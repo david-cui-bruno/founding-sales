@@ -32,10 +32,12 @@ import { GmailClientError } from './gmailClient.ts';
  * follow-up permission and ended enrollments among them — and release the send gate
  * with the fulfilled follow-up still claimable until the retry. So the loop stops at N
  * and reports how many leading ids it finished (`processedMessages`) and which read
- * failed (`readFailure`); the caller moves its position only to just before N, the job
- * commits 1 to N-1, and N is read again on the next run. What N itself wrote before its
- * body read failed is undone by a savepoint, so N is retried whole. Only a Gmail read is
- * caught: a database error still throws, and the runner still rolls the job back.
+ * failed (`readFailure`). `mail.sync` moves its cursor only to just before N, the job
+ * commits 1 to N-1, and N is read again on the next run; `mail.recover`, whose
+ * page-count position is not stable across runs, throws on it and keeps its whole-job
+ * retry. What N itself wrote before its body read failed is undone by a savepoint, so N
+ * is retried whole. Only a Gmail read is caught: a database error still throws, and the
+ * runner still rolls the job back.
  */
 
 export interface MessagePipelineDeps {

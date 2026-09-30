@@ -233,21 +233,30 @@ control still pauses automation."* This supersedes the first bullet above.
   fetch failure before the gated loop would lose an earlier opt-out's durable journal
   append.) A completed recovery reads the profile before the pipeline, so that call is
   never made under the gate.
-* **A failed Gmail read commits what came before it (round 7).** A metadata or body read
-  that fails for message N no longer throws: the pipeline stops at N and reports how many
-  leading messages it finished, `mail.sync` writes its cursor at the last history record
-  every one of whose messages was processed, and `mail.recover` counts only the pages
-  every one of whose ids was processed; the job commits messages 1 to N−1 — matches,
-  direct-send effects and consumed permissions, suppression journal entries — and N is
-  read again on the next one-minute pass. What N wrote before its body read failed is
-  undone by a savepoint, so N is retried whole; re-reading anything before N in the same
-  record or page is harmless (markers, uniqueness). Only a Gmail read is caught; a
-  database error still rolls the job back. The mailbox's `last_sync_error` names the
-  read, and a stopped run records no mailbox heartbeat, as a thrown one did not, so a
-  message Gmail keeps refusing raises `mailbox_heartbeat_missed`. Before this, a direct
-  send's consumed follow-up permission written early in a job was rolled back by a later
-  read failure, and the gate was released with the fulfilled follow-up claimable until
-  the retry.
+* **A failed Gmail read: sync commits the processed prefix, recovery does not (rounds 7
+  and 8).** A metadata or body read that fails for message N no longer throws out of the
+  pipeline: it stops at N and reports how many leading messages it finished. `mail.sync`
+  writes its cursor at the last history record every one of whose messages was
+  processed, so the job commits messages 1 to N−1 — matches, direct-send effects and
+  consumed permissions, suppression journal entries — and N is read again on the next
+  one-minute pass. Before this, a direct send's consumed follow-up permission written
+  early in a sync was rolled back by a later read failure, and the gate was released with
+  the fulfilled follow-up claimable until the retry. A history id is a stable position:
+  a record's id does not change when another message vanishes. What N wrote before its
+  body read failed is undone by a savepoint, so N is retried whole; re-reading anything
+  before N in the same record is harmless (markers, uniqueness). Only a Gmail read is
+  caught; a database error still rolls the job back. The mailbox's `last_sync_error`
+  names the read, and a stopped sync records no mailbox heartbeat, as a thrown one did
+  not, so a message Gmail keeps refusing raises `mailbox_heartbeat_missed`.
+  `mail.recover` keeps its whole-job retry: a failed read throws, the recovery job rolls
+  back and is re-armed as before. Its position is a page count over a listing that can
+  change between runs — a message that vanishes moves every later one forward a place —
+  so a committed prefix could resume past the failed message, prove coverage and release
+  the hold without having read it (a lost opt-out). The duplicate follow-up the sync
+  change closes does not arise there: while a recovery runs, the `coverage_incomplete`
+  hold blocks the owner's automated sends. A `410 Gone` from the import's metadata read is
+  read as a `404`: the message is gone, processed with no effect, and the cursor moves
+  past it rather than stopping on it every run.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.

@@ -95,16 +95,14 @@ export function mailRecoveryHandler(deps: MailRecoveryDeps, options: MailHandler
       }
       const context = repositoryContext(input.scope, input.session);
       const report = await runMailRecovery(context, deps, { mailboxId, generation });
-      if (report.outcome === 'mailbox_unknown') {
-        throw new Error('a mail.recover payload named a mailbox in another workspace');
-      }
-      // As for `mail.sync`: a run a failed Gmail read stopped is no heartbeat.
-      if (report.outcome === 'read_stopped') return;
       await recordMailboxHeartbeat(input.session, {
         workspaceId: input.scope.workspaceId,
         mailboxId,
         detail: { outcome: report.outcome, pages: report.pagesCompleted },
       });
+      if (report.outcome === 'mailbox_unknown') {
+        throw new Error('a mail.recover payload named a mailbox in another workspace');
+      }
     },
   };
 }

@@ -4,6 +4,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
 import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
+import { createGmailHttpClient } from '../../mail/gmailClientHttp.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
 import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
@@ -1044,7 +1045,7 @@ describe('coverage, recovery and the grant', () => {
     },
   });
 
-  it('S1 round-7: a recovery stopped by a failed read commits what came before and resumes at that page', async () => {
+  it('S1 round-8: a recovery a failed read interrupts rolls back whole and is retried from where it was', async () => {
     world = await createMailWorld({
       alphaMessages: [
         fixtureMessage({ id: 'rec-stop-1', historyId: '1081', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
@@ -1058,49 +1059,82 @@ describe('coverage, recovery and the grant', () => {
     const deps = { ...w.syncDeps(w.alpha), pageSize: 1, maxMessages: 3 };
     const session = w.database.session as Parameters<typeof withTransaction>[0];
 
-    const first = await withTransaction(
-      session,
-      async () =>
-        await runMailRecovery(
-          context,
-          { ...deps, gmail: refusing(deps.gmail, 'getMetadata', 'rec-stop-2') },
-          { mailboxId: w.alpha.mailboxId, generation: 1 },
-        ),
-    );
-    expect(first.outcome).toBe('read_stopped');
-    expect(first.processedMessages).toBe(1);
-    expect(first.pagesCompleted).toBe(1);
-    expect(first.coverageProved).toBe(false);
-
-    // Committed: message 1's direct send, and a position of one page — just before message 2.
-    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
-    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([0, 0]);
+    // A page-count position over a listing that can change is not a safe prefix, so the
+    // recovery keeps its whole-job retry: the read failure throws and nothing commits.
+    await expect(
+      withTransaction(
+        session,
+        async () =>
+          await runMailRecovery(
+            context,
+            { ...deps, gmail: refusing(deps.gmail, 'getMetadata', 'rec-stop-2') },
+            { mailboxId: w.alpha.mailboxId, generation: 1 },
+          ),
+      ),
+    ).rejects.toThrow(/metadata read failed during recovery/u);
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([0, 0]);
     const { rows: recovery } = await w.database.session.query<{ pages_completed: number; completed: boolean }>(
       `SELECT pages_completed, completed_at IS NOT NULL AS completed FROM mailbox_recoveries
         WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1`,
       [workspaceId, w.alpha.mailboxId],
     );
-    expect(recovery).toEqual([{ pages_completed: 1, completed: false }]);
-    const stopped = await readMailbox(context, w.alpha.mailboxId);
-    expect(stopped?.syncState).not.toBe('ready');
-    expect(stopped?.lastSyncError).toMatch(/metadata read failed/u);
-    const holds = await listApplicableHolds(context, {
-      actionKind: 'email_send',
-      ownerUserId: w.alpha.workspace.salesperson.userId,
-    });
-    expect(holds.map(hold => hold.reasonCode)).toContain('coverage_incomplete');
+    expect(recovery).toEqual([{ pages_completed: 0, completed: false }]);
+    expect((await readMailbox(context, w.alpha.mailboxId))?.syncState).not.toBe('ready');
 
-    // The next pass resumes at message 2's page, reads the rest, and proves coverage.
     const second = await withTransaction(
       session,
       async () => await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 1 }),
     );
     expect(second.outcome).toBe('completed');
-    expect(second.messagesSeen).toBe(2);
     expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
     expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([1, 0]);
     expect(await storedAndMarked(w, 'rec-stop-3')).toEqual([1, 0]);
-    expect((await readMailbox(context, w.alpha.mailboxId))?.syncState).toBe('ready');
+  });
+
+  it('S1 round-8: the sync reads past a message Gmail answers 410 or 404 for, and moves its cursor', async () => {
+    world = await createMailWorld({ alphaHistoryId: '1400' });
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gone-410', historyId: '1301', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({ id: 'gone-404', historyId: '1302', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({ id: 'after-gone', historyId: '1303', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    // The real HTTP client's reading of each status, over a stub transport.
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async url => {
+        await Promise.resolve();
+        const status = url.includes('/messages/gone-410') ? 410 : 404;
+        return { status, headers: {}, body: JSON.stringify({ error: { code: status } }) };
+      },
+    });
+    const base = w.syncDeps(w.alpha);
+    const gmail: GmailClient = {
+      ...base.gmail,
+      getMetadata: async (access, id, headers) =>
+        id.startsWith('gone-') ? await http.getMetadata(access, id, headers) : await base.gmail.getMetadata(access, id, headers),
+    };
+
+    const report = await withTransaction(
+      session,
+      async () => await runMailSync(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId }),
+    );
+    expect(report.outcome).toBe('synced');
+    expect(report.readFailure).toBeNull();
+    expect(report.processedMessages).toBe(3);
+    expect(report.directSendsRecorded).toBe(1);
+    expect(report.cursorTo).toBe('1400');
+    expect((await readMailbox(context, w.alpha.mailboxId))?.historyId).toBe('1400');
+    expect(await storedAndMarked(w, 'gone-410')).toEqual([0, 0]);
+    expect(await storedAndMarked(w, 'gone-404')).toEqual([0, 0]);
+    expect(await storedAndMarked(w, 'after-gone')).toEqual([1, 1]);
   });
 
   it('S1 round-7: a failed body read undoes that message whole and stops the sync before it', async () => {

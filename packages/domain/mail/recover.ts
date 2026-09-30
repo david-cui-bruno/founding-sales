@@ -4,7 +4,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailClient, GmailOAuthConfig } from './gmailClient.ts';
+import { GmailClientError, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
 import {
   advanceGeneration,
   openMailboxHold,
@@ -247,8 +247,7 @@ export type MailRecoveryOutcome =
   | 'mailbox_inactive'
   | 'generation_superseded'
   | 'grant_revoked'
-  | 'rate_limited'
-  | 'read_stopped';
+  | 'rate_limited';
 
 export interface MailRecoveryReport extends MessagePipelineReport {
   readonly outcome: MailRecoveryOutcome;
@@ -330,8 +329,6 @@ export async function runMailRecovery(
   // and Gmail's own page tokens do not survive a process.
   let pageToken: string | undefined = recovery.pagesCompleted === 0 ? undefined : String(recovery.pagesCompleted * pageSize);
   const ids: string[] = [];
-  /** How many ids the run held after each page it read: where each page ends in `ids`. */
-  const pageEnds: number[] = [];
   let pagesThisRun = 0;
   let exhausted = false;
 
@@ -351,7 +348,6 @@ export async function runMailRecovery(
       return recoveryReport(mailbox.id, input.generation, 'rate_limited');
     }
     ids.push(...outcome.messageIds);
-    pageEnds.push(ids.length);
     pagesThisRun += 1;
     if (outcome.nextPageToken === null) {
       exhausted = true;
@@ -374,41 +370,29 @@ export async function runMailRecovery(
     access: access.access,
     messageIds: ids,
   });
+  // The pipeline stops at a failed Gmail read instead of throwing, which `mail.sync` uses
+  // to commit the prefix it processed. A recovery does not (send-path v2, S1 review round
+  // 8): its position is a page count over a listing that can change between runs — a
+  // message that vanishes shifts every later one forward a place — so resuming a prefix
+  // could skip the failed message and still prove coverage. The whole job rolls back
+  // and is retried, as before; the coverage hold blocks the owner's automated sends
+  // meanwhile.
+  if (pipeline.readFailure !== null) {
+    throw new GmailClientError(
+      'unexpected_status',
+      `the Gmail ${pipeline.readFailure.read} read failed during recovery (${pipeline.readFailure.detail})`,
+    );
+  }
 
-  // A Gmail read that failed stopped the pipeline at that message rather than throwing,
-  // so what came before it commits with this job (send-path v2, S1 review round 7). The
-  // position is a page count, so it moves only past the pages every one of whose ids
-  // was processed: the page holding the failed message is listed again next time, and
-  // what the run finished in it is read again, which the pipeline's markers and
-  // uniqueness make harmless. The recovery is not complete, however far it read.
-  const stopped = pipeline.readFailure !== null;
-  const pagesFinished = stopped
-    ? pageEnds.filter(end => end <= pipeline.processedMessages).length
-    : pagesThisRun;
-  const complete = exhausted && !stopped;
-  const pagesCompleted = recovery.pagesCompleted + pagesFinished;
+  const pagesCompleted = recovery.pagesCompleted + pagesThisRun;
   await context.db.query(
     `UPDATE mailbox_recoveries
         SET pages_completed = $3,
             messages_seen = messages_seen + $4,
             completed_at = CASE WHEN $5 THEN now() ELSE completed_at END
       WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, recovery.id, pagesCompleted, pipeline.messagesSeen, complete],
+    [context.scope.workspaceId, recovery.id, pagesCompleted, pipeline.messagesSeen, exhausted],
   );
-
-  if (pipeline.readFailure !== null) {
-    await recordSyncError(context, {
-      mailboxId: mailbox.id,
-      error: `the Gmail ${pipeline.readFailure.read} read failed (${pipeline.readFailure.detail}); the recovery stopped before that message`,
-    });
-    // `mailRecoverySource` re-arms the incomplete recovery on the next one-minute pass,
-    // as it does for a run that stopped at its page limit.
-    return recoveryReport(mailbox.id, input.generation, 'read_stopped', pipeline, {
-      fromAt: recovery.fromAt,
-      toAt: recovery.toAt,
-      pagesCompleted,
-    });
-  }
 
   if (!exhausted) {
     // Another pass is needed, and this run does not schedule it: the handler is

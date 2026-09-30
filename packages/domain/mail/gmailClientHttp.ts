@@ -327,6 +327,12 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       { format: 'metadata', metadataHeaders: [...headers] },
     );
     if (response.status === 404) return null;
+    // A 410 Gone for the import's read is the same fact as a 404: the message is not
+    // there to read, and the next listing will not name it. Treating it as a failure
+    // would stop the sync at that message on every run (send-path v2, S1 review round
+    // 8). The restore's strict read keeps refusing it: that path proves sends, and a
+    // message Gmail calls gone is not one it may count.
+    if (response.status === 410 && !strict) return null;
     if (response.status !== 200) {
       throw new GmailClientError('unexpected_status', 'the Gmail metadata read failed', response.status);
     }
