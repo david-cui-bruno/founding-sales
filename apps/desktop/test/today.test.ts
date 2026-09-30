@@ -998,7 +998,8 @@ describe('the CRM bridge G3b was waiting for', () => {
     // registry now — the fourteenth is `crm.takeOver`, the explicit takeover (P1-1 of
     // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
     // The fifteenth is `crm.resolveOutgoing`, a held outgoing message's firm (S1 review P1-C).
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(15);
+    // The sixteenth is `crm.setValue`, a person's monthly value for an opportunity (Kanban, slice K).
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(16);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

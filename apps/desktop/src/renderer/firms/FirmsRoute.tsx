@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import { useRef, useState, type JSX } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import type { Generation } from '../app/generation.ts';
 import type { Route } from '../routes.ts';
@@ -9,7 +9,7 @@ import { FirmMerge } from './FirmMerge.tsx';
 import { FirmPage } from './FirmPage.tsx';
 import { FirmsList } from './FirmsList.tsx';
 import { ImportScreen } from './ImportScreen.tsx';
-import { PipelineBoard } from './PipelineBoard.tsx';
+import { emptyBoardMemory, PipelineBoard, type BoardMemory } from './PipelineBoard.tsx';
 import { FirmResearch } from '../research/FirmResearch.tsx';
 import { buildFirmWorkspaceView, FIRMS_HEADING, PIPELINE_HEADING } from '../firmWorkspaceView.ts';
 import { useCrm } from './useCrm.ts';
@@ -48,6 +48,10 @@ export function FirmsRoute({
   readonly guard: Generation;
 }): JSX.Element {
   const crm = useCrm(route, identity, generation, guard);
+  // The board's search and scroll outlive the firm page opened from it (slice K): this
+  // component is not remounted between the two screens, so they are kept here.
+  const [boardSearch, setBoardSearch] = useState('');
+  const boardMemory = useRef<BoardMemory>(emptyBoardMemory());
   const state = crm.state;
   // Which row asked for this view. The board answer is the same answer on both, so the
   // route says which reading of it to draw.
@@ -78,7 +82,7 @@ export function FirmsRoute({
   const onFirmsList = state.screen === 'pipeline' && !onPipelineRow;
 
   return (
-    <Page data-testid="firms" aria-busy={crm.pending > 0}>
+    <Page data-testid="firms" aria-busy={crm.pending > 0} className={onPipelineRow ? 'max-w-none' : undefined}>
       <ViewHeader
         title={
           onFirm && state.firm !== null ? state.firm.read.firm.name : state.screen === 'pipeline' ? rowHeading : view.heading
@@ -90,7 +94,9 @@ export function FirmsRoute({
               size="sm"
               data-testid="back-to-pipeline"
               className="-ml-2 self-start"
-              onClick={crm.actions.openPipeline}
+              onClick={() => {
+                crm.actions.openPipeline();
+              }}
             >
               <ChevronLeft aria-hidden />
               {crm.origin === 'pipeline' ? PIPELINE_HEADING : FIRMS_HEADING}
@@ -181,8 +187,14 @@ export function FirmsRoute({
           <PipelineBoard
             pipeline={state.pipeline}
             actionsEnabled={view.actionsEnabled}
-            changing={opportunityId => crm.busy(`stage:${opportunityId}`)}
+            stageBusy={opportunityId => crm.busy(`stage:${opportunityId}`)}
+            valueBusy={opportunityId => crm.busy(`value:${opportunityId}`)}
+            search={boardSearch}
+            memory={boardMemory}
+            onSearch={setBoardSearch}
+            onShowLost={crm.actions.openPipeline}
             onChangeStage={crm.actions.changeStage}
+            onSetValue={crm.actions.setValue}
             onOpenFirm={crm.actions.openFirm}
           />
         ) : (

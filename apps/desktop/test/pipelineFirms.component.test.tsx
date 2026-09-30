@@ -5,7 +5,7 @@ import type { FirmIdentityDto } from '@fss/contracts';
 import type { CrmState, PipelineView } from '../src/renderer/firmWorkspaceContract.ts';
 import { FIRMS_HEADING, PIPELINE_HEADING } from '../src/renderer/firmWorkspaceView.ts';
 import { FirmsList, NOT_IN_PIPELINE, firmsOf, stageNameOf } from '../src/renderer/firms/FirmsList.tsx';
-import { PipelineBoard } from '../src/renderer/firms/PipelineBoard.tsx';
+import { emptyBoardMemory, PipelineBoard } from '../src/renderer/firms/PipelineBoard.tsx';
 import { routeOfState } from '../src/renderer/firms/useCrm.ts';
 
 /**
@@ -76,7 +76,19 @@ afterEach(cleanup);
 describe('Pipeline', () => {
   it('shows only the firms that have an open opportunity, with its count on each column', () => {
     render(
-      <PipelineBoard pipeline={PIPELINE} actionsEnabled={false} changing={() => false} onChangeStage={noop} onOpenFirm={noop} />,
+      <PipelineBoard
+        pipeline={PIPELINE}
+        actionsEnabled={false}
+        stageBusy={() => false}
+        valueBusy={() => false}
+        search=""
+        memory={{ current: emptyBoardMemory() }}
+        onSearch={noop}
+        onShowLost={noop}
+        onChangeStage={noop}
+        onSetValue={noop}
+        onOpenFirm={noop}
+      />,
     );
 
     const names = screen.getAllByTestId('pipeline-open-firm').map(node => node.textContent);
