@@ -62,7 +62,7 @@ describe('the Kanban through the CRM bridge', () => {
   it('hands the window the cards and every stage, and asks for Lost only when told to, remembering the answer', async () => {
     const { bridge, calls } = scripted(boardAnswer);
     const plain = await bridge.openPipeline();
-    expect(calls.at(-1)?.body).toEqual({});
+    expect(calls.at(-1)?.body).toEqual({ includeLost: false });
     expect(plain.pipeline?.columns.map(column => column.stage.key)).toEqual(['new', 'won']);
     expect(plain.pipeline?.stages?.map(stage => stage.key)).toEqual(['new', 'won', 'lost']);
     expect(plain.pipeline?.cards?.[FIRM]).toMatchObject({ pinned: true, value: { kind: 'agreed' } });
@@ -80,7 +80,11 @@ describe('the Kanban through the CRM bridge', () => {
     expect(back.pipeline?.includeLost).toBe(true);
     await bridge.forget();
     await bridge.openPipeline();
-    expect(calls.at(-1)?.body).toEqual({});
+    expect(calls.at(-1)?.body).toEqual({ includeLost: false });
+    // No board request ever goes out without the field.
+    for (const entry of calls.filter(call => call.path === '/pipeline/board')) {
+      expect(typeof entry.body?.['includeLost']).toBe('boolean');
+    }
   });
 
   it('sends the value in whole cents with its kind, then reads the board again', async () => {

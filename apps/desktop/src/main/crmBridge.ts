@@ -390,7 +390,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     const board = await deps.api.read(
       '/pipeline/board',
       value => pipelineBoardResponseSchema.parse(value),
-      includeLost ? { includeLost: true } : {},
+      // Always explicit: an absent field means "include Lost" to the API (old desktops).
+      { includeLost },
     );
     if (board.ok) {
       pipeline = {
