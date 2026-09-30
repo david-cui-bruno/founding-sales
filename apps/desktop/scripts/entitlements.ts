@@ -6,7 +6,9 @@
  * Callie is a Developer ID app, not a Mac App Store app, so it is not sandboxed and
  * the `com.apple.security.*` sandbox entitlements would say nothing. What it is is
  * hardened, and the hardened runtime blocks writable-executable memory — which V8
- * needs. That is the one exception, and it is the whole list.
+ * needs. That is one exception. The other is the microphone (slice C1): a hardened
+ * app cannot open an audio input without `device.audio-input`, and calls placed from
+ * Callie are spoken through the Mac. The camera stays unrequested.
  *
  * The forbidden list is the other half. Each of those entitlements turns off a part
  * of the hardened runtime, several of them are copied into Electron projects as
@@ -18,6 +20,7 @@
 
 export const DESKTOP_ENTITLEMENTS: Readonly<Record<string, boolean>> = Object.freeze({
   'com.apple.security.cs.allow-jit': true,
+  'com.apple.security.device.audio-input': true,
 });
 
 export const FORBIDDEN_ENTITLEMENTS: readonly string[] = Object.freeze([

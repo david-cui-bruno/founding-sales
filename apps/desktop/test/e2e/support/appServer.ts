@@ -263,12 +263,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   );
   const html = (await readFile(`${pageDirectory}index.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
-    // The shipped page has `connect-src 'none'` because the real renderer talks to the
-    // main process across an IPC bridge, which CSP does not see. Here the bridges are
-    // `fetch` to this same server, so the policy is relaxed to `'self'` for the test
-    // document only; the file on disk stays strict. `replaceAll`: the phrase is in the
-    // page's comment as well as in the policy.
-    .replaceAll("connect-src 'none'", "connect-src 'self'");
+    // The shipped page's `connect-src` names only Twilio's Voice SDK hosts (slice C1)
+    // because the real renderer talks to Callie through the main process across an IPC
+    // bridge, which CSP does not see. Here the bridges are `fetch` to this same server,
+    // so `'self'` is added for the test document only; the file on disk stays strict.
+    .replace('connect-src https://', "connect-src 'self' https://");
   const styles = await stylesheet();
 
   const calls: Call[] = [];

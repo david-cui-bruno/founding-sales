@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
+import { BUNDLE_ORIGIN } from './bundleScheme.ts';
 import { createDialHandoff } from './dialHandoff.ts';
+import { allowPermissionCheck, allowPermissionRequest } from './mediaPermission.ts';
 import { createTelLaunchDriver, isBrowserLink } from './telHandoff.ts';
 import { resetBridges } from './identityReset.ts';
 import { createImportHandoff, IMPORT_FILE_FILTERS } from './importHandoff.ts';
@@ -160,6 +162,28 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
     if (isBrowserLink(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // The microphone, for a call placed from Callie (slice C1), asked by our own page; every
+  // other permission, and anything from anywhere else, is refused (`mediaPermission.ts`).
+  const ownOrigin = configuration.rendererUrl === undefined ? 'file://' : BUNDLE_ORIGIN;
+  window.webContents.session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    const media = details as { readonly mediaTypes?: readonly string[]; readonly requestingUrl?: string };
+    callback(
+      allowPermissionRequest({
+        permission,
+        mediaTypes: media.mediaTypes,
+        requestingUrl: media.requestingUrl ?? '',
+        ownOrigin,
+      }),
+    );
+  });
+  window.webContents.session.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) =>
+    allowPermissionCheck({
+      permission,
+      mediaType: (details as { readonly mediaType?: string }).mediaType,
+      requestingOrigin,
+      ownOrigin,
+    }),
+  );
   mainWindow = window;
   windowLoaded = false;
   if (configuration.rendererUrl === undefined) await window.loadFile(configuration.rendererEntry);
