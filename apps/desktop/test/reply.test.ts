@@ -265,6 +265,24 @@ describe('the reply card view model', () => {
     expect(view.emptyMessage).toBe('Callie cannot reach the server. Replies are never kept on this Mac.');
   });
 
+  it('names the sequence and step a hold concerns, and says nothing for a hold with none (R2)', () => {
+    const base = card();
+    const hold = base.impact.holds[0];
+    if (hold === undefined) throw new Error('the fixture card has a hold');
+    const withEnrollment = card({
+      impact: {
+        ...base.impact,
+        holds: [{ ...hold, enrollment: { id: '33333333-3333-4333-8333-333333333333', sequenceName: 'Spring follow-up', stepNumber: 2 } }],
+      },
+    });
+    const lines = buildReplyCardView(state(), withEnrollment, null).impactLines;
+    expect(lines).toContain('Sequence: Spring follow-up, step 2');
+    expect(lines.some(line => line.startsWith('On hold: '))).toBe(true);
+
+    const without = buildReplyCardView(state(), base, null).impactLines;
+    expect(without.some(line => line.startsWith('Sequence:'))).toBe(false);
+  });
+
   it('says the same thing above the button as on it, on both kinds of follow-up card', () => {
     const plain = buildReplyCardView(state(), card(), 'follow_up_later');
     const plainText = plain.choices.find(choice => choice.disposition === 'follow_up_later')?.consequence ?? '';

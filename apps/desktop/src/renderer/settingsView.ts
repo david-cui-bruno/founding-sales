@@ -1,4 +1,4 @@
-import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum, reasonSentence } from '@fss/contracts';
 import { TIME_ZONE_CHOICES } from './captureView.ts';
 import { POSTURE_NOTICES, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
 import { OFFLINE_BANNER, readErrorSentence } from './readError.ts';
@@ -558,7 +558,7 @@ function dashboardPanels(state: AdminState): readonly PanelView[] {
     {
       title: 'Holds',
       lines: dashboard.holds.byReason.map(
-        entry => `${entry.reasonCode}: ${String(entry.count)}, oldest ${seconds(entry.oldestAgeSeconds)}`,
+        entry => `${reasonSentence(entry.reasonCode)} ${String(entry.count)}, oldest ${seconds(entry.oldestAgeSeconds)}`,
       ),
       unavailable: null,
     },
@@ -668,7 +668,7 @@ const INERT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
 });
 
 export function inertSentence(code: string): string {
-  return INERT_SENTENCES[code] ?? code;
+  return INERT_SENTENCES[code] ?? reasonSentence(code);
 }
 
 /** One typed control of a setting. `key` is the field of the slice's value it edits. */

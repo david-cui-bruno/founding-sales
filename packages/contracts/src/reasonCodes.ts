@@ -160,3 +160,16 @@ const HOLD_SCOPE_KINDS = [
   'channel',
 ] as const;
 export const holdScopeKindSchema = z.enum(HOLD_SCOPE_KINDS);
+
+/**
+ * The enrollment a hold concerns, when it concerns one (call-to-booking R2): the sequence's
+ * name and the step's ordinal, so a window can say "Sequence: <name>, step N". Additive and
+ * optional; a hold that concerns no enrollment carries null or nothing. `stepNumber` is null
+ * when the enrollment has no unfinished step to name.
+ */
+export const holdEnrollmentDtoSchema = z.strictObject({
+  id: z.uuid(),
+  sequenceName: z.string(),
+  stepNumber: z.number().int().positive().nullable(),
+});
+export type HoldEnrollmentDto = z.infer<typeof holdEnrollmentDtoSchema>;

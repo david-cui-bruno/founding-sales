@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CALL_SESSION_REFUSAL_CODES,
+  CALL_SESSION_REFUSAL_SENTENCES,
   CRM_REFUSAL_CODES,
   CRM_REFUSAL_SENTENCES,
   DIAL_REFUSAL_SENTENCES,
@@ -12,8 +14,11 @@ import {
   MAILBOX_SWITCH_REFUSAL_CODES,
   RESEARCH_REFUSAL_CODES,
   RESEARCH_REFUSAL_SENTENCES,
+  STAGE_REVIEW_REASONS,
+  STAGE_REVIEW_SENTENCES,
   dialCheckResponseSchema,
   hasReasonSentence,
+  liveWorkPresentSentence,
   reasonSentence,
 } from '../src/index.ts';
 import { readFileSync } from 'node:fs';
@@ -27,6 +32,13 @@ import { fileURLToPath } from 'node:url';
 const FOLLOW_UP_PREVIEW_REFUSALS: readonly string[] = (() => {
   const source = readFileSync(fileURLToPath(new URL('../../domain/dial/followUpPreview.ts', import.meta.url)), 'utf8');
   const block = /export const FOLLOW_UP_PREVIEW_REFUSALS = \[([\s\S]*?)\] as const;/u.exec(source)?.[1] ?? '';
+  return [...block.matchAll(/'([a-z_]+)'/gu)].map(match => match[1] ?? '');
+})();
+
+/** The domain's `StageReviewReason` union, read from its source for the reason above. */
+const DOMAIN_STAGE_REVIEW_REASONS: readonly string[] = (() => {
+  const source = readFileSync(fileURLToPath(new URL('../../domain/crm/stageEvidence.ts', import.meta.url)), 'utf8');
+  const block = /export type StageReviewReason =([\s\S]*?);/u.exec(source)?.[1] ?? '';
   return [...block.matchAll(/'([a-z_]+)'/gu)].map(match => match[1] ?? '');
 })();
 
@@ -54,6 +66,9 @@ describe('reasonSentence covers every list of codes', () => {
     ['follow-up preview refusals', FOLLOW_UP_PREVIEW_REFUSALS],
     ['mailbox switch refusals', MAILBOX_SWITCH_REFUSAL_CODES],
     ['grant refusals', GRANT_REFUSAL_CODES],
+    ['call session refusals', CALL_SESSION_REFUSAL_CODES],
+    ['stage review reasons', STAGE_REVIEW_REASONS],
+    ['review item and mailbox lock words', ['stage_review', 'mailbox_busy']],
     ['mailbox_already_connected and its siblings', ['mailbox_already_connected', 'mailbox_not_connected']],
   ] as const)('%s', (_name, codes) => {
     expect(missing(codes)).toEqual([]);
@@ -66,6 +81,10 @@ describe('reasonSentence covers every list of codes', () => {
     expect(Object.keys(RESEARCH_REFUSAL_SENTENCES).sort()).toEqual([...RESEARCH_REFUSAL_CODES].sort());
     expect(Object.keys(FOLLOW_UP_PREVIEW_REFUSAL_SENTENCES).sort()).toEqual([...FOLLOW_UP_PREVIEW_REFUSALS].sort());
     for (const code of GRANT_REFUSAL_CODES) expect(Object.keys(MAIL_REFUSAL_SENTENCES)).toContain(code);
+    expect(Object.keys(CALL_SESSION_REFUSAL_SENTENCES).sort()).toEqual([...CALL_SESSION_REFUSAL_CODES].sort());
+    expect(DOMAIN_STAGE_REVIEW_REASONS.length).toBeGreaterThan(3);
+    expect([...DOMAIN_STAGE_REVIEW_REASONS].sort()).toEqual([...STAGE_REVIEW_REASONS].sort());
+    expect(Object.keys(STAGE_REVIEW_SENTENCES).sort()).toEqual([...STAGE_REVIEW_REASONS, 'stage_review'].sort());
   });
 
   it('covers the follow-up permission hold codes', () => {
@@ -83,6 +102,10 @@ describe('reasonSentence covers every list of codes', () => {
       ...RESEARCH_REFUSAL_CODES,
       ...FOLLOW_UP_PREVIEW_REFUSALS,
       ...GRANT_REFUSAL_CODES,
+      ...CALL_SESSION_REFUSAL_CODES,
+      ...STAGE_REVIEW_REASONS,
+      'stage_review',
+      'mailbox_busy',
     ];
     for (const code of all) {
       const sentence = reasonSentence(code);
@@ -96,6 +119,22 @@ describe('reasonSentence covers every list of codes', () => {
     expect(reasonSentence('coverage_incomplete')).toBe('Callie is still reading this mailbox and won’t send from it until it has caught up.');
     expect(reasonSentence('cold_outreach_mailbox_required')).toContain('Call this firm instead');
     expect(reasonSentence('mailbox_switch_pending_sends')).toBe('A message is still being sent from the current mailbox. Try again in a few minutes.');
+  });
+
+  it('no longer says Google refused when the grant failed', () => {
+    const sentence = reasonSentence('grant_refused');
+    expect(sentence).toBe('Callie couldn’t finish connecting that account. Your mailbox did not change. Try again in a minute.');
+    expect(sentence).not.toContain('Google');
+  });
+
+  it('names the live enrollments in the live_work_present sentence', () => {
+    expect(liveWorkPresentSentence(undefined)).toBe(reasonSentence('live_work_present'));
+    expect(liveWorkPresentSentence([])).toBe(reasonSentence('live_work_present'));
+    const one = liveWorkPresentSentence([{ sequenceName: 'Spring follow-up', stepNumber: 2 }]);
+    expect(one).toContain('Spring follow-up, step 2');
+    const two = liveWorkPresentSentence([{ sequenceName: 'Spring follow-up', stepNumber: 2 }, { sequenceName: 'Intro', stepNumber: null }]);
+    expect(two).toContain('Spring follow-up, step 2; Intro');
+    expect(two).not.toMatch(/[0-9a-f]{8}-/u);
   });
 
   it('answers an unknown code generically, with the code in parentheses', () => {

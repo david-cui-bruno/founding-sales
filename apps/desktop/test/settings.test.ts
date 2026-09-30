@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { reasonSentence } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { DEFAULT_CHANGE_NOTE, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
@@ -441,7 +442,7 @@ describe('the administration bridge', () => {
     expect(calls.filter(call => call.path === '/settings')).toHaveLength(1);
     expect(again.sendingReadError).toBe('internal_error');
     expect(adminViewOf(again).sendingUnread?.line).toBe(
-      'Callie could not read the sending status. The server answered internal_error.',
+      `Callie could not read the sending status. ${reasonSentence('internal_error')}`,
     );
 
     // Retry is the Settings screen shown again, and it recovers.

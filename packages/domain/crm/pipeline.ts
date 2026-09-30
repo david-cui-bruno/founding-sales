@@ -491,8 +491,14 @@ export async function classifyControlModeOrigin(
     // Releasing makes the opportunity's steps eligible again, so it waits until nothing
     // is live there: an administrator stops or completes those enrollments first, and
     // the refusal names them (S1 review P1-3).
-    const { rows: live } = await context.db.query<{ id: string }>(
-      `SELECT n.id FROM sequence_enrollments AS n
+    const { rows: live } = await context.db.query<{ id: string; sequence_name: string; step_number: number | null }>(
+      `SELECT n.id, s.name AS sequence_name,
+              (SELECT min(x.ordinal) FROM step_executions AS x
+                WHERE x.workspace_id = n.workspace_id AND x.enrollment_id = n.id
+                  AND x.state IN ('pending', 'held')) AS step_number
+         FROM sequence_enrollments AS n
+         JOIN sequence_versions AS v ON v.workspace_id = n.workspace_id AND v.id = n.sequence_version_id
+         JOIN sequences AS s ON s.workspace_id = v.workspace_id AND s.id = v.sequence_id
         WHERE n.workspace_id = $1 AND n.opportunity_id = $2
           AND (n.ended_at IS NULL
                OR EXISTS (SELECT 1 FROM step_executions AS e
@@ -502,7 +508,16 @@ export async function classifyControlModeOrigin(
       [context.scope.workspaceId, input.opportunityId],
     );
     if (live.length > 0) {
-      return { ok: false, reason: 'live_work_present', liveEnrollmentIds: live.map(row => row.id) };
+      return {
+        ok: false,
+        reason: 'live_work_present',
+        liveEnrollmentIds: live.map(row => row.id),
+        liveEnrollments: live.map(row => ({
+          id: row.id,
+          sequenceName: row.sequence_name,
+          stepNumber: row.step_number === null ? null : Number(row.step_number),
+        })),
+      };
     }
     const { rows: releasedRows } = await context.db.query<OpportunityRow>(
       `UPDATE opportunities

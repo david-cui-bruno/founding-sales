@@ -1,4 +1,4 @@
-import { localParts, type PostureCitationDto, type SettingsSnapshot, type StatePostureView } from '@fss/contracts';
+import { localParts, reasonSentence, type PostureCitationDto, type SettingsSnapshot, type StatePostureView } from '@fss/contracts';
 import { readErrorSentence } from './readError.ts';
 import type { AdminState } from './settingsContract.ts';
 
@@ -146,7 +146,7 @@ export function postureSection(state: AdminState, zone: string, now: Date = new 
     rules: Object.fromEntries((reference?.states ?? []).map(entry => [entry.state, entry.rule] as const)),
     // Without the statements there is nothing to confirm, so nothing to record.
     editable: reason === null && reference !== null && postures.records !== null,
-    notEditableBecause: reason === null ? null : (INERT_SENTENCES[reason] ?? reason),
+    notEditableBecause: reason === null ? null : (INERT_SENTENCES[reason] ?? reasonSentence(reason)),
     zone,
   };
 }

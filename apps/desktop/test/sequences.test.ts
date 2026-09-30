@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { reasonSentence } from '@fss/contracts';
 import { OFFLINE_BANNER } from '../src/renderer/readError.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
@@ -348,7 +349,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
         slice: 'versions',
         line: `${SEQUENCE_UNREAD.versions} The answer was not in the shape this version of Callie reads (unreadable_answer).`,
       },
-      { slice: 'templates', line: `${SEQUENCE_UNREAD.templates} The server answered service_unavailable.` },
+      { slice: 'templates', line: `${SEQUENCE_UNREAD.templates} ${reasonSentence('service_unavailable')}` },
       { slice: 'enrollments', line: `${SEQUENCE_UNREAD.enrollments} The server did not answer (offline).` },
     ]);
   });

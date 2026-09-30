@@ -6,7 +6,7 @@ import {
   type ReplyState,
   type ReplySummary,
 } from './replyContract.ts';
-import { reasonSentence } from '@fss/contracts';
+import { holdEnrollmentLine, reasonSentence } from '@fss/contracts';
 import { inWords } from './dates.ts';
 import { OFFLINE_SENTENCE } from './readError.ts';
 
@@ -271,6 +271,8 @@ function impactLines(card: ReplyCard): readonly string[] {
         ? `On hold: ${reasonSentence(hold.reasonCode)}`
         : `On hold: ${reasonSentence(hold.reasonCode)} Paused: ${hold.blockedActionKinds.map(inWords).join(', ')}.`,
     );
+    const enrollment = holdEnrollmentLine(hold.enrollment);
+    if (enrollment !== null) lines.push(enrollment);
   }
   if (card.impact.contactsAtFirm > 1) {
     lines.push(`${String(card.impact.contactsAtFirm)} people at this firm are in Callie.`);

@@ -145,9 +145,15 @@ export async function readDiagnostics(
                  AND h.scope_kind = 'mailbox' AND h.scope_key = m.id::text
             ) AS held
        FROM mailboxes m
-       LEFT JOIN mailbox_watches w
-              ON w.workspace_id = m.workspace_id AND w.mailbox_id = m.id
-             AND w.generation = m.generation AND w.cancelled_at IS NULL
+       -- The current watch is the newest one not cancelled. A watch's generation is its own
+       -- counter (one per registration), not the mailbox's sync generation, so the two are
+       -- not joined on it (R2): after a switch or a re-register they differ.
+       LEFT JOIN LATERAL (
+         SELECT x.expires_at FROM mailbox_watches x
+          WHERE x.workspace_id = m.workspace_id AND x.mailbox_id = m.id AND x.cancelled_at IS NULL
+          ORDER BY x.registered_at DESC, x.generation DESC
+          LIMIT 1
+       ) w ON true
       WHERE m.workspace_id = $1 AND ($2::uuid IS NULL OR m.owner_user_id = $2::uuid)
       ORDER BY m.email_address`,
     [context.scope.workspaceId, ownerFilter],

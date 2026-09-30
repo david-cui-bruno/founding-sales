@@ -5,6 +5,7 @@ import { readContact } from '../crm/contacts.ts';
 import { readFirm } from '../crm/firms.ts';
 import { readOpportunity } from '../crm/pipeline.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { holdEnrollments, type HoldEnrollmentDto } from '../sequences/holdEnrollments.ts';
 import { listMatches } from '../mail/matching.ts';
 import { readMessage, readMessageBody } from '../mail/messages.ts';
 import { listClassifications, proposedDispositionOf, type ClassificationRow } from './store.ts';
@@ -54,6 +55,8 @@ export interface ReplyCardHoldDto {
   readonly recoveryAction: string | null;
   readonly recoverable: boolean;
   readonly startedAt: string;
+  /** The enrollment the hold concerns, when it concerns one (R2). */
+  readonly enrollment: HoldEnrollmentDto | null;
 }
 
 export interface ReplyCardSignalDto {
@@ -131,6 +134,7 @@ async function holdsOfMessage(
       ORDER BY started_at, id`,
     [context.scope.workspaceId, messageId],
   );
+  const enrollments = await holdEnrollments(context, rows.map(row => row.id));
   return rows.map(row => ({
     holdId: row.id,
     opportunityId: row.scope_key,
@@ -139,6 +143,7 @@ async function holdsOfMessage(
     recoveryAction: row.recovery_action,
     recoverable: isRecoverableHoldReason(row.reason_code),
     startedAt: row.started_at.toISOString(),
+    enrollment: enrollments.get(row.id) ?? null,
   }));
 }
 

@@ -1,4 +1,4 @@
-import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, hasOptOutLink } from '@fss/contracts';
+import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, hasOptOutLink, reasonSentence } from '@fss/contracts';
 import { OFFLINE_BANNER, OFFLINE_SENTENCE, readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
@@ -681,7 +681,7 @@ export const TEMPLATE_WARNING_SENTENCES: Readonly<Record<string, string>> = Obje
 });
 
 export function templateWarningSentence(code: string): string {
-  return TEMPLATE_WARNING_SENTENCES[code] ?? code;
+  return TEMPLATE_WARNING_SENTENCES[code] ?? reasonSentence(code);
 }
 
 /** Each reason `decideTemplateApproval` can give, as the sentence the window shows. */
@@ -731,11 +731,13 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   malformed_body: 'Callie could not send that. Check the fields and try again.',
 });
 
+const CODE_SHAPE = /^[a-z][a-z0-9_]*$/u;
+
 /**
  * One notice as a sentence. A refused save-and-approve arrives as `template_unapproved:`
  * and the issues (`apps/api/src/routes/templates.ts`), and every issue is named, because
  * an author fixing one rule at a time is a worse day than one fixing four at once. A code
- * with no sentence is shown as it is.
+ * with no sentence of its own gets the shared generic one (reasonText).
  */
 export function sequenceNotice(code: string): string {
   // Send-path v2 (S2): an edit of a published version or an approved template is a new
@@ -756,10 +758,11 @@ export function sequenceNotice(code: string): string {
       .slice('template_unapproved:'.length)
       .split(',')
       .filter(issue => issue.length > 0)
-      .map(issue => TEMPLATE_ISSUE_SENTENCES[issue] ?? issue);
+      .map(issue => TEMPLATE_ISSUE_SENTENCES[issue] ?? reasonSentence(issue));
     return `Not approved. ${issues.join(' ')}`.trim();
   }
-  return SEQUENCE_NOTICES[code] ?? code;
+  // A notice that is already a sentence (the window's own) passes through; a code gets words.
+  return SEQUENCE_NOTICES[code] ?? (CODE_SHAPE.test(code) ? reasonSentence(code) : code);
 }
 
 export { delayLabel };

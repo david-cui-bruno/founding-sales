@@ -1,4 +1,4 @@
-import type { CallBriefDto } from '@fss/contracts';
+import { reasonSentence, type CallBriefDto } from '@fss/contracts';
 import type { ResearchState } from './researchContract.ts';
 
 /**
@@ -44,9 +44,9 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   unreadable_answer: 'Callie could not read the server’s answer.',
 });
 
-/** The one place a research refusal code becomes English. Unknown codes are shown as-is. */
+/** The one place a research refusal code becomes English. An unknown code gets the shared generic sentence. */
 export function researchNotice(code: string): string {
-  return NOTICES[code] ?? code;
+  return NOTICES[code] ?? reasonSentence(code);
 }
 
 /** The four judgments, in the order the design record names them. */

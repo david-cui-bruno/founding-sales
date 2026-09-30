@@ -385,6 +385,58 @@ describe('diagnostics', () => {
     expect(theOthers.mailboxVisibility).toBe('own');
   });
 
+  it('shows the current watch, the newest not cancelled, whatever the mailbox generation is', async () => {
+    const before = await database.session.query<{ generation: number }>(
+      'SELECT generation FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, mail.alpha.mailboxId],
+    );
+    const syncGeneration = (before.rows[0]?.generation ?? 1) + 4;
+    // The mailbox's sync generation and a watch's generation are separate counters.
+    await database.session.query('UPDATE mailboxes SET generation = $3 WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      mail.alpha.mailboxId,
+      syncGeneration,
+    ]);
+    try {
+      expect((await readDiagnostics(owner, input)).mailboxes[0]?.watchExpiresAt).toBe('2026-09-08T12:00:00.000Z');
+
+      // A re-registration: the old watch is cancelled and the new one has its own generation.
+      await database.session.query(
+        "UPDATE mailbox_watches SET cancelled_at = now(), cancelled_reason = 'test' WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1",
+        [seeded.alpha.workspaceId, mail.alpha.mailboxId],
+      );
+      await database.session.query(
+        `INSERT INTO mailbox_watches (workspace_id, mailbox_id, generation, topic_name, provider_history_id,
+                                      registered_at, expires_at)
+         SELECT workspace_id, mailbox_id, 2, topic_name, '200',
+                TIMESTAMPTZ '2026-09-05 12:00:00+00', TIMESTAMPTZ '2026-09-12 12:00:00+00'
+           FROM mailbox_watches WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1`,
+        [seeded.alpha.workspaceId, mail.alpha.mailboxId],
+      );
+      expect((await readDiagnostics(owner, input)).mailboxes[0]?.watchExpiresAt).toBe('2026-09-12T12:00:00.000Z');
+
+      await database.session.query(
+        "UPDATE mailbox_watches SET cancelled_at = now(), cancelled_reason = 'test' WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 2",
+        [seeded.alpha.workspaceId, mail.alpha.mailboxId],
+      );
+      expect((await readDiagnostics(owner, input)).mailboxes[0]?.watchExpiresAt).toBeNull();
+    } finally {
+      await database.session.query('DELETE FROM mailbox_watches WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 2', [
+        seeded.alpha.workspaceId,
+        mail.alpha.mailboxId,
+      ]);
+      await database.session.query(
+        'UPDATE mailbox_watches SET cancelled_at = NULL, cancelled_reason = NULL WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1',
+        [seeded.alpha.workspaceId, mail.alpha.mailboxId],
+      );
+      await database.session.query('UPDATE mailboxes SET generation = $3 WHERE workspace_id = $1 AND id = $2', [
+        seeded.alpha.workspaceId,
+        mail.alpha.mailboxId,
+        before.rows[0]?.generation,
+      ]);
+    }
+  });
+
   it('audits an admin reading somebody else s mailbox diagnostics', async () => {
     const before = await database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM audit_events

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE } from '@fss/contracts';
+import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE, reasonSentence } from '@fss/contracts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { contactPatchBody, createCrmBridge } from '../src/main/crmBridge.ts';
@@ -362,7 +362,8 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     const saved = await bridge.saveTemplate({ templateVersionId: null, name: 'Long', subject: 'Hi', body: 'word '.repeat(90), signOff: 'David' });
     expect(saved.notice).toBe('template_saved');
     expect(saved.warnings).toEqual(['template_body_too_long', 'template_new_advice']);
-    expect(sequenceScreen(saved).warnings).toEqual(['The email is longer than 89 words, sign-off included.', 'template_new_advice']);
+    expect(sequenceScreen(saved).warnings).toEqual(['The email is longer than 89 words, sign-off included.', reasonSentence('template_new_advice')]);
+    expect(sequenceScreen(saved).warnings[1]).toContain('(template_new_advice)');
     // A read keeps them on screen; the next act clears them.
     expect((await bridge.state()).warnings).toHaveLength(2);
     expect((await bridge.publish({ sequenceVersionId: SEQUENCE_IDS.version })).warnings).toEqual([]);
@@ -631,6 +632,7 @@ describe('Settings has typed controls, not JSON (audit G08)', () => {
     expect(settingSummary('business_time_zone', { timeZone: 'America/Chicago' })).toBe('Central (Chicago)');
     expect(settingSummary('sending_enabled', { enabled: false })).toBe('Off');
     expect(inertSentence('admin_only')).toBe('Only an admin can change this.');
-    expect(inertSentence('a_code_from_the_future')).toBe('a_code_from_the_future');
+    expect(inertSentence('a_code_from_the_future')).toBe(reasonSentence('a_code_from_the_future'));
+    expect(inertSentence('a_code_from_the_future')).not.toBe('a_code_from_the_future');
   });
 });

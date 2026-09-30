@@ -1,5 +1,6 @@
 import { knownBlockedActionKinds, type FollowUpPermissionDto } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { holdEnrollments, type HoldEnrollmentDto } from '../sequences/holdEnrollments.ts';
 import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
@@ -44,6 +45,8 @@ export interface FirmHoldDto {
   readonly startedAt: string;
   /** Section 15: only an explicitly recoverable hold may offer a control. */
   readonly recoveryAction: string | null;
+  /** The enrollment the hold concerns, when it concerns one (R2). */
+  readonly enrollment: HoldEnrollmentDto | null;
 }
 
 export interface OpportunitySummaryDto {
@@ -156,6 +159,7 @@ export async function readFirmPage(
     [workspace, input.firmId],
   );
 
+  const enrollmentsOfHolds = await holdEnrollments(context, holds.rows.map(hold => hold.id));
   const row = opportunity.rows[0];
   return accept({
     visibility: 'assigned_or_admin',
@@ -188,6 +192,7 @@ export async function readFirmPage(
       blockedActionKinds: knownBlockedActionKinds(hold.blocked_action_kinds),
       startedAt: hold.started_at.toISOString(),
       recoveryAction: hold.recovery_action,
+      enrollment: enrollmentsOfHolds.get(hold.id) ?? null,
     })),
     // Migration 0025. Read after the holds because it is the same kind of fact: what
     // the automation may and may not do about this firm, and on whose authority.

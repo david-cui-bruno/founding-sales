@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { followUpPermissionDtoSchema } from './followUps.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
-import { holdReasonCodeSchema } from './reasonCodes.ts';
+import { holdEnrollmentDtoSchema, holdReasonCodeSchema } from './reasonCodes.ts';
 import { uuid } from './foundationRows.ts';
 import { firmReadDtoSchema } from './crm.ts';
 
@@ -298,6 +298,7 @@ const firmHoldDtoSchema = z.strictObject({
   blockedActionKinds: z.array(z.string()),
   startedAt: z.iso.datetime(),
   recoveryAction: z.string().nullable(),
+  enrollment: holdEnrollmentDtoSchema.nullable().optional(),
 });
 
 const opportunitySummaryDtoSchema = z.strictObject({
