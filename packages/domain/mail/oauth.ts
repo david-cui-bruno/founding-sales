@@ -1,5 +1,8 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { withTransaction } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { recordAccountSwitch } from './accounts.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { coalesceMailSync } from './coalesce.ts';
 import type { MailPublicConfig } from './config.ts';
@@ -12,6 +15,9 @@ import {
   openMailboxHold,
   readMailbox,
   readMailboxForOwner,
+  readMailboxForUpdate,
+  releaseMailboxHold,
+  resetAccountState,
 } from './mailboxes.ts';
 import { startRecovery } from './recover.ts';
 import type { SecretProvider } from './secretProvider.ts';
@@ -22,6 +28,7 @@ import {
   GMAIL_SCOPES,
   acceptMail,
   refuseMail,
+  type MailRefusalCode,
   type MailResult,
   type MailboxRow,
 } from './types.ts';
@@ -63,12 +70,41 @@ export interface GrantStateClaims {
   readonly workspaceId: string;
   readonly userId: string;
   readonly expiresAtEpochSeconds: number;
+  /**
+   * This grant attempt (call-to-booking A2). A refusal at the callback is audited with it
+   * and reported by `/gmail/status`, so the Mac can tell "this attempt was refused" from
+   * "an earlier one was". Null only for a state signed before the attempt id existed.
+   */
+  readonly attemptId?: string | null | undefined;
+  /**
+   * The owner's intent to replace their mailbox with this account (A2): the lowercased
+   * address `POST /gmail/connect` named in `switchTo`. The callback switches the row to a
+   * different Google account only when the state carries this and the chosen account is
+   * this one. Null when the grant is a connect or a same-account re-consent.
+   */
+  readonly switchTo?: string | null | undefined;
 }
 
-const STATE_VERSION = 'g1';
+/**
+ * `g1` is the state before A2: workspace, user, expiry. `g2` adds the attempt id and the
+ * switch intent. A `g1` state still verifies (one signed in the ten minutes before a
+ * deploy) and carries neither — so it can never authorise a switch.
+ */
+const STATE_VERSION_G1 = 'g1';
+const STATE_VERSION = 'g2';
 
 function stateBody(claims: GrantStateClaims): string {
-  return [STATE_VERSION, claims.workspaceId, claims.userId, String(claims.expiresAtEpochSeconds)].join('.');
+  return [
+    STATE_VERSION,
+    claims.workspaceId,
+    claims.userId,
+    String(claims.expiresAtEpochSeconds),
+    claims.attemptId ?? '',
+    // The address holds dots, which separate the fields, so it travels encoded.
+    claims.switchTo === null || claims.switchTo === undefined
+      ? ''
+      : Buffer.from(claims.switchTo.trim().toLowerCase(), 'utf8').toString('base64url'),
+  ].join('.');
 }
 
 export function signGrantState(key: Buffer, claims: GrantStateClaims): string {
@@ -77,7 +113,19 @@ export function signGrantState(key: Buffer, claims: GrantStateClaims): string {
   return `${Buffer.from(body, 'utf8').toString('base64url')}.${mac}`;
 }
 
-export function verifyGrantState(key: Buffer, state: string, nowEpochSeconds: number): GrantStateClaims | null {
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/**
+ * The claims of a state whose MAC holds, and whether it has expired — or null when the
+ * MAC does not hold or the body is not a state. The expired case is returned rather
+ * than dropped so the callback can attribute an expired attempt to its user and audit
+ * the refusal (A2); nothing may *act* on an expired state (`verifyGrantState`).
+ */
+export function readGrantState(
+  key: Buffer,
+  state: string,
+  nowEpochSeconds: number,
+): { readonly claims: GrantStateClaims; readonly expired: boolean } | null {
   const parts = state.split('.');
   if (parts.length !== 2) return null;
   const [encoded, mac] = parts;
@@ -98,12 +146,42 @@ export function verifyGrantState(key: Buffer, state: string, nowEpochSeconds: nu
   if (difference !== 0) return null;
 
   const fields = body.split('.');
-  const [version, workspaceId, userId, expiry] = fields;
-  if (fields.length !== 4 || version !== STATE_VERSION) return null;
+  const [version, workspaceId, userId, expiry, attempt, switchEncoded] = fields;
   if (workspaceId === undefined || userId === undefined || expiry === undefined) return null;
+  let attemptId: string | null = null;
+  let switchTo: string | null = null;
+  if (version === STATE_VERSION_G1) {
+    if (fields.length !== 4) return null;
+  } else if (version === STATE_VERSION) {
+    if (fields.length !== 6 || attempt === undefined || switchEncoded === undefined) return null;
+    if (attempt !== '') {
+      if (!UUID_SHAPE.test(attempt)) return null;
+      attemptId = attempt;
+    }
+    if (switchEncoded !== '') switchTo = Buffer.from(switchEncoded, 'base64url').toString('utf8');
+  } else {
+    return null;
+  }
   const expiresAtEpochSeconds = Number(expiry);
-  if (!Number.isInteger(expiresAtEpochSeconds) || expiresAtEpochSeconds <= nowEpochSeconds) return null;
-  return { workspaceId, userId, expiresAtEpochSeconds };
+  if (!Number.isInteger(expiresAtEpochSeconds)) return null;
+  return {
+    // Absent rather than null when the state carries neither, so a `g1` state reads back
+    // exactly as it was signed.
+    claims: {
+      workspaceId,
+      userId,
+      expiresAtEpochSeconds,
+      ...(attemptId === null ? {} : { attemptId }),
+      ...(switchTo === null ? {} : { switchTo }),
+    },
+    expired: expiresAtEpochSeconds <= nowEpochSeconds,
+  };
+}
+
+export function verifyGrantState(key: Buffer, state: string, nowEpochSeconds: number): GrantStateClaims | null {
+  const read = readGrantState(key, state, nowEpochSeconds);
+  if (read === null || read.expired) return null;
+  return read.claims;
 }
 
 /** The PKCE verifier for one grant, derived from its state. Nothing is stored. */
@@ -129,9 +207,35 @@ export interface MailGrantDeps {
 export interface BeginGrantOutcome {
   readonly authorizationUrl: string;
   readonly expiresAt: string;
+  /** This attempt, as the signed state carries it (A2). */
+  readonly attemptId: string;
 }
 
 export const DEFAULT_GRANT_SECONDS = 600;
+
+/**
+ * The fence states a switch waits for (migration 0010's `outbound_messages_state_known`
+ * less its two terminal states, `sent` and `unknown_terminal`). A `held` fence is not
+ * terminal: it returns to `prepared` when its hold clears, and it would then leave from
+ * whichever account the row names at that instant.
+ */
+export const NON_TERMINAL_FENCE_STATES: readonly string[] = Object.freeze([
+  'prepared',
+  'held',
+  'dispatching',
+  'reconciling',
+]);
+
+async function pendingFenceCount(context: RepositoryContext, mailboxId: string): Promise<number> {
+  const { rows } = await context.db.query<{ pending: string }>(
+    `SELECT count(*) AS pending FROM outbound_messages
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND state = ANY ($3::text[])`,
+    [context.scope.workspaceId, mailboxId, [...NON_TERMINAL_FENCE_STATES]],
+  );
+  return Number(rows[0]?.pending ?? 0);
+}
+
+const domainOf = (address: string): string => address.split('@')[1] ?? '';
 
 /**
  * Start the grant. Returns the URL the Mac opens in the system browser.
@@ -140,30 +244,61 @@ export const DEFAULT_GRANT_SECONDS = 600;
  * parameter. `access_type=offline` and `prompt=consent` are what make Google return a
  * refresh token; without them a re-consent returns an access token only and the
  * mailbox would connect and then be unable to sync tomorrow.
+ *
+ * `switchTo` (call-to-booking A2) is the owner asking to replace their mailbox with
+ * another account of the hosted domain. It is refused here, before anybody sees a
+ * consent screen, when it names the mailbox's own address, another domain, or while
+ * any fence of the mailbox is not terminal (the fence would otherwise leave from the new
+ * account). Otherwise the lowercased address goes into the signed state as the intent
+ * and into the consent URL as Google's `login_hint`. An owner with no mailbox has
+ * nothing to switch: that is a plain connect, and the state carries no intent (the hint
+ * is still passed, because the owner named the account).
  */
 export async function beginGmailGrant(
   context: RepositoryContext,
   deps: MailGrantDeps,
+  input: { readonly switchTo?: string | undefined } = {},
 ): Promise<MailResult<BeginGrantOutcome>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuseMail('invalid_input');
 
+  const requested = input.switchTo?.trim().toLowerCase();
+  let switchTo: string | null = null;
+  if (requested !== undefined) {
+    if (domainOf(requested) !== deps.config.hostedDomain.trim().toLowerCase()) {
+      return refuseMail('mailbox_switch_wrong_domain');
+    }
+    const current = await readMailboxForOwner(context, actor.userId);
+    if (current !== null) {
+      if (current.emailAddress === requested) return refuseMail('mailbox_switch_same_address');
+      if ((await pendingFenceCount(context, current.id)) > 0) return refuseMail('mailbox_switch_pending_sends');
+      switchTo = requested;
+    }
+  }
+
   const now = (deps.now ?? ((): Date => new Date()))();
   const expiresAtEpochSeconds = Math.floor(now.getTime() / 1000) + (deps.grantSeconds ?? DEFAULT_GRANT_SECONDS);
+  const attemptId = randomUUID();
   const state = signGrantState(deps.stateSigningKey, {
     workspaceId: context.scope.workspaceId,
     userId: actor.userId,
     expiresAtEpochSeconds,
+    attemptId,
+    switchTo,
   });
   const oauth = await resolveGmailOAuthConfig(deps.config, deps.secrets);
   const url = deps.gmail.authorizationUrl(oauth, {
     state,
     codeChallenge: grantCodeChallenge(grantCodeVerifier(deps.stateSigningKey, state)),
     scopes: GMAIL_SCOPES,
+    // Google preselects the named account. A hint, never a check: the callback compares
+    // the account Google actually returned with the intent in the state.
+    ...(requested === undefined ? {} : { loginHint: requested }),
   });
   return acceptMail({
     authorizationUrl: url,
     expiresAt: new Date(expiresAtEpochSeconds * 1000).toISOString(),
+    attemptId,
   });
 }
 
@@ -171,15 +306,67 @@ export interface CompleteGrantOutcome {
   readonly mailboxId: string;
   readonly emailAddress: string;
   readonly baselineStarted: boolean;
+  /** True when the row moved to a different Google account (A2). */
+  readonly switched: boolean;
+  /** For a switch: whether Gmail acknowledged `users.stop` on the old account's watch. */
+  readonly oldWatchStopped: boolean | null;
 }
 
 /**
- * Finish the grant: exchange the code, store the envelope, create the mailbox, hold
- * the owner's automation until the baseline proves coverage.
+ * A refused grant, audited (A2): `mailbox.grant_refused { reason, attemptId }`, on the
+ * user, and nothing else. `/gmail/status` reports the latest one after the user's latest
+ * connect or switch as `lastGrantRefusal`, which is how the Mac learns what the browser
+ * page deliberately does not say. Written on its own, outside any transaction the
+ * refusal rolled back.
+ */
+export async function recordGrantRefusal(
+  context: RepositoryContext,
+  input: { readonly reason: MailRefusalCode; readonly attemptId: string | null },
+): Promise<void> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return;
+  await recordCrmAuditEvent(context, {
+    action: 'mailbox.grant_refused',
+    subjectKind: 'user',
+    subjectId: actor.userId,
+    detail: { reason: input.reason, attemptId: input.attemptId },
+  });
+}
+
+/** Thrown inside the switch's transaction to roll it back with a refusal. */
+class GrantRefusedInTransaction extends Error {
+  constructor(readonly reason: MailRefusalCode) {
+    super(reason);
+  }
+}
+
+/**
+ * Finish the grant: exchange the code, store the envelope, create the mailbox — or
+ * revive it, or switch it to another account — and hold the owner's automation until
+ * the baseline proves coverage.
  *
- * The order matters and is the conservative one. The mailbox row and the token are
- * written before the coverage hold is opened, but every one of them is in the same
- * transaction, so there is no instant at which a mailbox exists and is not held.
+ * **Provider calls first, then one transaction.** The code exchange, the profile read
+ * and, for a switch, a best-effort `users.stop` on the old account's watch (with the old
+ * refresh token) all happen before any lock is taken, so no row lock is held across a
+ * network call. Then everything the grant writes commits together or not at all, on the
+ * request's session (`context.db` must be one connection — the route's and the test
+ * world's both are), in this lock order: the exclusive send gate, the mailbox row, the
+ * fence re-check. The gate comes first because a switch changes the address every later
+ * send leaves from, which is a stop fact for a claim racing it (`policy/sendGate.ts`).
+ *
+ * **A different account needs intent.** A re-consent whose chosen account is not the
+ * mailbox's own address is refused `mailbox_switch_not_requested` unless the state
+ * carries `switchTo` — the silent switch this closes is the one where the browser was
+ * signed into another account — and refused `mailbox_switch_address_mismatch` when it
+ * carries an intent for a different account. Every refusal here is audited
+ * (`recordGrantRefusal`) and changes nothing else: no row, token, watch or hold.
+ *
+ * **A switch keeps the mailbox id.** Messages, matches, permission evidence, fences and
+ * the ramp keep referencing it. The account's history state is reset (cursor, watermark,
+ * sync error), the current watch row is cancelled so the scheduler registers the new
+ * account's watch on its next pass, and `mailbox_accounts` records the old account's
+ * closed interval and the new one's open one. The generation advances, the baseline
+ * restarts from the new account's profile `historyId`, and the coverage hold goes on.
  *
  * A grant that comes back without a refresh token is refused rather than accepted
  * hopefully: Google omits it when the user has consented before and `prompt=consent`
@@ -192,74 +379,208 @@ export async function completeGmailGrant(
   input: { readonly state: string; readonly code: string },
 ): Promise<MailResult<CompleteGrantOutcome>> {
   const now = (deps.now ?? ((): Date => new Date()))();
-  const claims = verifyGrantState(deps.stateSigningKey, input.state, Math.floor(now.getTime() / 1000));
-  if (claims === null) return refuseMail('authorization_request_unknown');
+  const read = readGrantState(deps.stateSigningKey, input.state, Math.floor(now.getTime() / 1000));
+  if (read === null) return refuseMail('authorization_request_unknown');
+  const claims = read.claims;
   if (claims.workspaceId !== context.scope.workspaceId) return refuseMail('authorization_request_unknown');
   const actor = context.scope.actor;
   if (actor.kind !== 'user' || actor.userId !== claims.userId) return refuseMail('authorization_request_unknown');
+
+  const attemptId = claims.attemptId ?? null;
+  const refuse = async (reason: MailRefusalCode): Promise<MailResult<CompleteGrantOutcome>> => {
+    await recordGrantRefusal(context, { reason, attemptId });
+    return refuseMail(reason);
+  };
+  // An expired state is this user's, provably, and still refused: audited, so the Mac
+  // can say the consent took too long.
+  if (read.expired) return await refuse('authorization_request_unknown');
 
   const oauth = await resolveGmailOAuthConfig(deps.config, deps.secrets);
   const exchanged = await deps.gmail.exchangeAuthorizationCode(oauth, {
     code: input.code,
     codeVerifier: grantCodeVerifier(deps.stateSigningKey, input.state),
   });
-  if (!exchanged.ok) return refuseMail('grant_refused');
+  if (!exchanged.ok) return await refuse('grant_refused');
   const refreshToken = exchanged.grant.refreshToken;
-  if (refreshToken === null) return refuseMail('grant_refused');
+  if (refreshToken === null) return await refuse('grant_refused');
 
   // Every scope FSS asked for must have come back. A partial grant is a mailbox that
   // can read and not send, or send and not reconcile, and Appendix B needs both.
   const granted = new Set(exchanged.grant.grantedScopes);
-  if (!GMAIL_SCOPES.every(scope => granted.has(scope))) return refuseMail('grant_refused');
+  if (!GMAIL_SCOPES.every(scope => granted.has(scope))) return await refuse('grant_refused');
 
+  // The profile yields the address and the history id the baseline starts from, and it
+  // is read before the interval's end is fixed (`toAt` below).
   const profile = await deps.gmail.getProfile(exchanged.grant);
   const address = profile.emailAddress.trim().toLowerCase();
-  const domain = address.split('@')[1] ?? '';
-  if (domain !== deps.config.hostedDomain.trim().toLowerCase()) return refuseMail('grant_refused');
+  if (domainOf(address) !== deps.config.hostedDomain.trim().toLowerCase()) return await refuse('grant_refused');
 
   // One mailbox per address per workspace, and this one may belong to somebody else.
-  const { rows } = await context.db.query<{ owner_user_id: string }>(
-    'SELECT owner_user_id FROM mailboxes WHERE workspace_id = $1 AND email_address = $2',
-    [context.scope.workspaceId, address],
-  );
-  const currentOwner = rows[0]?.owner_user_id;
-  if (currentOwner !== undefined && currentOwner !== actor.userId) return refuseMail('mailbox_address_taken');
+  const addressOwner = async (): Promise<string | undefined> => {
+    const { rows } = await context.db.query<{ owner_user_id: string }>(
+      'SELECT owner_user_id FROM mailboxes WHERE workspace_id = $1 AND email_address = $2',
+      [context.scope.workspaceId, address],
+    );
+    return rows[0]?.owner_user_id;
+  };
+  const taken = await addressOwner();
+  if (taken !== undefined && taken !== actor.userId) return await refuse('mailbox_address_taken');
 
+  // The intent, against the account Google returned.
+  const intent = claims.switchTo ?? null;
+  const before = await readMailboxForOwner(context, actor.userId);
+  const decided = switchDecision(before, address, intent);
+  if (!decided.ok) return await refuse(decided.reason);
+
+  // A switch stops the old account's watch with the old account's token, best effort,
+  // before any lock. Never blocks: a watch nobody stops expires within seven days, and
+  // the old token is replaced in the transaction below either way.
+  let oldWatchStopped: boolean | null = null;
+  if (decided.switching && before !== null) {
+    oldWatchStopped = await stopOldWatch(context, deps, oauth, before.id);
+  }
+  const toAt = (deps.now ?? ((): Date => new Date()))().toISOString();
   const baselineFromAt = new Date(
-    now.getTime() - (deps.config.baselineDays || DEFAULT_BASELINE_DAYS) * 24 * 3600 * 1000,
+    Date.parse(toAt) - (deps.config.baselineDays || DEFAULT_BASELINE_DAYS) * 24 * 3600 * 1000,
   ).toISOString();
-  const mailbox = await insertOrReviveMailbox(context, {
-    ownerUserId: actor.userId,
-    emailAddress: address,
-    providerAccountId: address,
-    baselineFromAt,
-  });
-  await storeRefreshToken(context, { mailboxId: mailbox.id, plaintext: refreshToken, cipher: deps.cipher });
 
-  // 12.3 and 4.2: nothing automated for this owner may run until coverage is proved.
-  await openMailboxHold(context, {
-    mailboxId: mailbox.id,
-    ownerUserId: mailbox.ownerUserId,
-    reasonCode: 'coverage_incomplete',
-  });
-  await startRecovery(context, { mailbox, reason: 'baseline', fromAt: baselineFromAt, toAt: now.toISOString(), startHistoryId: profile.historyId });
-  await coalesceMailSync(context.db, {
-    workspaceId: context.scope.workspaceId,
-    mailboxId: mailbox.id,
-    historyId: profile.historyId,
-  });
-
-  await recordCrmAuditEvent(context, {
-    action: 'mailbox.connected',
-    subjectKind: 'mailbox',
-    subjectId: mailbox.id,
-    // The address is business data the owner and an admin may see (Appendix F). The
-    // token is not here, not hashed here, and not anywhere but `mailbox_tokens`.
-    detail: { emailAddress: address },
-  });
-
-  return acceptMail({ mailboxId: mailbox.id, emailAddress: address, baselineStarted: true });
+  try {
+    const outcome = await withTransaction(context.db, async () => {
+      // 1. The exclusive send gate, before any row.
+      await lockSendGateForStopFact(context);
+      // 2. The mailbox row, and the decision again on what the lock shows: a concurrent
+      // grant may have moved it since the read above.
+      const owned = await readMailboxForOwner(context, actor.userId);
+      const locked = owned === null ? null : await readMailboxForUpdate(context, owned.id);
+      const lockedOwner = await addressOwner();
+      if (lockedOwner !== undefined && lockedOwner !== actor.userId) {
+        throw new GrantRefusedInTransaction('mailbox_address_taken');
+      }
+      const again = switchDecision(locked, address, intent);
+      if (!again.ok) throw new GrantRefusedInTransaction(again.reason);
+      const switching = again.switching && locked !== null;
+      // 3. The fences, under the lock: a fence prepared since `beginGmailGrant` checked.
+      if (switching && (await pendingFenceCount(context, locked.id)) > 0) {
+        throw new GrantRefusedInTransaction('mailbox_switch_pending_sends');
+      }
+      // 4. The old account's history state and its watch.
+      if (switching) {
+        await resetAccountState(context, { mailboxId: locked.id });
+        await cancelWatch(context, { mailboxId: locked.id, reason: 'mailbox_switched' });
+      }
+      // 5. The revive: address, account id, generation + 1, baseline_pending.
+      const mailbox = await insertOrReviveMailbox(context, {
+        ownerUserId: actor.userId,
+        emailAddress: address,
+        providerAccountId: address,
+        baselineFromAt,
+      });
+      // 6. The token.
+      await storeRefreshToken(context, { mailboxId: mailbox.id, plaintext: refreshToken, cipher: deps.cipher });
+      // 7. The account intervals.
+      if (switching) {
+        await recordAccountSwitch(context, {
+          mailboxId: mailbox.id,
+          fromAddress: locked.emailAddress,
+          toAddress: address,
+          toGeneration: mailbox.generation,
+        });
+      }
+      // 8. 12.3 and 4.2: nothing automated for this owner may run until coverage is proved.
+      await openMailboxHold(context, {
+        mailboxId: mailbox.id,
+        ownerUserId: mailbox.ownerUserId,
+        reasonCode: 'coverage_incomplete',
+      });
+      // 9. The baseline, from the profile's history id.
+      await startRecovery(context, {
+        mailbox,
+        reason: 'baseline',
+        fromAt: baselineFromAt,
+        toAt,
+        startHistoryId: profile.historyId,
+      });
+      await coalesceMailSync(context.db, {
+        workspaceId: context.scope.workspaceId,
+        mailboxId: mailbox.id,
+        historyId: profile.historyId,
+      });
+      // 10. A reconnect ends the disconnection: nothing released this hold before A2.
+      // `coverage_incomplete` stays until the baseline proves coverage.
+      await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'mailbox_disconnected' });
+      // 11. The audit row. The address is business data the owner and an admin may see
+      // (Appendix F). The token is not here, not hashed here, and not anywhere but
+      // `mailbox_tokens`.
+      if (switching) {
+        await recordCrmAuditEvent(context, {
+          action: 'mailbox.switched',
+          subjectKind: 'mailbox',
+          subjectId: mailbox.id,
+          detail: { from: locked.emailAddress, to: address, attemptId, oldWatchStopped },
+        });
+      } else {
+        await recordCrmAuditEvent(context, {
+          action: 'mailbox.connected',
+          subjectKind: 'mailbox',
+          subjectId: mailbox.id,
+          detail: { emailAddress: address, attemptId },
+        });
+      }
+      return { mailbox, switching };
+    });
+    return acceptMail({
+      mailboxId: outcome.mailbox.id,
+      emailAddress: address,
+      baselineStarted: true,
+      switched: outcome.switching,
+      oldWatchStopped: outcome.switching ? oldWatchStopped : null,
+    });
+  } catch (error) {
+    if (error instanceof GrantRefusedInTransaction) return await refuse(error.reason);
+    throw error;
+  }
 }
+
+/**
+ * What a grant for `address` does to the owner's current mailbox, given the state's
+ * intent: connect or re-consent (no switch), switch, or a refusal.
+ */
+function switchDecision(
+  current: MailboxRow | null,
+  address: string,
+  intent: string | null,
+): { readonly ok: true; readonly switching: boolean } | { readonly ok: false; readonly reason: MailRefusalCode } {
+  // An intent names one account, and only that one may complete it.
+  if (intent !== null && intent !== address) return { ok: false, reason: 'mailbox_switch_address_mismatch' };
+  if (current === null || current.emailAddress === address) return { ok: true, switching: false };
+  // Another account, and nobody asked for one: the silent switch.
+  if (intent === null) return { ok: false, reason: 'mailbox_switch_not_requested' };
+  return { ok: true, switching: true };
+}
+
+/**
+ * `users.stop` on the old account's watch, with the old account's refresh token, before
+ * the switch's transaction. Best effort, and the answer is recorded rather than acted
+ * on: true only when Gmail acknowledged the stop.
+ */
+async function stopOldWatch(
+  context: RepositoryContext,
+  deps: MailGrantDeps,
+  oauth: Awaited<ReturnType<typeof resolveGmailOAuthConfig>>,
+  mailboxId: string,
+): Promise<boolean> {
+  try {
+    const refreshToken = await readRefreshToken(context, { mailboxId, cipher: deps.cipher });
+    if (refreshToken === null) return false;
+    const access = await deps.gmail.refreshAccessToken(oauth, refreshToken);
+    if (!access.ok) return false;
+    await deps.gmail.stopWatch(access.grant);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 export interface DisconnectOutcome {
   readonly mailboxId: string;

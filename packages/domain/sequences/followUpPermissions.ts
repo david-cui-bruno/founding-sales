@@ -904,7 +904,17 @@ export async function consumeFollowUpPermission(
  */
 export async function consumeFulfilledByDirectSend(
   context: RepositoryContext,
-  input: { readonly firmId: string; readonly contactIds: readonly string[] },
+  input: {
+    readonly firmId: string;
+    readonly contactIds: readonly string[];
+    /**
+     * The message's Gmail internal date (call-to-booking A2, boundary (b)): a message
+     * fulfils only a permission that existed when it was sent. A delayed import — a
+     * baseline after a switch, a recovery — of a message sent before the grant does not
+     * spend the grant it predates.
+     */
+    readonly sentAt: string;
+  },
 ): Promise<readonly { readonly permissionId: string; readonly enrollmentId: string | null }[]> {
   if (input.contactIds.length === 0) return [];
   const { rows } = await context.db.query<{ id: string; enrollment_id: string | null }>(
@@ -917,8 +927,9 @@ export async function consumeFulfilledByDirectSend(
         AND consumed_at IS NULL
         AND revoked_at IS NULL
         AND expires_at > clock_timestamp()
+        AND date_trunc('milliseconds', created_at) <= $4::timestamptz
       RETURNING id, enrollment_id`,
-    [context.scope.workspaceId, input.firmId, [...input.contactIds]],
+    [context.scope.workspaceId, input.firmId, [...input.contactIds], input.sentAt],
   );
   return rows
     .map(row => ({ permissionId: row.id, enrollmentId: row.enrollment_id }))

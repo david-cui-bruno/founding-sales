@@ -43,7 +43,10 @@ export interface AttachmentView {
   readonly mailMessageId: string;
   readonly providerMessageId: string;
   readonly attachments: readonly AttachmentReference[];
-  /** Opens the original message in the mailbox it arrived in. */
+  /**
+   * Opens the original message in the mailbox it arrived in: the account the mailbox
+   * was when the message was recorded, which after a switch may not be the current one.
+   */
   readonly openInGmailUrl: string;
 }
 
@@ -90,7 +93,23 @@ export async function readAttachmentReferences(
     owner_user_id: string;
     assignees: readonly (string | null)[];
   }>(
-    `SELECT m.id, m.provider_message_id, m.attachment_references, b.email_address AS mailbox_address,
+    // The account the message was recorded under names the link, not the mailbox's
+    // current address (call-to-booking A2): after a switch, a message recorded while the
+    // row was the old account lives in the old account's Gmail, and `authuser=<new>`
+    // would open a mailbox that does not have it. The earliest interval that had not
+    // ended when the row was recorded (`recorded_at`) — the one containing it, or the
+    // first account for a row older than every interval (a restored or backdated row) —
+    // and the current address for every mailbox never switched (no `mailbox_accounts`
+    // rows).
+    `SELECT m.id, m.provider_message_id, m.attachment_references,
+            COALESCE(
+              (SELECT a.email_address FROM mailbox_accounts a
+                WHERE a.workspace_id = m.workspace_id AND a.mailbox_id = m.mailbox_id
+                  AND (a.active_until IS NULL OR m.recorded_at < a.active_until)
+                ORDER BY a.active_from
+                LIMIT 1),
+              b.email_address
+            ) AS mailbox_address,
             b.owner_user_id,
             COALESCE(
               (SELECT array_agg(DISTINCT f.assigned_user_id)

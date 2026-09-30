@@ -960,7 +960,17 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
       world.alpha.mailboxId,
     ]);
     world.alpha.messages.push(
-      fixtureMessage({ id: 'read-stop-1', historyId: '1101', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      // Sent now, after the permission was granted: a message from before the grant does
+      // not fulfil it (call-to-booking A2, boundary (b)), and the fixture's default date
+      // is in the past.
+      fixtureMessage({
+        id: 'read-stop-1',
+        historyId: '1101',
+        from: world.alpha.address,
+        to: followUp.address,
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now(),
+      }),
       fixtureMessage({ id: 'read-stop-2', historyId: '1102', from: followUp.address, to: world.alpha.address }),
     );
     const base = world.syncDeps(world.alpha);

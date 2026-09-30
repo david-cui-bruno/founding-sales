@@ -3,8 +3,8 @@ import {
   beginGmailGrant,
   completeGmailGrant,
   disconnectMailbox,
+  readGrantState,
   readOwnMailbox,
-  verifyGrantState,
 } from '@fss/domain/mail/oauth.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
@@ -12,7 +12,7 @@ import { registerMailboxSendingDomain } from '@fss/domain/outbound/domainGuard.t
 import { errorFields, type Logger } from '../bootstrap/log.ts';
 import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
-import { mailRouteDeps, membershipScope } from './mailSupport.ts';
+import { mailRouteDeps, membershipScope, readBaselineProgress, readLastGrantRefusal } from './mailSupport.ts';
 import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -71,13 +71,17 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     const code = request.query.get('code');
     if (code === null || code.length === 0) return html(REFUSED_PAGE, 400);
 
-    const claims = verifyGrantState(mail.stateSigningKey, state, Math.floor(Date.now() / 1000));
-    if (claims === null) return html(REFUSED_PAGE, 400);
-    const scoped = await membershipScope(auth, claims);
+    // A state whose MAC holds names its user even once it has expired, so an expired
+    // attempt reaches `completeGmailGrant`, which audits the refusal for that user
+    // (call-to-booking A2) and acts on nothing.
+    const read = readGrantState(mail.stateSigningKey, state, Math.floor(Date.now() / 1000));
+    if (read === null) return html(REFUSED_PAGE, 400);
+    const scoped = await membershipScope(auth, read.claims);
     if (scoped === null) return html(REFUSED_PAGE, 403);
 
     const outcome = await completeGmailGrant(scoped.context, mail, { state, code });
-    if (!outcome.ok) return html(REFUSED_PAGE, 409);
+    // An expired state is still a 400, as it was before the refusal was audited.
+    if (!outcome.ok) return html(REFUSED_PAGE, outcome.reason === 'authorization_request_unknown' ? 400 : 409);
     await registerConnectedDomain(auth.db, scoped.context, outcome.value, options.log);
     return html(CONNECTED_PAGE, 200);
   }
@@ -93,6 +97,8 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
     const mailbox = await readOwnMailbox(scoped.context, deps.principal.userId);
+    const baseline = mailbox === null ? null : await readBaselineProgress(scoped.context, mailbox);
+    const lastGrantRefusal = await readLastGrantRefusal(scoped.context, deps.principal.userId);
     // Appendix F: the mailbox owner sees their own diagnostics. Nothing here is a
     // credential, and the token's existence is reported as a boolean, never a value.
     // `satisfies GmailStatus`: the Mac parses this body with the same schema
@@ -113,7 +119,9 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
                 coverageWatermarkAt: mailbox.coverageWatermarkAt,
                 lastSyncedAt: mailbox.lastSyncedAt,
                 lastSyncError: mailbox.lastSyncError,
+                baseline,
               },
+        lastGrantRefusal,
       } satisfies GmailStatus,
     };
   }
@@ -128,7 +136,8 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
         deps,
         connectMailboxCommandSchema,
         'connect_mailbox',
-        async context => await beginGmailGrant(context, mail),
+        async (context, body) =>
+          await beginGmailGrant(context, mail, body.switchTo === undefined ? {} : { switchTo: body.switchTo }),
       );
     case '/gmail/disconnect':
       return await runRouteCommand(

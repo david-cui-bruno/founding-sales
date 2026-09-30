@@ -523,6 +523,14 @@ export async function applyDirectSendEffects(
   );
   if (processed[0]?.present === true) return NOT_RECORDED;
 
+  // Call-to-booking A2, boundary (a): after a mailbox switch, the new account's own Sent
+  // items from before the switch are that account's history, not the salesperson writing
+  // to this firm through Callie's mailbox. An outgoing message whose Gmail internal date
+  // is before the current account's `active_from` is never a direct send. A mailbox never
+  // switched has no `mailbox_accounts` row and no bound. Nothing is recorded, so nothing
+  // about the message is frozen either; inbound processing is not bounded at all.
+  if (await sentBeforeCurrentAccount(context, message)) return NOT_RECORDED;
+
   const recipientContactIds = await verifiedRecipientContacts(context, {
     firmId: candidate.firmId,
     addresses: [...message.headerTo, ...message.headerCc],
@@ -532,8 +540,10 @@ export async function applyDirectSendEffects(
   const { rows: prospecting } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments
       WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind = 'prospecting'
+        -- A2 boundary (c): a message ends only an enrollment that existed when it was sent.
+        AND date_trunc('milliseconds', created_at) <= $3::timestamptz
       ORDER BY id`,
-    [context.scope.workspaceId, candidate.firmId],
+    [context.scope.workspaceId, candidate.firmId, message.internalDate],
   );
   for (const enrollment of prospecting) {
     const stopped = await stopEnrollments(context, {
@@ -547,6 +557,7 @@ export async function applyDirectSendEffects(
   const consumed = await consumeFulfilledByDirectSend(context, {
     firmId: candidate.firmId,
     contactIds: recipientContactIds,
+    sentAt: message.internalDate,
   });
   const consumedPermissionIds = consumed.map(permission => permission.permissionId);
   if (consumedPermissionIds.length > 0) {
@@ -554,11 +565,14 @@ export async function applyDirectSendEffects(
       `SELECT id FROM sequence_enrollments
         WHERE workspace_id = $1 AND ended_at IS NULL
           AND (permission_id = ANY ($2::uuid[]) OR id = ANY ($3::uuid[]))
+          -- A2 boundary (c), as above.
+          AND date_trunc('milliseconds', created_at) <= $4::timestamptz
         ORDER BY id`,
       [
         context.scope.workspaceId,
         consumedPermissionIds,
         consumed.flatMap(permission => (permission.enrollmentId === null ? [] : [permission.enrollmentId])),
+        message.internalDate,
       ],
     );
     for (const enrollment of bound) {
@@ -642,6 +656,26 @@ export async function applyDirectSendEffects(
     deferredExecutionIds,
     deferredUntil,
   };
+}
+
+/**
+ * Whether an outgoing message predates the mailbox's current account (call-to-booking
+ * A2): its Gmail internal date is before the open `mailbox_accounts` interval's
+ * `active_from`. False when the mailbox has never been switched (no open row). Gmail's
+ * internal date has millisecond precision, so every boundary here compares at the
+ * millisecond (`date_trunc`): a message in the same millisecond as the instant counts as
+ * at-or-after it.
+ */
+async function sentBeforeCurrentAccount(context: RepositoryContext, message: MailMessageRow): Promise<boolean> {
+  const { rows } = await context.db.query<{ before: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM mailbox_accounts
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND active_until IS NULL
+          AND $3::timestamptz < date_trunc('milliseconds', active_from)
+     ) AS before`,
+    [context.scope.workspaceId, message.mailboxId, message.internalDate],
+  );
+  return rows[0]?.before === true;
 }
 
 /**

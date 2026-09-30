@@ -25,6 +25,13 @@ export const MAIL_REFUSAL_CODES = [
   // Send-path v2 (S1 review P1-D): the message's direct-send effect was already applied
   // to another firm, so a resolution to this one would contradict it.
   'already_applied',
+  // Call-to-booking A2: switching the mailbox to another Google account
+  // (`@fss/contracts` `MAILBOX_SWITCH_REFUSAL_CODES`, the same five words).
+  'mailbox_switch_not_requested',
+  'mailbox_switch_address_mismatch',
+  'mailbox_switch_same_address',
+  'mailbox_switch_wrong_domain',
+  'mailbox_switch_pending_sends',
 ] as const;
 export type MailRefusalCode = (typeof MAIL_REFUSAL_CODES)[number];
 
