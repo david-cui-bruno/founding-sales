@@ -345,8 +345,22 @@ export function holdEnrollmentLine(
     : `Sequence: ${enrollment.sequenceName}, step ${String(enrollment.stepNumber)}`;
 }
 
+/**
+ * The refusals a settings save can come back with, and the bridge's own words for "it did
+ * not work" (slice S1, Settings → Calling & calendar). A block of its own, added beside
+ * `ALL_SENTENCES` rather than inside another slice's map.
+ */
+const INTEGRATION_SETTINGS_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  invalid_value: 'Callie could not use that value. Check it and try again.',
+  setting_version_conflict: 'Somebody changed this setting a moment ago. Refresh and try again.',
+  offline: 'Callie cannot reach the server right now. Try again when the connection is back.',
+  refused: 'Callie could not make that change. Refresh and try again.',
+  unreadable_answer: 'Callie could not read the answer. Refresh and try again.',
+});
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  ...INTEGRATION_SETTINGS_SENTENCES,
   ...HOLD_REASON_SENTENCES,
   ...DIAL_REFUSAL_SENTENCES,
   ...DIAL_ADVICE_SENTENCES,

@@ -185,6 +185,8 @@ describe('the administration bridge', () => {
       '/calling-identities',
       '/postures/reference',
       '/postures',
+      // Slice S1: the call-to-booking switches, read for an admin.
+      '/settings/integrations',
     ]);
     expect(state.callingNumbers).toBeNull();
     expect(state.notice).toBeNull();

@@ -78,11 +78,11 @@ describe('workspace settings', () => {
     }
   });
 
-  it('stores slice C1 s voicemail script outside the snapshot, bounded at 1 000 characters', async () => {
+  it('stores slice C1 s voicemail script outside the snapshot, bounded at 2 000 characters', async () => {
     expect((await readSetting(admin, 'voicemail_script')).value).toEqual({ template: DEFAULT_VOICEMAIL_TEMPLATE });
     const tooLong = await updateSetting(admin, {
       settingKey: 'voicemail_script',
-      value: { template: 'x'.repeat(1_001) },
+      value: { template: 'x'.repeat(2_001) },
       changeNote: 'too long',
     });
     expect(tooLong).toEqual({ ok: false, reason: 'invalid_value' });

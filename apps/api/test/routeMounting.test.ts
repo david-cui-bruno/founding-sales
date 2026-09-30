@@ -147,6 +147,7 @@ describe('what the API mounts', () => {
       '/sequences/versions/steps',
       '/settings',
       '/settings/history',
+      '/settings/integrations',
       '/settings/update',
       '/suppressions',
       '/suppressions/correct',

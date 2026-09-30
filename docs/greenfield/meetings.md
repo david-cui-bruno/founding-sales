@@ -7,9 +7,10 @@ answers 404 and nothing reads the Cal.com secret.
 
 ## The switch
 
-`calendar_integration` `{"integration": "off" | "calcom"}`, written with
-`POST /settings/update` (not in the `GET /settings` snapshot; see
-[calling.md](calling.md)). The webhook serves **the one workspace** with the switch on:
+`calendar_integration` `{"integration": "off" | "calcom"}`. **David turns Cal.com on in
+Settings → Calling & calendar**; the switch cannot be turned on while the Cal.com webhook
+secret is missing. It is written with `POST /settings/update` (not in the `GET /settings`
+snapshot; see [calling.md](calling.md)). The webhook serves **the one workspace** with the switch on:
 Cal.com's webhook carries no workspace, so with two workspaces switched on the route
 answers 503 rather than guess.
 

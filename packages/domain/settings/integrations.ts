@@ -4,6 +4,7 @@ import {
   calendarIntegrationSettingSchema,
   callingProviderSettingSchema,
   telephonyBudgetSettingSchema,
+  voicemailScriptSettingSchema,
   type TelephonyBudgetSetting,
 } from '@fss/contracts';
 import type { SessionQueryable } from '../db/queryable.ts';
@@ -42,14 +43,12 @@ export async function readTelephonyBudget(context: RepositoryContext): Promise<T
  * The voicemail script's template (slice C1): `{contactFirstName}`, `{firmName}`,
  * `{callerName}` and `{callbackNumber}`, rendered by `renderVoicemailScript`.
  *
- * **Always the default for now.** A `voicemail_script` setting needs its key admitted by
- * `workspace_settings_key_known`, which only a migration can widen (0028 is slice W's and
- * closed), and `packages/domain/test/settings/settings.test.ts` holds the contract's key
- * list to that CHECK. Until that migration lands this reader is the one place the value
- * comes from, so the setting replaces it here and nowhere else.
+ * The stored `voicemail_script` setting (slice S1 made it editable; migration 0028 already
+ * admits the key), or the default when none is stored or the stored value does not parse.
  */
-export async function readVoicemailScript(_context: RepositoryContext): Promise<string> {
-  return await Promise.resolve(DEFAULT_VOICEMAIL_SCRIPT);
+export async function readVoicemailScript(context: RepositoryContext): Promise<string> {
+  const parsed = voicemailScriptSettingSchema.safeParse((await readSetting(context, 'voicemail_script')).value);
+  return parsed.success ? parsed.data.template : DEFAULT_VOICEMAIL_SCRIPT;
 }
 
 /**

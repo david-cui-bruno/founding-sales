@@ -179,7 +179,7 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
  *     one call reserves, and the price per minute in micro-dollars. A ceiling of 0 means
  *     telephony spend is disabled: `POST /calls/session` refuses `telephony_budget_disabled`.
  *   * `voicemail_script` — the template of the voicemail a caller leaves (slice C1, which
- *     owns the read, the write and the editor). `{ template }`, at most 1 000 characters;
+ *     owns the read, the write and the editor). `{ template }`, at most 2 000 characters;
  *     absent is `DEFAULT_VOICEMAIL_TEMPLATE`. Not an integration, but kept out of the
  *     snapshot for the same reason, so it lives in this list.
  */
@@ -214,7 +214,11 @@ export type TelephonyBudgetSetting = z.infer<typeof telephonyBudgetSettingSchema
 export const DEFAULT_VOICEMAIL_TEMPLATE =
   "Hi {contactFirstName}, this is {callerName} from Callie. I'm calling about how {firmName} handles maintenance requests after hours. I'll try you again, or you can reach me at {callbackNumber}. Thanks.";
 
-export const voicemailScriptSettingSchema = z.strictObject({ template: z.string().max(1_000) });
+/** The longest voicemail template an admin may save (slice S1 raised it from 1 000 to 2 000). */
+export const VOICEMAIL_TEMPLATE_MAX_CHARACTERS = 2_000;
+export const voicemailScriptSettingSchema = z.strictObject({
+  template: z.string().min(1).max(VOICEMAIL_TEMPLATE_MAX_CHARACTERS),
+});
 export type VoicemailScriptSetting = z.infer<typeof voicemailScriptSettingSchema>;
 
 export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
@@ -240,6 +244,23 @@ export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, un
   ...DEFAULT_SETTING_VALUES,
   ...DEFAULT_INTEGRATION_SETTING_VALUES,
 });
+
+/**
+ * `GET /settings/integrations` (slice S1): the four call-to-booking settings in one answer, and
+ * whether each integration's credentials are in place. `missing` is a list of field NAMES
+ * (`auth_token`), never a value, a length or a prefix of one.
+ */
+const integrationConfigured = z.strictObject({ ok: z.boolean(), missing: z.array(z.string().max(64)).max(16) });
+export const integrationsSettingsResponseSchema = z.strictObject({
+  callingProvider: z.enum(['tel', 'twilio']),
+  telephonyBudget: telephonyBudgetSettingSchema,
+  calendarIntegration: z.enum(['off', 'calcom']),
+  voicemailScript: z.string().min(1).max(VOICEMAIL_TEMPLATE_MAX_CHARACTERS),
+  configured: z.strictObject({ twilioVoice: integrationConfigured, calcom: integrationConfigured }),
+  /** Today's settled plus reserved Twilio minutes, in cents, on the budget's own day boundary. */
+  spentTodayCents: z.number().int().min(0),
+});
+export type IntegrationsSettingsResponse = z.infer<typeof integrationsSettingsResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Commands and reads

@@ -1,9 +1,17 @@
 import {
+  integrationsSettingsResponseSchema,
   settingHistoryRequestSchema,
   updateSettingCommandSchema,
 } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
 import { SETTINGS_ELSEWHERE } from '@fss/domain/settings/elsewhere.ts';
+import {
+  readCalendarIntegration,
+  readCallingProvider,
+  readTelephonyBudget,
+  readVoicemailScript,
+} from '@fss/domain/settings/integrations.ts';
+import { telephonySpentToday } from '@fss/domain/calls/sessions.ts';
 import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
 import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
 import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
@@ -15,7 +23,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 /**
  * The administrative configuration surface (specification 10.1, 13.3, 16.2).
  *
- * Three exact paths. Reading is open to any authenticated member — a salesperson
+ * Four exact paths (`/settings/integrations`, slice S1, is the read of the call-to-booking keys). Reading is open to any authenticated member — a salesperson
  * whose send was refused by a cap should be able to see what the cap is — and
  * writing is admin-only, refused by the domain command in the same transaction as
  * the write rather than by a check here.
@@ -48,13 +56,42 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * its sections. 1.0.14 knows the key, so the filter and its `?include=` parameter are
  * gone.
  */
-export const SETTINGS_PATHS: readonly string[] = ['/settings', '/settings/update', '/settings/history'];
+export const SETTINGS_PATHS: readonly string[] = ['/settings', '/settings/update', '/settings/history', '/settings/integrations'];
 
 export async function routeSettings(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!SETTINGS_PATHS.includes(request.path)) return null;
   const prepared = await policyRouteDeps(request, options);
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
+
+  if (request.path === '/settings/integrations') {
+    // Slice S1. Any signed-in member may read it (a salesperson sees why a call went to
+    // the phone app); only an admin may write the four keys, through `/settings/update`.
+    // Field NAMES only: a value, a length or a prefix of a secret never reaches this answer.
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+    }
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    const integrations = options.integrations;
+    const named = integrations?.missing;
+    const configured = (present: boolean, missing: readonly string[] | undefined): { ok: boolean; missing: string[] } =>
+      present ? { ok: true, missing: [] } : { ok: false, missing: [...(missing ?? [])] };
+    return {
+      status: 200,
+      body: integrationsSettingsResponseSchema.parse({
+        callingProvider: await readCallingProvider(scoped.context),
+        telephonyBudget: await readTelephonyBudget(scoped.context),
+        calendarIntegration: await readCalendarIntegration(scoped.context),
+        voicemailScript: await readVoicemailScript(scoped.context),
+        configured: {
+          twilioVoice: configured((integrations?.twilio ?? null) !== null, named?.twilioVoice),
+          calcom: configured((integrations?.calcom ?? null) !== null, named?.calcom),
+        },
+        spentTodayCents: await telephonySpentToday(scoped.context),
+      }),
+    };
+  }
 
   if (request.path === '/settings') {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
