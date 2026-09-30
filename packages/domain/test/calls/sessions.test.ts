@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import { withTransaction, type Queryable } from '../../db/queryable.ts';
+import { withTransaction, type Queryable, type QueryResultRowLike } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   consumeCallSession,
@@ -219,7 +219,7 @@ describe('call sessions', () => {
     // The placement commits between the unlocked lookup and the locked read: the lookup
     // misses. Without the gate and the firm, the session must not be locked or written.
     const racing: Queryable = {
-      query: async <Row extends object>(text: string, values?: readonly unknown[]) =>
+      query: async <Row extends QueryResultRowLike>(text: string, values?: readonly unknown[]) =>
         text.includes('SELECT workspace_id, firm_id FROM call_sessions')
           ? { rows: [] as Row[], rowCount: 0 }
           : await database.session.query<Row>(text, values),
