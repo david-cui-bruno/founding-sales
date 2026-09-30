@@ -68,8 +68,9 @@ expect rather than to lose the fact.
 | `firm.created` | J-facts | the firm id |
 | `firm.researched` | R | `{firm}:{revision}` |
 | `firm.queued_for_call` | R | the firm id: the *first* time it became callable |
-| `call.placed`, `call.connected`, `call.engaged` | C | the call log id |
-| `meeting.booked`, `meeting.held` | M | the calendar event id |
+| `call.placed`, `call.connected` | W (call-to-booking) | the call session id (a Twilio call; a `tel:` call records neither) |
+| `call.engaged` | C | the call log id |
+| `meeting.booked`, `meeting.held` | W (call-to-booking) | the Cal.com booking uid |
 | `mail.warm_sent` | W | the outbound message id |
 | `mail.replied` | W | the inbound mail message id |
 | `offer.sent`, `offer.accepted` | O | the offer id |

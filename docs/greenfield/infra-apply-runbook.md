@@ -204,7 +204,7 @@ The provider block in `infra/roots/production-google/providers.tf` names only `p
 
 ### 1.4 The secret values
 
-Terraform creates five **empty** Secrets Manager application entries, and two more for the database identities (3.3). It never holds a value and it never generates one. After the first apply (step 3.3), put the values in with the CLI. These are the entries and what goes in each:
+Terraform creates seven **empty** Secrets Manager application entries, and two more for the database identities (3.3). It never holds a value and it never generates one. After the first apply (step 3.3), put the values in with the CLI. These are the entries and what goes in each:
 
 | Entry | Content |
 |---|---|
@@ -213,6 +213,8 @@ Terraform creates five **empty** Secrets Manager application entries, and two mo
 | `fss-prod/session-signing-key` | signing material for access sessions |
 | `fss-prod/device-credential-pepper` | server-side pepper for the device credential hash |
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
+| `fss-prod/twilio-voice` | Twilio Voice, as in [calling.md](calling.md); `{}` until calling is set up |
+| `fss-prod/calcom` | Cal.com webhook secret, as in [meetings.md](meetings.md); `{}` until bookings are set up |
 
 Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). Neither is an input any more: the topic is the `gmail_push_topic` literal in `infra/roots/production`, which `infra/roots/production-google` owns and outputs, and the domain is the `google_hosted_domain` literal `usecallie.com` in `infra/modules/stack`. See [`docs/archive/release-first.md`](../archive/release-first.md) 1.6.
 
