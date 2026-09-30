@@ -29,6 +29,7 @@ import {
 } from './fss/config.ts';
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
+import { releaseDrainOffCommand, releaseDrainOnCommand, releaseIdleCheckCommand } from './fss/releaseIdle.ts';
 import { schemaPreflight0020Command } from './fss/schemaPreflight0020.ts';
 import { schemaPreflight0021Command } from './fss/schemaPreflight0021.ts';
 import { runVerify } from './fss/verify.ts';
@@ -174,6 +175,10 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   // Call-to-booking A2: the mailbox switch's preflight and the per-condition preview.
   'mailbox switch-preflight': mailboxSwitchPreflightCommand,
   'send-path preview': sendPathPreviewCommand,
+  // Slice A4: the release idle check and drain (apps/worker/src/tools/fss/releaseIdle.ts).
+  'release idle-check': releaseIdleCheckCommand,
+  'release drain on': releaseDrainOnCommand,
+  'release drain off': releaseDrainOffCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
@@ -225,7 +230,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore') {
+  if (name === 'holds release-restore' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };

@@ -14,6 +14,19 @@
 # and read back: desired, running and pending must all be zero. A service already at
 # zero is left alone, so running this twice is running it once. Production is named out
 # loud. Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command.
+#
+# Before it scales anything (slice A4), it asks whether production is idle, so a schema
+# release never stops the system under a call or a person at work:
+#
+#   1. production only: `idle.sh drain-on` (nothing new starts; it lapses by itself);
+#   2. `idle.sh wait`: `fss admin release idle-check` on the operations task, every
+#      FSS_PROD_IDLE_POLL_SECONDS (15) for up to FSS_PROD_IDLE_WAIT_SECONDS (600);
+#   3. idle: the scale-down below. Busy at the end: a refusal with the reasons, the drain
+#      turned off again, exit non-zero, and nothing stopped. FSS_PROD_FORCE_IDLE=1 skips
+#      the wait, prints "forced" and records it (release-stop.txt and the release timings).
+#
+# A rehearsal runs the check and never waits longer than one poll. `deploy.sh release`
+# turns the drain off once the deployed verify passes (docs/greenfield/release.md).
 
 # shellcheck source=infra/scripts/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -33,9 +46,40 @@ done
 release_read_root "$STOP_ROOT" "$STOP_PREFIX" "$NAMED_ENVIRONMENT" \
   "scales both of its services to zero, the outage a schema-change release takes on purpose"
 mkdir -p "$(rehearsal_report_dir)"
+STOP_STARTED_AT="$(date -u +%s)"
 rehearsal_log "stopping $PREFIX from $ROOT_DIRECTORY ($ENVIRONMENT) before the apply"
 release_guard_services stop
 rehearsal_log "services $API_SERVICE, then $WORKER_SERVICE"
+
+# Is production idle? Before anything is scaled, and before the stop instant is written.
+IDLE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/idle.sh"
+IDLE_NAMED=()
+if [ -n "$NAMED_ENVIRONMENT" ]; then IDLE_NAMED=(--environment "$NAMED_ENVIRONMENT"); fi
+rm -f "$(rehearsal_report_dir)/release-idle.txt" "$(rehearsal_report_dir)/release-drain.txt"
+if [ "$ENVIRONMENT" = production ]; then
+  rehearsal_log "0/2 the release drain on, then wait for production to be idle"
+  "$IDLE_SCRIPT" drain-on "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} \
+    || { echo "FAIL: the release drain could not be turned on, so nothing was stopped." >&2; exit 1; }
+else
+  rehearsal_log "0/2 wait for $PREFIX to be idle (a rehearsal waits at most one poll)"
+fi
+if ! "$IDLE_SCRIPT" wait "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"}; then
+  if [ "$ENVIRONMENT" = production ]; then
+    "$IDLE_SCRIPT" drain-off "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} \
+      || echo "WARN: the release drain could not be turned off; it lapses by itself within 60 minutes." >&2
+  fi
+  exit 1
+fi
+IDLE_RESULT=unknown
+DRAIN_STATE=not_used
+if [ -r "$(rehearsal_report_dir)/release-drain.txt" ]; then
+  DRAIN_STATE="$(sed -n 's/.* drain=\([a-z]*\).*/\1/p' "$(rehearsal_report_dir)/release-drain.txt" | tail -n 1)"
+fi
+IDLE_WAIT_SECONDS_SEEN=null
+if [ -r "$(rehearsal_report_dir)/release-idle.txt" ]; then
+  IDLE_RESULT="$(sed -n 's/.* result=\([a-z]*\).*/\1/p' "$(rehearsal_report_dir)/release-idle.txt" | tail -n 1)"
+  IDLE_WAIT_SECONDS_SEEN="$(sed -n 's/.* idle_wait_seconds=\([0-9]*\).*/\1/p' "$(rehearsal_report_dir)/release-idle.txt" | tail -n 1)"
+fi
 
 SUMMARY=''
 stop_service() { # stop_service <service>
@@ -99,5 +143,11 @@ fi
 rehearsal_log "2/2 $WORKER_SERVICE to zero"
 stop_service "$WORKER_SERVICE" || exit 1
 
-rehearsal_write_report "release-stop.txt" "prefix=$PREFIX environment=$ENVIRONMENT${SUMMARY}"
+rehearsal_write_report "release-stop.txt" "prefix=$PREFIX environment=$ENVIRONMENT idle=${IDLE_RESULT:-unknown} drain=${DRAIN_STATE:-not_used}${SUMMARY}"
+# What the release timings read (deploy.sh release): when this stop began and ended, and
+# how long the idle wait took. Named with the release it belongs to, like the stop instant.
+if ! rehearsal_dry_run; then
+  rehearsal_write_report "release-stop-timing.txt" \
+    "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX idle=${IDLE_RESULT:-unknown} drain=${DRAIN_STATE:-not_used} idle_wait_seconds=${IDLE_WAIT_SECONDS_SEEN:-null} stop_started_at=$STOP_STARTED_AT stop_finished_at=$(date -u +%s)"
+fi
 rehearsal_log "stopped: $API_SERVICE, then $WORKER_SERVICE. Next: the apply, then deploy.sh release --schema-change."

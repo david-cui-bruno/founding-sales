@@ -173,6 +173,39 @@ infra/scripts/deploy.sh current fss-prod --compare "<api_image>" "<worker_image>
 
 **The release record goes in before the apply.** `record.sh put` does the put and nothing else, on the operations definition the root outputs now — the running release's definition, so the task runs that image while the record it stores names the new digests. `deploy.sh release --release-record <file>` then reads it back after the final verify and fails unless the answer is `existing`; `created` fails the deploy, because the services would have started without it. Only a bootstrap, which had no database to put into, may create it.
 
+### 4.1b A schema release never stops production under a call: the idle check, the drain, and the timings (slice A4)
+
+**The production sequence** of `stop.sh --environment production`, before anything is scaled:
+
+1. **Drain on.** `idle.sh drain-on` runs `fss admin release drain on` (default 20 minutes, `--minutes N`, capped at 60) on the operations task. It is an audited write (`audit_events`, actions `release.drain_on` and `release.drain_off`, `detail.until` the instant it lapses), and it is **not** the sending switch. `releaseDrainActive(db)` in `packages/domain/release/drain.ts` is what the API asks to refuse new call sessions; slice C1 wires that refusal when call sessions exist. The drain lapses by itself, so a release that fails before it is turned off leaves a bounded delay and never a locked-out product.
+2. **Wait for idle.** `idle.sh wait` runs `fss admin release idle-check` (one READ ONLY transaction) every `FSS_PROD_IDLE_POLL_SECONDS` (15) for up to `FSS_PROD_IDLE_WAIT_SECONDS` (600) and proceeds the moment it answers `idle: true`. Idle means all of: no call in progress (`call_sessions`, status `in_progress`, started in the last 4 hours; before migration 0027 the table does not exist and the answer says `telephony: "not_installed"`, which counts as idle); no row in `command_receipts` (the 5.3 command envelope table) in the last 5 minutes; and no running job whose lease has not expired and whose handler is not chunked. Queued and retryable jobs never count, an expired lease is a job nothing is running, and a chunked job (`research.firm`, the only one declared `chunked: true`; `CHUNKED_JOB_KINDS` in `releaseIdle.ts` is held to the handlers by a test) requeues itself at its next chunk boundary.
+3. **Stop.** Idle: the scale-down as before. Busy at the end of the wait: a refusal in plain words with the reasons, the drain turned off again, a non-zero exit, and nothing scaled. An idle check that cannot be run or read is a refusal, never a pass.
+4. **Drain off.** `deploy.sh release --schema-change` turns it off once the deployed `fss verify` passes (a failure only warns: the drain lapses). `rollback.sh` does the same after its smoke.
+
+**The first schema release after the idle check merges** still runs a pre-A4 image in production (release scripts are manual-deploy), which has no `release idle-check` or `release drain` command; `idle.sh` recognises the old tool's unknown-command answer and `stop.sh` refuses with "The deployed image predates the idle check (<digest>). Check by hand that no call is active and nobody is working, then rerun with FSS_PROD_FORCE_IDLE=1"; under `FSS_PROD_FORCE_IDLE=1` the missing drain is a warning recorded as `drain=unavailable` in `release-stop.txt` and the timings.
+
+`FSS_PROD_FORCE_IDLE=1` skips the wait in production: it prints `FORCED`, and records `idle=forced` in `release-stop.txt`, `release-idle.txt`, `release-stop-timing.txt` and the release timings. A rehearsal runs the check and never waits longer than one poll; it uses no drain. `FSS_REHEARSAL_DRY_RUN=1` prints every command.
+
+**What happens to a handler still running when the worker is stopped.** The worker drains for `FSS_DRAIN_TIMEOUT_MS` (100 s, `apps/worker/src/bootstrap/config.ts`) on SIGTERM (`worker.ts`, `loop.ts` `drain`); the container's `stopTimeout` is 120 s, after which ECS kills it. A non-chunked handler still inside its transaction is killed with the connection, the transaction rolls back, the job row still says `running`, and once its lease expires `reclaimExpiredLeases` makes it runnable again (attempt counted). A chunked handler commits its cursor with each chunk and requeues near its lease deadline (`runner/jobRunner.ts`), so a stop loses at most the chunk in flight. Handlers that make a provider call, and their protection: `sequence.action` (Gmail send) sits behind the outbound fence, whose state machine is what a retry reads; `research.firm` follows the reservation, calling, settle pattern in three committed chunks. **Reported, not fixed:** `classify.reply` calls the Anthropic model inside a `business_uniqueness` handler; a kill between the call and the commit repeats the call on retry, which costs a second model call and cannot change the recorded result (one row per message and layer). It does not use the research paid-call reservation rows.
+
+**Rolling deploys do not run `stop.sh`, and do not interrupt a call.** The API service is `deployment_maximum_percent = 200`, `deployment_minimum_healthy_percent = 100` (`infra/modules/cluster/main.tf`): ECS starts the new tasks, waits until they are healthy, and only then drains the old ones, so the API never has fewer healthy tasks than declared. A call's media never passes through the API, so replacing an API task does not touch it. The worker is `100` / `0`: it is replaced, not overlapped, and a replaced worker drains as above. None of this applies to a schema release, which stops both services, which is why that one waits for idle.
+
+**The release timings.** `deploy.sh release` ends with one line and a file, `release-timings.json` (`fss.release-timings.v1`) in the reports directory:
+
+```
+release-timings: preparation=340s automated_checks=600s operator=120s downtime=560s idle_wait=30s
+```
+
+It is deliberately **not** inside the stored `fss.release-record.v1`: that record is put before the rollout, compared byte for byte at the read-back and strict in `@fss/contracts`, and three of the numbers do not exist until the rollout ends. Each number comes only from a timestamp a script wrote, and is `null` (printed `unknown`, with the reason in the file's `nulls`) when no script saw it. Nothing is estimated.
+
+| Part | Source | Null when |
+|---|---|---|
+| `preparationSeconds` | the images run's own clock (`record.sh from-ci` writes `release-prepare-timing.txt`) plus the promotion (`images.sh promote` writes `release-promote-timing.txt`), both naming these digests | either is missing: never half of it |
+| `automatedChecksSeconds` | the gate run's own clock (it contains the upgrade job). A rehearsal run is not included: no script times one | no gate timing for these digests |
+| `operatorSeconds` | `stop.sh` finishing (`release-stop-timing.txt`) to `deploy.sh release` starting: the plan, the apply and the hand-offs a person does between the two | `stop.sh` did not run for this root and prefix, or the gap is over 6 hours |
+| `downtimeSeconds` | `stop.sh`'s API-stopped marker to the passing deployed verify | a rolling release, or no marker for this root and prefix |
+| `idleWaitSeconds` | `stop.sh`'s idle wait (`idle_wait_seconds`) | `stop.sh` recorded none |
+
 ### 4.1a Rolling back: images only, and never across `beed2d90` or the applied-revision boundary
 
 `infra/scripts/rollback.sh` puts production back on a previous release's images. It runs from a checkout of main — an older commit has no copy of it — and plans the production root inside a second checkout at the previous release's commit. Without `--apply` it saves and prints the plan and stops; with `--apply` it plans again from the same reads, judges it the same way, applies, deploys on the rolling path (never `--schema-change`) and smokes, expecting the same sending state, so **a rollback never switches sending on or off**.

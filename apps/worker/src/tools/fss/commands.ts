@@ -81,6 +81,11 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Call-to-booking A2: the mailbox switch's two reads, each one READ ONLY transaction.
   'mailbox switch-preflight': 'database',
   'send-path preview': 'database',
+  // Slice A4. The release idle check reads in one READ ONLY transaction; the drain is
+  // one audited write. PostgreSQL and nothing else.
+  'release idle-check': 'database',
+  'release drain on': 'database',
+  'release drain off': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -277,6 +282,28 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary:
       'for every prepared or held fence and every due e-mail step, each send condition evaluated independently, and the sender it would leave from. Reads only',
+  },
+  {
+    // Slice A4. What `infra/scripts/stop.sh` asks before it stops production.
+    path: ['admin', 'release', 'idle-check'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'whether production is idle (no call, no recent API command, no uninterruptible running job), in one READ ONLY transaction',
+  },
+  {
+    path: ['admin', 'release', 'drain', 'on'],
+    valueFlags: ['--minutes', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'turn the release drain on (default 20 minutes, at most 60): the API refuses new call sessions until it lapses or is turned off',
+  },
+  {
+    path: ['admin', 'release', 'drain', 'off'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'turn the release drain off',
   },
 ]);
 

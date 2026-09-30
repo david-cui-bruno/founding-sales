@@ -609,6 +609,7 @@ if rehearsal_dry_run; then
   release_aws production cloudwatch get-metric-statistics --namespace "FSS/$PREFIX" --metric-name CanaryCompletionAgeSeconds \
     --statistics Maximum --start-time "<an hour ago>" --end-time "<now>" --period 300 --output json
   rehearsal_plan "${SMOKE[*]} <the newest Maximum> --expect-sending $EXPECT_SENDING"
+  rehearsal_plan "$ROLLBACK_SCRIPTS/idle.sh drain-off $ROOT_DIRECTORY $PREFIX --environment production   (the release drain, in case a stop turned it on)"
   exit 0
 fi
 AGE=''
@@ -642,6 +643,12 @@ for attempt in $(seq 1 "$attempts"); do
     "${SMOKE[@]}" "$AGE" --expect-sending "$EXPECT_SENDING"; then
     rehearsal_write_report "release-rollback.txt" \
       "prefix=$PREFIX commit=$COMMIT api_digest=$API_DIGEST worker_digest=$WORKER_DIGEST sending_enabled=$SENDING database_version=$DATABASE_VERSION applied=yes smoke=pass"
+    # The release drain is turned off on the rollback path too (slice A4): a failed
+    # schema release that stopped production turned it on, and the rollback is how that
+    # release ends. Off when it is already off is not an error; a failure here only warns,
+    # because the drain lapses by itself within 60 minutes.
+    "$ROLLBACK_SCRIPTS/idle.sh" drain-off "$ROOT_DIRECTORY" "$PREFIX" --environment production \
+      || rehearsal_log "WARN: the release drain could not be turned off; it lapses by itself within 60 minutes"
     rehearsal_log "rolled back to $COMMIT: api $API_DIGEST, worker $WORKER_DIGEST, sending $EXPECT_SENDING"
     exit 0
   fi

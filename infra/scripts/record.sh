@@ -96,6 +96,7 @@ record_from_ci() {
   images_run_id="$(FSS_WORK="$work" FSS_GATE_RUN_ID="$gate_run_id" FSS_COMMIT="$commit" FSS_REPOSITORY="${GITHUB_REPOSITORY:-}" \
     FSS_IMAGES_RUN="$images_run" python3 - <<'PY'
 import json, os, re, sys
+from datetime import datetime
 
 def fail(message):
     print("FAIL: " + message, file=sys.stderr)
@@ -168,7 +169,18 @@ if not str(images.get("html_url", "")).startswith("https://github.com/{}/actions
     fail("the Greenfield images run {} is in another repository than gate run {}".format(images_id, run_id))
 if images_id == run_id:
     fail("the images run and the gate run are the same run, {}".format(run_id))
-json.dump({"url": url, "updatedAt": updated}, open(os.path.join(work, "gate-facts.json"), "w", encoding="utf-8"))
+def seconds(run):
+    # The run clock: when it started and when it last changed. Absent or unreadable
+    # is None, and nothing downstream estimates one (release timings, slice A4).
+    try:
+        start = datetime.strptime(str(run.get("run_started_at", "")).split(".")[0].rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+        end = datetime.strptime(str(run.get("updated_at", "")).split(".")[0].rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    return int((end - start).total_seconds()) if end >= start else None
+
+json.dump({"url": url, "updatedAt": updated, "gateSeconds": seconds(gate), "imagesSeconds": seconds(images)},
+          open(os.path.join(work, "gate-facts.json"), "w", encoding="utf-8"))
 print(images_id)
 PY
 )" || exit 1
@@ -223,6 +235,20 @@ print(json.dumps({
 PY
 
   reference="ci-gate-${gate_run_id}-${commit:0:12}"
+  # The two preparation facts the release timings read (deploy.sh release): how long the
+  # images run and the gate run took, by the runs' own clocks, named with the digests they
+  # are for. `null` where a run reports no start; `images.sh promote` adds the promotion.
+  if [ -z "${FSS_SKIP_TIMING_FACTS:-}" ]; then
+    mkdir -p "$(rehearsal_report_dir)"
+    FSS_WORK="$work" FSS_API="$api" FSS_WORKER="$worker" FSS_COMMIT="$commit" python3 - > "$(rehearsal_report_dir)/release-prepare-timing.txt" <<'PY'
+import json, os
+facts = json.load(open(os.path.join(os.environ["FSS_WORK"], "gate-facts.json"), encoding="utf-8"))
+def number(value):
+    return "null" if value is None else str(int(value))
+print("api_digest={} worker_digest={} commit={} images_run_seconds={} gate_run_seconds={}".format(
+    os.environ["FSS_API"], os.environ["FSS_WORKER"], os.environ["FSS_COMMIT"], number(facts.get("imagesSeconds")), number(facts.get("gateSeconds"))))
+PY
+  fi
   if [ -n "$out" ]; then
     mkdir -p "$(dirname "$out")"
     cp "$work/release-record.json" "$out.partial"

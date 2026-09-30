@@ -207,6 +207,22 @@ describe('record.sh from-ci writes the ci-gate record from a green gate and its 
     expect(local.gh[0]).toEqual(['api', `repos/{owner}/{repo}/actions/runs/${GATE_RUN}`]);
   });
 
+  it('leaves the run durations the release timings read, null where a run reports no start (slice A4)', () => {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-record-timing-'));
+    const timed = greenWorld();
+    timed.runs[GATE_RUN] = gateRun({ run_started_at: '2026-09-25T21:30:12Z' });
+    timed.imagesRuns = [imagesRun({ run_started_at: '2026-09-25T21:31:00Z', updated_at: '2026-09-25T21:36:00Z' })];
+    const outcome = fromCi(timed, GREEN, { GITHUB_REPOSITORY: REPOSITORY, FSS_REHEARSAL_REPORTS: reports });
+    expect(outcome.status, outcome.stderr).toBe(0);
+    expect(readFileSync(join(reports, 'release-prepare-timing.txt'), 'utf8').trim()).toBe(
+      `api_digest=${API} worker_digest=${WORKER} commit=${COMMIT} images_run_seconds=300 gate_run_seconds=600`,
+    );
+    // The fixture's runs report no start: null, never a guess.
+    const untimed = mkdtempSync(join(tmpdir(), 'fss-record-timing-'));
+    expect(fromCi(greenWorld(), GREEN, { GITHUB_REPOSITORY: REPOSITORY, FSS_REHEARSAL_REPORTS: untimed }).status).toBe(0);
+    expect(readFileSync(join(untimed, 'release-prepare-timing.txt'), 'utf8')).toContain('images_run_seconds=null gate_run_seconds=null');
+  });
+
   it('says enablesSending only when told to, and writes the same bytes twice to --out', () => {
     const first = fromCi(greenWorld(), [...GREEN, '--enables-sending', '--out', '<out>']);
     expect(first.status, first.stderr).toBe(0);

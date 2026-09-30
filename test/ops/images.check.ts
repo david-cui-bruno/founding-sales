@@ -240,6 +240,28 @@ describe('images.sh promote copies the CI digests into production by digest, nev
     expect(result.stdout).toContain(`api fss-prod-api ${digest('a')} copied`);
   });
 
+  it('leaves the promotion time the release timings read, naming the digests, and nothing in a dry run (slice A4)', () => {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-promote-timing-'));
+    const { aws, docker } = registryStubs(registry());
+    const result = run(['promote', inputFile(digestsFor(COMMIT))], {
+      FSS_REHEARSAL_AWS_COMMAND: aws.command,
+      FSS_DOCKER_COMMAND: docker.command,
+      FSS_REHEARSAL_REPORTS: reports,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(readFileSync(join(reports, 'release-promote-timing.txt'), 'utf8').trim()).toMatch(
+      new RegExp(`^api_digest=${digest('a')} worker_digest=${digest('b')} promote_seconds=[0-9]+$`, 'u'),
+    );
+    const dry = mkdtempSync(join(tmpdir(), 'fss-promote-timing-'));
+    run(['promote', inputFile(digestsFor(COMMIT))], {
+      FSS_REHEARSAL_AWS_COMMAND: aws.command,
+      FSS_DOCKER_COMMAND: docker.command,
+      FSS_REHEARSAL_REPORTS: dry,
+      FSS_REHEARSAL_DRY_RUN: '1',
+    });
+    expect(existsSync(join(dry, 'release-promote-timing.txt'))).toBe(false);
+  });
+
   it('takes --app-only, and copies the worker under it', () => {
     const result = promote(inputFile(digestsFor(COMMIT)), registry(), ['--app-only']);
     expect(result.code, result.stderr).toBe(0);

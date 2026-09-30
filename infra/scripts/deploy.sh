@@ -414,6 +414,7 @@ deploy_release() {
   RELEASE_T_TASKS_END=n/a
   RELEASE_T_SERVICES_START=n/a
   RELEASE_T_STABLE=n/a
+  RELEASE_T_VERIFIED=n/a
   if [ "$SCHEMA_CHANGE" = "1" ]; then
     release_step "1/6 stop-during-migration: both services at zero ($([ "$BOOTSTRAP" = "true" ] && echo "the apply created them there" || echo "stop.sh put them there before the apply")), on the definitions the apply registered"
     release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" || release_refuse_not_stopped "$API_SERVICE"
@@ -448,7 +449,18 @@ deploy_release() {
 
     release_step "6/6 fss verify (deployed)"
     one_off verify-deployed "$OPERATIONS_TASK_DEFINITION" operations verify --report /tmp/fss-verify-deployed.json
+    # The smoke this hand path has: the instant a passing verify ends the outage. Downtime
+    # in the release timings runs from stop.sh's marker to here.
+    RELEASE_T_VERIFIED="$(release_now)"
     deployed='release-prepare (migrate, users), verify, worker and API together, running digests, verify'
+    # The release drain stop.sh turned on ends with the outage, not when it lapses: the
+    # API takes call sessions again. Production only (stop.sh drains nothing else), and a
+    # failure here is a warning, because the drain lapses by itself within 60 minutes.
+    if [ "$ENVIRONMENT" = production ]; then
+      release_step "drain off: the release is verified, so new call sessions are accepted again"
+      "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/idle.sh" drain-off "$ROOT_DIRECTORY" "$PREFIX" --environment production \
+        || rehearsal_log "WARN: the release drain could not be turned off; it lapses by itself within 60 minutes"
+    fi
   else
     release_step "1/2 one rolling deployment: $WORKER_SERVICE to $WORKER_TARGET and $API_SERVICE to $API_TARGET, on the task definitions the apply registered, then one wait"
     release_start_both
@@ -458,6 +470,7 @@ deploy_release() {
     deployed='one rolling deployment of the worker and the API, running digests'
   fi
   RELEASE_TIMING="$(release_timing_line)"
+  RELEASE_TIMINGS="$(release_timings_report)"
 
   # The read-back, only with --release-record: the record stored before the plan
   # (record.sh put) is there for the deployment now running.
@@ -475,10 +488,12 @@ deploy_release() {
 
   rehearsal_write_report "release-deploy.txt" \
     "prefix=$PREFIX environment=$ENVIRONMENT schema_change=$SCHEMA_CHANGE bootstrap=$BOOTSTRAP worker=$WORKER_TARGET api=$API_TARGET api_digest=${API_DIGEST:-unset} worker_digest=$WORKER_DIGEST running_digests=$RUNNING_DIGESTS release_record=$RELEASE_RECORD_OUTCOME
-$RELEASE_TIMING"
+$RELEASE_TIMING
+$RELEASE_TIMINGS"
   rehearsal_log "deployed: $deployed${RELEASE_RECORD:+, release record}"
   # Last, so it is the line an operator's eye lands on, and in the report beside it.
   rehearsal_log "$RELEASE_TIMING"
+  rehearsal_log "$RELEASE_TIMINGS"
 }
 
 # one_off <step> <task definition> <container> <command word>...
@@ -818,6 +833,136 @@ release_timing_line() {
     "$(release_seconds "$(release_elapsed "$RELEASE_T_TASKS_START" "$RELEASE_T_TASKS_END")")" \
     "$(release_seconds "$(release_elapsed "$RELEASE_T_SERVICES_START" "$RELEASE_T_STABLE")")" \
     "$(release_seconds "$(release_api_unreachable_seconds)")"
+}
+
+# The release's time in four separate parts and the idle wait (slice A4), as one
+# `release-timings:` line, and `release-timings.json` (fss.release-timings.v1) beside the
+# other reports. It is NOT part of the stored release record: that record is put before the
+# rollout, compared byte for byte at the read-back, and strict in @fss/contracts, and three
+# of these numbers do not exist until the rollout is over.
+#
+#   preparation     images run + promotion: release-prepare-timing.txt (record.sh from-ci)
+#                   and release-promote-timing.txt (images.sh promote), both naming THESE
+#                   digests; one of the two missing makes it null, never the half of it.
+#   automatedChecks the gate run (which contains the upgrade job), same file. A rehearsal
+#                   run is not included: no script times one.
+#   operator        stop.sh finishing to this script starting: the plan, the apply and the
+#                   hand-offs a person does between the two scripts. Null when stop.sh did
+#                   not run for this root and prefix, or the gap is not believable.
+#   downtime        stop.sh's API-stopped marker to a passing deployed verify (this path's
+#                   smoke). Null on the rolling path, which stops nothing.
+#   idleWait        the time stop.sh spent waiting for production to be idle; `forced`
+#                   says the wait was skipped with FSS_PROD_FORCE_IDLE=1.
+#
+# A number the scripts cannot see is null and named in `nulls`; nothing is estimated.
+# The line reads `unknown` for a null. It never fails the deploy.
+release_timings_report() {
+  local reports canonical out
+  reports="$(rehearsal_report_dir)"
+  canonical="$(release_canonical_path "$ROOT_DIRECTORY")"
+  out="$reports/release-timings.json"
+  if rehearsal_dry_run; then echo 'release-timings: n/a (dry run)'; return 0; fi
+  FSS_REPORTS="$reports" FSS_ROOT="$canonical" FSS_PREFIX="$PREFIX" FSS_API_DIGEST="${API_DIGEST:-}" FSS_WORKER_DIGEST="$WORKER_DIGEST" \
+    FSS_SCHEMA_CHANGE="$SCHEMA_CHANGE" FSS_ENVIRONMENT="$ENVIRONMENT" FSS_T_START="$RELEASE_T_START" FSS_T_VERIFIED="$RELEASE_T_VERIFIED" \
+    FSS_OUT="$out" python3 - <<'PY' 2>/dev/null || echo 'release-timings: unknown (the timings could not be assembled)'
+import json, os, re, sys
+from datetime import datetime, timezone
+
+env = os.environ
+SAME_RELEASE_SECONDS = 6 * 60 * 60
+
+def read_lines(name):
+    try:
+        with open(os.path.join(env["FSS_REPORTS"], name), encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+    except OSError:
+        return []
+
+def fields(line):
+    return dict(part.split("=", 1) for part in line.split() if "=" in part)
+
+def whole(value):
+    return int(value) if isinstance(value, str) and value.isdigit() else None
+
+def epoch(value):
+    return int(value) if value not in (None, "", "n/a") and str(value).isdigit() else None
+
+nulls = {}
+timings = {}
+start, verified = epoch(env["FSS_T_START"]), epoch(env["FSS_T_VERIFIED"])
+identity = "root={} prefix={} ".format(env["FSS_ROOT"], env["FSS_PREFIX"])
+
+# Preparation and automated checks: named with the digests they are for.
+prepare = next((fields(line) for line in reversed(read_lines("release-prepare-timing.txt"))
+                if fields(line).get("api_digest") == env["FSS_API_DIGEST"] and fields(line).get("worker_digest") == env["FSS_WORKER_DIGEST"]), None)
+promote = next((fields(line) for line in reversed(read_lines("release-promote-timing.txt"))
+                if fields(line).get("api_digest") == env["FSS_API_DIGEST"] and fields(line).get("worker_digest") == env["FSS_WORKER_DIGEST"]), None)
+images_seconds = whole((prepare or {}).get("images_run_seconds"))
+promote_seconds = whole((promote or {}).get("promote_seconds"))
+if images_seconds is not None and promote_seconds is not None:
+    timings["preparationSeconds"] = images_seconds + promote_seconds
+else:
+    timings["preparationSeconds"] = None
+    nulls["preparationSeconds"] = ("no images-run timing for these digests (record.sh from-ci did not run here, or the run reported no start)" if images_seconds is None
+                                   else "no promotion timing for these digests (images.sh promote did not run here)")
+gate_seconds = whole((prepare or {}).get("gate_run_seconds"))
+timings["automatedChecksSeconds"] = gate_seconds
+if gate_seconds is None:
+    nulls["automatedChecksSeconds"] = "no gate-run timing for these digests (record.sh from-ci did not run here, or the run reported no start)"
+
+# The stop: its own timing file, and the API-stopped marker, each naming this root and prefix.
+stop = next((fields(line) for line in reversed(read_lines("release-stop-timing.txt")) if (line + " ").startswith(identity)), None)
+marker = next((fields(line) for line in reversed(read_lines("release-stop-instant.txt")) if (line + " ").startswith(identity)), None)
+stopped_at = epoch((marker or {}).get("api_stopped_at"))
+
+finished = epoch((stop or {}).get("stop_finished_at"))
+if finished is not None and start is not None and 0 <= start - finished <= SAME_RELEASE_SECONDS:
+    timings["operatorSeconds"] = start - finished
+else:
+    timings["operatorSeconds"] = None
+    nulls["operatorSeconds"] = "stop.sh did not record this root and prefix, or its finish is not shortly before this deploy (a stop is the only place that knows where human steps begin)"
+
+if env["FSS_SCHEMA_CHANGE"] != "1":
+    timings["downtimeSeconds"] = None
+    nulls["downtimeSeconds"] = "a rolling release stops nothing, so there is no downtime"
+elif stopped_at is not None and verified is not None and 0 <= verified - stopped_at <= SAME_RELEASE_SECONDS:
+    timings["downtimeSeconds"] = verified - stopped_at
+else:
+    timings["downtimeSeconds"] = None
+    nulls["downtimeSeconds"] = "no stop marker for this root and prefix (stop.sh stopped nothing, or ran elsewhere), so the start of the outage is unknown"
+
+idle = (stop or {}).get("idle")
+waited = whole((stop or {}).get("idle_wait_seconds"))
+timings["idleWaitSeconds"] = waited
+if waited is None:
+    nulls["idleWaitSeconds"] = "stop.sh recorded no idle wait for this root and prefix"
+forced = idle == "forced"
+
+document = {
+    "schema": "fss.release-timings.v1",
+    "recordedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "prefix": env["FSS_PREFIX"],
+    "environment": env["FSS_ENVIRONMENT"],
+    "schemaChange": env["FSS_SCHEMA_CHANGE"] == "1",
+    "apiDigest": env["FSS_API_DIGEST"] or None,
+    "workerDigest": env["FSS_WORKER_DIGEST"],
+    "timings": timings,
+    "idle": {"result": idle, "forced": forced, "drain": (stop or {}).get("drain")},
+    "notes": {"automatedChecksCovers": "the gate run, which includes the upgrade job; rehearsal runs are not timed by any script"},
+    "nulls": nulls,
+}
+with open(env["FSS_OUT"], "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2)
+    handle.write("\n")
+
+def show(key):
+    value = timings.get(key)
+    return "unknown" if value is None else "{}s".format(value)
+
+print("release-timings: preparation={} automated_checks={} operator={} downtime={} idle_wait={}{}".format(
+    show("preparationSeconds"), show("automatedChecksSeconds"), show("operatorSeconds"), show("downtimeSeconds"), show("idleWaitSeconds"),
+    (" FORCED (the idle check was skipped" + ("; drain unavailable on the deployed image" if (stop or {}).get("drain") == "unavailable" else "") + ")") if forced else ""))
+PY
 }
 
 release_refuse_not_stopped() { # release_refuse_not_stopped <service>
