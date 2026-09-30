@@ -51,6 +51,7 @@ describe('calling status, history and recordings (slice C1)', () => {
     return { status: response.status, text, body: JSON.parse(text) as Record<string, unknown> };
   }
 
+  let voiceTwiml = '';
   async function twilio(path: string, params: Record<string, string>): Promise<number> {
     const response = await fetch(`${server.origin}${path}`, {
       method: 'POST',
@@ -60,7 +61,8 @@ describe('calling status, history and recordings (slice C1)', () => {
       },
       body: new URLSearchParams(params).toString(),
     });
-    await response.text();
+    const text = await response.text();
+    if (path === '/integrations/twilio/voice') voiceTwiml = text;
     return response.status;
   }
 
@@ -153,6 +155,11 @@ describe('calling status, history and recordings (slice C1)', () => {
   afterAll(async () => {
     await server.close();
     await fixture.stop();
+  });
+
+  it('dials with answerOnBridge, so the Mac rings until the prospect answers', () => {
+    expect(voiceTwiml).toContain(' answerOnBridge="true">');
+    expect(voiceTwiml).toContain(`>${PHONE}</Number>`);
   });
 
   it('answers the calling status: attempt 1 of 4, the voicemail template, the caller and their own number', async () => {
