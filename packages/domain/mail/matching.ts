@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { markMessageMatched } from './messages.ts';
 import type { NormalizedMetadata } from './messages.ts';
 import { acceptMail, refuseMail, type MailMatchRule, type MailResult } from './types.ts';
@@ -369,6 +370,10 @@ export async function resolveAmbiguity(
   const selected = candidates.find(candidate => candidate.opportunityId === input.selectedOpportunityId);
   if (selected === undefined) return refuseMail('match_unknown');
 
+  // The send gate before the first row this command writes (decision document 6a): a
+  // human resolution sets manual mode below, whose event records the enrollments it owes
+  // (migration 0026), and the hold opened first is a stop fact of its own.
+  await lockSendGateForStopFact(context);
   const now = await databaseNow(context);
   const resolvedBy = actor.kind === 'user' ? actor.userId : null;
   await context.db.query(

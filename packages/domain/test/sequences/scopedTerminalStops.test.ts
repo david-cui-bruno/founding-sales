@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { changeStage } from '../../crm/pipeline.ts';
+import { changeStage, setManualControlMode } from '../../crm/pipeline.ts';
 import { logCallOutcome } from '../../dial/calls.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
 import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
@@ -229,6 +229,62 @@ describe('a terminal stop stops what it owed when it was emitted, and nothing cr
     expect(await enrollment(earlier)).toEqual({ state: 'stopped', end_reason: 'engaged_call' });
     expect(await enrollment(agreed)).toEqual({ state: 'active', end_reason: null });
     expect(await executionsOf(agreed)).toEqual([{ ordinal: 1, state: 'pending' }]);
+  });
+
+  it('owes an enrollment committed just before the emission, even one racing it (the send gate)', async () => {
+    // Two transactions at once. A enrolls and holds the exclusive send gate
+    // (`enrollContact` takes it first); B sets the firm manual and must take the same gate
+    // before `emitCrmDomainEvent` computes what it owes. B waits, A commits, and B's
+    // marker names A's enrollment: nothing committed before the emission escapes it.
+    const firm = await makeFirm();
+    const version = await publishedVersion();
+    await drain();
+    const first = await database.appRuntimeSession();
+    const second = await database.appRuntimeSession();
+    await first.query('BEGIN');
+    const racing = await enrolFollowUp(contextFor(first), firm, firm.contactId, version);
+
+    await second.query('BEGIN');
+    const { rows: pid } = await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const manual = setManualControlMode(contextFor(second), {
+      opportunityId: firm.opportunityId,
+      reason: 'confirmed human reply',
+      origin: 'human_reply',
+    });
+    try {
+      // B is observably waiting on the gate before A commits, so this is the race and
+      // not two transactions that happened to run one after the other.
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !waiting; attempt += 1) {
+        const { rows } = await database.session.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM pg_locks
+            WHERE pid = $1 AND locktype = 'advisory' AND NOT granted`,
+          [pid[0]?.pid],
+        );
+        waiting = rows[0]?.count === '1';
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      expect(waiting).toBe(true);
+      await first.query('COMMIT');
+      const changed = await manual;
+      expect(changed.ok).toBe(true);
+      await second.query('COMMIT');
+    } finally {
+      // A failed assertion must not leave either transaction holding the gate for the
+      // cases after this one. Both are no-ops once the COMMITs above ran.
+      await first.query('ROLLBACK').catch(() => undefined);
+      await manual.catch(() => undefined);
+      await second.query('ROLLBACK').catch(() => undefined);
+    }
+
+    const event = await one<{ owed_enrollment_ids: string[] | null }>(
+      `SELECT owed_enrollment_ids FROM crm_domain_events
+        WHERE workspace_id = $1 AND firm_id = $2 AND event_kind = 'opportunity.manual_mode'`,
+      [seeded.alpha.workspaceId, firm.firmId],
+    );
+    expect(event.owed_enrollment_ids).toEqual([racing]);
+    await drain();
+    expect(await enrollment(racing)).toEqual({ state: 'stopped', end_reason: 'human_reply' });
   });
 
   it('still stops, at the drain, an owed enrollment the command itself did not stop', async () => {

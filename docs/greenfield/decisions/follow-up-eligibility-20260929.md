@@ -206,6 +206,26 @@ send gate. It cannot form, and this is the argument, which every path here now o
    `Date` rounds microseconds down and a competitor started in the same millisecond would
    otherwise compare as later than itself.
 
+5. **A stop owes what was committed before it took the gate** (send-path v2, migration
+   0026, 30 September 2026). A terminal-stop event records the enrollments it owes
+   (`crm_domain_events.owed_enrollment_ids`) and the drain stops only those. The set is
+   computed inside `emitCrmDomainEvent` **under the exclusive send gate**, which
+   `enrollContact` also takes first, so every enrollment is on exactly one side: it
+   committed before the emitter took the gate (visible to the sub-select, so owed), or it
+   waited for the emitter to commit (a deliberate later enrollment, not owed).
+   `emitCrmDomainEvent` takes the gate itself for the two stop kinds, which is a no-op
+   when the caller already holds it. Every emitter, checked:
+   * `changeStage` (the close, `opportunity.terminal_stop`) — gate is its first statement.
+   * `setManualControlMode` (`opportunity.manual_mode`) — gate is its first statement.
+     Its callers: `logCallOutcome` (gate first); `confirmReplyDisposition`, the confirmed
+     human reply (reads only before it); `takeOverOpportunity` (delegates);
+     `applyDirectSendEffects` via the mail import (only reads and inserts of new rows
+     before it — the fence lookup is a plain SELECT); and `resolveAmbiguity`, which
+     wrote `mail_message_matches` rows **before** reaching the gate and now takes it
+     before its first write.
+   * `applyClassificationEffects` (`mail/effects.ts`) takes the gate first and emits no
+     stop event itself; the human-reply manual mode is set by the two paths above.
+
 The tests are in `packages/domain/test/outbound/firmExclusivityAtSend.test.ts`: a barrier
 case that proves both claim transactions are open at once through `pg_locks` before the
 barrier is released, a tied-`started_at` case, and the review's deadlock shape run as a

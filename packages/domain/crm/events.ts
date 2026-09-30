@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { actorKind, actorUserId } from './types.ts';
 
 /**
@@ -109,11 +110,22 @@ export interface CrmDomainEventInput {
  * same command creates *after* the signal — an agreed sequence enrolled right after an
  * interested call — is not killed by a stop that was never about it. A set, not a
  * timestamp: every row this transaction writes carries the same `now()`.
+ *
+ * The set is complete because it is computed under the **exclusive send gate**, which
+ * `enrollContact` also takes first: an enrollment either committed before this
+ * transaction took the gate — and is visible to the sub-select, so it is owed — or
+ * waits for this transaction to commit, and is a deliberate later enrollment. Both
+ * emitters (`setManualControlMode`, `changeStage`) already hold the gate by the time
+ * they get here; taking it again is a no-op inside the same transaction, and makes the
+ * guarantee this function's own rather than every future caller's.
  */
 export async function emitCrmDomainEvent(
   context: RepositoryContext,
   event: CrmDomainEventInput,
 ): Promise<void> {
+  if (event.kind === 'opportunity.manual_mode' || event.kind === 'opportunity.terminal_stop') {
+    await lockSendGateForStopFact(context);
+  }
   await context.db.query(
     `INSERT INTO crm_domain_events
        (workspace_id, event_kind, firm_id, opportunity_id, contact_id, dedupe_key,

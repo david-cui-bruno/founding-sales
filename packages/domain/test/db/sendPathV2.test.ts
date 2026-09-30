@@ -74,6 +74,26 @@ describe('the steps of a published sequence version do not move (0026)', () => {
     expect(error).toMatchObject({ code: '23001' });
   });
 
+  it('refuses an INSERT of a step into a published version', async () => {
+    const error = await refusal(
+      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+       VALUES ($1, $2, 90, 'call_task', 'elapsed', 1, 'advance')`,
+      [workspace(), sequences.alpha.publishedVersionId],
+    );
+    expect(error).toMatchObject({ code: '23001' });
+    expect(error?.message).toMatch(/published sequence version are immutable/);
+  });
+
+  it('lets a step be inserted into a draft', async () => {
+    expect(
+      await refusal(
+        `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+         VALUES ($1, $2, 90, 'call_task', 'elapsed', 1, 'advance')`,
+        [workspace(), sequences.alpha.draftVersionId],
+      ),
+    ).toBeNull();
+  });
+
   it('refuses a step of a retired version too', async () => {
     const error = await rolledBack(async () => {
       await database.session.query(

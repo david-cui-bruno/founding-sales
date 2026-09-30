@@ -74,8 +74,8 @@ export const HOLD_REASON_CODES = [
   'firm_already_enrolled',
   /**
    * Migration 0026, send-path v2 (30 September 2026): a prospecting e-mail may not
-   * leave through a conversation mailbox. Recoverable: connecting a cold-outreach
-   * mailbox clears it.
+   * leave through a conversation (Gmail) mailbox; it is held until a cold-outreach
+   * transport dispatches it. A mailbox label never authorises the Gmail path.
    */
   'cold_outreach_mailbox_required',
 ] as const;
