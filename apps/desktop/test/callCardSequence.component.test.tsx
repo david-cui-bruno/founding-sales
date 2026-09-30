@@ -199,7 +199,16 @@ describe('the follow-up an interested call agreed to', () => {
     expect(harness.recorded[0]?.followUpPermission).toEqual({
       scope: 'agreed_sequence',
       sequenceVersionId: VERSION_ID,
-      previewBasis: { anchorAt: '2026-09-30T15:00:00.000Z', timeZone: 'America/Los_Angeles', calendarVersionId: 'none.1' },
+      previewBasis: {
+        anchorAt: '2026-09-30T15:00:00.000Z',
+        timeZone: 'America/Los_Angeles',
+        calendarVersionId: 'none.1',
+        // Each step at the instant it was displayed (review of S3, round 2, P1-A).
+        steps: [
+          { ordinal: 1, sendAt: '2026-10-02T15:00:00.000Z' },
+          { ordinal: 2, sendAt: '2026-10-06T15:00:00.000Z' },
+        ],
+      },
     });
     expect(harness.previews).toHaveLength(1);
   });
@@ -245,5 +254,38 @@ describe('the follow-up an interested call agreed to', () => {
     expect(screen.queryByTestId('outcome-follow-up-retry')).toBeNull();
     submit();
     expect(harness.recorded[0]?.followUpPermission).toMatchObject({ scope: 'agreed_sequence', sequenceVersionId: VERSION_ID });
+  });
+
+  it('keeps a stale agreement open on the card with the new dates and Record the agreed dates (round 2, P1-B)', () => {
+    const recorded: unknown[] = [];
+    const CALL_LOG_ID = '5a5a5a5a-5a5a-45a5-85a5-5a5a5a5a5a5a';
+    const state = todayStateSchema.parse({
+      ...baseState(),
+      notice: 'outcome_recorded',
+      pendingAgreement: {
+        firmId: FIRM_ID,
+        callLogId: CALL_LOG_ID,
+        contactId: CONTACT_ID,
+        sequenceVersionId: VERSION_ID,
+        name: 'After a good call v3',
+      },
+      followUpPreview: PREVIEW,
+    });
+    const actions = {
+      busy: () => false,
+      recordAgreedDates: (input: unknown) => {
+        recorded.push(input);
+      },
+      previewFollowUp: () => undefined,
+    } as unknown as TodayActions;
+    render(
+      <DraftsProvider>
+        <OutcomeForm state={state} view={buildTodayView(state)} enabled actions={actions} />
+      </DraftsProvider>,
+    );
+    expect(screen.getByTestId('agreed-dates').textContent).toContain('After a good call v3');
+    expect(screen.getAllByTestId('agreed-dates-step')).toHaveLength(2);
+    fireEvent.click(screen.getByTestId('agreed-dates-record'));
+    expect(recorded).toEqual([{ firmId: FIRM_ID, callLogId: CALL_LOG_ID }]);
   });
 });

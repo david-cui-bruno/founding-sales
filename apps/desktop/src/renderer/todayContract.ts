@@ -177,10 +177,55 @@ export const todayStateSchema = z.strictObject({
     })
     .nullable()
     .optional(),
+  /**
+   * An agreed sequence the server did not grant because the schedule changed after the
+   * preview (`stale_preview`; review of S3, round 2, P1-B). The call is recorded; the
+   * card keeps the follow-up open for this call, shows a fresh preview and offers
+   * "Record the agreed dates" (`POST /calls/follow-up`).
+   */
+  pendingAgreement: z
+    .strictObject({
+      firmId: uuid,
+      callLogId: uuid,
+      contactId: uuid,
+      sequenceVersionId: uuid,
+      name: z.string().max(220),
+    })
+    .nullable()
+    .optional(),
 });
 export type TodayState = z.infer<typeof todayStateSchema>;
+export type PendingAgreementView = NonNullable<TodayState['pendingAgreement']>;
+
+/** "Record the agreed dates": the pending agreement of this call, on the fresh preview. */
+export interface RecordAgreedDatesRequest {
+  readonly firmId: string;
+  readonly callLogId: string;
+}
 export type FollowUpPreviewView = NonNullable<TodayState['followUpPreview']>;
 export type AgreementView = NonNullable<TodayState['agreement']>;
+
+/** The preview the person was read, as the command carries it: anchor, zone, calendar, each step's minute. */
+export interface PreviewBasisView {
+  readonly anchorAt: string;
+  readonly timeZone: string;
+  readonly calendarVersionId: string;
+  readonly steps: { ordinal: number; sendAt: string }[];
+}
+
+/**
+ * The basis a shown preview gives the command, or null when the preview cannot carry
+ * one (a refusal, or no anchor). The displayed instant of each step is its `estimatedAt`.
+ */
+export function previewBasisOf(preview: FollowUpPreviewView): PreviewBasisView | null {
+  if (preview.refusal !== null || preview.anchoredAt === null || preview.steps.length === 0) return null;
+  return {
+    anchorAt: preview.anchoredAt,
+    timeZone: preview.firmTimeZone,
+    calendarVersionId: preview.holidayCalendarVersion,
+    steps: preview.steps.map(step => ({ ordinal: step.ordinal, sendAt: step.estimatedAt })),
+  };
+}
 
 /** Ask for the preview of one agreed sequence, for one person at the open firm. */
 export interface FollowUpPreviewRequest {
@@ -249,7 +294,7 @@ export interface OutcomeRequest {
         readonly scope: 'agreed_sequence';
         readonly sequenceVersionId: string;
         /** The schedule the card showed: the server refuses to start on a changed one. */
-        readonly previewBasis: { readonly anchorAt: string; readonly timeZone: string; readonly calendarVersionId: string };
+        readonly previewBasis: PreviewBasisView;
       }
     | null;
 }

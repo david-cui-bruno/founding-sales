@@ -43,6 +43,8 @@ export interface TodayActions {
    * `followUpPreview`; the outcome form shows it before the call is recorded.
    */
   previewFollowUp(input: OperationInput<'today.previewFollowUp'>): void;
+  /** "Record the agreed dates" after a stale preview (review of S3, round 2, P1-B). */
+  recordAgreedDates(input: OperationInput<'today.recordAgreedDates'>): void;
   scheduleCallback(input: OperationInput<'today.scheduleCallback'>): void;
   releasePause(input: OperationInput<'today.releasePause'>): void;
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
@@ -76,6 +78,8 @@ export const todayForm = {
   outcome: (firmId: string): string => `outcome:${firmId}`,
   /** The agreed sequence's preview under the outcome form. The form waits for it. */
   preview: (firmId: string): string => `preview:${firmId}`,
+  /** "Record the agreed dates" for a call whose preview went stale. */
+  agreedDates: (callLogId: string): string => `agreed-dates:${callLogId}`,
   callback: (callLogId: string): string => `callback:${callLogId}`,
   research: (firmId: string): string => `research-run:${firmId}`,
   hold: (holdId: string): string => `hold:${holdId}`,
@@ -200,6 +204,9 @@ export function useToday(identity: string | null, generation: number, guard: Gen
       },
       previewFollowUp: input => {
         command(value.read('today.previewFollowUp', input), todayForm.preview(input.firmId));
+      },
+      recordAgreedDates: input => {
+        command(value.command('today.recordAgreedDates', input), todayForm.agreedDates(input.callLogId));
       },
       scheduleCallback: input => {
         command(value.command('today.scheduleCallback', input), todayForm.callback(input.callLogId));

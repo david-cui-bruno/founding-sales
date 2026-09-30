@@ -48,6 +48,14 @@ export const POLICY_REFUSAL_CODES = [
    */
   'version_unknown',
   'version_not_published',
+  /**
+   * `POST /calls/follow-up` (review of S3, round 2, P1-B): the call already records an
+   * agreement (`agreement_exists`), or it was recorded more than an hour ago
+   * (`call_too_old`) — the recovery is for the minutes after a stale preview, not a way
+   * to attach an agreement to old history.
+   */
+  'agreement_exists',
+  'call_too_old',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 

@@ -79,6 +79,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       await deps.today.previewFollowUp(input),
     'today.recordOutcome': async (input: Parameters<TodayBridgeHost['recordOutcome']>[0]) =>
       await deps.today.recordOutcome(input),
+    'today.recordAgreedDates': async (input: Parameters<TodayBridgeHost['recordAgreedDates']>[0]) =>
+      await deps.today.recordAgreedDates(input),
     'today.scheduleCallback': async (input: Parameters<TodayBridgeHost['scheduleCallback']>[0]) =>
       await deps.today.scheduleCallback(input),
     'today.releasePause': async (input: Parameters<TodayBridgeHost['releasePause']>[0]) =>

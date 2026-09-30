@@ -429,6 +429,58 @@ export const consumeDialTicketCommandSchema = z.strictObject({
 });
 
 /**
+ * What an interested call may agree to (migration 0025; send-path v2): one approved
+ * e-mail, or an agreed published sequence with the basis of the preview the person was
+ * read. Shared by `POST /calls/log` and `POST /calls/follow-up`.
+ */
+const agreedFollowUpSchema = z
+  .discriminatedUnion('scope', [
+    z.strictObject({
+      scope: z.literal('single_email'),
+      /**
+       * The approved bytes that were promised. `logCallOutcome` writes it onto the call
+       * log (`agreed_template_version_id`), which is where the agreement lives, and the
+       * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
+       * rather than whichever approved template somebody picks later (P0-2).
+       */
+      templateVersionId: uuid,
+    }),
+    z.strictObject({
+      /**
+       * Send-path v2 (slice S3): the person agreed on the call to a follow-up
+       * sequence — one immutable **published** version, written onto the call log as
+       * `agreed_sequence_version_id` and bound to the permission, and enrolled in the
+       * same command (`agreed_sequence_enrolled` below says which enrollment).
+       */
+      scope: z.literal('agreed_sequence'),
+      sequenceVersionId: uuid,
+      /**
+       * The schedule the person was shown (review of S3, P1-3 and round 2): the
+       * preview's anchor, the firm's zone, the holiday calendar version and each step's
+       * displayed instant, as `POST /calls/follow-up-preview` answered them. Before
+       * anything is written the command recomputes the schedule at its transaction's
+       * sampled `now()`; a changed zone, calendar version or step minute answers
+       * `follow_up_not_granted` with reason `stale_preview` and writes no agreement and
+       * no permission, so nobody is enrolled on dates they did not hear.
+       */
+      previewBasis: z.strictObject({
+        anchorAt: instant,
+        timeZone: z.string().min(1).max(64),
+        calendarVersionId: z.string().min(1).max(64),
+        /**
+         * The instant each step was displayed at — the preview's `estimatedAt` — which
+         * the command compares, to the minute, with the schedule it would start in its
+         * own transaction (review of S3, round 2, P1-A).
+         */
+        steps: z
+          .array(z.strictObject({ ordinal: z.number().int().min(1).max(50), sendAt: instant }))
+          .min(1)
+          .max(50),
+      }),
+    }),
+  ]);
+
+/**
  * Log a call (specification 9.1, Appendix A "Log call outcome").
  *
  * Four changes from G4's shape, all additive or relaxing, so a desktop that sends the
@@ -485,42 +537,7 @@ export const logCallOutcomeCommandSchema = z.strictObject({
    * only for `interested`: "Call me Tuesday" is the `callback` above and grants no
    * e-mail permission, which is David's own distinction of 29 September 2026.
    */
-  followUpPermission: z
-    .discriminatedUnion('scope', [
-      z.strictObject({
-        scope: z.literal('single_email'),
-        /**
-         * The approved bytes that were promised. `logCallOutcome` writes it onto the call
-         * log (`agreed_template_version_id`), which is where the agreement lives, and the
-         * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
-         * rather than whichever approved template somebody picks later (P0-2).
-         */
-        templateVersionId: uuid,
-      }),
-      z.strictObject({
-        /**
-         * Send-path v2 (slice S3): the person agreed on the call to a follow-up
-         * sequence — one immutable **published** version, written onto the call log as
-         * `agreed_sequence_version_id` and bound to the permission, and enrolled in the
-         * same command (`agreed_sequence_enrolled` below says which enrollment).
-         */
-        scope: z.literal('agreed_sequence'),
-        sequenceVersionId: uuid,
-        /**
-         * The schedule the person was shown (review of S3, P1-3): the preview's anchor,
-         * the firm's zone and the holiday calendar version it was computed under, as
-         * `POST /calls/follow-up-preview` answered them. The command recomputes; if the
-         * zone or the calendar version has changed since, it does not start the sequence
-         * and answers `follow_up_not_enrolled` with reason `stale_preview` (the permission
-         * is still granted), so nobody is enrolled on dates they did not hear.
-         */
-        previewBasis: z.strictObject({
-          anchorAt: instant,
-          timeZone: z.string().min(1).max(64),
-          calendarVersionId: z.string().min(1).max(64),
-        }),
-      }),
-    ])
+  followUpPermission: agreedFollowUpSchema
     .optional(),
 });
 
@@ -625,6 +642,27 @@ export const loggedCallResultSchema = z.object({
   followUps: z.array(callFollowUpSchema),
 });
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;
+
+/**
+ * `POST /calls/follow-up` (review of S3, round 2, P1-B): record what an interested call
+ * agreed to after the call itself was recorded — the card's "Record the agreed dates"
+ * after a `stale_preview`. The same follow-up payload as `POST /calls/log`, against that
+ * call log: this workspace's `interested` call with a named person, recorded within the
+ * last hour, with no agreement on it yet.
+ */
+export const callFollowUpCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  callLogId: uuid,
+  followUpPermission: agreedFollowUpSchema,
+});
+export type CallFollowUpCommand = z.infer<typeof callFollowUpCommandSchema>;
+
+export const callFollowUpResultSchema = z.object({
+  callLogId: uuid,
+  followUpPermissionId: uuid.nullable(),
+  followUps: z.array(callFollowUpSchema),
+});
+export type CallFollowUpResult = z.infer<typeof callFollowUpResultSchema>;
 
 /**
  * `POST /calls/follow-up-preview` (send-path v2, slice S3): what an agreed sequence

@@ -936,6 +936,7 @@ describe('the Today bridge', () => {
       'today.collapse',
       'today.snooze',
       'today.recordOutcome',
+      'today.recordAgreedDates',
       'today.scheduleCallback',
       'today.releasePause',
     ]);

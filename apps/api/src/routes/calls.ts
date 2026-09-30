@@ -1,7 +1,7 @@
-import { followUpPreviewRequestSchema, logCallOutcomeCommandSchema } from '@fss/contracts';
+import { callFollowUpCommandSchema, followUpPreviewRequestSchema, logCallOutcomeCommandSchema } from '@fss/contracts';
 import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { readFirm } from '@fss/domain/crm/firms.ts';
-import { listCallLogs, logCallOutcome } from '@fss/domain/dial/calls.ts';
+import { listCallLogs, logCallOutcome, recordCallFollowUp } from '@fss/domain/dial/calls.ts';
 import { previewFollowUp } from '@fss/domain/dial/followUpPreview.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -20,6 +20,7 @@ export const CALL_PATHS: readonly string[] = [
   '/calls',
   '/calls/log',
   '/calls/follow-up-preview',
+  '/calls/follow-up',
 ];
 
 /**
@@ -89,6 +90,19 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
         : { status: 409, body: { status: 'refused', reason: preview.reason } };
     }
     return { status: 200, body: preview.value };
+  }
+  // Review of S3, round 2 (P1-B): record the agreed follow-up of a call already recorded
+  // — the card's "Record the agreed dates" after a stale preview. An exact path with the
+  // call log in the body rather than `/calls/<id>/follow-up`: every new endpoint in this
+  // registry is an exact path (`bootstrap/routeRegistry.ts`).
+  if (request.path === '/calls/follow-up') {
+    return await runPolicyCommand(deps, callFollowUpCommandSchema, 'record_call_follow_up', async (repository, body) =>
+      await recordCallFollowUp(repository, {
+        callLogId: body.callLogId,
+        followUpPermission: body.followUpPermission,
+        commandId: body.commandId,
+      }),
+    );
   }
   if (request.path !== '/calls/log') {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

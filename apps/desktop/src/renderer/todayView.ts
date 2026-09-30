@@ -137,6 +137,9 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   outcome_recorded_sequence_started: 'Call recorded, its earlier sequences stopped, and the agreed sequence started.',
   outcome_recorded_sequence_not_started:
     'Call recorded and its earlier sequences stopped. The agreed sequence is permitted but did not start.',
+  agreed_dates_need_preview: 'Callie has no current preview of those dates yet. Wait for it, then record them.',
+  agreement_exists: 'That call already records what was agreed.',
+  call_too_old: 'That call was recorded more than an hour ago. Record the agreement on the next call.',
   version_unknown: 'That sequence is not one of this workspace’s. Refresh and choose again.',
   version_not_published: 'That sequence version is not published any more. Refresh and choose again.',
   callback_scheduled: 'Callback scheduled.',

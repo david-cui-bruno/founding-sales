@@ -32,7 +32,15 @@ const RETIRED = 'dddddddd-4444-4444-8444-dddddddddddd';
 const WITH_REMOVED_STEP = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
 const ENROLLMENT_ID = 'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0';
 /** The basis of the preview the card showed, which the command carries (review of S3, P1-3). */
-const BASIS = { anchorAt: '2026-09-30T15:00:00.000Z', timeZone: 'America/Los_Angeles', calendarVersionId: 'none.1' };
+const BASIS = {
+  anchorAt: '2026-09-30T15:00:00.000Z',
+  timeZone: 'America/Los_Angeles',
+  calendarVersionId: 'none.1',
+  steps: [
+    { ordinal: 1, sendAt: '2026-10-02T15:00:00.000Z' },
+    { ordinal: 2, sendAt: '2026-10-06T15:00:00.000Z' },
+  ],
+};
 
 function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   readonly api: ReturnType<typeof createAuthedClient>;
@@ -308,17 +316,117 @@ describe('the Today bridge and an agreed sequence', () => {
     expect(state.notice).toBe('outcome_recorded');
   });
 
-  it('tells the person to preview again when the schedule changed before the call was recorded', async () => {
-    const { api } = scriptedApi(baseAnswers({ '/calls/log': logged([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]) }));
+  it('keeps a stale agreement open, reads the new dates, and records them on POST /calls/follow-up (round 2, P1-B)', async () => {
+    const CALL_LOG_ID = 'abababab-abab-4bab-8bab-abababababab';
+    const freshPreview = {
+      sequenceVersionId: PUBLISHED,
+      sequenceName: 'After a good call',
+      version: 3,
+      firmTimeZone: 'America/Los_Angeles',
+      holidayCalendarVersion: 'holidays.2',
+      anchoredAt: '2026-09-30T15:05:00.000Z',
+      steps: [
+        {
+          ordinal: 1,
+          channel: 'email',
+          templateVersionId: '66666666-6666-4666-8666-666666666666',
+          templateName: 'The overview',
+          subject: 'The overview',
+          templateApproved: true,
+          dueAt: '2026-10-05T15:00:00.000Z',
+          estimatedAt: '2026-10-05T15:00:00.000Z',
+        },
+      ],
+    };
+    const { api, calls } = scriptedApi(
+      baseAnswers({
+        '/calls/log': logged([{ kind: 'follow_up_not_granted', reason: 'stale_preview' }]),
+        '/calls/follow-up-preview': { status: 200, body: freshPreview },
+        '/calls/follow-up': accepted({
+          callLogId: CALL_LOG_ID,
+          followUpPermissionId: '99999999-9999-4999-8999-999999999999',
+          followUps: [{ kind: 'agreed_sequence_enrolled', reason: 'enrolled', enrollmentId: ENROLLMENT_ID }],
+        }),
+      }),
+    );
     const bridge = createTodayBridge({ api, handoff, session });
     await bridge.expand({ firmId: FIRM_ID });
     const state = await bridge.recordOutcome(
       interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }),
     );
-    expect(state.notice).toBe('outcome_recorded_sequence_not_started');
+    // Nothing granted; the card keeps this call's agreement open with the new dates.
+    expect(state.pendingAgreement).toEqual({
+      firmId: FIRM_ID,
+      callLogId: CALL_LOG_ID,
+      contactId: CONTACT_ID,
+      sequenceVersionId: PUBLISHED,
+      name: 'After a good call v3',
+    });
+    expect(state.followUpPreview?.holidayCalendarVersion).toBe('holidays.2');
     expect(buildTodayView(state).banners.map(banner => banner.text)).toContain(
-      'Agreed on the call: the sequence “After a good call v3”. It did not start: the schedule changed after you previewed it. Preview it again and start it from the firm’s page.',
+      'The call is recorded, but the sequence “After a good call v3” did not start: its dates changed after you previewed them. Read them the new dates on the card and press Record the agreed dates.',
     );
+
+    const after = await bridge.recordAgreedDates({ firmId: FIRM_ID, callLogId: CALL_LOG_ID });
+    expect(calls.find(call => call.path === '/calls/follow-up')?.body).toMatchObject({
+      callLogId: CALL_LOG_ID,
+      followUpPermission: {
+        scope: 'agreed_sequence',
+        sequenceVersionId: PUBLISHED,
+        previewBasis: {
+          anchorAt: '2026-09-30T15:05:00.000Z',
+          timeZone: 'America/Los_Angeles',
+          calendarVersionId: 'holidays.2',
+          steps: [{ ordinal: 1, sendAt: '2026-10-05T15:00:00.000Z' }],
+        },
+      },
+    });
+    expect(after.pendingAgreement).toBeNull();
+    expect(after.notice).toBe('outcome_recorded_sequence_started');
+    expect(buildTodayView(after).banners.map(banner => banner.text)).toContain(
+      'Agreed on the call: the sequence “After a good call v3”. It has started.',
+    );
+  });
+
+  it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {
+    let release: (() => void) | null = null;
+    const answers = baseAnswers();
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path !== '/calls/follow-up-preview') {
+          return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+        }
+        const body = JSON.parse(init.body ?? '{}') as { sequenceVersionId: string };
+        await new Promise<void>(resolve => {
+          release = resolve;
+        });
+        return {
+          status: 200,
+          body: {
+            sequenceVersionId: body.sequenceVersionId,
+            sequenceName: 'Plan',
+            version: 1,
+            firmTimeZone: 'America/New_York',
+            holidayCalendarVersion: 'none.1',
+            anchoredAt: '2026-09-30T15:00:00.000Z',
+            steps: [],
+          },
+        };
+      },
+    });
+    const bridge = createTodayBridge({ api, handoff, session });
+    await bridge.expand({ firmId: FIRM_ID });
+    const pending = bridge.previewFollowUp({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await bridge.collapse();
+    (release as (() => void) | null)?.();
+    await pending;
+    const reopened = await bridge.expand({ firmId: FIRM_ID });
+    expect(reopened.followUpPreview ?? null).toBeNull();
   });
 
   it('drops a preview answer that lands after a newer request (review of S3, P2-b)', async () => {

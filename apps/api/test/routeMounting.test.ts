@@ -66,6 +66,7 @@ describe('what the API mounts', () => {
       '/calling-identities/disable',
       '/calling-identities/register',
       '/calls',
+      '/calls/follow-up',
       '/calls/follow-up-preview',
       '/calls/log',
       '/crm/firm-page',

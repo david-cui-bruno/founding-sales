@@ -197,7 +197,57 @@ const importPreviewBody = {
   counts: { create: 1, attach: 0, duplicate: 0, invalid: 0 },
 };
 
+/**
+ * An interested call whose agreed sequence was not granted because its dates changed
+ * after the preview (review of S3, round 2, P1-B): the card then reads a fresh preview
+ * and offers "Record the agreed dates", so both requests are the bridge's to declare.
+ */
+export const STALE_CALL_LOG_ID = '5a5a5a5a-5a5a-45a5-85a5-5a5a5a5a5a5a';
+const staleCallBody = {
+  status: 'accepted',
+  replayed: false,
+  result: {
+    callLogId: STALE_CALL_LOG_ID,
+    outcome: 'interested',
+    stepEffect: 'none',
+    occurredAt: '2026-09-21T13:05:00.000Z',
+    setManual: true,
+    suggestedStageKey: null,
+    suppressionEventIds: [],
+    retiredRouteId: null,
+    successorExecutionId: null,
+    stepExecutionId: null,
+    stepApplication: null,
+    callbackId: null,
+    completedCallbackId: null,
+    followUpPermissionId: null,
+    followUps: [{ kind: 'follow_up_not_granted', reason: 'stale_preview' }],
+  },
+};
+const followUpPreviewBody = {
+  sequenceVersionId: '11111111-1111-4111-8111-111111111111',
+  sequenceName: 'Referrals',
+  version: 1,
+  firmTimeZone: 'America/New_York',
+  holidayCalendarVersion: 'none.1',
+  anchoredAt: '2026-09-21T13:06:00.000Z',
+  steps: [
+    {
+      ordinal: 1,
+      channel: 'call_task',
+      templateVersionId: null,
+      templateName: null,
+      subject: null,
+      templateApproved: null,
+      dueAt: '2026-09-22T12:00:00.000Z',
+      estimatedAt: '2026-09-22T12:00:00.000Z',
+    },
+  ],
+};
+
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
+  '/calls/log': staleCallBody,
+  '/calls/follow-up-preview': followUpPreviewBody,
   '/today/firm': todayFirmBody,
   '/replies': { businessDate: '2026-09-21', cards: [replyCardBody] },
   '/crm/firm-page': firmPageBody,

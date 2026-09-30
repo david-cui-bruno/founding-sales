@@ -1,5 +1,5 @@
 import { dueLabel } from '../homeView.ts';
-import type { AgreementView, FollowUpPreviewView, OutcomeRequest } from '../todayContract.ts';
+import { previewBasisOf, type AgreementView, type FollowUpPreviewView, type OutcomeRequest } from '../todayContract.ts';
 
 /**
  * The follow-up choice under an interested call, as pure functions (send-path v2, slice
@@ -53,23 +53,9 @@ export function followUpPermissionOf(
   if (pick.choice === 'single_email' && pick.templateVersionId !== '') {
     return { scope: 'single_email', templateVersionId: pick.templateVersionId };
   }
-  if (
-    pick.choice === 'agreed_sequence' &&
-    pick.sequenceVersionId !== '' &&
-    preview !== null &&
-    preview.refusal === null &&
-    preview.anchoredAt !== null &&
-    preview.sequenceVersionId === pick.sequenceVersionId
-  ) {
-    return {
-      scope: 'agreed_sequence',
-      sequenceVersionId: pick.sequenceVersionId,
-      previewBasis: {
-        anchorAt: preview.anchoredAt,
-        timeZone: preview.firmTimeZone,
-        calendarVersionId: preview.holidayCalendarVersion,
-      },
-    };
+  if (pick.choice === 'agreed_sequence' && pick.sequenceVersionId !== '' && preview !== null) {
+    const basis = preview.sequenceVersionId === pick.sequenceVersionId ? previewBasisOf(preview) : null;
+    if (basis !== null) return { scope: 'agreed_sequence', sequenceVersionId: pick.sequenceVersionId, previewBasis: basis };
   }
   return null;
 }
@@ -160,7 +146,7 @@ const ENROL_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
   not_assigned: 'the firm is not assigned to you',
   firm_unknown: 'the firm is not on your list',
   enrollment_failed: 'the enrolment failed',
-  stale_preview: 'the schedule changed after you previewed it',
+  stale_preview: 'the dates changed after you previewed them',
   agreement_not_recorded: 'the agreement could not be recorded on the call',
 });
 
@@ -179,13 +165,15 @@ export function agreementSentence(agreement: AgreementView | null | undefined): 
       ? `Agreed on the call: one e-mail, “${agreement.name}”.`
       : `Agreed on the call: one e-mail, “${agreement.name}” — but Callie was not given permission to send it.`;
   }
+  if (!agreement.granted && agreement.reason === 'stale_preview') {
+    // Review of S3, round 2, P1-B: nothing was granted, and the card itself is the way
+    // on — the firm page has no preview to read the new dates from.
+    return `The call is recorded, but the sequence “${agreement.name}” did not start: its dates changed after you previewed them. Read them the new dates on the card and press Record the agreed dates.`;
+  }
   if (!agreement.granted) {
     return `Agreed on the call: the sequence “${agreement.name}” — not started, because Callie was not given permission for it.`;
   }
   if (agreement.started === true) return `Agreed on the call: the sequence “${agreement.name}”. It has started.`;
-  if (agreement.reason === 'stale_preview') {
-    return `Agreed on the call: the sequence “${agreement.name}”. It did not start: the schedule changed after you previewed it. Preview it again and start it from the firm’s page.`;
-  }
   const why = agreement.reason === null ? '' : `: ${enrolRefusalSentence(agreement.reason)}`;
   return `Agreed on the call: the sequence “${agreement.name}”. It did not start${why}. Start it from the firm’s page.`;
 }

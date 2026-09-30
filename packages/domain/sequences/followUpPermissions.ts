@@ -7,7 +7,7 @@ import {
 } from '@fss/contracts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { currentHolidayCalendar } from './calendars.ts';
+import { currentHolidayCalendar, holidayCalendarByVersion } from './calendars.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
@@ -208,6 +208,45 @@ export interface FollowUpSubject {
 }
 
 /**
+ * The `follow_up_expired` detail of an agreed sequence whose schedule moved after the
+ * agreement: a holiday added to the workspace calendar after enrolment places a step
+ * later than the calendar the enrollment froze did, past the permission's bound. The
+ * hold says the date moved and a fresh agreement is needed.
+ */
+export const AGREED_SCHEDULE_MOVED = 'agreed_schedule_moved';
+
+/**
+ * Whether the calendar changed after this enrollment started in a way that places its
+ * plan later than the calendar it froze: the latest placed instant of its steps
+ * (`agreedSequenceExpiry`, which places each e-mail in the send window) under the
+ * workspace's current calendar is later than under the enrollment's own. Plan-wide
+ * rather than per step, because the permission's bound is plan-wide.
+ */
+async function agreedScheduleMoved(context: RepositoryContext, enrollmentId: string): Promise<boolean> {
+  const { rows } = await context.db.query<{
+    started_at: Date;
+    firm_time_zone: string;
+    holiday_calendar_version: string;
+    sequence_version_id: string;
+  }>(
+    `SELECT started_at, firm_time_zone, holiday_calendar_version, sequence_version_id
+       FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, enrollmentId],
+  );
+  const enrollment = rows[0];
+  if (enrollment === undefined) return false;
+  const current = await currentHolidayCalendar(context);
+  if (current.version === enrollment.holiday_calendar_version) return false;
+  const frozen = await holidayCalendarByVersion(context, enrollment.holiday_calendar_version);
+  const version = await readSequenceVersion(context, enrollment.sequence_version_id);
+  if (version === null || version.steps.length === 0) return false;
+  const startedAt = enrollment.started_at.toISOString();
+  const under = (calendar: WorkspaceHolidayCalendar): number =>
+    Date.parse(agreedSequenceExpiry(version.steps, startedAt, enrollment.firm_time_zone, calendar));
+  return under(current) > under(frozen);
+}
+
+/**
  * Whether this permission authorizes writing to this person, now.
  *
  * The questions, in the order a refusal is most worth reading:
@@ -249,6 +288,19 @@ export async function verifyFollowUpPermission(
   if (evidence !== null) return { ok: false, refusal: 'follow_up_not_permitted', detail: evidence };
 
   if (Date.parse(permission.expiresAt) <= Date.parse(subject.now)) {
+    // An agreed sequence whose schedule a later holiday pushed past its own bound is not
+    // a sequence that ran out: the date moved after the agreement (review of S3, round
+    // 2, P1-C). Same refusal code — 0026 is pinned, so no new hold reason — with a
+    // detail that says so, and the same answer: nothing is sent, and a fresh agreement
+    // is needed.
+    if (
+      permission.scope === 'agreed_sequence' &&
+      subject.enrollmentId !== undefined &&
+      subject.enrollmentId !== null &&
+      (await agreedScheduleMoved(context, subject.enrollmentId))
+    ) {
+      return { ok: false, refusal: 'follow_up_expired', detail: AGREED_SCHEDULE_MOVED };
+    }
     return { ok: false, refusal: 'follow_up_expired', detail: permission.expiresAt };
   }
 

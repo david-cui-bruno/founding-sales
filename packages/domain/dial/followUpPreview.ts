@@ -8,7 +8,8 @@ import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { currentHolidayCalendar } from '../sequences/calendars.ts';
 import { stepForCadence } from '../sequences/enrollments.ts';
 import { readSequenceVersion } from '../sequences/rows.ts';
-import { isStepChannel } from '../sequences/types.ts';
+import { isStepChannel, type SequenceStepRow } from '../sequences/types.ts';
+import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { readTemplateVersion } from '../templates/templates.ts';
 
 /**
@@ -117,8 +118,10 @@ export async function previewFollowUp(
   );
 
   const steps: FollowUpPreviewStep[] = [];
-  for (const step of version.steps) {
-    const due = resolveStepDue(stepForCadence(step), anchoredAt, zone, calendar).dueAt;
+  const schedule = scheduleOf(version.steps, anchoredAt, zone, calendar);
+  for (const [index, step] of version.steps.entries()) {
+    const planned = schedule[index];
+    if (planned === undefined) continue;
     const email = step.channel === 'email';
     const template =
       email && step.templateVersionId !== null ? await readTemplateVersion(context, step.templateVersionId) : null;
@@ -129,8 +132,8 @@ export async function previewFollowUp(
       templateName: template?.name ?? null,
       subject: template?.subject ?? null,
       templateApproved: email ? template !== null && template.approvedAt !== null : null,
-      dueAt: due,
-      estimatedAt: email ? placeEmailSend(due, zone, { calendar }).sendAt : due,
+      dueAt: planned.dueAt,
+      estimatedAt: planned.sendAt,
     });
   }
 
@@ -146,4 +149,69 @@ export async function previewFollowUp(
       steps,
     },
   };
+}
+
+/** One step's place in a schedule: when it falls due, and when it is expected to happen. */
+export interface PlannedStep {
+  readonly ordinal: number;
+  readonly dueAt: string;
+  /** For an e-mail, the send window's placement of `dueAt`; for a call task, `dueAt`. */
+  readonly sendAt: string;
+}
+
+/**
+ * The schedule of a version started at `anchor`: the arithmetic enrolment and dispatch
+ * use (`resolveStepDue`, then `placeEmailSend` for an e-mail), in one place, so the
+ * preview and the command's re-check can never compute it two ways.
+ */
+export function scheduleOf(
+  steps: readonly SequenceStepRow[],
+  anchor: string,
+  zone: string,
+  calendar: WorkspaceHolidayCalendar,
+): readonly PlannedStep[] {
+  return steps.map(step => {
+    const dueAt = resolveStepDue(stepForCadence(step), anchor, zone, calendar).dueAt;
+    return {
+      ordinal: step.ordinal,
+      dueAt,
+      sendAt: step.channel === 'email' ? placeEmailSend(dueAt, zone, { calendar }).sendAt : dueAt,
+    };
+  });
+}
+
+/** The basis of the preview the person was read, as the card carries it on the command. */
+export interface PreviewBasis {
+  readonly anchorAt: string;
+  readonly timeZone: string;
+  readonly calendarVersionId: string;
+  readonly steps?: readonly { readonly ordinal: number; readonly sendAt: string }[] | undefined;
+}
+
+/**
+ * Whether the schedule an enrolment started now would have is the schedule the person
+ * was read (review of S3, round 2, P1-A): the same zone, the same calendar version, and
+ * every step at the same minute — the precision the card displays. `now` is the
+ * transaction's sampled `now()`, which is the instant `enrollContact` anchors at in the
+ * same transaction. A step missing from either side is a difference.
+ */
+export function previewBasisHolds(
+  basis: PreviewBasis,
+  current: {
+    readonly steps: readonly SequenceStepRow[];
+    readonly now: string;
+    readonly zone: string | null;
+    readonly calendar: WorkspaceHolidayCalendar;
+  },
+): boolean {
+  if (current.zone === null || current.zone !== basis.timeZone) return false;
+  if (current.calendar.version !== basis.calendarVersionId) return false;
+  if (basis.steps === undefined) return true;
+  const schedule = scheduleOf(current.steps, current.now, current.zone, current.calendar);
+  if (schedule.length !== basis.steps.length) return false;
+  const minute = (instant: string): number => Math.floor(Date.parse(instant) / 60_000);
+  return schedule.every(planned => {
+    const shown = basis.steps?.find(entry => entry.ordinal === planned.ordinal);
+    return shown !== undefined && minute(shown.sendAt) === minute(planned.sendAt);
+  });
 }

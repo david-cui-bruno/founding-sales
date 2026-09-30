@@ -117,6 +117,7 @@ const outcomeInput = z.strictObject({
           anchorAt: instant,
           timeZone: z.string().min(1).max(64),
           calendarVersionId: z.string().min(1).max(64),
+          steps: z.array(z.strictObject({ ordinal: z.number().int().min(1).max(50), sendAt: instant })).min(1).max(50),
         }),
       }),
     ])
@@ -356,10 +357,21 @@ export const OPERATIONS = {
   },
   'today.recordOutcome': {
     kind: 'command',
-    calls: [{ method: 'POST', path: '/calls/log' }],
+    calls: [
+      { method: 'POST', path: '/calls/log' },
+      // After a stale preview, the fresh one for "Record the agreed dates" (P1-B).
+      { method: 'POST', path: '/calls/follow-up-preview' },
+    ],
     input: outcomeInput,
     output: todayStateSchema,
     transform: 'the call just handed off names the contact and number; the callback instant is the domain’s; no occurredAt',
+  },
+  'today.recordAgreedDates': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/follow-up' }],
+    input: z.strictObject({ firmId: uuid, callLogId: uuid }),
+    output: todayStateSchema,
+    transform: 'the pending agreement of a recorded call, sent on the fresh preview the person was read (its basis), after a stale preview',
   },
   'today.scheduleCallback': {
     kind: 'command',

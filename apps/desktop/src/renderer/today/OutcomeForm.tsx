@@ -26,6 +26,7 @@ import {
   followUpChoiceOf,
   followUpPermissionOf,
   followUpProblem,
+  enrolRefusalSentence,
   previewFor,
   previewRows,
 } from './followUpView.ts';
@@ -159,7 +160,77 @@ export function OutcomeForm({
   const previewFailed = previewKey !== null && askedKey === previewKey && preview === null && !previewing;
   const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
 
+  // Review of S3, round 2 (P1-B): the call was recorded but its agreed dates had changed
+  // after the preview, so nothing was granted. This call's agreement stays open here: the
+  // fresh preview, and "Record the agreed dates" once the person has heard them.
+  const pending = state.pendingAgreement != null && state.pendingAgreement.firmId === expanded.firmId ? state.pendingAgreement : null;
+  const pendingPreview =
+    pending === null
+      ? null
+      : previewFor(state.followUpPreview, {
+          firmId: pending.firmId,
+          contactId: pending.contactId,
+          sequenceVersionId: pending.sequenceVersionId,
+        });
+  const recordingDates = pending !== null && actions.busy(todayForm.agreedDates(pending.callLogId));
+  const recovery =
+    pending === null ? null : (
+      <section data-testid="agreed-dates" className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+        <p className="text-xs font-medium">{`The dates of “${pending.name}” changed after your preview. Read them the new dates:`}</p>
+        {pendingPreview !== null && pendingPreview.refusal === null ? (
+          <ol data-testid="agreed-dates-preview" className="flex flex-col gap-1 text-xs">
+            {previewRows(pendingPreview).map(row => (
+              <li key={row.ordinal} data-testid="agreed-dates-step" className="flex justify-between gap-3 border-b border-border py-1">
+                <span>{`${String(row.ordinal)}. ${row.what}`}</span>
+                <span className="shrink-0 text-muted-foreground">{row.when}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span data-testid="agreed-dates-problem">
+              {pendingPreview?.refusal == null
+                ? 'Callie is reading the new dates.'
+                : `Callie cannot start that sequence here: ${enrolRefusalSentence(pendingPreview.refusal)}.`}
+            </span>
+            {previewing ? null : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="agreed-dates-reload"
+                disabled={!enabled}
+                onClick={() => {
+                  actions.previewFollowUp({
+                    firmId: pending.firmId,
+                    contactId: pending.contactId,
+                    sequenceVersionId: pending.sequenceVersionId,
+                  });
+                }}
+              >
+                Preview again
+              </Button>
+            )}
+          </div>
+        )}
+        <div>
+          <Button
+            type="button"
+            data-testid="agreed-dates-record"
+            disabled={!enabled || recordingDates || previewing || pendingPreview === null || pendingPreview.refusal !== null}
+            onClick={() => {
+              actions.recordAgreedDates({ firmId: pending.firmId, callLogId: pending.callLogId });
+            }}
+          >
+            Record the agreed dates
+          </Button>
+        </div>
+      </section>
+    );
+
   return (
+    <>
+    {recovery}
     <form
       data-testid="outcome-form"
       className="mt-3 flex flex-col gap-2 border-t border-border pt-3"
@@ -425,5 +496,6 @@ export function OutcomeForm({
         </Button>
       </div>
     </form>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import {
   TODAY_CARD_VERSION,
   callbackInstant,
+  callFollowUpResultSchema,
   callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
   followUpPreviewResponseSchema,
@@ -15,13 +16,16 @@ import {
   type LoggedCallResult,
 } from '@fss/contracts';
 import {
+  previewBasisOf,
   todayStateSchema,
   type AgreementView,
   type DialAdviceView,
   type FollowUpPreviewRequest,
   type FollowUpPreviewView,
+  type PendingAgreementView,
   type DialRequest,
   type OutcomeRequest,
+  type RecordAgreedDatesRequest,
   type RefreshRequest,
   type ReleasePauseRequest,
   type ScheduleCallbackRequest,
@@ -128,6 +132,11 @@ export interface TodayBridgeHost {
    * outcome form to show before the call is recorded.
    */
   previewFollowUp(input: FollowUpPreviewRequest): Promise<TodayState>;
+  /**
+   * "Record the agreed dates" after a stale preview (review of S3, round 2, P1-B):
+   * `POST /calls/follow-up` for the pending agreement of that call, on the fresh preview.
+   */
+  recordAgreedDates(input: RecordAgreedDatesRequest): Promise<TodayState>;
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
   scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
@@ -247,6 +256,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let followUpPreview: FollowUpPreviewView | null = null;
   /** Which preview request is the newest; an older answer is dropped when it lands. */
   let previewRequest = 0;
+  /** The firm whose card the last successful expansion read. */
+  let openedFirmId: string | null = null;
+  /**
+   * An agreed sequence the server did not grant because the schedule changed after the
+   * preview (`stale_preview`; review of S3, round 2, P1-B). The call is recorded; the card
+   * keeps the follow-up open, reads a fresh preview, and offers "Record the agreed dates".
+   */
+  let pendingAgreement: PendingAgreementView | null = null;
   /** What the last recorded call agreed to, for the notice. Cleared with the notice. */
   let agreement: AgreementView | null = null;
   /**
@@ -312,6 +329,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       followUpSequences,
       followUpPreview,
       agreement,
+      pendingAgreement,
       lastCall:
         lastCall === null
           ? null
@@ -366,6 +384,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     notice = null;
     agreement = null;
     if (followUpPreview !== null && followUpPreview.firmId !== firmId) followUpPreview = null;
+    // Another firm's card: a preview in flight for the last one must not land here (P2).
+    if (openedFirmId !== firmId) {
+      previewRequest += 1;
+      if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
+    }
+    openedFirmId = firmId;
     dialAdvice = await adviseRoutes(page.value);
     followUpTemplates = await approvedTemplates();
     followUpSequences = await publishedSequences();
@@ -449,6 +473,53 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     };
   };
 
+  const loadPreview = async (input: FollowUpPreviewRequest): Promise<void> => {
+    // Only the newest request may land (review of S3, P2-b): a person who changes the
+    // sequence while an older preview is in flight must not see the older answer.
+    previewRequest += 1;
+    const mine = previewRequest;
+    const answer = await deps.api.read(
+      '/calls/follow-up-preview',
+      value => followUpPreviewResponseSchema.parse(value),
+      { firmId: input.firmId, contactId: input.contactId, sequenceVersionId: input.sequenceVersionId },
+    );
+    if (mine !== previewRequest) return;
+    if (answer.ok) {
+      followUpPreview = {
+        firmId: input.firmId,
+        contactId: input.contactId,
+        sequenceVersionId: answer.value.sequenceVersionId,
+        sequenceName: answer.value.sequenceName,
+        firmTimeZone: answer.value.firmTimeZone,
+        holidayCalendarVersion: answer.value.holidayCalendarVersion,
+        anchoredAt: answer.value.anchoredAt,
+        steps: answer.value.steps.map(step => ({
+          ordinal: step.ordinal,
+          channel: step.channel,
+          templateName: step.templateName,
+          subject: step.subject,
+          estimatedAt: step.estimatedAt,
+        })),
+        refusal: null,
+      };
+    } else if (answer.offline || answer.reason === 'unreadable_answer' || /^http_5\d\d$/u.test(answer.reason)) {
+      followUpPreview = null;
+      notice = answer.reason;
+    } else {
+      followUpPreview = {
+        firmId: input.firmId,
+        contactId: input.contactId,
+        sequenceVersionId: input.sequenceVersionId,
+        sequenceName: '',
+        firmTimeZone: '',
+        holidayCalendarVersion: '',
+        anchoredAt: null,
+        steps: [],
+        refusal: answer.reason.slice(0, 80),
+      };
+    }
+  };
+
   /**
    * Re-read after a mutation, keeping the mutation's notice. The re-read's own success
    * would clear it, and a firm whose last task the mutation finished has left today's
@@ -475,6 +546,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * work shown to somebody else.
      */
     async forget() {
+      previewRequest += 1;
+      pendingAgreement = null;
       expanded = null;
       notice = null;
       agreement = null;
@@ -516,6 +589,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     },
 
     async collapse() {
+      // A preview still on the wire belongs to the card being closed (review of S3,
+      // round 2, P2): advancing the counter makes its answer land on nothing.
+      previewRequest += 1;
+      pendingAgreement = null;
       expanded = null;
       notice = null;
       agreement = null;
@@ -564,50 +641,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * one.
      */
     async previewFollowUp(input) {
-      // Only the newest request may land (review of S3, P2-b): a person who changes the
-      // sequence while an older preview is in flight must not see the older answer.
-      previewRequest += 1;
-      const mine = previewRequest;
-      const answer = await deps.api.read(
-        '/calls/follow-up-preview',
-        value => followUpPreviewResponseSchema.parse(value),
-        { firmId: input.firmId, contactId: input.contactId, sequenceVersionId: input.sequenceVersionId },
-      );
-      if (mine !== previewRequest) return await snapshot();
-      if (answer.ok) {
-        followUpPreview = {
-          firmId: input.firmId,
-          contactId: input.contactId,
-          sequenceVersionId: answer.value.sequenceVersionId,
-          sequenceName: answer.value.sequenceName,
-          firmTimeZone: answer.value.firmTimeZone,
-          holidayCalendarVersion: answer.value.holidayCalendarVersion,
-          anchoredAt: answer.value.anchoredAt,
-          steps: answer.value.steps.map(step => ({
-            ordinal: step.ordinal,
-            channel: step.channel,
-            templateName: step.templateName,
-            subject: step.subject,
-            estimatedAt: step.estimatedAt,
-          })),
-          refusal: null,
-        };
-      } else if (answer.offline || answer.reason === 'unreadable_answer' || /^http_5\d\d$/u.test(answer.reason)) {
-        followUpPreview = null;
-        notice = answer.reason;
-      } else {
-        followUpPreview = {
-          firmId: input.firmId,
-          contactId: input.contactId,
-          sequenceVersionId: input.sequenceVersionId,
-          sequenceName: '',
-          firmTimeZone: '',
-          holidayCalendarVersion: '',
-          anchoredAt: null,
-          steps: [],
-          refusal: answer.reason.slice(0, 80),
-        };
-      }
+      await loadPreview(input);
       return await snapshot();
     },
 
@@ -724,14 +758,85 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ? input.followUpPermission
           : null;
       agreement = null;
+      pendingAgreement = null;
       if (note(answer, null) && answer.ok) {
         notice = outcomeNotice(answer.value);
         agreement = agreementOf(agreed, answer.value, { templates: followUpTemplates, sequences: followUpSequences });
         followUpPreview = null;
         if (call !== null) lastCall = null;
+        // The dates changed between the preview and the recording, and nothing was
+        // granted (P1-B). The card keeps this call's agreement open and reads the dates
+        // as they are now, for the person to hear before "Record the agreed dates".
+        const result = answer.value;
+        const stale =
+          result?.followUps.some(entry => entry.kind === 'follow_up_not_granted' && entry.reason === 'stale_preview') ===
+          true;
+        if (result !== null && stale && agreed?.scope === 'agreed_sequence' && contactId !== null) {
+          pendingAgreement = {
+            firmId: input.firmId,
+            callLogId: result.callLogId,
+            contactId,
+            sequenceVersionId: agreed.sequenceVersionId,
+            name: agreement?.name ?? '',
+          };
+        }
       }
       // The outcome may have created a callback, stopped a sequence or suppressed a
       // number. Re-read rather than patching the page: the server decided, not us.
+      await reloadAfterMutation({ refreshList: true });
+      if (pendingAgreement !== null) await loadPreview(pendingAgreement);
+      return await snapshot();
+    },
+
+    async recordAgreedDates(input) {
+      const pending = pendingAgreement;
+      const preview = followUpPreview;
+      const basis =
+        pending !== null &&
+        preview !== null &&
+        pending.callLogId === input.callLogId &&
+        preview.firmId === pending.firmId &&
+        preview.contactId === pending.contactId &&
+        preview.sequenceVersionId === pending.sequenceVersionId
+          ? previewBasisOf(preview)
+          : null;
+      if (pending === null || basis === null) {
+        notice = 'agreed_dates_need_preview';
+        return await snapshot();
+      }
+      const answer = await deps.api.command(
+        '/calls/follow-up',
+        {
+          callLogId: pending.callLogId,
+          followUpPermission: { scope: 'agreed_sequence', sequenceVersionId: pending.sequenceVersionId, previewBasis: basis },
+        },
+        value => {
+          const parsed = callFollowUpResultSchema.safeParse(value);
+          return parsed.success ? parsed.data : null;
+        },
+      );
+      const recorded = answer.ok ? answer.value : null;
+      if (note(answer, null) && recorded !== null) {
+        const followUps = recorded.followUps;
+        const stillStale = followUps.some(entry => entry.reason === 'stale_preview');
+        agreement = {
+          scope: 'agreed_sequence',
+          name: pending.name,
+          granted: !followUps.some(entry => entry.kind === 'follow_up_not_granted'),
+          started: followUps.some(entry => entry.kind === 'agreed_sequence_enrolled'),
+          reason: followUps.find(entry => entry.kind !== 'agreed_sequence_enrolled')?.reason ?? null,
+        };
+        notice = agreement.started === true ? 'outcome_recorded_sequence_started' : 'outcome_recorded_sequence_not_started';
+        if (stillStale) {
+          // The dates moved again while the person listened: read them again.
+          await loadPreview(pending);
+        } else {
+          pendingAgreement = null;
+          followUpPreview = null;
+        }
+      } else if (!answer.ok && answer.reason === 'agreement_exists') {
+        pendingAgreement = null;
+      }
       await reloadAfterMutation({ refreshList: true });
       return await snapshot();
     },

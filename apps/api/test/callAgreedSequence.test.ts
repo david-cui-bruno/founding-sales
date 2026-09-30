@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE, followUpPreviewResponseSchema, loggedCallResultSchema } from '@fss/contracts';
+import {
+  SENDING_STOP_LINE,
+  callFollowUpResultSchema,
+  followUpPreviewResponseSchema,
+  loggedCallResultSchema,
+} from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { controlModeSource } from '@fss/domain/sequences/eligibility.ts';
+import { controlModeSource, followUpPermissionSource } from '@fss/domain/sequences/eligibility.ts';
 import { listStepExecutions } from '@fss/domain/sequences/rows.ts';
 import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { placeEmailSend } from '@fss/domain/src/rules/sendingWindow.ts';
@@ -136,10 +141,17 @@ describe('an agreed sequence recorded on the call card', () => {
   }
 
   /** A basis the card could never have had, for requests refused before any preview. */
-  const UNPREVIEWED = { anchorAt: '2026-09-30T13:00:00.000Z', timeZone: 'America/New_York', calendarVersionId: 'none.1' };
+  const UNPREVIEWED = {
+    anchorAt: '2026-09-30T13:00:00.000Z',
+    timeZone: 'America/New_York',
+    calendarVersionId: 'none.1',
+    steps: [{ ordinal: 1, sendAt: '2026-10-02T12:00:00.000Z' }],
+  };
+
+  type Basis = typeof UNPREVIEWED;
 
   /** The basis the card carries: what `POST /calls/follow-up-preview` answered for this person. */
-  async function previewBasisFor(at: Scene, sequenceVersionId: string): Promise<Readonly<Record<string, string>>> {
+  async function previewBasisFor(at: Scene, sequenceVersionId: string): Promise<Basis> {
     const preview = await post('/calls/follow-up-preview', salespersonToken, {
       firmId: at.firmId,
       contactId: at.contactId,
@@ -147,7 +159,12 @@ describe('an agreed sequence recorded on the call card', () => {
     });
     if (preview.status !== 200) return UNPREVIEWED;
     const parsed = followUpPreviewResponseSchema.parse(preview.body);
-    return { anchorAt: parsed.anchoredAt, timeZone: parsed.firmTimeZone, calendarVersionId: parsed.holidayCalendarVersion };
+    return {
+      anchorAt: parsed.anchoredAt,
+      timeZone: parsed.firmTimeZone,
+      calendarVersionId: parsed.holidayCalendarVersion,
+      steps: parsed.steps.map(step => ({ ordinal: step.ordinal, sendAt: step.estimatedAt })),
+    };
   }
 
   /**
@@ -721,49 +738,137 @@ describe('an agreed sequence recorded on the call card', () => {
     });
   });
 
-  describe('the schedule the card showed (review of S3, P1-3)', () => {
-    it('does not start when the holiday calendar changed after the preview, and says so', async () => {
+  describe('the schedule the card showed (review of S3, P1-3 and round 2)', () => {
+    async function holidays(dates: readonly string[]): Promise<void> {
+      const changed = await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates }));
+      expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    }
+
+    async function expectStaleAndNothingWritten(at: Scene, logged: { status: number; body: unknown }): Promise<void> {
+      expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+      const answer = loggedCallResultSchema.parse(result(logged));
+      // Round 2, P1-B: checked before the grant. The call and its stop stand; no
+      // agreement, no permission, no enrollment — nothing the firm page could start later.
+      expect(answer.followUps).toEqual([{ kind: 'follow_up_not_granted', reason: 'stale_preview' }]);
+      expect(answer.setManual).toBe(true);
+      expect(answer.followUpPermissionId).toBeNull();
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+      expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
+      const [log] = await rowsAt('call_logs', at.firmId);
+      expect(log).toMatchObject({ outcome: 'interested', agreed_follow_up: null });
+    }
+
+    it('writes nothing beyond the call when the calendar changed after the preview', async () => {
       const sequenceVersionId = await publishedVersion(adminToken);
       const at = await scene('Cypress Test Advisers');
       const previewBasis = await previewBasisFor(at, sequenceVersionId);
-      const changed = await post(
-        '/sequences/holidays',
-        adminToken,
-        command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: ['2026-12-25'] }),
-      );
-      expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+      await holidays(['2026-12-25']);
       try {
-        const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
-        expect(logged.status, JSON.stringify(logged.body)).toBe(200);
-        const answer = loggedCallResultSchema.parse(result(logged));
-        expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]);
-        // The call, its stop and the permission stand; nothing was enrolled.
-        expect(answer.setManual).toBe(true);
-        expect(answer.followUpPermissionId).not.toBeNull();
-        expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
-
-        // Previewed again under the new calendar, the same agreement starts.
-        const second = await scene('Cedar Grove Test Advisers');
-        const fresh = await logInterested(second, { scope: 'agreed_sequence', sequenceVersionId });
-        expect(loggedCallResultSchema.parse(result(fresh)).followUps.map(entry => entry.kind)).toEqual([
-          'agreed_sequence_enrolled',
-        ]);
+        await expectStaleAndNothingWritten(
+          at,
+          await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis }),
+        );
       } finally {
-        await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: [] }));
+        await holidays([]);
       }
     });
 
-    it('does not start when the firm’s zone changed after the preview', async () => {
+    it('writes nothing beyond the call when the firm’s zone changed after the preview', async () => {
       const sequenceVersionId = await publishedVersion(adminToken);
       const at = await scene('Hemlock Test Advisers');
       const previewBasis = await previewBasisFor(at, sequenceVersionId);
-      await fixture.db.query(
-        "UPDATE firms SET time_zone = 'America/Chicago' WHERE workspace_id = $1 AND id = $2",
-        [fixture.alpha.workspaceId, at.firmId],
+      await fixture.db.query("UPDATE firms SET time_zone = 'America/Chicago' WHERE workspace_id = $1 AND id = $2", [
+        fixture.alpha.workspaceId,
+        at.firmId,
+      ]);
+      await expectStaleAndNothingWritten(
+        at,
+        await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis }),
       );
-      const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
-      const answer = loggedCallResultSchema.parse(result(logged));
-      expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]);
+    });
+
+    it('writes nothing beyond the call when a displayed step instant is not the one it would start with', async () => {
+      // Round 2, P1-A, through the route: the card's displayed minute for step 1 differs
+      // from what the command recomputes at its own transaction start.
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Hawthorn Test Advisers');
+      const shown = await previewBasisFor(at, sequenceVersionId);
+      const first = shown.steps[0];
+      if (first === undefined) throw new Error('no step');
+      const previewBasis = {
+        ...shown,
+        steps: [{ ordinal: 1, sendAt: new Date(Date.parse(first.sendAt) + 60_000).toISOString() }, ...shown.steps.slice(1)],
+      };
+      await expectStaleAndNothingWritten(
+        at,
+        await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis }),
+      );
+    });
+
+    it('records the agreed dates from the card afterwards: POST /calls/follow-up', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Cedar Grove Test Advisers');
+      const stale = await previewBasisFor(at, sequenceVersionId);
+      await holidays(['2026-12-25']);
+      try {
+        const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis: stale });
+        const callLogId = loggedCallResultSchema.parse(result(logged)).callLogId;
+
+        // The card previews again, the person hears the new dates, and records them.
+        const fresh = await previewBasisFor(at, sequenceVersionId);
+        const recovery = await post(
+          '/calls/follow-up',
+          salespersonToken,
+          command({ callLogId, followUpPermission: { scope: 'agreed_sequence', sequenceVersionId, previewBasis: fresh } }),
+        );
+        expect(recovery.status, JSON.stringify(recovery.body)).toBe(200);
+        const recorded = callFollowUpResultSchema.parse(result(recovery));
+        expect(recorded.followUps.map(entry => entry.kind), JSON.stringify(recorded.followUps)).toEqual([
+          'agreed_sequence_enrolled',
+        ]);
+        const [log] = await rowsAt('call_logs', at.firmId);
+        expect(log).toMatchObject({ agreed_follow_up: 'agreed_sequence', agreed_sequence_version_id: sequenceVersionId });
+        const [permission] = await rowsAt('follow_up_permissions', at.firmId);
+        expect(permission).toMatchObject({
+          id: recorded.followUpPermissionId,
+          call_log_id: callLogId,
+          enrollment_id: recorded.followUps[0]?.enrollmentId,
+        });
+
+        // One call, one agreement: a second recovery is refused.
+        const again = await post(
+          '/calls/follow-up',
+          salespersonToken,
+          command({ callLogId, followUpPermission: { scope: 'agreed_sequence', sequenceVersionId, previewBasis: fresh } }),
+        );
+        expect([again.status, (again.body as { reason?: string }).reason]).toEqual([409, 'agreement_exists']);
+      } finally {
+        await holidays([]);
+      }
+    });
+
+    it('refuses the recovery for an old call and for another workspace’s call', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Aspen Grove Test Advisers');
+      const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis: UNPREVIEWED });
+      const callLogId = loggedCallResultSchema.parse(result(logged)).callLogId;
+      const fresh = await previewBasisFor(at, sequenceVersionId);
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: fresh };
+
+      // Another workspace's session cannot see the call at all.
+      const betaSalesperson = (await issueSessionFor(fixture, fixture.beta, fixture.beta.salesperson)).accessToken;
+      const foreign = await post('/calls/follow-up', betaSalesperson, command({ callLogId, followUpPermission: payload }));
+      expect([foreign.status, (foreign.body as { reason?: string }).reason]).toEqual([409, 'call_log_unknown']);
+
+      // An hour and more after it was recorded, it is history, not a call in progress.
+      await fixture.db.query(
+        `UPDATE call_logs SET recorded_at = recorded_at - interval '61 minutes', occurred_at = occurred_at - interval '61 minutes'
+          WHERE workspace_id = $1 AND id = $2`,
+        [fixture.alpha.workspaceId, callLogId],
+      );
+      const old = await post('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload }));
+      expect([old.status, (old.body as { reason?: string }).reason]).toEqual([409, 'call_too_old']);
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
     });
 
     it('refuses an agreed sequence that carries no preview basis at all', async () => {
@@ -782,6 +887,55 @@ describe('an agreed sequence recorded on the call card', () => {
       expect(answer.status).toBe(400);
       expect(await rowsAt('call_logs', at.firmId)).toHaveLength(0);
     });
+  });
+
+  it('says the agreed date moved when a holiday added after enrolment pushes the plan past its bound', async () => {
+    // Round 2, P1-C. The enrollment froze the calendar it started under; a holiday added
+    // later moves the placed steps past the permission's bound, so at the claim the
+    // permission reads expired. That is not a plan that ran out: the refusal says the
+    // date moved after the agreement, and nothing is sent.
+    const sequenceVersionId = await publishedVersion(adminToken);
+    const at = await scene('Magnolia Test Advisers');
+    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId });
+    const answer = loggedCallResultSchema.parse(result(logged));
+    const enrollmentId = answer.followUps[0]?.enrollmentId ?? '';
+    const { rows } = await fixture.db.query<{ expires_at: Date }>(
+      'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+      [fixture.alpha.workspaceId, answer.followUpPermissionId],
+    );
+    const afterExpiry = new Date((rows[0]?.expires_at.getTime() ?? 0) + 60_000).toISOString();
+    const context = repositoryContext(
+      workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'scheduler' }),
+      fixture.db,
+    );
+    const execution = (await listStepExecutions(context, { enrollmentId }))[0];
+    if (execution === undefined) throw new Error('no first step');
+    const ask = async () =>
+      await followUpPermissionSource().evaluate(context, {
+        execution,
+        opportunityId: at.opportunityId ?? '',
+        firmId: at.firmId,
+        contactId: at.contactId,
+        ownerUserId: fixture.alpha.salesperson.userId,
+        channel: 'email',
+        actionKind: 'email_send',
+        now: afterExpiry,
+      });
+
+    // Without a calendar change, an expired agreement is just expired.
+    const plain = await ask();
+    expect(plain).toMatchObject({ ok: false, reasonCode: 'follow_up_expired' });
+    expect((plain as { detail?: string }).detail).not.toBe('agreed_schedule_moved');
+
+    // Three weeks of holidays from today: every business-day step lands later.
+    const dates: string[] = [];
+    for (let day = 0; day < 21; day += 1) dates.push(new Date(Date.now() + day * 86_400_000).toISOString().slice(0, 10));
+    await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates }));
+    try {
+      expect(await ask()).toEqual({ ok: false, reasonCode: 'follow_up_expired', detail: 'agreed_schedule_moved' });
+    } finally {
+      await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: [] }));
+    }
   });
 
   it('takes the opened opportunity back when the enrolment is then refused', async () => {

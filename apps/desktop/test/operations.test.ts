@@ -126,6 +126,7 @@ describe('the operation registry', () => {
       'today.collapse',
       'today.snooze',
       'today.recordOutcome',
+      'today.recordAgreedDates',
       'today.scheduleCallback',
       'today.releasePause',
     ]);
