@@ -45,7 +45,9 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
     accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const at = new URL(url);
-      seen.push(`${init.method} ${at.pathname}${at.search}`);
+      // An identifier in the query is the registry's `{uuid}` (slice C1's call reads).
+      const search = at.search.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu, '{uuid}');
+      seen.push(`${init.method} ${at.pathname}${search}`);
       /*
        * A body the bridge accepts wherever `support/bridgeAnswers.ts` has one, and an
        * empty accepted envelope otherwise.
@@ -95,6 +97,12 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'today.recordAgreedDates': { firmId: UUID, callLogId: STALE_CALL_LOG_ID },
   'today.scheduleCallback': { callLogId: UUID, localDate: '2026-09-28', localTime: '09:00' },
   'today.releasePause': { holdId: UUID },
+  'calling.status': { firmId: UUID },
+  'calling.start': { firmId: FIXTURE_IDS.firm, contactId: null, routeId: FIXTURE_IDS.route },
+  'calling.setActive': { active: true },
+  'calling.resume': { firmId: UUID },
+  'calling.history': { firmId: UUID },
+  'calling.recording': { sessionId: UUID },
   'replies.open': { messageId: UUID },
   'replies.confirm': { messageId: FIXTURE_IDS.message, classification: 'human_reply', callback: null },
   'replies.resolve': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
@@ -201,14 +209,15 @@ const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]
   // The takeover needs the same open page: the bridge takes the opportunity from it.
   'crm.takeOver': [['openFirm', { firmId: UUID }]],
   'crm.resolveOutgoing': [['openFirm', { firmId: UUID }]],
+  // Calling needs the card open: the route and identity come from it.
+  'calling.start': [['expand', { firmId: FIXTURE_IDS.firm }]],
   'crm.commitImport': [['previewImport', { fileName: 'firms.csv', csv: 'name\nAspen Test Wealth\n' }]],
 });
 
 type Host = Readonly<Record<string, ((input?: unknown) => Promise<unknown>) | undefined>>;
 
 function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<string, Host>> {
-  return {
-    today: createTodayBridge({
+  const today = createTodayBridge({
       api,
       session,
       // Never reached: nothing in this file presses Call, and `today.dial` is a channel
@@ -220,7 +229,19 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
           openTelUri: async () => await Promise.resolve(),
         },
       }),
-    }) as unknown as Host,
+    });
+  return {
+    today: today as unknown as Host,
+    // Slice C1: the calling operations are the Today bridge's dial path, under their own names.
+    calling: {
+      expand: async input => await today.expand(input as { firmId: string }),
+      status: async input => await today.callingStatus(input as { firmId: string }),
+      start: async input => await today.startCall(input as Parameters<typeof today.startCall>[0]),
+      setActive: async input => await today.setCallActive(input as { active: boolean }),
+      resume: async input => await today.resumeCalling(input as { firmId: string }),
+      history: async input => await today.callHistory(input as { firmId: string }),
+      recording: async input => await today.callRecording(input as { sessionId: string }),
+    },
     replies: createReplyBridge({ api, session }) as unknown as Host,
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,

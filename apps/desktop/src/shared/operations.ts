@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { CALL_OUTCOMES, callsPlacedTodayResponseSchema, instant, uuid } from '@fss/contracts';
+import {
+  CALL_OUTCOMES,
+  callCadenceSchema,
+  callRecordingResponseSchema,
+  callSessionDtoSchema,
+  callsPlacedTodayResponseSchema,
+  instant,
+  uuid,
+} from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyStateSchema, REPLY_DISPOSITIONS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -263,6 +271,52 @@ const templateDraftInput = z.strictObject({
 const versionInput = z.strictObject({ sequenceVersionId: uuid });
 
 // ---------------------------------------------------------------------------
+// Calling from Callie (slice C1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a firm's Call button places the call in Callie or hands the number to the phone
+ * app. `tel` whenever the server does not answer "twilio" — the switch off, the read
+ * refused or not answered — so the `tel:` handoff is what a doubt falls back to.
+ */
+export const callingViewSchema = z.strictObject({
+  provider: z.enum(['tel', 'twilio']),
+  /** "Attempt N of 4", parked; null with `tel`. */
+  cadence: callCadenceSchema.nullable(),
+});
+export type CallingView = z.infer<typeof callingViewSchema>;
+
+/**
+ * What the page needs to place one call: the session id — the only thing the Voice SDK
+ * sends — and the Twilio Voice access token its Device connects with. **The token crosses
+ * the bridge on purpose**: WebRTC runs in the page, so the Device does, and the token is
+ * Twilio's (outgoing through our TwiML app only, an hour), not Callie's API credential.
+ * The number never does. `attempt` and the rendered voicemail script are for the call view.
+ */
+export const callStartSchema = z.discriminatedUnion('ok', [
+  z.strictObject({
+    ok: z.literal(true),
+    sessionId: uuid,
+    token: z.string().min(1).max(8192),
+    attempt: z.number().int().min(1).nullable(),
+    voicemailScript: z.string().max(2000).nullable(),
+  }),
+  z.strictObject({ ok: z.literal(false), reason: z.string().min(1).max(80) }),
+]);
+export type CallStart = z.infer<typeof callStartSchema>;
+
+const callStartInput = z.strictObject({ firmId: uuid, contactId: uuid.nullable(), routeId: uuid });
+
+/** The firm page's call history; null when it could not be read. */
+export const callHistoryViewSchema = z.strictObject({ calls: z.array(callSessionDtoSchema).nullable() });
+
+/** One recording's audio for the page to play; `reason` when it could not be read. */
+export const callRecordingViewSchema = z.strictObject({
+  recording: callRecordingResponseSchema.nullable(),
+  reason: z.string().max(80).nullable(),
+});
+
+// ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
 
@@ -275,7 +329,8 @@ export interface Operation {
   /** A read never mints a command id; a command always does, unless `envelope` says otherwise. */
   readonly kind: 'read' | 'command';
   /**
-   * Every API path the main process may reach for this operation, and nothing else.
+   * Every API path the main process may reach for this operation, and nothing else. A
+   * query value that is an identifier is written `{uuid}` (the call reads of slice C1).
    *
    * Empty for the operations answered from the main process's own state. Several for the
    * ones whose transform reads more than one route — a firm page also reads the sequences
@@ -386,6 +441,57 @@ export const OPERATIONS = {
     input: z.strictObject({ holdId: uuid }),
     output: todayStateSchema,
     transform: 're-reads the list and the open card, keeping the command’s notice',
+  },
+
+  // --- Calling from Callie (slice C1) -----------------------------------------
+  'calling.status': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/calling?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: callingViewSchema,
+    transform: 'tel unless the server answers twilio: a 404, a refusal or no answer keeps the phone-app handoff',
+  },
+  'calling.start': {
+    kind: 'command',
+    calls: [
+      { method: 'GET', path: '/calls/calling?firmId={uuid}' },
+      { method: 'POST', path: '/calls/session' },
+      { method: 'POST', path: '/calls/access-token' },
+    ],
+    input: callStartInput,
+    output: callStartSchema,
+    transform: 'the route version and calling identity from the open card; session, then token; the voicemail script rendered for attempts 1 and 4; the session remembered for the outcome',
+  },
+  'calling.setActive': {
+    kind: 'command',
+    calls: [],
+    input: z.strictObject({ active: z.boolean() }),
+    output: z.strictObject({ active: z.boolean() }),
+    transform: 'the live-call flag the updater waits on; ending it installs a deferred update',
+  },
+  'calling.resume': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/calls/cadence/resume' },
+      { method: 'GET', path: '/calls/calling?firmId={uuid}' },
+    ],
+    input: z.strictObject({ firmId: uuid }),
+    output: callingViewSchema,
+    transform: 'the review of a parked firm, then its cadence read again',
+  },
+  'calling.history': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: callHistoryViewSchema,
+    transform: 'none: the firm’s placed calls, or null when the read did not answer',
+  },
+  'calling.recording': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/recording?sessionId={uuid}' }],
+    input: z.strictObject({ sessionId: uuid }),
+    output: callRecordingViewSchema,
+    transform: 'none: the audio the API proxied from Twilio, never a URL',
   },
 
   // --- Research (lane R) --------------------------------------------------

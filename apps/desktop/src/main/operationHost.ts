@@ -86,6 +86,13 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'today.releasePause': async (input: Parameters<TodayBridgeHost['releasePause']>[0]) =>
       await deps.today.releasePause(input),
 
+    'calling.status': async (input: { readonly firmId: string }) => await deps.today.callingStatus(input),
+    'calling.start': async (input: Parameters<TodayBridgeHost['startCall']>[0]) => await deps.today.startCall(input),
+    'calling.setActive': async (input: { readonly active: boolean }) => await deps.today.setCallActive(input),
+    'calling.resume': async (input: { readonly firmId: string }) => await deps.today.resumeCalling(input),
+    'calling.history': async (input: { readonly firmId: string }) => await deps.today.callHistory(input),
+    'calling.recording': async (input: { readonly sessionId: string }) => await deps.today.callRecording(input),
+
     'replies.state': async () => await deps.replies.state(),
     'replies.refresh': async () => await deps.replies.refresh(),
     'replies.open': async (input: { readonly messageId: string }) => await deps.replies.open(input),

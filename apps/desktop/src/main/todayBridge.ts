@@ -1,7 +1,15 @@
 import type { BridgeIdentity } from './identityReset.ts';
 import {
+  CALL_CADENCE,
   TODAY_CARD_VERSION,
+  callHistoryResponseSchema,
+  callRecordingResponseSchema,
+  callSessionCreatedSchema,
   callbackInstant,
+  callingStatusResponseSchema,
+  firstNameOf,
+  renderVoicemailScript,
+  voiceAccessTokenResponseSchema,
   callFollowUpResultSchema,
   callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
@@ -36,8 +44,11 @@ import {
   type TodayState,
 } from '../renderer/todayContract.ts';
 import type { AuthedClient } from './authedClient.ts';
+import type { CallActivity } from './callActivity.ts';
+import type { CallStart, CallingView } from '../shared/operations.ts';
 import { HANDOFF_LIMITATION_NOTICE, type DialHandoff } from './dialHandoff.ts';
 import type { ApiOutcome } from './apiClient.ts';
+import type { z } from 'zod';
 
 /**
  * The Today window's half of the bridge, in the main process (specification 8.2,
@@ -108,6 +119,8 @@ export interface TodayBridgeDeps {
     }>;
     refreshToday(): Promise<unknown>;
   };
+  /** The live-call flag the updater waits on (slice C1). Absent: nothing is told. */
+  readonly callActivity?: CallActivity;
 }
 
 export interface TodayBridgeHost {
@@ -147,7 +160,37 @@ export interface TodayBridgeHost {
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
   scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
   releasePause(input: ReleasePauseRequest): Promise<TodayState>;
+
+  // ---- Calling from Callie (slice C1): the dial path when `calling_provider = twilio` ----
+  /** `tel` unless `GET /calls/calling` answers: the phone-app handoff is what a doubt keeps. */
+  callingStatus(input: { readonly firmId: string }): Promise<CallingView>;
+  /**
+   * Place a call from Callie: the cadence, then `POST /calls/session`, then
+   * `POST /calls/access-token`. The page gets the session id and the Voice token, never
+   * the number; the session is kept here for the outcome recorded next.
+   */
+  startCall(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): Promise<CallStart>;
+  /** The page says a call started or ended; ending one lets a deferred update install. */
+  setCallActive(input: { readonly active: boolean }): Promise<{ readonly active: boolean }>;
+  /** "Resume calling" on a parked firm, then its cadence again. */
+  resumeCalling(input: { readonly firmId: string }): Promise<CallingView>;
+  callHistory(input: { readonly firmId: string }): Promise<{ readonly calls: CallHistoryCalls | null }>;
+  callRecording(input: { readonly sessionId: string }): Promise<{
+    readonly recording: z.infer<typeof callRecordingResponseSchema> | null;
+    readonly reason: string | null;
+  }>;
 }
+
+type CallHistoryCalls = z.infer<typeof callHistoryResponseSchema>['calls'];
+
+/** The call placed from Callie that the next outcome for its firm records (slice C1). */
+interface LastSession {
+  readonly firmId: string;
+  readonly routeId: string;
+  readonly sessionId: string;
+}
+
+const TEL: CallingView = Object.freeze({ provider: 'tel', cadence: null });
 
 /** The last handed-off call, so the outcome recorded next can name the number. */
 interface LastCall {
@@ -254,6 +297,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let expanded: TodayFirm | null = null;
   let notice: string | null = null;
   let lastCall: LastCall | null = null;
+  /** The last call placed from Callie, for `callSessionId` on its outcome (slice C1). */
+  let lastSession: LastSession | null = null;
   /** `POST /dial/check`'s answer for each of the expanded card's usable numbers. */
   let dialAdvice: readonly DialAdviceView[] = [];
   /**
@@ -633,6 +678,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       followUpSequences = [];
       followUpTemplates = [];
       lastCall = null;
+      lastSession = null;
       dialAdvice = [];
       expansionsOwner = null;
       return await snapshot();
@@ -828,6 +874,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           : null;
       const routeId = input.routeId ?? call?.routeId ?? null;
       const contactId = input.contactId ?? call?.contactId ?? null;
+      // A call placed from Callie to this firm and number: the outcome names its session,
+      // so the server links the log to the recorded call (slice C1). Never guessed across
+      // firms or numbers, exactly like the last call above.
+      const placed =
+        lastSession !== null && lastSession.firmId === input.firmId && (routeId === null || routeId === lastSession.routeId)
+          ? lastSession
+          : null;
       const answer = await deps.api.command(
         '/calls/log',
         {
@@ -835,6 +888,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(contactId === null ? {} : { contactId }),
           ...(routeId === null ? {} : { routeId }),
           ...(input.itemId === null ? {} : { itemId: input.itemId }),
+          ...(placed === null ? {} : { callSessionId: placed.sessionId }),
           outcome: input.outcome,
           // No `occurredAt`: "just now" is the server's clock (C15).
           ...(input.note === '' ? {} : { note: input.note }),
@@ -874,6 +928,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         agreement = agreementOf(agreed, answer.value, { templates: followUpTemplates, sequences: followUpSequences });
         followUpPreview = null;
         if (call !== null) lastCall = null;
+        if (placed !== null) lastSession = null;
         // The dates changed between the preview and the recording, and nothing was
         // granted (P1-B). The card keeps this call's agreement open and reads the dates
         // as they are now, for the person to hear before "Record the agreed dates".
@@ -990,6 +1045,120 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       await reloadAfterMutation({ refreshList: true }, mine);
       return await answerFor(mine);
     },
+
+    async callingStatus(input) {
+      const status = await readCallingStatus(input.firmId);
+      return status === null ? TEL : { provider: 'twilio', cadence: status.cadence };
+    },
+
+    async startCall(input) {
+      const mine = generation;
+      const refused = (reason: string): CallStart => ({ ok: false, reason: reason.slice(0, 80) });
+      // 1. The cadence and the voicemail values. Not twilio (404) is a refusal here: the
+      //    page only asks this after `callingStatus` said twilio, and it goes back to it.
+      const status = await readCallingStatus(input.firmId, true);
+      if (stale(mine)) return refused('identity_changed');
+      if (status === null) return refused('calling_off');
+      if ('reason' in status) return refused(status.reason);
+
+      // The card the Call button is on: its route at the version shown, and the person's
+      // own verified identity. A card that is not open is not a call to place.
+      const page = expanded;
+      const route = page?.firmId === input.firmId ? page.routes.find(entry => entry.routeId === input.routeId) : undefined;
+      if (page === null || route === undefined) return refused('route_missing');
+      if (page.callingIdentityId === null) return refused('identity_missing');
+
+      // 2. The session: the server resolves the number and takes the whole decision.
+      const contactId = route.contactId ?? input.contactId;
+      const created = await deps.api.command(
+        '/calls/session',
+        {
+          firmId: input.firmId,
+          ...(contactId === null ? {} : { contactId }),
+          routeId: route.routeId,
+          routeVersion: route.version,
+          callingIdentityId: page.callingIdentityId,
+        },
+        value => callSessionCreatedSchema.parse(value),
+      );
+      if (stale(mine)) return refused('identity_changed');
+      if (!created.ok) return refused(created.reason);
+
+      // 3. The token the Device connects with.
+      const token = await deps.api.read('/calls/access-token', value => voiceAccessTokenResponseSchema.parse(value), {});
+      if (stale(mine)) return refused('identity_changed');
+      if (!token.ok) return refused(token.reason);
+
+      // The outcome form records this call: the number (already on the card) and the session.
+      lastCall = { firmId: input.firmId, routeId: route.routeId, contactId, e164: route.e164 };
+      lastSession = { firmId: input.firmId, routeId: route.routeId, sessionId: created.value.sessionId };
+      const attempt = status.cadence.nextAttempt;
+      const contactName = page.tasks.find(task => task.contactId !== null && task.contactId === contactId)?.contactName ?? null;
+      return {
+        ok: true,
+        sessionId: created.value.sessionId,
+        token: token.value.token,
+        attempt,
+        voicemailScript:
+          attempt !== null && CALL_CADENCE.voicemailAttempts.includes(attempt)
+            ? renderVoicemailScript(status.voicemailTemplate, {
+                contactFirstName: firstNameOf(contactName),
+                firmName: page.firmName,
+                callerName: status.callerName,
+                callbackNumber: status.callbackNumber,
+              })
+            : null,
+      };
+    },
+
+    async setCallActive(input) {
+      deps.callActivity?.set(input.active);
+      return await Promise.resolve({ active: deps.callActivity?.active() ?? input.active });
+    },
+
+    async resumeCalling(input) {
+      await deps.api.command('/calls/cadence/resume', { firmId: input.firmId }, () => null);
+      return await host.callingStatus(input);
+    },
+
+    async callHistory(input) {
+      const answer = await deps.api.read(
+        `/calls/history?firmId=${encodeURIComponent(input.firmId)}`,
+        value => callHistoryResponseSchema.parse(value),
+      );
+      return { calls: answer.ok ? answer.value.calls : null };
+    },
+
+    async callRecording(input) {
+      const answer = await deps.api.read(
+        `/calls/recording?sessionId=${encodeURIComponent(input.sessionId)}`,
+        value => callRecordingResponseSchema.parse(value),
+      );
+      return answer.ok ? { recording: answer.value, reason: null } : { recording: null, reason: answer.reason.slice(0, 80) };
+    },
   };
+
+  /**
+   * `GET /calls/calling` for one firm. Null when the server did not say twilio — the
+   * switch is off (404), or the read failed — unless `refusals` asks for the reason.
+   */
+  async function readCallingStatus(
+    firmId: string,
+  ): Promise<z.infer<typeof callingStatusResponseSchema> | null>;
+  async function readCallingStatus(
+    firmId: string,
+    refusals: true,
+  ): Promise<z.infer<typeof callingStatusResponseSchema> | { readonly reason: string } | null>;
+  async function readCallingStatus(
+    firmId: string,
+    refusals = false,
+  ): Promise<z.infer<typeof callingStatusResponseSchema> | { readonly reason: string } | null> {
+    const answer = await deps.api.read(`/calls/calling?firmId=${encodeURIComponent(firmId)}`, value =>
+      callingStatusResponseSchema.parse(value),
+    );
+    if (answer.ok) return answer.value;
+    if (!refusals || answer.reason === 'not_found') return null;
+    return { reason: answer.reason };
+  }
   return host;
 }
