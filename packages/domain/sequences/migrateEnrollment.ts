@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
+import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { holidayCalendarByVersion } from './calendars.ts';
 import { completeEnrollment, FollowUpReuseError, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { bindFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
@@ -92,8 +93,9 @@ export interface MigratedEnrollment {
   readonly completed: boolean;
   /**
    * When step k + 1's planned instant (the target's delay from the original anchor) had
-   * already passed, the instant it was moved to instead — its delay counted from now.
-   * Null when it kept the plan, or when there is no next step.
+   * already passed, the instant it was moved to instead — its delay counted from now and,
+   * for an e-mail, placed in the sending window. Null when it kept the plan, or when there
+   * is no next step.
    */
   readonly rescheduledTo: string | null;
 }
@@ -248,7 +250,50 @@ export async function migrateEnrollment(
     if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
   }
 
-  // 8. Supersede: end the old enrollment first, then insert the new one.
+  // 8. Where step k + 1 goes, decided before anything is written.
+  //
+  // PR 335 review, P1-6: a step whose planned instant has already passed is not sent on
+  // the next tick. For k > 0 it is placed at the target's delay for that step counted
+  // from now — the spacing a successor keeps when its predecessor ran late — and the
+  // answer says so (`rescheduledTo`). "Now" is `clock_timestamp()`, read here, after every
+  // lock is held: the transaction's `now()` is the instant it began, before it waited for
+  // the gate, and a plan that passed during that wait would read as not yet late. The
+  // first step of a run that has done nothing (k = 0) keeps the plan.
+  //
+  // An e-mail is then placed in the sending window with `placeEmailSend` — the rule the
+  // step runner applies — on the frozen zone and calendar, so the instant compared with
+  // the permission below and answered as `rescheduledTo` is the instant it can send.
+  let schedule: { readonly dueAt: string; readonly sourceZone: string; readonly ruleVersion: string } | null = null;
+  let rescheduledTo: string | null = null;
+  if (next !== undefined) {
+    const calendar = await holidayCalendarByVersion(context, old.holidayCalendarVersion);
+    const planned = resolveStepDue(stepForCadence(next), old.startedAt, old.firmTimeZone, calendar);
+    const { rows: clock } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+    const now = (clock[0]?.now ?? new Date()).toISOString();
+    const late = k > 0 && Date.parse(planned.dueAt) <= Date.parse(now);
+    const due = late ? resolveStepDue(stepForCadence(next), now, old.firmTimeZone, calendar) : planned;
+    const sendsAt =
+      next.channel === 'email' ? placeEmailSend(due.dueAt, old.firmTimeZone, { calendar }).sendAt : due.dueAt;
+    schedule = { dueAt: late ? sendsAt : due.dueAt, sourceZone: due.sourceZone, ruleVersion: due.ruleVersion };
+    if (late) rescheduledTo = sendsAt;
+
+    // PR 335 review, round 2: the fresh permission must still be live when the e-mail it
+    // pays for can leave. Otherwise binding it would end the old run for a follow-up that
+    // can only be held `follow_up_expired`. Refused here, before the old row is touched,
+    // with the permission unbound.
+    if (input.permissionId !== undefined && next.channel === 'email') {
+      const { rows: bound } = await context.db.query<{ expires_at: Date }>(
+        'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+        [context.scope.workspaceId, input.permissionId],
+      );
+      const expiresAt = bound[0]?.expires_at;
+      if (expiresAt === undefined || Date.parse(sendsAt) >= expiresAt.getTime()) {
+        return refuseSequence('permission_expires_before_step');
+      }
+    }
+  }
+
+  // 9. Supersede: end the old enrollment first, then insert the new one.
   await stopEnrollments(context, {
     enrollmentId: old.id,
     reason: 'migration_superseded',
@@ -270,20 +315,7 @@ export async function migrateEnrollment(
   const newEnrollmentId = inserted[0]?.id;
   if (newEnrollmentId === undefined) throw new Error('the superseding enrollment was not written');
 
-  let rescheduledTo: string | null = null;
-  if (next !== undefined) {
-    const calendar = await holidayCalendarByVersion(context, old.holidayCalendarVersion);
-    const planned = resolveStepDue(stepForCadence(next), old.startedAt, old.firmTimeZone, calendar);
-    // PR 335 review, P1-6: a step whose planned instant has already passed is not sent on
-    // the next tick. For k > 0 it is placed at the target's delay for that step counted
-    // from now — the spacing a successor keeps when its predecessor ran late — and the
-    // answer says so (`rescheduledTo`). The first step of a run that has done nothing
-    // (k = 0) keeps the plan: it is exactly what enrolling now would have scheduled.
-    const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
-    const now = (clock[0]?.now ?? new Date()).toISOString();
-    const late = k > 0 && Date.parse(planned.dueAt) <= Date.parse(now);
-    const due = late ? resolveStepDue(stepForCadence(next), now, old.firmTimeZone, calendar) : planned;
-    if (late) rescheduledTo = due.dueAt;
+  if (next !== undefined && schedule !== null) {
     await context.db.query(
       `INSERT INTO step_executions
          (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
@@ -297,9 +329,9 @@ export async function migrateEnrollment(
         old.contactId,
         next.channel,
         next.ordinal,
-        due.dueAt,
-        due.sourceZone,
-        due.ruleVersion,
+        schedule.dueAt,
+        schedule.sourceZone,
+        schedule.ruleVersion,
       ],
     );
   }

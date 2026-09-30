@@ -88,6 +88,11 @@ export const SEQUENCE_REFUSAL_CODES = [
   'agreed_scope_bound',
   /** A published version's edit, refused because the sequence already has a draft (S2). */
   'draft_exists',
+  /**
+   * A migration's fresh permission would expire before the e-mail it pays for can be
+   * sent (step k + 1 placed in the window); refused before the old run is touched.
+   */
+  'permission_expires_before_step',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

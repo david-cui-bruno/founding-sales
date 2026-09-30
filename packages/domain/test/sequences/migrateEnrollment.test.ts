@@ -7,6 +7,8 @@ import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import { resolveStepDue } from '../../src/rules/cadence.ts';
+import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
+import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { completedPrefix, migrateEnrollment } from '../../sequences/migrateEnrollment.ts';
@@ -156,7 +158,7 @@ async function completeCurrent(enrollmentId: string): Promise<void> {
 }
 
 /** An `agreed_sequence` permission for `versionId`, on a recorded interested call. */
-async function agreedPermission(firm: VersionFirm, versionId: string): Promise<string> {
+async function agreedPermission(firm: VersionFirm, versionId: string, expiresAt?: string): Promise<string> {
   const { rows } = await database.session.query<{ id: string }>(
     `INSERT INTO call_logs
        (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
@@ -170,6 +172,7 @@ async function agreedPermission(firm: VersionFirm, versionId: string): Promise<s
     contactId: firm.contactId,
     callLogId: rows[0]?.id ?? '',
     grantedByUserId: seeded.alpha.salesperson.userId,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   });
   if (!granted.ok) throw new Error(`the permission was refused: ${granted.reason}`);
   return granted.value.id;
@@ -592,13 +595,124 @@ describe('a replacement step whose planned instant has passed (PR 335 review, P1
     const after = Date.parse(await databaseNow(admin()));
     if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
     expect(migrated.value.nextOrdinal).toBe(2);
+    // Its delay from now, then placed in the sending window like any e-mail: never earlier
+    // than now + 48 h, never later than the window placement of the latest possible now,
+    // and itself an instant inside a window.
     const moved = Date.parse(migrated.value.rescheduledTo ?? '');
     const hours48 = 48 * 60 * 60 * 1000;
     expect(moved).toBeGreaterThanOrEqual(before + hours48 - 1000);
-    expect(moved).toBeLessThanOrEqual(after + hours48 + 1000);
+    expect(moved).toBeLessThanOrEqual(
+      Date.parse(placeEmailSend(new Date(after + hours48 + 1000).toISOString(), ZONE, { calendar: CALENDAR }).sendAt),
+    );
+    expect(placeEmailSend(migrated.value.rescheduledTo ?? '', ZONE, { calendar: CALENDAR }).inPlace).toBe(true);
     const [step] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
     expect(step).toMatchObject({ ordinal: 2, channel: 'email', dueAt: migrated.value.rescheduledTo, notBefore: migrated.value.rescheduledTo });
     expect(Date.parse(step?.dueAt ?? '')).toBeGreaterThan(after);
+  });
+});
+
+describe('the late decision is taken on the wall clock after the locks (PR 335 review, round 2)', () => {
+  it('places a step whose plan passed while the migration waited at the gate at its delay from the release', async () => {
+    // Fails with the transaction's `now()`: the migration began before the plan's instant,
+    // so it would read the step as not late and schedule it at the instant already passed.
+    const template = await approvedTemplate(admin(), 'Waited at the gate.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const now = Date.parse(await databaseNow(admin()));
+    // Step 2 of the target is one hour after the anchor; the anchor is set so that hour
+    // ends three seconds from now.
+    const anchor = new Date(now - 60 * 60 * 1000 + 3000).toISOString();
+    const old = await enrolled(plan.versionId, await newFirm(database.session, seeded.alpha), { kind: 'prospecting' }, anchor);
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, 1)]);
+    const planned = Date.parse(anchor) + 60 * 60 * 1000;
+
+    await second.query('BEGIN');
+    await lockSendGateForStopFact(contextOn(second, 'admin'));
+    const migrating = inTransaction(third, async () =>
+      await migrateEnrollment(contextOn(third, 'salesperson'), { enrollmentId: old, targetSequenceVersionId: target }),
+    );
+    expect(await someoneWaitsOnALock()).toBe(true);
+    while (Date.parse(await databaseNow(admin())) <= planned + 500) await new Promise(resolve => setTimeout(resolve, 100));
+    const released = Date.parse(await databaseNow(admin()));
+    await second.query('COMMIT');
+    const migrated = await migrating;
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+
+    expect(migrated.value.rescheduledTo).not.toBeNull();
+    const [step] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
+    expect(Date.parse(step?.dueAt ?? '')).toBeGreaterThanOrEqual(released + 60 * 60 * 1000 - 1000);
+    expect(step?.dueAt).toBe(migrated.value.rescheduledTo);
+  });
+});
+
+describe('the fresh permission must outlive the step it pays for (PR 335 review, round 2)', () => {
+  async function lateFollowUp(expiresInMs: number): Promise<{ old: string; target: string; fresh: string; firm: VersionFirm }> {
+    const template = await approvedTemplate(admin(), 'An agreed follow-up.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, 48)]);
+    const expiresAt = new Date(Date.parse(await databaseNow(admin())) + expiresInMs).toISOString();
+    return { old, target, fresh: await agreedPermission(firm, target, expiresAt), firm };
+  }
+
+  it('refuses permission_expires_before_step when the delay carries the e-mail past the expiry, and touches nothing', async () => {
+    // Fails if the placed instant is not compared with the permission's expiry.
+    const { old, target, fresh } = await lateFollowUp(24 * 60 * 60 * 1000);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('refuses when the window placement, not the delay, carries the e-mail past the expiry', async () => {
+    // The raw due instant (now + 48 h) is inside the permission; its local day is made a
+    // holiday on the calendar the enrollment froze, so the send moves to the next business
+    // morning, which is not. Fails if the raw due instant is compared instead of the placed one.
+    const hours48 = 48 * 60 * 60 * 1000;
+    const { old, target, fresh } = await lateFollowUp(hours48 + 2 * 60 * 1000);
+    const rawDay = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE }).format(
+      new Date(Date.parse(await databaseNow(admin())) + hours48),
+    );
+    const version = `holidays.s2-${crypto.randomUUID().slice(0, 8)}`;
+    await database.session.query(
+      // A historical version (superseded at once): the workspace's current calendar is
+      // untouched, and the enrollment below is pointed at this one as its frozen calendar.
+      `INSERT INTO workspace_holiday_calendars (workspace_id, version, dates, created_by_user_id, superseded_at)
+       VALUES ($1, $2, ARRAY[$3::date], $4, now())`,
+      [seeded.alpha.workspaceId, version, rawDay, seeded.alpha.admin.userId],
+    );
+    await database.session.query('UPDATE sequence_enrollments SET holiday_calendar_version = $2 WHERE id = $1', [old, version]);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('still migrates a kept plan inside the permission, with rescheduledTo null', async () => {
+    const template = await approvedTemplate(admin(), 'Kept inside the agreement.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const anchor = new Date(Date.parse(await databaseNow(admin())) - 60 * 60 * 1000).toISOString();
+    const old = await enrolled(
+      plan.versionId,
+      firm,
+      { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) },
+      anchor,
+    );
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, 24)]);
+    const tenDays = new Date(Date.parse(await databaseNow(admin())) + 10 * 24 * 60 * 60 * 1000).toISOString();
+    const fresh = await agreedPermission(firm, target, tenDays);
+    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    expect(migrated.value.rescheduledTo).toBeNull();
+    const [step] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
+    expect(step?.dueAt).toBe(new Date(Date.parse(anchor) + 24 * 60 * 60 * 1000).toISOString());
+    expect((await permissionRow(fresh)).enrollment_id).toBe(migrated.value.newEnrollmentId);
   });
 });
 

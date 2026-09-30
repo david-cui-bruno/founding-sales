@@ -345,7 +345,13 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   `enrollContact` (its first step) and the migration (step k + 1) pass it. (P1-6) When
   step k + 1's planned instant has already passed (k > 0), it is placed at the target's
   delay for that step counted from now, never the next tick, and the answer carries
-  `rescheduledTo`; a run that has done nothing (k = 0) keeps its plan. (P2-a) The target
+  `rescheduledTo`; a run that has done nothing (k = 0) keeps its plan. (Round 2) "Now"
+  is `clock_timestamp()`, read after every lock is held, so a plan that passes while the
+  command waits at the gate still counts as late; an e-mail's instant is placed in the
+  window with `placeEmailSend` on the frozen zone and calendar, and that placed instant is
+  both `rescheduledTo` and the instant compared with the fresh permission's `expires_at` —
+  a permission that would expire first refuses `permission_expires_before_step` before
+  the old run is touched, and stays unbound. (P2-a) The target
   version is held `FOR SHARE` from its check to the commit, so a publication cannot
   retire it in between; the publication waits, and one that commits first makes the
   migration refuse `version_retired`.

@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { createGeneration } from '../src/renderer/app/generation.ts';
 import type { SequenceState } from '../src/renderer/sequenceContract.ts';
@@ -65,12 +65,15 @@ interface Call {
   readonly input: unknown;
 }
 
-function install(answers: Partial<Record<OperationName, SequenceState>>, initial: SequenceState): Call[] {
+function install(answers: Partial<Record<OperationName, SequenceState | Error>>, initial: SequenceState): Call[] {
   const calls: Call[] = [];
   const answer = async (operation: OperationName, input: unknown): Promise<unknown> => {
     calls.push({ operation, input });
     await Promise.resolve();
-    return answers[operation] ?? initial;
+    const scripted = answers[operation];
+    // An Error is a bridge fault: the operation rejects rather than answering a state.
+    if (scripted instanceof Error) throw scripted;
+    return scripted ?? initial;
   };
   globalThis.callieApi = { read: answer, command: answer } as unknown as OperationApi;
   return calls;
@@ -229,6 +232,27 @@ describe('a save that is not accepted keeps what was typed (PR 335 review, P1-4)
       expect(screen.getByTestId('sequence-notice')).toBeDefined();
     });
     expect((within(panel).getAllByTestId('step-delay-amount')[1] as HTMLInputElement).value).toBe('5');
+  });
+
+  it('keeps the published edit when the bridge itself fails', async () => {
+    // Fails if a rejected save resolves as saved (or never resolves and the edit is
+    // dropped anyway): the catch in `useSequences` answers false.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const calls = install({ 'sequences.saveSteps': new Error('the bridge went away') }, base());
+      renderRoute();
+      const panel = await typeIntoPublished();
+      await waitFor(() => {
+        expect(calls.some(call => call.operation === 'sequences.saveSteps')).toBe(true);
+      });
+      await waitFor(() => {
+        expect(quiet).toHaveBeenCalled();
+      });
+      expect((within(panel).getAllByTestId('step-delay-amount')[1] as HTMLInputElement).value).toBe('5');
+      expect((within(panel).getByTestId('draft-save') as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      quiet.mockRestore();
+    }
   });
 
   async function editTemplateAndSave(): Promise<void> {
