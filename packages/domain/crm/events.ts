@@ -118,6 +118,15 @@ export interface CrmDomainEventInput {
  * emitters (`setManualControlMode`, `changeStage`) already hold the gate by the time
  * they get here; taking it again is a no-op inside the same transaction, and makes the
  * guarantee this function's own rather than every future caller's.
+ *
+ * And a stop event's `occurred_at` is `clock_timestamp()`, read while the gate is held,
+ * not the column default `now()` (review of PR 335, round 2, P1). The drain's
+ * high-water mark is `(occurred_at, id)`, and `now()` is the instant the transaction
+ * *started*: a transaction that began early and took the gate late would commit a stop
+ * stamped before one that another transaction had already committed and the drain
+ * already passed, and that stop would never be read. Every stop event is written under
+ * the exclusive gate, which is held to commit, so stamping it under the gate makes the
+ * instants monotonic in commit order.
  */
 export async function emitCrmDomainEvent(
   context: RepositoryContext,
@@ -129,8 +138,12 @@ export async function emitCrmDomainEvent(
   await context.db.query(
     `INSERT INTO crm_domain_events
        (workspace_id, event_kind, firm_id, opportunity_id, contact_id, dedupe_key,
-        reason_code, actor_kind, actor_user_id, command_id, detail, owed_enrollment_ids)
+        reason_code, actor_kind, actor_user_id, command_id, detail, occurred_at, owed_enrollment_ids)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
+             -- A stop event's instant is read now, under the gate, not at transaction
+             -- start: see the doc comment above.
+             CASE WHEN $2 IN ('opportunity.manual_mode', 'opportunity.terminal_stop')
+                  THEN clock_timestamp() ELSE now() END,
              CASE
                WHEN $2 = 'opportunity.manual_mode' THEN (
                  SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])

@@ -288,6 +288,45 @@ describe('a terminal stop stops what it owed when it was emitted, and nothing cr
     expect(await enrollment(racing)).toEqual({ state: 'stopped', end_reason: 'human_reply' });
   });
 
+  it('a stop committed after the drain passed a later one is still read: instants follow the gate, not BEGIN', async () => {
+    // Review of PR 335, round 2, P1. A begins first, so its transaction-start `now()` is
+    // the earliest instant here, but takes the gate last. B emits and commits a stop, the
+    // drain runs past it, then A emits and commits. Stamped with `now()`, A's event would
+    // sort before B's and behind the cursor for ever.
+    const early = await makeFirm();
+    const late = await makeFirm();
+    const version = await publishedVersion();
+    const owedByA = await inTransaction(async context => await enrolFollowUp(context, early, early.contactId, version));
+    await drain();
+
+    const a = await database.appRuntimeSession();
+    await a.query('BEGIN');
+    await a.query('SELECT now()');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    try {
+      await inTransaction(async context => {
+        const changed = await setManualControlMode(context, {
+          opportunityId: late.opportunityId,
+          reason: 'B, committed first',
+          origin: 'human_reply',
+        });
+        expect(changed.ok).toBe(true);
+      });
+      await drain();
+      const changed = await setManualControlMode(contextFor(a), {
+        opportunityId: early.opportunityId,
+        reason: 'A, begun first and committed last',
+        origin: 'human_reply',
+      });
+      expect(changed.ok).toBe(true);
+      await a.query('COMMIT');
+    } finally {
+      await a.query('ROLLBACK').catch(() => undefined);
+    }
+    await drain();
+    expect(await enrollment(owedByA)).toEqual({ state: 'stopped', end_reason: 'human_reply' });
+  });
+
   it('still stops, at the drain, an owed enrollment the command itself did not stop', async () => {
     // The event is the source of truth for the stop: an owed enrollment that is live when
     // the drain runs is stopped by the drain, with the event's reason.

@@ -2,6 +2,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { MANUAL_MODE_ORIGINS, type ManualModeOrigin } from '../crm/events.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { stopEnrollments } from './enrollments.ts';
 import type { EnrollmentEndReason } from '@fss/contracts';
 
@@ -143,6 +144,20 @@ export async function consumeTerminalStops(
   context: RepositoryContext,
   options: { readonly limit?: number } = {},
 ): Promise<TerminalStopReport> {
+  // The drain reads under the exclusive send gate (review of PR 335, round 2, P1). Every
+  // stop event is written by a transaction holding that gate to its commit, and stamped
+  // under it, so while the drain holds it no stop event is in flight: the set it reads
+  // cannot later be preceded by an uncommitted one. Exclusive rather than shared because
+  // `stopEnrollments` takes it exclusive anyway, and upgrading a shared advisory lock two
+  // drains both hold would deadlock them.
+  await lockSendGateForStopFact(context);
+  // The cursor row exists and is locked before anything is read, so two first drains of
+  // a workspace serialize on it rather than both reading from nothing (round 2, P2).
+  await context.db.query(
+    `INSERT INTO sequence_event_cursors (workspace_id, subscriber) VALUES ($1, $2)
+     ON CONFLICT (workspace_id, subscriber) DO NOTHING`,
+    [context.scope.workspaceId, TERMINAL_STOP_SUBSCRIBER],
+  );
   const { rows: cursors } = await context.db.query<{
     last_event_at: Date | null;
     last_event_id: string | null;
@@ -230,12 +245,19 @@ export async function consumeTerminalStops(
     await context.db.query(
       // The instant is copied from the event row in SQL, not round-tripped through a
       // JavaScript Date that would truncate it to the millisecond.
-      `INSERT INTO sequence_event_cursors (workspace_id, subscriber, last_event_at, last_event_id)
-       SELECT $1, $2, e.occurred_at, e.id FROM crm_domain_events e WHERE e.workspace_id = $1 AND e.id = $3
-       ON CONFLICT (workspace_id, subscriber)
-         DO UPDATE SET last_event_at = EXCLUDED.last_event_at,
-                       last_event_id = EXCLUDED.last_event_id,
-                       updated_at = now()`,
+      // Monotonic: the cursor only moves forward, so a batch read from an older
+      // position can never overwrite a newer one (round 2, P2).
+      `UPDATE sequence_event_cursors c
+          SET last_event_at = e.occurred_at, last_event_id = e.id, updated_at = now()
+         FROM crm_domain_events e
+        WHERE c.workspace_id = $1 AND c.subscriber = $2
+          AND e.workspace_id = $1 AND e.id = $3
+          AND (c.last_event_at IS NULL
+               OR (e.occurred_at, e.id) > (coalesce((SELECT x.occurred_at FROM crm_domain_events x
+                                                      WHERE x.workspace_id = c.workspace_id
+                                                        AND x.id = c.last_event_id),
+                                                     c.last_event_at),
+                                            c.last_event_id))`,
       [context.scope.workspaceId, TERMINAL_STOP_SUBSCRIBER, last.id],
     );
   }
