@@ -7,6 +7,8 @@ import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import { resolveStepDue } from '../../src/rules/cadence.ts';
+import { localInstant } from '../../src/rules/localClock.ts';
+import { applyCallToStep, loadBoundCallStep } from '../../dial/stepEffects.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
@@ -750,6 +752,72 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
     ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
     expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
     expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  /**
+   * The round-4 weekend: step k + 1 is a call due Friday afternoon, the e-mail after it
+   * is planned eight hours later, and the permission ends on Sunday. Projected from the
+   * call's due instant, the e-mail would fall on Friday night and move to Monday — past
+   * the expiry. But Today shows the call from the start of Friday, and completed then the
+   * runner places the e-mail on Friday morning. The check is a lower bound, so this
+   * migrates.
+   */
+  async function weekendCase(): Promise<{ old: string; target: string; fresh: string; friday: string; fridayStart: string; sundayNoon: string }> {
+    const zone = 'America/New_York';
+    const now = Date.parse(await databaseNow(admin()));
+    let day = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date(now));
+    let friday16 = '';
+    for (let step = 0; step < 14; step += 1) {
+      day = new Date(Date.parse(`${day}T12:00:00Z`) + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const candidate = localInstant(day, { hour: 16, minute: 0 }, zone);
+      if (new Date(`${day}T12:00:00Z`).getUTCDay() === 5 && Date.parse(candidate) - now > 3 * 60 * 60 * 1000) {
+        friday16 = candidate;
+        break;
+      }
+    }
+    const hours = Math.floor((Date.parse(friday16) - now) / (60 * 60 * 1000));
+    const sunday = new Date(Date.parse(`${day}T12:00:00Z`) + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const sundayNoon = localInstant(sunday, { hour: 12, minute: 0 }, zone);
+    const { old, target, fresh } = await lateFollowUpTo(
+      template => [emailStep(template), callAfter(2, hours), emailStep(template, 3, hours + 8)],
+      Date.parse(sundayNoon) - now,
+    );
+    return { old, target, fresh, friday: day, fridayStart: localInstant(day, { hour: 0, minute: 0 }, zone), sundayNoon };
+  }
+
+  it('migrates when the e-mail after a Friday call can still go before a Sunday expiry (round 4)', async () => {
+    // Fails with the call projected as completed at its due instant: the e-mail would be
+    // placed on Monday and the migration refused, stranding the old run.
+    const { old, target, fresh } = await weekendCase();
+    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    expect((await permissionRow(fresh)).enrollment_id).toBe(migrated.value.newEnrollmentId);
+  });
+
+  it('completing that call early through the call path puts the e-mail where the runner places it, inside the permission (round 4)', async () => {
+    const { old, target, fresh, friday, fridayStart, sundayNoon } = await weekendCase();
+    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    const [call] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
+    if (call === undefined) throw new Error('the migrated enrollment has no step');
+    // The call path's own step functions: the step as a call binds it, then the outcome
+    // applied at the start of Friday — the earliest its Today card exists.
+    const bound = await loadBoundCallStep(worker(), { stepExecutionId: call.id, firmId: call.firmId });
+    if (bound === null) throw new Error('the call did not bind');
+    const applied = await applyCallToStep(worker(), {
+      bound,
+      outcome: 'no_answer',
+      stepEffect: 'advance',
+      engaged: false,
+      occurredAt: fridayStart,
+      now: fridayStart,
+    });
+    expect(applied.successorExecutionId).not.toBeNull();
+    const email = (await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId })).find(step => step.ordinal === 3);
+    const placed = placeEmailSend(email?.dueAt ?? '', ZONE, { calendar: CALENDAR }).sendAt;
+    expect(Date.parse(placed)).toBeLessThan(Date.parse(sundayNoon));
+    // Eight hours after the start of Friday, which is the window's opening: Friday 08:00.
+    expect(placed).toBe(localInstant(friday, { hour: 8, minute: 0 }, ZONE));
   });
 
   it('still migrates a kept plan inside the permission, with rescheduledTo null', async () => {

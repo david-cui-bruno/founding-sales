@@ -5,6 +5,8 @@ import { resolveStepDue } from '../src/rules/cadence.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { successorDue } from './successor.ts';
+import { localDate, localInstant } from '../src/rules/localClock.ts';
+import { workspaceBusinessTimeZone } from '../today/snapshots.ts';
 import { holidayCalendarByVersion } from './calendars.ts';
 import { completeEnrollment, FollowUpReuseError, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { bindFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
@@ -127,22 +129,39 @@ export function completedPrefix(executions: readonly ExecutionForPrefix[]): numb
 }
 
 /**
- * Where the first e-mail of the remainder would be sent: `next` (step k + 1) at
- * `nextAt`, then each later step at `successorDue` from its predecessor's projected
- * instant, until an e-mail, which is placed in the sending window. Null when the
- * remainder has no e-mail.
+ * The **earliest** instant the first e-mail of the remainder could be sent (PR 335
+ * review, round 4) — a lower bound, so a migration is refused only when even the
+ * earliest the product permits cannot precede the permission's expiry.
+ *
+ * `next` (step k + 1) is due at `nextAt`. A call task can be completed before its due
+ * instant: a call is bound to its step only through its Today card (`logCallOutcome` →
+ * `loadBoundCallStep` from `readTodayItem`), and `dueSequenceWorkSource`
+ * (`todaySource.ts`) lists a step on every business date on or after its due instant's
+ * local date **in the workspace's business time zone** — so the earliest completion is
+ * the start of that date there, and never before `now` or before its predecessor's
+ * earliest completion. Each later step is then where `successorDue` (the rule the
+ * runner applies to the actual completion, monotone in it) puts it after that earliest
+ * completion; the first e-mail is placed with `placeEmailSend`. Null when the remainder
+ * has no e-mail.
  */
-export function firstEmailOfRemainder(
-  steps: readonly SequenceStepRow[],
-  next: SequenceStepRow,
-  nextAt: string,
-  startedAt: string,
-  zone: string,
-  calendar: WorkspaceHolidayCalendar,
-): string | null {
+export function firstEmailOfRemainder(input: {
+  readonly steps: readonly SequenceStepRow[];
+  readonly next: SequenceStepRow;
+  readonly nextAt: string;
+  readonly startedAt: string;
+  readonly zone: string;
+  readonly calendar: WorkspaceHolidayCalendar;
+  readonly businessTimeZone: string;
+  readonly now: string;
+}): string | null {
+  const { steps, next, nextAt, startedAt, zone, calendar, businessTimeZone, now } = input;
   if (next.channel === 'email') return nextAt;
+  const earliestCompletion = (dueAt: string, floor: string): string => {
+    const startOfDueDate = localInstant(localDate(dueAt, businessTimeZone), { hour: 0, minute: 0 }, businessTimeZone);
+    return new Date(Math.max(Date.parse(startOfDueDate), Date.parse(floor))).toISOString();
+  };
   let previous = next;
-  let previousAt = nextAt;
+  let previousDone = earliestCompletion(nextAt, now);
   for (const step of steps.filter(entry => entry.ordinal > next.ordinal).sort((a, b) => a.ordinal - b.ordinal)) {
     const due = successorDue({
       previous: stepForCadence(previous),
@@ -150,12 +169,11 @@ export function firstEmailOfRemainder(
       startedAt,
       zone,
       calendar,
-      completedAt: previousAt,
+      completedAt: previousDone,
     });
-    const at = step.channel === 'email' ? placeEmailSend(due.dueAt, zone, { calendar }).sendAt : due.dueAt;
-    if (step.channel === 'email') return at;
+    if (step.channel === 'email') return placeEmailSend(due.dueAt, zone, { calendar }).sendAt;
     previous = step;
-    previousAt = at;
+    previousDone = earliestCompletion(due.dueAt, previousDone);
   }
   return null;
 }
@@ -319,10 +337,9 @@ export async function migrateEnrollment(
     // compared with `expires_at`, before the old row is touched:
     //
     //   * step k + 1 itself, as placed above (a call task is due where it is);
-    //   * the **first e-mail** of the remainder (k + 1 … n), projected on the frozen
-    //     cadence: each later step is where `successorDue` — the rule the step runner
-    //     uses — puts it when its predecessor is done at its own projected instant, and
-    //     an e-mail is then placed in the window with `placeEmailSend`.
+    //   * the **earliest** first e-mail of the remainder (k + 1 … n), a lower bound: each
+    //     call completed at the earliest instant Today lets a person complete it, then
+    //     `successorDue` and `placeEmailSend` (`firstEmailOfRemainder`, round 4).
     //
     // Either one at or after the expiry refuses `permission_expires_before_step`, with
     // the permission unbound and the old enrollment active.
@@ -332,7 +349,16 @@ export async function migrateEnrollment(
         [context.scope.workspaceId, input.permissionId],
       );
       const expiresAt = bound[0]?.expires_at.getTime();
-      const firstEmail = firstEmailOfRemainder(target.steps, next, sendsAt, old.startedAt, old.firmTimeZone, calendar);
+      const firstEmail = firstEmailOfRemainder({
+        steps: target.steps,
+        next,
+        nextAt: sendsAt,
+        startedAt: old.startedAt,
+        zone: old.firmTimeZone,
+        calendar,
+        businessTimeZone: await workspaceBusinessTimeZone(context),
+        now,
+      });
       if (
         expiresAt === undefined ||
         Date.parse(sendsAt) >= expiresAt ||

@@ -354,7 +354,12 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   the old run is touched, and stays unbound. (Round 3) Step k + 1 is compared whatever
   its channel (a call task at its due instant), and so is the **first e-mail** of the
   remainder, projected with `successorDue` from each predecessor's projected instant and
-  placed with `placeEmailSend` — so a call now and an e-mail after the expiry refuses too. (P2-a) The target
+  placed with `placeEmailSend` — so a call now and an e-mail after the expiry refuses too.
+  (Round 4) That projection is a **lower bound**: a call is bound to its step only through
+  its Today card, which `dueSequenceWorkSource` lists from the start of its due date in
+  the workspace's business time zone, so each call is taken as completed at the later of
+  that instant, the migration instant and its predecessor's earliest completion. The
+  migration refuses only when even the earliest first e-mail cannot precede the expiry. (P2-a) The target
   version is held `FOR SHARE` from its check to the commit, so a publication cannot
   retire it in between; the publication waits, and one that commits first makes the
   migration refuse `version_retired`.
