@@ -1747,6 +1747,74 @@ describe('a mailbox switched to another account (call-to-booking A2)', () => {
     expect(report.directSendsRecorded).toBe(1);
     expect(await directSends()).toEqual(['newacct-sent-after']);
   });
+  it('covers a message that arrives between the profile read and the baseline’s end (toAt after the capture)', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const context = w.systemContext(workspaceId);
+    const newAddress = 'david.alpha@example.test';
+    const messages: ReturnType<typeof fixtureMessage>[] = [];
+    const base = w.clientWith(w.alpha, {
+      emailAddress: newAddress,
+      historyId: '5000',
+      messages,
+      refreshToken: randomBytes(24).toString('base64url'),
+    });
+    // The grant's clock: its first reading is the start, every later one ten seconds on.
+    const start = Date.now();
+    let readings = 0;
+    const clock = (): Date => new Date(readings++ === 0 ? start : start + 10_000);
+    // A message lands while the profile is being read: its history record is the one
+    // the profile names (so history *after* it never lists it), and its date is after
+    // the grant began. Only a listing that ends after the capture can see it.
+    const gmail: GmailClient = {
+      ...base,
+      getProfile: async (...args: Parameters<GmailClient['getProfile']>) => {
+        messages.push(
+          fixtureMessage({
+            id: 'during-capture',
+            historyId: '5000',
+            from: PROSPECT,
+            to: newAddress,
+            internalDateEpochMilliseconds: start + 5_000,
+          }),
+        );
+        return await base.getProfile(...args);
+      },
+    };
+    const key = randomBytes(32);
+    const state = signGrantState(key, {
+      workspaceId,
+      userId: w.alpha.workspace.salesperson.userId,
+      expiresAtEpochSeconds: Math.floor(start / 1000) + 600,
+      attemptId: randomUUID(),
+      switchTo: newAddress,
+    });
+    const switched = await completeGmailGrant(
+      w.userContext(workspaceId),
+      {
+        gmail,
+        config: w.config,
+        secrets: staticSecretProvider({ gmail_oauth_client_secret: w.syncDeps(w.alpha).oauth.clientSecret }),
+        cipher: w.cipher,
+        stateSigningKey: key,
+        now: clock,
+      },
+      { state, code: 'switch-code' },
+    );
+    expect(switched.ok).toBe(true);
+
+    const deps = { ...w.syncDeps(w.alpha), gmail };
+    expect((await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 2 })).outcome).toBe('completed');
+    await runMailSync(context, deps, { mailboxId: w.alpha.mailboxId });
+    const { rows } = await w.database.session.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = 'during-capture'",
+      [workspaceId],
+    );
+    expect(rows[0]?.count).toBe('1');
+  });
+
   it('sets no bound on an expired-cursor recovery: an old Sent item of the same account is still a direct send', async () => {
     world = await createMailWorld();
     const w = world;

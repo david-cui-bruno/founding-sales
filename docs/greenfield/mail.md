@@ -653,7 +653,9 @@ was `callie@` still opens in `callie@`'s Gmail.
    to `callie@`; the forwarded copy is what reaches the synced account.
 2. Run `fss admin mailbox switch-preflight` on the operations task. It is one READ ONLY
    transaction: the mailbox, message counts, fences by state, live permissions and
-   enrollments, open holds, watch rows, mail jobs, send-day totals, the account
+   enrollments, open holds, watch rows, mail jobs (in both key formats: a
+   `mail-sync` or `watch` row from before lane A1's generation-keyed keys is reported as
+   `orphaned_pre_generation`, never as live work), send-day totals, the account
    intervals, and `wouldRefuse`. Wait while `wouldRefuse` lists
    `non_terminal_fences` (settle them first) or
    `old_account_not_synced_within_2_minutes` (the old account's last reads must be in).

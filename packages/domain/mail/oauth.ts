@@ -439,6 +439,10 @@ export async function completeGmailGrant(
   if (decided.switching && before !== null) {
     oldWatchStopped = await stopOldWatch(context, deps, oauth, before.id);
   }
+  // The interval's end is read now, after the profile read (and after the stop), so it
+  // is never earlier than the instant `profile.historyId` was captured: a message that
+  // arrived before the capture is in the listing up to `toAt`, and one after it is in
+  // history from `startHistoryId` (A1's continuous handoff).
   const toAt = (deps.now ?? ((): Date => new Date()))().toISOString();
   const baselineFromAt = new Date(
     Date.parse(toAt) - (deps.config.baselineDays || DEFAULT_BASELINE_DAYS) * 24 * 3600 * 1000,
@@ -503,6 +507,7 @@ export async function completeGmailGrant(
       await coalesceMailSync(context.db, {
         workspaceId: context.scope.workspaceId,
         mailboxId: mailbox.id,
+        generation: mailbox.generation,
         historyId: profile.historyId,
       });
       // 10. A reconnect ends the disconnection: nothing released this hold before A2.

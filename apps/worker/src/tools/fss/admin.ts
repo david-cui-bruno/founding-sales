@@ -1772,14 +1772,24 @@ export async function mailboxSwitchPreflightCommand(invocation: AdminInvocation)
          FROM mailbox_watches WHERE workspace_id = $1 AND mailbox_id = $2 ORDER BY generation`,
       values,
     );
+    // Both key formats (lane A1): `mail-sync:{mailbox}:{generation}` and
+    // `watch:{mailbox}:{mailboxGeneration}:{renewal}` now, `mail-sync:{mailbox}` and
+    // `watch:{mailbox}:{renewal}` before. A pre-generation row is never claimed again
+    // under the new keys, so it is reported as orphaned rather than as live work. The
+    // mailbox is the key's second field in every format.
     const jobs = await session.query(
       `SELECT kind,
+              CASE
+                WHEN kind = 'mail.sync' AND array_length(string_to_array(idempotency_key, ':'), 1) = 2 THEN 'orphaned_pre_generation'
+                WHEN kind = 'mail.watch_renew' AND array_length(string_to_array(idempotency_key, ':'), 1) = 3 THEN 'orphaned_pre_generation'
+                ELSE 'current'
+              END AS key_format,
               count(*) FILTER (WHERE state IN ('queued', 'retryable')) AS queued,
               count(*) FILTER (WHERE state = 'running') AS running,
               count(*) FILTER (WHERE state = 'dead') AS dead
          FROM jobs
-        WHERE workspace_id = $1 AND kind LIKE 'mail.%' AND payload->>'mailboxId' = $2::text
-        GROUP BY kind ORDER BY kind`,
+        WHERE workspace_id = $1 AND kind LIKE 'mail.%' AND split_part(idempotency_key, ':', 2) = $2::text
+        GROUP BY 1, 2 ORDER BY 1, 2`,
       values,
     );
     const sendDays = await session.query(
@@ -1841,6 +1851,7 @@ export async function mailboxSwitchPreflightCommand(invocation: AdminInvocation)
         })),
         mailJobs: jobs.rows.map(row => ({
           kind: row['kind'],
+          keyFormat: row['key_format'],
           queued: asCount(row['queued']),
           running: asCount(row['running']),
           dead: asCount(row['dead']),

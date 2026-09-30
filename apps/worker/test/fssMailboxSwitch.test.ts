@@ -135,6 +135,36 @@ describe('fss admin mailbox switch-preflight', () => {
     }
   });
 
+  it('reads mail jobs in both key formats and reports the pre-generation ones as orphaned', async () => {
+    const id = world.alpha.mailboxId;
+    const job = async (kind: string, key: string, state: string): Promise<void> => {
+      await world.database.session.query(
+        `INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, state, dead_at)
+         VALUES ($1, $2, jsonb_build_object('mailboxId', $3::text), $4, $5, CASE WHEN $5 = 'dead' THEN now() END)
+         ON CONFLICT (workspace_id, kind, idempotency_key)
+         DO UPDATE SET state = EXCLUDED.state, dead_at = EXCLUDED.dead_at`,
+        [workspaceId(), kind, id, key, state],
+      );
+    };
+    const count = async (kind: string, keyFormat: string, state: 'queued' | 'dead'): Promise<number> => {
+      const report = reportOf(await mailboxSwitchPreflightCommand(invocation(world.database.session, { '--workspace': workspaceId() })));
+      const row = (report['mailJobs'] as readonly Record<string, unknown>[]).find(
+        entry => entry['kind'] === kind && entry['keyFormat'] === keyFormat,
+      );
+      return Number(row?.[state] ?? 0);
+    };
+    const syncQueuedBefore = await count('mail.sync', 'current', 'queued');
+    const watchDeadBefore = await count('mail.watch_renew', 'current', 'dead');
+    await job('mail.sync', `mail-sync:${id}`, 'dead');
+    await job('mail.sync', `mail-sync:${id}:7`, 'queued');
+    await job('mail.watch_renew', `watch:${id}:3`, 'queued');
+    await job('mail.watch_renew', `watch:${id}:7:4`, 'dead');
+    expect(await count('mail.sync', 'orphaned_pre_generation', 'dead')).toBe(1);
+    expect(await count('mail.sync', 'current', 'queued')).toBe(syncQueuedBefore + 1);
+    expect(await count('mail.watch_renew', 'orphaned_pre_generation', 'queued')).toBe(1);
+    expect(await count('mail.watch_renew', 'current', 'dead')).toBe(watchDeadBefore + 1);
+  });
+
   it('refuses rather than pick a workspace', async () => {
     const outcome = await mailboxSwitchPreflightCommand(invocation(world.database.session, {}));
     expect(outcome).toMatchObject({ ok: false, reason: 'workspace_ambiguous' });
