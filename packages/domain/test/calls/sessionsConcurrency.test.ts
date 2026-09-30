@@ -6,6 +6,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { consumeCallSession, createCallSession, recordCallStatus, sweepCallSessionReservations } from '../../calls/sessions.ts';
 import { sendGateLockName } from '../../policy/sendGate.ts';
+import { logCallOutcome } from '../../dial/calls.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
@@ -228,6 +229,63 @@ describe('call-session consumption under concurrency', () => {
     } finally {
       await other.end().catch(() => undefined);
     }
+  });
+
+  it('a final no-answer callback waits for Log outcome’s gate rather than holding the session against it (C1 fold 2)', async () => {
+    const sessionId = await create('alpha');
+    const input = consumeInput('alpha', sessionId);
+    expect((await withTransaction(database.session, async () => await consumeCallSession(database.session, input))).ok).toBe(true);
+    await dateCall(sessionId, '2026-09-10T14:00:00.000Z');
+    const other = await otherConnection();
+    try {
+      const writerPid = await pidOf(async sql => await other.query<{ pid: number }>(sql));
+      // Log outcome's order: the gate EXCLUSIVE, then the firm, then the session.
+      await other.query('BEGIN');
+      await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(seeded.alpha.workspaceId)]);
+      await other.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+        seeded.alpha.workspaceId,
+        crm.alpha.firmId,
+      ]);
+      const callback = withTransaction(database.session, async () =>
+        await recordCallStatus(database.session, { callSid: input.callSid, providerStatus: 'no-answer' }),
+      );
+      expect(await waitsOn(other as never, writerPid)).toBe(true);
+      // The outcome's write to the same session. Had the callback locked the session
+      // before asking for the gate, this would deadlock and one side would be aborted.
+      await other.query('UPDATE call_sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+      await other.query('COMMIT');
+      expect(await callback).toMatchObject({ known: true, status: 'completed', applied: true });
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+  });
+
+  it('a final no-answer callback and a real Log outcome on the same session, run together, both commit', async () => {
+    const sessionId = await create('alpha', '2026-09-18T20:00:00.000Z');
+    const input = consumeInput('alpha', sessionId, '2026-09-18T20:00:00.000Z');
+    expect((await withTransaction(database.session, async () => await consumeCallSession(database.session, input))).ok).toBe(true);
+    await dateCall(sessionId, '2026-09-11T14:00:00.000Z');
+    const runtime = await database.appRuntimeSession();
+    const salesperson = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.salesperson.userId, role: 'salesperson' }),
+      runtime,
+    );
+    const [logged, called] = await Promise.all([
+      withTransaction(runtime, async () =>
+        await logCallOutcome(salesperson, { firmId: crm.alpha.firmId, callSessionId: sessionId, outcome: 'voicemail_left' }),
+      ),
+      withTransaction(database.session, async () =>
+        await recordCallStatus(database.session, { callSid: input.callSid, providerStatus: 'no-answer' }),
+      ),
+    ]);
+    expect(logged.ok).toBe(true);
+    expect(called).toMatchObject({ known: true });
+    const { rows } = await database.session.query<{ status: string; call_log_id: string | null }>(
+      'SELECT status, call_log_id FROM call_sessions WHERE id = $1',
+      [sessionId],
+    );
+    expect(rows[0]?.status).toBe('completed');
+    expect(rows[0]?.call_log_id).not.toBeNull();
   });
 
   it('refuses a consumption that waited on the gate past the minute while the sweep released its reservation (fold 2)', async () => {

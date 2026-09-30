@@ -469,5 +469,22 @@ describe('call sessions', () => {
       expect(await createAt(day(4))).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
       expect(await openParkingHolds()).toBe(1);
     });
+
+    it('does not park on a late classification that completes no 14-day window (days 0, 7, 14, 15)', async () => {
+      expect((await resume()).ok).toBe(true);
+      await reset('2026-11-30T12:00:00.000Z');
+      const base = Date.parse('2026-12-07T15:00:00.000Z'); // Monday 10:00 in New York
+      const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
+      // Day 0 reached somebody who was not asked what happened: an attempt, unclassified.
+      const first = await attempt(day(0), { provider: 'completed' });
+      await attempt(day(7, 3), { provider: 'no-answer' });
+      await attempt(day(14), { provider: 'no-answer' });
+      await attempt(day(15, 3), { provider: 'no-answer' });
+      expect(await openParkingHolds()).toBe(0);
+      // On day 15 David records day 0's call as unanswered: the window ending at the latest
+      // call holds days 7, 14 and 15 only.
+      expect((await record(first, 'no_answer', day(15, 3))).ok).toBe(true);
+      expect(await openParkingHolds()).toBe(0);
+    });
   });
 });

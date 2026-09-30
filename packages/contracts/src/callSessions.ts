@@ -174,43 +174,6 @@ export function firstNameOf(fullName: string | null | undefined): string | null 
   return first === '' ? null : first;
 }
 
-// ---------------------------------------------------------------------------
-// Sentences
-// ---------------------------------------------------------------------------
-
-/**
- * The call-session refusals in words. `reasonText.ts` (`reasonSentence`) does not know
- * these codes yet and belongs to another slice, so the call view asks this map first and
- * `reasonSentence` for every dial refusal; the coordinator folds it into `reasonText.ts`.
- */
-export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
-  call_attempts_exhausted:
-    'Four calls to this firm went unanswered in the last 14 days, so calling it is parked for review. Resume calling when you want to try again.',
-  call_attempt_today: 'This firm was already called without an answer today. Try again on another business day.',
-  call_attempt_too_soon:
-    'The last unanswered call was at about this time of day. Try at least two hours earlier or later in their day.',
-  telephony_budget_disabled: 'Calling from Callie has no budget set. An administrator can set one in Settings, under Calling.',
-  telephony_budget_exhausted: 'Calling paused: today’s calling budget is used.',
-  caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
-});
-
-/**
- * Slice W's attempt limit, which the cadence replaced. No route answers it any more; a
- * receipt stored before the cadence can still replay it, so it keeps a sentence.
- */
-export const CALL_ATTEMPT_LIMIT_SENTENCE = 'This firm has had as many calls as Callie allows for now. Try again on another day.';
-
-/** Slice W's consumption refusal when the call's reservation was no longer open. */
-export const RESERVATION_CLOSED_SENTENCE = "The call couldn't be authorised because today's calling budget changed. Try again.";
-
-/** The sentence for a call-session refusal, or null for a code this map does not own. */
-export function callSessionRefusalSentence(code: string): string | null {
-  if (code === 'call_attempt_limit') return CALL_ATTEMPT_LIMIT_SENTENCE;
-  if (code === 'reservation_closed') return RESERVATION_CLOSED_SENTENCE;
-  return Object.hasOwn(CALL_SESSION_REFUSAL_SENTENCES, code)
-    ? (CALL_SESSION_REFUSAL_SENTENCES[code as CallSessionRefusalCode] ?? null)
-    : null;
-}
 
 /** A session's life: the dial ticket's sixty seconds. */
 export const CALL_SESSION_SECONDS = 60;

@@ -1,8 +1,8 @@
-import { callSessionRefusalSentence, reasonSentence } from '@fss/contracts';
+import { reasonSentence } from '@fss/contracts';
 
 /**
- * The call view's words (slice C1). Every refusal is a sentence: the call-session codes
- * from `callSessionRefusalSentence`, every dial refusal from `reasonSentence`.
+ * The call view's words (slice C1). Every refusal is a sentence from `reasonSentence`,
+ * the one map, which carries the call-session codes too.
  */
 
 export const MICROPHONE_DENIED_SENTENCE =
@@ -11,7 +11,7 @@ export const MICROPHONE_DENIED_SENTENCE =
 export const CALL_FAILED_SENTENCE = 'The call could not be connected. Check your internet connection and press Call again.';
 
 export function callRefusalSentence(code: string): string {
-  return callSessionRefusalSentence(code) ?? reasonSentence(code);
+  return reasonSentence(code);
 }
 
 /** The Voice SDK's microphone refusals (31401 permission, 31402 acquisition) and the browser's own. */

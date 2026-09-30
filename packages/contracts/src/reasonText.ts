@@ -1,3 +1,4 @@
+import type { CallSessionRefusalCode } from './callSessions.ts';
 import type { CrmRefusalCode } from './crm.ts';
 import type { DialRefusalCode } from './dial.ts';
 import type { GrantRefusalCode } from './mail.ts';
@@ -247,6 +248,31 @@ export const MAIL_REFUSAL_SENTENCES: Readonly<Record<GrantRefusalCode | 'mailbox
     mailbox_not_connected: 'No mailbox is connected yet. Connect Gmail first.',
   });
 
+// ---------------------------------------------------------------------------
+// Call-session refusals (callSessions.ts, call-to-booking slices W and C1)
+// ---------------------------------------------------------------------------
+
+export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
+  call_attempts_exhausted:
+    'Four calls to this firm went unanswered in the last 14 days, so calling it is parked for review. Resume calling when you want to try again.',
+  call_attempt_today: 'This firm was already called today. Try again on another business day.',
+  call_attempt_too_soon:
+    'The last call was at about this time of day. Try at least two hours earlier or later in their day.',
+  telephony_budget_disabled: 'Calling from Callie has no budget set. An administrator can set one in Settings, under Calling.',
+  telephony_budget_exhausted: 'Calling paused: today’s calling budget is used.',
+  caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
+});
+
+/**
+ * The TwiML consumption's own refusals (slice W). No Mac route answers them today — the
+ * caller hears the generic TwiML sentence — but a stored receipt (W's retired attempt
+ * limit) can replay one, and each code keeps one sentence here.
+ */
+export const CALL_CONSUMPTION_REFUSAL_SENTENCES = Object.freeze({
+  call_attempt_limit: 'This firm has had as many calls as Callie allows for now. Try again on another day.',
+  reservation_closed: "The call couldn't be authorised because today's calling budget changed. Try again.",
+} as const);
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...HOLD_REASON_SENTENCES,
@@ -257,6 +283,8 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...FOLLOW_UP_PREVIEW_REFUSAL_SENTENCES,
   ...FOLLOW_UP_PERMISSION_REFUSAL_SENTENCES,
   ...MAIL_REFUSAL_SENTENCES,
+  ...CALL_SESSION_REFUSAL_SENTENCES,
+  ...CALL_CONSUMPTION_REFUSAL_SENTENCES,
 });
 
 /** Whether `code` has a sentence of its own (not the generic one). */

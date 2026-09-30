@@ -138,9 +138,9 @@ cadence and the budget.
 4. The call ends; the outcome form says the call is filed with its recording, and
    `/calls/log` carries `callSessionId`.
 
-A refusal is a sentence: the call-session codes from `CALL_SESSION_REFUSAL_SENTENCES`
-(`packages/contracts/src/callSessions.ts`; the budget one reads "Calling paused: today’s
-calling budget is used."), every dial refusal from `reasonSentence`. A microphone macOS
+A refusal is a sentence from `reasonSentence` (`packages/contracts/src/reasonText.ts`),
+the one map for dial and call-session refusals alike; the budget one reads "Calling
+paused: today’s calling budget is used.". A microphone macOS
 refused says where to allow it (System Settings → Privacy & Security → Microphone).
 
 **Callbacks ring David's cellphone.** The caller ID is his own number, so a prospect who

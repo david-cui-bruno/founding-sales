@@ -255,8 +255,10 @@ export interface CallCadenceState extends CallCadence {
  * rang out, reached a machine, failed, or was never classified is an attempt; nothing
  * expires one but the window itself (review of C1, fold 1, finding 2).
  *
- * Counted since the latest of: `at` minus the window, the last resetting outcome recorded
- * for the firm, and the last release of a parking hold (the review).
+ * Counted in the window `(at − windowDays, at]` — bounded above, so a late decision about
+ * an old call looks at the window it belongs to (review of C1, fold 2) — and since the
+ * later of the last resetting outcome recorded for the firm and the last release of a
+ * parking hold (the review).
  *
  * Spacing is on the firm's own clock, from every counted session's time: at most one
  * attempt a local date, and the next at least `spacingMinutes` of the clock away from the
@@ -288,6 +290,7 @@ export async function readCallCadence(
        LEFT JOIN call_logs l ON l.workspace_id = s.workspace_id AND l.id = s.call_log_id
       WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.consumed_at IS NOT NULL
         AND s.consumed_at > $3::timestamptz - make_interval(days => $4)
+        AND s.consumed_at <= $3::timestamptz
         AND ($5::timestamptz IS NULL OR s.consumed_at > $5::timestamptz)
       ORDER BY s.consumed_at, s.id`,
     [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt],
@@ -345,14 +348,17 @@ export async function parkIfCadenceSpent(
 ): Promise<string | null> {
   // The gate before anything is read: two recordings cannot both find no hold.
   await lockSendGateForStopFact(context);
-  // Counted as of the recorded attempt itself: the window is the one it was placed in.
-  const { rows } = await context.db.query<{ consumed_at: Date | null }>(
-    'SELECT consumed_at FROM call_sessions WHERE workspace_id = $1 AND id = $2',
-    [context.scope.workspaceId, input.sessionId],
+  // Counted in the 14-day window that ends at the firm's latest placed call: four there
+  // is four within one window. A late classification of an old call can complete that
+  // window, never a window that never held four (review of C1, fold 2, finding 3).
+  const { rows } = await context.db.query<{ placed: boolean; latest: Date | null }>(
+    `SELECT EXISTS (SELECT 1 FROM call_sessions WHERE workspace_id = $1 AND id = $3 AND consumed_at IS NOT NULL) AS placed,
+            (SELECT max(consumed_at) FROM call_sessions WHERE workspace_id = $1 AND firm_id = $2) AS latest`,
+    [context.scope.workspaceId, input.firmId, input.sessionId],
   );
-  const placedAt = rows[0]?.consumed_at;
-  if (placedAt == null) return null;
-  const cadence = await readCallCadence(context, input.firmId, placedAt.toISOString());
+  const latest = rows[0]?.latest ?? null;
+  if (rows[0]?.placed !== true || latest === null) return null;
+  const cadence = await readCallCadence(context, input.firmId, latest.toISOString());
   if (cadence.unansweredAttempts < CALL_CADENCE.unansweredLimit) return cadence.parkingHoldId;
   return await parkFirmForReview(context, input.firmId, input.sessionId);
 }
@@ -836,6 +842,22 @@ async function sessionBySid(db: Queryable, callSid: string): Promise<CallbackSes
  */
 export async function recordCallStatus(db: Queryable, input: CallStatusInput): Promise<CallStatusOutcome> {
   const status = sessionStatusOf(input.providerStatus);
+  // A final no-answer or busy may park the firm (`parkIfCadenceSpent`), which takes the
+  // send gate EXCLUSIVE. So such a callback takes the gate, then the firm, before the
+  // session row — the order consumption and Log outcome use — and never asks for the
+  // gate while holding the session (review of C1, fold 2, finding 1).
+  if (status !== null && UNANSWERED_PROVIDER_STATUSES.has(input.providerStatus)) {
+    const { rows: located } = await db.query<{ workspace_id: string; firm_id: string }>(
+      `SELECT workspace_id, firm_id FROM call_sessions WHERE twilio_call_sid = $1 OR dial_call_sid = $1
+        ORDER BY (twilio_call_sid = $1) DESC LIMIT 1`,
+      [input.callSid],
+    );
+    const at = located[0];
+    if (at !== undefined) {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(at.workspace_id)]);
+      await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
+    }
+  }
   const session = await sessionBySid(db, input.callSid);
   if (session === null || status === null) return { known: false };
   const context = systemContext(db, session.workspace_id);
