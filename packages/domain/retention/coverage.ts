@@ -213,6 +213,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   stage_review_items: coverage(['deletion_removes'], 'Evidence waiting for a person, naming the firm; removed with the firm.'),
   call_sessions: coverage(['deletion_removes'], 'One Twilio call attempt and its recording reference; removed with the firm or the person.'),
   meetings: coverage(['deletion_removes'], 'A Cal.com booking and the attendee’s e-mail; removed with the firm or the person.'),
+  mail_message_duplicates: coverage(['swept', 'deletion_removes'], 'A provider message id the pipeline skips; goes with the message it names (ON DELETE CASCADE).'),
   calcom_events: coverage(['deletion_removes'], 'Delivery digests of a deleted meeting; removed with it. Unmatched ones carry no identity.'),
 });
 

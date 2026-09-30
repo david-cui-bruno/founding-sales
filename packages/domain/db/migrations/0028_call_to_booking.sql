@@ -60,6 +60,8 @@
 --     raw body, so an exact redelivery is one row.
 --   * `meetings` — one Cal.com booking and its state machine, ordered by the payload
 --     timestamp of the last event applied.
+--   * `mail_message_duplicates` — provider message ids the mail pipeline will not
+--     import (a proven duplicate, or vanished); for the mail slice.
 --
 -- ## Release shape
 --
@@ -525,6 +527,31 @@ CREATE TABLE calcom_events (
 );
 
 -- ---------------------------------------------------------------------------
+-- mail_message_duplicates — provider message ids the mail pipeline will not import
+--
+-- Added at the coordinator's request for the mail slice (30 September 2026). One row
+-- per (mailbox, provider message id) that is either a proven duplicate of a stored
+-- message (`duplicate_of_message_id` names it) or vanished at the provider before it
+-- could be read. Append-only; the row goes with the message it names (ON DELETE
+-- CASCADE), so the retention sweep and the deletion workflow never trip over it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE mail_message_duplicates (
+  workspace_id uuid NOT NULL,
+  mailbox_id uuid NOT NULL,
+  provider_message_id text NOT NULL,
+  duplicate_of_message_id uuid,
+  reason text NOT NULL,
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT mail_message_duplicates_pkey PRIMARY KEY (workspace_id, mailbox_id, provider_message_id),
+  CONSTRAINT mail_message_duplicates_mailbox_fkey FOREIGN KEY (workspace_id, mailbox_id)
+    REFERENCES mailboxes (workspace_id, id),
+  CONSTRAINT mail_message_duplicates_message_fkey FOREIGN KEY (workspace_id, duplicate_of_message_id)
+    REFERENCES mail_messages (workspace_id, id) ON DELETE CASCADE,
+  CONSTRAINT mail_message_duplicates_provider_id_shape CHECK (provider_message_id ~ '^[A-Za-z0-9_-]{1,128}$'),
+  CONSTRAINT mail_message_duplicates_reason_known CHECK (reason IN ('proven_duplicate', 'vanished'))
+);
+
+-- ---------------------------------------------------------------------------
 -- (e) workspace_settings — the three new keys
 -- ---------------------------------------------------------------------------
 ALTER TABLE workspace_settings
@@ -550,3 +577,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON stage_review_items TO app_runtime, migra
 GRANT SELECT, INSERT, UPDATE, DELETE ON call_sessions TO app_runtime, migration;
 GRANT SELECT, INSERT, UPDATE, DELETE ON meetings TO app_runtime, migration;
 GRANT SELECT, INSERT, UPDATE, DELETE ON calcom_events TO app_runtime, migration;
+GRANT SELECT, INSERT ON mail_message_duplicates TO app_runtime, migration;
+REVOKE UPDATE, DELETE, TRUNCATE ON mail_message_duplicates FROM app_runtime, migration;

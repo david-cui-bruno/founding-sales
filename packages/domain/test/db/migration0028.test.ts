@@ -251,4 +251,17 @@ describe('migration 0028 on a database at schema 27', () => {
       { evidence_kind: 'subscription.accepted', action: 'advance', target_stage_key: 'onboarding' },
     ]);
   });
+
+  it('gives the runtime SELECT and INSERT on mail_message_duplicates, and nothing that rewrites it', async () => {
+    const { rows } = await database.session.query<{ privilege: string; granted: boolean }>(
+      `SELECT p AS privilege, has_table_privilege('app_runtime', 'mail_message_duplicates', p) AS granted
+         FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p`,
+    );
+    expect(Object.fromEntries(rows.map(row => [row.privilege, row.granted]))).toEqual({
+      SELECT: true,
+      INSERT: true,
+      UPDATE: false,
+      DELETE: false,
+    });
+  });
 });

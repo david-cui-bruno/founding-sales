@@ -1,5 +1,6 @@
 import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { SeededCrm } from './crmFixtures.ts';
+import type { SeededMail } from './mailFixtures.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
@@ -16,6 +17,7 @@ interface Fixture {
   readonly session: SessionQueryable;
   readonly seeded: TwoWorkspaces;
   readonly crm: SeededCrm;
+  readonly mail: SeededMail;
 }
 
 interface Case {
@@ -257,6 +259,18 @@ async function calcomEvent(f: Fixture, overrides: Row = {}): Promise<string> {
     booking_uid: 'booking-case',
     payload_created_at: '2026-09-30T12:00:00Z',
     outcome: 'applied',
+    ...overrides,
+  });
+}
+
+// -------------------------------------------------------------- mail_message_duplicates
+async function duplicate(f: Fixture, overrides: Row = {}): Promise<string> {
+  return await insert(f, 'mail_message_duplicates', {
+    workspace_id: workspace(f),
+    mailbox_id: f.mail.alpha.mailboxId,
+    provider_message_id: `dup${String(next())}`,
+    duplicate_of_message_id: f.mail.alpha.messageId,
+    reason: 'proven_duplicate',
     ...overrides,
   });
 }
@@ -535,4 +549,17 @@ export const CALL_TO_BOOKING_CONSTRAINT_CASES: readonly Case[] = [
   { constraint: 'calcom_events_trigger_shape', run: async f => await calcomEvent(f, { trigger_event: 'booking created' }) },
   { constraint: 'calcom_events_booking_uid_shape', run: async f => await calcomEvent(f, { booking_uid: 'a b' }) },
   { constraint: 'calcom_events_outcome_known', run: async f => await calcomEvent(f, { outcome: 'shrugged' }) },
+
+  // --------------------------------------------------------- mail_message_duplicates
+  {
+    constraint: 'mail_message_duplicates_pkey',
+    run: async f => {
+      await duplicate(f, { provider_message_id: 'twice-seen' });
+      return await duplicate(f, { provider_message_id: 'twice-seen' });
+    },
+  },
+  { constraint: 'mail_message_duplicates_mailbox_fkey', run: async f => await duplicate(f, { mailbox_id: ABSENT }) },
+  { constraint: 'mail_message_duplicates_message_fkey', run: async f => await duplicate(f, { duplicate_of_message_id: ABSENT }) },
+  { constraint: 'mail_message_duplicates_provider_id_shape', run: async f => await duplicate(f, { provider_message_id: 'has space' }) },
+  { constraint: 'mail_message_duplicates_reason_known', run: async f => await duplicate(f, { reason: 'looked_similar' }) },
 ];
