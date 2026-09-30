@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CALL_SESSION_REFUSAL_CODES, hasReasonSentence, reasonSentence } from '@fss/contracts';
 import { liveWorkNotice, noticeText } from '../src/renderer/firmWorkspaceView.ts';
 
 /**
@@ -29,19 +30,11 @@ const RAW = [
   /: (code|reason);/u,
 ];
 
-/**
- * Sources owned by another slice that still have a raw fallback, named so the test stays
- * honest: `today/followUpView.ts` (C1) has `ENROL_REFUSALS[code] ?? code`. Remove the entry
- * when that slice lands its own change.
- */
-const OWNED_ELSEWHERE = new Set(['today/followUpView.ts']);
-
 describe('the renderer never shows a raw code', () => {
   it('has no fallback to, or interpolation of, a reason code', () => {
     const found: string[] = [];
     for (const path of sources(RENDERER)) {
       const file = relative(RENDERER, path);
-      if (OWNED_ELSEWHERE.has(file)) continue;
       readFileSync(path, 'utf8')
         .split('\n')
         .forEach((line, index) => {
@@ -55,9 +48,17 @@ describe('the renderer never shows a raw code', () => {
     expect(found).toEqual([]);
   });
 
-  it('does not let the exemption outlive the fallback it names', () => {
-    for (const file of OWNED_ELSEWHERE) {
-      expect(readFileSync(join(RENDERER, file), 'utf8')).toMatch(RAW[0] as RegExp);
+  it('scans the call view and Today’s call-card sources too', () => {
+    const files = sources(RENDERER).map(path => relative(RENDERER, path));
+    expect(files).toContain('calling/CallHistory.tsx');
+    expect(files).toContain('today/followUpView.ts');
+    expect(files).toContain('today/OutcomeForm.tsx');
+  });
+
+  it('has a sentence, not a code, for every call session refusal', () => {
+    for (const code of [...CALL_SESSION_REFUSAL_CODES, 'call_attempt_limit', 'reservation_closed']) {
+      expect(hasReasonSentence(code), code).toBe(true);
+      expect(reasonSentence(code), code).not.toContain('_');
     }
   });
 });
