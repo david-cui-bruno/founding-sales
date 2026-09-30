@@ -1132,7 +1132,7 @@ export const SEND_PATH_SAMPLE_MAX = 500;
 export const SEND_PATH_DEVIATIONS: readonly string[] = Object.freeze([
   'Every section is scoped to one workspace (workspace_id = $1); the document\'s SQL is unscoped because it assumed production holds exactly one workspace, and this command refuses rather than guess when it holds more.',
   'Section 1 reads only the version of each setting still in force (superseded_at IS NULL); the document\'s SQL has no such predicate and would also list every retired version.',
-  'Section 2 groups the document\'s read 2 by sequence_enrollments.origin_kind, which did not exist at 23ec4338, and reports total - cold_legacy as wouldLeaveOnFirstTick because listStepWakes now excludes cold_legacy outright.',
+  'Section 2 groups the document\'s read 2 by sequence_enrollments.origin_kind, which did not exist at 23ec4338, and reports total - cold_legacy - heldForColdOutreach as wouldLeaveOnFirstTick because listStepWakes now excludes cold_legacy outright and, since send-path v2, a due prospecting e-mail step is held with cold_outreach_mailbox_required rather than sent.',
   'Section 4 reads sequence_enrollments.permission_id and opportunities.control_mode_origin, which 0025 added, beside the document\'s two proxies (hadConversation, hadInbound) rather than instead of them.',
   'Section 4\'s hadInbound reads mail_messages.direction = \'incoming\'. The document\'s SQL says \'inbound\', which is not in mail_messages_direction_known (incoming, outgoing) and so answered false for every row it was ever run against.',
   'Section 7 does not read mailbox_send_days.direct_sent: migration 0019 dropped the column, so the document\'s read 7 would fail outright on schema 25.',
@@ -1255,7 +1255,8 @@ async function sendPathDueNow(session: SessionQueryable, workspaceId: string): P
   const { rows } = await session.query(
     `SELECT n.origin_kind,
             count(*) AS due_now,
-            count(*) FILTER (WHERE e.channel = 'email') AS due_email
+            count(*) FILTER (WHERE e.channel = 'email') AS due_email,
+            count(*) FILTER (WHERE e.channel = 'email' AND n.origin_kind = 'prospecting') AS held_for_cold_outreach
        FROM step_executions e
        JOIN sequence_enrollments n
          ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
@@ -1272,12 +1273,14 @@ async function sendPathDueNow(session: SessionQueryable, workspaceId: string): P
   const emailByOriginKind = emptyOriginTally();
   let total = 0;
   let email = 0;
+  let heldForColdOutreach = 0;
   for (const row of rows) {
     const kind = String(row['origin_kind']) as OriginKind;
     const due = asCount(row['due_now']);
     const dueEmail = asCount(row['due_email']);
     total += due;
     email += dueEmail;
+    heldForColdOutreach += asCount(row['held_for_cold_outreach']);
     if (kind in byOriginKind) {
       byOriginKind[kind] = due;
       emailByOriginKind[kind] = dueEmail;
@@ -1288,10 +1291,14 @@ async function sendPathDueNow(session: SessionQueryable, workspaceId: string): P
     email,
     byOriginKind,
     emailByOriginKind,
-    // The number that matters: what `listStepWakes` would actually wake.
-    wouldLeaveOnFirstTick: total - byOriginKind.cold_legacy,
+    // Send-path v2 (slice S4): every due prospecting e-mail step, whether it already
+    // carries the hold or will be given it the first time it is asked. `listStepWakes`
+    // still wakes these, so the hold is visible; nothing about them leaves.
+    heldForColdOutreach,
+    // The number that matters: what would actually go on the first tick.
+    wouldLeaveOnFirstTick: total - byOriginKind.cold_legacy - heldForColdOutreach,
     note:
-      'cold_legacy rows are excluded twice over — listStepWakes will not wake one (sequences/wake.ts) and followUpPermissionSource refuses it at the step — so they are listed here for completeness only. wouldLeaveOnFirstTick is total minus byOriginKind.cold_legacy.',
+      'cold_legacy rows are excluded twice over — listStepWakes will not wake one (sequences/wake.ts) and followUpPermissionSource refuses it at the step — so they are listed here for completeness only. heldForColdOutreach counts the due prospecting e-mail steps: listStepWakes wakes them, and coldOutreachTransportSource holds each with cold_outreach_mailbox_required (the dispatch claim refuses a prepared one again), because a prospecting e-mail may not leave through the Gmail dispatch path. wouldLeaveOnFirstTick is total minus byOriginKind.cold_legacy minus heldForColdOutreach.',
   };
 }
 

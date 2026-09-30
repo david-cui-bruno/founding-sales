@@ -77,10 +77,10 @@ async function dueEmailStep(label: string): Promise<{
     opportunityId: firm.opportunityId,
     userId: world.alpha.workspace.salesperson.userId,
     templateVersionId: world.alpha.templateVersionId,
-    // A cold first touch, one contact at a firm of its own: this file's cases are about
-    // a reply stopping a send, and a confirmed reply stops a prospecting step by manual
-    // mode (migration 0025 changes that only for evidenced follow-ups).
-    originKind: 'prospecting',
+    // The fixture's default, an evidenced follow-up. This file used a cold first touch
+    // until send-path v2 (slice S4): a prospecting e-mail is now held at eligibility with
+    // `cold_outreach_mailbox_required` and never reaches the dispatch path, so it cannot
+    // be the step whose send a reply stops.
   });
   const { rows } = await session.query<{ enrollment_id: string; contact_id: string }>(
     'SELECT enrollment_id, contact_id FROM step_executions WHERE workspace_id = $1 AND id = $2',
@@ -179,6 +179,10 @@ describe('sequence.action through the real hand-off and the fixed dispatch path'
     const executions = await listStepExecutions(context(), { enrollmentId: step.enrollmentId });
     const execution = executions.find(candidate => candidate.id === step.executionId);
     expect(execution?.state).toBe('held');
-    expect(execution?.holdReasonCode).toBe('opportunity_manual');
+    // A follow-up is not blocked by the reply's manual mode (a reply is a signal origin),
+    // but the reply's stop ended the enrollment, and an ended enrollment is refused as
+    // `scoped_pause` (`enrollmentSource`). With a prospecting step, before send-path v2,
+    // the control-mode source answered first with `opportunity_manual`.
+    expect(execution?.holdReasonCode).toBe('scoped_pause');
   });
 });

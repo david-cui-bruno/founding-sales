@@ -377,6 +377,59 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   enrollments, both versions, the carried ordinals, the permissions and the person's
   `changeNote`.
 
+## 6e. A prospecting e-mail does not leave through Gmail (send-path v2, 30 September 2026)
+
+David, 30 September 2026:
+
+> Zero currently due emails is insufficient: creating an enrollment must not enable cold
+> Gmail outreach.
+
+**This section is the coordinator's reading of that sentence, not a quotation of a rule
+David wrote.** Read together with his 28 September decision that cold outreach uses a
+non-Google mailbox, it is taken to mean: until a real cold-outreach transport exists, a
+*prospecting* e-mail step is refused on the Gmail dispatch path — visibly held, never
+silently dropped — whatever the owner's mailbox is labelled. Follow-ups (section 5) and
+`cold_legacy` (section 3) are unchanged.
+
+Two places ask it, the same two every other rule here is asked in:
+
+* **At the step.** `coldOutreachTransportSource` (`packages/domain/sequences/eligibility.ts`)
+  refuses an e-mail step of a `prospecting` enrollment with
+  `cold_outreach_mailbox_required`, the hold code migration 0026 added. It is asked after
+  suppression and the follow-up permission and before the firm rule of section 4, so a
+  prospecting e-mail with no transport is held for that reason whichever contact at the
+  firm is first. `runDueStepExecution` stores it as the step's `hold_reason_code`; no
+  fence is prepared. A prospecting call task passes: a person dialling is not Gmail.
+* **At the dispatch claim.** `coldOutreachDispatchRefusal`
+  (`packages/domain/outbound/stepPermission.ts`), asked by `decideSend` in the precheck and
+  again inside the claiming transaction under the send gate, refuses a fence whose
+  enrollment is `prospecting` with `step_ineligible`, detail
+  `cold_outreach_mailbox_required:gmail_dispatch:<mailbox kind>`. It covers a fence
+  prepared before this rule existed and a held fence returning through dispatch; Gmail is
+  never asked.
+
+**A label is not a transport.** Migration 0026 lets a mailbox row carry the kind
+`cold_outreach`. Neither check reads that kind as permission: the claim's rule is "this is
+the Gmail dispatch path and the enrollment is prospecting", not "the mailbox is not a
+cold-outreach mailbox" (P0-5 of the send-path v2 plan review). The kind appears only in the
+refusal's detail, so an operator can see which mailbox the fence would have used.
+
+**What is deliberately untouched.** `listStepWakes` (`sequences/wake.ts`) keeps waking
+prospecting steps, so the hold is re-read and stays visible on the card rather than going
+quiet. Reconciliation (`outbound/reconcile.ts`) is unchanged: it resolves the outcome of a
+fence that is already `dispatching` or `reconciling` by searching the Sent folder, and it
+never starts a claim or calls `sendMessage`, so it has no cold e-mail to refuse.
+
+**The report.** `fss admin send-path report` section 2 (`dueNow`) gains
+`heldForColdOutreach`, the due prospecting e-mail steps, and `wouldLeaveOnFirstTick` is now
+`total − byOriginKind.cold_legacy − heldForColdOutreach`.
+
+**What it costs.** The firm rule of section 4 is no longer reached at the dispatch claim for
+an e-mail, because a prospecting e-mail is refused before it. Its decisions are still
+tested against `firmExclusivitySource` directly; the three claim-concurrency cases in
+`packages/domain/test/outbound/firmExclusivityAtSend.test.ts` are parked (skipped) until a
+cold-outreach transport makes a prospecting claim a real path again.
+
 ## 7. Deviations from the brief, each with its reason
 
 1. **`granted_by` is two columns**, `granted_by_user_id` (FK onto
@@ -429,5 +482,5 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
 
 * It does not lift the pause, and cannot.
 * It creates no booking table and no Cal.com integration.
-* It does not change what a `prospecting` or a legacy step may do, except to refuse more.
+* It does not change what a `prospecting` or a legacy step may do, except to refuse more. (Section 6e, send-path v2, is such a refusal: a prospecting e-mail no longer leaves through Gmail.)
 * It adds no partial unique index, so no production row makes the migration fail to apply.
