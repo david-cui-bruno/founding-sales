@@ -532,6 +532,30 @@ describe('the continuous handoff', () => {
   });
 });
 
+describe('legacy recoveries adopt a handoff (fold 2)', () => {
+  it.each([
+    ['no cursor', "UPDATE mailboxes SET history_id = NULL, history_id_updated_at = NULL WHERE id = $1"],
+    [
+      'an expired cursor older than the recovery',
+      `UPDATE mailboxes SET history_id = '777',
+              history_id_updated_at = (SELECT started_at FROM mailbox_recoveries WHERE mailbox_id = $1) - interval '1 hour'
+        WHERE id = $1`,
+    ],
+  ])('a recovery left with %s takes a fresh handoff at its next run', async (_label, legacy) => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    await w.database.session.query(legacy, [w.alpha.mailboxId]);
+    (w.alpha.fixture as { historyId: string }).historyId = '1050';
+    const report = await asJob(w, async () =>
+      await runMailRecovery(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(report.outcome).toBe('completed');
+    expect((await readMailbox(context, w.alpha.mailboxId))?.historyId).toBe('1050');
+    expect(w.alpha.gmail.calls.filter(call => call.method === 'getProfile').length).toBeGreaterThan(0);
+  });
+});
+
 describe('resume by recorded ids', () => {
   const runUntilDone = async (
     w: MailWorld,
@@ -722,12 +746,21 @@ describe('recovery budgets (fold 1)', () => {
     const w = world;
     const context = w.systemContext(w.alpha.workspace.workspaceId);
     const gmail = w.clientWith(w.alpha, { vanishedMessageIds: Array.from({ length: 8 }, (_, index) => `gone${String(index)}`) });
+    const log = recordingMailLog();
     const report = await asJob(w, async () =>
-      await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+      await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail, log, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
     );
     expect(report.outcome).toBe('continued');
     expect(report.vanishedMessages).toBe(6);
     expect(gmail.metadataReads).toHaveLength(6);
+    // Fold 2: a run that records nothing and does not complete says so.
+    expect(log.lines.find(line => line.event === 'mail.recovery_no_progress')?.fields).toMatchObject({
+      mailboxId: w.alpha.mailboxId,
+      generation: 1,
+      idsRead: 6,
+      vanishedMessages: 6,
+      duplicateRfcId: 0,
+    });
   });
 });
 

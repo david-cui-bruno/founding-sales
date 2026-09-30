@@ -277,7 +277,14 @@ one run.
 inside the job's transaction: `mail.sync`'s cursor compare-and-set (`advanceCursor`
 takes the fence), the expired-cursor generation advance, a recovery's handoff cursor,
 its progress and its completion, and a watch registration (`lockMailboxAtFence` after
-`users.watch`, before the insert). A mismatch throws `StaleMailboxGeneration` rather
+`users.watch`, before the insert), and every refusal path's write — a revoked grant
+(`holdForRevokedGrant`), a disconnected or coverage hold, a rate-limited sync error. A
+path that writes a stop fact takes the send gate first and then the mailbox row
+(`lockForFencedStopFact`), never the row and then the gate; a continued recovery locks
+the row at its fence to commit before it writes progress. The fenced row lock is `FOR NO
+KEY UPDATE`: every `mail_messages` insert holds KEY SHARE on its mailbox row, which `FOR
+UPDATE` would wait on and NO KEY UPDATE does not, while a generation bump still waits
+for it. A mismatch throws `StaleMailboxGeneration` rather
 than returning, so the runner rolls back the whole job, message effects included, and
 records `stale_mailbox_generation`. The runner then **retries** it, and the retry is
 harmless by construction: it re-reads the mailbox and acts for the generation it finds.
@@ -300,23 +307,34 @@ after the id; a message arriving during the recovery is in one or both, never in
 neither. A recovery created before this rule has no cursor, and takes one at the start
 of its next run, moving `to_at` to after that read.
 
-**3. Resume by recorded ids.** A recovery run walks the listing from page 1 with
-Gmail's own `nextPageToken` (opaque; never stored), asks once per page which ids already
-have a `mail_messages` row for this mailbox (`provider_message_id = ANY(...)`), and
-processes the rest under two budgets: `maxMessages` counts only messages the run newly
-records (a proven duplicate or a vanished id writes no row and costs nothing against
-it), and a read cap of `RECOVERY_READ_CAP_FACTOR` (3) × `maxMessages` ids bounds the
-run's Gmail reads (one metadata read per id, plus one read of the other message on an
-RFC Message-ID collision). The whole walk comes before the pipeline, so no listing call
+**3. Resume by recorded ids.** A recovery run lists its interval in time slices of
+`RECOVERY_SLICE_SECONDS` (one day), each by **one** `users.messages.list` call with
+`after:`/`before:` epoch seconds and no page token. Gmail documents nothing about a page
+token when the mailbox changes between pages — a message deleted before the second page
+can shift a survivor off both — so a recovery never follows one. A slice whose answer
+has a `nextPageToken` holds more than a page: the answer is discarded and the slice
+bisected, down to one second (`RecoverySliceOverflow` if one second still overflows).
+Every slice but the first is listed with one second of overlap below it, so a boundary
+second is covered whichever way Gmail treats the bounds. Each slice's ids are checked
+once against `mail_messages` (`provider_message_id = ANY(...)`), and the rest are
+processed under two budgets: `maxMessages` counts only messages the run newly records
+(a proven duplicate or a vanished id writes no row and costs nothing against it), and a
+read cap of `RECOVERY_READ_CAP_FACTOR` (3) × `maxMessages` ids bounds the run's Gmail
+reads (one metadata read per id, plus one read of the other message on an RFC
+Message-ID collision). The whole walk comes before the pipeline, so no listing call
 waits behind the send gate; it stops early once it holds more unrecorded ids than the
 read cap. The rows are the position, so a message deleted between runs shifts nothing.
-The recovery completes only when one run's walk reaches the end of the listing with
-every listed id covered — it has a row, or this run found it a proven duplicate, or this
+The recovery completes only when one run listed every slice of the window and every
+listed id is covered — it has a row, or this run found it a proven duplicate, or this
 run's metadata read found it gone — and then `sync_state = 'ready'`, the watermark at
 `toAt`, `completed_at` and the release of the `coverage_incomplete` hold commit
 together, predicated on the generation, the address and `history_id` still equal to the
-handoff id; any mismatch throws and rolls back. `pages_completed` is the number of pages
-the last walk read, and is informational.
+handoff id; any mismatch throws and rolls back. `pages_completed` is the number of
+slices the last walk listed, and is informational.
+
+A cursor is the recovery's captured handoff only if `history_id_updated_at` is no
+earlier than the recovery row's `started_at`; otherwise — no cursor, or the expired one
+an older expired-cursor recovery left — the run adopts a fresh handoff first.
 
 The residual, and it is a real limit: proven duplicates and vanished ids leave no
 record, so every run meets them again, first. While they number no more than the read
@@ -325,7 +343,11 @@ recovery completes in the run whose budget reaches the end. If they alone exceed
 read cap (1,500 at the default page size), every run spends its whole read cap on the
 same ids at the front of the listing and neither records anything behind them nor
 completes: the recovery does not progress, and the coverage hold stays on. Fixing that
-needs a durable record of an id already covered (a migration, not made here).
+needs a durable record of an id already covered (a migration, not made here). Two
+signals make the stall visible: `MailboxCoverageAgeSeconds` includes a `baseline_pending`
+or `recovering` mailbox whose current recovery has run for more than
+`RECOVERY_STALL_SECONDS` (two hours), reading the recovery's age, and a run that records
+nothing and does not complete logs `mail.recovery_no_progress`.
 
 **4. RFC Message-ID conflicts.** `mail_messages_one_per_rfc_id` allows one row per RFC
 Message-ID per mailbox. `recordMessage` absorbs a collision instead of raising. A
@@ -337,8 +359,11 @@ other collision is a **conflict**: the new message is recorded with `rfc_message
 NULL`, a `mail.rfc_id_conflict` line is logged (mailbox id, both Gmail ids, the RFC id;
 no body, no address), the report counts `rfcIdConflicts`, and the message is processed
 as new on its **own** metadata — its direction, its classification, its suppression, its
-own `In-Reply-To`/`References` for matching, and its own Message-ID for the fence
-lookup. An opt-out that reuses an outgoing message's id is therefore still read and
+own `In-Reply-To`/`References` for matching. Its fence lookup is by its own Gmail id
+only — its row holds no RFC Message-ID, on the first import and on every replay — so it
+can never inherit the fence of the message that owns the colliding id. A failed read of
+the other message for the duplicate proof is this message's stopped read, like any
+other failed Gmail read. An opt-out that reuses an outgoing message's id is therefore still read and
 still suppresses.
 
 ### The cursor stands on whole history records

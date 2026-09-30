@@ -17,6 +17,7 @@ import {
   lockMailboxAtFence,
   StaleMailboxGeneration,
 } from './mailboxes.ts';
+import { stdoutMailLog } from './log.ts';
 import { recordedProviderMessageIds } from './messages.ts';
 import {
   combinePipelineReports,
@@ -50,8 +51,8 @@ import {
  * two containers in two regions would then cover two intervals.
  *
  * **Every page.** The run is resumable rather than unbounded: every run walks the
- * listing from its first page with Gmail's own page tokens, skips the ids this mailbox
- * already has a row for, and processes at most `maxMessages` of the rest. The rows are
+ * interval in single-page time slices (never a page token; fold 2), skips the ids this
+ * mailbox already has a row for, and processes at most `maxMessages` of the rest. The rows are
  * the position; `pages_completed` only says how many pages the last walk read. The
  * next one-minute scheduler pass re-arms the same job row — Appendix C's key
  * `mail-recover:{mailbox}:{generation}` has no instant in it, so there is exactly one
@@ -396,9 +397,14 @@ export async function runMailRecovery(
   // exactly that id. A recovery started before the handoff existed has no cursor; it
   // takes one now, before the listing, and moves its interval's end to after the read
   // so the two still meet.
+  //
+  // Fold 2: a cursor is this recovery's captured handoff only if it was written no
+  // earlier than the recovery row (`startRecovery` writes both in one transaction). An
+  // older cursor — none at all, or the expired one a pre-handoff expired-cursor
+  // recovery left behind — is adopted afresh here, before the listing.
   let recovery = found;
   let capturedHistoryId = mailbox.historyId;
-  if (capturedHistoryId === null) {
+  if (!(await cursorIsCapturedHandoff(context, recovery.id))) {
     const adopted = await adoptHandoffCursor(context, deps, { access: access.access, mailbox, recovery });
     recovery = adopted.recovery;
     capturedHistoryId = adopted.historyId;
@@ -532,6 +538,21 @@ export async function runMailRecovery(
       [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen, fence.generation, fence.emailAddress],
     );
     if ((progress.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery progress', fence);
+    if (pipeline.messagesRecorded === 0) {
+      // A run that recorded nothing and did not complete is not progress, however healthy
+      // its heartbeat: every id it could read was a proven duplicate or gone, or the read
+      // cap stopped it first. Identifiers and counts only.
+      (deps.log ?? stdoutMailLog)('warn', 'mail.recovery_no_progress', {
+        mailboxId: mailbox.id,
+        generation: input.generation,
+        reason: recovery.reason,
+        unrecordedListed: unrecorded.length,
+        idsRead: processed,
+        duplicateRfcId: pipeline.duplicateRfcId,
+        vanishedMessages: pipeline.vanishedMessages,
+        listingEnded,
+      });
+    }
     // Another pass is needed, and this run does not schedule it: the handler is
     // inside the runner's transaction and its own job row is still `running`, so it
     // cannot re-arm itself. `mailRecoverySource` finds every incomplete recovery on
@@ -589,8 +610,21 @@ export async function runMailRecovery(
   });
 }
 
+/** Whether the mailbox's cursor was written with (or after) this recovery row. */
+async function cursorIsCapturedHandoff(context: RepositoryContext, recoveryId: string): Promise<boolean> {
+  const { rows } = await context.db.query<{ captured: boolean }>(
+    `SELECT (m.history_id IS NOT NULL AND m.history_id_updated_at >= r.started_at) AS captured
+       FROM mailbox_recoveries AS r
+       JOIN mailboxes AS m ON m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
+      WHERE r.workspace_id = $1 AND r.id = $2`,
+    [context.scope.workspaceId, recoveryId],
+  );
+  return rows[0]?.captured === true;
+}
+
 /**
- * A recovery created before the continuous handoff has no cursor to adopt. Take one
+ * A recovery created before the continuous handoff has no cursor of its own to adopt:
+ * none, or an older one (an expired cursor). Take one
  * now — the profile first, then the interval's end moved to no earlier than the read —
  * so that from here on it behaves exactly like one `startRecovery` created.
  */
@@ -605,8 +639,9 @@ async function adoptHandoffCursor(
   const cursor = await context.db.query(
     `UPDATE mailboxes
         SET history_id = $5, history_id_updated_at = now(), updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND generation = $3 AND email_address = $4 AND history_id IS NULL`,
-    [context.scope.workspaceId, input.mailbox.id, fence.generation, fence.emailAddress, profile.historyId],
+      WHERE workspace_id = $1 AND id = $2 AND generation = $3 AND email_address = $4
+        AND history_id IS NOT DISTINCT FROM $6`,
+    [context.scope.workspaceId, input.mailbox.id, fence.generation, fence.emailAddress, profile.historyId, input.mailbox.historyId],
   );
   if ((cursor.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(input.mailbox.id, 'recovery handoff', fence);
   const { rows } = await context.db.query<RecoveryDbRow>(

@@ -46,6 +46,7 @@ describe('MailboxCoverageAgeSeconds agrees with the send gate', () => {
     watermarkOffsetSeconds: number | null,
     status: 'connected' | 'disconnected' = 'connected',
   ): Promise<string> => {
+    await database.session.query('DELETE FROM mailbox_recoveries WHERE workspace_id = $1', [workspaceId]);
     await database.session.query('DELETE FROM mailboxes WHERE workspace_id = $1', [workspaceId]);
     const { rows } = await database.session.query<{ id: string }>(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, status, disconnected_at, disconnect_reason,
@@ -86,6 +87,36 @@ describe('MailboxCoverageAgeSeconds agrees with the send gate', () => {
     expect(await mailboxCoverageAgeSeconds(database.session)).toBeNull();
     await only('ready', 3600, 'disconnected');
     expect(await mailboxCoverageAgeSeconds(database.session)).toBeNull();
+  });
+
+  it('fold 2: a baseline or recovery running for more than two hours reads its age, so a stall alarms', async () => {
+    const recovery = async (mailboxId: string, hoursAgo: number, generation = 1, completed = false): Promise<void> => {
+      await database.session.query(
+        `INSERT INTO mailbox_recoveries (workspace_id, mailbox_id, generation, reason, from_at, to_at, started_at, completed_at)
+         VALUES ($1, $2, $3, 'baseline', now() - interval '31 days', now() - make_interval(hours => $4::integer),
+                 now() - make_interval(hours => $4::integer),
+                 CASE WHEN $5 THEN now() ELSE NULL END)`,
+        [workspaceId, mailboxId, generation, hoursAgo, completed],
+      );
+    };
+    for (const state of ['recovering', 'baseline_pending'] as const) {
+      let mailboxId = await only(state, null);
+      await recovery(mailboxId, 3);
+      expect(await mailboxCoverageAgeSeconds(database.session), `${state}, three hours`).toBeGreaterThanOrEqual(3 * 3600 - 5);
+
+      mailboxId = await only(state, null);
+      await recovery(mailboxId, 1);
+      expect(await mailboxCoverageAgeSeconds(database.session), `${state}, one hour`).toBeNull();
+    }
+    // A superseded generation's recovery, or a completed one, is not a stall.
+    let mailboxId = await only('recovering', null);
+    await database.session.query('UPDATE mailboxes SET generation = 2 WHERE id = $1', [mailboxId]);
+    await recovery(mailboxId, 3, 1);
+    expect(await mailboxCoverageAgeSeconds(database.session)).toBeNull();
+    mailboxId = await only('recovering', null);
+    await recovery(mailboxId, 3, 1, true);
+    expect(await mailboxCoverageAgeSeconds(database.session)).toBeNull();
+    await database.session.query('DELETE FROM mailbox_recoveries WHERE workspace_id = $1', [workspaceId]);
   });
 
   it('crosses the window exactly when the gate starts holding', async () => {

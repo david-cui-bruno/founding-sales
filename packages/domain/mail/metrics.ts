@@ -36,7 +36,8 @@ import { hoursToSoonestWatchExpiry } from './watch.ts';
  * `MailboxDisconnectedHours`, with its 48 hours.
  *
  * **`MailboxCoverageAgeSeconds`** is how long ago the stalest connected, `ready`
- * mailbox's coverage was last proved. The send path holds every automated email for an
+ * mailbox's coverage was last proved, or how long a recovery has been running once it is
+ * past two hours. The send path holds every automated email for an
  * owner whose watermark is older than `COVERAGE_FRESHNESS_SECONDS` (`coverage.ts`), and
  * this gauge is what shows outside the Mac whether sync is advancing: the heartbeat says a check *ran*, and a
  * rate-limited check runs and proves nothing. The warning `mailbox_coverage_stale`
@@ -67,15 +68,29 @@ export const MAIL_METRIC_NAMES: readonly string[] = Object.freeze([
  *   age, and reads one second past the window, so it is above the alarm threshold
  *   without inventing a number of hours.
  *
- * Mailboxes in their baseline or recovering are not here: the gate holds them for their
- * state (`coverage_incomplete`), which is what `mail.recover` is working on, and the
- * mailbox check heartbeat already covers a recovery that has stopped.
+ * A mailbox in its baseline or recovering is held by the gate for its state
+ * (`coverage_incomplete`) while `mail.recover` works. Until its current generation's
+ * recovery is `RECOVERY_STALL_SECONDS` (two hours) old it is not here; after that it
+ * reads the recovery's age (fold 2). The heartbeat cannot see a recovery that runs
+ * every minute and never completes — every run is a successful check — so this gauge
+ * is what alarms on one.
  */
+export const RECOVERY_STALL_SECONDS = 2 * 60 * 60;
+
 export async function mailboxCoverageAgeSeconds(db: Queryable): Promise<number | null> {
   const { rows } = await db.query<{ age_seconds: number | null }>(
     `SELECT extract(epoch FROM (clock_timestamp() - coverage_watermark_at))::float8 AS age_seconds
        FROM mailboxes
-      WHERE status = 'connected' AND sync_state = 'ready'`,
+      WHERE status = 'connected' AND sync_state = 'ready'
+     UNION ALL
+     SELECT extract(epoch FROM (clock_timestamp() - r.started_at))::float8 AS age_seconds
+       FROM mailboxes AS m
+       JOIN mailbox_recoveries AS r
+         ON r.workspace_id = m.workspace_id AND r.mailbox_id = m.id AND r.generation = m.generation
+      WHERE m.status = 'connected' AND m.sync_state IN ('baseline_pending', 'recovering')
+        AND r.completed_at IS NULL
+        AND r.started_at <= clock_timestamp() - make_interval(secs => $1::double precision)`,
+    [RECOVERY_STALL_SECONDS],
   );
   if (rows.length === 0) return null;
   let stalest = 0;
