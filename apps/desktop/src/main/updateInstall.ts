@@ -745,6 +745,16 @@ export function createUpdater(options: UpdaterOptions): Updater {
   };
 
   const swapAndRelaunch = async (manifest: UpdateManifest, bytes: Uint8Array | null): Promise<UpdateOutcome> => {
+    // Every install path ends here, the launch install included: a call that went live
+    // while the channel was read, the bundle downloaded or proved again is never hung up
+    // on by a relaunch (slice C1, review fold 1). The bundle is staged and verified; it
+    // is installed when the call ends (`callEnded`).
+    if (onCall()) {
+      installAfterCall = true;
+      setStatus({ kind: 'ready', version: manifest.releaseVersion });
+      log(`update: ${manifest.releaseVersion} deferred until the call ends`);
+      return { kind: 'deferred', version: manifest.releaseVersion };
+    }
     const swapped = await swapInto(manifest, currentVersion, host);
     if (swapped.kind === 'failed') {
       return await fallBack(manifest, bytes, swapped.step, swapped.restored, swapped.previousPath, swapped.runningPath);

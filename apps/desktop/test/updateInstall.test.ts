@@ -669,6 +669,20 @@ describe('during a call (slice C1)', () => {
     expect(h.relaunched).toEqual([EXE]);
   });
 
+  it('defers a launch install found while a call is live, and installs it when the call ends', async () => {
+    const h = harness();
+    h.onCall(true);
+
+    await expect(h.updater.atLaunch()).resolves.toEqual({ kind: 'deferred', version: '1.0.6' });
+    expectApplicationsUntouched(h);
+    expect(h.fake.bundleAt(STAGED_BUNDLE)?.version).toBe('1.0.6');
+
+    h.onCall(false);
+    await expect(h.updater.callEnded()).resolves.toEqual({ kind: 'relaunching', version: '1.0.6' });
+    expect(h.fake.bundleAt(RUNNING)?.version).toBe('1.0.6');
+    expect(h.relaunched).toEqual([EXE]);
+  });
+
   it('installs nothing when a call ends with no install owed', async () => {
     const h = harness();
     await h.updater.periodic();
