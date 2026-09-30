@@ -4,6 +4,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import type { EnvelopeCipher } from '../../mail/envelope.ts';
 import type { GmailClient } from '../../mail/gmailClient.ts';
+import { createGmailHttpClient } from '../../mail/gmailClientHttp.ts';
 import type { RecordedGmailClient } from '../../mail/gmailClientFake.ts';
 import { lockMailboxAtFence, openMailboxHold, readMailbox, readMailboxHold, StaleMailboxGeneration } from '../../mail/mailboxes.ts';
 import { readAttachmentReferences } from '../../retention/attachments.ts';
@@ -335,7 +336,20 @@ describe('completing a switch', () => {
       `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'mailbox.switch_old_watch' AND subject_id = $2`,
       [workspaceId(), world.alpha.mailboxId],
     );
-    expect(stopped.map(row => row.detail)).toEqual([{ attemptId: started.attemptId, oldWatchStopped: true }]);
+    expect(stopped.map(row => row.detail)).toEqual([
+      { attemptId: started.attemptId, account: world.alpha.address, oldWatchStopped: true },
+    ]);
+    // The audit's instant is the interval boundary itself, to the microsecond (N2).
+    const { rows: boundary } = await world.database.session.query<{ switched_at: string; active_from: string }>(
+      `SELECT s.detail->>'switchedAt' AS switched_at,
+              to_char(a.active_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS active_from
+         FROM audit_events s
+         JOIN mailbox_accounts a ON a.workspace_id = s.workspace_id AND a.mailbox_id::text = s.subject_id
+        WHERE s.workspace_id = $1 AND s.action = 'mailbox.switched' AND a.active_until IS NULL`,
+      [workspaceId()],
+    );
+    expect(boundary[0]?.switched_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u);
+    expect(boundary[0]?.switched_at).toBe(boundary[0]?.active_from);
   });
 
   it('stops the old watch with the OLD token, after the commit', async () => {
@@ -425,6 +439,92 @@ describe('completing a switch', () => {
     expect(await snapshot()).toEqual(before);
     expect(gmail.calls.map(call => call.method)).not.toContain('stopWatch');
     expect(await refusals()).toEqual([{ reason: 'mailbox_switch_pending_sends', attemptId: started.attemptId }]);
+  });
+
+  it('refuses cleanly when the gate is held past the window, within the window', async () => {
+    const holder = await openExtraSession(world);
+    extras.push(holder);
+    const started = await begin(NEW_ADDRESS);
+    await holder.session.query('BEGIN');
+    await lockSendGateForStopFact(holder.context(workspaceId()));
+    const before = await snapshot();
+    const gmail = account(NEW_ADDRESS);
+    const startedAt = Date.now();
+    const done = await completeGmailGrant(owner(), grantDeps(gmail, { rowLockWindowMilliseconds: 700 }), {
+      state: started.state,
+      code: 'gate-busy',
+    });
+    const took = Date.now() - startedAt;
+    await holder.session.query('ROLLBACK');
+    expect(done).toEqual({ ok: false, reason: 'grant_refused' });
+    expect(took).toBeLessThan(2_000);
+    expect(await snapshot()).toEqual(before);
+    expect(gmail.calls.map(call => call.method)).not.toContain('stopWatch');
+    const { rows } = await world.database.session.query<{ detail: string | null }>(
+      `SELECT detail->>'detail' AS detail FROM audit_events
+        WHERE workspace_id = $1 AND action = 'mailbox.grant_refused' AND actor_user_id = $2`,
+      [workspaceId(), ownerId()],
+    );
+    expect(rows).toEqual([{ detail: 'mailbox_busy' }]);
+  });
+
+  it('B then C: the second switch stops the watch of the account it replaced (B), not the first (A)', async () => {
+    const toB = 'bravo.alpha@example.test';
+    const toC = 'charlie.alpha@example.test';
+    const startB = await begin(toB);
+    const startC = await begin(toC);
+    // The race: C reads the mailbox (still A) before its transaction, then waits on the
+    // gate; B commits A -> B while C waits; C then locks B and switches B -> C.
+    const gateHolder = await openExtraSession(world);
+    const cSession = await openExtraSession(world);
+    extras.push(gateHolder, cSession);
+    await gateHolder.session.query('BEGIN');
+    await lockSendGateForStopFact(gateHolder.context(workspaceId()));
+    const clientC = account(toC);
+    const refreshedWith: string[] = [];
+    const watching: GmailClient = {
+      ...clientC,
+      refreshAccessToken: async (...args: Parameters<GmailClient['refreshAccessToken']>) => {
+        refreshedWith.push(args[1]);
+        return await clientC.refreshAccessToken(...args);
+      },
+    };
+    const pendingC = completeGmailGrant(userOn(cSession.session), grantDeps(watching), { state: startC.state, code: 'c' });
+    await waitUntilBlocked(world.database.session, cSession.pid, 'advisory');
+    // B completes on the gate holder's own connection: its transaction joins the one that
+    // holds the gate (a nested BEGIN is a warning), and its COMMIT releases the gate to C.
+    const clientB = account(toB);
+    const doneB = await completeGmailGrant(userOn(gateHolder.session), grantDeps(clientB), { state: startB.state, code: 'b' });
+    expect(doneB.ok).toBe(true);
+    const doneC = await pendingC;
+    expect(doneC).toMatchObject({ ok: true, value: { switched: true, oldWatchStopped: true } });
+    expect(refreshedWith).toEqual([clientB.refreshToken]);
+    const { rows } = await world.database.session.query<{ account: string }>(
+      `SELECT detail->>'account' AS account FROM audit_events
+        WHERE workspace_id = $1 AND action = 'mailbox.switch_old_watch' ORDER BY occurred_at, id`,
+      [workspaceId()],
+    );
+    expect(rows.map(row => row.account)).toEqual([world.alpha.address, toB]);
+  });
+
+  it('records a users.stop the HTTP adapter saw fail (429) as not stopped, with its status', async () => {
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async () => await Promise.resolve({ status: 429, headers: {}, body: '{}' }),
+    });
+    const started = await begin(NEW_ADDRESS);
+    const gmail = account(NEW_ADDRESS);
+    const done = await completeGmailGrant(owner(), grantDeps({ ...gmail, stopWatch: http.stopWatch }), {
+      state: started.state,
+      code: 'stop-429',
+    });
+    expect(done).toMatchObject({ ok: true, value: { switched: true, oldWatchStopped: false } });
+    const { rows } = await world.database.session.query<{ failure: string | null; stopped: boolean }>(
+      `SELECT detail->>'failure' AS failure, (detail->>'oldWatchStopped')::boolean AS stopped FROM audit_events
+        WHERE workspace_id = $1 AND action = 'mailbox.switch_old_watch'`,
+      [workspaceId()],
+    );
+    expect(rows).toEqual([{ failure: 'status_429', stopped: false }]);
   });
 
   it('refuses the second of two switch attempts to the same account: mailbox_switch_same_address, nothing changes', async () => {
@@ -950,5 +1050,19 @@ describe('direct-send boundaries', () => {
       followUp: 'direct_send',
       permission: 'fulfilled_by_direct_send',
     });
+  });
+});
+
+describe('the HTTP adapter\'s users.stop', () => {
+  it.each([429, 500])('rejects a %i with the status, and resolves on 204', async status => {
+    const answer = { status };
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async () => await Promise.resolve({ status: answer.status, headers: {}, body: '' }),
+    });
+    const access = { accessToken: 'fixture-access', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 60 };
+    await expect(http.stopWatch(access)).rejects.toMatchObject({ name: 'GmailClientError', status });
+    answer.status = 204;
+    await expect(http.stopWatch(access)).resolves.toBeUndefined();
   });
 });

@@ -506,7 +506,12 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     },
 
     stopWatch: async (access): Promise<void> => {
-      await api(access, '/gmail/v1/users/me/stop', {}, 'POST', {});
+      const response = await api(access, '/gmail/v1/users/me/stop', {}, 'POST', {});
+      // Gmail answers 204 No Content; anything outside 2xx did not stop the watch, and a
+      // caller that records the outcome must hear that (review C2B-A2-v2, N3).
+      if (response.status < 200 || response.status > 299) {
+        throw new GmailClientError('unexpected_status', 'the Gmail watch stop failed', response.status);
+      }
     },
 
     listHistory: async (access, request: GmailHistoryRequest): Promise<GmailHistoryOutcome> => {

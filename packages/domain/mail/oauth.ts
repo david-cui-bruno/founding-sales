@@ -7,8 +7,8 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { coalesceMailSync } from './coalesce.ts';
 import type { MailPublicConfig } from './config.ts';
 import { resolveGmailOAuthConfig } from './config.ts';
-import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailClient } from './gmailClient.ts';
+import type { EnvelopeCipher, EnvelopeCiphertext } from './envelope.ts';
+import { GmailClientError, type GmailClient } from './gmailClient.ts';
 import {
   insertOrReviveMailbox,
   markMailboxDisconnected,
@@ -20,7 +20,7 @@ import {
 } from './mailboxes.ts';
 import { startRecovery } from './recover.ts';
 import type { SecretProvider } from './secretProvider.ts';
-import { deleteRefreshToken, readRefreshToken, storeRefreshToken } from './tokens.ts';
+import { deleteRefreshToken, readRefreshToken, readRefreshTokenEnvelope, storeRefreshToken } from './tokens.ts';
 import { cancelWatch } from './watch.ts';
 import {
   DEFAULT_BASELINE_DAYS,
@@ -445,14 +445,6 @@ export async function completeGmailGrant(
   const decided = switchDecision(before, address, intent);
   if (!decided.ok) return await refuse(decided.reason);
 
-  // The old account's refresh token, decrypted now and held in memory: the transaction
-  // below replaces it, and the old watch is stopped with it only after the switch has
-  // committed (review of 5015abd8, finding 6). A refused or rolled-back switch changes
-  // nothing at Google.
-  const oldRefreshToken =
-    decided.switching && before !== null
-      ? await readRefreshToken(context, { mailboxId: before.id, cipher: deps.cipher })
-      : null;
   // The interval's end is read now, after the profile read, so it
   // is never earlier than the instant `profile.historyId` was captured: a message that
   // arrived before the capture is in the listing up to `toAt`, and one after it is in
@@ -463,9 +455,10 @@ export async function completeGmailGrant(
   ).toISOString();
 
   try {
-    const outcome = await withRowLockRetry(deps.rowLockWindowMilliseconds ?? MAILBOX_ROW_LOCK_WINDOW_MILLISECONDS, async () => await withTransaction(context.db, async () => {
-      // 1. The exclusive send gate, before any row.
-      await lockSendGateForStopFact(context);
+    const outcome = await withRowLockRetry(deps.rowLockWindowMilliseconds ?? MAILBOX_ROW_LOCK_WINDOW_MILLISECONDS, async remaining => await withTransaction(context.db, async () => {
+      // 1. The exclusive send gate, before any row — waited for no longer than the retry
+      // window has left (review C2B-A2-v2, N1). A gate held past it is `busy` too.
+      await lockGateWithin(context, remaining);
       // 2. The mailbox row, and the decision again on what the lock shows: a concurrent
       // grant may have moved it since the read above. See `lockOwnMailbox` for the lock
       // strength and why it is taken the way it is.
@@ -474,7 +467,11 @@ export async function completeGmailGrant(
       // `now()`, which is this transaction's start (review finding 3). A sync that
       // committed against the old account while this waited is before it, so its rows
       // stay the old account's; the new account's Sent items from that wait are too.
-      const { rows: clock } = await context.db.query<{ at: string }>('SELECT clock_timestamp()::text AS at');
+      // Rendered in UTC to the microsecond, and used as text everywhere — intervals and
+      // audit alike — so no `Date` rounds it to the millisecond (review C2B-A2-v2, N2).
+      const { rows: clock } = await context.db.query<{ at: string }>(
+        `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at`,
+      );
       const switchedAt = clock[0]?.at ?? '';
       const lockedOwner = await addressOwner();
       if (lockedOwner !== undefined && lockedOwner !== actor.userId) {
@@ -487,7 +484,12 @@ export async function completeGmailGrant(
       if (switching && (await pendingFenceCount(context, locked.id)) > 0) {
         throw new GrantRefusedInTransaction('mailbox_switch_pending_sends');
       }
-      // 4. The old account's history state and its watch.
+      // 4. The old account's history state and its watch — and its token's envelope, read
+      // here under the row lock so the post-commit stop is bound to the account this
+      // transaction actually replaced (review C2B-A2-v2, N4). Not decrypted here: the
+      // production cipher calls KMS, and no network call happens under the gate.
+      const oldEnvelope = switching ? await readRefreshTokenEnvelope(context, locked.id) : null;
+      const oldAddress = switching ? locked.emailAddress : null;
       if (switching) {
         await resetAccountState(context, { mailboxId: locked.id });
         await cancelWatch(context, { mailboxId: locked.id, reason: 'mailbox_switched' });
@@ -542,7 +544,7 @@ export async function completeGmailGrant(
           action: 'mailbox.switched',
           subjectKind: 'mailbox',
           subjectId: mailbox.id,
-          detail: { from: locked.emailAddress, to: address, attemptId, switchedAt: new Date(switchedAt).toISOString() },
+          detail: { from: locked.emailAddress, to: address, attemptId, switchedAt },
         });
       } else {
         await recordCrmAuditEvent(context, {
@@ -552,18 +554,24 @@ export async function completeGmailGrant(
           detail: { emailAddress: address, attemptId },
         });
       }
-      return { mailbox, switching };
+      return { mailbox, switching, oldEnvelope, oldAddress };
     }));
     // After the commit, and only for a switch: stop the old account's watch with its own
     // token, best effort. The answer is recorded, never acted on.
     let oldWatchStopped: boolean | null = null;
     if (outcome.switching) {
-      oldWatchStopped = await stopOldWatch(deps, oauth, oldRefreshToken);
+      const stop = await stopOldWatch(deps, oauth, outcome.oldEnvelope);
+      oldWatchStopped = stop.stopped;
       await recordCrmAuditEvent(context, {
         action: 'mailbox.switch_old_watch',
         subjectKind: 'mailbox',
         subjectId: outcome.mailbox.id,
-        detail: { attemptId, oldWatchStopped },
+        detail: {
+          attemptId,
+          account: outcome.oldAddress,
+          oldWatchStopped,
+          ...(stop.failure === undefined ? {} : { failure: stop.failure }),
+        },
       });
     }
     return acceptMail({
@@ -607,22 +615,47 @@ function switchDecision(
 
 /**
  * `users.stop` on the old account's watch, with the old account's refresh token, after
- * the switch has committed. Best effort: true only when Gmail acknowledged the stop.
+ * the switch has committed. Best effort: stopped only when Gmail acknowledged the stop;
+ * otherwise the failure is named (`no_token`, `refresh_<reason>`, `status_<code>`, or
+ * the error's class) for the audit row, and never acted on.
  */
 async function stopOldWatch(
   deps: MailGrantDeps,
   oauth: Awaited<ReturnType<typeof resolveGmailOAuthConfig>>,
-  refreshToken: string | null,
-): Promise<boolean> {
-  if (refreshToken === null) return false;
+  envelope: EnvelopeCiphertext | null,
+): Promise<{ readonly stopped: boolean; readonly failure?: string }> {
+  if (envelope === null) return { stopped: false, failure: 'no_token' };
   try {
+    const refreshToken = await deps.cipher.decrypt(envelope);
     const access = await deps.gmail.refreshAccessToken(oauth, refreshToken);
-    if (!access.ok) return false;
+    if (!access.ok) return { stopped: false, failure: `refresh_${access.reason}` };
     await deps.gmail.stopWatch(access.grant);
-    return true;
-  } catch {
-    return false;
+    return { stopped: true };
+  } catch (error) {
+    if (error instanceof GmailClientError && error.status !== undefined) {
+      return { stopped: false, failure: `status_${String(error.status)}` };
+    }
+    return { stopped: false, failure: error instanceof Error ? error.name : 'error' };
   }
+}
+
+/**
+ * Take the send gate, waiting at most `remainingMilliseconds` (floor 100 ms). A gate held
+ * past that is `MailboxRowBusy`, like a busy row: the attempt rolls back, and the retry
+ * either tries again or, with the window spent, refuses `grant_refused`/`mailbox_busy`.
+ * The timeout is reset to its default once the gate is held, so nothing later in the
+ * transaction inherits it.
+ */
+async function lockGateWithin(context: RepositoryContext, remainingMilliseconds: number): Promise<void> {
+  const limit = Math.max(100, Math.floor(remainingMilliseconds));
+  await context.db.query("SELECT set_config('lock_timeout', $1, true)", [`${String(limit)}ms`]);
+  try {
+    await lockSendGateForStopFact(context);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === '55P03') throw new MailboxRowBusy();
+    throw error;
+  }
+  await context.db.query('SET LOCAL lock_timeout TO DEFAULT');
 }
 
 /** The row lock was not available at once: roll back, release the gate, and retry. */
@@ -677,12 +710,12 @@ async function lockOwnMailbox(context: RepositoryContext, ownerUserId: string): 
   return id === undefined ? null : await readMailbox(context, id);
 }
 
-async function withRowLockRetry<T>(windowMilliseconds: number, attempt: () => Promise<T>): Promise<T> {
+async function withRowLockRetry<T>(windowMilliseconds: number, attempt: (remaining: number) => Promise<T>): Promise<T> {
   const deadline = Date.now() + windowMilliseconds;
   let pause = MAILBOX_ROW_LOCK_FIRST_PAUSE_MILLISECONDS;
   for (;;) {
     try {
-      return await attempt();
+      return await attempt(deadline - Date.now());
     } catch (error) {
       if (!(error instanceof MailboxRowBusy)) throw error;
       const left = deadline - Date.now();

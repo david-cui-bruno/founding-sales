@@ -89,6 +89,29 @@ export async function readRefreshToken(
   return await input.cipher.decrypt(toEnvelope(row));
 }
 
+/**
+ * The stored envelope for one mailbox, **not decrypted**, or null (call-to-booking A2).
+ *
+ * The mailbox switch reads the outgoing account's envelope inside its transaction,
+ * under the row lock, so the token it later stops the old watch with is bound to the
+ * account it actually replaced. Decryption is left to the caller after the commit,
+ * because the production cipher asks KMS to unwrap the data key — a network call that
+ * must not happen under the gate. The ciphertext never leaves the caller's frame.
+ */
+export async function readRefreshTokenEnvelope(
+  context: RepositoryContext,
+  mailboxId: string,
+): Promise<EnvelopeCiphertext | null> {
+  const { rows } = await context.db.query<TokenRow>(
+    `SELECT key_id, algorithm, wrapped_data_key, ciphertext, iv, auth_tag
+       FROM mailbox_tokens
+      WHERE workspace_id = $1 AND mailbox_id = $2`,
+    [context.scope.workspaceId, mailboxId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toEnvelope(row);
+}
+
 /** Whether a grant exists at all, without decrypting anything. */
 export async function hasRefreshToken(context: RepositoryContext, mailboxId: string): Promise<boolean> {
   const { rows } = await context.db.query<{ present: boolean }>(

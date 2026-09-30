@@ -608,9 +608,9 @@ the pause.
   cancelled (`error=access_denied`, no code: `grant_refused`). A state this process did
   not sign is attributed to nobody and not audited.
 * **One commit.** Every provider call comes first, outside any lock: the code exchange,
-  the profile read (address and `historyId`), then `toAt`; the old account's refresh
-  token is decrypted and held in memory. Then one transaction on the request's session,
-  in this lock order: the exclusive send gate, the mailbox row `FOR UPDATE NOWAIT`, the
+  the profile read (address and `historyId`), then `toAt`. Then one transaction on the request's session,
+  in this lock order: the exclusive send gate (waited for no longer than the retry window
+  has left: `lock_timeout`, and a gate held past it counts as busy), the mailbox row `FOR UPDATE NOWAIT`, the
   fence re-check. The row lock is strong because the revive changes `email_address`, a
   unique-index column, which conflicts with the `KEY SHARE` an import holds from its
   message rows; `NOWAIT` because such an import then waits for the gate, and a callback
@@ -631,9 +631,13 @@ the pause.
   rows, the coverage hold, the new generation's baseline from the profile's `historyId`,
   the release of every `mailbox_disconnected` hold of the mailbox (nothing released it
   before A2, on reconnect either), and `mailbox.switched { from, to, attemptId,
-  switchedAt }`. Only after the commit, and only for a switch, is `users.stop` called on
-  the old account's watch with the old token, best effort; the answer is recorded as
-  `mailbox.switch_old_watch { attemptId, oldWatchStopped }`. A refused or rolled-back
+  switchedAt }`, where `switchedAt` is the interval boundary itself, UTC to the
+  microsecond. The outgoing account's token envelope is read inside the transaction,
+  under the row lock, so it belongs to the account actually replaced (not decrypted
+  there: the production cipher calls KMS). Only after the commit, and only for a switch,
+  is it decrypted and `users.stop` called on that account's watch, best effort; the
+  answer is recorded as `mailbox.switch_old_watch { attemptId, account, oldWatchStopped,
+  failure? }`, and a non-2xx answer from Gmail is `failure: status_<code>`. A refused or rolled-back
   switch changes nothing at Google. A same-address re-consent is what it was, plus the
   `mailbox_disconnected` release.
 * **`mailbox_accounts` (migration 0027).** One row per account interval, at most one
