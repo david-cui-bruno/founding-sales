@@ -267,13 +267,18 @@ export type EnrollmentMigrateCommand = z.infer<typeof enrollmentMigrateCommandSc
 /**
  * The accepted answer to `POST /enrollments/migrate`. `carriedOrdinals` are the
  * completed steps the new enrollment inherits (1..k); `nextOrdinal` is the one step it
- * scheduled (k + 1). A plain object, so a later field does not break an older Mac.
+ * scheduled (k + 1). `rescheduledTo` is the instant step k + 1 was moved to when its
+ * planned instant (the target's delay from the original anchor) had already passed — its
+ * delay counted from the migration instead (PR 335 review, P1-6) — and null when the plan
+ * was kept or there is no next step. A plain object, so a later field does not break an
+ * older Mac.
  */
 export const enrollmentMigrateResultSchema = z.object({
   oldEnrollmentId: uuid,
   newEnrollmentId: uuid,
   carriedOrdinals: z.array(z.number().int().min(1)),
   nextOrdinal: z.number().int().min(1),
+  rescheduledTo: instant.nullable(),
 });
 export type EnrollmentMigrateResult = z.infer<typeof enrollmentMigrateResultSchema>;
 

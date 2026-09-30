@@ -456,13 +456,10 @@ describe('the sequence, template and enrollment routes', () => {
     const first = command(payload);
     const migrated = await post('/enrollments/migrate', salespersonToken, first);
     expect(migrated.status).toBe(200);
-    // The contract's fields, and `rescheduledTo` beside them (PR 335 review, P1-6): null
-    // here, because nothing was completed and the first step keeps its plan.
-    const { rescheduledTo, ...declared } = resultOf(migrated);
-    expect(rescheduledTo).toBeNull();
-    expect(wireDrift(enrollmentMigrateResultSchema, declared)).toEqual([]);
+    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
     const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
-    expect(result).toMatchObject({ oldEnrollmentId: enrolled?.id, carriedOrdinals: [], nextOrdinal: 1 });
+    // Nothing was completed, so the first step keeps its plan: `rescheduledTo` is null.
+    expect(result).toMatchObject({ oldEnrollmentId: enrolled?.id, carriedOrdinals: [], nextOrdinal: 1, rescheduledTo: null });
 
     const replay = await post('/enrollments/migrate', salespersonToken, first);
     expect(replay.status).toBe(200);
@@ -478,6 +475,85 @@ describe('the sequence, template and enrollment routes', () => {
       [fixture.alpha.workspaceId, result.newEnrollmentId],
     );
     expect(rows[0]?.count).toBe('1');
+  });
+
+  it('answers the instant a past-due next step was moved to, through the contract (PR 335 review, P1-6)', async () => {
+    // A second firm and contact, enrolled on the current version with an anchor weeks
+    // ago and step 1 completed — so step 2's planned instant on any target has passed.
+    const lateFirm = await seedFirm(fixture, {
+      name: 'Late Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    await fixture.db.query(
+      `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
+              time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
+        WHERE workspace_id = $1 AND id = $2`,
+      [fixture.alpha.workspaceId, lateFirm],
+    );
+    const lateContact = await seedContact(fixture, { firmId: lateFirm, fullName: 'Robin Example' });
+    const opened = await post('/opportunities/open', salespersonToken, command({ firmId: lateFirm }));
+    const lateOpportunity = String(resultOf(opened)['id']);
+    const current = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.state === 'published');
+    const enrolledLate = await post(
+      '/enrollments/enroll',
+      salespersonToken,
+      command({
+        originKind: 'prospecting',
+        sequenceVersionId: current?.id,
+        opportunityId: lateOpportunity,
+        firmId: lateFirm,
+        contactId: lateContact,
+      }),
+    );
+    expect(enrolledLate.status).toBe(200);
+    const lateEnrollment = String(resultOf(enrolledLate)['enrollmentId']);
+    await fixture.db.query(
+      "UPDATE sequence_enrollments SET started_at = TIMESTAMPTZ '2026-09-01 13:00:00+00' WHERE id = $1",
+      [lateEnrollment],
+    );
+    await fixture.db.query(
+      `UPDATE step_executions
+          SET state = 'completed', completed_at = TIMESTAMPTZ '2026-09-01 13:00:00+00',
+              completion_source = 'send', result = 'sent',
+              due_at = TIMESTAMPTZ '2026-09-01 13:00:00+00', not_before = TIMESTAMPTZ '2026-09-01 13:00:00+00',
+              original_due_at = TIMESTAMPTZ '2026-09-01 13:00:00+00'
+        WHERE enrollment_id = $1`,
+      [lateEnrollment],
+    );
+
+    const target = await post(
+      '/sequences/versions/draft',
+      adminToken,
+      command({
+        sequenceId,
+        steps: [
+          { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
+          { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 2 }, onNoAnswer: 'advance' },
+        ],
+      }),
+    );
+    const targetId = String(resultOf(target)['sequenceVersionId']);
+    expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: targetId }))).status).toBe(200);
+
+    const before = Date.now();
+    const migrated = await post(
+      '/enrollments/migrate',
+      salespersonToken,
+      command({ enrollmentId: lateEnrollment, targetSequenceVersionId: targetId }),
+    );
+    expect(migrated.status).toBe(200);
+    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
+    const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
+    expect(result).toMatchObject({ carriedOrdinals: [1], nextOrdinal: 2 });
+    // Two business days from now, never the planned 3 September and never the next tick.
+    expect(result.rescheduledTo).not.toBeNull();
+    expect(Date.parse(result.rescheduledTo ?? '')).toBeGreaterThan(before);
+    const steps = await post('/enrollments/steps', salespersonToken, { enrollmentId: result.newEnrollmentId });
+    expect((steps.body['steps'] as { dueAt: string }[])[0]?.dueAt).toBe(result.rescheduledTo);
   });
 
   it('leaves no draft behind when it refuses one (lane D1)', async () => {
