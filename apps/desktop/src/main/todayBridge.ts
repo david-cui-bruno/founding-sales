@@ -348,6 +348,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   const loadExpansion = async (firmId: string): Promise<void> => {
+    // Another firm's card: a preview in flight for the last one must not land here. At
+    // the start, before the read — a read that fails or is refused returns early, and
+    // the old request must be dead on those paths too (review of S3, round 3, P2-a).
+    if (openedFirmId !== firmId) {
+      previewRequest += 1;
+      followUpPreview = null;
+      if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
+    }
+    openedFirmId = firmId;
     const session = await deps.session.state();
     const owner = session.device?.deviceId ?? null;
     if (owner !== expansionsOwner) {
@@ -384,12 +393,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     notice = null;
     agreement = null;
     if (followUpPreview !== null && followUpPreview.firmId !== firmId) followUpPreview = null;
-    // Another firm's card: a preview in flight for the last one must not land here (P2).
-    if (openedFirmId !== firmId) {
-      previewRequest += 1;
-      if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
-    }
-    openedFirmId = firmId;
+
     dialAdvice = await adviseRoutes(page.value);
     followUpTemplates = await approvedTemplates();
     followUpSequences = await publishedSequences();

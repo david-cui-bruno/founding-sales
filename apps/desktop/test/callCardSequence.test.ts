@@ -388,6 +388,53 @@ describe('the Today bridge and an agreed sequence', () => {
     );
   });
 
+  it('forgets a preview still on the wire when another firm’s card is opened, even if that read fails (round 3, P2-a)', async () => {
+    const OTHER_FIRM = '22222222-2222-4222-8222-222222222222';
+    let release: (() => void) | null = null;
+    const answers = baseAnswers();
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === '/today/firm') {
+          const body = JSON.parse(init.body ?? '{}') as { firmId: string };
+          // The other firm's card is refused: it left today's list.
+          if (body.firmId === OTHER_FIRM) return { status: 404, body: { error: 'not_found' } };
+        }
+        if (path !== '/calls/follow-up-preview') {
+          return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+        }
+        const body = JSON.parse(init.body ?? '{}') as { sequenceVersionId: string };
+        await new Promise<void>(resolve => {
+          release = resolve;
+        });
+        return {
+          status: 200,
+          body: {
+            sequenceVersionId: body.sequenceVersionId,
+            sequenceName: 'Plan',
+            version: 1,
+            firmTimeZone: 'America/New_York',
+            holidayCalendarVersion: 'none.1',
+            anchoredAt: '2026-09-30T15:00:00.000Z',
+            steps: [],
+          },
+        };
+      },
+    });
+    const bridge = createTodayBridge({ api, handoff, session });
+    await bridge.expand({ firmId: FIRM_ID });
+    const pending = bridge.previewFollowUp({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const refused = await bridge.expand({ firmId: OTHER_FIRM });
+    expect(refused.expanded).toBeNull();
+    (release as (() => void) | null)?.();
+    const landed = await pending;
+    expect(landed.followUpPreview ?? null).toBeNull();
+  });
+
   it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {
     let release: (() => void) | null = null;
     const answers = baseAnswers();

@@ -621,9 +621,12 @@ export interface RecordedCallFollowUp {
  * reads the new dates, and "Record the agreed dates" sends this — the same payload and
  * basis — so starting the agreed sequence still needs no command of anybody's own.
  *
- * The call must be this workspace's, an `interested` call with a named person, recorded
- * within the last hour, with no agreement on it yet (`agreement_exists` otherwise: one
- * call, one agreement). Then exactly what `logCallOutcome` does after its effects:
+ * The call must be this workspace's, made by this actor (`not_call_actor` otherwise), an
+ * `interested` call with a named person, that happened and was logged within the last
+ * hour by the database's wall clock (`call_too_old`), with no agreement on it yet
+ * (`agreement_exists`: one call, one agreement; two racing requests serialize on the
+ * call log's row lock, and the second reads the first's agreement). Then exactly what
+ * `logCallOutcome` does after its effects:
  * the same standing checks before any write, the agreement, the grant, the enrolment.
  * Lock order as there: the send gate, then the firm.
  */
@@ -635,29 +638,48 @@ export async function recordCallFollowUp(
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
   await lockSendGateForStopFact(context);
 
-  const { rows } = await context.db.query<{
-    firm_id: string;
-    contact_id: string | null;
-    outcome: string;
-    agreed_follow_up: string | null;
-    recorded_at: Date;
-  }>(
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, recorded_at
-       FROM call_logs WHERE workspace_id = $1 AND id = $2`,
+  // Where the call is, then the firm's lock, then the call log's own row lock — the
+  // order every command here keeps (gate → firm → the rows under it). Re-read under the
+  // lock, so the actor, the agreement and the firm are the ones this command decides on.
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_logs WHERE workspace_id = $1 AND id = $2',
     [context.scope.workspaceId, input.callLogId],
   );
-  const log = rows[0];
-  if (log === undefined) return refusePolicy('call_log_unknown');
-  const firm = await loadFirmForUpdate(context, log.firm_id);
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return refusePolicy('call_log_unknown');
+  const firm = await loadFirmForUpdate(context, firmId);
   if (firm === null) return refusePolicy('firm_unknown');
   const permitted = decideFirmMutation(context, firm);
   if (!permitted.permitted) {
     return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
   }
+  const { rows } = await context.db.query<{
+    firm_id: string;
+    contact_id: string | null;
+    outcome: string;
+    agreed_follow_up: string | null;
+    actor_user_id: string;
+    too_old: boolean;
+  }>(
+    // `clock_timestamp()`, not `now()`: the transaction began before it waited for the
+    // gate and the firm, and a request that waited past the hour must not be judged by
+    // the instant it started (review of S3, round 3, P1-G). Both instants count: an
+    // entered past `occurred_at` is a call that happened then, whenever it was logged.
+    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id,
+            (occurred_at < clock_timestamp() - make_interval(mins => $3)
+             OR recorded_at < clock_timestamp() - make_interval(mins => $3)) AS too_old
+       FROM call_logs WHERE workspace_id = $1 AND id = $2
+       FOR UPDATE`,
+    [context.scope.workspaceId, input.callLogId, CALL_FOLLOW_UP_WINDOW_MINUTES],
+  );
+  const log = rows[0];
+  if (log === undefined || log.firm_id !== firmId) return refusePolicy('call_log_unknown');
+  // The person who made the call records what was agreed on it — not whoever holds the
+  // firm now, and not an administrator (review of S3, round 3, P1-F).
+  if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
   if (log.outcome !== 'interested' || log.contact_id === null) return refusePolicy('invalid_input');
   if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
-  const now = Date.parse(await databaseNow(context));
-  if (now - log.recorded_at.getTime() > CALL_FOLLOW_UP_WINDOW_MINUTES * 60_000) return refusePolicy('call_too_old');
+  if (log.too_old) return refusePolicy('call_too_old');
   if (input.followUpPermission.scope === 'agreed_sequence') {
     const version = await readSequenceVersion(context, input.followUpPermission.sequenceVersionId);
     if (version === null) return refusePolicy('version_unknown');

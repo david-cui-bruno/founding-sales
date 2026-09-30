@@ -219,7 +219,8 @@ export const AGREED_SCHEDULE_MOVED = 'agreed_schedule_moved';
  * Whether the calendar changed after this enrollment started in a way that places its
  * plan later than the calendar it froze: the latest placed instant of its steps
  * (`agreedSequenceExpiry`, which places each e-mail in the send window) under the
- * workspace's current calendar is later than under the enrollment's own. Plan-wide
+ * calendar dispatch observes — the frozen one united with the current one — is later
+ * than under the enrollment's own. Plan-wide
  * rather than per step, because the permission's bound is plan-wide.
  */
 async function agreedScheduleMoved(context: RepositoryContext, enrollmentId: string): Promise<boolean> {
@@ -240,10 +241,19 @@ async function agreedScheduleMoved(context: RepositoryContext, enrollmentId: str
   const frozen = await holidayCalendarByVersion(context, enrollment.holiday_calendar_version);
   const version = await readSequenceVersion(context, enrollment.sequence_version_id);
   if (version === null || version.steps.length === 0) return false;
+  // What dispatch observes: the union of the frozen calendar and the current one
+  // (`dispatchHolidayCalendar` in `outbound/stepPermission.ts`, the same expression —
+  // written here rather than imported, because `outbound` imports this module). A
+  // replacement calendar that drops Monday and adds Tuesday places a step later under
+  // the union than under either calendar alone (review of S3, round 3, P1-C).
+  const dispatch: WorkspaceHolidayCalendar = {
+    version: `${frozen.version}+${current.version}`,
+    dates: [...new Set([...frozen.dates, ...current.dates])].sort(),
+  };
   const startedAt = enrollment.started_at.toISOString();
   const under = (calendar: WorkspaceHolidayCalendar): number =>
     Date.parse(agreedSequenceExpiry(version.steps, startedAt, enrollment.firm_time_zone, calendar));
-  return under(current) > under(frozen);
+  return under(dispatch) > under(frozen);
 }
 
 /**

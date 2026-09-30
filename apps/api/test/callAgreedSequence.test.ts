@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   SENDING_STOP_LINE,
@@ -14,7 +15,10 @@ import { placeEmailSend } from '@fss/domain/src/rules/sendingWindow.ts';
 import { createAuthFixture, type AuthFixture, type SeededWorkspace } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
-import { DESKTOP_VERSION_UNDER_TEST, routeAnswer } from './support/wireThrough.ts';
+import { DESKTOP_VERSION_UNDER_TEST, routeAnswer, routeOptions } from './support/wireThrough.ts';
+import { databaseUrlOf, testRequestPool } from './support/poolFixture.ts';
+import { dispatch } from '../src/server.ts';
+import { sendGateLockName } from '@fss/domain/policy/sendGate.ts';
 
 /**
  * The call card's agreed sequence, end to end through the real routes (send-path v2,
@@ -61,7 +65,7 @@ describe('an agreed sequence recorded on the call card', () => {
    */
   async function publishedVersion(
     token: string,
-    options: { readonly publish?: boolean; readonly callFirst?: boolean } = {},
+    options: { readonly publish?: boolean; readonly callFirst?: boolean; readonly elapsedHours?: number } = {},
   ): Promise<string> {
     const template = await post(
       '/templates/create',
@@ -85,7 +89,9 @@ describe('an agreed sequence recorded on the call card', () => {
       command({
         sequenceId: String(result(sequence)['id']),
         steps:
-          options.callFirst === true
+          options.elapsedHours !== undefined
+            ? [{ ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: options.elapsedHours }, templateVersionId }]
+            : options.callFirst === true
             ? [
                 { ordinal: 1, channel: 'call_task', delay: { unit: 'business_days', days: 1 }, onNoAnswer: 'advance' },
                 { ordinal: 2, channel: 'email', delay: { unit: 'business_days', days: 3 }, templateVersionId },
@@ -208,9 +214,38 @@ describe('an agreed sequence recorded on the call card', () => {
     betaAdminToken = (await issueSessionFor(fixture, fixture.beta, fixture.beta.admin)).accessToken;
   });
 
+  let requestPool: pg.Pool | null = null;
+
   afterAll(async () => {
+    await requestPool?.end();
     await fixture.stop();
   });
+
+  /**
+   * One request on a connection of its own, as the served API runs it: `routeAnswer`
+   * shares the fixture's one session, which serializes everything, so two requests that
+   * must race — or wait on a lock another connection holds — go through here.
+   */
+  async function postOnOwnConnection(path: string, token: string, body: Readonly<Record<string, unknown>>) {
+    requestPool ??= testRequestPool(fixture.database);
+    const client = await requestPool.connect();
+    try {
+      const options = routeOptions(fixture);
+      const answer = await dispatch(
+        {
+          method: 'POST',
+          path,
+          query: new URLSearchParams(),
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.parse(JSON.stringify(body)) as Readonly<Record<string, unknown>>,
+        },
+        { ...options, session: client, ...(options.auth === undefined ? {} : { auth: { ...options.auth, db: client } }) },
+      );
+      return { status: answer.status, body: JSON.parse(JSON.stringify(answer.body ?? null)) as unknown };
+    } finally {
+      client.release();
+    }
+  }
 
   it('records the agreement, grants the permission, enrols — and the enrollment survives the drain', async () => {
     const sequenceVersionId = await publishedVersion(adminToken);
@@ -872,6 +907,97 @@ describe('an agreed sequence recorded on the call card', () => {
       expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
     });
 
+    /** A recorded interested call whose agreed sequence went stale: nothing on it yet. */
+    async function staleCall(name: string): Promise<{ at: Scene; callLogId: string; sequenceVersionId: string }> {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene(name);
+      const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis: UNPREVIEWED });
+      expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+      return { at, callLogId: loggedCallResultSchema.parse(result(logged)).callLogId, sequenceVersionId };
+    }
+
+    it('refuses a recovery by anyone but the person who made the call (round 3, P1-F)', async () => {
+      const { at, callLogId, sequenceVersionId } = await staleCall('Rowan Grove Test Advisers');
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      // A colleague in the same workspace who may act on the firm: the administrator, and
+      // then the new assignee after a reassignment.
+      const byAdmin = await post('/calls/follow-up', adminToken, command({ callLogId, followUpPermission: payload }));
+      expect([byAdmin.status, (byAdmin.body as { reason?: string }).reason]).toEqual([409, 'not_call_actor']);
+      await fixture.db.query('UPDATE firms SET assigned_user_id = $3 WHERE workspace_id = $1 AND id = $2', [
+        fixture.alpha.workspaceId,
+        at.firmId,
+        fixture.alpha.admin.userId,
+      ]);
+      const byNewAssignee = await post('/calls/follow-up', adminToken, command({ callLogId, followUpPermission: payload }));
+      expect([byNewAssignee.status, (byNewAssignee.body as { reason?: string }).reason]).toEqual([409, 'not_call_actor']);
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+      expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
+      const [log] = await rowsAt('call_logs', at.firmId);
+      expect(log?.['agreed_follow_up']).toBeNull();
+    });
+
+    it('refuses the recovery of a call entered as having happened over an hour ago (round 3, P1-G)', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Linden Grove Test Advisers');
+      const logged = await logInterested(
+        at,
+        { scope: 'agreed_sequence', sequenceVersionId, previewBasis: UNPREVIEWED },
+        { occurredAt: new Date(Date.now() - 61 * 60_000).toISOString() },
+      );
+      const callLogId = loggedCallResultSchema.parse(result(logged)).callLogId;
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      const old = await post('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload }));
+      expect([old.status, (old.body as { reason?: string }).reason]).toEqual([409, 'call_too_old']);
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+    });
+
+    it('judges the hour by the wall clock after the gate, not by when the request began waiting (round 3, P1-G)', async () => {
+      const { at, callLogId, sequenceVersionId } = await staleCall('Juniper Grove Test Advisers');
+      // Three seconds inside the hour when the request starts; five seconds of waiting on
+      // the gate take it past.
+      await fixture.db.query(
+        `UPDATE call_logs SET occurred_at = now() - interval '3597 seconds', recorded_at = now() - interval '3597 seconds'
+          WHERE workspace_id = $1 AND id = $2`,
+        [fixture.alpha.workspaceId, callLogId],
+      );
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      const holder = new pg.Client({ connectionString: databaseUrlOf(fixture.database) });
+      await holder.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          sendGateLockName(fixture.alpha.workspaceId),
+        ]);
+        const waiting = postOnOwnConnection('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload }));
+        await new Promise(resolve => setTimeout(resolve, 5_000));
+        await holder.query('COMMIT');
+        const answer = await waiting;
+        expect([answer.status, (answer.body as { reason?: string }).reason]).toEqual([409, 'call_too_old']);
+      } finally {
+        await holder.end();
+      }
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+    }, 30_000);
+
+    it('lets exactly one of two racing recoveries record the agreement (round 3, P2-b)', async () => {
+      const { at, callLogId, sequenceVersionId } = await staleCall('Laurel Grove Test Advisers');
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      const answers = await Promise.all([
+        postOnOwnConnection('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload })),
+        postOnOwnConnection('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload })),
+      ]);
+      const statuses = answers.map(answer => answer.status).sort();
+      expect(statuses).toEqual([200, 409]);
+      const loser = answers.find(answer => answer.status === 409);
+      expect((loser?.body as { reason?: string }).reason).toBe('agreement_exists');
+      const winner = answers.find(answer => answer.status === 200);
+      expect(callFollowUpResultSchema.parse(result(winner ?? { body: null })).followUps.map(entry => entry.kind)).toEqual([
+        'agreed_sequence_enrolled',
+      ]);
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(1);
+      expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(1);
+    }, 30_000);
+
     it('refuses an agreed sequence that carries no preview basis at all', async () => {
       const sequenceVersionId = await publishedVersion(adminToken);
       const at = await scene('Larch Test Advisers');
@@ -936,6 +1062,65 @@ describe('an agreed sequence recorded on the call card', () => {
       expect(await ask()).toEqual({ ok: false, reasonCode: 'follow_up_expired', detail: 'agreed_schedule_moved' });
     } finally {
       await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: [] }));
+    }
+  });
+
+  it('says the date moved when a replacement calendar drops Monday and adds Tuesday (round 3, P1-C)', async () => {
+    // One e-mail due on a Saturday. Frozen calendar {Monday}: placed Tuesday 08:00, and
+    // the permission ends a day after. The replacement {Tuesday} alone would place it
+    // Monday — earlier — but dispatch observes the union {Monday, Tuesday} and places it
+    // Wednesday: past the bound, because the date moved after the agreement.
+    const zone = 'America/New_York';
+    const localDateOf = (instant: number): string =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+        new Date(instant),
+      );
+    const weekdayOf = (instant: number): string =>
+      new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short' }).format(new Date(instant));
+    let saturday = Date.now() + 2 * 86_400_000;
+    while (weekdayOf(saturday) !== 'Sat') saturday += 86_400_000;
+    const saturdayNoon = Date.parse(`${localDateOf(saturday)}T12:00:00-04:00`);
+    const hours = Math.round((saturdayNoon - Date.now()) / 3_600_000);
+    const monday = localDateOf(saturdayNoon + 2 * 86_400_000);
+    const tuesday = localDateOf(saturdayNoon + 3 * 86_400_000);
+
+    const holidays = async (dates: readonly string[]) => {
+      const changed = await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates }));
+      expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    };
+    await holidays([monday]);
+    try {
+      const sequenceVersionId = await publishedVersion(adminToken, { elapsedHours: hours });
+      const at = await scene('Chestnut Test Advisers');
+      const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId });
+      const answer = loggedCallResultSchema.parse(result(logged));
+      expect(answer.followUps.map(entry => entry.kind), JSON.stringify(answer.followUps)).toEqual(['agreed_sequence_enrolled']);
+      const enrollmentId = answer.followUps[0]?.enrollmentId ?? '';
+      const { rows } = await fixture.db.query<{ expires_at: Date }>(
+        'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+        [fixture.alpha.workspaceId, answer.followUpPermissionId],
+      );
+      const context = repositoryContext(
+        workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'scheduler' }),
+        fixture.db,
+      );
+      const execution = (await listStepExecutions(context, { enrollmentId }))[0];
+      if (execution === undefined) throw new Error('no first step');
+
+      await holidays([tuesday]);
+      const verdict = await followUpPermissionSource().evaluate(context, {
+        execution,
+        opportunityId: at.opportunityId ?? '',
+        firmId: at.firmId,
+        contactId: at.contactId,
+        ownerUserId: fixture.alpha.salesperson.userId,
+        channel: 'email',
+        actionKind: 'email_send',
+        now: new Date((rows[0]?.expires_at.getTime() ?? 0) + 60_000).toISOString(),
+      });
+      expect(verdict).toEqual({ ok: false, reasonCode: 'follow_up_expired', detail: 'agreed_schedule_moved' });
+    } finally {
+      await holidays([]);
     }
   });
 

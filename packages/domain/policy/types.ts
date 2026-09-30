@@ -56,6 +56,8 @@ export const POLICY_REFUSAL_CODES = [
    */
   'agreement_exists',
   'call_too_old',
+  /** Round 3, P1-F: only the person who made the call records what was agreed on it. */
+  'not_call_actor',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 
