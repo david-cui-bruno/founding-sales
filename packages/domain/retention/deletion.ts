@@ -134,6 +134,25 @@ const contactPredicate = (column: string, parameter: string): string =>
 const FIRM_SCOPED_ONLY = '$2::uuid IS NULL';
 
 /**
+ * The meetings a deletion takes, as a predicate over `m` (call-to-booking 0028, review
+ * fold 1, finding 10): those linked to the target, **and** every meeting in the
+ * workspace whose attendee is one of the target's own addresses — an unmatched booking
+ * has no firm or contact, and a domain-matched one has no contact, so the links alone
+ * would leave the person's e-mail behind. `meetings.attendee_email` and
+ * `email_addresses.address` are both stored lower-case. Evaluated while the addresses
+ * still exist: the meetings go before the routes.
+ */
+const MEETING_IN_SCOPE = `(
+  (m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')})
+  OR m.attendee_email IN (
+    SELECT a.address FROM email_addresses a
+     WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}))`;
+
+/** The review items opened for one of those meetings, which name no firm when unmatched. */
+const MEETING_REVIEW_IN_SCOPE = `(evidence_kind = 'meeting.booked' AND evidence_id IN (
+  SELECT m.id::text FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}))`;
+
+/**
  * The same rule for G7b's confirmations, which carry a firm but no contact.
  *
  * A confirmation belongs to a message, and which contact a message is about is the
@@ -286,21 +305,20 @@ async function measure(
     ),
     meetings: await countOf(
       context,
-      `SELECT count(*) AS count FROM meetings
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      `SELECT count(*) AS count FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,
       byContact,
     ),
     calcom_events: await countOf(
       context,
       `SELECT count(*) AS count FROM calcom_events e
          JOIN meetings m ON m.workspace_id = e.workspace_id AND m.id = e.meeting_id
-        WHERE e.workspace_id = $1 AND m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')}`,
+        WHERE e.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,
       byContact,
     ),
     stage_review_items: await countOf(
       context,
       `SELECT count(*) AS count FROM stage_review_items
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+        WHERE workspace_id = $1 AND ((firm_id = $3 AND ${FIRM_SCOPED_ONLY}) OR ${MEETING_REVIEW_IN_SCOPE})`,
       byContact,
     ),
     // G7b. A confirmation would cascade with its message anyway, but it is counted
@@ -700,21 +718,23 @@ export async function commitDeletion(
     `DELETE FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
+  // The review items first: their meeting predicate reads the meetings about to go.
+  await remove(
+    'stage_review_items',
+    `DELETE FROM stage_review_items
+      WHERE workspace_id = $1 AND ((firm_id = $3 AND ${FIRM_SCOPED_ONLY}) OR ${MEETING_REVIEW_IN_SCOPE})`,
+    byContact,
+  );
   await remove(
     'calcom_events',
     `DELETE FROM calcom_events e USING meetings m
       WHERE e.workspace_id = $1 AND m.workspace_id = e.workspace_id AND m.id = e.meeting_id
-        AND m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')}`,
+        AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
   await remove(
     'meetings',
-    `DELETE FROM meetings WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
-    byContact,
-  );
-  await remove(
-    'stage_review_items',
-    `DELETE FROM stage_review_items WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+    `DELETE FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
   // Then the things that point at a route, then the routes.

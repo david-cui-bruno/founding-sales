@@ -117,4 +117,69 @@ describe('the deletion workflow and the call-to-booking rows', () => {
     );
     expect(rows.map(row => row.state)).toEqual(['estimated']);
   });
+
+  it('removes a person s unmatched and domain-matched meetings with their contact (review fold 1, finding 10)', async () => {
+    const beta = seeded.beta.workspaceId;
+    const betaAdmin = repositoryContext(
+      workspaceScope(beta, { kind: 'user', userId: seeded.beta.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    await database.session.query("UPDATE firms SET website = 'https://beta-person-firm.example' WHERE id = $1", [crm.beta.firmId]);
+    const book = async (uid: string, email: string) => {
+      const body = {
+        triggerEvent: 'BOOKING_CREATED',
+        createdAt: '2026-09-30T12:00:00Z',
+        payload: { uid, startTime: '2026-10-06T15:00:00Z', endTime: '2026-10-06T15:30:00Z', attendees: [{ email }] },
+      };
+      return await withTransaction(database.session, async () =>
+        await receiveCalcomEvent(database.session, { workspaceId: beta, rawBody: Buffer.from(JSON.stringify(body)), body }),
+      );
+    };
+    // Booked before Callie knew the person: one on an address nobody has, one matched
+    // only by the firm's domain.
+    const unmatched = await book('person-unmatched', 'pat@personal-mail.example');
+    const byDomain = await book('person-domain', 'pat@beta-person-firm.example');
+    const bystander = await book('someone-else', 'other@beta-person-firm.example');
+    expect(unmatched).toMatchObject({ outcome: 'unmatched' });
+    expect(byDomain).toMatchObject({ outcome: 'applied' });
+
+    // Then the person is added, with both addresses, and asks to be deleted.
+    const { rows: contact } = await database.session.query<{ id: string }>(
+      "INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, 'Pat Person') RETURNING id",
+      [beta, crm.beta.firmId],
+    );
+    const contactId = contact[0]?.id ?? '';
+    for (const address of ['pat@personal-mail.example', 'pat@beta-person-firm.example']) {
+      await database.session.query(
+        `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at)
+         VALUES ($1, $2, $3, $4, 'salesperson', now())`,
+        [beta, crm.beta.firmId, contactId, address],
+      );
+    }
+    const preview = await previewDeletion(betaAdmin, { targetKind: 'contact', firmId: crm.beta.firmId, contactId });
+    expect(preview.value?.removes['meetings']).toBe(2);
+    const outcome = await commitDeletion(betaAdmin, {
+      requestId: preview.value?.requestId ?? '',
+      previewHash: preview.value?.previewHash ?? '',
+      commandId: 'deletion-person-meetings',
+      journal: recordingSuppressionJournal(),
+    });
+    expect(outcome.ok, outcome.ok ? '' : outcome.reason).toBe(true);
+    const { rows: left } = await database.session.query<{ booking_uid: string }>(
+      'SELECT booking_uid FROM meetings WHERE workspace_id = $1 ORDER BY booking_uid',
+      [beta],
+    );
+    expect(left.map(row => row.booking_uid)).toEqual(['someone-else']);
+    const { rows: reviews } = await database.session.query<{ evidence_id: string }>(
+      "SELECT evidence_id FROM stage_review_items WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked'",
+      [beta],
+    );
+    expect(reviews.map(row => row.evidence_id)).not.toContain(unmatched.meetingId);
+    const { rows: deliveries } = await database.session.query<{ booking_uid: string }>(
+      'SELECT booking_uid FROM calcom_events WHERE workspace_id = $1 ORDER BY booking_uid',
+      [beta],
+    );
+    expect(deliveries.map(row => row.booking_uid)).toEqual(['someone-else']);
+    expect(bystander.meetingId).not.toBeNull();
+  });
 });
