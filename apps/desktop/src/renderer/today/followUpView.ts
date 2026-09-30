@@ -40,13 +40,36 @@ export interface FollowUpPick {
   readonly sequenceVersionId: string;
 }
 
-/** The command's `followUpPermission`, or null for "none" or an incomplete pick. */
-export function followUpPermissionOf(pick: FollowUpPick): OutcomeRequest['followUpPermission'] {
+/**
+ * The command's `followUpPermission`, or null for "none" or an incomplete pick. An agreed
+ * sequence carries the basis of the preview shown — its anchor, the firm's zone and the
+ * calendar version — so the server can refuse to start on a schedule nobody heard
+ * (review of S3, P1-3); without a shown preview there is no agreement to send.
+ */
+export function followUpPermissionOf(
+  pick: FollowUpPick,
+  preview: FollowUpPreviewView | null,
+): OutcomeRequest['followUpPermission'] {
   if (pick.choice === 'single_email' && pick.templateVersionId !== '') {
     return { scope: 'single_email', templateVersionId: pick.templateVersionId };
   }
-  if (pick.choice === 'agreed_sequence' && pick.sequenceVersionId !== '') {
-    return { scope: 'agreed_sequence', sequenceVersionId: pick.sequenceVersionId };
+  if (
+    pick.choice === 'agreed_sequence' &&
+    pick.sequenceVersionId !== '' &&
+    preview !== null &&
+    preview.refusal === null &&
+    preview.anchoredAt !== null &&
+    preview.sequenceVersionId === pick.sequenceVersionId
+  ) {
+    return {
+      scope: 'agreed_sequence',
+      sequenceVersionId: pick.sequenceVersionId,
+      previewBasis: {
+        anchorAt: preview.anchoredAt,
+        timeZone: preview.firmTimeZone,
+        calendarVersionId: preview.holidayCalendarVersion,
+      },
+    };
   }
   return null;
 }
@@ -74,10 +97,13 @@ export function previewFor(
 export function followUpProblem(
   pick: FollowUpPick,
   preview: FollowUpPreviewView | null,
+  /** The last request for this pick came back with no answer (review of S3, P2-b). */
+  failed = false,
 ): string | null {
   if (pick.choice === 'single_email' && pick.templateVersionId === '') return 'Choose the e-mail they agreed to.';
   if (pick.choice !== 'agreed_sequence') return null;
   if (pick.sequenceVersionId === '') return 'Choose the sequence they agreed to.';
+  if (preview === null && failed) return 'Callie could not read what that sequence would send. Try again.';
   if (preview === null) return 'Callie is reading what that sequence would send.';
   if (preview.refusal !== null) return `Callie cannot start that sequence here: ${enrolRefusalSentence(preview.refusal)}.`;
   return null;
@@ -134,6 +160,7 @@ const ENROL_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
   not_assigned: 'the firm is not assigned to you',
   firm_unknown: 'the firm is not on your list',
   enrollment_failed: 'the enrolment failed',
+  stale_preview: 'the schedule changed after you previewed it',
   agreement_not_recorded: 'the agreement could not be recorded on the call',
 });
 
@@ -156,6 +183,9 @@ export function agreementSentence(agreement: AgreementView | null | undefined): 
     return `Agreed on the call: the sequence “${agreement.name}” — not started, because Callie was not given permission for it.`;
   }
   if (agreement.started === true) return `Agreed on the call: the sequence “${agreement.name}”. It has started.`;
+  if (agreement.reason === 'stale_preview') {
+    return `Agreed on the call: the sequence “${agreement.name}”. It did not start: the schedule changed after you previewed it. Preview it again and start it from the firm’s page.`;
+  }
   const why = agreement.reason === null ? '' : `: ${enrolRefusalSentence(agreement.reason)}`;
   return `Agreed on the call: the sequence “${agreement.name}”. It did not start${why}. Start it from the firm’s page.`;
 }

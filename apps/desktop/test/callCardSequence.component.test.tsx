@@ -73,6 +73,7 @@ const PREVIEW: FollowUpPreviewView = {
   sequenceVersionId: VERSION_ID,
   sequenceName: 'After a good call',
   firmTimeZone: 'America/Los_Angeles',
+  holidayCalendarVersion: 'none.1',
   anchoredAt: '2026-09-30T15:00:00.000Z',
   steps: [
     {
@@ -92,8 +93,12 @@ interface Harness {
   readonly previews: unknown[];
 }
 
-/** The form with a live state: a preview request answers with `answer` on the next render. */
-function mount(answer: FollowUpPreviewView | null): Harness {
+/**
+ * The form with a live state: a preview request answers with `answer` on the next render.
+ * A list answers the requests in turn (the last repeats); null is an answer that never
+ * arrived, which the bridge leaves as no preview.
+ */
+function mount(answer: FollowUpPreviewView | null | readonly (FollowUpPreviewView | null)[]): Harness {
   const harness: Harness = { recorded: [], previews: [] };
   function Host(): JSX.Element {
     const [state, setState] = useState<TodayState>(baseState);
@@ -104,7 +109,9 @@ function mount(answer: FollowUpPreviewView | null): Harness {
       },
       previewFollowUp: (input: unknown) => {
         harness.previews.push(input);
-        setState(current => ({ ...current, followUpPreview: answer }));
+        const list: readonly (FollowUpPreviewView | null)[] = Array.isArray(answer) ? answer : [answer];
+        const next = list[Math.min(harness.previews.length - 1, list.length - 1)] ?? null;
+        setState(current => ({ ...current, followUpPreview: next }));
       },
     } as unknown as TodayActions;
     return <OutcomeForm state={state} view={buildTodayView(state)} enabled actions={actions} />;
@@ -188,12 +195,25 @@ describe('the follow-up an interested call agreed to', () => {
     expect(whens).toEqual(['Fri 2 Oct, 08:00 PDT', 'Tue 6 Oct, 08:00 PDT']);
 
     submit();
-    expect(harness.recorded[0]?.followUpPermission).toEqual({ scope: 'agreed_sequence', sequenceVersionId: VERSION_ID });
+    // With the basis of the preview shown, so the server can refuse a changed schedule.
+    expect(harness.recorded[0]?.followUpPermission).toEqual({
+      scope: 'agreed_sequence',
+      sequenceVersionId: VERSION_ID,
+      previewBasis: { anchorAt: '2026-09-30T15:00:00.000Z', timeZone: 'America/Los_Angeles', calendarVersionId: 'none.1' },
+    });
     expect(harness.previews).toHaveLength(1);
   });
 
   it('will not record an agreed sequence the server would not preview, and says why', () => {
-    const harness = mount({ ...PREVIEW, steps: [], sequenceName: '', firmTimeZone: '', anchoredAt: null, refusal: 'firm_zone_unknown' });
+    const harness = mount({
+      ...PREVIEW,
+      steps: [],
+      sequenceName: '',
+      firmTimeZone: '',
+      holidayCalendarVersion: '',
+      anchoredAt: null,
+      refusal: 'firm_zone_unknown',
+    });
     choose('outcome-select', 'interested');
     choose('outcome-follow-up-kind', 'agreed_sequence');
     choose('outcome-follow-up-sequence', VERSION_ID);
@@ -204,5 +224,26 @@ describe('the follow-up an interested call agreed to', () => {
     expect((screen.getByTestId('outcome-submit') as HTMLButtonElement).disabled).toBe(true);
     submit();
     expect(harness.recorded).toEqual([]);
+  });
+
+  it('offers Preview again when the preview did not arrive, and records once it does (review of S3, P2-b)', () => {
+    const harness = mount([null, PREVIEW]);
+    choose('outcome-select', 'interested');
+    choose('outcome-follow-up-kind', 'agreed_sequence');
+    choose('outcome-follow-up-sequence', VERSION_ID);
+    // The first request came back with nothing: no plan, Record stays off, and a retry.
+    expect(harness.previews).toHaveLength(1);
+    expect(screen.queryByTestId('outcome-follow-up-preview')).toBeNull();
+    expect(screen.getByTestId('outcome-follow-up-problem').textContent).toBe(
+      'Callie could not read what that sequence would send. Try again.',
+    );
+    expect((screen.getByTestId('outcome-submit') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByTestId('outcome-follow-up-retry'));
+    expect(harness.previews).toHaveLength(2);
+    expect(screen.getAllByTestId('preview-step')).toHaveLength(2);
+    expect(screen.queryByTestId('outcome-follow-up-retry')).toBeNull();
+    submit();
+    expect(harness.recorded[0]?.followUpPermission).toMatchObject({ scope: 'agreed_sequence', sequenceVersionId: VERSION_ID });
   });
 });

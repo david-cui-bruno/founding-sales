@@ -146,6 +146,8 @@ export const todayStateSchema = z.strictObject({
       sequenceVersionId: uuid,
       sequenceName: z.string().max(200),
       firmTimeZone: z.string().max(64),
+      /** The workspace holiday calendar version the instants were computed under. */
+      holidayCalendarVersion: z.string().max(64),
       anchoredAt: instant.nullable(),
       steps: z.array(
         z.strictObject({
@@ -243,7 +245,12 @@ export interface OutcomeRequest {
    */
   readonly followUpPermission:
     | { readonly scope: 'single_email'; readonly templateVersionId: string }
-    | { readonly scope: 'agreed_sequence'; readonly sequenceVersionId: string }
+    | {
+        readonly scope: 'agreed_sequence';
+        readonly sequenceVersionId: string;
+        /** The schedule the card showed: the server refuses to start on a changed one. */
+        readonly previewBasis: { readonly anchorAt: string; readonly timeZone: string; readonly calendarVersionId: string };
+      }
     | null;
 }
 

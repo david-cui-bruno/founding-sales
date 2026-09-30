@@ -31,6 +31,8 @@ const DRAFT = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
 const RETIRED = 'dddddddd-4444-4444-8444-dddddddddddd';
 const WITH_REMOVED_STEP = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee';
 const ENROLLMENT_ID = 'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0';
+/** The basis of the preview the card showed, which the command carries (review of S3, P1-3). */
+const BASIS = { anchorAt: '2026-09-30T15:00:00.000Z', timeZone: 'America/Los_Angeles', calendarVersionId: 'none.1' };
 
 function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   readonly api: ReturnType<typeof createAuthedClient>;
@@ -231,6 +233,7 @@ describe('the Today bridge and an agreed sequence', () => {
       sequenceVersionId: PUBLISHED,
       sequenceName: 'After a good call',
       firmTimeZone: 'America/Los_Angeles',
+      holidayCalendarVersion: 'none.1',
       anchoredAt: '2026-09-30T15:00:00.000Z',
       steps: [
         {
@@ -261,11 +264,11 @@ describe('the Today bridge and an agreed sequence', () => {
     );
     const bridge = createTodayBridge({ api, handoff, session });
     await bridge.expand({ firmId: FIRM_ID });
-    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED }));
+    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }));
     expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({
       contactId: CONTACT_ID,
       outcome: 'interested',
-      followUpPermission: { scope: 'agreed_sequence', sequenceVersionId: PUBLISHED },
+      followUpPermission: { scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS },
     });
     expect(state.notice).toBe('outcome_recorded_sequence_started');
     expect(state.agreement).toEqual({
@@ -286,7 +289,7 @@ describe('the Today bridge and an agreed sequence', () => {
     );
     const bridge = createTodayBridge({ api, handoff, session });
     await bridge.expand({ firmId: FIRM_ID });
-    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED }));
+    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }));
     expect(state.notice).toBe('outcome_recorded_sequence_not_started');
     expect(state.agreement).toMatchObject({ started: false, granted: true, reason: 'firm_zone_unknown' });
     const banners = buildTodayView(state).banners.map(banner => banner.text);
@@ -299,10 +302,70 @@ describe('the Today bridge and an agreed sequence', () => {
     const { api, calls } = scriptedApi(baseAnswers({ '/calls/log': logged([]) }));
     const bridge = createTodayBridge({ api, handoff, session });
     await bridge.expand({ firmId: FIRM_ID });
-    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED }, null));
+    const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }, null));
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
     expect(state.agreement).toBeNull();
     expect(state.notice).toBe('outcome_recorded');
+  });
+
+  it('tells the person to preview again when the schedule changed before the call was recorded', async () => {
+    const { api } = scriptedApi(baseAnswers({ '/calls/log': logged([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]) }));
+    const bridge = createTodayBridge({ api, handoff, session });
+    await bridge.expand({ firmId: FIRM_ID });
+    const state = await bridge.recordOutcome(
+      interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }),
+    );
+    expect(state.notice).toBe('outcome_recorded_sequence_not_started');
+    expect(buildTodayView(state).banners.map(banner => banner.text)).toContain(
+      'Agreed on the call: the sequence “After a good call v3”. It did not start: the schedule changed after you previewed it. Preview it again and start it from the firm’s page.',
+    );
+  });
+
+  it('drops a preview answer that lands after a newer request (review of S3, P2-b)', async () => {
+    // The first request's answer is held until the second has been answered.
+    let release: (() => void) | null = null;
+    const answers = baseAnswers();
+    const calls: string[] = [];
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path !== '/calls/follow-up-preview') {
+          return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+        }
+        const body = JSON.parse(init.body ?? '{}') as { sequenceVersionId: string };
+        calls.push(body.sequenceVersionId);
+        const answer: HttpAnswer = {
+          status: 200,
+          body: {
+            sequenceVersionId: body.sequenceVersionId,
+            sequenceName: 'Plan',
+            version: 1,
+            firmTimeZone: 'America/New_York',
+            holidayCalendarVersion: 'none.1',
+            anchoredAt: '2026-09-30T15:00:00.000Z',
+            steps: [],
+          },
+        };
+        if (calls.length === 1) {
+          await new Promise<void>(resolve => {
+            release = resolve;
+          });
+        }
+        return answer;
+      },
+    });
+    const bridge = createTodayBridge({ api, handoff, session });
+    await bridge.expand({ firmId: FIRM_ID });
+    const older = bridge.previewFollowUp({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: DRAFT });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const newer = await bridge.previewFollowUp({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED });
+    expect(newer.followUpPreview?.sequenceVersionId).toBe(PUBLISHED);
+    (release as (() => void) | null)?.();
+    const late = await older;
+    expect(late.followUpPreview?.sequenceVersionId).toBe(PUBLISHED);
   });
 
   it('ranks the notices so the one a person must act on comes first', () => {

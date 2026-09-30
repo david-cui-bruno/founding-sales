@@ -11,6 +11,7 @@ import { currentHolidayCalendar } from './calendars.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
+import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { readSequenceVersion } from './rows.ts';
 import { refuseSequence, acceptSequence, type SequenceResult, type SequenceStepRow } from './types.ts';
@@ -647,7 +648,8 @@ async function defaultExpiry(
 }
 
 /**
- * When the last step of `steps` would be due if the sequence started at `from`.
+ * When the last step of `steps` would be due — for an e-mail, placed in the send
+ * window — if the sequence started at `from`, plus a day.
  *
  * **The real cadence**, which is start-anchored: 11.1 counts every step's delay from the
  * instant the enrollment began, not from the previous step's due instant
@@ -683,11 +685,18 @@ export function agreedSequenceExpiry(
       zone,
       calendar,
     ).dueAt;
-    if (Date.parse(due) > Date.parse(instant)) instant = due;
+    // An e-mail does not leave at its due instant but at the send window's placement of
+    // it (`runEmailStep` → `placeEmailSend`, 11.2): a step due Friday evening sends
+    // Monday at 08:00, or Tuesday after a Monday holiday. The bound has to cover the
+    // instant the step will actually be claimed, or eligibility refuses it as expired
+    // (send-path v2 review of S3, P1-1). Same function, same zone, same calendar.
+    const at =
+      step.channel === 'email' ? placeEmailSend(due, zone, calendar === undefined ? {} : { calendar }).sendAt : due;
+    if (Date.parse(at) > Date.parse(instant)) instant = at;
   }
-  // One day past the last step's due instant, so the step due on the final day is
-  // inside the window rather than exactly on its edge (`expires_at > granted_at`, and
-  // the source compares with `<=`).
+  // One day past the last step's send instant, so the step on the final day is inside
+  // the window rather than exactly on its edge (`expires_at > granted_at`, and the source
+  // compares with `<=`).
   return new Date(Date.parse(instant) + 24 * 60 * 60 * 1000).toISOString();
 }
 

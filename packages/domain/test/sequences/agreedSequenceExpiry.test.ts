@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { agreedSequenceExpiry } from '../../sequences/followUpPermissions.ts';
 import { resolveStepDue } from '../../src/rules/cadence.ts';
+import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import type { WorkspaceHolidayCalendar } from '../../src/rules/businessDays.ts';
 import type { SequenceStepRow } from '../../sequences/types.ts';
 
@@ -80,5 +81,39 @@ describe('the bound an agreed sequence carries', () => {
       calendar,
     ).dueAt;
     expect(Date.parse(withHoliday)).toBe(Date.parse(due) + A_DAY);
+  });
+
+  describe('an e-mail the send window moves (send-path v2 review of S3, P1-1)', () => {
+    /** Friday 25 September 2026, 16:30 New York: an elapsed delay lands after the window. */
+    const FRIDAY_AFTERNOON = '2026-09-25T20:30:00.000Z';
+    const elapsed = (ordinal: number, hours: number): SequenceStepRow => ({
+      ...step(ordinal, 0),
+      delay: { unit: 'elapsed', hours },
+    });
+
+    it('covers a Friday-evening e-mail through the weekend to Monday morning', () => {
+      // Due Friday 18:30, after the window closes at 17:00: it sends Monday 08:00.
+      const steps = [elapsed(1, 2)];
+      const due = '2026-09-25T22:30:00.000Z';
+      const monday = placeEmailSend(due, ZONE).sendAt;
+      expect(monday).toBe('2026-09-28T12:00:00.000Z');
+      const expiry = agreedSequenceExpiry(steps, FRIDAY_AFTERNOON, ZONE);
+      // Past the Monday send, by the day; a bound from the due instant would end Saturday.
+      expect(Date.parse(expiry)).toBe(Date.parse(monday) + A_DAY);
+      expect(Date.parse(expiry)).toBeGreaterThan(Date.parse(due) + A_DAY);
+    });
+
+    it('covers it past a Monday holiday to Tuesday morning', () => {
+      const calendar: WorkspaceHolidayCalendar = { version: 'test.1', dates: ['2026-09-28'] };
+      const expiry = agreedSequenceExpiry([elapsed(1, 2)], FRIDAY_AFTERNOON, ZONE, calendar);
+      // Tuesday 29 September, 08:00 New York.
+      expect(expiry).toBe(new Date(Date.parse('2026-09-29T12:00:00.000Z') + A_DAY).toISOString());
+    });
+
+    it('leaves a call task at its due instant: calls have no send window here', () => {
+      const call: SequenceStepRow = { ...elapsed(1, 2), channel: 'call_task', templateVersionId: null };
+      const expiry = agreedSequenceExpiry([call], FRIDAY_AFTERNOON, ZONE);
+      expect(expiry).toBe(new Date(Date.parse('2026-09-25T22:30:00.000Z') + A_DAY).toISOString());
+    });
   });
 });

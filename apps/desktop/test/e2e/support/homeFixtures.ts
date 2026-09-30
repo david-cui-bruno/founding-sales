@@ -258,6 +258,7 @@ export function agreedSequencePreview(input: {
     sequenceName: 'After a good call',
     // Chicago, while the workspace is New York: the card must use the firm's clock.
     firmTimeZone: 'America/Chicago',
+    holidayCalendarVersion: 'none.1',
     anchoredAt: '2026-09-21T14:00:00.000Z',
     steps: [
       {

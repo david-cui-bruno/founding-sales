@@ -85,7 +85,9 @@ export async function previewFollowUp(
   if (!permitted.permitted) return refuse(permitted.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
 
   const { rows: contacts } = await context.db.query(
-    'SELECT 1 FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3',
+    // Active, as `enrollContact` requires: an inactive person cannot be enrolled, so the
+    // card must not preview a plan for them (review of S3, P2-a).
+    "SELECT 1 FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 AND status = 'active'",
     [context.scope.workspaceId, input.contactId, input.firmId],
   );
   if (contacts.length === 0) return refuse('contact_unknown');

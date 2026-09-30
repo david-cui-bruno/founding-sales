@@ -65,7 +65,11 @@ test('an interested call agrees to a sequence, shows its plan, and starts it', a
     firmId: FIRM_ID,
     outcome: 'interested',
     contactId: '88888888-8888-4888-8888-888888888888',
-    followUpPermission: { scope: 'agreed_sequence', sequenceVersionId: AGREED_SEQUENCE_VERSION_ID },
+    followUpPermission: {
+      scope: 'agreed_sequence',
+      sequenceVersionId: AGREED_SEQUENCE_VERSION_ID,
+      previewBasis: { anchorAt: '2026-09-21T14:00:00.000Z', timeZone: 'America/Chicago', calendarVersionId: 'none.1' },
+    },
   });
   await expect(page.getByTestId('banner-info').filter({ hasText: 'agreed sequence started' })).toBeVisible();
   await expect(

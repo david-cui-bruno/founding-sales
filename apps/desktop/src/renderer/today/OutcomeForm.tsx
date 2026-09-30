@@ -1,5 +1,5 @@
 import { CALL_OUTCOMES } from '@fss/contracts';
-import { useEffect, useRef, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { useClearDrafts, useDraft } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
 import {
@@ -105,18 +105,20 @@ export function OutcomeForm({
           sequenceVersionId: pick.sequenceVersionId,
         });
   // Ask the server once per firm, person and version: an answer that does not match (a
-  // refusal is kept, a lost answer clears it) is not a reason to ask again in a loop.
-  const asked = useRef<string | null>(null);
+  // refusal is kept, a lost answer clears it) is not a reason to ask again in a loop. A
+  // lost answer offers Retry instead, which forgets the key and asks again (review of
+  // S3, P2-b).
+  const [askedKey, setAskedKey] = useState<string | null>(null);
   const previewKey = wantsPreview ? `${expanded.firmId}:${calledContactId}:${pick.sequenceVersionId}` : null;
   useEffect(() => {
-    if (previewKey === null || !wantsPreview || preview !== null || asked.current === previewKey) return;
-    asked.current = previewKey;
+    if (previewKey === null || !wantsPreview || preview !== null || askedKey === previewKey) return;
+    setAskedKey(previewKey);
     actions.previewFollowUp({
       firmId: expanded.firmId,
       contactId: calledContactId,
       sequenceVersionId: pick.sequenceVersionId,
     });
-  }, [previewKey, wantsPreview, preview, actions, expanded, calledContactId, pick.sequenceVersionId]);
+  }, [previewKey, wantsPreview, preview, askedKey, actions, expanded, calledContactId, pick.sequenceVersionId]);
 
   if (expanded === null) return null;
 
@@ -153,7 +155,9 @@ export function OutcomeForm({
   // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
   // grants no e-mail permission, which is David's own distinction of 29 September 2026.
   const offersFollowUp = draft.outcome === 'interested' && contactId !== null;
-  const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview) : null;
+  // The last request for this pick came back and left nothing: a lost answer, not a refusal.
+  const previewFailed = previewKey !== null && askedKey === previewKey && preview === null && !previewing;
+  const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
 
   return (
     <form
@@ -189,7 +193,7 @@ export function OutcomeForm({
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
           // Never without a person: the select is hidden in that case, and a draft kept
           // from a moment when it was not is not a reason to send one.
-          followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick) : null,
+          followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
         });
         clear(prefix);
       }}
@@ -326,6 +330,22 @@ export function OutcomeForm({
         <p data-testid="outcome-follow-up-problem" className="text-xs text-muted-foreground empty:hidden">
           {followUpStopper ?? ''}
         </p>
+        {offersFollowUp && previewFailed ? (
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="outcome-follow-up-retry"
+              disabled={!enabled || busy}
+              onClick={() => {
+                setAskedKey(null);
+              }}
+            >
+              Preview again
+            </Button>
+          </div>
+        ) : null}
       </fieldset>
 
       <fieldset data-testid="outcome-callback" hidden={!wantsCallback} className="flex flex-wrap items-end gap-2 border-0 p-0">

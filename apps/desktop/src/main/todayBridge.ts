@@ -245,6 +245,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
    */
   let followUpSequences: readonly { readonly sequenceVersionId: string; readonly name: string }[] = [];
   let followUpPreview: FollowUpPreviewView | null = null;
+  /** Which preview request is the newest; an older answer is dropped when it lands. */
+  let previewRequest = 0;
   /** What the last recorded call agreed to, for the notice. Cleared with the notice. */
   let agreement: AgreementView | null = null;
   /**
@@ -562,11 +564,16 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * one.
      */
     async previewFollowUp(input) {
+      // Only the newest request may land (review of S3, P2-b): a person who changes the
+      // sequence while an older preview is in flight must not see the older answer.
+      previewRequest += 1;
+      const mine = previewRequest;
       const answer = await deps.api.read(
         '/calls/follow-up-preview',
         value => followUpPreviewResponseSchema.parse(value),
         { firmId: input.firmId, contactId: input.contactId, sequenceVersionId: input.sequenceVersionId },
       );
+      if (mine !== previewRequest) return await snapshot();
       if (answer.ok) {
         followUpPreview = {
           firmId: input.firmId,
@@ -574,6 +581,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           sequenceVersionId: answer.value.sequenceVersionId,
           sequenceName: answer.value.sequenceName,
           firmTimeZone: answer.value.firmTimeZone,
+          holidayCalendarVersion: answer.value.holidayCalendarVersion,
           anchoredAt: answer.value.anchoredAt,
           steps: answer.value.steps.map(step => ({
             ordinal: step.ordinal,
@@ -594,6 +602,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           sequenceVersionId: input.sequenceVersionId,
           sequenceName: '',
           firmTimeZone: '',
+          holidayCalendarVersion: '',
           anchoredAt: null,
           steps: [],
           refusal: answer.reason.slice(0, 80),

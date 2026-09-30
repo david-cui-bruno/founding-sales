@@ -126,15 +126,41 @@ describe('an agreed sequence recorded on the call card', () => {
     return { firmId, contactId, opportunityId };
   }
 
+  /** A basis the card could never have had, for requests refused before any preview. */
+  const UNPREVIEWED = { anchorAt: '2026-09-30T13:00:00.000Z', timeZone: 'America/New_York', calendarVersionId: 'none.1' };
+
+  /** The basis the card carries: what `POST /calls/follow-up-preview` answered for this person. */
+  async function previewBasisFor(at: Scene, sequenceVersionId: string): Promise<Readonly<Record<string, string>>> {
+    const preview = await post('/calls/follow-up-preview', salespersonToken, {
+      firmId: at.firmId,
+      contactId: at.contactId,
+      sequenceVersionId,
+    });
+    if (preview.status !== 200) return UNPREVIEWED;
+    const parsed = followUpPreviewResponseSchema.parse(preview.body);
+    return { anchorAt: parsed.anchoredAt, timeZone: parsed.firmTimeZone, calendarVersionId: parsed.holidayCalendarVersion };
+  }
+
+  /**
+   * Log an interested call. An agreed sequence carries the basis of the preview the card
+   * showed — read here, as the card reads it, unless the test names one.
+   */
   async function logInterested(
     at: Scene,
     followUpPermission: Readonly<Record<string, unknown>>,
     extra: Readonly<Record<string, unknown>> = {},
   ) {
+    const agreed =
+      followUpPermission['scope'] === 'agreed_sequence' && followUpPermission['previewBasis'] === undefined
+        ? {
+            ...followUpPermission,
+            previewBasis: await previewBasisFor(at, String(followUpPermission['sequenceVersionId'])),
+          }
+        : followUpPermission;
     return await post(
       '/calls/log',
       salespersonToken,
-      command({ firmId: at.firmId, contactId: at.contactId, outcome: 'interested', followUpPermission, ...extra }),
+      command({ firmId: at.firmId, contactId: at.contactId, outcome: 'interested', followUpPermission: agreed, ...extra }),
     );
   }
 
@@ -342,6 +368,14 @@ describe('an agreed sequence recorded on the call card', () => {
     expect([otherWorkspace.status, reason(otherWorkspace)]).toEqual([409, 'version_unknown']);
     const stranger = await ask({ contactId: randomUUID() });
     expect([stranger.status, reason(stranger)]).toEqual([409, 'contact_unknown']);
+    // An inactive person cannot be enrolled, so there is no plan to preview (P2-a).
+    const leaver = await seedContact(fixture, { firmId: at.firmId, fullName: 'Casey Example' });
+    await fixture.db.query("UPDATE contacts SET status = 'inactive' WHERE workspace_id = $1 AND id = $2", [
+      fixture.alpha.workspaceId,
+      leaver,
+    ]);
+    const inactive = await ask({ contactId: leaver });
+    expect([inactive.status, reason(inactive)]).toEqual([409, 'contact_unknown']);
     const noZone = await scene('Hazel Test Advisers', { zone: false });
     const zoneless = await ask({ firmId: noZone.firmId, contactId: noZone.contactId });
     expect([zoneless.status, reason(zoneless)]).toEqual([409, 'firm_zone_unknown']);
@@ -363,7 +397,11 @@ describe('an agreed sequence recorded on the call card', () => {
       const answer = await post(
         '/calls/log',
         salespersonToken,
-        command({ firmId: at.firmId, outcome: 'interested', followUpPermission: { scope: 'agreed_sequence', sequenceVersionId } }),
+        command({
+          firmId: at.firmId,
+          outcome: 'interested',
+          followUpPermission: { scope: 'agreed_sequence', sequenceVersionId, previewBasis: UNPREVIEWED },
+        }),
       );
       expect([answer.status, (answer.body as { reason?: string }).reason]).toEqual([409, 'invalid_input']);
       await nothingWritten(at.firmId);
@@ -379,7 +417,7 @@ describe('an agreed sequence recorded on the call card', () => {
           firmId: at.firmId,
           contactId: at.contactId,
           outcome: 'voicemail_left',
-          followUpPermission: { scope: 'agreed_sequence', sequenceVersionId },
+          followUpPermission: { scope: 'agreed_sequence', sequenceVersionId, previewBasis: UNPREVIEWED },
         }),
       );
       expect([answer.status, (answer.body as { reason?: string }).reason]).toEqual([409, 'invalid_input']);
@@ -404,15 +442,20 @@ describe('an agreed sequence recorded on the call card', () => {
   });
 
   it('keeps the call, its stop and the permission when the enrolment is refused', async () => {
-    // The firm's zone was never established: the grant can still bound the agreement
-    // (it assumes the business zone for the expiry), but `enrollContact` refuses to
-    // invent due instants — `firm_zone_unknown`. The permission must stand, unbound.
+    // The person was previewed, then marked inactive before the call was recorded: the
+    // grant still rests on the call, but `enrollContact` refuses an inactive contact
+    // (`contact_unknown`). The permission must stand, unbound.
     const sequenceVersionId = await publishedVersion(adminToken);
-    const at = await scene('Willow Test Advisers', { zone: false });
-    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId });
+    const at = await scene('Willow Test Advisers');
+    const previewBasis = await previewBasisFor(at, sequenceVersionId);
+    await fixture.db.query("UPDATE contacts SET status = 'inactive' WHERE workspace_id = $1 AND id = $2", [
+      fixture.alpha.workspaceId,
+      at.contactId,
+    ]);
+    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
     expect(logged.status, JSON.stringify(logged.body)).toBe(200);
     const answer = loggedCallResultSchema.parse(result(logged));
-    expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'firm_zone_unknown' }]);
+    expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'contact_unknown' }]);
     expect(answer.setManual).toBe(true);
     expect(answer.followUpPermissionId).not.toBeNull();
 
@@ -500,6 +543,7 @@ describe('an agreed sequence recorded on the call card', () => {
       callLogId: log?.['id'],
       outcome: 'interested',
       sequenceVersionId,
+      reopened: false,
     });
 
     // The manual-mode event it wrote owes nothing — nothing was live at the firm — and the
@@ -543,15 +587,191 @@ describe('an agreed sequence recorded on the call card', () => {
     expect(verdict).toEqual({ ok: true });
   });
 
+  for (const closedAs of ['won', 'lost'] as const) {
+    it(`reopens a ${closedAs} history explicitly, linked and naming the call, rather than a silent new row`, async () => {
+      // Review of S3, P1-2: a firm whose last opportunity closed keeps that history. The
+      // opportunity the agreed sequence needs is the explicit reopen — linked by
+      // `reopened_from_opportunity_id`, its reason naming the interested call — at stage
+      // New, manual, origin `engaged_call`, so the follow-up still runs.
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene(`${closedAs === 'won' ? 'Oak' : 'Elm'} Test Advisers`);
+      const closed = await post(
+        '/opportunities/stage',
+        salespersonToken,
+        command({
+          opportunityId: at.opportunityId,
+          toStageKey: closedAs,
+          ...(closedAs === 'lost' ? { reason: 'not now' } : {}),
+        }),
+      );
+      expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+
+      const logged = await logInterested(
+        { ...at, opportunityId: null },
+        { scope: 'agreed_sequence', sequenceVersionId },
+      );
+      expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+      const answer = loggedCallResultSchema.parse(result(logged));
+      expect(answer.followUps.map(entry => entry.kind), JSON.stringify(answer.followUps)).toEqual([
+        'agreed_sequence_enrolled',
+      ]);
+      const enrollmentId = answer.followUps[0]?.enrollmentId;
+
+      const [log] = await rowsAt('call_logs', at.firmId);
+      const { rows: opportunities } = await fixture.db.query<Record<string, unknown>>(
+        `SELECT o.*, s.key AS stage_key FROM opportunities o
+           JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
+          WHERE o.workspace_id = $1 AND o.firm_id = $2 ORDER BY o.created_at`,
+        [fixture.alpha.workspaceId, at.firmId],
+      );
+      expect(opportunities.map(row => row['status'])).toEqual([closedAs, 'open']);
+      const reopened = opportunities[1];
+      expect(reopened).toMatchObject({
+        reopened_from_opportunity_id: at.opportunityId,
+        stage_key: 'new',
+        control_mode: 'manual',
+        control_mode_origin: 'engaged_call',
+      });
+      expect(String(reopened?.['control_mode_reason'])).toContain(String(log?.['id']));
+      const [enrollment] = (await rowsAt('sequence_enrollments', at.firmId)).filter(row => row['id'] === enrollmentId);
+      expect(enrollment).toMatchObject({ opportunity_id: reopened?.['id'], origin_kind: 'follow_up', ended_at: null });
+
+      const { rows: audits } = await fixture.db.query<{ action: string }>(
+        `SELECT action FROM audit_events WHERE workspace_id = $1 AND subject_kind = 'opportunity' AND subject_id = $2`,
+        [fixture.alpha.workspaceId, reopened?.['id']],
+      );
+      expect(audits.map(row => row.action).sort()).toEqual([
+        'opportunity.manual',
+        'opportunity.opened_for_agreed_sequence',
+        'opportunity.reopened',
+      ]);
+    });
+  }
+
+  describe('a single e-mail whose template no longer stands (review of S3, P1-4)', () => {
+    async function template(approve: boolean): Promise<string> {
+      const created = await post(
+        '/templates/create',
+        adminToken,
+        command({
+          name: `Overview ${randomUUID().slice(0, 8)}`,
+          subject: 'A note about {firm_name}',
+          body: `Hello {contact_first_name},\n\nA note.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+          footerSignOff: 'Sam Example\nCallie',
+          requiredVariables: ['firm_name', 'contact_first_name'],
+          approve,
+        }),
+      );
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+      return String(result(created)['id']);
+    }
+
+    async function expectNotGranted(templateVersionId: string, reason: string, name: string): Promise<void> {
+      const at = await scene(name);
+      const logged = await logInterested(at, { scope: 'single_email', templateVersionId });
+      expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+      const answer = loggedCallResultSchema.parse(result(logged));
+      // The call and its stop stand; the permission is refused with the reason.
+      expect(answer.setManual).toBe(true);
+      expect(answer.followUps).toEqual([{ kind: 'follow_up_not_granted', reason }]);
+      expect(answer.followUpPermissionId).toBeNull();
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+      const [log] = await rowsAt('call_logs', at.firmId);
+      expect(log).toMatchObject({ outcome: 'interested', agreed_follow_up: null });
+    }
+
+    it('refuses an unapproved template', async () => {
+      await expectNotGranted(await template(false), 'template_unapproved', 'Fir Test Advisers');
+    });
+
+    it('refuses a retired template', async () => {
+      const templateVersionId = await template(true);
+      await fixture.db.query('UPDATE template_versions SET retired_at = now() WHERE workspace_id = $1 AND id = $2', [
+        fixture.alpha.workspaceId,
+        templateVersionId,
+      ]);
+      await expectNotGranted(templateVersionId, 'template_retired', 'Yew Test Advisers');
+    });
+  });
+
+  describe('the schedule the card showed (review of S3, P1-3)', () => {
+    it('does not start when the holiday calendar changed after the preview, and says so', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Cypress Test Advisers');
+      const previewBasis = await previewBasisFor(at, sequenceVersionId);
+      const changed = await post(
+        '/sequences/holidays',
+        adminToken,
+        command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: ['2026-12-25'] }),
+      );
+      expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+      try {
+        const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
+        expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+        const answer = loggedCallResultSchema.parse(result(logged));
+        expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]);
+        // The call, its stop and the permission stand; nothing was enrolled.
+        expect(answer.setManual).toBe(true);
+        expect(answer.followUpPermissionId).not.toBeNull();
+        expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
+
+        // Previewed again under the new calendar, the same agreement starts.
+        const second = await scene('Cedar Grove Test Advisers');
+        const fresh = await logInterested(second, { scope: 'agreed_sequence', sequenceVersionId });
+        expect(loggedCallResultSchema.parse(result(fresh)).followUps.map(entry => entry.kind)).toEqual([
+          'agreed_sequence_enrolled',
+        ]);
+      } finally {
+        await post('/sequences/holidays', adminToken, command({ version: `s3-${randomUUID().slice(0, 8)}`, dates: [] }));
+      }
+    });
+
+    it('does not start when the firm’s zone changed after the preview', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Hemlock Test Advisers');
+      const previewBasis = await previewBasisFor(at, sequenceVersionId);
+      await fixture.db.query(
+        "UPDATE firms SET time_zone = 'America/Chicago' WHERE workspace_id = $1 AND id = $2",
+        [fixture.alpha.workspaceId, at.firmId],
+      );
+      const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
+      const answer = loggedCallResultSchema.parse(result(logged));
+      expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'stale_preview' }]);
+    });
+
+    it('refuses an agreed sequence that carries no preview basis at all', async () => {
+      const sequenceVersionId = await publishedVersion(adminToken);
+      const at = await scene('Larch Test Advisers');
+      const answer = await post(
+        '/calls/log',
+        salespersonToken,
+        command({
+          firmId: at.firmId,
+          contactId: at.contactId,
+          outcome: 'interested',
+          followUpPermission: { scope: 'agreed_sequence', sequenceVersionId },
+        }),
+      );
+      expect(answer.status).toBe(400);
+      expect(await rowsAt('call_logs', at.firmId)).toHaveLength(0);
+    });
+  });
+
   it('takes the opened opportunity back when the enrolment is then refused', async () => {
-    // No zone: the opportunity would open, the enrolment refuses `firm_zone_unknown`, and
-    // the savepoint takes both back — only the call, its stop and the permission remain.
+    // The opportunity would open, the enrolment refuses the now-inactive person
+    // (`contact_unknown`), and the savepoint takes both back — only the call, its stop and
+    // the permission remain.
     const sequenceVersionId = await publishedVersion(adminToken);
-    const at = await scene('Poplar Test Advisers', { zone: false, opportunity: false });
-    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId });
+    const at = await scene('Poplar Test Advisers', { opportunity: false });
+    const previewBasis = await previewBasisFor(at, sequenceVersionId);
+    await fixture.db.query("UPDATE contacts SET status = 'inactive' WHERE workspace_id = $1 AND id = $2", [
+      fixture.alpha.workspaceId,
+      at.contactId,
+    ]);
+    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId, previewBasis });
     expect(logged.status, JSON.stringify(logged.body)).toBe(200);
     const answer = loggedCallResultSchema.parse(result(logged));
-    expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'firm_zone_unknown' }]);
+    expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'contact_unknown' }]);
     expect(answer.followUpPermissionId).not.toBeNull();
     expect(await rowsAt('opportunities', at.firmId)).toHaveLength(0);
   });

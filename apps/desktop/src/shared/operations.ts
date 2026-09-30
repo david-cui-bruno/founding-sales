@@ -109,7 +109,16 @@ const outcomeInput = z.strictObject({
       z.strictObject({ scope: z.literal('single_email'), templateVersionId: uuid }),
       // Send-path v2 (slice S3): an agreed published sequence, enrolled by the server in
       // the same command. The card shows its preview before this can be sent.
-      z.strictObject({ scope: z.literal('agreed_sequence'), sequenceVersionId: uuid }),
+      // `previewBasis` is the preview the person heard (review of S3, P1-3).
+      z.strictObject({
+        scope: z.literal('agreed_sequence'),
+        sequenceVersionId: uuid,
+        previewBasis: z.strictObject({
+          anchorAt: instant,
+          timeZone: z.string().min(1).max(64),
+          calendarVersionId: z.string().min(1).max(64),
+        }),
+      }),
     ])
     .nullable(),
 });

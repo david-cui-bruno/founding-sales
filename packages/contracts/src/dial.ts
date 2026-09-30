@@ -506,6 +506,19 @@ export const logCallOutcomeCommandSchema = z.strictObject({
          */
         scope: z.literal('agreed_sequence'),
         sequenceVersionId: uuid,
+        /**
+         * The schedule the person was shown (review of S3, P1-3): the preview's anchor,
+         * the firm's zone and the holiday calendar version it was computed under, as
+         * `POST /calls/follow-up-preview` answered them. The command recomputes; if the
+         * zone or the calendar version has changed since, it does not start the sequence
+         * and answers `follow_up_not_enrolled` with reason `stale_preview` (the permission
+         * is still granted), so nobody is enrolled on dates they did not hear.
+         */
+        previewBasis: z.strictObject({
+          anchorAt: instant,
+          timeZone: z.string().min(1).max(64),
+          calendarVersionId: z.string().min(1).max(64),
+        }),
       }),
     ])
     .optional(),
