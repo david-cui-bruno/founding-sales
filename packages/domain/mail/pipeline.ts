@@ -34,9 +34,13 @@ import { GmailClientError } from './gmailClient.ts';
  * with the fulfilled follow-up still claimable until the retry. So the loop stops at N
  * and reports how many leading ids it finished (`processedMessages`) and which read
  * failed (`readFailure`). `mail.sync` moves its cursor only to just before N, the job
- * commits 1 to N-1, and N is read again on the next run; `mail.recover`, whose
- * page-count position is not stable across runs, throws on it and keeps its whole-job
- * retry. What N itself wrote before its body read failed is undone by a savepoint, so N
+ * commits 1 to N-1, and N is read again on the next run; `mail.recover` throws on it
+ * and keeps its whole-job retry (its position is the recorded rows, so nothing is lost).
+ *
+ * **An RFC Message-ID collision never raises** (C2B-A1): `recordMessage` returns a proven
+ * duplicate as the recorded message, whose effects are not run again, and records any
+ * other colliding message without the id, which this loop then processes on its own
+ * metadata. What N itself wrote before its body read failed is undone by a savepoint, so N
  * is retried whole. Only a Gmail read is caught: a database error still throws, and the
  * runner still rolls the job back.
  */

@@ -35,7 +35,9 @@ import { RECOVERY_OVERLAP_SECONDS, type MailboxRow } from './types.ts';
  *    which is the one place that decides what is read and in which order.
  * 3. **Match, then fetch a body only for what matched** — in the shared pipeline.
  * 4. **Advance the cursor and the watermark by compare-and-set, together.** If the
- *    compare fails, another run got there first and this one stops.
+ *    compare fails, another run got there first and this one stops. The compare is
+ *    also fenced on the generation and address this run read: a mailbox that moved on
+ *    throws `StaleMailboxGeneration` and the whole run rolls back (C2B-A1).
  *
  * An expired cursor is step 2's defined failure and is not a retry either: the
  * mailbox's generation advances, a bounded recovery starts for the new generation,

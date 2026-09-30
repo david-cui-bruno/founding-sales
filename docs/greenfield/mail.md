@@ -61,7 +61,9 @@ Attachments are references only — filename, media type, size, Gmail's attachme
 ### 2. The cursor moves by compare-and-set, and the watermark moves with it
 
 `advanceCursor` updates `history_id` only where it is still the value the caller read
-(`IS NOT DISTINCT FROM`), and writes `coverage_watermark_at` in the **same statement**.
+(`IS NOT DISTINCT FROM`) on the generation and address the caller read (a different
+generation throws `StaleMailboxGeneration`; see the four rules below), and writes
+`coverage_watermark_at` in the **same statement**.
 Two overlapping syncs cannot write each other's progress; the loser is told
 `cursor_moved` and stops, which is right, because the winner has already read at least
 as much.
@@ -253,9 +255,9 @@ opportunity rather than discarded.
 
 ## Sync, recovery and the watch
 
-A `mail.sync` is single-flight per mailbox: `mail-sync:{mailbox}`, no instant in the
-key, so a hundred notifications in a minute are one sync with the **high-water** history
-id merged in. `coalesceMailSync` is an upsert with three rules — merge the id upward
+A `mail.sync` is single-flight per mailbox generation: `mail-sync:{mailbox}:{generation}`,
+no instant in the key, so a hundred notifications in a minute are one sync with the
+**high-water** history id merged in. `coalesceMailSync` is an upsert with three rules — merge the id upward
 only, re-arm a `done` job, never revive a `dead` one — and it is in the mail lane
 rather than in `jobs/jobStore.ts` because those rules are mail's contract with
 Appendix C, not the queue's.
@@ -263,6 +265,68 @@ Appendix C, not the queue's.
 Each run is bounded and its continuation is the one-minute scheduler, never itself. The
 reasoning is in `docs/archive/decisions/g7-sync-transaction-shape.md` and it is the single
 easiest thing in this lane to get wrong.
+
+### Four rules of mail-core correctness (C2B-A1)
+
+These four hold the sync, the recovery and the watch together across a generation
+change — an account switch, an expired cursor, a restore — and a mailbox far larger than
+one run.
+
+**1. Generation fencing.** Every job reads the mailbox's `generation` and
+`email_address` at its start, and each of its durable writes is predicated on both,
+inside the job's transaction: `mail.sync`'s cursor compare-and-set (`advanceCursor`
+takes the fence), the expired-cursor generation advance, a recovery's handoff cursor,
+its progress and its completion, and a watch registration (`lockMailboxAtFence` after
+`users.watch`, before the insert). A mismatch throws `StaleMailboxGeneration` rather
+than returning, so the runner rolls back the whole job, message effects included, and
+records `stale_mailbox_generation`. The runner then **retries** it, and the retry is
+harmless by construction: it re-reads the mailbox and acts for the generation it finds.
+A `mail.sync` of a mailbox that is not `ready` (`baseline_pending` or `recovering`)
+reads no history and writes only the coverage hold — it starts a recovery only when its
+generation has none (`recovery_underway` otherwise); a `mail.recover` for a superseded
+generation answers `generation_superseded`; a watch renewal scheduled for an earlier
+mailbox generation answers `generation_superseded`, and one for the current generation
+registers the current account's watch. The `mail.sync` and watch-renewal keys carry the
+mailbox generation (`mail-sync:{mailbox}:{generation}`,
+`watch:{mailbox}:{mailboxGeneration}:{renewal}`), so a `dead` job of an earlier
+generation — which 13.2 leaves dead — cannot absorb the next generation's work.
+
+**2. The continuous handoff.** `startRecovery` requires `startHistoryId`: the profile's
+`historyId`, read *before* the interval's end (`toAt`) is fixed, with `toAt` no earlier
+than that read. It is stored as `mailboxes.history_id` when the recovery is created, and
+completion adopts exactly that id — there is no profile read after the listing. The
+listing covers everything up to `toAt`; history sync after completion covers everything
+after the id; a message arriving during the recovery is in one or both, never in
+neither. A recovery created before this rule has no cursor, and takes one at the start
+of its next run, moving `to_at` to after that read.
+
+**3. Resume by recorded ids.** A recovery run walks the listing from page 1 with
+Gmail's own `nextPageToken` (opaque; never stored), asks once per page which ids already
+have a `mail_messages` row for this mailbox (`provider_message_id = ANY(...)`), and
+processes up to `maxMessages` of the rest. The rows are the position, so a message
+deleted between runs shifts nothing. The recovery completes only when one run's walk
+reaches the end of the listing with every listed id recorded, here or earlier, and then
+`sync_state = 'ready'`, the watermark at `toAt`, `completed_at` and the release of the
+`coverage_incomplete` hold commit together, predicated on the generation, the address
+and `history_id` still equal to the handoff id; any mismatch throws and rolls back.
+`pages_completed` is the number of pages the last walk read, and is informational. A
+listed id that is never recorded — a message Gmail lists and cannot read, or a proven
+duplicate (rule 4) — is taken again by every run; that is correct, and it means a
+mailbox with more than `maxMessages` of them could not complete.
+
+**4. RFC Message-ID conflicts.** `mail_messages_one_per_rfc_id` allows one row per RFC
+Message-ID per mailbox. `recordMessage` absorbs a collision instead of raising. A
+**proven duplicate** — same direction, same normalised From, same Subject, and the same
+`Date` header (the table keeps no `Date`, so the pipeline re-reads the other message's
+allowlisted metadata to compare) — is treated as already recorded: the existing row is
+returned, no effect runs again, and the pipeline report counts `duplicateRfcId`. Any
+other collision is a **conflict**: the new message is recorded with `rfc_message_id =
+NULL`, a `mail.rfc_id_conflict` line is logged (mailbox id, both Gmail ids, the RFC id;
+no body, no address), the report counts `rfcIdConflicts`, and the message is processed
+as new on its **own** metadata — its direction, its classification, its suppression, its
+own `In-Reply-To`/`References` for matching, and its own Message-ID for the fence
+lookup. An opt-out that reuses an outgoing message's id is therefore still read and
+still suppresses.
 
 ### The cursor stands on whole history records
 
@@ -393,8 +457,11 @@ processed.
 
 A Gmail watch expires after seven days and a lapsed watch is *silent*.
 `mailbox_watches.generation` is a per-renewal counter, independent of
-`mailboxes.generation` — so `watch:{mailbox}:{generation}` is a new key every renewal,
-and bumping it does not supersede an in-flight recovery. `GmailWatchHoursToExpiry`
+`mailboxes.generation` — so `watch:{mailbox}:{mailboxGeneration}:{generation}` is a new
+key every renewal, and bumping it does not supersede an in-flight recovery. The mailbox
+generation is in the key too (rule 1 of the four above), and a registration commits only
+while the mailbox is still the generation and address the renewal read before its
+`users.watch` call; its `mail.watch_registered` log line names the watched address. `GmailWatchHoursToExpiry`
 reports **zero** for a connected mailbox with no live watch, because no watch is the
 state the alarm most needs to fire on.
 
