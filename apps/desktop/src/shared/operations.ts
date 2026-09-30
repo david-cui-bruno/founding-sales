@@ -306,7 +306,13 @@ export const callStartSchema = z.discriminatedUnion('ok', [
 ]);
 export type CallStart = z.infer<typeof callStartSchema>;
 
-const callStartInput = z.strictObject({ firmId: uuid, contactId: uuid.nullable(), routeId: uuid });
+/**
+ * `requestId` names one press of Call (review of C1, fold 3): the page makes it, and the
+ * cancel for that press carries it, so a cancel that arrives after a newer start is
+ * about the old press and leaves the newer one alone.
+ */
+const callStartInput = z.strictObject({ firmId: uuid, contactId: uuid.nullable(), routeId: uuid, requestId: uuid });
+const callCancelInput = z.strictObject({ requestId: uuid });
 
 /** The firm page's call history; null when it could not be read. */
 export const callHistoryViewSchema = z.strictObject({ calls: z.array(callSessionDtoSchema).nullable() });
@@ -466,9 +472,9 @@ export const OPERATIONS = {
   'calling.cancel': {
     kind: 'command',
     calls: [],
-    input: nothing,
-    output: z.strictObject({ cancelled: z.literal(true) }),
-    transform: 'the current start is given up: a late session or token binds nothing, and a bound session is unbound',
+    input: callCancelInput,
+    output: z.strictObject({ cancelled: z.boolean() }),
+    transform: 'the start with this request id, if it is still the current one, is given up: a late session or token binds nothing, and a bound session is unbound; a cancel for an older start changes nothing (cancelled false)',
   },
   'calling.setActive': {
     kind: 'command',

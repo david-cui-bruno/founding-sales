@@ -34,12 +34,22 @@ interface CallLive {
 }
 
 export interface CallPorts {
-  start(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): Promise<CallStart>;
+  start(input: {
+    readonly firmId: string;
+    readonly contactId: string | null;
+    readonly routeId: string;
+    readonly requestId: string;
+  }): Promise<CallStart>;
   setActive(active: boolean): Promise<unknown>;
-  /** Give up the current start in the main process, so nothing of it is bound (fold 2). */
-  cancel?(): Promise<unknown>;
+  /**
+   * Give up the start `requestId` names in the main process, so nothing of it is bound
+   * (fold 2). The id is that press's own (fold 3): a late cancel leaves a newer start alone.
+   */
+  cancel?(requestId: string): Promise<unknown>;
   device?: VoiceDeviceFactory;
   now?: () => number;
+  /** A new request id per press of Call; `crypto.randomUUID` in the app. */
+  requestId?: () => string;
 }
 
 export interface CallControl {
@@ -70,6 +80,8 @@ export function useCall(ports: CallPorts | null): CallControl {
   const generation = useRef(0);
   /** A start is between Call and a connected call (for unmount's cancel). */
   const starting = useRef(false);
+  /** The request id of the latest press of Call, which a cancel names. */
+  const request = useRef<string | null>(null);
   const portsRef = useRef(ports);
   portsRef.current = ports;
   const now = (): number => (portsRef.current?.now ?? Date.now)();
@@ -100,12 +112,14 @@ export function useCall(ports: CallPorts | null): CallControl {
       generation.current += 1;
       const mine = generation.current;
       const cancelled = (): boolean => mine !== generation.current;
+      const requestId = (current.requestId ?? (() => globalThis.crypto.randomUUID()))();
+      request.current = requestId;
       starting.current = true;
       setState({ phase: 'starting', firmId: input.firmId, routeId: input.routeId });
       void (async () => {
         let started: CallStart;
         try {
-          started = await current.start(input);
+          started = await current.start({ ...input, requestId });
         } catch {
           if (!cancelled()) {
             starting.current = false;
@@ -206,7 +220,8 @@ export function useCall(ports: CallPorts | null): CallControl {
     // Still being set up: cancel it. Whatever the pending start creates is torn down, and
     // the main process binds nothing of it.
     generation.current += 1;
-    void portsRef.current?.cancel?.().catch(() => undefined);
+    const pending = request.current;
+    if (pending !== null) void portsRef.current?.cancel?.(pending).catch(() => undefined);
     starting.current = false;
     device.current?.destroy();
     device.current = null;
@@ -235,7 +250,10 @@ export function useCall(ports: CallPorts | null): CallControl {
     () => () => {
       // A start still pending is cancelled: what it creates after this is torn down.
       generation.current += 1;
-      if (call.current === null && starting.current) void portsRef.current?.cancel?.().catch(() => undefined);
+      const pending = request.current;
+      if (call.current === null && starting.current && pending !== null) {
+        void portsRef.current?.cancel?.(pending).catch(() => undefined);
+      }
       call.current?.disconnect();
       device.current?.destroy();
       if (live.current) {
@@ -258,6 +276,6 @@ export function registryCallPorts(): CallPorts | null {
   return {
     start: async input => await api.command('calling.start', input),
     setActive: async active => await api.command('calling.setActive', { active }),
-    cancel: async () => await api.command('calling.cancel', {}),
+    cancel: async requestId => await api.command('calling.cancel', { requestId }),
   };
 }

@@ -164,15 +164,18 @@ Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessio
   callback is the next action, as it always was (the callback task on Today);
 * the same cadence is read again at consumption, after slice W's shared send gate and
   the firm row lock (`consumeCallSession`), so sessions created together cannot all be
-  placed; a refusal there is heard as the generic TwiML sentence;
+  placed; it counts every call placed up to `clock_timestamp()` read after those locks,
+  not the transaction's start, so a call another consumption committed while this one
+  waited is counted. A refusal there is heard as the generic TwiML sentence;
 * the firm is **parked when its fourth attempt is recorded unanswered** — an outcome of
   `no_answer`, `busy` or `voicemail_left` (`logCallOutcome`), or Twilio's final
   no-answer/busy with no outcome yet (`recordCallStatus`) — through `parkIfCadenceSpent`,
   which takes the send gate before it looks for an open hold and counts the window that
-  ends at the firm's latest placed call (a late classification of an old call cannot
-  park a firm whose attempts never fell four in one window). A no-answer/busy callback
-  takes the gate and the firm row before the session row, the order consumption and Log
-  outcome use. A call request that finds
+  ends at the firm's latest placed call, kept as text at the database's microseconds (a
+  late classification of an old call cannot park a firm whose attempts never fell four
+  in one window). A no-answer/busy callback takes the gate and the firm row before the
+  session row, the order consumption and Log outcome use; one whose SID the unlocked
+  lookup does not find is answered as an unknown SID, without locking anything. A call request that finds
   the limit reached and no hold parks it only after `authorizeDial` accepts the caller,
   firm, route and identity; a refused request writes nothing. The hold is firm-scoped
   `scoped_pause` on `dial_authorization`, source `call_cadence_parked`, recovery
@@ -223,5 +226,9 @@ widened, which is a migration; until then `readVoicemailScript` answers the defa
   verified bundle is installed when the call ends (`callActivity.ts`, `Updater.callEnded`).
 * Closing the card or pressing Hang up while a call is being set up cancels it; a Device
   or Call created afterwards is disconnected and destroyed at once, and the main process
-  (`calling.cancel`) binds nothing of that start to the next outcome. Stop, or leaving
+  (`calling.cancel`) binds nothing of that start to the next outcome. Each press carries
+  its own `requestId` through `calling.start` and `calling.cancel`: a cancel for an older
+  press, arriving after a newer one started, changes nothing (`cancelled: false`). Every
+  refusal of a press is a sentence (`call_cancelled` and `calling_off` included); a
+  transport failure is "The call could not be connected…", never a code. Stop, or leaving
   the firm page, cancels a recording still being fetched.

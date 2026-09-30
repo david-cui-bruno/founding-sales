@@ -273,6 +273,16 @@ export const CALL_CONSUMPTION_REFUSAL_SENTENCES = Object.freeze({
   reservation_closed: "The call couldn't be authorised because today's calling budget changed. Try again.",
 } as const);
 
+/**
+ * The Mac's own refusals of a Call press (slice C1, fold 3): the start was given up — the
+ * card closed, Hang up was pressed, a newer press or another person took over — or the
+ * server said calling from Callie is off after the card offered it.
+ */
+export const CALL_START_REFUSAL_SENTENCES = Object.freeze({
+  call_cancelled: 'The call was stopped before it rang. Press Call to try again.',
+  calling_off: 'Calling from Callie is turned off. Close and reopen the firm to call from your phone instead.',
+} as const);
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...HOLD_REASON_SENTENCES,
@@ -285,6 +295,7 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...MAIL_REFUSAL_SENTENCES,
   ...CALL_SESSION_REFUSAL_SENTENCES,
   ...CALL_CONSUMPTION_REFUSAL_SENTENCES,
+  ...CALL_START_REFUSAL_SENTENCES,
 });
 
 /** Whether `code` has a sentence of its own (not the generic one). */

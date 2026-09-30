@@ -23,6 +23,8 @@ const CONTACT_ID = '77777777-7777-4777-8777-777777777777';
 const IDENTITY_ID = '55555555-5555-4555-8555-555555555555';
 const SESSION_ID = '88888888-8888-4888-8888-888888888888';
 const USER_ID = '99999999-9999-4999-8999-999999999999';
+const REQUEST_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const REQUEST_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const PROSPECT = '+14015550187';
 const CALLER = '+14015550100';
 
@@ -143,7 +145,7 @@ describe('calling from Callie, in the main process', () => {
     await w.bridge.expand({ firmId: FIRM_ID });
     w.sent.length = 0;
 
-    const started = await w.bridge.startCall({ firmId: FIRM_ID, contactId: CONTACT_ID, routeId: ROUTE_ID });
+    const started = await w.bridge.startCall({ firmId: FIRM_ID, contactId: CONTACT_ID, routeId: ROUTE_ID, requestId: REQUEST_A });
 
     expect(w.sent.map(entry => `${entry.method} ${entry.path}`)).toEqual([
       'GET /calls/calling',
@@ -180,7 +182,7 @@ describe('calling from Callie, in the main process', () => {
       '/calls/log': accepted({ callLogId: '12121212-1212-4212-8212-121212121212', followUps: [] }),
     });
     await w.bridge.expand({ firmId: FIRM_ID });
-    const started = await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    const started = await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_A });
     expect(started).toMatchObject({ ok: true, attempt: 2, voicemailScript: null });
     // The outcome form names this call: the number the card already shows.
     expect((await w.bridge.state()).lastCall).toMatchObject({ firmId: FIRM_ID, routeId: ROUTE_ID, e164: PROSPECT });
@@ -228,13 +230,13 @@ describe('calling from Callie, in the main process', () => {
     );
     await w.bridge.expand({ firmId: FIRM_ID });
     // A: its token request is on the wire when David hangs up.
-    const a = w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    const a = w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_A });
     await vi.waitFor(() => {
       expect(firstToken).not.toBeNull();
     });
-    await w.bridge.cancelCall();
+    expect(await w.bridge.cancelCall({ requestId: REQUEST_A })).toEqual({ cancelled: true });
     // B, to the same firm and number, completes.
-    expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID })).toMatchObject({
+    expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_B })).toMatchObject({
       ok: true,
       sessionId: SESSION_B,
     });
@@ -255,6 +257,58 @@ describe('calling from Callie, in the main process', () => {
     expect(w.sent.find(entry => entry.path === '/calls/log')?.body).toMatchObject({ callSessionId: SESSION_B });
   });
 
+  it('a late cancel for an older start leaves the newer one bound: start A, start B, cancel(A) (fold 3)', async () => {
+    const SESSION_B = '66666666-6666-4666-8666-666666666666';
+    let sessions = 0;
+    let firstToken: ((answer: HttpAnswer) => void) | null = null;
+    const w = worldWith(
+      path => {
+        if (path === '/calls/session') {
+          sessions += 1;
+          return accepted({ sessionId: sessions === 1 ? SESSION_ID : SESSION_B, expiresAt: '2026-09-21T14:01:00.000Z' });
+        }
+        if (path === '/calls/access-token' && firstToken === null) {
+          return new Promise<HttpAnswer>(resolve => {
+            firstToken = resolve;
+          });
+        }
+        return undefined;
+      },
+      {
+        '/calls/calling': calling(2),
+        '/calls/access-token': tokenAnswer,
+        '/calls/log': accepted({ callLogId: '12121212-1212-4212-8212-121212121212', followUps: [] }),
+      },
+    );
+    await w.bridge.expand({ firmId: FIRM_ID });
+    // A is on the wire when B is pressed; B completes and is the call on the card.
+    const a = w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_A });
+    await vi.waitFor(() => {
+      expect(firstToken).not.toBeNull();
+    });
+    expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_B })).toMatchObject({
+      ok: true,
+      sessionId: SESSION_B,
+    });
+    // A's cancel arrives now: it is about A, which B already superseded. B stays bound.
+    expect(await w.bridge.cancelCall({ requestId: REQUEST_A })).toEqual({ cancelled: false });
+    expect((await w.bridge.state()).lastCall).toMatchObject({ firmId: FIRM_ID, routeId: ROUTE_ID });
+    (firstToken as unknown as (answer: HttpAnswer) => void)(tokenAnswer);
+    expect(await a).toEqual({ ok: false, reason: 'call_cancelled' });
+    await w.bridge.recordOutcome({
+      firmId: FIRM_ID,
+      itemId: null,
+      contactId: null,
+      routeId: null,
+      outcome: 'no_answer',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: null,
+    });
+    expect(w.sent.find(entry => entry.path === '/calls/log')?.body).toMatchObject({ callSessionId: SESSION_B });
+  });
+
   it('a start cancelled after it bound its session unbinds it: the next outcome names no session', async () => {
     const w = world({
       '/calls/calling': calling(1),
@@ -263,8 +317,8 @@ describe('calling from Callie, in the main process', () => {
       '/calls/log': accepted({ callLogId: '12121212-1212-4212-8212-121212121212', followUps: [] }),
     });
     await w.bridge.expand({ firmId: FIRM_ID });
-    expect((await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID })).ok).toBe(true);
-    await w.bridge.cancelCall();
+    expect((await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_A })).ok).toBe(true);
+    expect(await w.bridge.cancelCall({ requestId: REQUEST_A })).toEqual({ cancelled: true });
     expect((await w.bridge.state()).lastCall).toBeNull();
     await w.bridge.recordOutcome({
       firmId: FIRM_ID,
@@ -284,7 +338,7 @@ describe('calling from Callie, in the main process', () => {
     for (const reason of ['firm_suppressed', 'outside_calling_window', 'telephony_budget_exhausted', 'call_attempts_exhausted']) {
       const w = world({ '/calls/calling': calling(1), '/calls/session': refused(reason), '/calls/access-token': tokenAnswer });
       await w.bridge.expand({ firmId: FIRM_ID });
-      expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID })).toEqual({ ok: false, reason });
+      expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: REQUEST_A })).toEqual({ ok: false, reason });
       expect(w.sent.some(entry => entry.path === '/calls/access-token')).toBe(false);
       expect((await w.bridge.state()).lastCall).toBeNull();
     }

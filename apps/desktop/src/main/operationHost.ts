@@ -88,7 +88,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
 
     'calling.status': async (input: { readonly firmId: string }) => await deps.today.callingStatus(input),
     'calling.start': async (input: Parameters<TodayBridgeHost['startCall']>[0]) => await deps.today.startCall(input),
-    'calling.cancel': async () => await deps.today.cancelCall(),
+    'calling.cancel': async (input: Parameters<TodayBridgeHost['cancelCall']>[0]) => await deps.today.cancelCall(input),
     'calling.setActive': async (input: { readonly active: boolean }) => await deps.today.setCallActive(input),
     'calling.resume': async (input: { readonly firmId: string }) => await deps.today.resumeCalling(input),
     'calling.history': async (input: { readonly firmId: string }) => await deps.today.callHistory(input),

@@ -129,7 +129,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 function portsWith(answer: CallStart, sdk = fakeSdk(), now = { value: 1_000_000 }) {
   const active: boolean[] = [];
   const start = vi.fn(async (_input: unknown) => await Promise.resolve(answer));
-  const cancel = vi.fn(async () => await Promise.resolve({ cancelled: true }));
+  const cancel = vi.fn(async (_requestId: string) => await Promise.resolve({ cancelled: true }));
   const ports: CallPorts = {
     start,
     cancel,
@@ -168,7 +168,7 @@ describe('the call view', () => {
     await waitFor(() => {
       expect(screen.getByTestId('call-status').textContent).toBe('Ringing…');
     });
-    expect(world.start).toHaveBeenCalledWith({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(world.start).toHaveBeenCalledWith({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, requestId: expect.any(String) });
     expect(world.sdk.tokens).toEqual(['twilio.voice.jwt']);
     expect(world.sdk.connects).toEqual([{ sessionId: SESSION_ID }]);
     expect(world.active).toEqual([true]);
@@ -329,13 +329,20 @@ describe('the call view', () => {
   it('cancels on Hang up pressed while the call is starting: nothing dials, and the panel is back to Call', async () => {
     const world = portsWith(started());
     const start = deferred<CallStart>();
-    world.ports.start = async () => await start.promise;
+    const requests: string[] = [];
+    world.ports.start = async input => {
+      requests.push(input.requestId);
+      return await start.promise;
+    };
     render(<Harness ports={world.ports} calling={twilio(1)} />);
     fireEvent.click(screen.getByTestId('dial'));
     expect(screen.getByTestId('call-status').textContent).toBe('Starting the call…');
     fireEvent.click(screen.getByTestId('call-hang-up'));
-    // The main process is told, so a late session or token binds nothing there either.
+    // The main process is told, so a late session or token binds nothing there either;
+    // the cancel names this press's own request (fold 3).
     expect(world.cancel).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(1);
+    expect(world.cancel).toHaveBeenCalledWith(requests[0]);
     start.resolve(started());
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(world.sdk.connects).toEqual([]);
