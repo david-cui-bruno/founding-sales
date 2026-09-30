@@ -56,8 +56,10 @@ function pageWith(permissions: readonly Permission[]): Page {
   return { ...base, followUpPermissions: [...permissions] };
 }
 
-const agreedPlan = { sequenceVersionId: VERSION, templateVersionIds: [TEMPLATE, OTHER_TEMPLATE] };
-const oneStepPlan = { sequenceVersionId: OTHER_VERSION, templateVersionIds: [TEMPLATE] };
+const agreedPlan = { sequenceVersionId: VERSION, templateVersionIds: [TEMPLATE, OTHER_TEMPLATE], stepCount: 2 };
+const oneStepPlan = { sequenceVersionId: OTHER_VERSION, templateVersionIds: [TEMPLATE], stepCount: 1 };
+/** One e-mail and one call task: one template id, and two steps of contact. */
+const mixedPlan = { sequenceVersionId: OTHER_VERSION, templateVersionIds: [TEMPLATE], stepCount: 2 };
 
 describe('the permission an enrolment picks', () => {
   it('passes over the ones that are spent, revoked, expired or somebody else’s', () => {
@@ -85,7 +87,7 @@ describe('the permission an enrolment picks', () => {
     const page = pageWith([permission('30000000-0000-4000-8000-000000000001', { sequenceVersionId: OTHER_VERSION })]);
     expect(livePermissionFor(page, CONTACT, agreedPlan)).toBeNull();
     expect(
-      livePermissionFor(page, CONTACT, { sequenceVersionId: OTHER_VERSION, templateVersionIds: [] }),
+      livePermissionFor(page, CONTACT, { sequenceVersionId: OTHER_VERSION, templateVersionIds: [], stepCount: 1 }),
     ).toBe('30000000-0000-4000-8000-000000000001');
   });
 
@@ -102,8 +104,15 @@ describe('the permission an enrolment picks', () => {
     expect(livePermissionFor(page, CONTACT, agreedPlan)).toBeNull();
     // …a one-step plan of another template is not their bytes…
     expect(
-      livePermissionFor(page, CONTACT, { sequenceVersionId: OTHER_VERSION, templateVersionIds: [OTHER_TEMPLATE] }),
+      livePermissionFor(page, CONTACT, {
+        sequenceVersionId: OTHER_VERSION,
+        templateVersionIds: [OTHER_TEMPLATE],
+        stepCount: 1,
+      }),
     ).toBeNull();
+    // …an e-mail followed by a call task is one template id and two steps of contact,
+    // which is not "one e-mail" either (the third review of PR 332)…
+    expect(livePermissionFor(page, CONTACT, mixedPlan)).toBeNull();
     // …and this is the plan they agreed to.
     expect(livePermissionFor(page, CONTACT, oneStepPlan)).toBe('40000000-0000-4000-8000-000000000001');
   });

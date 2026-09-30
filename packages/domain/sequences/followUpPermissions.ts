@@ -705,16 +705,36 @@ export async function revokeFollowUpPermission(
  * exists. Conditional on `enrollment_id IS NULL`, so a second enrollment on the same
  * permission affects no row and the caller refuses: that is "reject reuse" (P0-3), and
  * `follow_up_permissions_one_enrollment` is the same rule in the database.
+ *
+ * And conditional on the permission still being **live**, against the database's own
+ * clock, which is the last thing this transaction does before it commits (the third
+ * review of PR 332). The verification a few statements earlier reads the clock at *its*
+ * moment; a permission that expires or is revoked between the two would otherwise commit
+ * a supersession — and a terminal stop of a `cold_legacy` enrollment is history a person
+ * cannot get back. Zero rows makes the caller throw, which takes the enrollment, the
+ * first execution and the supersession with it.
  */
 export async function bindFollowUpPermission(
   context: RepositoryContext,
   permissionId: string,
   enrollmentId: string,
+  /**
+   * The end of the run this permission just bought, for an `agreed_sequence`. The grant
+   * computed a bound from *its* instant and the calendar as it stood then; the enrollment
+   * knows the start the run actually took and the calendar it froze, and that is the
+   * agreement's real length (the third review of PR 332). Absent for every other scope,
+   * whose window is a fixed number of days from the grant.
+   */
+  expiresAt?: string | undefined,
 ): Promise<boolean> {
   const bound = await context.db.query(
-    `UPDATE follow_up_permissions SET enrollment_id = $3
-      WHERE workspace_id = $1 AND id = $2 AND enrollment_id IS NULL`,
-    [context.scope.workspaceId, permissionId, enrollmentId],
+    `UPDATE follow_up_permissions
+        SET enrollment_id = $3, expires_at = coalesce($4::timestamptz, expires_at)
+      WHERE workspace_id = $1 AND id = $2
+        AND enrollment_id IS NULL
+        AND revoked_at IS NULL
+        AND expires_at > clock_timestamp()`,
+    [context.scope.workspaceId, permissionId, enrollmentId, expiresAt ?? null],
   );
   return (bound.rowCount ?? 0) > 0;
 }

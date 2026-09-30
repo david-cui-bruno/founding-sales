@@ -287,7 +287,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return;
     }
     const labels = new Map<string, string>();
-    const published: { sequenceVersionId: string; label: string; templateVersionIds: string[] }[] = [];
+    const published: {
+      sequenceVersionId: string;
+      label: string;
+      templateVersionIds: string[];
+      stepCount: number;
+    }[] = [];
     for (const sequence of list.value.sequences.slice(0, FIRM_PAGE_SEQUENCE_LIMIT)) {
       if (sequence.archivedAt !== null) continue;
       const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
@@ -310,6 +315,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
             templateVersionIds: version.steps
               .map(step => step.templateVersionId)
               .filter((id): id is string => id !== null),
+            stepCount: version.steps.length,
           });
         }
       }
@@ -607,6 +613,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
           : livePermissionFor(page, input.contactId, {
               sequenceVersionId: plan.sequenceVersionId,
               templateVersionIds: plan.templateVersionIds,
+              stepCount: plan.stepCount,
             });
       const answer = await deps.api.command(
         '/enrollments/enroll',
@@ -706,7 +713,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 export function livePermissionFor(
   page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>,
   contactId: string,
-  plan: { readonly sequenceVersionId: string; readonly templateVersionIds: readonly string[] },
+  plan: {
+    readonly sequenceVersionId: string;
+    readonly templateVersionIds: readonly string[];
+    readonly stepCount: number;
+  },
 ): string | null {
   const now = Date.now();
   const usable = page.followUpPermissions.find(permission => {
@@ -721,7 +732,12 @@ export function livePermissionFor(
     // the plan must be the single step that sends them.
     if (permission.scope === 'agreed_sequence') return permission.sequenceVersionId === plan.sequenceVersionId;
     if (permission.scope === 'single_email' || permission.scope === 'contextual_reply') {
+      // One message means a plan of **one step**, not a plan with one template in it: an
+      // e-mail followed by a call task has exactly one template id and is two steps of
+      // contact (the third review of PR 332). The server refuses it either way; the Mac
+      // should not offer it.
       return (
+        plan.stepCount === 1 &&
         plan.templateVersionIds.length === 1 &&
         (permission.templateVersionId === null || permission.templateVersionId === plan.templateVersionIds[0])
       );

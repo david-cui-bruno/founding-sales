@@ -14,7 +14,11 @@ import {
   type SequenceVersionRow,
 } from './types.ts';
 import type { EnrollableOriginKind, EnrollmentEndReason } from '@fss/contracts';
-import { bindFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
+import {
+  agreedSequenceExpiry,
+  bindFollowUpPermission,
+  verifyFollowUpPermission,
+} from './followUpPermissions.ts';
 
 /**
  * Enrollment, and the terminal stop (specification 11.2, 7.3, 8.1, Appendix A).
@@ -166,6 +170,8 @@ export async function enrollContact(
   //
   // Prospecting only. "This restriction applies to prospecting; it must not prevent
   // ordinary customer conversations involving multiple people."
+  /** The scope the permission turned out to be, for the bind below. */
+  let permittedScope: string | null = null;
   if (input.originKind === 'prospecting') {
     if (input.permissionId !== undefined) return refuseSequence('invalid_input');
     const atFirm = await listEnrollments(context, { firmId: input.firmId, liveOnly: true });
@@ -197,6 +203,7 @@ export async function enrollContact(
     // refuses `follow_up_scope_exhausted`, which is 'that permission does not buy this
     // plan'.
     if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
+    permittedScope = verdict.permission.scope;
   }
 
   // The supersession, after every refusal and before the insert, so a command that is
@@ -263,9 +270,22 @@ export async function enrollContact(
 
   // The permission buys **this** run, and only this one. The bind is conditional on
   // `enrollment_id IS NULL`, so a second enrollment on the same permission finds it
-  // taken and this command refuses rather than quietly running twice (P0-3).
+  // taken and this command refuses rather than quietly running twice (P0-3) — and on the
+  // permission still being live at the database's own clock, so a permission that died
+  // between the verification above and here takes the whole transaction down, including
+  // the supersession of any `cold_legacy` row (third review of PR 332).
   if (input.permissionId !== undefined) {
-    const bound = await bindFollowUpPermission(context, input.permissionId, created.enrollment_id);
+    // An agreed sequence is agreed for the length of **the run it bought**, so the bound
+    // is recomputed here: the grant could only guess at the start (it used its own
+    // instant and the calendar as it stood then), and this enrollment knows the start it
+    // actually took and the calendar it froze (the third review of PR 332). The
+    // verification above already refused a permission that was not live at this moment,
+    // so this can only move the end of a live permission to where its own plan ends.
+    const runExpiry =
+      permittedScope === 'agreed_sequence'
+        ? agreedSequenceExpiry(version.steps, startedAt, firm.time_zone, calendar)
+        : undefined;
+    const bound = await bindFollowUpPermission(context, input.permissionId, created.enrollment_id, runExpiry);
     if (!bound) throw new FollowUpReuseError(input.permissionId);
   }
   return acceptSequence({
@@ -283,7 +303,7 @@ export async function enrollContact(
  */
 export class FollowUpReuseError extends Error {
   constructor(public readonly permissionId: string) {
-    super('that follow-up permission has already been used for an enrollment');
+    super('that follow-up permission is spent, expired, revoked or already bound to a run');
     this.name = 'FollowUpReuseError';
   }
 }

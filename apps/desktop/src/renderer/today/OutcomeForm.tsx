@@ -87,9 +87,15 @@ export function OutcomeForm({
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
   const suppression = outcomeSuppresses(draft);
   const wantsCallback = draft.outcome === 'callback_requested';
+  // Who this call was with. A permission is granted to *a person*, so the form offers one
+  // only when it can name one: a call to a main line is evidence about a firm and not
+  // somebody's consent (the third review of PR 332, where an agreement with no contact
+  // rolled the engaged-call stop back).
+  const task = callable.find(entry => entry.task.itemId === itemId)?.task ?? null;
+  const contactId = lastCall?.contactId ?? task?.contactId ?? null;
   // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
   // grants no e-mail permission, which is David's own distinction of 29 September 2026.
-  const offersFollowUp = draft.outcome === 'interested';
+  const offersFollowUp = draft.outcome === 'interested' && contactId !== null;
 
   return (
     <form
@@ -106,10 +112,9 @@ export function OutcomeForm({
           draft,
         });
         if ('problem' in built) return;
-        const task = callable.find(entry => entry.task.itemId === itemId)?.task ?? null;
         actions.recordOutcome({
             firmId: expanded.firmId,
-            contactId: lastCall?.contactId ?? task?.contactId ?? null,
+            contactId,
             routeId: lastCall?.routeId ?? null,
             itemId: itemId === '' ? null : itemId,
             outcome: built.command.outcome,
@@ -124,10 +129,10 @@ export function OutcomeForm({
                     sourceTimeZone: draft.callbackTimeZone,
                   },
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
+          // Never without a person: the select is hidden in that case, and a draft kept
+          // from a moment when it was not is not a reason to send one.
           followUpPermission:
-            built.command.outcome === 'interested' && followUp !== ''
-              ? { scope: 'single_email', templateVersionId: followUp }
-              : null,
+            offersFollowUp && followUp !== '' ? { scope: 'single_email', templateVersionId: followUp } : null,
         });
         clear(prefix);
       }}

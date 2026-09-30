@@ -270,8 +270,16 @@ export async function logCallOutcome(
   // else — a voicemail, a no-answer, "call me Tuesday" — agreed to nothing, and migration
   // 0025's `call_logs_agreement_needs_interest` says so in the database. Refused here so
   // a client that sends a stale field gets a code rather than a constraint violation.
-  if (input.followUpPermission !== undefined && input.outcome !== 'interested') {
-    return refusePolicy('invalid_input');
+  //
+  // And an agreement needs a **person**: a permission is granted to somebody, and a log
+  // with no contact is a call to a main line. Both are checked *before* the call log is
+  // written, which is the third review of PR 332: the contact check used to sit inside
+  // the savepoint that carries the engaged-call stop, so an agreement with no contact
+  // rolled the stop back and the command still answered accepted — the sequences kept
+  // running against a firm that had just had a conversation.
+  if (input.followUpPermission !== undefined) {
+    if (input.outcome !== 'interested') return refusePolicy('invalid_input');
+    if (input.contactId === undefined && ticket?.contact_id == null) return refusePolicy('invalid_input');
   }
 
   const engaged = effects.setsManual;
@@ -422,33 +430,6 @@ export async function logCallOutcome(
       await completeTodayItemsByKey(context, { firmId: input.firmId, itemKey: boundNeedsTimeKey });
     }
 
-    // The follow-up the salesperson agreed to, inside the savepoint with every other
-    // effect of this call: a permission that survived a rolled-back outcome would be a
-    // permission resting on a conversation the record does not have.
-    //
-    // The evidence is this very call log — the row inserted a few statements above —
-    // and `verifyFollowUpPermission` re-reads it before every step: the log's firm must
-    // still be this firm, and, when the log names a person, still this person.
-    let followUpPermissionId: string | null = null;
-    const agreed = input.followUpPermission;
-    if (agreed !== undefined) {
-      // Only a conversation grants one. A callback request grants the callback above
-      // and nothing else, which is David's own distinction.
-      if (input.outcome !== 'interested') return refusePolicy('invalid_input');
-      if (contactId === undefined) return refusePolicy('invalid_input');
-      // The kind and the scope are not passed: the call log decides them, because a
-      // caller that could name them could name a sequence over a callback (P0-1).
-      const granted = await grantFollowUpPermission(context, {
-        firmId: input.firmId,
-        contactId,
-        callLogId,
-        grantedByUserId: actor.userId,
-        note: 'agreed on the call',
-      });
-      if (!granted.ok) return refusePolicy('invalid_input');
-      followUpPermissionId = granted.value.id;
-    }
-
     let callbackId: string | null = null;
     if (confirmedCallback !== null && input.callback !== undefined) {
       const created = await createCallback(context, {
@@ -474,9 +455,41 @@ export async function logCallOutcome(
       retiredRouteId,
       completedCallbackId,
       callbackId,
-      followUpPermissionId,
+      followUpPermissionId: null,
     });
   });
+
+  // The follow-up the salesperson agreed to, in a savepoint of its **own** and after the
+  // effects above (the third review of PR 332). It was inside theirs, and a grant that
+  // refused took the engaged-call stop down with it — the one effect of an interested
+  // call that must never be lost, because a sequence still running after a conversation
+  // is exactly what invariant 3 forbids. A grant that fails now costs the permission and
+  // nothing else, and says so on the receipt.
+  //
+  // The evidence is this very call log — the row inserted above — and
+  // `verifyFollowUpPermission` re-reads it before every step: the log's firm must still
+  // be this firm, and, since it names a person, still this person.
+  let followUpPermissionId: string | null = null;
+  if (input.followUpPermission !== undefined && contactId !== undefined) {
+    // A *thrown* refusal is caught too, and for the same reason: `grantFollowUpPermission`
+    // raises on evidence it cannot support, and the savepoint has already been rolled back
+    // by the time the error reaches here. Nothing about granting a permission is worth
+    // losing a recorded conversation and its stop over.
+    const granted = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
+      // The kind and the scope are not passed: the call log decides them, because a
+      // caller that could name them could name a sequence over a callback (P0-1).
+      const outcome = await grantFollowUpPermission(context, {
+        firmId: input.firmId,
+        contactId,
+        callLogId,
+        grantedByUserId: actor.userId,
+        note: 'agreed on the call',
+      });
+      return outcome.ok ? acceptPolicy(outcome.value.id) : refusePolicy('invalid_input');
+    }).catch(() => refusePolicy<string>('invalid_input'));
+    if (granted.ok) followUpPermissionId = granted.value;
+    else followUps.push({ kind: 'follow_up_not_granted', reason: granted.reason });
+  }
 
   const outcomes: AppliedEffects = applied.ok
     ? applied.value
@@ -542,7 +555,10 @@ export async function logCallOutcome(
     stepApplication: outcomes.stepApplication,
     successorExecutionId: outcomes.successorExecutionId,
     completedCallbackId: outcomes.completedCallbackId,
-    followUpPermissionId: outcomes.followUpPermissionId,
+    // Not `outcomes`: the grant has a savepoint of its own now, so a rolled-back effect
+    // does not erase a permission that was granted, and a refused grant does not erase
+    // the effects.
+    followUpPermissionId,
     followUps,
   });
 }

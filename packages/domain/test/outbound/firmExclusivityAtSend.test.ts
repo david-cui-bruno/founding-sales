@@ -278,10 +278,14 @@ describe('the firm rule at the dispatch claim', () => {
       [workspaceId(), firm.firmId],
     );
 
+    // The barrier holds the **fence**, not the firm: that is the row the claim locks
+    // *after* it has taken the gate, so the claim ends up holding the gate and waiting —
+    // which is the state this whole argument is about. (A barrier on the firm row catches
+    // the dispatch in its precheck instead, before the gate, and proves nothing.)
     await barrier.session.query('BEGIN');
-    await barrier.session.query('SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+    await barrier.session.query('SELECT id FROM outbound_messages WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
       workspaceId(),
-      firm.firmId,
+      fenceId,
     ]);
 
     const gmail = world.clientWith(world.alpha, {});
@@ -291,8 +295,10 @@ describe('the firm rule at the dispatch claim', () => {
     await waitUntilBlocked(world.database.session, racer.pid);
 
     // The call outcome, on its own connection, as `runPolicyCommand` runs it: one
-    // transaction, the real command. `no_answer` keeps it to the shape under test — the
-    // locks it takes and their order — without dragging the whole engaged-call stop in.
+    // transaction, the real command, and an **engaged** outcome — which is the only kind
+    // that reaches the stop the old code took the gate for. A `no_answer` never gets
+    // there, so a test that logged one passed whether or not the gate came first (the
+    // third review of PR 332).
     const caller = repositoryContext(
       workspaceScope(workspaceId(), {
         kind: 'user',
@@ -305,10 +311,17 @@ describe('the firm rule at the dispatch claim', () => {
       await logCallOutcome(caller, {
         firmId: firm.firmId,
         ...(contacts[0]?.id === undefined ? {} : { contactId: contacts[0].id }),
-        outcome: 'no_answer',
+        outcome: 'interested',
       }),
     );
 
+    // The call is queued behind the claim: the claim holds the gate SHARED for the whole
+    // of its transaction, so the call's EXCLUSIVE request waits. Take the gate away from
+    // the front of the call — the order this lane changed — and the call takes the firm
+    // row first and *then* asks for the gate, while the claim, released by the barrier,
+    // asks for that firm row inside `firmExclusivitySource`. Each holds what the other
+    // needs, which is the cycle PostgreSQL breaks with `40P01`.
+    await waitUntilBlocked(world.database.session, second.pid);
     await barrier.session.query('COMMIT');
     // Neither side is aborted. `40P01` is PostgreSQL's deadlock, and a failure of the
     // ordering above would raise it on one of these two.

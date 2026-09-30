@@ -534,7 +534,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           // is the only outcome the server grants one on: another outcome would be
           // refused, and refusing a whole call log because of a stale field in the
           // form would lose the outcome itself.
-          ...(input.followUpPermission !== null && input.outcome === 'interested'
+          // …and only when the call names a person. A permission is granted to somebody,
+          // and the server refuses an agreement with no contact — which would take the
+          // whole call log with it, losing the outcome (the third review of PR 332).
+          ...(input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
             ? { followUpPermission: input.followUpPermission }
             : {}),
         },

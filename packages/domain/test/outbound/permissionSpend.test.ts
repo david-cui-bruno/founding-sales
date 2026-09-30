@@ -299,6 +299,55 @@ describe('a permission that expires while the claim waits', () => {
   });
 });
 
+describe('a consuming scope that expires between the gate and the spend', () => {
+  it('aborts the claim on a zero-row consume, and calls Gmail not at all', async () => {
+    // P2-1's proof, third round. The code rolls back when the conditional consume affects
+    // no row, and the tests that stood for it never reached that line: the second attempt
+    // was refused earlier, by the eligibility source reading `consumed_at`. Here the
+    // permission is unspent and live at every read — the recheck runs on the fixture's
+    // pinned clock — and dead by the database's own clock at the moment of the UPDATE.
+    const firm = await seedFirm(world, world.alpha, 'expiring-consume');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    const permission = await permissionOfFence(fenceId);
+    await becomeContextualReply(permission.id, firm.firmId, permission.contactId);
+    await world.database.session.query(
+      `UPDATE follow_up_permissions SET expires_at = clock_timestamp() + interval '2 seconds'
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), permission.id],
+    );
+
+    await barrier.session.query('BEGIN');
+    await barrier.session.query('SELECT id FROM outbound_messages WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+      workspaceId(),
+      fenceId,
+    ]);
+    const gmail = world.clientWith(world.alpha, {});
+    const sampled = new Date(OPEN_INSTANT);
+    const claim = dispatchOutboundMessage(
+      context(),
+      world.sendDeps(world.alpha, { gmail, now: () => sampled }),
+      { outboundMessageId: fenceId },
+    );
+    await waitUntilBlocked(barrier.session, await backendOfClaim());
+    await settle(2_500);
+    await barrier.session.query('COMMIT');
+
+    const report = await claim;
+    expect(report.outcome, JSON.stringify(report)).toBe('not_ready');
+    expect(`${report.refusal ?? ''}:${report.detail ?? ''}`).toContain('follow_up_scope_exhausted');
+    expect(gmail.sends).toHaveLength(0);
+    // Nothing was spent, and the fence is still there to be decided again.
+    const { rows } = await world.database.session.query<{ consumed_at: Date | null; state: string }>(
+      `SELECT p.consumed_at, m.state
+         FROM follow_up_permissions p, outbound_messages m
+        WHERE p.workspace_id = $1 AND p.id = $2 AND m.workspace_id = $1 AND m.id = $3`,
+      [workspaceId(), permission.id, fenceId],
+    );
+    expect(rows[0]?.consumed_at).toBeNull();
+    expect(rows[0]?.state).toBe('prepared');
+  });
+});
+
 /** The backend the world's own session is using, which is the one the claim runs on. */
 async function backendOfClaim(): Promise<number> {
   const { rows } = await world.database.session.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
@@ -409,6 +458,126 @@ describe('an expired permission cannot supersede legacy history', () => {
       'SELECT state, ended_at FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
       [workspaceId(), legacyId],
     );
+    expect(after[0]?.state).toBe('active');
+    expect(after[0]?.ended_at).toBeNull();
+  });
+});
+
+describe('a permission that dies between the verification and the bind', () => {
+  it('takes the whole enrolment with it, supersession included', async () => {
+    // The third review of PR 332. The post-gate clock closed the window *before* the
+    // verification; this is the window after it. The bind is the last statement of the
+    // command, and until now it asked only whether the permission was unbound — so a
+    // permission that expired while the enrollment and its first execution were being
+    // written still committed a terminal stop of a live `cold_legacy` row.
+    //
+    // The gap is made real rather than hoped for: a trigger that sleeps on the enrollment
+    // insert puts a second and a half between the verification's clock and the bind's.
+    const firm = await seedFirm(world, world.alpha, 'expiring-bind');
+    const legacyExecution = await makeStepExecution(world.database.session, {
+      workspaceId: workspaceId(),
+      firmId: firm.firmId,
+      opportunityId: firm.opportunityId,
+      userId: world.alpha.workspace.salesperson.userId,
+      templateVersionId: world.alpha.templateVersionId,
+      originKind: 'cold_legacy',
+    });
+    const { rows: legacy } = await world.database.session.query<{ id: string; contact_id: string; sequence_version_id: string }>(
+      `SELECT n.id, n.contact_id, n.sequence_version_id
+         FROM step_executions e
+         JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+        WHERE e.workspace_id = $1 AND e.id = $2`,
+      [workspaceId(), legacyExecution],
+    );
+    const legacyId = legacy[0]?.id ?? '';
+    const contactId = legacy[0]?.contact_id ?? '';
+    const { rows: log } = await world.database.session.query<{ id: string }>(
+      `INSERT INTO call_logs
+         (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+          actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+       VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5,
+               'agreed_sequence', $6)
+       RETURNING id`,
+      [
+        workspaceId(),
+        firm.firmId,
+        contactId,
+        firm.opportunityId,
+        world.alpha.workspace.salesperson.userId,
+        legacy[0]?.sequence_version_id ?? '',
+      ],
+    );
+    const caller = repositoryContext(
+      workspaceScope(workspaceId(), {
+        kind: 'user',
+        userId: world.alpha.workspace.salesperson.userId,
+        role: 'salesperson',
+      }),
+      world.database.session,
+    );
+    const granted = await grantFollowUpPermission(caller, {
+      firmId: firm.firmId,
+      contactId,
+      callLogId: log[0]?.id ?? '',
+      grantedByUserId: world.alpha.workspace.salesperson.userId,
+    });
+    if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
+    await world.database.session.query(
+      `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
+              time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), firm.firmId],
+    );
+    // Alive when the command verifies it, dead by the time the insert finishes.
+    await world.database.session.query(
+      `UPDATE follow_up_permissions SET expires_at = clock_timestamp() + interval '700 milliseconds'
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), granted.value.id],
+    );
+    await world.database.session.query(`
+      CREATE OR REPLACE FUNCTION fss_test_slow_enrolment() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_sleep(1.5); RETURN NEW; END; $$;
+    `);
+    await world.database.session.query(
+      `CREATE TRIGGER fss_test_slow_enrolment BEFORE INSERT ON sequence_enrollments
+         FOR EACH ROW EXECUTE FUNCTION fss_test_slow_enrolment()`,
+    );
+
+    try {
+      await expect(
+        withTransaction(second.session as Parameters<typeof withTransaction>[0], async () =>
+          await enrollContact(
+            repositoryContext(
+              workspaceScope(workspaceId(), {
+                kind: 'user',
+                userId: world.alpha.workspace.salesperson.userId,
+                role: 'salesperson',
+              }),
+              second.session,
+            ),
+            {
+              sequenceVersionId: legacy[0]?.sequence_version_id ?? '',
+              originKind: 'follow_up',
+              permissionId: granted.value.id,
+              opportunityId: firm.opportunityId,
+              firmId: firm.firmId,
+              contactId,
+            },
+          ),
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await world.database.session.query('DROP TRIGGER fss_test_slow_enrolment ON sequence_enrollments');
+      await world.database.session.query('DROP FUNCTION fss_test_slow_enrolment()');
+    }
+
+    // The legacy row is untouched, and no new enrolment exists.
+    const { rows: after } = await world.database.session.query<{ id: string; state: string; ended_at: Date | null }>(
+      'SELECT id, state, ended_at FROM sequence_enrollments WHERE workspace_id = $1 AND firm_id = $2',
+      [workspaceId(), firm.firmId],
+    );
+    expect(after).toHaveLength(1);
+    expect(after[0]?.id).toBe(legacyId);
     expect(after[0]?.state).toBe('active');
     expect(after[0]?.ended_at).toBeNull();
   });

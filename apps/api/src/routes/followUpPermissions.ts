@@ -4,8 +4,6 @@ import {
 } from '@fss/contracts';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
-import { readFirm } from '@fss/domain/crm/firms.ts';
-import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import {
   followUpPermissionDto,
@@ -83,27 +81,21 @@ export async function routeFollowUpPermissions(
     if (!scoped.ok) return scoped.result;
     const actor = scoped.context.scope.actor;
     const everyFirm = actor.kind === 'system' || actor.role === 'admin';
-    if (parsed.data.firmId !== undefined) {
-      // A read about one firm answers the assignment question the same way the firm
-      // page does: an unassigned salesperson is told nothing about it. The answer's
-      // *contents* are decided by the query below, which carries the same rule.
-      const firm = await readFirm(scoped.context, parsed.data.firmId);
-      if (firm === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-      // A member who is not the assignee and not an admin learns nothing about the
-      // firm's permissions — `not_found`, the same answer the firm page gives, because
-      // "you are not the assignee of this firm" is itself a fact about the firm.
-      if (decideFirmRead(scoped.context, firm) !== 'assigned_or_admin') {
-        return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-      }
-    }
+    // No read of the firm before the read of its permissions, and that is the whole of
+    // P1-5 (third review of PR 332). A route that read the firm, decided, and then asked
+    // for the rows had a window between the two statements — READ COMMITTED gives each
+    // its own snapshot — and a reassignment committing inside it answered with rows the
+    // caller was no longer allowed. The only way to have no window is to have one
+    // statement, so the assignment rule travels *in* the query, for every salesperson,
+    // with or without a firm id.
+    //
+    // The cost is the shape of the answer: a salesperson naming a firm that is not theirs
+    // gets an empty list rather than `not_found`. Nothing is disclosed by it — an empty
+    // list is exactly what a firm with no permissions looks like — and the firm page,
+    // which is where "you are not the assignee" is a fact worth saying, still says it.
     const permissions = await listFollowUpPermissions(scoped.context, {
       ...(parsed.data.firmId === undefined ? {} : { firmId: parsed.data.firmId }),
       ...(parsed.data.contactId === undefined ? {} : { contactId: parsed.data.contactId }),
-      // The server, not the caller, decides which firms this answer may mention (P1-5),
-      // and it decides it **in the query** — with or without a firm id. The `readFirm`
-      // above is a presentation choice, not an authorization: it picks `not_found` over
-      // an empty list for a firm this caller may not see, and a reassignment committing
-      // between it and this query can only make the answer narrower.
       ...(everyFirm || actor.kind !== 'user' ? {} : { assignedToUserId: actor.userId }),
     });
     return {

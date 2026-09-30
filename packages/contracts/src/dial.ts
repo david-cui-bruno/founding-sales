@@ -522,8 +522,18 @@ export const CALL_OCCURRED_AT_TOLERANCE_SECONDS = 120;
  *    and no number was named, so nothing was retired or suppressed by number.
  *  * `effects_not_applied` — applying the outcome was refused part-way. Every effect
  *    was rolled back to a savepoint; the call itself is recorded.
+ *  * `follow_up_not_granted` — the call was recorded and its effects applied, but the
+ *    follow-up agreed on it could not be granted. Its own savepoint, so the one effect
+ *    an interested call must never lose — the engaged-call stop — is not taken down with
+ *    it (the third review of PR 332). A person grants the permission from the firm page,
+ *    or the conversation simply has none.
  */
-const CALL_FOLLOW_UP_KINDS = ['callback_time_needed', 'route_not_named', 'effects_not_applied'] as const;
+const CALL_FOLLOW_UP_KINDS = [
+  'callback_time_needed',
+  'route_not_named',
+  'effects_not_applied',
+  'follow_up_not_granted',
+] as const;
 
 const callFollowUpSchema = z.object({
   kind: z.enum(CALL_FOLLOW_UP_KINDS),

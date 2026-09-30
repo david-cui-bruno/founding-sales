@@ -234,6 +234,7 @@ export function firmSequences(overrides: Partial<NonNullable<CrmState['sequences
         sequenceVersionId: SEQUENCE_VERSION_ID,
         label: 'Founder plan v1',
         templateVersionIds: [SEQUENCE_TEMPLATE_VERSION_ID],
+        stepCount: 1,
       },
     ],
     enrollments: [],

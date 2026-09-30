@@ -412,6 +412,63 @@ describe('C04: a logged call applies the frozen step, bound through its Today ta
     expect((await readOpenOpportunity(salesperson(), firm.firmId))?.control_mode).toBe('manual');
   });
 
+  it('an engaged call still stops its sequences when the agreed follow-up cannot be granted', async () => {
+    // The third review of PR 332's new P0, in its general form: the grant used to share a
+    // savepoint with the engaged-call stop, so anything that refused it rolled the stop
+    // back — and the command still answered accepted. A conversation was recorded and the
+    // sequences kept running, which is the one outcome invariant 3 forbids.
+    const firm = await makeFirm();
+    const called = await enrolWithCallTask(firm, firm.contactId, await callFirstVersion('advance'));
+    const { id: templateVersionId } = await one<{ id: string }>(
+      `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
+                                      content_hash, footer_sign_off, approved_at, approved_by_user_id)
+       VALUES ($1, gen_random_uuid(), 1, 'The overview', 'A question about {firm_name}',
+               'Hello {contact_first_name}.', encode(sha256(random()::text::bytea), 'hex'),
+               'Sam Example', now(), $2)
+       RETURNING id`,
+      [seeded.alpha.workspaceId, seeded.alpha.admin.userId],
+    );
+    // Every new permission refused, at the database, which is the bluntest way to make
+    // the grant fail without pretending the rest of the call went wrong. `NOT VALID`
+    // leaves existing rows alone and still applies to inserts.
+    await database.session.query(
+      'ALTER TABLE follow_up_permissions ADD CONSTRAINT fu_grant_blocked CHECK (false) NOT VALID',
+    );
+    try {
+      const logged = await inTransaction(async context =>
+        await logCallOutcome(context, {
+          firmId: firm.firmId,
+          contactId: firm.contactId,
+          itemId: called.itemId,
+          outcome: 'interested',
+          followUpPermission: { scope: 'single_email', templateVersionId },
+        }),
+      );
+      if (!logged.ok) throw new Error(`refused: ${logged.reason}`);
+      // The permission is the only thing lost, and the receipt says so.
+      expect(logged.value.followUpPermissionId).toBeNull();
+      expect(logged.value.followUps).toContainEqual({ kind: 'follow_up_not_granted', reason: 'invalid_input' });
+      expect(logged.value.followUps.some(entry => entry.kind === 'effects_not_applied')).toBe(false);
+      // And everything an interested call must do, it did.
+      expect(logged.value.setManual).toBe(true);
+      expect(logged.value.stepApplication).toBe('completed_and_stopped');
+      const { rows } = await database.session.query<{ state: string; end_reason: string | null }>(
+        'SELECT state, end_reason FROM sequence_enrollments WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firm.firmId],
+      );
+      expect(rows.map(row => [row.state, row.end_reason])).toEqual([['stopped', 'engaged_call']]);
+      expect((await readOpenOpportunity(salesperson(), firm.firmId))?.control_mode).toBe('manual');
+      // The call log is there, with what was agreed on it.
+      const log = await one<{ agreed_follow_up: string | null }>(
+        'SELECT agreed_follow_up FROM call_logs WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firm.firmId],
+      );
+      expect(log.agreed_follow_up).toBe('single_email');
+    } finally {
+      await database.session.query('ALTER TABLE follow_up_permissions DROP CONSTRAINT fu_grant_blocked');
+    }
+  });
+
   it('a wrong number or a failed call completes nothing, and the task stays', async () => {
     const firm = await makeFirm();
     const enrolled = await enrolWithCallTask(firm, firm.contactId, await callFirstVersion('advance'));

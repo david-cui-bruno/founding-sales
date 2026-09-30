@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -16,12 +17,14 @@ import {
 } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
 import {
+  agreedSequenceExpiry,
   consumeFollowUpPermission,
   grantFollowUpPermission,
   revokeFollowUpPermission,
 } from '../../sequences/followUpPermissions.ts';
+import { currentHolidayCalendar } from '../../sequences/calendars.ts';
 import { resumeEnrollment } from '../../sequences/resume.ts';
-import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { listStepExecutions, readEnrollment, readSequenceVersion } from '../../sequences/rows.ts';
 import { listStepWakes } from '../../sequences/wake.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
@@ -787,6 +790,58 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     expect(refused).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
   });
 
+  it('agreed_sequence: the bound follows the enrolment that used it, not the grant', async () => {
+    // The third review of PR 332. The grant computed the bound from *its own* instant;
+    // an enrolment days later ran a plan whose last step fell outside it — the
+    // permission's own sequence, refused by the permission. The bind now recomputes the
+    // bound from the start the run actually took, on the calendar it froze.
+    const contactId = await addContact('Enrolled Later');
+    const versionId = await publishDelayedPlan();
+    const granted = await grantAgreedSequence(contactId, versionId);
+    // The wait between agreeing and enrolling: the permission was granted three days ago
+    // and, because its plan is a week long, is still live.
+    await database.session.query(
+      `UPDATE follow_up_permissions
+          SET granted_at = granted_at - interval '3 days', expires_at = expires_at - interval '3 days'
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, granted.permissionId],
+    );
+    const { rows: atGrant } = await database.session.query<{ expires_at: Date }>(
+      'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, granted.permissionId],
+    );
+
+    const result = await enrollContact(salesperson(), {
+      sequenceVersionId: versionId,
+      originKind: 'follow_up',
+      permissionId: granted.permissionId,
+      opportunityId: crm.alpha.opportunityId,
+      firmId: crm.alpha.firmId,
+      contactId,
+    });
+    if (!result.ok) throw new Error(`refused: ${result.reason}`);
+
+    const { rows: bound } = await database.session.query<{ expires_at: Date; started_at: Date }>(
+      `SELECT p.expires_at, n.started_at
+         FROM follow_up_permissions p
+         JOIN sequence_enrollments n ON n.workspace_id = p.workspace_id AND n.id = p.enrollment_id
+        WHERE p.workspace_id = $1 AND p.id = $2`,
+      [seeded.alpha.workspaceId, granted.permissionId],
+    );
+    const startedAt = bound[0]?.started_at?.toISOString() ?? '';
+    const expected = agreedSequenceExpiry(
+      (await readSequenceVersion(worker(), versionId))?.steps ?? [],
+      startedAt,
+      'America/New_York',
+      await currentHolidayCalendar(worker()),
+    );
+    // Exactly the plan's own end, measured from this run's start…
+    expect(bound[0]?.expires_at?.toISOString()).toBe(expected);
+    // …and later than the bound the grant three days ago had left it with, which is the
+    // window the old code would have run this plan inside.
+    expect(bound[0]?.expires_at?.getTime() ?? 0).toBeGreaterThan(atGrant[0]?.expires_at?.getTime() ?? 0);
+  });
+
   it('agreed_sequence: refuses a step of another sequence', async () => {
     const contactId = await addContact('Agreed Elsewhere');
     // The permission names a different published **version** from the one the
@@ -1174,6 +1229,33 @@ async function onePublishedStep(): Promise<string> {
     [seeded.alpha.workspaceId, `One step ${String(Date.now())}`, seeded.alpha.admin.userId],
   );
   return await publishOneStep(sequenceRows[0]?.id ?? '');
+}
+
+/** A published plan with a week in it, so "when does this agreement end" has an answer. */
+async function publishDelayedPlan(): Promise<string> {
+  const { rows: sequenceRows } = await database.session.query<{ id: string }>(
+    `INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+    [seeded.alpha.workspaceId, `Delayed plan ${randomUUID().slice(0, 8)}`, seeded.alpha.admin.userId],
+  );
+  const { rows: versions } = await database.session.query<{ id: string }>(
+    `INSERT INTO sequence_versions (workspace_id, sequence_id, version, state)
+     VALUES ($1, $2, 1, 'draft') RETURNING id`,
+    [seeded.alpha.workspaceId, sequenceRows[0]?.id ?? ''],
+  );
+  const versionId = versions[0]?.id ?? '';
+  await database.session.query(
+    `INSERT INTO sequence_steps
+       (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, template_version_id)
+     VALUES ($1, $2, 1, 'email', 'elapsed', 0, $3), ($1, $2, 2, 'email', 'business_days', 5, $3)`,
+    [seeded.alpha.workspaceId, versionId, sequences.alpha.template.templateVersionId],
+  );
+  await database.session.query(
+    `UPDATE sequence_versions
+        SET state = 'published', published_at = now(), published_by_user_id = $3
+      WHERE workspace_id = $1 AND id = $2`,
+    [seeded.alpha.workspaceId, versionId, seeded.alpha.admin.userId],
+  );
+  return versionId;
 }
 
 async function publishOneStep(sequenceId: string): Promise<string> {

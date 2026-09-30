@@ -474,6 +474,27 @@ describe('the Today bridge', () => {
     const expanded = await bridge.expand({ firmId: FIRM_ID });
     expect(expanded.followUpTemplates).toEqual([{ id: TEMPLATE_ID, name: 'The overview' }]);
 
+    const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: CONTACT_ID,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({
+      contactId: CONTACT_ID,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+
+    // …and never without a person. A permission is granted to somebody, and the server
+    // refuses an agreement that names nobody — which would take the call log with it
+    // (the third review of PR 332).
+    calls.length = 0;
     await bridge.recordOutcome({
       firmId: FIRM_ID,
       contactId: null,
@@ -485,9 +506,7 @@ describe('the Today bridge', () => {
       doNotCallCoversAllContact: false,
       followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
     });
-    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({
-      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
-    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
   });
 
   it('never puts a token, a URI or a command id in the state it returns', async () => {

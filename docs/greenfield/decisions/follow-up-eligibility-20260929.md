@@ -238,6 +238,29 @@ real claim against a real `logCallOutcome`, with SQLSTATE `40P01` asserted absen
 * **The Mac matches the permission to the plan** and requires it unbound
   (`livePermissionFor`).
 
+## 6c. What the third review changed (30 September 2026)
+
+* **An agreement needs a person, and it is checked before the call log is written.** The
+  contact check sat inside the savepoint that carries the engaged-call stop, so an
+  `interested` call with an agreement and no contact recorded the conversation, rolled the
+  stop back and still answered accepted — sequences kept running against a firm that had
+  just had a conversation. The grant now has a savepoint of its **own**, after the effects:
+  a grant that fails costs the permission and says so (`follow_up_not_granted`), and
+  nothing else.
+* **The permission list makes no read the query could disagree with.** The route's
+  `readFirm` is gone: one statement, with the assignment rule inside it. A salesperson who
+  names a firm that is not theirs gets an empty list rather than `not_found`.
+* **The bind is conditional on liveness**, not only on being unbound, and zero rows takes
+  the whole enrollment — supersession included — with it.
+* **An agreed sequence's bound is rebound at enrollment** from the start the run actually
+  took and the calendar it froze; the grant's bound was a guess made at grant time.
+* **The Mac counts steps, not templates**: "one e-mail" is a plan of one step, and an
+  e-mail followed by a call task is not it.
+* Three proofs were rewritten to be proofs: the deadlock case uses an engaged outcome and
+  a barrier on the fence row (it fails with `40P01` if the gate-first line is reverted),
+  and the zero-row consume case expires a live, unspent permission mid-claim (it sends if
+  the abort is removed).
+
 ## 7. Deviations from the brief, each with its reason
 
 1. **`granted_by` is two columns**, `granted_by_user_id` (FK onto

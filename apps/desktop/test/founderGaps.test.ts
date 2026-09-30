@@ -451,6 +451,9 @@ describe('the Firm page enrols, confirms a number, and clears a title (audit G03
           // The bytes the version's steps send, which the Mac matches a follow-up
           // permission against before it offers one (migration 0025).
           templateVersionIds: [SEQUENCE_IDS.template],
+          // How many steps the version has in all, which is not the number of templates
+          // in it: the Mac needs both to tell "one e-mail" from "an e-mail and a call".
+          stepCount: 1,
         },
       ],
       enrollments: [{ enrollmentId: SEQUENCE_IDS.enrollment, contactId: CONTACT, label: 'Founding outreach v1', state: 'active', startedAt: '2026-09-01T12:00:00.000Z' }],

@@ -140,7 +140,60 @@ describe('the follow-up permission endpoints', () => {
         [fixture.alpha.workspaceId, theirsPermissionId],
       )).rows[0]?.firm_id,
     });
-    expect(theirFirm.status).toBe(404);
+    // An empty list, not `not_found`: since the third review of PR 332 the route makes no
+    // decision outside the query, so there is no firm read to answer from. Nothing about
+    // the firm is disclosed either way.
+    expect(theirFirm.status).toBe(200);
+    expect((theirFirm.body as { permissions: readonly unknown[] }).permissions).toEqual([]);
+  });
+
+  it('makes no authorization read the query could disagree with', async () => {
+    // P1-5's proof, third round. The window the review found was between the route's
+    // `readFirm` and the list query: under READ COMMITTED each statement has its own
+    // snapshot, so a reassignment committing between them answered with rows the caller
+    // was no longer allowed. The window is gone because the statements are one — and this
+    // case pins that by committing the reassignment *from another connection while the
+    // request is in flight*, repeatedly. Whatever the interleaving, the rows a salesperson
+    // sees are the rows the same statement says are theirs.
+    const firmId = (await fixture.db.query<{ firm_id: string }>(
+      'SELECT firm_id FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+      [fixture.alpha.workspaceId, minePermissionId],
+    )).rows[0]?.firm_id;
+    const reassign = async (toUserId: string): Promise<void> => {
+      await fixture.db.query('UPDATE firms SET assigned_user_id = $3 WHERE workspace_id = $1 AND id = $2', [
+        fixture.alpha.workspaceId,
+        firmId,
+        toUserId,
+      ]);
+    };
+    try {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await reassign(fixture.alpha.salesperson.userId);
+        // The request and the reassignment, launched together.
+        const [answer] = await Promise.all([
+          post('/follow-up-permissions/list', salespersonToken, { firmId }),
+          reassign(fixture.alpha.admin.userId),
+        ]);
+        expect(answer.status).toBe(200);
+        const permissions = (answer.body as { permissions: readonly { id: string; firmId: string }[] }).permissions;
+        // Every row answered is about a firm this salesperson is assigned *at the moment
+        // the answer was built*. A row about the firm can only appear when the answer was
+        // built before the reassignment landed; a row about it from after would be the
+        // leak.
+        const { rows: owner } = await fixture.db.query<{ assigned_user_id: string | null }>(
+          'SELECT assigned_user_id FROM firms WHERE workspace_id = $1 AND id = $2',
+          [fixture.alpha.workspaceId, firmId],
+        );
+        if (owner[0]?.assigned_user_id === fixture.alpha.admin.userId && permissions.length > 0) {
+          // The answer was built before the reassignment committed — which is a linear
+          // order, not a leak. The forbidden state is a *later* read exposing them.
+          const after = await post('/follow-up-permissions/list', salespersonToken, { firmId });
+          expect((after.body as { permissions: readonly unknown[] }).permissions).toEqual([]);
+        }
+      }
+    } finally {
+      await reassign(fixture.alpha.salesperson.userId);
+    }
   });
 
   it('applies the assignee rule in the query, so a reassignment cannot expose rows', async () => {
@@ -249,6 +302,36 @@ describe('the follow-up permission endpoints', () => {
       template_version_id: templateVersionId,
       max_steps: 1,
     });
+  });
+
+  it('refuses an agreement that names nobody, before the call log is written', async () => {
+    // The third review of PR 332's new P0. The contact check used to sit inside the
+    // savepoint that carries the engaged-call stop: the log was written, manual mode and
+    // the stop were applied, the missing contact was found, all of it was rolled back —
+    // and the command still answered accepted. A conversation was recorded and the
+    // sequences kept running.
+    const templateVersionId = await approvedTemplate();
+    const firmId = await seedFirm(fixture, {
+      name: 'Aspen Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const answer = await post(
+      '/calls/log',
+      salespersonToken,
+      command({ firmId, outcome: 'interested', followUpPermission: { scope: 'single_email', templateVersionId } }),
+    );
+    expect(answer.status).toBe(409);
+    expect((answer.body as { reason?: string }).reason).toBe('invalid_input');
+    // Nothing was written at all: not the log, not the permission.
+    for (const table of ['call_logs', 'follow_up_permissions']) {
+      const { rows } = await fixture.db.query(
+        `SELECT 1 FROM ${table} WHERE workspace_id = $1 AND firm_id = $2`,
+        [fixture.alpha.workspaceId, firmId],
+      );
+      expect(rows, table).toHaveLength(0);
+    }
   });
 
   it('refuses a call agreement on an outcome that agreed to nothing', async () => {
