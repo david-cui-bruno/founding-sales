@@ -48,6 +48,17 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
   const [playing, setPlaying] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const playback = useRef<Playback | null>(null);
+  /**
+   * Which Play press is current (review of C1, fold 2, finding 4). Stop and leaving the
+   * page move it on; a recording that arrives afterwards creates no audio and no blob URL,
+   * and playback that had already started for it is stopped (which revokes the URL).
+   */
+  const playRequest = useRef(0);
+  const stopPlayback = (): void => {
+    playRequest.current += 1;
+    playback.current?.stop();
+    playback.current = null;
+  };
   const portsRef = useRef(ports);
   portsRef.current = ports;
 
@@ -64,7 +75,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
     );
     return () => {
       current = false;
-      playback.current?.stop();
+      stopPlayback();
     };
   }, [firmId]);
 
@@ -79,22 +90,33 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
   if (calls.length === 0) return null;
 
   const play = async (sessionId: string): Promise<void> => {
-    playback.current?.stop();
+    stopPlayback();
+    const mine = playRequest.current;
+    const cancelled = (): boolean => mine !== playRequest.current;
     setProblem(null);
     setPlaying(sessionId);
     try {
       const answer = await ports.recording(sessionId);
+      // Stopped, or the page left, while the recording was on the wire: nothing is made.
+      if (cancelled()) return;
       if (answer.recording === null) {
         setProblem('Callie could not read that recording just now. Try again in a minute.');
         setPlaying(null);
         return;
       }
       const started = await (ports.play ?? playRecording)(answer.recording.audioBase64, answer.recording.contentType);
+      if (cancelled()) {
+        started.stop();
+        return;
+      }
       playback.current = started;
       await started.ended;
     } catch {
+      if (cancelled()) return;
       setProblem('That recording could not be played.');
     }
+    if (cancelled()) return;
+    playback.current = null;
     setPlaying(current => (current === sessionId ? null : current));
   };
 
@@ -116,7 +138,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
                 data-testid="call-history-play"
                 onClick={() => {
                   if (playing === call.sessionId) {
-                    playback.current?.stop();
+                    stopPlayback();
                     setPlaying(null);
                     return;
                   }

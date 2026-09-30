@@ -410,6 +410,104 @@ describe('the firm’s call history', () => {
   });
 });
 
+describe('a recording still on the wire', () => {
+  const recorded = {
+    sessionId: SESSION_ID,
+    firmId: FIRM_ID,
+    status: 'completed' as const,
+    startedAt: '2026-09-21T14:00:00.000Z',
+    answeredAt: null,
+    endedAt: null,
+    durationSeconds: 95,
+    hasRecording: true,
+    callLogId: null,
+  };
+
+  for (const how of ['Stop', 'leaving the page'] as const) {
+    it(`creates no audio when ${how} came first, and stops audio that started anyway`, async () => {
+      const pending = deferred<{ recording: { audioBase64: string; contentType: string }; reason: null }>();
+      const played: string[] = [];
+      const stopped: string[] = [];
+      const { unmount } = render(
+        <CallHistory
+          firmId={FIRM_ID}
+          ports={{
+            history: async () => await Promise.resolve({ calls: [recorded] }),
+            recording: async () => await pending.promise,
+            play: async audio => {
+              played.push(audio);
+              return await Promise.resolve({
+                stop: () => {
+                  stopped.push(audio);
+                },
+                ended: new Promise<void>(() => undefined),
+              });
+            },
+          }}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('call-history-play')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByTestId('call-history-play'));
+      if (how === 'Stop') fireEvent.click(screen.getByTestId('call-history-play'));
+      else unmount();
+      pending.resolve({ recording: { audioBase64: 'AAAA', contentType: 'audio/mpeg' }, reason: null });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(played).toEqual([]);
+      expect(stopped).toEqual([]);
+      if (how === 'Stop') unmount();
+    });
+  }
+});
+
+describe('audio that starts after Stop', () => {
+  it('is stopped at once (its blob: URL revoked)', async () => {
+    const starting = deferred<{ stop: () => void; ended: Promise<void> }>();
+    const stopped: number[] = [];
+    render(
+      <CallHistory
+        firmId={FIRM_ID}
+        ports={{
+          history: async () =>
+            await Promise.resolve({
+              calls: [
+                {
+                  sessionId: SESSION_ID,
+                  firmId: FIRM_ID,
+                  status: 'completed',
+                  startedAt: null,
+                  answeredAt: null,
+                  endedAt: null,
+                  durationSeconds: 5,
+                  hasRecording: true,
+                  callLogId: null,
+                },
+              ],
+            }),
+          recording: async () => await Promise.resolve({ recording: { audioBase64: 'AAAA', contentType: 'audio/mpeg' }, reason: null }),
+          play: async () => await starting.promise,
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('call-history-play')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('call-history-play'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    fireEvent.click(screen.getByTestId('call-history-play')); // Stop, while the audio is being made
+    starting.resolve({
+      stop: () => {
+        stopped.push(1);
+      },
+      ended: new Promise<void>(() => undefined),
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(stopped).toEqual([1]);
+    expect(screen.getByTestId('call-history-play').textContent).toBe('Play');
+  });
+});
+
 describe('playing a recording', () => {
   it('plays a blob: URL of the bytes and revokes it when stopped', async () => {
     const created: Blob[] = [];
