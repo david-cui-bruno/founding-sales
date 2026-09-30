@@ -12,6 +12,7 @@ import type {
   MergeResolution,
   ResolveOutgoingRequest,
   StageChange,
+  ValueChange,
 } from '../firmWorkspaceContract.ts';
 import { routeShown, type Route } from '../routes.ts';
 
@@ -42,7 +43,7 @@ import { routeShown, type Route } from '../routes.ts';
 
 export interface CrmActions {
   openFirm(firmId: string): void;
-  openPipeline(): void;
+  openPipeline(includeLost?: boolean): void;
   openAddFirm(): void;
   openImport(): void;
   /** macOS's file panel, then the server's preview of whatever it answered. */
@@ -51,6 +52,8 @@ export interface CrmActions {
   commitImport(): void;
   saveContact(edit: ContactEdit): void;
   changeStage(change: StageChange): void;
+  /** A person records an opportunity's monthly value (slice K). */
+  setValue(change: ValueChange): void;
   resolveMerge(resolution: MergeResolution): void;
   openOpportunity(): void;
   /** The explicit takeover (P1-1): manual mode with the origin only a person writes. */
@@ -109,8 +112,9 @@ export function useCrm(
       openFirm: firmId => {
         read(api => api.read('crm.openFirm', { firmId }));
       },
-      openPipeline: () => {
-        read(api => api.read('crm.openPipeline', {}));
+      openPipeline: includeLost => {
+        // `onClick={openPipeline}` hands over the event; only a real boolean is a filter.
+        read(api => api.read('crm.openPipeline', typeof includeLost === 'boolean' ? { includeLost } : {}));
       },
       openAddFirm: () => {
         read(api => api.read('crm.openAddFirm', {}));
@@ -136,6 +140,9 @@ export function useCrm(
         // Per opportunity, not per board: changing one firm's stage must not disable
         // the control on every other column (P1-4).
         command(`stage:${change.opportunityId}`, api => api.command('crm.changeStage', change));
+      },
+      setValue: change => {
+        command(`value:${change.opportunityId}`, api => api.command('crm.setValue', change));
       },
       resolveMerge: resolution => {
         command('merge', api => api.command('crm.resolveMerge', resolution));

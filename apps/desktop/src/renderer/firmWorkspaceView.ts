@@ -76,6 +76,7 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   saved: 'Saved.',
   merged: 'Merged.',
   stage_changed: 'Stage changed.',
+  value_recorded: 'Value recorded.',
   // Lane g84: Add firm and Import. A refused form marks its fields; the line says so.
   firm_added: 'Firm added.',
   imported: 'Imported.',
@@ -131,6 +132,7 @@ const INFO_NOTICES: ReadonlySet<string> = new Set([
   'saved',
   'merged',
   'stage_changed',
+  'value_recorded',
   'firm_added',
   'imported',
   'opportunity_opened',

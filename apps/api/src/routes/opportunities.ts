@@ -2,6 +2,7 @@ import {
   changeStageCommandSchema,
   classifyControlModeOriginCommandSchema,
   openOpportunityCommandSchema,
+  recordOpportunityValueCommandSchema,
   takeOverOpportunityCommandSchema,
 } from '@fss/contracts';
 import {
@@ -10,6 +11,7 @@ import {
   openOpportunity,
   takeOverOpportunity,
 } from '@fss/domain/crm/pipeline.ts';
+import { setOpportunityValue } from '@fss/domain/crm/opportunityValue.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -62,6 +64,14 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
           toStageKey: body.toStageKey,
           reason: body.reason,
           commandId: body.commandId,
+        }),
+      );
+    case '/opportunities/value':
+      return await runRouteCommand(deps, recordOpportunityValueCommandSchema, 'opportunity.value_recorded', async (repository, body) =>
+        await setOpportunityValue(repository, {
+          opportunityId: body.opportunityId,
+          monthlyCents: body.monthlyCents,
+          kind: body.kind,
         }),
       );
     case '/opportunities/manual':

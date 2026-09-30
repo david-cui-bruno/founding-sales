@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  boardCardSchema,
   heldOutgoingMessageSchema,
   enrollmentDtoSchema,
   firmIdentityDtoSchema,
@@ -65,6 +66,12 @@ export const pipelineViewSchema = z.object({
    * them out showed nothing for what had just been added.
    */
   unplacedFirms: z.array(firmIdentityDtoSchema).optional(),
+  /** Firm id to its card detail: value, meeting, evidence, pin, close reason (slice K). */
+  cards: z.record(z.string(), boardCardSchema).optional(),
+  /** Every stage of the workspace, for the destinations a move may name. */
+  stages: z.array(pipelineStageDtoSchema).optional(),
+  /** Whether this read asked for Lost (slice K). The bridge remembers it across screens. */
+  includeLost: z.boolean().optional(),
 });
 export type PipelineView = z.infer<typeof pipelineViewSchema>;
 
@@ -215,6 +222,13 @@ export interface ContactEdit {
   readonly fullName: string;
   readonly title: string | null;
   readonly makePrimary: boolean;
+}
+
+/** A person records an opportunity's monthly value (slice K). */
+export interface ValueChange {
+  readonly opportunityId: string;
+  readonly monthlyCents: number;
+  readonly kind: 'estimated' | 'agreed';
 }
 
 export interface StageChange {
