@@ -632,11 +632,14 @@ async function stopOldWatch(
     await deps.gmail.stopWatch(access.grant);
     return { stopped: true };
   } catch (error) {
-    if (error instanceof GmailClientError && error.status !== undefined) {
-      return { stopped: false, failure: `status_${String(error.status)}` };
-    }
-    return { stopped: false, failure: error instanceof Error ? error.name : 'error' };
+    return { stopped: false, failure: providerFailure(error) };
   }
+}
+
+/** A provider call's failure as a short audit code: `status_<n>` or the error's name. */
+function providerFailure(error: unknown): string {
+  if (error instanceof GmailClientError && error.status !== undefined) return `status_${String(error.status)}`;
+  return error instanceof Error ? error.name : 'error';
 }
 
 /**
@@ -757,16 +760,36 @@ export async function disconnectMailbox(
   const permitted = actor.kind === 'system' || actor.role === 'admin' || actor.userId === mailbox.ownerUserId;
   if (!permitted) return refuseMail('not_assigned');
 
+  // Two independent best-effort provider calls (A2 fold 3): stopping the watch and
+  // revoking the grant. The revocation runs whether or not the stop succeeded, because
+  // the token is deleted below and nothing could retry it afterwards. A grant FSS cannot
+  // reach is one it stops using in the next statements; the salesperson can revoke it in
+  // their Google account. Each outcome is recorded in the disconnect audit.
+  let oldWatchStopped = false;
+  let revoked = false;
+  const failure: { stop?: string; revoke?: string } = {};
   const refreshToken = await readRefreshToken(context, { mailboxId: mailbox.id, cipher: deps.cipher });
-  if (refreshToken !== null) {
+  if (refreshToken === null) {
+    failure.stop = 'no_token';
+    failure.revoke = 'no_token';
+  } else {
     const oauth = await resolveGmailOAuthConfig(deps.config, deps.secrets);
     try {
       const access = await deps.gmail.refreshAccessToken(oauth, refreshToken);
-      if (access.ok) await deps.gmail.stopWatch(access.grant);
+      if (access.ok) {
+        await deps.gmail.stopWatch(access.grant);
+        oldWatchStopped = true;
+      } else {
+        failure.stop = `refresh_${access.reason}`;
+      }
+    } catch (error) {
+      failure.stop = providerFailure(error);
+    }
+    try {
       await deps.gmail.revokeRefreshToken(oauth, refreshToken);
-    } catch {
-      // Best effort. A grant FSS cannot reach is a grant FSS will stop using in the
-      // next statement, and the salesperson can revoke it in their Google account.
+      revoked = true;
+    } catch (error) {
+      failure.revoke = providerFailure(error);
     }
   }
 
@@ -791,7 +814,13 @@ export async function disconnectMailbox(
     action: 'mailbox.disconnected',
     subjectKind: 'mailbox',
     subjectId: mailbox.id,
-    detail: { reason: input.reason, tokenDeleted: deleted },
+    detail: {
+      reason: input.reason,
+      tokenDeleted: deleted,
+      oldWatchStopped,
+      revoked,
+      ...(Object.keys(failure).length > 0 ? { failure } : {}),
+    },
   });
 
   return acceptMail({ mailboxId: mailbox.id, tokenDeleted: deleted });

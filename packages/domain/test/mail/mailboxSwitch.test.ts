@@ -837,6 +837,37 @@ describe('the switch transaction takes the send gate, then the mailbox row', () 
     expect(rows).toEqual([{ status: 'disconnected' }]);
   });
 
+  it('a disconnect whose users.stop fails (429) still revokes the grant, and the audit records both outcomes', async () => {
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async () => await Promise.resolve({ status: 429, headers: {}, body: '{}' }),
+    });
+    const gmail = account(world.alpha.address);
+    const done = await withTransaction(world.database.session, async () =>
+      await disconnectMailbox(owner(), grantDeps({ ...gmail, stopWatch: http.stopWatch }), {
+        mailboxId: world.alpha.mailboxId,
+        reason: 'owner_disconnect',
+      }),
+    );
+    expect(done).toMatchObject({ ok: true, value: { tokenDeleted: true } });
+    expect(gmail.calls.map(call => call.method)).toContain('revokeRefreshToken');
+    const { rows } = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'mailbox.disconnected'`,
+      [workspaceId()],
+    );
+    expect(rows).toEqual([
+      {
+        detail: {
+          reason: 'owner_disconnect',
+          tokenDeleted: true,
+          oldWatchStopped: false,
+          revoked: true,
+          failure: { stop: 'status_429' },
+        },
+      },
+    ]);
+  });
+
   it('never holds the gate while it waits for the row: it retries until the row is free', async () => {
     const holder = await extra();
     const grantSession = await extra();

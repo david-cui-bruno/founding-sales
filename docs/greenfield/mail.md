@@ -555,6 +555,14 @@ and the built guard — a refusal on the disconnect route, with an admin overrid
 audited — belongs to a later lane. Until then it lives here, in
 `docs/greenfield/release.md` section 6, and nowhere else.
 
+When a disconnect does run, it makes two independent best-effort Google calls before it
+takes the send gate: it stops the watch (`users.stop`), and it revokes the grant. The
+revocation runs whether or not the stop succeeded, because the local token is deleted
+in the same transaction and nothing could retry the revocation afterwards. The
+`mailbox.disconnected` audit records `oldWatchStopped`, `revoked` and, when either
+failed, `failure: { stop?, revoke? }` (for example `status_429`, `refresh_grant_revoked`
+or `no_token`). The disconnect itself goes ahead either way.
+
 ### The per-mailbox thirty-day opt-out window is the same kind of rule
 
 David's 19 September 2026 note asked for a per-mailbox thirty-day opt-out-processing
