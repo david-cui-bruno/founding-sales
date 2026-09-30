@@ -102,6 +102,11 @@ export const SEND_HANDOFF_REFUSALS = [
   'provider_refusal',
   'send_unknown_reconciling',
   'restore_in_progress',
+  // Send-path v2, slice S4: the dispatch claim refuses a prospecting fence on the Gmail
+  // path as `step_ineligible` with this code first in its detail, and the worker's
+  // hand-off (`refusalFor`) keeps a known code rather than collapsing it to
+  // `scoped_pause`, so the step shows the reason a card can act on.
+  'cold_outreach_mailbox_required',
 ] as const;
 export type SendHandoffRefusal = (typeof SEND_HANDOFF_REFUSALS)[number];
 

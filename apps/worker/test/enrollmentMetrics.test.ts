@@ -223,12 +223,38 @@ describe('the worker publishes ActiveEnrollments and HeldEnrollments on every pa
 
   it('publishes 2 active and 0 held once the real send gate holds both due emails because sending is switched off', async () => {
     for (const prospect of prospects) {
+      // Evidenced follow-ups, as the shared step-execution fixture writes them: an
+      // `interested` call that agreed this sequence, and the permission it granted. Until
+      // send-path v2 (slice S4) these were prospecting enrollments; a prospecting e-mail is
+      // now held at eligibility with `cold_outreach_mailbox_required`, before any fence,
+      // and this case is about the send gate refusing a real fence.
+      const callLogId = await one(
+        `INSERT INTO call_logs
+           (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+            actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+         VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5, 'agreed_sequence', $6)
+         RETURNING id`,
+        [workspaceId, prospect.firmId, prospect.contactId, prospect.opportunityId, userId, versionId],
+      );
+      const permissionId = await one(
+        `INSERT INTO follow_up_permissions
+           (workspace_id, firm_id, contact_id, kind, scope, call_log_id, sequence_version_id, max_steps,
+            expires_at, granted_by_user_id, note)
+         VALUES ($1, $2, $3, 'agreed_sequence', 'agreed_sequence', $4, $5, 1,
+                 now() + interval '365 days', $6, 'a fixture follow-up agreed on the call')
+         RETURNING id`,
+        [workspaceId, prospect.firmId, prospect.contactId, callLogId, versionId, userId],
+      );
       const enrollmentId = await one(
         `INSERT INTO sequence_enrollments
            (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-            firm_time_zone, holiday_calendar_version, origin_kind)
-         VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1', 'prospecting') RETURNING id`,
-        [workspaceId, versionId, prospect.opportunityId, prospect.firmId, prospect.contactId, userId],
+            firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1', 'follow_up', $7) RETURNING id`,
+        [workspaceId, versionId, prospect.opportunityId, prospect.firmId, prospect.contactId, userId, permissionId],
+      );
+      await database.session.query(
+        'UPDATE follow_up_permissions SET enrollment_id = $3 WHERE workspace_id = $1 AND id = $2',
+        [workspaceId, permissionId, enrollmentId],
       );
       await database.session.query(
         `INSERT INTO step_executions

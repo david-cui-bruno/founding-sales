@@ -107,6 +107,7 @@ export interface SendPlan {
 type MailboxRow = {
   id: string;
   owner_user_id: string;
+  kind: string;
   email_address: string;
   status: string;
   sync_state: string;
@@ -124,7 +125,7 @@ export async function decideSend(
   const now = deps.now?.() ?? (await decisionInstant(context));
 
   const mailboxRead = await context.db.query<MailboxRow>(
-    'SELECT id, owner_user_id, email_address, status, sync_state FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    'SELECT id, owner_user_id, kind, email_address, status, sync_state FROM mailboxes WHERE workspace_id = $1 AND id = $2',
     [context.scope.workspaceId, fence.mailboxId],
   );
   const mailbox = mailboxRead.rows[0];
@@ -151,7 +152,9 @@ export async function decideSend(
   const permission = await decideStepPermission(
     context,
     fence,
-    { id: mailbox.id, ownerUserId: mailbox.owner_user_id },
+    // The kind only names the mailbox in a cold-outreach refusal's detail; it never
+    // admits a send (`coldOutreachDispatchRefusal`, send-path v2).
+    { id: mailbox.id, ownerUserId: mailbox.owner_user_id, kind: mailbox.kind },
     now,
   );
   if (!permission.ok) return permission;

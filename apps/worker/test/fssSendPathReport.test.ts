@@ -27,8 +27,9 @@ import { readToolConfig } from '../src/tools/fss/config.ts';
  * **Counts over an empty database.** The fixture seeds one live enrollment of each of
  * the three origin kinds with a due step, an ended enrollment, a second live contact at
  * one firm, a firm suppression and a prepared fence, so every number asserted below is
- * non-zero because something is there — and `wouldLeaveOnFirstTick` is 2 rather than 0,
- * which is the number that would have made "excluded" untestable.
+ * non-zero because something is there — and `wouldLeaveOnFirstTick` is 1 rather than 0,
+ * which is the number that would have made "excluded" untestable. (It was 2 until
+ * send-path v2, slice S4: the due prospecting e-mail is now `heldForColdOutreach`.)
  *
  * **A read-only proof that proves nothing.** Asserting the mutation counters did not
  * move would pass against a counter that never moves. So the same test writes one row
@@ -384,14 +385,18 @@ describe('fss admin send-path report', () => {
       domains: [{ domain: 'usecallie.example', automatedSendingEnabled: false, dmarcPass: false, spfPass: true }],
     });
 
-    // 2. Three due steps, one per origin kind; two of them would actually leave.
+    // 2. Three due steps, one per origin kind. Only the follow-up would actually leave:
+    // cold_legacy is never woken, and the prospecting e-mail is held for a cold-outreach
+    // mailbox (send-path v2, slice S4), so wouldLeaveOnFirstTick = 3 - 1 - 1.
     expect(section(answer, 'dueNow')).toMatchObject({
       total: 3,
       email: 3,
       byOriginKind: { cold_legacy: 1, prospecting: 1, follow_up: 1 },
-      wouldLeaveOnFirstTick: 2,
+      heldForColdOutreach: 1,
+      wouldLeaveOnFirstTick: 1,
     });
     expect(String(section(answer, 'dueNow')['note'])).toContain('cold_legacy');
+    expect(String(section(answer, 'dueNow')['note'])).toContain('heldForColdOutreach');
 
     // 3. The live enrollments, grouped by sequence, version, started day and origin.
     const grouped = section(answer, 'liveEnrollments') as unknown as readonly Record<string, unknown>[];
@@ -467,7 +472,7 @@ describe('fss admin send-path report', () => {
     expect(section(answer, 'liveEnrollmentRows')['rows']).toHaveLength(1);
     // The counting sections are not sampled: a cap on the rows is not a cap on the
     // number that decides whether the pause may be lifted.
-    expect(section(answer, 'dueNow')).toMatchObject({ total: 3, wouldLeaveOnFirstTick: 2 });
+    expect(section(answer, 'dueNow')).toMatchObject({ total: 3, heldForColdOutreach: 1, wouldLeaveOnFirstTick: 1 });
   });
 
   it('refuses a --sample outside the bounds rather than silently clamping it', async () => {
@@ -554,7 +559,7 @@ describe('fss admin send-path report', () => {
       const { report: answer } = await report(['--workspace', workspaceId]);
       expect(section(answer, 'dueNow')).toMatchObject({ total: 3 });
       const { report: empty } = await report(['--workspace', otherId]);
-      expect(section(empty, 'dueNow')).toMatchObject({ total: 0, wouldLeaveOnFirstTick: 0 });
+      expect(section(empty, 'dueNow')).toMatchObject({ total: 0, heldForColdOutreach: 0, wouldLeaveOnFirstTick: 0 });
       expect(section(empty, 'liveEnrollmentRows')).toMatchObject({ total: 0, truncated: false });
     } finally {
       // The second workspace is left in place: this case is last, and deleting a

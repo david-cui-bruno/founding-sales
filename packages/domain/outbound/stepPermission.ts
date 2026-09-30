@@ -3,7 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from '../sequences/calendars.ts';
-import { CHANNEL_ACTION_KINDS, composeEligibility } from '../sequences/eligibility.ts';
+import { CHANNEL_ACTION_KINDS, composeEligibility, suppressionSource, type StepEligibilityInput } from '../sequences/eligibility.ts';
 import { readEnrollment, readStepExecution } from '../sequences/rows.ts';
 import type { EnrollmentRow, StepExecutionRow } from '../sequences/types.ts';
 import type { OutboundFenceRow } from './fence.ts';
@@ -47,7 +47,7 @@ export interface StepPermission {
 export async function decideStepPermission(
   context: RepositoryContext,
   fence: OutboundFenceRow,
-  mailbox: { readonly id: string; readonly ownerUserId: string },
+  mailbox: { readonly id: string; readonly ownerUserId: string; readonly kind: string },
   now: Date,
 ): Promise<SendResult<StepPermission>> {
   if (fence.originKind !== 'step_execution' || fence.stepExecutionId === null) {
@@ -95,7 +95,7 @@ export async function decideStepPermission(
     return refuseSend('step_ineligible', 'template_not_the_step’s');
   }
 
-  const outcome = await composeEligibility().evaluate(context, {
+  const input: StepEligibilityInput = {
     execution,
     opportunityId: enrollment.opportunityId,
     firmId: fence.firmId,
@@ -111,12 +111,68 @@ export async function decideStepPermission(
       routeVersion: fence.recipientRouteVersion,
       templateVersionId: fence.templateVersionId,
     },
-  });
+  };
+
+  // Contact-wide suppression first, before the cold-outreach refusal below (review of
+  // slice S4, P2-a). `decideSend` has checked the firm and the fence's own recipient
+  // address, but an opt-out recorded on *another* address of the same person is only
+  // seen by `suppressionSource`, and it is the fact that must be reported: a person who
+  // asked to stop must never be shown as merely waiting for a mailbox. The composition
+  // asks the same source again first; asking it here as well costs one statement.
+  const suppression = await suppressionSource().evaluate(context, input);
+  if (!suppression.ok) return refuseSend(sendRefusalForIneligibility(suppression.reasonCode), suppression.reasonCode);
+
+  // The dispatch path's own question about this fence (send-path v2, slice S4): a
+  // prospecting e-mail does not leave through Gmail, whatever the mailbox is labelled.
+  // Asked before the rest of the composition, beside the other fence-against-enrollment
+  // checks, because it is about the fence and the path rather than about the step: the
+  // composition's `coldOutreachTransportSource` asks the step's half.
+  const coldOutreach = coldOutreachDispatchRefusal(enrollment, mailbox);
+  if (coldOutreach !== null) return refuseSend('step_ineligible', coldOutreach);
+
+  const outcome = await composeEligibility().evaluate(context, input);
   if (!outcome.ok) {
     const detail = outcome.detail === undefined ? outcome.reasonCode : `${outcome.reasonCode}:${outcome.detail}`;
     return refuseSend(sendRefusalForIneligibility(outcome.reasonCode), detail);
   }
   return acceptSend({ execution, enrollment });
+}
+
+/**
+ * Why this fence may not leave through the Gmail dispatch path as cold outreach, or null
+ * (send-path v2, slice S4; David, 30 September 2026: "creating an enrollment must not
+ * enable cold Gmail outreach").
+ *
+ * `decideStepPermission` is reached only from `decideSend`, and `decideSend` only from
+ * `outbound/send.ts`, whose one external call is `gmail.sendMessage`. So every fence
+ * asked about here is on the Gmail dispatch path, and every fence is an e-mail. The rule
+ * is therefore "this is the Gmail path and the enrollment is prospecting" — and **not**
+ * "the fence's mailbox is not a cold-outreach mailbox": migration 0026 admits the kind
+ * `cold_outreach` as a label, and a label must never authorise Gmail as cold outreach
+ * (P0-5 of the plan review). The mailbox's kind is read only to be named in the detail,
+ * so an operator reading a held fence sees which mailbox it would have left through.
+ *
+ * Under the send gate, inside the claiming transaction (`send.ts`'s `recheckAndClaim`),
+ * so a prepared fence — one prepared before this rule existed, or held and returning
+ * through dispatch — is refused before the claim, and Gmail is never asked.
+ *
+ * `step_ineligible` rather than a refusal of its own: `holdReasonForRefusal` opens no
+ * `active_holds` row for it. The detail starts with `cold_outreach_mailbox_required`,
+ * the shape every eligibility refusal already takes here, and the worker's hand-off
+ * (`refusalFor` in `apps/worker/src/handlers/outboundSendHandoff.ts`) turns that first
+ * code into the step's hold because it is in `SEND_HANDOFF_REFUSALS` — so a prepared or
+ * resumed fence refused here leaves its step held with the same reason the eligibility
+ * source gives, not `scoped_pause`.
+ *
+ * Contact-wide suppression is asked before this (`decideStepPermission`): an opt-out
+ * on another address of the same person is reported as the suppression, never as this.
+ */
+export function coldOutreachDispatchRefusal(
+  enrollment: Pick<EnrollmentRow, 'originKind'>,
+  mailbox: { readonly kind: string },
+): string | null {
+  if (enrollment.originKind !== 'prospecting') return null;
+  return `cold_outreach_mailbox_required:gmail_dispatch:${mailbox.kind}`;
 }
 
 /**

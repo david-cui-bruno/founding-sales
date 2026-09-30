@@ -23,6 +23,9 @@ dimensions and are summed over every workspace (lane g72; `collectSequenceMetric
   and sending switched off (the deployment flag, the workspace attestation, the domain's
   automated-sending switch, or no sending domain).
 - `daily_cap`, `outside_email_window` and `send_unknown_reconciling`.
+- `cold_outreach_mailbox_required` (since send-path v2, 30 September 2026): a
+  prospecting e-mail step held because no cold-outreach transport exists yet. It is the
+  expected state of every prospecting enrollment until one does.
 
 Every other reason counts. A counted hold under a pause still counts.
 

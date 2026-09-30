@@ -1,7 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { databaseNow } from '../../policy/clock.ts';
-import { CHANNEL_ACTION_KINDS, followUpPermissionSource } from '../../sequences/eligibility.ts';
+import {
+  CHANNEL_ACTION_KINDS,
+  firmExclusivitySource,
+  followUpPermissionSource,
+  type StepEligibilityOutcome,
+} from '../../sequences/eligibility.ts';
 import { readEnrollment, readStepExecution } from '../../sequences/rows.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
@@ -37,9 +42,17 @@ import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
  *
  * ## The vacuous-pass trap
  *
- * A refusal proves nothing if neither fence could have gone. The single-fence control
- * at the top dispatches one prospecting fence at a firm of its own and requires `sent`,
- * so the world is demonstrably sendable before either race is run.
+ * A refusal proves nothing if neither fence could have gone. Until send-path v2 the
+ * single-fence control dispatched one prospecting fence at a firm of its own and
+ * required `sent`, so the world was demonstrably sendable before either race was run.
+ *
+ * ## Since send-path v2 (slice S4)
+ *
+ * A prospecting e-mail is refused on the Gmail dispatch path before the firm rule is
+ * asked, so the single-fence case no longer sends: the sendable control is now the
+ * follow-up case at the top, and the firm rule's decisions are asked of
+ * `firmExclusivitySource` directly. The claim-concurrency cases are parked at the end
+ * of the file; the note there says why.
  */
 
 let world: OutboundWorld;
@@ -82,6 +95,42 @@ async function prospectingFence(firm: Awaited<ReturnType<typeof seedFirm>>): Pro
     originKind: 'prospecting',
   });
   return await prepareFor(world, world.alpha, firm, { stepExecutionId });
+}
+
+/** As `prospectingFence`, and the step execution the fence belongs to. */
+async function prospectingStep(
+  firm: Awaited<ReturnType<typeof seedFirm>>,
+): Promise<{ readonly fenceId: string; readonly stepExecutionId: string }> {
+  const stepExecutionId = await makeStepExecution(world.database.session, {
+    workspaceId: workspaceId(),
+    firmId: firm.firmId,
+    opportunityId: firm.opportunityId,
+    userId: world.alpha.workspace.salesperson.userId,
+    templateVersionId: world.alpha.templateVersionId,
+    originKind: 'prospecting',
+  });
+  return { fenceId: await prepareFor(world, world.alpha, firm, { stepExecutionId }), stepExecutionId };
+}
+
+/** `firmExclusivitySource` alone, about one step execution, in its own transaction. */
+async function askFirmRule(stepExecutionId: string): Promise<StepEligibilityOutcome> {
+  const execution = await readStepExecution(context(), stepExecutionId);
+  if (execution === null) throw new Error('the step execution disappeared');
+  const enrollment = await readEnrollment(context(), { enrollmentId: execution.enrollmentId });
+  if (enrollment === null) throw new Error('the enrollment disappeared');
+  const now = await databaseNow(context());
+  return await withTransaction(world.database.session as Parameters<typeof withTransaction>[0], async () =>
+    await firmExclusivitySource().evaluate(context(), {
+      execution,
+      opportunityId: enrollment.opportunityId,
+      firmId: enrollment.firmId,
+      contactId: enrollment.contactId,
+      ownerUserId: enrollment.assignedUserId,
+      channel: execution.channel,
+      actionKind: CHANNEL_ACTION_KINDS[execution.channel],
+      now,
+    }),
+  );
 }
 
 async function dispatch(fenceId: string): Promise<{ readonly report: SendReport; readonly sends: number }> {
@@ -163,30 +212,78 @@ describe('a single_email permission is spent by the claim that sends it', () => 
   });
 });
 
-describe('the firm rule at the dispatch claim', () => {
-  it('sends the one prospecting fence of a firm that has only one', async () => {
+describe('the firm rule after send-path v2', () => {
+  it('holds the one prospecting fence of a firm that has only one before the firm rule is asked', async () => {
+    // Until send-path v2 (slice S4) this case sent: it was the control that showed the
+    // world sendable. A prospecting e-mail now has no transport, so the claim refuses it
+    // on the Gmail dispatch path before the firm rule (`coldOutreachDispatchRefusal`).
+    // The sendable control is the follow-up case above.
     const firm = await seedFirm(world, world.alpha, 'solo');
     const { report, sends } = await dispatch(await prospectingFence(firm));
-    expect(report.outcome, JSON.stringify(report)).toBe('sent');
-    expect(sends).toBe(1);
+    expect(report.outcome, JSON.stringify(report)).toBe('held');
+    expect(report.detail).toBe('cold_outreach_mailbox_required:gmail_dispatch:personal');
+    expect(sends).toBe(0);
   });
 
   it('refuses the later of two live prospecting enrollments at one firm', async () => {
     const firm = await seedFirm(world, world.alpha, 'pair');
-    const earlier = await prospectingFence(firm);
-    const later = await prospectingFence(firm);
+    const earlier = await prospectingStep(firm);
+    const later = await prospectingStep(firm);
 
-    const first = await dispatch(earlier);
-    expect(first.report.outcome, JSON.stringify(first.report)).toBe('sent');
+    // The rule itself, asked of the source the claim composes: the earlier enrollment
+    // is the winner, and the later is refused naming it.
+    expect(await askFirmRule(earlier.stepExecutionId)).toEqual({ ok: true });
+    const refusal = await askFirmRule(later.stepExecutionId);
+    expect(refusal).toMatchObject({ ok: false, reasonCode: 'firm_already_enrolled' });
 
-    const refused = await dispatch(later);
-    expect(refused.report.outcome).toBe('held');
-    expect(refused.report.refusal).toBe('step_ineligible');
-    expect(refused.report.detail ?? '').toContain('firm_already_enrolled');
-    // Nothing reached Gmail on the second attempt.
-    expect(refused.sends).toBe(0);
+    // And at the dispatch, neither goes: a prospecting e-mail is held for a
+    // cold-outreach mailbox before the firm rule is reached.
+    const first = await dispatch(earlier.fenceId);
+    const second_ = await dispatch(later.fenceId);
+    for (const run of [first, second_]) {
+      expect(run.report.outcome, JSON.stringify(run.report)).toBe('held');
+      expect(run.report.detail ?? '').toContain('cold_outreach_mailbox_required');
+    }
+    expect(first.sends + second_.sends).toBe(0);
   });
 
+  it('breaks a tie in started_at by id, so two enrollments of the same instant still pick one winner', async () => {
+    // P1-4: the winner query orders by `(started_at, id)`, and the case that proved it
+    // used two distinct instants, which the ordering would satisfy without the tiebreak.
+    // Asked of the source since send-path v2: the dispatch no longer reaches it for a
+    // prospecting e-mail.
+    const firm = await seedFirm(world, world.alpha, 'tie');
+    const earlier = await prospectingStep(firm);
+    const later = await prospectingStep(firm);
+    await world.database.session.query(
+      `UPDATE sequence_enrollments SET started_at = now()
+        WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL`,
+      [workspaceId(), firm.firmId],
+    );
+    const { rows: tied } = await world.database.session.query<{ instants: string }>(
+      `SELECT count(DISTINCT started_at)::text AS instants FROM sequence_enrollments
+        WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL`,
+      [workspaceId(), firm.firmId],
+    );
+    expect(tied[0]?.instants).toBe('1');
+
+    const outcomes = [await askFirmRule(earlier.stepExecutionId), await askFirmRule(later.stepExecutionId)];
+    expect(outcomes.filter(outcome => outcome.ok)).toHaveLength(1);
+    expect(outcomes.find(outcome => !outcome.ok)).toMatchObject({ reasonCode: 'firm_already_enrolled' });
+  });
+});
+
+/**
+ * The firm rule's concurrency at the dispatch claim, parked by send-path v2 (slice S4).
+ *
+ * Each case below needs a prospecting fence to pass the precheck and enter the claiming
+ * transaction, where `firmExclusivitySource` locks the firm row. Since S4 a prospecting
+ * e-mail is refused by the precheck (`coldOutreachDispatchRefusal`) and never opens that
+ * transaction, so the overlap these cases construct cannot happen, and their barriers
+ * would wait for a lock nobody takes. They are kept, unchanged, for the day a
+ * cold-outreach transport exists and a prospecting claim is a real path again.
+ */
+describe.skip('the firm rule at the dispatch claim, concurrently (parked until a cold-outreach transport exists)', () => {
   it('two claim transactions that are provably open at once send exactly one e-mail', async () => {
     // P1-4 of the GPT-6 review of PR 332: the old version of this case launched both
     // dispatches together and asserted the outcome, which a serial pair would satisfy
@@ -231,33 +328,6 @@ describe('the firm rule at the dispatch claim', () => {
     expect(gmailFirst.sends.length + gmailSecond.sends.length).toBe(1);
     const held = reports.find(report => report.outcome !== 'sent');
     expect(`${held?.refusal ?? ''}:${held?.detail ?? ''}`).toContain('firm_already_enrolled');
-  });
-
-  it('breaks a tie in started_at by id, so two enrollments of the same instant still pick one winner', async () => {
-    // P1-4: the winner query orders by `(started_at, id)`, and the case that proved it
-    // used two distinct instants, which the ordering would satisfy without the tiebreak.
-    const firm = await seedFirm(world, world.alpha, 'tie');
-    const earlier = await prospectingFence(firm);
-    const later = await prospectingFence(firm);
-    await world.database.session.query(
-      `UPDATE sequence_enrollments SET started_at = now()
-        WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL`,
-      [workspaceId(), firm.firmId],
-    );
-    const { rows: tied } = await world.database.session.query<{ instants: string }>(
-      `SELECT count(DISTINCT started_at)::text AS instants FROM sequence_enrollments
-        WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL`,
-      [workspaceId(), firm.firmId],
-    );
-    expect(tied[0]?.instants).toBe('1');
-
-    const first = await dispatch(earlier);
-    const second_ = await dispatch(later);
-    const outcomes = [first, second_];
-    expect(outcomes.filter(run => run.report.outcome === 'sent')).toHaveLength(1);
-    expect(first.sends + second_.sends).toBe(1);
-    const refused = outcomes.find(run => run.report.outcome !== 'sent');
-    expect(`${refused?.report.refusal ?? ''}:${refused?.report.detail ?? ''}`).toContain('firm_already_enrolled');
   });
 
   it('a real claim and a real call outcome overlap without deadlocking', async () => {

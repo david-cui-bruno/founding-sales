@@ -86,26 +86,63 @@ export const MINIMUM_TODAY_CARDS = 5;
  *
  * **`scoped_pause` again since the deployed base is schema 25** (send-path v2, 25 → 26,
  * 30 September 2026). The paragraph above describes a base that predates 0025. A
- * schema-25 base *does* write an origin: its fixture enrols through `enrollContact` with
- * `originKind: 'prospecting'` (`fixture.ts`), so the legacy refusal no longer applies to
- * that row, and the first source that refuses it is the workspace pause — the same
- * answer `EXPECTED_PROSPECTING_DECISION` requires of the post-upgrade probe. The
- * property under test is unchanged: the upgrade must not change the gate's decision
- * about the deployed code's rows. A run from a base older than 25 would see
- * `cold_legacy` here and fail loudly, which is the intended reading of an unexpected
- * base.
+ * schema-25 base *does* write an origin, so the legacy refusal no longer applies, and
+ * the first source that refuses the candidate row is the workspace pause. The property
+ * under test is unchanged: the upgrade must not change the gate's decision about this
+ * row. A run from a base older than 25 would see `cold_legacy` here and fail loudly,
+ * which is the intended reading of an unexpected base.
+ *
+ * **Which row that is, observed on the 25 → 26 run of slice S4 (30 September 2026).**
+ * The candidate query below prefers the fixture's `activeEnrollmentId`, but that
+ * enrollment (a `prospecting` one, written by `enrollContact`) has no `pending` or `held`
+ * step left by the time this runs, so the query takes another active enrollment: a
+ * **`follow_up`** one written by the base checkout's step-execution fixture, whose next
+ * step is a pending e-mail. That is why send-path v2's cold-outreach rule does not move
+ * this constant — a follow-up is not prospecting — while it does move
+ * `EXPECTED_PROSPECTING_DECISION` below. If a later fixture makes a prospecting e-mail
+ * step the candidate, this answer becomes `cold_outreach_mailbox_required` and fails
+ * loudly, which is the intended reading.
  */
 export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
 
 /**
- * The decision a *post-upgrade* enrollment must reach: the workspace pause.
+ * The decision a *post-upgrade* prospecting enrollment must reach.
  *
  * The legacy enrollment above is refused for being legacy, which is the property 0025
  * adds and also the reason it can no longer show that the pause still holds. So the same
- * step writes one enrollment of its own with a real origin, asks the gate about it, and
- * requires the switch that keeps production silent (P2-2 of the GPT-6 review of PR 332).
+ * step writes one enrollment of its own with a real origin, `prospecting`, asks the gate
+ * about it, and names the answer (P2-2 of the GPT-6 review of PR 332).
+ *
+ * **`cold_outreach_mailbox_required` since send-path v2, slice S4 (30 September 2026).**
+ * Until then the answer was the workspace pause (`scoped_pause`). David, 30 September
+ * 2026: "creating an enrollment must not enable cold Gmail outreach" — so
+ * `coldOutreachTransportSource` now refuses a prospecting e-mail step before the holds
+ * source, and the gate's decision about a prospecting row changes **on purpose**. That
+ * change is exactly what this probe must witness: an upgrade to this code that still
+ * answered `scoped_pause` here would mean a prospecting e-mail was one switch away from
+ * leaving through Gmail. The pause itself is still witnessed, by the follow-up row
+ * `EXPECTED_ELIGIBILITY_DECISION` asks about.
+ *
+ * **Assumption: the probe's step is an e-mail step.** It copies the first step of the
+ * candidate's sequence version, which in the fixture is an e-mail (`fixture.ts`, ordinal
+ * 1). A call-task first step would pass the cold-outreach source and reach
+ * `scoped_pause` instead, and this would fail loudly.
  */
-export const EXPECTED_PROSPECTING_DECISION = 'scoped_pause';
+export const EXPECTED_PROSPECTING_DECISION = 'cold_outreach_mailbox_required';
+
+/**
+ * The decision a *post-upgrade* evidenced follow-up must reach: the workspace pause
+ * (review of send-path v2 slice S4, P1-b).
+ *
+ * `EXPECTED_PROSPECTING_DECISION` moved to the cold-outreach rule, so the probe that
+ * used to prove "the switch that keeps production silent still holds an otherwise
+ * sendable step" no longer reaches the switch. This probe keeps that proof explicit on a
+ * row written after the upgrade: a `follow_up` enrollment resting on a real permission
+ * with real evidence (an `interested` call that agreed this sequence), which passes the
+ * follow-up and cold-outreach sources and must then be held by the pause. So the upgrade
+ * test proves both halves: prospecting → the cold hold, follow-up → the pause.
+ */
+export const EXPECTED_FOLLOW_UP_DECISION = 'scoped_pause';
 
 /**
  * The lane the fixture's primary firm's card must be in.
@@ -356,8 +393,9 @@ export async function runWorkflows(
             `expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, got ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`,
           );
         }
-        // And the pause this case used to observe, on a row that can reach it (P2-2 of
-        // the GPT-6 review of PR 332). `cold_legacy` is refused before every other
+        // And a row with a real origin written after the upgrade (P2-2 of the GPT-6 review
+        // of PR 332). Since send-path v2 (slice S4) its answer is the cold-outreach rule,
+        // not the pause: see `EXPECTED_PROSPECTING_DECISION`. `cold_legacy` is refused before every other
         // source, so the legacy enrollment above no longer proves that the workspace
         // switch still holds an otherwise-sendable step. This fixture is written *after*
         // the upgrade, by the new code, with an origin the deployed checkout could not
@@ -454,7 +492,109 @@ export async function runWorkflows(
           probeContactId,
         ]);
 
-        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}`;
+        // The evidenced follow-up probe (P1-b): written, asked and rolled back in one
+        // transaction of its own, so nothing it writes outlives the question. The
+        // workflows run on an autocommit session, so this BEGIN is the outermost one.
+        let followUpOutcome: Awaited<ReturnType<ReturnType<typeof composeEligibility>['evaluate']>>;
+        await session.query('BEGIN');
+        try {
+          const followUp = await session.query<{ enrollment_id: string }>(
+            `WITH source AS (
+               SELECT e.workspace_id, e.firm_id, e.opportunity_id, e.assigned_user_id, e.sequence_version_id,
+                      e.firm_time_zone, e.holiday_calendar_version
+                 FROM sequence_enrollments e WHERE e.workspace_id = $1 AND e.id = $2
+             ), person AS (
+               INSERT INTO contacts (workspace_id, firm_id, full_name)
+               SELECT workspace_id, firm_id, 'Upgrade Follow-up Probe' FROM source
+               RETURNING id, workspace_id, firm_id
+             ), route AS (
+               INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                            association_confidence, technical_validation, eligibility,
+                                            eligibility_policy_version)
+               SELECT p.workspace_id, p.firm_id, p.id, 'upgrade.follow-up.probe@example.test', 'research_provider',
+                      now(), 0.900, 'passed', 'usable', 'route-policy.1'
+                 FROM person p
+               RETURNING contact_id
+             ), call AS (
+               INSERT INTO call_logs (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect,
+                                      occurred_at, actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+               SELECT s.workspace_id, s.firm_id, p.id, s.opportunity_id, 'interested', 'none',
+                      now() - interval '1 second', s.assigned_user_id, 'agreed_sequence', s.sequence_version_id
+                 FROM source s CROSS JOIN person p
+               RETURNING id
+             ), permission AS (
+               INSERT INTO follow_up_permissions (workspace_id, firm_id, contact_id, kind, scope, call_log_id,
+                                                  sequence_version_id, max_steps, expires_at, granted_by_user_id, note)
+               SELECT s.workspace_id, s.firm_id, p.id, 'agreed_sequence', 'agreed_sequence', c.id,
+                      s.sequence_version_id,
+                      (SELECT count(*) FROM sequence_steps st
+                        WHERE st.workspace_id = s.workspace_id AND st.sequence_version_id = s.sequence_version_id),
+                      now() + interval '365 days', s.assigned_user_id, 'upgrade test follow-up probe'
+                 FROM source s CROSS JOIN person p CROSS JOIN call c
+               RETURNING id
+             ), enrolled AS (
+               INSERT INTO sequence_enrollments
+                 (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+                  started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+               SELECT s.workspace_id, s.sequence_version_id, s.opportunity_id, s.firm_id, p.id, s.assigned_user_id,
+                      now(), s.firm_time_zone, s.holiday_calendar_version, 'follow_up', m.id
+                 FROM source s CROSS JOIN person p CROSS JOIN permission m
+               RETURNING id, workspace_id, firm_id, contact_id, sequence_version_id, permission_id
+             )
+             INSERT INTO step_executions
+               (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
+                due_at, not_before, original_due_at, source_zone, rule_version)
+             SELECT n.workspace_id, n.id, st.id, n.firm_id, n.contact_id, st.channel, st.ordinal,
+                    now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour',
+                    'America/New_York', 'elapsed.1'
+               FROM enrolled n
+               JOIN sequence_steps st
+                 ON st.workspace_id = n.workspace_id AND st.sequence_version_id = n.sequence_version_id
+              ORDER BY st.ordinal
+              LIMIT 1
+             RETURNING enrollment_id`,
+            [candidate.workspace_id, candidate.id],
+          );
+          const followUpEnrollmentId = followUp.rows[0]?.enrollment_id;
+          if (followUpEnrollmentId === undefined) throw new Error('the post-upgrade follow-up probe was not written');
+          // The permission buys this run (`bindFollowUpPermission`). A separate statement:
+          // the data-modifying CTEs above cannot see each other's rows.
+          const bound = await session.query(
+            `UPDATE follow_up_permissions f SET enrollment_id = n.id
+               FROM sequence_enrollments n
+              WHERE n.workspace_id = $1 AND n.id = $2
+                AND f.workspace_id = n.workspace_id AND f.id = n.permission_id AND f.enrollment_id IS NULL`,
+            [candidate.workspace_id, followUpEnrollmentId],
+          );
+          if (bound.rowCount !== 1) throw new Error('the post-upgrade follow-up probe permission was not bound');
+          const followUpEnrollment = await readEnrollment(worker, { enrollmentId: followUpEnrollmentId });
+          const followUpExecution = await nextUnfinishedExecution(worker, followUpEnrollmentId);
+          if (followUpEnrollment === null || followUpExecution === null) {
+            throw new Error('the post-upgrade follow-up probe has no step');
+          }
+          followUpOutcome = await composeEligibility().evaluate(worker, {
+            execution: followUpExecution,
+            opportunityId: followUpEnrollment.opportunityId,
+            firmId: followUpEnrollment.firmId,
+            contactId: followUpEnrollment.contactId,
+            ownerUserId: followUpEnrollment.assignedUserId,
+            channel: followUpExecution.channel,
+            actionKind: CHANNEL_ACTION_KINDS[followUpExecution.channel],
+            now,
+          });
+        } finally {
+          await session.query('ROLLBACK');
+        }
+        if (followUpOutcome.ok) {
+          throw new Error(`expected ${EXPECTED_FOLLOW_UP_DECISION} on the post-upgrade follow-up probe, and it was eligible`);
+        }
+        if (followUpOutcome.reasonCode !== EXPECTED_FOLLOW_UP_DECISION) {
+          throw new Error(
+            `expected ${EXPECTED_FOLLOW_UP_DECISION} on the post-upgrade follow-up probe, got ${followUpOutcome.reasonCode}${followUpOutcome.detail === undefined ? '' : ` (${followUpOutcome.detail})`}`,
+          );
+        }
+
+        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}; post-upgrade follow-up probe: ${followUpOutcome.reasonCode}`;
       },
     },
     {

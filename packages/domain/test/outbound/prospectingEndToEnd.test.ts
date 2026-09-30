@@ -7,28 +7,32 @@ import { holdReasonForRefusal } from '../../outbound/gate.ts';
 import { dispatchOutboundMessage, type OutboundSendDeps } from '../../outbound/send.ts';
 import { composeEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
-import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
+import { runDueStepExecution } from '../../sequences/executions.ts';
 import { listStepExecutions } from '../../sequences/rows.ts';
+import { listStepWakes } from '../../sequences/wake.ts';
 import type { SendHandoff, SendHandoffRefusal } from '../../sequences/sendHandoff.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { seedFirm } from './support/dispatchFixtures.ts';
 
 /**
  * A cold first touch, end to end: the command a person gives, the step the scheduler
- * wakes, the claim that really claims, and one e-mail at a fake Gmail
- * (P2-2 of the GPT-6 review of PR 332).
+ * wakes, and the eligibility that holds it (P2-2 of the GPT-6 review of PR 332; send-path
+ * v2, slice S4).
  *
  * Migration 0025 made every enrollment say what it is for, and the shared step-execution
  * fixture chose `follow_up` for the reason its header gives. That left the repository
- * with no test of the *other* origin along the whole path: scenario 33 asks the command
- * and the source separately, and the send tests start from a fence somebody inserted. A
- * regression that refused every prospecting enrollment at the claim — or one that let a
- * `cold_legacy` row through the wake — would have been caught in pieces and nowhere as a
- * whole.
+ * with no test of the *other* origin along the whole path, so this file walks it: one
+ * firm, one person, `enrollContact` with `originKind: 'prospecting'`, and
+ * `runDueStepExecution` with the real composition and a hand-off over the real fence and
+ * the real dispatch, with nothing stubbed but Gmail.
  *
- * So this is the whole of it, in one case, with nothing stubbed but Gmail: one firm, one
- * person, `enrollContact` with `originKind: 'prospecting'`, `runDueStepExecution` with
- * the real composition, and `dispatchPreparedStep` through `dispatchOutboundMessage`.
+ * Until send-path v2 the walk ended in one e-mail at the fake Gmail. David, 30 September
+ * 2026: "creating an enrollment must not enable cold Gmail outreach". So it now ends in
+ * a held step: `coldOutreachTransportSource` refuses the prospecting e-mail with
+ * `cold_outreach_mailbox_required`, `runDueStepExecution` stores it as the step's
+ * `hold_reason_code` (which references `hold_reason_codes`, extended by migration
+ * 0026), no fence is prepared, and Gmail is never asked. The enrollment is still live —
+ * the hold is visible, not an ending.
  */
 
 let world: OutboundWorld;
@@ -72,8 +76,8 @@ function fenceHandoff(deps: OutboundSendDeps): SendHandoff {
   };
 }
 
-describe('a prospecting enrollment from the command to Gmail', () => {
-  it('enrols, wakes, claims and sends exactly one e-mail', async () => {
+describe('a prospecting enrollment from the command to the held step', () => {
+  it('enrols, wakes, and holds the e-mail with cold_outreach_mailbox_required: no fence, no Gmail call', async () => {
     const firm = await seedFirm(world, world.alpha, 'prospecting-e2e');
     // A firm with a resolved zone: the command schedules against it.
     await world.database.session.query(
@@ -103,11 +107,11 @@ describe('a prospecting enrollment from the command to Gmail', () => {
     // 2. The step the scheduler would wake. Its delay is zero, so it is due at once.
     const [execution] = await listStepExecutions(worker(), { enrollmentId: enrolled.value.enrollmentId });
     if (execution === undefined) throw new Error('the enrollment has no step');
+    expect(execution.channel).toBe('email');
 
-    // 3. The wake, the preparation and the claim, through the real composition.
-    // The clock is the step's own: `not_before` is the first instant inside the firm's
-    // local sending window, so a minute after it is due *and* inside the window. The
-    // dispatch's window clock is pinned to the same instant, as every send test pins it.
+    // 3. The wake and the eligibility, through the real composition, a minute after the
+    // step is due and inside the firm's window (the first look may only place it there,
+    // which is a reschedule and not a refusal).
     const dueAt = async (): Promise<string> => {
       const { rows: due } = await world.database.session.query<{ at: Date }>(
         `SELECT greatest(due_at, not_before) + interval '1 minute' AS at
@@ -128,30 +132,53 @@ describe('a prospecting enrollment from the command to Gmail', () => {
             sendHandoff: fenceHandoff(world.sendDeps(world.alpha, { gmail, now: () => new Date(at) })),
           }),
       );
-    // The first look may only place the step inside the firm's local sending window
-    // (11.2, Appendix G 32), which is a reschedule and not a refusal; the second look is
-    // the one that hands it to the send.
-    let at = await dueAt();
-    let ran = await look(at);
-    if (ran.kind === 'scheduled') {
-      at = await dueAt();
-      ran = await look(at);
-    }
-    if (ran.kind !== 'handed_to_send') throw new Error(`the step was not handed to send: ${ran.kind}`);
-    const now = at;
-    const dispatched = await dispatchPreparedStep(worker(), {
-      stepExecutionId: execution.id,
-      outboundMessageId: ran.outboundMessageId,
-      sendHandoff: fenceHandoff(world.sendDeps(world.alpha, { gmail, now: () => new Date(now) })),
-      now,
-    });
+    let ran = await look(await dueAt());
+    if (ran.kind === 'scheduled') ran = await look(await dueAt());
 
-    // 4. One e-mail, to this person's own address, and the step says it sent.
-    expect(dispatched.kind).toBe('sent');
-    expect(gmail.sends).toHaveLength(1);
-    expect(gmail.sends[0]?.to).toBe(firm.address);
-    const [after] = await listStepExecutions(worker(), { enrollmentId: enrolled.value.enrollmentId });
-    expect(after?.state).toBe('completed');
-    expect(after?.result).toBe('sent');
+    // 4. Held, for the reason an operator reads, and stored where a card reads it.
+    expect(ran).toEqual({ kind: 'held', stepExecutionId: execution.id, reasonCode: 'cold_outreach_mailbox_required' });
+    const { rows: stored } = await world.database.session.query<{
+      state: string;
+      hold_reason_code: string | null;
+      recoverable: boolean | null;
+    }>(
+      `SELECT e.state, e.hold_reason_code, c.recoverable
+         FROM step_executions e
+         LEFT JOIN hold_reason_codes c ON c.code = e.hold_reason_code
+        WHERE e.workspace_id = $1 AND e.id = $2`,
+      [workspaceId(), execution.id],
+    );
+    expect(stored).toEqual([{ state: 'held', hold_reason_code: 'cold_outreach_mailbox_required', recoverable: true }]);
+
+    // 5. Nothing was prepared and nothing reached Gmail; the enrollment is still live.
+    const { rows: fences } = await world.database.session.query(
+      'SELECT id FROM outbound_messages WHERE workspace_id = $1 AND step_execution_id = $2',
+      [workspaceId(), execution.id],
+    );
+    expect(fences).toHaveLength(0);
+    expect(gmail.sends).toHaveLength(0);
+    const { rows: live } = await world.database.session.query<{ ended_at: Date | null }>(
+      'SELECT ended_at FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), enrolled.value.enrollmentId],
+    );
+    expect(live[0]?.ended_at).toBeNull();
+
+    // 6. And the scheduler keeps asking (review P2-b): `listStepWakes` does not wake the
+    // held step before its `not_before`, and does wake it after, so the hold is re-read
+    // and stays visible rather than going quiet. (`wake.ts` is untouched by send-path v2:
+    // it excludes `cold_legacy`, not `prospecting`.)
+    const { rows: timing } = await world.database.session.query<{ before: Date; after: Date }>(
+      `SELECT not_before - interval '1 minute' AS before, not_before + interval '1 minute' AS after
+         FROM step_executions WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), execution.id],
+    );
+    const window = timing[0];
+    if (window === undefined) throw new Error('the held step disappeared');
+    const wokenAt = async (at: Date): Promise<boolean> =>
+      (await listStepWakes(world.database.session, { now: at.toISOString(), limit: 1000 })).some(
+        wake => wake.stepExecutionId === execution.id,
+      );
+    expect(await wokenAt(window.before)).toBe(false);
+    expect(await wokenAt(window.after)).toBe(true);
   });
 });
