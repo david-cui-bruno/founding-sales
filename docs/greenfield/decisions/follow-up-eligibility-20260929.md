@@ -345,6 +345,15 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   enrollment is `dispatched`, has a fence while unfinished, or has a fence `dispatching` or
   `reconciling`. `packages/domain/test/sequences/migrateEnrollment.test.ts` pins both
   orders with a held transaction and races them six times: exactly one proceeds.
+* **The holiday calendar is behind the same gate.** `recordHolidayCalendar` takes the send
+  gate EXCLUSIVE before it reads or writes `workspace_holiday_calendars`. The current
+  calendar is the one mutable window input a live run reads (`dispatchHolidayCalendar` =
+  frozen ∪ current; the firm zone and the calendar version are frozen on the enrollment,
+  and the sending window is a constant), and the migration's expiry check places the first
+  e-mail with it. So a migration either commits first (dispatch's later placement is a
+  post-commit calendar change, re-checked and failed closed there) or waits and reads the
+  new calendar (`permission_expires_before_step` when the moved window passes the expiry).
+  `migrateEnrollment.test.ts` pins both commit orders with two sessions.
 * **After the PR 335 review.** (P1-5) A one-message scope is a promise of an e-mail:
   `verifyFollowUpPermission` takes the step a run would pay for next (`nextStep`), and a
   `single_email` needs an e-mail step whose template is exactly the permitted one, a
