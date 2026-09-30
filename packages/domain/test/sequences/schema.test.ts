@@ -65,7 +65,7 @@ afterAll(async () => {
   await database.drop();
 });
 
-describe('a published version is immutable, and its steps are edited in place (11.1; migration 0019)', () => {
+describe('a published version is immutable, and so are its steps (11.1; migrations 0019, 0026)', () => {
   it('refuses an edit to a published version', async () => {
     const message = await refusal(
       `UPDATE sequence_versions SET version = 99 WHERE workspace_id = $1 AND id = $2`,
@@ -92,13 +92,14 @@ describe('a published version is immutable, and its steps are edited in place (1
     expect(message).toMatch(/immutable/i);
   });
 
-  it('lets a step of a published version be edited in place', async () => {
-    const workspaceId = seeded.alpha.workspaceId;
-    const { rowCount } = await database.session.query(
+  it('refuses to edit a step of a published version in place (migration 0026)', async () => {
+    // 0019 allowed it (edit in place); send-path v2 brought the guard back, because a
+    // live enrollment's next step reads the stored step. An edit is a new version.
+    const message = await refusal(
       'UPDATE sequence_steps SET delay_amount = delay_amount WHERE workspace_id = $1 AND id = $2',
-      [workspaceId, sequences.alpha.emailStepId],
+      [seeded.alpha.workspaceId, sequences.alpha.emailStepId],
     );
-    expect(rowCount).toBe(1);
+    expect(message).toMatch(/immutable/i);
   });
 
   it('lets a draft version change freely', async () => {
@@ -176,14 +177,14 @@ describe('template_versions is extended, not replaced (11.1)', () => {
   });
 
   it('keeps the reserved generated block unreachable on an approved version', async () => {
-    // Migration 0019 dropped the trigger that froze an approved version (edit in place),
-    // so the CHECK is what refuses this now.
+    // Migration 0019 dropped the trigger that froze an approved version and 0026 brought
+    // it back, so either the trigger or the CHECK refuses this.
     expect(
       await refusal(
         `UPDATE template_versions SET generated_block = 'anything' WHERE workspace_id = $1 AND id = $2`,
         [seeded.alpha.workspaceId, sequences.alpha.template.templateVersionId],
       ),
-    ).toMatch(/generated_block_reserved/i);
+    ).toMatch(/generated_block_reserved|immutable/i);
   });
 
   it('accepts a version that names no postal address, in both workspaces (G20)', async () => {

@@ -191,6 +191,19 @@ export interface FollowUpSubject {
    * `single_email`: "the agreed overview", not "whatever approved template was picked".
    */
   readonly templateVersionId?: string | null | undefined;
+  /**
+   * The step the permission would pay for next, when the caller is deciding a run rather
+   * than one send: `enrollContact` (the first step) and `migrateEnrollment` (step k + 1).
+   * `null` means the plan has no such step. Absent means the caller does not describe it
+   * (the grant; the step-time source, which asks about the fence's own bytes).
+   *
+   * A one-message scope is a promise of **an e-mail** (the PR 335 review, P1-5):
+   * `single_email` needs an e-mail step whose template is exactly the permitted one, and
+   * `contextual_reply` needs an e-mail step. Neither buys a call, and neither buys a run
+   * with nothing left to send — which would otherwise bind the permission to a run that
+   * completes at once.
+   */
+  readonly nextStep?: { readonly channel: string; readonly templateVersionId: string | null } | null | undefined;
 }
 
 /**
@@ -263,6 +276,23 @@ export async function verifyFollowUpPermission(
         permission.templateVersionId !== subject.templateVersionId
       ) {
         return { ok: false, refusal: 'follow_up_not_permitted', detail: 'another_template' };
+      }
+      // And for a run, the step it pays for is an e-mail — with exactly the agreed bytes
+      // for a single e-mail — and exists at all.
+      if (subject.nextStep !== undefined) {
+        if (subject.nextStep === null) {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'no_next_step' };
+        }
+        if (subject.nextStep.channel !== 'email') {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'not_an_email' };
+        }
+        if (
+          permission.scope === 'single_email' &&
+          (subject.nextStep.templateVersionId === null ||
+            permission.templateVersionId !== subject.nextStep.templateVersionId)
+        ) {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'another_template' };
+        }
       }
       break;
     case 'agreed_sequence':
@@ -756,13 +786,17 @@ export async function bindFollowUpPermission(
  * consuming after the provider answered could let a second e-mail leave on a permission
  * that buys one. `docs/greenfield/decisions/follow-up-eligibility-20260929.md` records
  * the choice.
+ *
+ * `consumed_reason = 'sent'` since migration 0026, whose CHECK pairs a reason with every
+ * `consumed_at`: this is the spend by the dispatch claim, as opposed to a promised
+ * e-mail the salesperson sent by hand (`fulfilled_by_direct_send`).
  */
 export async function consumeFollowUpPermission(
   context: RepositoryContext,
   permissionId: string,
 ): Promise<boolean> {
   const consumed = await context.db.query(
-    `UPDATE follow_up_permissions SET consumed_at = now()
+    `UPDATE follow_up_permissions SET consumed_at = now(), consumed_reason = 'sent'
       WHERE workspace_id = $1 AND id = $2
         AND scope IN ('single_email', 'contextual_reply')
         AND consumed_at IS NULL

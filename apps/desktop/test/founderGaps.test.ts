@@ -136,12 +136,10 @@ describe('the step editor (audit G03)', () => {
   });
 
   /**
-   * Wave 2, S3: a published version is edited in place, and the edit reaches the
-   * enrollments running in it. "Edit as a new draft" is gone — a second version was
-   * never what a person editing a live sequence meant — so a published version is
-   * editable and a retired one is not, whatever else is open.
+   * Send-path v2, S2: a published version is never written to. Its Save makes the
+   * sequence's draft, so it is offered whatever else is open, and a retired one is not.
    */
-  it('edits a published version in place, however many versions there are', () => {
+  it('offers a published version’s Save as a new draft, however many versions there are', () => {
     const published = sequenceVersionAnswer([emailStepAnswer(TEMPLATE)], { state: 'published', publishedAt: '2026-09-20T12:00:00.000Z' });
     const base: SequenceState = { ...EMPTY_SEQUENCE_STATE, online: true, mayMutate: true, isAdmin: true, templates: [templateVersionAnswer()] };
     expect(sequenceScreen({ ...base, versions: [published] }).versions[0]?.editable).toBe(true);
@@ -294,7 +292,7 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     expect(state.warnings).toEqual([]);
   });
 
-  it('edits an existing version in place, naming it rather than superseding it', async () => {
+  it('edits an unapproved version in place, naming it', async () => {
     const { api, calls } = scriptedApi({ ...reads, '/templates/update': accepted(templateVersionAnswer()) });
     const state = await sequenceBridge(api).saveTemplate({
       templateVersionId: TEMPLATE,
@@ -309,6 +307,49 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
       approve: true,
     });
     expect(calls.map(entry => entry.path)).not.toContain('/templates/create');
+  });
+
+  it('names the new version an edit of an approved template became (send-path v2, S2)', async () => {
+    const next = templateVersionAnswer({ id: SEQUENCE_IDS.firm, version: 2 });
+    const { api } = scriptedApi({ ...reads, '/templates/update': accepted({ ...next, warnings: [], issues: [] }) });
+    const state = await sequenceBridge(api).saveTemplate({
+      templateVersionId: TEMPLATE,
+      name: 'First touch',
+      subject: 'A question',
+      body: 'Hello,',
+      signOff: 'David',
+    });
+    expect(state.notice).toBe('template_saved_as_version:2');
+    expect(sequenceScreen(state).notice).toBe(
+      'Saved and approved as version 2 of the template. The version you edited is unchanged; a sequence sends the new text once a version naming it is published.',
+    );
+  });
+
+  it('names the draft version an edit of a published version became (send-path v2, S2)', async () => {
+    const { api } = scriptedApi({
+      ...reads,
+      '/sequences/versions/steps': accepted({ steps: 2, sequenceVersionId: SEQUENCE_IDS.firm, version: 3, newVersion: true }),
+    });
+    const state = await sequenceBridge(api).saveSteps({ sequenceVersionId: SEQUENCE_IDS.version, steps: [call(0), email(2)] });
+    expect(state.notice).toBe('steps_saved_as_version:3');
+    expect(sequenceScreen(state).notice).toBe(
+      'Saved as draft version 3. Publish it to use it for new enrollments; everybody already enrolled keeps the version they started on.',
+    );
+  });
+
+  it('carries a draft_exists refusal through, naming the draft, and says it in words (send-path v2, S2)', async () => {
+    const DRAFT = '13131313-1313-4131-8131-131313131313';
+    const { api } = scriptedApi({
+      ...reads,
+      '/sequences/versions/steps': { status: 409, body: { status: 'refused', reason: `draft_exists:3:${DRAFT}` } },
+    });
+    const state = await sequenceBridge(api).saveSteps({ sequenceVersionId: SEQUENCE_IDS.version, steps: [call(0), email(2)] });
+    expect(state.notice).toBe(`draft_exists:3:${DRAFT}`);
+    const screen = sequenceScreen(state);
+    expect(screen.notice).toBe(
+      'Not saved: version 3 is already a draft of this sequence. Make the change there, or publish it first.',
+    );
+    expect(screen.noticeDraft).toEqual({ id: DRAFT, version: 3 });
   });
 
   it('shows the copy warnings a save answered, until the next act (wave 1)', async () => {
@@ -467,6 +508,40 @@ describe('the Firm page enrols, confirms a number, and clears a title (audit G03
       firmId: FIRM,
       contactId: CONTACT,
     });
+  });
+
+  it('lists one current version per sequence once publishing has retired the one before (send-path v2, S2)', async () => {
+    const OLD = '12121212-1212-4121-8121-121212121212';
+    const DRAFT = '13131313-1313-4131-8131-131313131313';
+    const { api } = scriptedApi({
+      ...reads('open'),
+      '/sequences/versions': {
+        status: 200,
+        body: {
+          versions: [
+            sequenceVersionAnswer([emailStepAnswer(TEMPLATE)], { id: DRAFT, version: 3, state: 'draft' }),
+            sequenceVersionAnswer([emailStepAnswer(TEMPLATE)], { state: 'published', version: 2, publishedAt: '2026-09-29T12:00:00.000Z' }),
+            sequenceVersionAnswer([emailStepAnswer(TEMPLATE)], {
+              id: OLD,
+              version: 1,
+              state: 'retired',
+              publishedAt: '2026-09-20T12:00:00.000Z',
+              retiredAt: '2026-09-29T12:00:00.000Z',
+            }),
+          ],
+        },
+      },
+      // The enrollment still runs the retired version, and is labelled by it.
+      '/enrollments': {
+        status: 200,
+        body: { asOf: '2026-09-30T13:00:00.000Z', enrollments: [enrollmentAnswer({ contactId: CONTACT, sequenceVersionId: OLD })] },
+      },
+    });
+    const opened = await crm(api).openFirm({ firmId: FIRM });
+    expect(opened.sequences?.published.map(entry => [entry.sequenceVersionId, entry.label])).toEqual([
+      [SEQUENCE_IDS.version, 'Founding outreach v2'],
+    ]);
+    expect(opened.sequences?.enrollments.map(entry => entry.label)).toEqual(['Founding outreach v1']);
   });
 
   it('enrols nobody at a firm whose opportunity is closed, and opens one for a firm with none', async () => {

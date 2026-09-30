@@ -35,6 +35,18 @@ const PUBLISH_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.freez
   upgrade_required: 'Update Callie to publish.',
 });
 
+/**
+ * Bring a version's panel into view and put focus on it: how the page offers the draft a
+ * `draft_exists` refusal named (send-path v2, S2). `scrollIntoView` is optional because
+ * not every environment the page renders in has it.
+ */
+function openVersion(sequenceVersionId: string): void {
+  const panel = document.getElementById(`version-${sequenceVersionId}`);
+  if (panel === null) return;
+  panel.scrollIntoView?.({ block: 'start' });
+  panel.focus();
+}
+
 function UnreadSlice({ screen, slice, onRetry }: { readonly screen: SequenceScreen; readonly slice: SequenceReadSlice; onRetry(): void }): JSX.Element | null {
   const unread = screen.unread.find(entry => entry.slice === slice);
   if (unread === undefined) return null;
@@ -158,7 +170,14 @@ export function SequencesRoute({
   const state = sequences.state;
   const [name, setName] = useState('');
   const [nameMissing, setNameMissing] = useState(false);
-  const [editing, setEditing] = useState<{ readonly templateVersionId: string; readonly name: string; readonly subject: string; readonly body: string; readonly signOff: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    readonly templateVersionId: string;
+    readonly name: string;
+    readonly subject: string;
+    readonly body: string;
+    readonly signOff: string;
+    readonly note: string | null;
+  } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
 
   if (!sequences.available || state === null) {
@@ -191,6 +210,19 @@ export function SequencesRoute({
         {screen.notice === null || serverIssues.length > 0 ? null : (
           <Alert tone="info" data-testid="sequence-notice">
             {screen.notice}
+            {screen.noticeDraft === null ? null : (
+              <Button
+                size="sm"
+                variant="link"
+                data-testid="sequence-notice-open-draft"
+                className="ml-1 h-auto px-0"
+                onClick={() => {
+                  if (screen.noticeDraft !== null) openVersion(screen.noticeDraft.id);
+                }}
+              >
+                {`Open version ${String(screen.noticeDraft.version)}`}
+              </Button>
+            )}
           </Alert>
         )}
         {screen.warnings.map(warning => (
@@ -280,6 +312,8 @@ export function SequencesRoute({
         return (
           <Section
             key={panel.id}
+            id={`version-${panel.id}`}
+            tabIndex={-1}
             data-testid="version"
             title={panel.heading}
             count={panel.steps.length}
@@ -330,9 +364,8 @@ export function SequencesRoute({
                 version={version}
                 state={state}
                 saving={sequences.busy(`steps:${panel.id}`)}
-                onSave={steps => {
-                  sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps });
-                }}
+                onSave={async steps => await sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps })}
+                onOpenDraft={openVersion}
               />
             ) : (
               <Rows data-testid="version-steps" className="mt-2">
@@ -396,6 +429,7 @@ export function SequencesRoute({
             subject: template.subject,
             body: typedBodyOf(template),
             signOff: template.footerSignOff,
+            note: screen.templates.find(panel => panel.id === template.id)?.editNote ?? null,
           });
           setFormOpen(true);
         }}
@@ -409,10 +443,15 @@ export function SequencesRoute({
           editing={editing}
           enabled={screen.canAuthor && !sequences.busy('template-form')}
           issues={serverIssues}
-          onSave={draft => {
-            sequences.actions.saveTemplate(draft);
-            setFormOpen(false);
-            setEditing(null);
+          onSave={async draft => {
+            // The form closes only on an accepted save; a refusal leaves it open with the
+            // issues under it and the text as typed (PR 335 review, P1-4).
+            const saved = await sequences.actions.saveTemplate(draft);
+            if (saved) {
+              setFormOpen(false);
+              setEditing(null);
+            }
+            return saved;
           }}
           onCancel={() => {
             setFormOpen(false);

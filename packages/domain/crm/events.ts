@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { actorKind, actorUserId } from './types.ts';
 
 /**
@@ -100,16 +101,59 @@ export interface CrmDomainEventInput {
  * Write one signal. Idempotent: a second call with the same kind and dedupe key is a
  * no-op rather than a unique violation, because a command replay must not abort the
  * transaction it is replaying inside.
+ *
+ * A terminal-stop signal also records **which enrollments it owes a stop to**, in the
+ * same statement (`owed_enrollment_ids`, migration 0026; P0-2 of the send-path v2 plan
+ * review): the live enrollments of the firm for `opportunity.manual_mode` (7.3 is
+ * firm-wide) and of the opportunity for `opportunity.terminal_stop` (8.1), as this
+ * transaction sees them now. The drain stops those and no others, so an enrollment the
+ * same command creates *after* the signal — an agreed sequence enrolled right after an
+ * interested call — is not killed by a stop that was never about it. A set, not a
+ * timestamp: every row this transaction writes carries the same `now()`.
+ *
+ * The set is complete because it is computed under the **exclusive send gate**, which
+ * `enrollContact` also takes first: an enrollment either committed before this
+ * transaction took the gate — and is visible to the sub-select, so it is owed — or
+ * waits for this transaction to commit, and is a deliberate later enrollment. Both
+ * emitters (`setManualControlMode`, `changeStage`) already hold the gate by the time
+ * they get here; taking it again is a no-op inside the same transaction, and makes the
+ * guarantee this function's own rather than every future caller's.
+ *
+ * And a stop event's `occurred_at` is `clock_timestamp()`, read while the gate is held,
+ * not the column default `now()` (review of PR 335, round 2, P1). The drain's
+ * high-water mark is `(occurred_at, id)`, and `now()` is the instant the transaction
+ * *started*: a transaction that began early and took the gate late would commit a stop
+ * stamped before one that another transaction had already committed and the drain
+ * already passed, and that stop would never be read. Every stop event is written under
+ * the exclusive gate, which is held to commit, so stamping it under the gate makes the
+ * instants monotonic in commit order.
  */
 export async function emitCrmDomainEvent(
   context: RepositoryContext,
   event: CrmDomainEventInput,
 ): Promise<void> {
+  if (event.kind === 'opportunity.manual_mode' || event.kind === 'opportunity.terminal_stop') {
+    await lockSendGateForStopFact(context);
+  }
   await context.db.query(
     `INSERT INTO crm_domain_events
        (workspace_id, event_kind, firm_id, opportunity_id, contact_id, dedupe_key,
-        reason_code, actor_kind, actor_user_id, command_id, detail)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+        reason_code, actor_kind, actor_user_id, command_id, detail, occurred_at, owed_enrollment_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
+             -- A stop event's instant is read now, under the gate, not at transaction
+             -- start: see the doc comment above.
+             CASE WHEN $2 IN ('opportunity.manual_mode', 'opportunity.terminal_stop')
+                  THEN clock_timestamp() ELSE now() END,
+             CASE
+               WHEN $2 = 'opportunity.manual_mode' THEN (
+                 SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
+                   FROM sequence_enrollments n
+                  WHERE n.workspace_id = $1 AND n.firm_id = $3 AND n.ended_at IS NULL)
+               WHEN $2 = 'opportunity.terminal_stop' THEN (
+                 SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
+                   FROM sequence_enrollments n
+                  WHERE n.workspace_id = $1 AND n.opportunity_id = $4 AND n.ended_at IS NULL)
+             END)
      ON CONFLICT ON CONSTRAINT crm_domain_events_dedupe DO NOTHING`,
     [
       context.scope.workspaceId,

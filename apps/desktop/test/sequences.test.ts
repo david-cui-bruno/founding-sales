@@ -81,11 +81,11 @@ describe('what the editor will and will not let a person publish (11.1)', () => 
   });
 
   /**
-   * Wave 2, S3: a published version is edited in place and the edit reaches the
-   * enrollments already running in it. "Edit as a new draft" is gone, so the control a
-   * published version offers is Edit, not Supersede — and a retired one offers neither.
+   * Send-path v2, S2: a published version offers Save, and Save writes a new draft — so
+   * its panel says so, naming the version everybody enrolled keeps. A retired one offers
+   * nothing.
    */
-  it('edits a published version in place, and offers nothing on a retired one', () => {
+  it('offers a published version’s edit as a new draft, and nothing on a retired one', () => {
     const state = (patch: Partial<SequenceState['versions'][number]>): SequenceState => ({
       ...EMPTY_SEQUENCE_STATE,
       online: true,
@@ -96,6 +96,10 @@ describe('what the editor will and will not let a person publish (11.1)', () => 
     });
     const live = sequenceScreen(state({ state: 'published', publishedAt: '2026-09-01T12:00:00.000Z' }));
     expect(live.versions[0]?.editable).toBe(true);
+    expect(live.versions[0]?.editNote).toBe(
+      `Saving makes a new draft version. Everybody already enrolled keeps version ${String(live.versions[0]?.version)}.`,
+    );
+    expect(sequenceScreen(state({})).versions[0]?.editNote).toBeNull();
     expect(live.versions[0]?.canPublish).toBe(false);
     expect(live.versions[0]?.canRetire).toBe(true);
 

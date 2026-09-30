@@ -206,6 +206,26 @@ send gate. It cannot form, and this is the argument, which every path here now o
    `Date` rounds microseconds down and a competitor started in the same millisecond would
    otherwise compare as later than itself.
 
+5. **A stop owes what was committed before it took the gate** (send-path v2, migration
+   0026, 30 September 2026). A terminal-stop event records the enrollments it owes
+   (`crm_domain_events.owed_enrollment_ids`) and the drain stops only those. The set is
+   computed inside `emitCrmDomainEvent` **under the exclusive send gate**, which
+   `enrollContact` also takes first, so every enrollment is on exactly one side: it
+   committed before the emitter took the gate (visible to the sub-select, so owed), or it
+   waited for the emitter to commit (a deliberate later enrollment, not owed).
+   `emitCrmDomainEvent` takes the gate itself for the two stop kinds, which is a no-op
+   when the caller already holds it. Every emitter, checked:
+   * `changeStage` (the close, `opportunity.terminal_stop`) — gate is its first statement.
+   * `setManualControlMode` (`opportunity.manual_mode`) — gate is its first statement.
+     Its callers: `logCallOutcome` (gate first); `confirmReplyDisposition`, the confirmed
+     human reply (reads only before it); `takeOverOpportunity` (delegates);
+     `applyDirectSendEffects` via the mail import (only reads and inserts of new rows
+     before it — the fence lookup is a plain SELECT); and `resolveAmbiguity`, which
+     wrote `mail_message_matches` rows **before** reaching the gate and now takes it
+     before its first write.
+   * `applyClassificationEffects` (`mail/effects.ts`) takes the gate first and emits no
+     stop event itself; the human-reply manual mode is set by the two paths above.
+
 The tests are in `packages/domain/test/outbound/firmExclusivityAtSend.test.ts`: a barrier
 case that proves both claim transactions are open at once through `pg_locks` before the
 barrier is released, a tied-`started_at` case, and the review's deadlock shape run as a
@@ -260,6 +280,102 @@ real claim against a real `logCallOutcome`, with SQLSTATE `40P01` asserted absen
   a barrier on the fence row (it fails with `40P01` if the gate-first line is reverted),
   and the zero-row consume case expires a live, unspent permission mid-claim (it sends if
   the abort is removed).
+
+## 6d. Edits create versions; migration by supersede (30 September 2026, send-path v2 S2)
+
+David, 30 September 2026: *"Existing enrollments keep their original steps, template
+versions, and cadence. Edits affect new enrollments by default. Explicitly migrating an
+enrollment must preserve completed steps and the agreed follow-up scope."* The plan review
+found the first sentence false: `saveSteps` updated a published version's steps in place
+and `updateTemplateVersion` rewrote an approved template's text in place, so a live
+`agreed_sequence` run could read steps and text its agreement never covered.
+
+* **An edit is a new version.** Steps saved against a published version become a new
+  draft version (copy + change), and the answer names it. While the sequence already has
+  a draft, such a save is refused `draft_exists`, naming the draft (the route answers
+  `draft_exists:<version>:<id>`), rather than overwriting unpublished work; the Mac turns
+  the published Save off and offers the draft. An approved template's edit is its next version,
+  pending approval unless the same command approves it. Nothing published or approved is
+  written to, and migration 0026's triggers (`sequence_steps_published_immutable`,
+  `template_versions_approved_immutable`) say so in the database; a command that reaches
+  one answers a refusal (`version_not_draft`, `template_already_approved`) through a
+  savepoint rather than a 500. **Publishing retires the version it replaces** (David, 30
+  September 2026): one current version per sequence, so new enrollments — and the Firm
+  page's list — have one choice; a retired version keeps running for the enrollments
+  already on it, its steps frozen by 0026's trigger, and a migration's target is always
+  the current version.
+* **`POST /enrollments/migrate`** moves one live enrollment to a published version of the
+  same sequence by **supersede**: the old enrollment ends `migration_superseded` (its
+  unfinished step cancelled, its history kept) and a new one is inserted after it — never
+  before, so `sequence_enrollments_one_active_per_contact` and §4's one-prospecting rule
+  never see two live rows — with the same origin, contact, opportunity, assignee, the
+  **original** `started_at` (copied in SQL), zone and frozen calendar, and
+  `migrated_from_enrollment_id` naming the old row. The old enrollment's completed steps
+  must be exactly ordinals 1..k (none cancelled, none skipped, nothing unfinished but
+  k + 1), else `completed_prefix_required`; the new enrollment gets **one** execution,
+  ordinal k + 1 of the target, due at the target's delay for that step from the original
+  anchor, and completes at once (`sequence_complete`) when the target has no step k + 1.
+* **The agreed scope.** A `follow_up` run moves only on a **fresh** permission for the
+  target version, re-verified with `verifyFollowUpPermission` (the target version, its
+  step count, the template of step k + 1) and bound to the new enrollment with
+  `bindFollowUpPermission`, whose conditional write throws the whole transaction back if it
+  loses. The grant's own expiry is kept (the grant computed it for this version's plan); it
+  is not recomputed from the original anchor, which could put it in the past. An
+  `agreed_sequence` run offered no permission refuses `agreed_scope_bound`; the other
+  follow-up scopes refuse `follow_up_not_permitted`. **The old permission** stays bound to
+  the old, now ended, enrollment: bound means it can never buy another run (the bind
+  requires `enrollment_id IS NULL`, and verification refuses `another_enrollment`), and an
+  ended enrollment sends nothing. It is neither revoked (nobody withdrew it) nor consumed
+  (`consumed_reason` is about a message leaving, and none did). `cold_legacy` never moves
+  (`cold_legacy_never_revived`); `prospecting` moves without a permission.
+* **Lock order**, extending §6a: send gate EXCLUSIVE → the old enrollment → the fresh
+  permission → the firm → opportunity → contact. The gate first because ending an
+  enrollment is a stop fact: a dispatch claim holding the gate SHARED makes the migration
+  wait, and a migration in flight makes a claim wait and then find the enrollment ended.
+  The step runner does not take the gate; it locks the enrollment first
+  (`lockStepWithEnrollment`), as the migration does, so the two serialize on that row. After
+  the locks the migration refuses `enrollment_dispatching` when any execution of the old
+  enrollment is `dispatched`, has a fence while unfinished, or has a fence `dispatching` or
+  `reconciling`. `packages/domain/test/sequences/migrateEnrollment.test.ts` pins both
+  orders with a held transaction and races them six times: exactly one proceeds.
+* **After the PR 335 review.** (P1-5) A one-message scope is a promise of an e-mail:
+  `verifyFollowUpPermission` takes the step a run would pay for next (`nextStep`), and a
+  `single_email` needs an e-mail step whose template is exactly the permitted one, a
+  `contextual_reply` an e-mail step, and neither buys a run with no next step. Both
+  `enrollContact` (its first step) and the migration (step k + 1) pass it. (P1-6) When
+  step k + 1's planned instant has already passed (k > 0), it is placed at the target's
+  delay for that step counted from now, never the next tick, and the answer carries
+  `rescheduledTo`; a run that has done nothing (k = 0) keeps its plan. (Round 2) "Now"
+  is `clock_timestamp()`, read after every lock is held, so a plan that passes while the
+  command waits at the gate still counts as late; an e-mail's instant is placed in the
+  window with `placeEmailSend` on the frozen zone and calendar, and that placed instant is
+  both `rescheduledTo` and the instant compared with the fresh permission's `expires_at` —
+  a permission that would expire first refuses `permission_expires_before_step` before
+  the old run is touched, and stays unbound. (Round 6, the coordinator's decision) A
+  fresh permission moves a run only onto a remainder (k + 1 … n) that **begins with an
+  e-mail**, checked as above; one that begins with a call task is refused
+  `remainder_starts_with_call`, old run untouched, permission unbound — record a new
+  agreement from the call card instead, where S3 enrols call-first agreed sequences.
+  Why fail closed: when that e-mail can go depends on when the call is completed, which
+  depends on when Today builds the call's card (once per date at 05:00 business time) and
+  on whether a migration straddles that build; rounds 3–5 tried to project it and each
+  round found another reachable case the projection got wrong. An exact answer would
+  couple the migration to Today's materialisation, so the rule refuses instead.
+  Migrations without a fresh permission (prospecting) are unchanged. (Round 7) The shape
+  is decided before any scope is verified, so every scope gets the structural answer, and
+  a remainder with **no step** — a target no longer than the completed prefix — refuses
+  `no_remaining_step` (binding would stop the old run and complete the replacement at
+  once). The expiry is compared with the earliest instant the dispatch would release the
+  e-mail: the first sending window at or after the later of its due instant and
+  `clock_timestamp()`, on the calendar dispatch applies (the frozen one and the current
+  one, `dispatchHolidayCalendar`); the schedule itself keeps the frozen cadence. (P2-a) The target
+  version is held `FOR SHARE` from its check to the commit, so a publication cannot
+  retire it in between; the publication waits, and one that commits first makes the
+  migration refuse `version_retired`.
+* **Who may.** An administrator, or the firm's assigned salesperson, decided in the
+  domain under the firm's row lock; one audit event (`enrollment.migrated`) names both
+  enrollments, both versions, the carried ordinals, the permissions and the person's
+  `changeNote`.
 
 ## 7. Deviations from the brief, each with its reason
 

@@ -10,22 +10,26 @@ import {
   type TemplateRules,
   type TemplateWarningCode,
 } from '../src/rules/templates.ts';
+import { underImmutabilityGuard } from '../sequences/immutability.ts';
 
 /**
- * Template versions: created, edited in place, approved (specification 11.1, 12.6; wave 2, S3).
+ * Template versions: created, edited, approved (specification 11.1, 12.6; wave 2, S3; send-path v2, S2).
  *
  * The table is migration 0009's; this is the repository over it, and the rules it applies
  * are the pure ones in `packages/domain/src/rules/templates.ts`. Nothing here re-implements
  * a rule: the footer requirement, the copy warnings and the content hash are one function
  * that every save and approval calls and the send later re-checks against.
  *
- * Since migration 0019 an approved version is edited in place. The edit recomputes the
- * content hash and re-runs the refusal rules; the approval stays only if they still pass,
- * and "Save and approve" (`approve: true`) approves in the same command or, when a rule
- * fails, refuses and writes nothing — so a version in live use keeps sending its old text
- * until the new text passes. What freezes the bytes of a send is the outbound fence: a
- * fence already prepared keeps the text it was prepared with; a step not yet prepared
- * renders the edited text.
+ * **An approved version never changes** (David, 30 September 2026: "Existing enrollments
+ * keep their original steps, template versions, and cadence"). Editing one writes a new
+ * version of the same template — the next version number, a new content hash, pending
+ * approval unless the same command approves it ("Save and approve") — and leaves the
+ * approved row, and every published step that names it, exactly as they were. A step
+ * picks up the new text only when a new sequence version names it and is published.
+ * An unapproved version is nobody's agreement yet and is still edited in place.
+ * Migration 0026 puts the trigger refusing an UPDATE of an approved version's content
+ * back (0019 had removed it for the edit in place this replaces), and the edit answers
+ * that trigger as a refusal should any path reach it (`underImmutabilityGuard`).
  *
  * A body or subject carrying a *visible opt-out link* is refused by a CHECK (12.6, and
  * the part of it David kept on 29 September 2026); the save refuses it first, as
@@ -163,8 +167,9 @@ export interface TemplateTextInput {
 
 export interface CreateTemplateVersionInput extends TemplateTextInput {
   /**
-   * Absent starts a new template; present adds a version to an existing one.
-   * @deprecated the "new version" path desktop 1.0.11 uses; edit in place instead.
+   * Absent starts a new template; present adds a version to an existing one, which is
+   * what an edit of an approved version does (`updateTemplateVersion`). The route does
+   * not take it: a caller edits a version, and the edit decides whether it is a new one.
    */
   readonly templateId?: string | undefined;
 }
@@ -263,16 +268,24 @@ async function newTemplateId(context: RepositoryContext): Promise<string> {
 }
 
 /**
- * Edit a version in place (wave 2, S3; migration 0019 dropped the trigger that forbade it).
+ * Edit a version (send-path v2, S2).
  *
  * Every check runs before anything is written, because a refusal commits with its
- * receipt. The content hash is recomputed over the new text. The approval:
+ * receipt.
  *
- *   * `approve: true` approves the new text, by this admin, now — or, when a refusal rule
- *     fails, refuses with every issue and leaves the row as it was;
- *   * otherwise an approved version stays approved only if the new text passes every
- *     refusal rule, and becomes unapproved (its steps hold `template_unapproved` at send)
- *     if it does not; an unapproved one stays unapproved.
+ *   * **An approved version** is not written to. The edit becomes a new version of the
+ *     same template (`createTemplateVersion` with its `templateId`): the next number, a
+ *     hash over the new text, unapproved — or approved in the same command when
+ *     `approve: true` and the text passes every refusal rule, and refused with every issue
+ *     when it does not. The answer is the new row, so its `id` and `version` are not the
+ *     ones the caller named.
+ *   * **An unapproved version** is edited in place: the content hash is recomputed over
+ *     the new text, and `approve: true` approves it, by this admin, now — or, when a
+ *     refusal rule fails, refuses with every issue and leaves the row as it was.
+ *   * **A retired version** refuses.
+ *
+ * The row is locked before it is read, so two edits of one approved version serialize
+ * and the second numbers its version after the first.
  */
 export async function updateTemplateVersion(
   context: RepositoryContext,
@@ -283,53 +296,70 @@ export async function updateTemplateVersion(
   const approver = approverOf(context);
   if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
 
-  const { rows: locked } = await context.db.query<TemplateDbRow>(
-    `SELECT ${COLUMNS}, approved_by_user_id FROM template_versions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
-    [context.scope.workspaceId, input.templateVersionId],
+  return await underImmutabilityGuard(
+    context,
+    (): TemplateResult<TemplateSaveResult> => ({ ok: false, reason: 'template_already_approved' }),
+    async () => {
+      const { rows: locked } = await context.db.query<TemplateDbRow>(
+        `SELECT ${COLUMNS} FROM template_versions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+        [context.scope.workspaceId, input.templateVersionId],
+      );
+      const current = locked[0];
+      if (current === undefined) return { ok: false, reason: 'template_unknown' };
+      if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
+
+      if (current.approved_at !== null) {
+        return await createTemplateVersion(context, {
+          name: input.name,
+          subject: input.subject,
+          body: input.body,
+          footer: input.footer,
+          requiredVariables: input.requiredVariables,
+          approve: input.approve,
+          templateId: current.template_id,
+        });
+      }
+
+      // As in `createTemplateVersion`: an approval answers with the issue list, a plain save
+      // of bytes the table would refuse answers `invalid_input` (review of PR 311, P2).
+      const issues = templateTextIssues(input, rulesFor(input));
+      if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
+      if (linkedBytes(input)) return { ok: false, reason: 'invalid_input' };
+
+      const contentHash = templateContentHash({
+        templateId: current.template_id,
+        version: Number(current.version),
+        subject: input.subject,
+        body: input.body,
+      });
+      const approvedBy = input.approve === true ? approver : null;
+
+      const { rows } = await context.db.query<TemplateDbRow>(
+        `UPDATE template_versions
+            SET name = $3, subject = $4, body = $5, content_hash = $6, footer_sign_off = $7,
+                required_variables = $8::text[],
+                approved_at = CASE WHEN $9::uuid IS NULL THEN NULL ELSE now() END,
+                approved_by_user_id = $9::uuid,
+                updated_at = greatest(now(), created_at)
+          WHERE workspace_id = $1 AND id = $2
+          RETURNING ${COLUMNS}`,
+        [
+          context.scope.workspaceId,
+          input.templateVersionId,
+          input.name.trim(),
+          input.subject,
+          input.body,
+          contentHash,
+          input.footer.signOff,
+          [...input.requiredVariables],
+          approvedBy,
+        ],
+      );
+      const row = rows[0];
+      if (row === undefined) return { ok: false, reason: 'template_unknown' };
+      return { ok: true, value: { ...withWarnings(toTemplate(row)), issues } };
+    },
   );
-  const current = locked[0];
-  if (current === undefined) return { ok: false, reason: 'template_unknown' };
-  if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
-
-  // As in `createTemplateVersion`: an approval answers with the issue list, a plain save
-  // of bytes the table would refuse answers `invalid_input` (review of PR 311, P2).
-  const issues = templateTextIssues(input, rulesFor(input));
-  if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
-  if (linkedBytes(input)) return { ok: false, reason: 'invalid_input' };
-
-  const contentHash = templateContentHash({
-    templateId: current.template_id,
-    version: Number(current.version),
-    subject: input.subject,
-    body: input.body,
-  });
-  const keptApprover =
-    current.approved_at !== null && issues.length === 0 ? (current['approved_by_user_id'] as string | null) : null;
-  const approvedBy = input.approve === true ? approver : keptApprover;
-  const approvedAt = input.approve === true ? 'now()' : keptApprover === null ? 'NULL' : 'approved_at';
-
-  const { rows } = await context.db.query<TemplateDbRow>(
-    `UPDATE template_versions
-        SET name = $3, subject = $4, body = $5, content_hash = $6, footer_sign_off = $7,
-            required_variables = $8::text[], approved_at = ${approvedAt}, approved_by_user_id = $9::uuid,
-            updated_at = greatest(now(), created_at)
-      WHERE workspace_id = $1 AND id = $2
-      RETURNING ${COLUMNS}`,
-    [
-      context.scope.workspaceId,
-      input.templateVersionId,
-      input.name.trim(),
-      input.subject,
-      input.body,
-      contentHash,
-      input.footer.signOff,
-      [...input.requiredVariables],
-      approvedBy,
-    ],
-  );
-  const row = rows[0];
-  if (row === undefined) return { ok: false, reason: 'template_unknown' };
-  return { ok: true, value: { ...withWarnings(toTemplate(row)), issues } };
 }
 
 /**

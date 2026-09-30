@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { commandIdSchema } from './auth.ts';
+import { semanticVersionSchema } from './clientVersion.ts';
 import { enrollmentOriginKindSchema } from './followUps.ts';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
 
@@ -73,6 +75,13 @@ export const ENROLLMENT_END_REASONS = [
    * old cold sequence had to end for the new one to exist. The history stays.
    */
   'superseded_by_follow_up',
+  /**
+   * An explicit enrollment migration (send-path v2, 30 September 2026): the enrollment
+   * was superseded by a new one on another published version of the same sequence,
+   * which names it in `migrated_from_enrollment_id` (migration 0026). The database has
+   * admitted the value since 0025; the contract gains it here.
+   */
+  'migration_superseded',
 ] as const;
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 
@@ -235,6 +244,43 @@ export const enrollmentDtoSchema = z.object({
   permissionId: uuid.nullable(),
 });
 export type EnrollmentDto = z.infer<typeof enrollmentDtoSchema>;
+
+/**
+ * `POST /enrollments/migrate` (send-path v2, slice S2): supersede one live enrollment
+ * with a new one on another published version of the same sequence, carrying the
+ * completed prefix and scheduling only the next remaining ordinal.
+ *
+ * `permissionId` is the fresh permission a `follow_up` enrollment needs for the target
+ * version (an `agreed_sequence` never moves on its original agreement); a prospecting
+ * enrollment migrates without one. `changeNote` is the person's reason, audited.
+ */
+export const enrollmentMigrateCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  enrollmentId: uuid,
+  targetSequenceVersionId: uuid,
+  permissionId: uuid.optional(),
+  changeNote: z.string().trim().min(1).max(2000).optional(),
+});
+export type EnrollmentMigrateCommand = z.infer<typeof enrollmentMigrateCommandSchema>;
+
+/**
+ * The accepted answer to `POST /enrollments/migrate`. `carriedOrdinals` are the
+ * completed steps the new enrollment inherits (1..k); `nextOrdinal` is the one step it
+ * scheduled (k + 1). `rescheduledTo` is the instant step k + 1 was moved to when its
+ * planned instant (the target's delay from the original anchor) had already passed — its
+ * delay counted from the migration instead (PR 335 review, P1-6) — and null when the plan
+ * was kept or there is no next step. A plain object, so a later field does not break an
+ * older Mac.
+ */
+export const enrollmentMigrateResultSchema = z.object({
+  oldEnrollmentId: uuid,
+  newEnrollmentId: uuid,
+  carriedOrdinals: z.array(z.number().int().min(1)),
+  nextOrdinal: z.number().int().min(1),
+  rescheduledTo: instant.nullable(),
+});
+export type EnrollmentMigrateResult = z.infer<typeof enrollmentMigrateResultSchema>;
 
 // ---------------------------------------------------------------------------
 // The answers

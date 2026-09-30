@@ -19,8 +19,9 @@ import { Textarea } from '../ui/textarea.tsx';
  * **One press saves and approves** (D5). `/templates/create` and `/templates/update` take
  * `approve: true` and refuse the whole command, with every issue, when the text does not
  * pass — so a version is never written that cannot be approved, and there is no second
- * button to forget. Editing an approved version edits it in place; the content hash is
- * recomputed and the rules re-run, and it stays approved only if they pass.
+ * button to forget. Editing an approved version writes the template's next version
+ * (send-path v2, S2): the approved one, and every sequence that sends it, stay exactly as
+ * they were, and the form says so above its Save.
  *
  * What is typed lives in the shell's draft store, so leaving Sequences and coming back
  * does not lose the email somebody was writing.
@@ -29,18 +30,27 @@ import { Textarea } from '../ui/textarea.tsx';
 const DRAFTS = 'template:';
 
 export function TemplateForm({
-  /** The version being edited in place, or null for a new template. */
+  /** The version being edited, or null for a new template. */
   editing,
   enabled,
   issues,
   onSave,
   onCancel,
 }: {
-  readonly editing: { readonly templateVersionId: string; readonly name: string; readonly subject: string; readonly body: string; readonly signOff: string } | null;
+  readonly editing: {
+    readonly templateVersionId: string;
+    readonly name: string;
+    readonly subject: string;
+    readonly body: string;
+    readonly signOff: string;
+    /** What Save will do, when it is not an edit in place (`TemplatePanel.editNote`). */
+    readonly note?: string | null | undefined;
+  } | null;
   readonly enabled: boolean;
   /** The issues the server named on the last save, by field. */
   readonly issues: readonly string[];
-  onSave(draft: TemplateDraft): void;
+  /** Resolves true only when the save was accepted; the typed text stays otherwise. */
+  onSave(draft: TemplateDraft): Promise<boolean>;
   onCancel(): void;
 }): JSX.Element {
   const clear = useClearDrafts();
@@ -66,11 +76,19 @@ export function TemplateForm({
       onSubmit={event => {
         event.preventDefault();
         if (found.length > 0) return;
-        clear(DRAFTS);
-        onSave(draft);
+        // The typed text is let go only once the save is accepted: a refused approval or
+        // an offline answer keeps the form and everything in it (PR 335 review, P1-4).
+        void onSave(draft).then(saved => {
+          if (saved) clear(DRAFTS);
+        });
       }}
     >
       <h3 className="text-sm font-medium">{editing === null ? 'New template' : 'Edit this template'}</h3>
+      {editing?.note === undefined || editing.note === null ? null : (
+        <p data-testid="template-form-note" className="text-xs text-muted-foreground">
+          {editing.note}
+        </p>
+      )}
       <Field label="Name" htmlFor="template-form-name" issues={issueFor('name')}>
         <Input
           id="template-form-name"

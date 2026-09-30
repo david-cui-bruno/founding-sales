@@ -10,6 +10,7 @@ import { applyAs, compareDeployedMigrations, withFailingMigration } from './migr
 import { prepareCheckout, schemaVersionOf } from './baseCheckout.ts';
 import { ALLOWED_MISSING_OBJECTS, loadFixtureInBaseCheckout, unexcusedSkips } from './fixtureRun.ts';
 import { REQUIRED_FIXTURE_PARTS } from './fixtureManifest.ts';
+import { seedsFor } from './headSeeds.ts';
 import {
   addedTables,
   columnNames,
@@ -214,6 +215,13 @@ async function run(options: Options, report: Report): Promise<void> {
     if (absent.length > 0) {
       failures.push(`step 3: the loader in ${options.base} does not carry the part(s): ${absent.join(', ')}`);
     }
+    // Rows the base's loader cannot write but production can hold, in schema N's own
+    // columns (`headSeeds.ts`), so the snapshot and step 6 see the migration meet them.
+    const seeded: { readonly name: string; readonly id: string; readonly verify: (session: SessionQueryable, id: string) => Promise<string | null> }[] = [];
+    for (const headSeed of seedsFor(options.from)) {
+      seeded.push({ name: headSeed.name, id: await headSeed.seed(owner.session), verify: headSeed.verify });
+      report.line(`        head seed at ${String(options.from)}: ${headSeed.name}`);
+    }
 
     // ------------------------------------------------------------------------ step 4
     started = process.hrtime.bigint();
@@ -306,6 +314,12 @@ async function run(options: Options, report: Report): Promise<void> {
       failures.push(
         `step 6: ${undeclaredViews.map(difference => `${difference.view} (${difference.change})`).join(', ')} — no migration in ${String(options.from + 1)}..${String(options.to)} names ${undeclaredViews.length === 1 ? 'it' : 'them'} in a \`-- changes:\` header`,
       );
+    }
+
+    for (const headSeed of seeded) {
+      const problem = await headSeed.verify(owner.session, headSeed.id);
+      report.line(`        head seed after ${String(options.to)}: ${headSeed.name} — ${problem ?? 'as expected'}`);
+      if (problem !== null) failures.push(`step 6: head seed ${headSeed.name}: ${problem}`);
     }
 
     // ------------------------------------------------------------------------ step 7

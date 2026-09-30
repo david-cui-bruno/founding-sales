@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  enrollmentMigrateResultSchema,
   enrollmentsResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
@@ -123,6 +124,7 @@ describe('the sequence, template and enrollment routes', () => {
       '/sequences/versions/publish',
       '/templates/create',
       '/enrollments/enroll',
+      '/enrollments/migrate',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
@@ -346,7 +348,7 @@ describe('the sequence, template and enrollment routes', () => {
     expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
   });
 
-  it('edits a template in place and saves and approves in one command (wave 2, S3)', async () => {
+  it('writes an edit of an approved template as its next version, and saves and approves in one command (send-path v2, S2)', async () => {
     const payload = {
       templateVersionId,
       name: 'First touch',
@@ -356,13 +358,19 @@ describe('the sequence, template and enrollment routes', () => {
       requiredVariables: ['firm_name', 'contact_first_name'],
     };
     expect((await post('/templates/update', salespersonToken, command(payload))).body['reason']).toBe('admin_only');
+    const before = templateVersionsResponseSchema
+      .parse((await post('/templates', adminToken, {})).body)
+      .templates.find(template => template.id === templateVersionId);
+    expect(before?.approvedAt).not.toBeNull();
 
-    // A plain save of text that passes keeps the approval; the answer carries warnings and issues.
+    // A plain save of an approved version is its next version, pending approval; the
+    // approved one is untouched. The answer carries warnings and issues.
     const saved = await post('/templates/update', adminToken, command(payload));
     expect(saved.status).toBe(200);
     const result = templateSaveResultSchema.parse(resultOf(saved));
-    expect(result).toMatchObject({ id: templateVersionId, issues: [], warnings: [] });
-    expect(result.approvedAt).not.toBeNull();
+    expect(result).toMatchObject({ templateId: before?.templateId, version: (before?.version ?? 0) + 1, issues: [], warnings: [] });
+    expect(result.id).not.toBe(templateVersionId);
+    expect(result.approvedAt).toBeNull();
 
     // Save and approve with a rule broken: refused with every issue, and nothing written.
     const refused = await post(
@@ -373,7 +381,8 @@ describe('the sequence, template and enrollment routes', () => {
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('template_unapproved:template_footer_missing');
     const listed = templateVersionsResponseSchema.parse((await post('/templates', adminToken, {})).body);
-    expect(listed.templates.find(template => template.id === templateVersionId)?.body).toBe(payload.body);
+    expect(listed.templates.find(template => template.id === templateVersionId)).toEqual(before);
+    expect(listed.templates.filter(template => template.templateId === before?.templateId)).toHaveLength(2);
 
     // A new template saved and approved in one command.
     const { templateVersionId: _edited, ...text } = payload;
@@ -382,28 +391,169 @@ describe('the sequence, template and enrollment routes', () => {
     expect(templateSaveResultSchema.parse(resultOf(created)).approvedAt).not.toBeNull();
   });
 
-  it('edits a published version’s steps in place, and refuses to rewrite a step an execution names (wave 2, S3)', async () => {
+  it('writes an edit of a published version’s steps to a new draft version and leaves the published one as it was (send-path v2, S2)', async () => {
+    const before = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.id === sequenceVersionId);
+    expect(before?.state).toBe('published');
     const steps = [
       { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
       { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 5 }, onNoAnswer: 'advance' },
     ];
     const saved = await post('/sequences/versions/steps', adminToken, command({ sequenceVersionId, steps }));
     expect(saved.status).toBe(200);
+    const answer = resultOf(saved);
+    expect(answer).toMatchObject({ steps: 2, version: (before?.version ?? 0) + 1, newVersion: true });
     const versions = sequenceVersionsResponseSchema.parse(
       (await post('/sequences/versions', adminToken, { sequenceId })).body,
     ).versions;
-    const version = versions.find(entry => entry.id === sequenceVersionId);
-    expect(version?.state).toBe('published');
-    expect(version?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
+    expect(versions.find(entry => entry.id === sequenceVersionId)).toEqual(before);
+    const draft = versions.find(entry => entry.id === answer['sequenceVersionId']);
+    expect(draft?.state).toBe('draft');
+    expect(draft?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
 
-    // The enrolment above executed step 1; it keeps its channel.
-    const refused = await post(
-      '/sequences/versions/steps',
-      adminToken,
-      command({ sequenceVersionId, steps: [{ ...steps[1], ordinal: 1 }] }),
+    // A second edit of the published version while that draft exists is refused, naming
+    // the draft (`draft_exists:<version>:<id>`), and the draft is left as it was.
+    const again = await post('/sequences/versions/steps', adminToken, command({ sequenceVersionId, steps: [steps[0]] }));
+    expect(again.status).toBe(409);
+    expect(again.body['reason']).toBe(`draft_exists:${String(draft?.version)}:${String(draft?.id)}`);
+    const after = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.id === draft?.id);
+    expect(after).toEqual(draft);
+  });
+
+  it('migrates an enrollment to the newly published version by supersede, audited, and answers a replay from the receipt (send-path v2, S2)', async () => {
+    const versions = sequenceVersionsResponseSchema.parse(
+      (await post('/sequences/versions', adminToken, { sequenceId })).body,
+    ).versions;
+    const draft = versions.find(entry => entry.state === 'draft');
+    expect(draft).toBeDefined();
+    const published = await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: draft?.id }));
+    expect(published.status).toBe(200);
+    // One current version per sequence: publishing retired the one it replaced.
+    const states = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.map(entry => [entry.id, entry.state]);
+    expect(states).toEqual([
+      [draft?.id, 'published'],
+      [sequenceVersionId, 'retired'],
+    ]);
+    const enrolled = enrollmentsResponseSchema
+      .parse((await post('/enrollments', salespersonToken, { contactId, liveOnly: true })).body)
+      .enrollments.find(entry => entry.sequenceVersionId === sequenceVersionId);
+    expect(enrolled).toBeDefined();
+    const payload = { enrollmentId: enrolled?.id, targetSequenceVersionId: draft?.id, changeNote: 'Corrected cadence.' };
+
+    // Another workspace's administrator cannot see it; nobody without a session can ask.
+    const betaAdmin = (await issueSessionFor(fixture, fixture.beta, fixture.beta.admin)).accessToken;
+    const hidden = await post('/enrollments/migrate', betaAdmin, command(payload));
+    expect(hidden.status).toBe(409);
+    expect(hidden.body['reason']).toBe('enrollment_unknown');
+    expect((await post('/enrollments/migrate', null, command(payload))).status).toBe(401);
+    expect((await post('/enrollments/migrate', salespersonToken, command({ ...payload, extra: true }))).status).toBe(400);
+
+    const first = command(payload);
+    const migrated = await post('/enrollments/migrate', salespersonToken, first);
+    expect(migrated.status).toBe(200);
+    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
+    const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
+    // Nothing was completed, so the first step keeps its plan: `rescheduledTo` is null.
+    expect(result).toMatchObject({ oldEnrollmentId: enrolled?.id, carriedOrdinals: [], nextOrdinal: 1, rescheduledTo: null });
+
+    const replay = await post('/enrollments/migrate', salespersonToken, first);
+    expect(replay.status).toBe(200);
+    expect(resultOf(replay)).toEqual(resultOf(migrated));
+
+    const listed = enrollmentsResponseSchema.parse((await post('/enrollments', salespersonToken, { contactId, liveOnly: false })).body).enrollments;
+    expect(listed.find(entry => entry.id === result.oldEnrollmentId)).toMatchObject({ state: 'stopped', endReason: 'migration_superseded' });
+    expect(listed.find(entry => entry.id === result.newEnrollmentId)).toMatchObject({ state: 'active', sequenceVersionId: draft?.id });
+
+    const { rows } = await fixture.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM audit_events
+        WHERE workspace_id = $1 AND action = 'enrollment.migrated' AND subject_id = $2`,
+      [fixture.alpha.workspaceId, result.newEnrollmentId],
     );
-    expect(refused.status).toBe(409);
-    expect(refused.body['reason']).toBe('step_in_use');
+    expect(rows[0]?.count).toBe('1');
+  });
+
+  it('answers the instant a past-due next step was moved to, through the contract (PR 335 review, P1-6)', async () => {
+    // A second firm and contact, enrolled on the current version with an anchor weeks
+    // ago and step 1 completed — so step 2's planned instant on any target has passed.
+    const lateFirm = await seedFirm(fixture, {
+      name: 'Late Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    await fixture.db.query(
+      `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
+              time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
+        WHERE workspace_id = $1 AND id = $2`,
+      [fixture.alpha.workspaceId, lateFirm],
+    );
+    const lateContact = await seedContact(fixture, { firmId: lateFirm, fullName: 'Robin Example' });
+    const opened = await post('/opportunities/open', salespersonToken, command({ firmId: lateFirm }));
+    const lateOpportunity = String(resultOf(opened)['id']);
+    const current = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.state === 'published');
+    const enrolledLate = await post(
+      '/enrollments/enroll',
+      salespersonToken,
+      command({
+        originKind: 'prospecting',
+        sequenceVersionId: current?.id,
+        opportunityId: lateOpportunity,
+        firmId: lateFirm,
+        contactId: lateContact,
+      }),
+    );
+    expect(enrolledLate.status).toBe(200);
+    const lateEnrollment = String(resultOf(enrolledLate)['enrollmentId']);
+    await fixture.db.query(
+      "UPDATE sequence_enrollments SET started_at = TIMESTAMPTZ '2026-09-01 13:00:00+00' WHERE id = $1",
+      [lateEnrollment],
+    );
+    await fixture.db.query(
+      `UPDATE step_executions
+          SET state = 'completed', completed_at = TIMESTAMPTZ '2026-09-01 13:00:00+00',
+              completion_source = 'send', result = 'sent',
+              due_at = TIMESTAMPTZ '2026-09-01 13:00:00+00', not_before = TIMESTAMPTZ '2026-09-01 13:00:00+00',
+              original_due_at = TIMESTAMPTZ '2026-09-01 13:00:00+00'
+        WHERE enrollment_id = $1`,
+      [lateEnrollment],
+    );
+
+    const target = await post(
+      '/sequences/versions/draft',
+      adminToken,
+      command({
+        sequenceId,
+        steps: [
+          { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
+          { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 2 }, onNoAnswer: 'advance' },
+        ],
+      }),
+    );
+    const targetId = String(resultOf(target)['sequenceVersionId']);
+    expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: targetId }))).status).toBe(200);
+
+    const before = Date.now();
+    const migrated = await post(
+      '/enrollments/migrate',
+      salespersonToken,
+      command({ enrollmentId: lateEnrollment, targetSequenceVersionId: targetId }),
+    );
+    expect(migrated.status).toBe(200);
+    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
+    const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
+    expect(result).toMatchObject({ carriedOrdinals: [1], nextOrdinal: 2 });
+    // Two business days from now, never the planned 3 September and never the next tick.
+    expect(result.rescheduledTo).not.toBeNull();
+    expect(Date.parse(result.rescheduledTo ?? '')).toBeGreaterThan(before);
+    const steps = await post('/enrollments/steps', salespersonToken, { enrollmentId: result.newEnrollmentId });
+    expect((steps.body['steps'] as { dueAt: string }[])[0]?.dueAt).toBe(result.rescheduledTo);
   });
 
   it('leaves no draft behind when it refuses one (lane D1)', async () => {

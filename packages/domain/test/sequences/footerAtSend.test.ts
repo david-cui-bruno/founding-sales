@@ -7,11 +7,12 @@ import { enrollContact } from '../../sequences/enrollments.ts';
 import { runDueStepExecution } from '../../sequences/executions.ts';
 import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
 import { listStepExecutions } from '../../sequences/rows.ts';
-import { updateTemplateVersion } from '../../templates/templates.ts';
+import { createTemplateVersion } from '../../templates/templates.ts';
+import { createDraftVersion, createSequence, publishVersion } from '../../sequences/definitions.ts';
 import { sendFooterBlock } from '../../src/rules/templates.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
-import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
+import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences } from './support/sequenceFixtures.ts';
 
 /**
  * The step composes the footer **before** it hands anything to the send (lane W3-F,
@@ -34,7 +35,6 @@ import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences, type SeededSequences } fr
 let database: TestDatabase;
 let seeded: TwoWorkspaces;
 let crm: SeededCrm;
-let sequences: SeededSequences;
 
 const ADDRESS = '1 Example Way, Suite 2\nProvidence, RI 02903';
 const DUE = '2026-09-21T13:00:00Z';
@@ -69,18 +69,34 @@ async function setPostalAddress(address: string | null): Promise<void> {
   );
 }
 
-/** The seeded template, edited in place to `body` and kept approved. */
+/**
+ * The version the next enrollment runs: one e-mail step on an approved template with
+ * `body`. Since send-path v2 (S2) an approved template and a published version never
+ * change, so a different body is a new template version in a new published plan rather
+ * than an edit of the seeded one.
+ */
+let versionUnderTest = '';
+
 async function templateBody(body: string, variables: readonly string[] = ['firm_name']): Promise<void> {
-  const edited = await updateTemplateVersion(contextFor('admin'), {
+  const created = await createTemplateVersion(contextFor('admin'), {
     name: 'Seeded, edited',
     subject: 'Hello {firm_name}',
     body,
     footer: { signOff: FIXTURE_SIGN_OFF },
     requiredVariables: ['firm_name', ...variables],
-    templateVersionId: sequences.alpha.template.templateVersionId,
     approve: true,
   });
-  if (!edited.ok) throw new Error(`the template edit was refused: ${edited.reason}`);
+  if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+  const sequence = await createSequence(contextFor('admin'), { name: `Footer plan ${crypto.randomUUID()}` });
+  if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
+  const draft = await createDraftVersion(contextFor('admin'), {
+    sequenceId: sequence.value.id,
+    steps: [{ ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId: created.value.id }],
+  });
+  if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
+  const published = await publishVersion(contextFor('admin'), { sequenceVersionId: draft.value.sequenceVersionId });
+  if (!published.ok) throw new Error(`the publication was refused: ${published.reason}`);
+  versionUnderTest = draft.value.sequenceVersionId;
 }
 
 async function setDue(enrollmentId: string): Promise<void> {
@@ -93,7 +109,7 @@ async function setDue(enrollmentId: string): Promise<void> {
 
 async function enrolledAndDue(): Promise<string> {
   const result = await enrollContact(contextFor('salesperson'), {
-    sequenceVersionId: sequences.alpha.publishedVersionId,
+    sequenceVersionId: versionUnderTest,
     originKind: 'prospecting' as const,
     opportunityId: crm.alpha.opportunityId,
     firmId: crm.alpha.firmId,
@@ -108,7 +124,8 @@ beforeAll(async () => {
   database = await createTestDatabase();
   seeded = await seedTwoWorkspaces(database.session);
   crm = await seedCrm(database.session, seeded);
-  sequences = await seedSequences(database.session, seeded);
+  // The holiday calendar the enrollments freeze; the plans themselves are made per case.
+  await seedSequences(database.session, seeded);
 });
 
 afterAll(async () => {

@@ -85,6 +85,13 @@ missing is one of `sessions`, `oidc_authorization_requests`, `command_receipts`,
 or only by the workflows in step 10. Anything else fails with the part's name and reason,
 so "almost nothing loaded" cannot pass quietly.
 
+**Head seeds.** A row production can hold but the base's loader never writes cannot come
+from the base's fixture, and a migration that must meet one would pass without it.
+`tools/upgrade/headSeeds.ts` adds such rows after step 3, in schema N's own columns (plain
+SQL, never HEAD's domain code), keyed by the base schemas each is written for, and reads
+each back after the apply; a wrong answer fails step 6. The first is a spent follow-up
+permission for 0026, which backfills `consumed_reason` before its pairing CHECK.
+
 Eleven steps, each printing its wall-clock seconds:
 
 1. a fresh database owned by a non-superuser migrator login role, as the RDS master is;

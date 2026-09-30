@@ -72,6 +72,39 @@ export const SEQUENCE_REFUSAL_CODES = [
   'still_held',
   'step_in_use',
   'calendar_version_taken',
+  /**
+   * `POST /enrollments/migrate` (send-path v2, S2). `version_other_sequence`: the target
+   * is a version of another sequence. `cold_legacy_never_revived`: a pre-0025 enrollment
+   * never moves, because moving it would be reviving it. `enrollment_dispatching`: a step
+   * of the enrollment is claimed, dispatching or has a fence not yet settled.
+   * `completed_prefix_required`: the completed steps are not exactly 1..k.
+   * `agreed_scope_bound`: an agreed-sequence run cannot move on its original agreement;
+   * a fresh permission for the target version is required.
+   */
+  'version_other_sequence',
+  'cold_legacy_never_revived',
+  'enrollment_dispatching',
+  'completed_prefix_required',
+  'agreed_scope_bound',
+  /** A published version's edit, refused because the sequence already has a draft (S2). */
+  'draft_exists',
+  /**
+   * A migration's fresh permission would expire before the e-mail it pays for can be
+   * sent (step k + 1 placed in the window); refused before the old run is touched.
+   */
+  'permission_expires_before_step',
+  /**
+   * A migration offered a fresh permission onto a remainder that begins with a call task:
+   * record a new agreement from the call card instead (S3 enrols call-first agreed
+   * sequences there). Fail closed, because the e-mail's timing would depend on when Today
+   * lists the call.
+   */
+  'remainder_starts_with_call',
+  /**
+   * A migration offered a fresh permission onto a target no longer than the completed
+   * prefix: nothing would remain for the agreement to buy (PR 335 round 7).
+   */
+  'no_remaining_step',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

@@ -27,15 +27,20 @@ import { Select } from '../ui/select.tsx';
  * an email sends or what a call does when nobody answers — with up, down and remove on
  * hover, and Add call / Add email below. Nothing is sent until Save.
  *
- * **A published version is edited in place.** `saveSteps` changes it and the change
- * reaches the enrollments already running in it, which is what a person editing a
- * sequence means; the "Edit as a new draft" it used to offer made a second version that
- * nobody in the first one ever saw. The server holds a published version to what
- * publication checks, and refuses a step that has already run.
+ * **A published version is never written to** (send-path v2, S2; David, 30 September
+ * 2026: "Existing enrollments keep their original steps, template versions, and
+ * cadence"). Its Save reads "Save as new draft": the server writes the edit to the
+ * sequence's draft version, which appears as its own panel, and the published steps —
+ * and everybody running them — stay as they were. The line under the button says so.
+ * While the sequence already has a draft the server refuses such a save (`draft_exists`)
+ * rather than overwrite it, so Save is off and the line offers that draft instead.
  *
  * The steps being edited are held here, between answers, because every answer redraws
  * the view and an editor redrawn from the server's copy would drop what was being typed.
- * They are forgotten once saved, and whenever the version on screen changes.
+ * They are forgotten once saved, and whenever the version on screen changes. A published
+ * version's editor forgets them once the save is accepted, because its own steps will not
+ * change: the edit is in the new draft's panel. A save that is refused or cannot reach
+ * the server forgets nothing.
  */
 
 function templateLabel(template: TemplateVersion): string {
@@ -49,13 +54,17 @@ export function StepEditor({
   state,
   saving,
   onSave,
+  onOpenDraft,
 }: {
   readonly panel: VersionPanel;
   readonly version: SequenceVersion;
   readonly state: SequenceState;
   /** This version's own Save is on the wire; another version's is not this one's wait. */
   readonly saving: boolean;
-  onSave(steps: readonly DraftStep[]): void;
+  /** Resolves true only when the save was accepted; the typed steps stay otherwise. */
+  onSave(steps: readonly DraftStep[]): Promise<boolean>;
+  /** Bring the sequence's draft into view (offered when this version's edit would be refused). */
+  onOpenDraft?(sequenceVersionId: string): void;
 }): JSX.Element {
   const [steps, setSteps] = useState<readonly DraftStep[]>(() => draftStepsOf(version));
   const stored = JSON.stringify(draftStepsOf(version));
@@ -279,13 +288,19 @@ export function StepEditor({
         <Button
           size="sm"
           data-testid="draft-save"
-          disabled={!panel.editable || !changed || issues.length > 0 || saving}
+          disabled={!panel.editable || panel.existingDraft !== null || !changed || issues.length > 0 || saving}
           {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
-            onSave(steps);
+            // A published version's own steps do not change when its edit is saved (the
+            // edit is the new draft), so its editor lets go of the edit — but only once the
+            // save is accepted: a refusal, `draft_exists` or an offline answer keeps
+            // everything typed (PR 335 review, P1-4).
+            void onSave(steps).then(saved => {
+              if (saved && panel.state === 'published') setSteps(draftStepsOf(version));
+            });
           }}
         >
-          Save
+          {panel.state === 'published' ? 'Save as new draft' : 'Save'}
         </Button>
         {changed ? (
           <Button
@@ -300,6 +315,24 @@ export function StepEditor({
           </Button>
         ) : null}
       </div>
+      {panel.editNote === null ? null : (
+        <p data-testid="draft-edit-note" className="mt-1 text-xs text-muted-foreground">
+          {panel.editNote}
+          {panel.existingDraft === null || onOpenDraft === undefined ? null : (
+            <Button
+              size="sm"
+              variant="link"
+              data-testid="draft-open-existing"
+              className="ml-1 h-auto px-0 text-xs"
+              onClick={() => {
+                if (panel.existingDraft !== null) onOpenDraft(panel.existingDraft.id);
+              }}
+            >
+              {`Edit version ${String(panel.existingDraft.version)}`}
+            </Button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

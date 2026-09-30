@@ -60,6 +60,18 @@ export interface VersionPanel {
   readonly heading: string;
   readonly steps: readonly StepRow[];
   readonly editable: boolean;
+  /**
+   * What Save does to this version, when that is not simply "save it" (send-path v2,
+   * S2): a published version is never written to, so its editor says the edit becomes a
+   * new draft and that everybody enrolled keeps this one. Null on a draft.
+   */
+  readonly editNote: string | null;
+  /**
+   * The sequence's draft, on a published version's panel, when one exists: an edit of the
+   * published version is refused while it does (`draft_exists`), so the editor offers the
+   * draft instead of a Save that cannot succeed. Null otherwise.
+   */
+  readonly existingDraft: { readonly id: string; readonly version: number } | null;
   readonly canPublish: boolean;
   readonly publishRefusal: PublishRefusal | null;
   readonly canRetire: boolean;
@@ -78,6 +90,11 @@ export interface TemplatePanel {
   readonly approved: boolean;
   readonly retired: boolean;
   readonly editable: boolean;
+  /**
+   * What saving an edit of this version does, when it is not an edit in place (send-path
+   * v2, S2): an approved version is never rewritten, so the edit is the next version.
+   */
+  readonly editNote: string | null;
   readonly canApprove: boolean;
   /** The footer block the body must end with, and whether it does (12.6). */
   readonly footerPresent: boolean;
@@ -131,6 +148,8 @@ export interface SequenceScreen {
   /** Whether the "New sequence" and "New template" forms may be used. */
   readonly canAuthor: boolean;
   readonly notice: string | null;
+  /** The draft the notice's `draft_exists` refusal named, which the page offers. */
+  readonly noticeDraft: { readonly id: string; readonly version: number } | null;
   /** The last template create's or approval's copy warnings, as sentences (wave 1). */
   readonly warnings: readonly string[];
 }
@@ -177,6 +196,7 @@ function versionPanel(
   version: SequenceVersion,
   templates: readonly TemplateVersion[],
   options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
+  draft: SequenceVersion | undefined = undefined,
 ): VersionPanel {
   const refusal = publishRefusalFor(version, templates, options);
   const steps = [...version.steps]
@@ -211,10 +231,18 @@ function versionPanel(
     state: version.state,
     heading: `Version ${String(version.version)} — ${version.state}`,
     steps,
-    // Edited in place since wave 2 (S3): `saveSteps` changes a published version's steps
-    // and the edit reaches its live enrollments, so "Edit as a new draft" is gone and a
-    // published version is simply editable. A retired one is not.
+    // A published version is editable in the sense that Save is offered, and Save writes
+    // the edit to the sequence's draft (send-path v2, S2): the published steps, and every
+    // enrollment on them, stay as they are. A retired one offers nothing.
     editable: version.state !== 'retired' && options.isAdmin && options.mayMutate,
+    editNote:
+      version.state !== 'published'
+        ? null
+        : draft !== undefined
+          ? `Version ${String(draft.version)} is already a draft of this sequence. Make the change there, or publish it first.`
+          : `Saving makes a new draft version. Everybody already enrolled keeps version ${String(version.version)}.`,
+    existingDraft:
+      version.state === 'published' && draft !== undefined ? { id: draft.id, version: draft.version } : null,
     canPublish: refusal === null,
     publishRefusal: refusal,
     canRetire: version.state === 'published' && options.isAdmin && options.mayMutate,
@@ -273,6 +301,9 @@ function templatePanel(
     approved,
     retired,
     editable: !approved && !retired && options.isAdmin && options.mayMutate,
+    editNote: approved
+      ? `Saving makes version ${String(template.version + 1)}. Version ${String(template.version)} stays approved as it is, and so does every sequence that sends it.`
+      : null,
     canApprove:
       !approved && !retired && options.isAdmin && options.mayMutate && footerPresent && !optOutLinkMentioned,
     footerPresent,
@@ -329,13 +360,31 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
     })),
     versions: [...state.versions]
       .sort((left, right) => right.version - left.version)
-      .map(version => versionPanel(version, state.templates, options)),
+      .map(version =>
+        versionPanel(
+          version,
+          state.templates,
+          options,
+          state.versions.find(candidate => candidate.state === 'draft'),
+        ),
+      ),
     templates: state.templates.map(template => templatePanel(template, options)),
     enrollments: enrollmentPanel(state),
     canAuthor: state.isAdmin && state.mayMutate,
     notice: state.notice === null ? null : sequenceNotice(state.notice),
+    noticeDraft: state.notice === null ? null : draftNamedBy(state.notice),
     warnings: state.warnings.map(templateWarningSentence),
   };
+}
+
+/**
+ * The draft a `draft_exists:<version>:<id>` refusal names, so the notice can offer it
+ * (send-path v2, S2). Null for every other notice.
+ */
+export function draftNamedBy(code: string): { readonly id: string; readonly version: number } | null {
+  const named = /^draft_exists:(\d{1,4}):([0-9a-f-]{36})$/u.exec(code);
+  if (named === null) return null;
+  return { id: named[2] ?? '', version: Number(named[1]) };
 }
 
 /** The empty screen the window renders before its first answer. */
@@ -663,6 +712,8 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   sequence_created: 'Sequence created, with an empty version to fill in.',
   steps_saved: 'Saved.',
   template_saved: 'Template saved and approved.',
+  version_not_draft: 'That version is published and does not change. Save again to make a new draft.',
+  template_already_approved: 'That template version is approved and does not change. Save again to make a new version.',
   published: 'Published. It can be used for new enrolments now.',
   retired: 'Retired. Nobody new can be enrolled in this version.',
   admin_only: 'Only an administrator can change sequences and templates.',
@@ -687,6 +738,19 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
  * with no sentence is shown as it is.
  */
 export function sequenceNotice(code: string): string {
+  // Send-path v2 (S2): an edit of a published version or an approved template is a new
+  // version, and the notice names its number so nobody looks for the edit in the old one.
+  const draft = draftNamedBy(code);
+  if (draft !== null) {
+    return `Not saved: version ${String(draft.version)} is already a draft of this sequence. Make the change there, or publish it first.`;
+  }
+  const newVersion = /^(steps|template)_saved_as_version:(\d{1,4})$/u.exec(code);
+  if (newVersion !== null) {
+    const number = newVersion[2] ?? '';
+    return newVersion[1] === 'steps'
+      ? `Saved as draft version ${number}. Publish it to use it for new enrollments; everybody already enrolled keeps the version they started on.`
+      : `Saved and approved as version ${number} of the template. The version you edited is unchanged; a sequence sends the new text once a version naming it is published.`;
+  }
   if (code.startsWith('template_unapproved:')) {
     const issues = code
       .slice('template_unapproved:'.length)
