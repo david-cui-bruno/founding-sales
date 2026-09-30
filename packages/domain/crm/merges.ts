@@ -173,6 +173,12 @@ export async function mergeFirms(
   // could see.
   await mergeResearch(context, source.id, target.id, preserved);
 
+  // A meeting (call-to-booking, 0028) names both a contact and an opportunity through
+  // composite keys that share its firm_id. Moving the contacts rewrites that firm_id by
+  // cascade while the opportunity is still the source's, so the opportunity key is
+  // deferred until the opportunities below have moved too, and checked again there.
+  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey DEFERRED');
+
   // Contacts move first, and the routes, evidence, aliases and events that name a
   // contact follow through `ON UPDATE CASCADE` on the semantic composite key — which
   // is the only way the append-only tables could move at all.
@@ -198,6 +204,11 @@ export async function mergeFirms(
   // as part of the merge rather than moved on top of it. Its stage events cascade.
   await closeOpenOpportunityForMerge(context, source.id, target.id);
   await move('opportunities');
+  // Every meeting that named a contact or an opportunity has followed it by now; the
+  // key is checked here rather than at commit, so a merge that broke it fails as itself.
+  await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey IMMEDIATE');
+  // And a meeting that named only the firm follows the firm that survives.
+  await move('meetings');
 
   await preserveIdentifiers(context, source, target);
   await preserveFirmSuppressions(context, source.id, target.id, input.commandId);

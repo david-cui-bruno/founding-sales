@@ -481,8 +481,13 @@ CREATE TABLE meetings (
   CONSTRAINT meetings_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT meetings_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
     REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
+  -- DEFERRABLE INITIALLY IMMEDIATE: checked per statement like every other key, except
+  -- inside a firm merge, which defers it. The merge moves contacts before
+  -- opportunities, and a meeting linked to both has its firm_id rewritten by the contact
+  -- key's cascade while its opportunity is still the source's; the check has to wait for
+  -- the opportunities to move (`crm/merges.ts`).
   CONSTRAINT meetings_opportunity_fkey FOREIGN KEY (workspace_id, opportunity_id, firm_id)
-    REFERENCES opportunities (workspace_id, id, firm_id) ON UPDATE CASCADE,
+    REFERENCES opportunities (workspace_id, id, firm_id) ON UPDATE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT meetings_uid_shape
     CHECK (booking_uid ~ '^[A-Za-z0-9_-]{1,128}$' AND current_booking_uid ~ '^[A-Za-z0-9_-]{1,128}$'),
   CONSTRAINT meetings_state_known CHECK (state IN ('booked', 'rescheduled', 'cancelled', 'held', 'no_show')),

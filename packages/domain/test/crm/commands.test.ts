@@ -690,6 +690,51 @@ describe('CRM commands', () => {
       });
     });
 
+    it('moves a meeting linked to the source’s contact and opportunity, and a firm-only one (0028)', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const duplicate = await createFirm(context, { name: 'Northwind Test Holdings (booked)' });
+        if (!duplicate.ok) throw new Error(duplicate.reason);
+        const contact = await createContact(context, { firmId: duplicate.value.id, fullName: 'Booked Person', title: 'Owner' });
+        if (!contact.ok) throw new Error(contact.reason);
+        const stage = await context.db.query<{ id: string }>(
+          "SELECT id FROM pipeline_stages WHERE workspace_id = $1 AND key = 'demo_booked'",
+          [seeded.alpha.workspaceId],
+        );
+        const opportunity = await context.db.query<{ id: string }>(
+          `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
+           VALUES ($1, $2, $3, now()) RETURNING id`,
+          [seeded.alpha.workspaceId, duplicate.value.id, stage.rows[0]?.id ?? ''],
+        );
+        const opportunityId = opportunity.rows[0]?.id ?? '';
+        const meeting = async (uid: string, links: { contactId: string | null; opportunityId: string | null }): Promise<void> => {
+          await context.db.query(
+            `INSERT INTO meetings (workspace_id, booking_uid, current_booking_uid, firm_id, contact_id, opportunity_id,
+                                   state, starts_at, ends_at, attendee_email, last_event_at)
+             VALUES ($1, $2, $2, $3, $4, $5, 'booked', now() + INTERVAL '1 day', now() + INTERVAL '1 day 30 minutes',
+                     'booked.person@dup.example.test', now())`,
+            [seeded.alpha.workspaceId, uid, duplicate.value.id, links.contactId, links.opportunityId],
+          );
+        };
+        await meeting('merge-linked', { contactId: contact.value.id, opportunityId });
+        await meeting('merge-firm-only', { contactId: null, opportunityId: null });
+
+        // The contacts move first, and the linked meeting's firm follows its contact
+        // through ON UPDATE CASCADE while its opportunity is still the source's: the
+        // opportunity key must not be checked until the opportunities have moved too.
+        expect(await mergeFirms(context, { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId })).toMatchObject({
+          ok: true,
+        });
+        const { rows } = await context.db.query<{ booking_uid: string; firm_id: string; contact_id: string | null; opportunity_id: string | null }>(
+          'SELECT booking_uid, firm_id, contact_id, opportunity_id FROM meetings WHERE workspace_id = $1 ORDER BY booking_uid',
+          [seeded.alpha.workspaceId],
+        );
+        expect(rows).toEqual([
+          { booking_uid: 'merge-firm-only', firm_id: crm.alpha.firmId, contact_id: null, opportunity_id: null },
+          { booking_uid: 'merge-linked', firm_id: crm.alpha.firmId, contact_id: contact.value.id, opportunity_id: opportunityId },
+        ]);
+      });
+    });
+
     it('preserves suppressions, evidence, stage events, aliases and external ids', async () => {
       await inRolledBackTransaction(admin, async context => {
         const duplicate = await createFirm(context, {
