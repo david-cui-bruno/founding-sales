@@ -42,8 +42,14 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
  * workspace under a restore hold "mostly running" until each step's day arrived.
  *
  * **Counted** means every section 15 reason except the ones in
- * `EXPECTED_HOLD_REASONS`: `scoped_pause`, and the three that clear with the clock.
+ * `EXPECTED_HOLD_REASONS`: `scoped_pause`, `cold_outreach_mailbox_required`, and the
+ * three that clear with the clock.
  *
+ *   * `cold_outreach_mailbox_required` (send-path v2, slice S4; coordinator's decision,
+ *     30 September 2026) is the expected state of every prospecting enrollment while no
+ *     cold-outreach transport exists: `coldOutreachTransportSource` holds its e-mail
+ *     step on purpose, and a workspace whose live enrollments are all prospecting must
+ *     not page anybody for that.
  *   * `scoped_pause` is every stop somebody chose. An administrator's pause at any
  *     scope and a salesperson's Today delay open holds with it, and the send hand-off
  *     holds a step with it when sending is switched off: the deployment's flag, the
@@ -70,12 +76,19 @@ export const SEQUENCE_METRIC_NAMES: readonly string[] = Object.freeze(['ActiveEn
 
 /**
  * The hold reasons that do not make an enrollment count as held: every deliberate
- * stop (`scoped_pause`) and the holds that clear with the clock. Derived from
+ * stop (`scoped_pause`), a prospecting e-mail held for want of a cold-outreach
+ * transport (`cold_outreach_mailbox_required`, send-path v2), and the holds that clear
+ * with the clock. Derived from
  * `CLOCK_CLEARING_HOLDS` rather than restated, so the gauge and the scheduler agree
  * about which holds wait for time.
  */
 export const EXPECTED_HOLD_REASONS: readonly HoldReasonCode[] = Object.freeze(
-  HOLD_REASON_CODES.filter(code => code === 'scoped_pause' || CLOCK_CLEARING_HOLDS[code] !== undefined),
+  HOLD_REASON_CODES.filter(
+    code =>
+      code === 'scoped_pause' ||
+      code === 'cold_outreach_mailbox_required' ||
+      CLOCK_CLEARING_HOLDS[code] !== undefined,
+  ),
 );
 
 export interface EnrollmentCounts {

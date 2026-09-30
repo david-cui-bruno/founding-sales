@@ -4,7 +4,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { openHold, releaseHold, type OpenHoldInput } from '../../policy/holds.ts';
 import { openPause } from '../../policy/pauses.ts';
-import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { allowAllEligibility, composeEligibility } from '../../sequences/eligibility.ts';
 import { completeEnrollment, enrollContact, stopEnrollments } from '../../sequences/enrollments.ts';
 import { CLOCK_CLEARING_HOLDS, completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { EXPECTED_HOLD_REASONS, collectSequenceMetrics, countEnrollments } from '../../sequences/metrics.ts';
@@ -379,6 +379,28 @@ describe('the holds that do not count', () => {
     expect(await counts()).toEqual({ active: 1, held: 0 });
   });
 
+  it('does not count a prospecting e-mail held for a cold-outreach mailbox (send-path v2)', async () => {
+    // The worker's own path with the real composition: a prospecting enrollment's due
+    // e-mail step is held by `coldOutreachTransportSource`, which is the expected state
+    // while no cold-outreach transport exists — not an alarm.
+    const target = await enrolledProspect('alpha');
+    await database.session.query(
+      `UPDATE step_executions
+          SET due_at = TIMESTAMPTZ '2026-09-18T13:00:00Z', not_before = TIMESTAMPTZ '2026-09-18T13:00:00Z',
+              original_due_at = TIMESTAMPTZ '2026-09-18T13:00:00Z'
+        WHERE workspace_id = $1 AND enrollment_id = $2`,
+      [seeded.alpha.workspaceId, target.enrollmentId],
+    );
+    const outcome = await runDueStepExecution(worker('alpha'), {
+      enrollmentId: target.enrollmentId,
+      now: '2026-09-18T14:00:00Z',
+      eligibility: composeEligibility(),
+      sendHandoff: unavailableSendHandoff(),
+    });
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'cold_outreach_mailbox_required' });
+    expect(await counts()).toEqual({ active: 1, held: 0 });
+  });
+
   for (const reasonCode of Object.keys(CLOCK_CLEARING_HOLDS) as HoldReasonCode[]) {
     it(`does not count ${reasonCode}, which clears with the clock, on the step or as a firm hold`, async () => {
       const target = await enrolledProspect('alpha');
@@ -509,9 +531,9 @@ describe('two workspaces', () => {
 });
 
 describe('which reasons are expected', () => {
-  it('is scoped_pause and the three clock-clearing holds, and nothing else', () => {
+  it('is scoped_pause, cold_outreach_mailbox_required and the three clock-clearing holds, and nothing else', () => {
     expect([...EXPECTED_HOLD_REASONS].sort()).toEqual(
-      ['daily_cap', 'outside_email_window', 'scoped_pause', 'send_unknown_reconciling'],
+      ['cold_outreach_mailbox_required', 'daily_cap', 'outside_email_window', 'scoped_pause', 'send_unknown_reconciling'],
     );
   });
 });
