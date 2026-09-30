@@ -65,10 +65,11 @@ function stub(directory: string, prefix: string): string {
     `    printf '{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:${ACCOUNT}:task/${prefix}-cluster/oneoff-%s"}],"failures":[]}\\n' "$n"`,
     '    exit 0 ;;',
     '  "ecs describe-tasks")',
-    '    printf \'{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"operations","exitCode":0}]}],"failures":[]}\\n\'',
+    '    printf \'{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"operations","exitCode":%s}]}],"failures":[]}\\n\' "$(cat "$state/exit-code" 2>/dev/null || echo 0)"',
     '    exit 0 ;;',
     '  "logs get-log-events")',
     '    n=${stream##*oneoff-}; cmd=$(cat "$state/task-$n.cmd")',
+    '    if [ -f "$state/old-image" ]; then answer=\'{"level":"error","event":"fss_usage","reason":"command_unknown","detail":"admin release"}\'; python3 -c \'import json,sys; print(json.dumps({"events":[{"message": sys.argv[1]}]}))\' "$answer"; exit 0; fi',
     '    case "$cmd" in',
     '      *idle-check*)',
     '        k=$(( $(cat "$state/idle-polls" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$state/idle-polls"',
@@ -107,6 +108,8 @@ interface Options {
   readonly services?: Readonly<Record<'api' | 'worker', number>>;
   /** For idle.sh: the mode, then the root and prefix follow, then `tail`. */
   readonly args?: readonly string[];
+  /** The deployed image predates the commands: the tool exits 64 with command_unknown. */
+  readonly oldImage?: boolean;
   readonly tail?: readonly string[];
 }
 
@@ -121,6 +124,10 @@ function run(script: string, options: Options = {}): Run {
   for (const [name, count] of Object.entries(services)) {
     writeFileSync(join(directory, `${prefix}-${name}.desired`), `${String(count)}\n`);
     writeFileSync(join(directory, `${prefix}-${name}.running`), `${String(count)}\n`);
+  }
+  if (options.oldImage === true) {
+    writeFileSync(join(directory, 'old-image'), '');
+    writeFileSync(join(directory, 'exit-code'), '64\n');
   }
   const answers = (options.answers ?? [IDLE_ANSWER]).map(answer => (typeof answer === 'string' ? answer : JSON.stringify(answer)));
   writeFileSync(join(directory, 'idle-answers'), `${answers.join('\n')}\n`);
@@ -207,7 +214,7 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
     expect(r.output).toContain('production is busy: 1 call is in progress');
     expect(r.report('release-stop.txt')).toContain('idle=idle');
     expect(r.report('release-idle.txt')).toMatch(/result=idle idle_wait_seconds=[0-9]+ polls=3 forced=0$/u);
-    expect(r.report('release-stop-timing.txt')).toMatch(/idle=idle idle_wait_seconds=[0-9]+ stop_started_at=[0-9]+ stop_finished_at=[0-9]+$/u);
+    expect(r.report('release-stop-timing.txt')).toMatch(/idle=idle drain=on idle_wait_seconds=[0-9]+ stop_started_at=[0-9]+ stop_finished_at=[0-9]+$/u);
   });
 
   it('refuses after the wait with the reasons, changes nothing, and turns the drain off again', () => {
@@ -260,6 +267,33 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
     expect(r.code).not.toBe(0);
     expect(r.output).toContain('FSS_PROD_IDLE_WAIT_SECONDS');
     expect(r.calls).toEqual([]);
+  });
+});
+
+describe('the first release after the idle check merges: the deployed image has no such command', () => {
+  it('refuses with the predates message, names the digest, and scales nothing', () => {
+    const r = run(STOP, { production: true, oldImage: true });
+    expect(r.code).not.toBe(0);
+    expect(r.output).toContain('The deployed image predates the idle check (sha256:');
+    expect(r.output).toContain('then rerun with FSS_PROD_FORCE_IDLE=1.');
+    expect(r.output, 'reported as busy').not.toContain('production is not idle');
+    expect(r.output, 'reported as unreadable').not.toContain('could not be run or read');
+    expect(scaled(r.calls)).toEqual([]);
+    expect(r.counts).toEqual({ api: 2, worker: 1 });
+    expect(r.report('release-stop.txt')).toBeNull();
+  });
+
+  it('with FSS_PROD_FORCE_IDLE=1 proceeds, and records forced with the drain unavailable', () => {
+    const r = run(STOP, { production: true, oldImage: true, env: { FSS_PROD_FORCE_IDLE: '1' } });
+    expect(r.code, r.output).toBe(0);
+    expect(r.output).toContain('WARN: the deployed image predates the release drain');
+    expect(scaled(r.calls)).toHaveLength(2);
+    expect(r.report('release-stop.txt')).toContain('idle=forced drain=unavailable');
+    expect(r.report('release-stop-timing.txt')).toContain('idle=forced drain=unavailable');
+  });
+
+  it('idle.sh check on the old image exits 4, distinct from busy (3) and unreadable (1)', () => {
+    expect(run(IDLE, { args: ['check'], oldImage: true }).code).toBe(4);
   });
 });
 

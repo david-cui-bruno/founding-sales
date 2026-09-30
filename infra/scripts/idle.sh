@@ -48,6 +48,7 @@ IDLE_POLL_SECONDS=${FSS_PROD_IDLE_POLL_SECONDS:-15}
 IDLE_WAIT_SECONDS=${FSS_PROD_IDLE_WAIT_SECONDS:-600}
 IDLE_POLLS=0
 IDLE_REASONS=''
+IDLE_DIGEST=''
 
 # The worker image the operations definition runs, by digest; the task is held to it.
 idle_operations_digest() {
@@ -76,6 +77,7 @@ idle_task() {
   reports="$(rehearsal_report_dir)"
   mkdir -p "$reports"
   digest="$(idle_operations_digest)" || return 1
+  IDLE_DIGEST=$digest
   rehearsal_log "$step: fss admin $*"
   release_run_task \
     --step "$step" --environment "$ENVIRONMENT" --prefix "$PREFIX" --account "$ACCOUNT" --region "$REGION" \
@@ -83,12 +85,25 @@ idle_task() {
     --network-plan "$NETWORK_PLAN" --image-digest "$digest" \
     --database-host "$DATABASE_HOST" --secret-arn "$RUNTIME_SECRET_ARN" \
     --log-group "$LOG_GROUP" --log-stream-prefix operations --capture "$reports/$step.log" \
-    -- admin "$@" || return 1
+    -- admin "$@" || {
+      # The deployed image may predate this command (the first release after the idle check
+      # merges: its scripts are manual-deploy, so production still runs the old worker).
+      # The old tool answers an unknown command with exit 64 and an fss_usage /
+      # command_unknown log line, which is in the capture. Distinct from busy and from
+      # unreadable: return 4.
+      if grep -q 'command_unknown' "$reports/$step.log" 2>/dev/null; then return 4; fi
+      return 1
+    }
   if rehearsal_dry_run; then return 0; fi
   release_captured_report "$reports/$step.log" "$reports/$step.json" || return 1
 }
 
-# One read. Sets IDLE_REASONS; returns 0 idle, 3 busy, 1 unreadable.
+idle_predates_message() {
+  printf 'The deployed image predates the idle check (%s). Check by hand that no call is active and nobody is working, then rerun with FSS_PROD_FORCE_IDLE=1.' "${IDLE_DIGEST:-unknown}"
+}
+
+# One read. Sets IDLE_REASONS; returns 0 idle, 3 busy, 4 the deployed image has no such
+# command, 1 unreadable.
 idle_check_once() {
   local step verdict
   IDLE_POLLS=$((IDLE_POLLS + 1))
@@ -99,8 +114,10 @@ idle_check_once() {
     rehearsal_plan "read $(rehearsal_report_dir)/$step.json and proceed only when idle is true; a busy answer polls again every ${IDLE_POLL_SECONDS}s for up to ${IDLE_WAIT_SECONDS}s"
     return 0
   fi
-  idle_task "$step" release idle-check --report /tmp/fss-idle-check.json \
-    || { echo "FAIL: the idle check could not be run or read, so production is not known to be idle." >&2; return 1; }
+  local status=0
+  idle_task "$step" release idle-check --report /tmp/fss-idle-check.json || status=$?
+  if [ "$status" = 4 ]; then return 4; fi
+  if [ "$status" != 0 ]; then echo "FAIL: the idle check could not be run or read, so production is not known to be idle." >&2; return 1; fi
   verdict="$(FSS_FILE="$(rehearsal_report_dir)/$step.json" python3 -c '
 import json, os, sys
 answer = json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}
@@ -151,6 +168,11 @@ idle_wait() {
         return 0
         ;;
       3) ;;
+      4)
+        idle_write_report predates "$waited" 0
+        echo "FAIL: $(idle_predates_message)" >&2
+        return 1
+        ;;
       *) idle_write_report refused "$waited" 0; return 1 ;;
     esac
     if [ "$waited" -ge "$max_wait" ]; then
@@ -187,22 +209,35 @@ idle_main() {
       case "$status" in
         0) rehearsal_log "production is idle" ;;
         3) echo "BUSY: $IDLE_REASONS" >&2; exit 3 ;;
+        4) echo "FAIL: $(idle_predates_message)" >&2; exit 4 ;;
         *) exit 1 ;;
       esac
       ;;
     wait) idle_wait || exit 1 ;;
-    drain-on)
+    drain-on | drain-off)
       [ "$ENVIRONMENT" = production ] || idle_fail "the release drain is production's; a rehearsal does not use it"
-      if [ -n "$minutes" ]; then
+      local drain_args=(release drain on) drain_step=release-drain-on drain_status=0
+      if [ "$mode" = drain-off ]; then drain_args=(release drain off); drain_step=release-drain-off; fi
+      if [ "$mode" = drain-on ] && [ -n "$minutes" ]; then
         [[ "$minutes" =~ ^[0-9]+$ ]] || idle_fail "--minutes takes a whole number of minutes from 1 to 60"
-        idle_task release-drain-on release drain on --minutes "$minutes" --report /tmp/fss-drain.json || idle_fail "the release drain was not turned on"
-      else
-        idle_task release-drain-on release drain on --report /tmp/fss-drain.json || idle_fail "the release drain was not turned on"
+        drain_args+=(--minutes "$minutes")
       fi
-      ;;
-    drain-off)
-      [ "$ENVIRONMENT" = production ] || idle_fail "the release drain is production's; a rehearsal does not use it"
-      idle_task release-drain-off release drain off --report /tmp/fss-drain.json || idle_fail "the release drain was not turned off (it lapses by itself within 60 minutes)"
+      idle_task "$drain_step" "${drain_args[@]}" --report /tmp/fss-drain.json || drain_status=$?
+      if [ "$drain_status" = 4 ]; then
+        # The deployed image has no drain command. Forced: a warning, recorded; otherwise
+        # the same refusal as the idle check.
+        if [ "${FSS_PROD_FORCE_IDLE:-0}" = 1 ]; then
+          rehearsal_log "WARN: the deployed image predates the release drain (${IDLE_DIGEST:-unknown}); FORCED, so this is not a failure. Recorded as drain=unavailable."
+          rehearsal_write_report "release-drain.txt" "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX drain=unavailable"
+        else
+          idle_fail "$(idle_predates_message)"
+        fi
+      elif [ "$drain_status" != 0 ]; then
+        if [ "$mode" = drain-on ]; then idle_fail "the release drain was not turned on"; fi
+        idle_fail "the release drain was not turned off (it lapses by itself within 60 minutes)"
+      else
+        rehearsal_write_report "release-drain.txt" "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX drain=${mode#drain-}"
+      fi
       ;;
     *) idle_usage ;;
   esac

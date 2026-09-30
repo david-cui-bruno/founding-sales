@@ -55,7 +55,7 @@ rehearsal_log "services $API_SERVICE, then $WORKER_SERVICE"
 IDLE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/idle.sh"
 IDLE_NAMED=()
 if [ -n "$NAMED_ENVIRONMENT" ]; then IDLE_NAMED=(--environment "$NAMED_ENVIRONMENT"); fi
-rm -f "$(rehearsal_report_dir)/release-idle.txt"
+rm -f "$(rehearsal_report_dir)/release-idle.txt" "$(rehearsal_report_dir)/release-drain.txt"
 if [ "$ENVIRONMENT" = production ]; then
   rehearsal_log "0/2 the release drain on, then wait for production to be idle"
   "$IDLE_SCRIPT" drain-on "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} \
@@ -71,6 +71,10 @@ if ! "$IDLE_SCRIPT" wait "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAM
   exit 1
 fi
 IDLE_RESULT=unknown
+DRAIN_STATE=not_used
+if [ -r "$(rehearsal_report_dir)/release-drain.txt" ]; then
+  DRAIN_STATE="$(sed -n 's/.* drain=\([a-z]*\).*/\1/p' "$(rehearsal_report_dir)/release-drain.txt" | tail -n 1)"
+fi
 IDLE_WAIT_SECONDS_SEEN=null
 if [ -r "$(rehearsal_report_dir)/release-idle.txt" ]; then
   IDLE_RESULT="$(sed -n 's/.* result=\([a-z]*\).*/\1/p' "$(rehearsal_report_dir)/release-idle.txt" | tail -n 1)"
@@ -139,11 +143,11 @@ fi
 rehearsal_log "2/2 $WORKER_SERVICE to zero"
 stop_service "$WORKER_SERVICE" || exit 1
 
-rehearsal_write_report "release-stop.txt" "prefix=$PREFIX environment=$ENVIRONMENT idle=${IDLE_RESULT:-unknown}${SUMMARY}"
+rehearsal_write_report "release-stop.txt" "prefix=$PREFIX environment=$ENVIRONMENT idle=${IDLE_RESULT:-unknown} drain=${DRAIN_STATE:-not_used}${SUMMARY}"
 # What the release timings read (deploy.sh release): when this stop began and ended, and
 # how long the idle wait took. Named with the release it belongs to, like the stop instant.
 if ! rehearsal_dry_run; then
   rehearsal_write_report "release-stop-timing.txt" \
-    "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX idle=${IDLE_RESULT:-unknown} idle_wait_seconds=${IDLE_WAIT_SECONDS_SEEN:-null} stop_started_at=$STOP_STARTED_AT stop_finished_at=$(date -u +%s)"
+    "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX idle=${IDLE_RESULT:-unknown} drain=${DRAIN_STATE:-not_used} idle_wait_seconds=${IDLE_WAIT_SECONDS_SEEN:-null} stop_started_at=$STOP_STARTED_AT stop_finished_at=$(date -u +%s)"
 fi
 rehearsal_log "stopped: $API_SERVICE, then $WORKER_SERVICE. Next: the apply, then deploy.sh release --schema-change."

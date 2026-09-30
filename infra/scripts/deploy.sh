@@ -947,7 +947,7 @@ document = {
     "apiDigest": env["FSS_API_DIGEST"] or None,
     "workerDigest": env["FSS_WORKER_DIGEST"],
     "timings": timings,
-    "idle": {"result": idle, "forced": forced},
+    "idle": {"result": idle, "forced": forced, "drain": (stop or {}).get("drain")},
     "notes": {"automatedChecksCovers": "the gate run, which includes the upgrade job; rehearsal runs are not timed by any script"},
     "nulls": nulls,
 }
@@ -961,7 +961,7 @@ def show(key):
 
 print("release-timings: preparation={} automated_checks={} operator={} downtime={} idle_wait={}{}".format(
     show("preparationSeconds"), show("automatedChecksSeconds"), show("operatorSeconds"), show("downtimeSeconds"), show("idleWaitSeconds"),
-    " FORCED (the idle check was skipped)" if forced else ""))
+    (" FORCED (the idle check was skipped" + ("; drain unavailable on the deployed image" if (stop or {}).get("drain") == "unavailable" else "") + ")") if forced else ""))
 PY
 }
 
