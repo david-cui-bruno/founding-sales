@@ -75,6 +75,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'today.collapse': async () => await deps.today.collapse(),
     'today.callsPlaced': async () => await deps.today.callsPlaced(),
     'today.snooze': async (input: Parameters<TodayBridgeHost['snooze']>[0]) => await deps.today.snooze(input),
+    'today.previewFollowUp': async (input: Parameters<TodayBridgeHost['previewFollowUp']>[0]) =>
+      await deps.today.previewFollowUp(input),
     'today.recordOutcome': async (input: Parameters<TodayBridgeHost['recordOutcome']>[0]) =>
       await deps.today.recordOutcome(input),
     'today.scheduleCallback': async (input: Parameters<TodayBridgeHost['scheduleCallback']>[0]) =>

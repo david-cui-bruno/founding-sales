@@ -121,6 +121,7 @@ describe('the operation registry', () => {
       'today.state',
       'today.refresh',
       'today.expand',
+      'today.previewFollowUp',
       'today.callsPlaced',
       'today.collapse',
       'today.snooze',

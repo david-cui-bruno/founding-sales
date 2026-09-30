@@ -1,6 +1,7 @@
 import { callbackInstant, localParts } from '@fss/contracts';
 import type { DialAdviceView, TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
 import { OFFLINE_SENTENCE } from './readError.ts';
+import { agreementSentence } from './today/followUpView.ts';
 
 /**
  * What the Today window shows, as a pure function of the state the main process sent
@@ -131,6 +132,13 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   // on its way (migration 0025).
   outcome_recorded_follow_up_not_granted:
     'Call recorded and its sequences stopped, but Callie was not given permission to send the follow-up e-mail you chose. Grant it from the firm’s page, or promise it again on your next call.',
+  // Send-path v2 (slice S3): an agreed sequence recorded on the call. The agreement
+  // banner beside it names the sequence and, when it did not start, why.
+  outcome_recorded_sequence_started: 'Call recorded, its earlier sequences stopped, and the agreed sequence started.',
+  outcome_recorded_sequence_not_started:
+    'Call recorded and its earlier sequences stopped. The agreed sequence is permitted but did not start.',
+  version_unknown: 'That sequence is not one of this workspace’s. Refresh and choose again.',
+  version_not_published: 'That sequence version is not published any more. Refresh and choose again.',
   callback_scheduled: 'Callback scheduled.',
   callback_time_invalid: 'That is not a day and time Callie can place a callback at.',
   callback_already_scheduled: 'That call already has its callback.',
@@ -243,6 +251,10 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     });
   }
   if (state.notice !== null) banners.push({ tone: 'info', text: noticeSentence(state.notice) });
+  // What the call just recorded agreed to, by name (send-path v2, slice S3). Only beside
+  // a recorded call's notice: another command's notice is not about this agreement.
+  const agreed = state.notice?.startsWith('outcome_recorded') === true ? agreementSentence(state.agreement) : null;
+  if (agreed !== null) banners.push({ tone: 'info', text: agreed });
   // A card with a number to dial and no number of the person's own to place it from.
   // Since 1.0.12 that does not stop the call — `POST /dial/check` decides, and it has no
   // opinion about the caller's own line — so it is a line to act on rather than an

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, instant, uuid } from './foundationRows.ts';
-import { STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
+import { STEP_CHANNELS, STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
 
 /**
  * The wire contract of policy, suppression and dialing
@@ -612,6 +612,62 @@ export const loggedCallResultSchema = z.object({
   followUps: z.array(callFollowUpSchema),
 });
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;
+
+/**
+ * `POST /calls/follow-up-preview` (send-path v2, slice S3): what an agreed sequence
+ * would send, and when, if the person on the call agreed to it now.
+ *
+ * David, 30 September 2026: *"Show the messages and timing and record the prospect's
+ * agreement."* So the Today card shows, before the outcome is recorded, every step of
+ * the published version in order — the approved template's name and subject for an
+ * e-mail, and the call tasks too, because they count toward the agreed scope — with the
+ * instant each is expected. The instants are the server's: the same `resolveStepDue` and
+ * `placeEmailSend` enrolment and the scheduler use, in the firm's zone, under the
+ * workspace's current holiday calendar, anchored at `previewAt` (default: the database's
+ * now). A read; it writes nothing.
+ */
+export const followUpPreviewRequestSchema = z.strictObject({
+  firmId: uuid,
+  contactId: uuid,
+  sequenceVersionId: uuid,
+  /** The instant the enrolment would start. Absent means the database's now. */
+  previewAt: instant.optional(),
+});
+export type FollowUpPreviewRequest = z.infer<typeof followUpPreviewRequestSchema>;
+
+const followUpPreviewStepSchema = z.object({
+  ordinal: z.number().int().min(1),
+  channel: z.enum(STEP_CHANNELS),
+  /** The template an e-mail step sends; null for a call task. */
+  templateVersionId: uuid.nullable(),
+  templateName: z.string().max(200).nullable(),
+  /** The approved subject as stored (placeholders unrendered). Null for a call task. */
+  subject: z.string().max(1000).nullable(),
+  /** Whether the template is approved. A published step should always be; false says so. */
+  templateApproved: z.boolean().nullable(),
+  /** When the step falls due: what enrolment stores as the execution's `due_at`. */
+  dueAt: instant,
+  /**
+   * When it is expected to happen: for an e-mail, `placeEmailSend(dueAt)` — the send
+   * window's next valid instant; for a call task, the due instant itself.
+   */
+  estimatedAt: instant,
+});
+export type FollowUpPreviewStep = z.infer<typeof followUpPreviewStepSchema>;
+
+export const followUpPreviewResponseSchema = z.object({
+  sequenceVersionId: uuid,
+  sequenceName: z.string().max(200),
+  version: z.number().int().min(1),
+  /** The firm's IANA zone, which the card formats every instant in. */
+  firmTimeZone: z.string().min(1).max(64),
+  /** The workspace holiday calendar version the instants were computed under. */
+  holidayCalendarVersion: z.string().max(64),
+  /** The anchor the delays were counted from. */
+  anchoredAt: instant,
+  steps: z.array(followUpPreviewStepSchema),
+});
+export type FollowUpPreviewResponse = z.infer<typeof followUpPreviewResponseSchema>;
 
 /**
  * Give a recorded "call me back" its time, later (audit item C13).

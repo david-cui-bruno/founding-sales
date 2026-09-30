@@ -41,6 +41,13 @@ export const POLICY_REFUSAL_CODES = [
   'item_unknown',
   /** An entered `occurredAt` further ahead of database time than the tolerance (C15). */
   'occurred_at_in_future',
+  /**
+   * Send-path v2 (slice S3): the sequence version a call agreed to is not one of this
+   * workspace's (`version_unknown`), or is not published (`version_not_published`).
+   * Decided before the call log is written, like the two agreement rules beside it.
+   */
+  'version_unknown',
+  'version_not_published',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 

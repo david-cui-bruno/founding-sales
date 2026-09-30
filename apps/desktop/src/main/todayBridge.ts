@@ -3,7 +3,10 @@ import {
   callbackInstant,
   callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
+  followUpPreviewResponseSchema,
   loggedCallResultSchema,
+  sequenceVersionsResponseSchema,
+  sequencesResponseSchema,
   templateVersionsResponseSchema,
   todayFirmResponseSchema,
   todayPauseReleaseResultSchema,
@@ -13,7 +16,10 @@ import {
 } from '@fss/contracts';
 import {
   todayStateSchema,
+  type AgreementView,
   type DialAdviceView,
+  type FollowUpPreviewRequest,
+  type FollowUpPreviewView,
   type DialRequest,
   type OutcomeRequest,
   type RefreshRequest,
@@ -116,6 +122,12 @@ export interface TodayBridgeHost {
    */
   callsPlaced(): Promise<CallsPlacedTodayResponse | null>;
   snooze(input: SnoozeRequest): Promise<TodayState>;
+  /**
+   * What an agreed sequence would send and when, for one person at the open firm
+   * (send-path v2, slice S3): `POST /calls/follow-up-preview`, kept on the state for the
+   * outcome form to show before the call is recorded.
+   */
+  previewFollowUp(input: FollowUpPreviewRequest): Promise<TodayState>;
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
   scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
@@ -138,13 +150,59 @@ export function outcomeNotice(result: LoggedCallResult | null): string {
   const kinds = new Set((result?.followUps ?? []).map(entry => entry.kind));
   if (kinds.has('effects_not_applied')) return 'outcome_recorded_effects_not_applied';
   if (kinds.has('callback_time_needed')) return 'outcome_recorded_callback_time_needed';
+  // Send-path v2 (slice S3): the agreed sequence was granted but did not start. Above
+  // "not granted" only because the two cannot both be present — a refused grant never
+  // reaches the enrolment.
+  if (kinds.has('follow_up_not_enrolled')) return 'outcome_recorded_sequence_not_started';
   // Above `route_not_named`, because it is the more surprising of the two: the person
   // chose an e-mail to promise and Callie did not get permission to send it, which is a
   // thing they said out loud on the call (migration 0025).
   if (kinds.has('follow_up_not_granted')) return 'outcome_recorded_follow_up_not_granted';
   if (kinds.has('route_not_named')) return 'outcome_recorded_route_not_named';
+  if (kinds.has('agreed_sequence_enrolled')) return 'outcome_recorded_sequence_started';
   return 'outcome_recorded';
 }
+
+/**
+ * What a recorded call agreed to, for the notice: the name the person chose from, whether
+ * the permission was granted and — for an agreed sequence — whether it started, or the
+ * server's refusal code when it did not (send-path v2, slice S3). Null when nothing was
+ * agreed, or when the server's answer did not come back readable.
+ */
+export function agreementOf(
+  sent: OutcomeRequest['followUpPermission'],
+  result: LoggedCallResult | null,
+  names: {
+    readonly templates: readonly { readonly id: string; readonly name: string }[];
+    readonly sequences: readonly { readonly sequenceVersionId: string; readonly name: string }[];
+  },
+): AgreementView | null {
+  if (sent === null || result === null) return null;
+  const followUps = result.followUps;
+  const notGranted = followUps.find(entry => entry.kind === 'follow_up_not_granted');
+  if (sent.scope === 'single_email') {
+    return {
+      scope: 'single_email',
+      name: names.templates.find(entry => entry.id === sent.templateVersionId)?.name ?? 'the e-mail you chose',
+      granted: notGranted === undefined,
+      started: null,
+      reason: notGranted?.reason ?? null,
+    };
+  }
+  const notEnrolled = followUps.find(entry => entry.kind === 'follow_up_not_enrolled');
+  const enrolled = followUps.some(entry => entry.kind === 'agreed_sequence_enrolled');
+  return {
+    scope: 'agreed_sequence',
+    name:
+      names.sequences.find(entry => entry.sequenceVersionId === sent.sequenceVersionId)?.name ?? 'the sequence you chose',
+    granted: notGranted === undefined,
+    started: enrolled,
+    reason: notGranted?.reason ?? notEnrolled?.reason ?? null,
+  };
+}
+
+/** How many sequences the card reads the versions of: more than a founder publishes. */
+const FOLLOW_UP_SEQUENCE_LIMIT = 50;
 
 /**
  * `YYYY-MM-DDTHH:MM` in `zone`, as a UTC instant.
@@ -180,6 +238,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
    * answer and not a silent one — the form says so.
    */
   let followUpTemplates: readonly { readonly id: string; readonly name: string }[] = [];
+  /**
+   * The published sequence versions a call may agree to (send-path v2, slice S3), read
+   * with the expansion like the templates, and the preview of the one chosen. The preview
+   * belongs to one firm, person and version; the form shows it only when all three match.
+   */
+  let followUpSequences: readonly { readonly sequenceVersionId: string; readonly name: string }[] = [];
+  let followUpPreview: FollowUpPreviewView | null = null;
+  /** What the last recorded call agreed to, for the notice. Cleared with the notice. */
+  let agreement: AgreementView | null = null;
   /**
    * The URI each advised number would open, by route. It never crosses the bridge: a
    * renderer that cannot name a `tel:` string cannot ask for one to be opened, however
@@ -240,6 +307,9 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       handoffNotice: HANDOFF_LIMITATION_NOTICE,
       dialAdvice,
       followUpTemplates,
+      followUpSequences,
+      followUpPreview,
+      agreement,
       lastCall:
         lastCall === null
           ? null
@@ -292,8 +362,37 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     expanded = page.value;
     remember(page.value);
     notice = null;
+    agreement = null;
+    if (followUpPreview !== null && followUpPreview.firmId !== firmId) followUpPreview = null;
     dialAdvice = await adviseRoutes(page.value);
     followUpTemplates = await approvedTemplates();
+    followUpSequences = await publishedSequences();
+  };
+
+  /**
+   * The published, enrollable sequence versions, as "Name v2", for the agreed-sequence
+   * choice (send-path v2, slice S3). The Firm page's read (`crmBridge.loadSequences`):
+   * `/sequences`, then each unarchived sequence's `/sequences/versions` — a founder has a
+   * handful. A read that fails leaves the list empty, which the form says plainly; it
+   * never offers a version it could not read.
+   */
+  const publishedSequences = async (): Promise<readonly { readonly sequenceVersionId: string; readonly name: string }[]> => {
+    const list = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
+    if (!list.ok) return [];
+    const published: { sequenceVersionId: string; name: string }[] = [];
+    for (const sequence of list.value.sequences.slice(0, FOLLOW_UP_SEQUENCE_LIMIT)) {
+      if (sequence.archivedAt !== null) continue;
+      const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
+        sequenceId: sequence.id,
+      });
+      if (!versions.ok) return [];
+      for (const version of versions.value.versions) {
+        // A version with a removed LinkedIn step is not enrollable (`step_unknown`).
+        if (version.state !== 'published' || version.steps.some(step => step.channel === 'removed')) continue;
+        published.push({ sequenceVersionId: version.id, name: `${sequence.name} v${String(version.version)}` });
+      }
+    }
+    return published;
   };
 
   /**
@@ -357,8 +456,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     if (options.refreshList) await deps.session.refreshToday();
     if (expanded === null) return;
     const kept = notice;
+    const keptAgreement = agreement;
     await loadExpansion(expanded.firmId);
-    if (expanded !== null || notice === 'not_found') notice = kept;
+    if (expanded !== null || notice === 'not_found') {
+      notice = kept;
+      agreement = keptAgreement;
+    }
   };
 
   return {
@@ -372,6 +475,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     async forget() {
       expanded = null;
       notice = null;
+      agreement = null;
+      followUpPreview = null;
+      followUpSequences = [];
+      followUpTemplates = [];
       lastCall = null;
       dialAdvice = [];
       expansionsOwner = null;
@@ -409,6 +516,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     async collapse() {
       expanded = null;
       notice = null;
+      agreement = null;
+      followUpPreview = null;
       dialAdvice = [];
       telUris.clear();
       return await snapshot();
@@ -440,6 +549,56 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       );
       if (note(answer, null) && answer.ok) notice = answer.value.outcome;
       await reloadAfterMutation({ refreshList: false });
+      return await snapshot();
+    },
+
+    /**
+     * The server's preview of an agreed sequence (send-path v2, slice S3).
+     *
+     * Every instant is the server's — `resolveStepDue` and `placeEmailSend`, the firm's
+     * zone, the workspace calendar — so the Mac computes no schedule of its own. A refusal
+     * is kept as its code, with no steps, so the form can say why it cannot start that
+     * plan; an answer that did not arrive clears the preview rather than showing an old
+     * one.
+     */
+    async previewFollowUp(input) {
+      const answer = await deps.api.read(
+        '/calls/follow-up-preview',
+        value => followUpPreviewResponseSchema.parse(value),
+        { firmId: input.firmId, contactId: input.contactId, sequenceVersionId: input.sequenceVersionId },
+      );
+      if (answer.ok) {
+        followUpPreview = {
+          firmId: input.firmId,
+          contactId: input.contactId,
+          sequenceVersionId: answer.value.sequenceVersionId,
+          sequenceName: answer.value.sequenceName,
+          firmTimeZone: answer.value.firmTimeZone,
+          anchoredAt: answer.value.anchoredAt,
+          steps: answer.value.steps.map(step => ({
+            ordinal: step.ordinal,
+            channel: step.channel,
+            templateName: step.templateName,
+            subject: step.subject,
+            estimatedAt: step.estimatedAt,
+          })),
+          refusal: null,
+        };
+      } else if (answer.offline || answer.reason === 'unreadable_answer' || /^http_5\d\d$/u.test(answer.reason)) {
+        followUpPreview = null;
+        notice = answer.reason;
+      } else {
+        followUpPreview = {
+          firmId: input.firmId,
+          contactId: input.contactId,
+          sequenceVersionId: input.sequenceVersionId,
+          sequenceName: '',
+          firmTimeZone: '',
+          anchoredAt: null,
+          steps: [],
+          refusal: answer.reason.slice(0, 80),
+        };
+      }
       return await snapshot();
     },
 
@@ -550,8 +709,16 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           return parsed.success ? parsed.data : null;
         },
       );
+      // What was actually sent, for the notice: the same condition as the body above.
+      const agreed =
+        input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
+          ? input.followUpPermission
+          : null;
+      agreement = null;
       if (note(answer, null) && answer.ok) {
         notice = outcomeNotice(answer.value);
+        agreement = agreementOf(agreed, answer.value, { templates: followUpTemplates, sequences: followUpSequences });
+        followUpPreview = null;
         if (call !== null) lastCall = null;
       }
       // The outcome may have created a callback, stopped a sequence or suppressed a

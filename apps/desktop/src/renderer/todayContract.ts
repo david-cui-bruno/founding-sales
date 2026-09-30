@@ -124,8 +124,68 @@ export const todayStateSchema = z.strictObject({
    * workspace has approved nothing.
    */
   followUpTemplates: z.array(z.strictObject({ id: uuid, name: z.string().min(1).max(200) })),
+  /**
+   * The published sequence versions a call may agree to (send-path v2, slice S3), by
+   * the sequence's name and version. Read with the expansion, like the templates; empty
+   * when the workspace has published nothing. Optional so a state written by an older
+   * main process still parses.
+   */
+  followUpSequences: z
+    .array(z.strictObject({ sequenceVersionId: uuid, name: z.string().min(1).max(220) }))
+    .optional(),
+  /**
+   * What the chosen agreed sequence would send, and when — the server's answer to
+   * `POST /calls/follow-up-preview`, for one firm, person and version. The card shows it
+   * before the outcome is recorded. `refusal` is the server's code when it would not
+   * preview (the same refusals enrolment would give); `steps` is then empty.
+   */
+  followUpPreview: z
+    .strictObject({
+      firmId: uuid,
+      contactId: uuid,
+      sequenceVersionId: uuid,
+      sequenceName: z.string().max(200),
+      firmTimeZone: z.string().max(64),
+      anchoredAt: instant.nullable(),
+      steps: z.array(
+        z.strictObject({
+          ordinal: z.number().int().min(1),
+          channel: z.enum(['email', 'call_task']),
+          templateName: z.string().max(200).nullable(),
+          subject: z.string().max(1000).nullable(),
+          estimatedAt: instant,
+        }),
+      ),
+      refusal: z.string().max(80).nullable(),
+    })
+    .nullable()
+    .optional(),
+  /**
+   * What the last recorded call agreed to, so the notice can name it and say whether the
+   * sequence started (send-path v2, slice S3). `started` is null for a single e-mail, and
+   * `reason` is the server's refusal code when an agreed sequence did not start.
+   */
+  agreement: z
+    .strictObject({
+      scope: z.enum(['single_email', 'agreed_sequence']),
+      name: z.string().max(220),
+      granted: z.boolean(),
+      started: z.boolean().nullable(),
+      reason: z.string().max(80).nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 export type TodayState = z.infer<typeof todayStateSchema>;
+export type FollowUpPreviewView = NonNullable<TodayState['followUpPreview']>;
+export type AgreementView = NonNullable<TodayState['agreement']>;
+
+/** Ask for the preview of one agreed sequence, for one person at the open firm. */
+export interface FollowUpPreviewRequest {
+  readonly firmId: string;
+  readonly contactId: string;
+  readonly sequenceVersionId: string;
+}
 
 export interface SnoozeRequest {
   readonly itemId: string;
@@ -176,10 +236,15 @@ export interface OutcomeRequest {
   } | null;
   readonly doNotCallCoversAllContact: boolean;
   /**
-   * The follow-up agreed on the call (migration 0025). `null` is "none", and it is the
-   * only value any outcome other than `interested` may carry.
+   * The follow-up agreed on the call (migration 0025): one approved e-mail, or — since
+   * send-path v2 (slice S3) — an agreed published sequence, which the server enrols in
+   * the same command. `null` is "none", and it is the only value any outcome other than
+   * `interested` may carry.
    */
-  readonly followUpPermission: { readonly scope: 'single_email'; readonly templateVersionId: string } | null;
+  readonly followUpPermission:
+    | { readonly scope: 'single_email'; readonly templateVersionId: string }
+    | { readonly scope: 'agreed_sequence'; readonly sequenceVersionId: string }
+    | null;
 }
 
 /**

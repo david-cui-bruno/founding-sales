@@ -212,9 +212,13 @@ describe('a terminal stop stops what it owed when it was emitted, and nothing cr
       });
       if (!logged.ok) throw new Error(`call refused: ${logged.reason}`);
       expect(logged.value.setManual).toBe(true);
-      const permissionId = logged.value.followUpPermissionId;
-      if (permissionId === null) throw new Error(`no permission: ${JSON.stringify(logged.value.followUps)}`);
-      return await enrol(context, firm, firm.contactId, agreedVersion, permissionId);
+      // Since S3 the command enrols the agreed sequence itself, in its own savepoint after
+      // the stop, and names the enrollment on its answer.
+      const enrolled = logged.value.followUps.find(entry => entry.kind === 'agreed_sequence_enrolled');
+      if (logged.value.followUpPermissionId === null || enrolled?.enrollmentId === undefined) {
+        throw new Error(`not enrolled: ${JSON.stringify(logged.value.followUps)}`);
+      }
+      return enrolled.enrollmentId;
     });
 
     // The marker names the earlier enrollment, and only it.

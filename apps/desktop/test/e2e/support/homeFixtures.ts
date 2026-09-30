@@ -243,6 +243,36 @@ export const CALLABLE_ADVICE: TodayState['dialAdvice'][number] = {
   firmLocalTime: '09:05',
 };
 
+/** The published sequence the agreed-sequence spec offers, and the preview the server gives for it. */
+export const AGREED_SEQUENCE_VERSION_ID = 'abababab-1111-4111-8111-abababababab';
+
+export function agreedSequencePreview(input: {
+  readonly firmId: string;
+  readonly contactId: string;
+  readonly sequenceVersionId: string;
+}): NonNullable<TodayState['followUpPreview']> {
+  return {
+    firmId: input.firmId,
+    contactId: input.contactId,
+    sequenceVersionId: input.sequenceVersionId,
+    sequenceName: 'After a good call',
+    // Chicago, while the workspace is New York: the card must use the firm's clock.
+    firmTimeZone: 'America/Chicago',
+    anchoredAt: '2026-09-21T14:00:00.000Z',
+    steps: [
+      {
+        ordinal: 1,
+        channel: 'email',
+        templateName: 'The overview',
+        subject: 'The overview for {firm_name}',
+        estimatedAt: '2026-09-23T13:00:00.000Z',
+      },
+      { ordinal: 2, channel: 'call_task', templateName: null, subject: null, estimatedAt: '2026-09-25T14:00:00.000Z' },
+    ],
+    refusal: null,
+  };
+}
+
 export function todayAnswer(state: TodayState, method: string, argument: unknown, _calls: readonly Call[]): TodayState {
   if (method === 'expand') {
     const firmId = (argument as { firmId?: string } | null)?.firmId;
@@ -264,7 +294,26 @@ export function todayAnswer(state: TodayState, method: string, argument: unknown
     return { ...state, notice: itemId === AUTOMATED_ITEM_ID ? 'held' : 'snoozed' };
   }
   if (method === 'dial') return { ...state, notice: 'dial_opened' };
+  if (method === 'previewFollowUp') {
+    // Send-path v2 (slice S3): the server's preview of the agreed sequence, as the real
+    // bridge keeps it — for this firm, this person and this version.
+    const input = argument as { firmId: string; contactId: string; sequenceVersionId: string };
+    return { ...state, followUpPreview: agreedSequencePreview(input) };
+  }
   if (method === 'recordOutcome') {
+    const agreed = (argument as { followUpPermission?: { scope?: string; sequenceVersionId?: string } | null } | null)
+      ?.followUpPermission;
+    if (agreed?.scope === 'agreed_sequence') {
+      // The bridge's answer to an enrolled agreed sequence: the notice and the agreement.
+      const name =
+        state.followUpSequences?.find(entry => entry.sequenceVersionId === agreed.sequenceVersionId)?.name ?? '';
+      return {
+        ...state,
+        notice: 'outcome_recorded_sequence_started',
+        agreement: { scope: 'agreed_sequence', name, granted: true, started: true, reason: null },
+        followUpPreview: null,
+      };
+    }
     // Lane g79: a callback request with no day comes back recorded with its follow-up,
     // as the real bridge reports the server's `followUps`.
     const input = argument as { outcome?: string; callback?: unknown } | null;
