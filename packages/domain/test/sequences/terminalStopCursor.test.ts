@@ -55,12 +55,28 @@ describe('the terminal-stop cursor', () => {
     await second.query('BEGIN');
     const firstReport = await consumeTerminalStops(workerOn(first), { limit: 1 });
     expect(firstReport.eventsConsumed).toBe(1);
+    const { rows: pidRows } = await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const secondPid = pidRows[0]?.pid;
     let secondDone = false;
     const secondDrain = consumeTerminalStops(workerOn(second), { limit: 2 }).finally(() => {
       secondDone = true;
     });
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // No timer decides the branch. Session 2 is observed in one of exactly two states:
+    // finished (nothing made it wait — the old drain) or waiting on a lock session 1
+    // holds (the gate or the cursor row — the new drain). Anything else within the
+    // deadline fails the test rather than choosing a branch.
+    let secondWaiting = false;
+    const deadline = Date.now() + 10_000;
+    while (!secondDone && !secondWaiting && Date.now() < deadline) {
+      const { rows: waits } = await database.session.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM pg_locks WHERE pid = $1 AND NOT granted',
+        [secondPid],
+      );
+      secondWaiting = waits[0]?.count !== '0';
+      if (!secondWaiting && !secondDone) await new Promise(resolve => setTimeout(resolve, 10));
+    }
     try {
+      expect(secondDone || secondWaiting, 'session 2 was neither finished nor observed waiting on a lock').toBe(true);
       if (secondDone) {
         // Nothing made the second drain wait: commit it first, and the older batch after.
         await secondDrain;
