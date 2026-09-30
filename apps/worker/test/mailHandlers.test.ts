@@ -355,7 +355,14 @@ describe('the mail handlers and scheduler sources', () => {
 
     expect(report.freshOutcome).toBe('completed');
     expect(report.staleOutcome).toBe('lease_lost');
-    expect(report.effectsAfter - report.effectsBefore).toBe(1);
+    // `pages_completed` is the number of one-day listing slices one walk read (C2B-A1
+    // fold 2): one run's walk of the interval, not two.
+    const { rows } = await session.query<{ slices: number }>(
+      `SELECT ceil((ceil(extract(epoch FROM to_at)) - floor(extract(epoch FROM from_at))) / 86400)::integer AS slices
+         FROM mailbox_recoveries WHERE workspace_id = $1`,
+      [workspaceId],
+    );
+    expect(report.effectsAfter - report.effectsBefore).toBe(rows[0]?.slices);
   });
 
   it('registers one watch under a stolen lease, not two', async () => {
