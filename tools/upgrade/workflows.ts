@@ -83,8 +83,19 @@ export const MINIMUM_TODAY_CARDS = 5;
  * a later change to the fixture makes a different source win, this fails loudly and
  * somebody decides which decision the fixture is supposed to produce, rather than the
  * assertion quietly becoming vacuous.
+ *
+ * **`scoped_pause` again since the deployed base is schema 25** (send-path v2, 25 → 26,
+ * 30 September 2026). The paragraph above describes a base that predates 0025. A
+ * schema-25 base *does* write an origin: its fixture enrols through `enrollContact` with
+ * `originKind: 'prospecting'` (`fixture.ts`), so the legacy refusal no longer applies to
+ * that row, and the first source that refuses it is the workspace pause — the same
+ * answer `EXPECTED_PROSPECTING_DECISION` requires of the post-upgrade probe. The
+ * property under test is unchanged: the upgrade must not change the gate's decision
+ * about the deployed code's rows. A run from a base older than 25 would see
+ * `cold_legacy` here and fail loudly, which is the intended reading of an unexpected
+ * base.
  */
-export const EXPECTED_ELIGIBILITY_DECISION = 'cold_legacy';
+export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
 
 /**
  * The decision a *post-upgrade* enrollment must reach: the workspace pause.
