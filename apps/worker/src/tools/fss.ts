@@ -16,6 +16,7 @@ import {
   releaseRecordShowCommand,
   sendPathPreviewCommand,
   sendPathReportCommand,
+  pipelineStageCountsCommand,
   suppressionJournalReplayCommand,
   type AdminInvocation,
   type AdminOutcome,
@@ -179,6 +180,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'release idle-check': releaseIdleCheckCommand,
   'release drain on': releaseDrainOnCommand,
   'release drain off': releaseDrainOffCommand,
+  // Call-to-booking (slice W): the 0028 remap report.
+  'pipeline stage-counts': pipelineStageCountsCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {

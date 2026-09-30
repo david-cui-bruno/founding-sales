@@ -2290,3 +2290,86 @@ export async function sendPathPreviewCommand(invocation: AdminInvocation): Promi
     await session.query('ROLLBACK');
   }
 }
+
+// ---------------------------------------------------------------------------
+// The pipeline remap report (call-to-booking slice W, migration 0028).
+// ---------------------------------------------------------------------------
+
+/**
+ * `fss admin pipeline stage-counts`: every workspace's stages in board order, with how
+ * many open, won and lost opportunities sit in each, how many pins there are, and how
+ * many opportunities 0028's remap moved (`stage_remap_20260930`). The before-and-after
+ * read for the release that applies 0028: run before, the counts are in the old stages;
+ * run after, `contacting`, `engaged` and `proposal` hold no open opportunity and the
+ * remap count equals what they held. One READ ONLY transaction; it writes nothing.
+ */
+export async function pipelineStageCountsCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const schemaVersion = await readAppliedSchemaVersion(session);
+    const { rows: stages } = await session.query<{
+      workspace_id: string;
+      key: string;
+      display_name: string;
+      position: number;
+      retired: boolean;
+      open: string;
+      won: string;
+      lost: string;
+    }>(
+      `SELECT s.workspace_id, s.key, s.display_name, s.position, s.retired,
+              count(o.id) FILTER (WHERE o.status = 'open')::text AS open,
+              count(o.id) FILTER (WHERE o.status = 'won')::text AS won,
+              count(o.id) FILTER (WHERE o.status = 'lost')::text AS lost
+         FROM pipeline_stages s
+         LEFT JOIN opportunities o ON o.workspace_id = s.workspace_id AND o.stage_id = s.id
+        GROUP BY s.workspace_id, s.id, s.key, s.display_name, s.position, s.retired
+        ORDER BY s.workspace_id, s.position`,
+    );
+    // The two 0028 reads only exist at schema 28; before it the counts alone are the report.
+    const at28 = schemaVersion >= 28;
+    const remapped = at28
+      ? await session.query<{ workspace_id: string; count: string }>(
+          `SELECT workspace_id, count(*)::text AS count FROM opportunity_stage_events
+            WHERE reason = 'stage_remap_20260930' GROUP BY workspace_id`,
+        )
+      : { rows: [] };
+    const pins = at28
+      ? await session.query<{ workspace_id: string; count: string }>(
+          'SELECT workspace_id, count(*)::text AS count FROM opportunity_stage_pins GROUP BY workspace_id',
+        )
+      : { rows: [] };
+    const byWorkspace = new Map<string, { stages: Record<string, unknown>[]; remapped: number; pins: number }>();
+    for (const row of stages) {
+      const entry = byWorkspace.get(row.workspace_id) ?? { stages: [], remapped: 0, pins: 0 };
+      entry.stages.push({
+        key: row.key,
+        displayName: row.display_name,
+        position: Number(row.position),
+        retired: row.retired,
+        open: Number(row.open),
+        won: Number(row.won),
+        lost: Number(row.lost),
+      });
+      byWorkspace.set(row.workspace_id, entry);
+    }
+    for (const row of remapped.rows) {
+      const entry = byWorkspace.get(row.workspace_id);
+      if (entry !== undefined) entry.remapped = Number(row.count);
+    }
+    for (const row of pins.rows) {
+      const entry = byWorkspace.get(row.workspace_id);
+      if (entry !== undefined) entry.pins = Number(row.count);
+    }
+    return accept({
+      ok: true,
+      report: {
+        schemaVersion,
+        workspaces: [...byWorkspace.entries()].map(([workspaceId, entry]) => ({ workspaceId, ...entry })),
+      },
+    });
+  } finally {
+    await session.query('ROLLBACK');
+  }
+}
