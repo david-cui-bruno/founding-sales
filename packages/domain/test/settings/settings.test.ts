@@ -1,7 +1,13 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SETTING_VALUES, DEFAULT_STORED_SETTING_VALUES, INTEGRATION_SETTING_KEYS, SETTING_KEYS } from '@fss/contracts';
+import {
+  DEFAULT_SETTING_VALUES,
+  DEFAULT_STORED_SETTING_VALUES,
+  DEFAULT_VOICEMAIL_TEMPLATE,
+  INTEGRATION_SETTING_KEYS,
+  SETTING_KEYS,
+} from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -70,6 +76,24 @@ describe('workspace settings', () => {
       expect(entry.changedAt, entry.settingKey).toBeNull();
       expect(entry.value, entry.settingKey).toEqual(DEFAULT_STORED_SETTING_VALUES[entry.settingKey]);
     }
+  });
+
+  it('stores slice C1 s voicemail script outside the snapshot, bounded at 1 000 characters', async () => {
+    expect((await readSetting(admin, 'voicemail_script')).value).toEqual({ template: DEFAULT_VOICEMAIL_TEMPLATE });
+    const tooLong = await updateSetting(admin, {
+      settingKey: 'voicemail_script',
+      value: { template: 'x'.repeat(1_001) },
+      changeNote: 'too long',
+    });
+    expect(tooLong).toEqual({ ok: false, reason: 'invalid_value' });
+    const written = await updateSetting(admin, {
+      settingKey: 'voicemail_script',
+      value: { template: 'Hi {contactFirstName}, it is {callerName} again.' },
+      changeNote: 'shorter',
+    });
+    expect(written.ok).toBe(true);
+    expect((await readSetting(admin, 'voicemail_script')).value).toEqual({ template: 'Hi {contactFirstName}, it is {callerName} again.' });
+    expect((await readCurrentSettings(admin)).map(entry => entry.settingKey)).not.toContain('voicemail_script');
   });
 
   it('refuses a salesperson and writes nothing', async () => {

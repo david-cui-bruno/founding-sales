@@ -210,7 +210,7 @@ export async function readSettingHistory(
 export const DEFAULT_SETTING_CHANGE_NOTE = 'Changed on the Mac';
 
 export interface UpdateSettingInput {
-  /** A settings-page key or one of the call-to-booking switches (`INTEGRATION_SETTING_KEYS`). */
+  /** A settings-page key or one of the call-to-booking keys (`INTEGRATION_SETTING_KEYS`). */
   readonly settingKey: StoredSettingKey;
   readonly value: unknown;
   /** Optional since wave 2 (D5): blank or absent records `DEFAULT_SETTING_CHANGE_NOTE`. */

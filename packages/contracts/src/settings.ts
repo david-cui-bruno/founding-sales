@@ -163,7 +163,7 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
 // ---------------------------------------------------------------------------
 
 /**
- * Three workspace settings that are **not** in `SETTING_KEYS`, on purpose.
+ * Four workspace settings that are **not** in `SETTING_KEYS`, on purpose.
  *
  * `GET /settings` answers with a `strictObject` whose `settingKey` is `z.enum(SETTING_KEYS)`,
  * and every installed Mac parses it with the enum it was built with. A key added to that
@@ -178,8 +178,17 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
  *   * `telephony_budget` — the per-day ceiling in cents for Twilio minutes, the most minutes
  *     one call reserves, and the price per minute in micro-dollars. A ceiling of 0 means
  *     telephony spend is disabled: `POST /calls/session` refuses `telephony_budget_disabled`.
+ *   * `voicemail_script` — the template of the voicemail a caller leaves (slice C1, which
+ *     owns the read, the write and the editor). `{ template }`, at most 1 000 characters;
+ *     absent is `DEFAULT_VOICEMAIL_TEMPLATE`. Not an integration, but kept out of the
+ *     snapshot for the same reason, so it lives in this list.
  */
-export const INTEGRATION_SETTING_KEYS = ['calling_provider', 'calendar_integration', 'telephony_budget'] as const;
+export const INTEGRATION_SETTING_KEYS = [
+  'calling_provider',
+  'calendar_integration',
+  'telephony_budget',
+  'voicemail_script',
+] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
 /** Every key the versioned store may hold. */
@@ -201,16 +210,25 @@ export const telephonyBudgetSettingSchema = z.strictObject({
 });
 export type TelephonyBudgetSetting = z.infer<typeof telephonyBudgetSettingSchema>;
 
+/** Slice C1's default voicemail. The placeholders are C1's to fill. */
+export const DEFAULT_VOICEMAIL_TEMPLATE =
+  "Hi {contactFirstName}, this is {callerName} from Callie. I'm calling about how {firmName} handles maintenance requests after hours. I'll try you again, or you can reach me at {callbackNumber}. Thanks.";
+
+export const voicemailScriptSettingSchema = z.strictObject({ template: z.string().max(1_000) });
+export type VoicemailScriptSetting = z.infer<typeof voicemailScriptSettingSchema>;
+
 export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   calling_provider: callingProviderSettingSchema,
   calendar_integration: calendarIntegrationSettingSchema,
   telephony_budget: telephonyBudgetSettingSchema,
+  voicemail_script: voicemailScriptSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
   calling_provider: { provider: 'tel' },
   calendar_integration: { integration: 'off' },
   telephony_budget: { dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14_000 },
+  voicemail_script: { template: DEFAULT_VOICEMAIL_TEMPLATE },
 });
 
 /** The schema and default for any stored key. */

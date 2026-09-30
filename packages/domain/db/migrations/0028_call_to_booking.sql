@@ -32,8 +32,9 @@
 --       for the telephony subjects and forbidden for the LLM one. Every stored row is a
 --       `research_run` with all three model fields present, so every existing CHECK
 --       answer is unchanged and the new CHECK is satisfied by every existing row.
---   (e) `workspace_settings` — `workspace_settings_key_known` admits the three new
---       keys (`calling_provider`, `calendar_integration`, `telephony_budget`); a swap
+--   (e) `workspace_settings` — `workspace_settings_key_known` admits the four new
+--       keys (`calling_provider`, `calendar_integration`, `telephony_budget`, and slice
+--       C1's `voicemail_script`); a swap
 --       under the same name, as 0020's was. No row is written: a key with no row is
 --       its default (`DEFAULT_SETTING_VALUES`), and every default is "off".
 --
@@ -557,13 +558,14 @@ CREATE TABLE mail_message_duplicates (
 );
 
 -- ---------------------------------------------------------------------------
--- (e) workspace_settings — the three new keys
+-- (e) workspace_settings — the four new keys
 -- ---------------------------------------------------------------------------
 ALTER TABLE workspace_settings
   DROP CONSTRAINT workspace_settings_key_known,
   ADD CONSTRAINT workspace_settings_key_known
     CHECK (setting_key IN ('business_time_zone', 'postal_address', 'sending_enabled',
-                           'calling_provider', 'calendar_integration', 'telephony_budget'));
+                           'calling_provider', 'calendar_integration', 'telephony_budget',
+                           'voicemail_script'));
 
 -- ---------------------------------------------------------------------------
 -- Privileges
