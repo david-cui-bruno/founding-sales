@@ -121,6 +121,7 @@ describe('the operation registry', () => {
     expect(OPERATION_NAMES.filter(name => name.startsWith('calling.'))).toEqual([
       'calling.status',
       'calling.start',
+      'calling.cancel',
       'calling.setActive',
       'calling.resume',
       'calling.history',

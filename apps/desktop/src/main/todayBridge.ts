@@ -170,6 +170,8 @@ export interface TodayBridgeHost {
    * the number; the session is kept here for the outcome recorded next.
    */
   startCall(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): Promise<CallStart>;
+  /** The page cancelled the current start before its call connected: nothing of it is bound. */
+  cancelCall(): Promise<{ readonly cancelled: true }>;
   /** The page says a call started or ended; ending one lets a deferred update install. */
   setCallActive(input: { readonly active: boolean }): Promise<{ readonly active: boolean }>;
   /** "Resume calling" on a parked firm, then its cadence again. */
@@ -300,6 +302,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let lastCall: LastCall | null = null;
   /** The last call placed from Callie, for `callSessionId` on its outcome (slice C1). */
   let lastSession: LastSession | null = null;
+  /**
+   * Which Call press is current (review of C1, fold 2, finding 2). Each `startCall` takes
+   * the next number; a cancel and an identity change move it on. A start whose session or
+   * token answers after that binds nothing: a cancelled start's session is never what the
+   * next outcome records.
+   */
+  let startRequest = 0;
+  /** The start that bound `lastSession`, so a cancel of that start can unbind it. */
+  let lastSessionRequest: number | null = null;
   /** `POST /dial/check`'s answer for each of the expanded card's usable numbers. */
   let dialAdvice: readonly DialAdviceView[] = [];
   /**
@@ -680,6 +691,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       followUpTemplates = [];
       lastCall = null;
       lastSession = null;
+      lastSessionRequest = null;
+      startRequest += 1;
       dialAdvice = [];
       expansionsOwner = null;
       return await snapshot();
@@ -1058,11 +1071,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
 
     async startCall(input) {
       const mine = generation;
+      startRequest += 1;
+      const request = startRequest;
+      /** Cancelled, superseded by another start, or another person signed in. */
+      const gone = (): boolean => stale(mine) || request !== startRequest;
       const refused = (reason: string): CallStart => ({ ok: false, reason: reason.slice(0, 80) });
       // 1. The cadence and the voicemail values. Not twilio (404) is a refusal here: the
       //    page only asks this after `callingStatus` said twilio, and it goes back to it.
       const status = await readCallingStatus(input.firmId);
-      if (stale(mine)) return refused('identity_changed');
+      if (gone()) return refused('call_cancelled');
       if (status === null) return refused('calling_off');
       if ('reason' in status) return refused(status.reason);
 
@@ -1086,17 +1103,18 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         },
         value => callSessionCreatedSchema.parse(value),
       );
-      if (stale(mine)) return refused('identity_changed');
+      if (gone()) return refused('call_cancelled');
       if (!created.ok) return refused(created.reason);
 
       // 3. The token the Device connects with.
       const token = await deps.api.read('/calls/access-token', value => voiceAccessTokenResponseSchema.parse(value), {});
-      if (stale(mine)) return refused('identity_changed');
+      if (gone()) return refused('call_cancelled');
       if (!token.ok) return refused(token.reason);
 
       // The outcome form records this call: the number (already on the card) and the session.
       lastCall = { firmId: input.firmId, routeId: route.routeId, contactId, e164: route.e164 };
       lastSession = { firmId: input.firmId, routeId: route.routeId, sessionId: created.value.sessionId };
+      lastSessionRequest = request;
       const attempt = status.cadence.nextAttempt;
       const contactName = page.tasks.find(task => task.contactId !== null && task.contactId === contactId)?.contactName ?? null;
       return {
@@ -1114,6 +1132,20 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
               })
             : null,
       };
+    },
+
+    async cancelCall() {
+      // The page gave up on the current start before its call connected. A session it
+      // bound is unbound, with the number the outcome form would have named; a start
+      // still on the wire binds nothing when it answers.
+      if (lastSessionRequest !== null && lastSessionRequest === startRequest && lastSession !== null) {
+        const cancelled = lastSession;
+        lastSession = null;
+        lastSessionRequest = null;
+        if (lastCall !== null && lastCall.firmId === cancelled.firmId && lastCall.routeId === cancelled.routeId) lastCall = null;
+      }
+      startRequest += 1;
+      return await Promise.resolve({ cancelled: true as const });
     },
 
     async setCallActive(input) {

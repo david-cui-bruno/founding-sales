@@ -463,6 +463,13 @@ export const OPERATIONS = {
     output: callStartSchema,
     transform: 'the route version and calling identity from the open card; session, then token; the voicemail script rendered for attempts 1 and 4; the session remembered for the outcome',
   },
+  'calling.cancel': {
+    kind: 'command',
+    calls: [],
+    input: nothing,
+    output: z.strictObject({ cancelled: z.literal(true) }),
+    transform: 'the current start is given up: a late session or token binds nothing, and a bound session is unbound',
+  },
   'calling.setActive': {
     kind: 'command',
     calls: [],

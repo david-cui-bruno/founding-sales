@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CALL_ANNOUNCEMENT, DEFAULT_VOICEMAIL_SCRIPT } from '@fss/contracts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
@@ -83,7 +83,10 @@ function world(answers: Record<string, HttpAnswer>) {
   return worldWith(() => undefined, answers);
 }
 
-function worldWith(dynamic: (path: string) => HttpAnswer | undefined, answers: Record<string, HttpAnswer>) {
+function worldWith(
+  dynamic: (path: string) => HttpAnswer | Promise<HttpAnswer> | undefined,
+  answers: Record<string, HttpAnswer>,
+) {
   const sent: Sent[] = [];
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
@@ -198,6 +201,83 @@ describe('calling from Callie, in the main process', () => {
     expect(logs[0]?.body).toMatchObject({ callSessionId: SESSION_ID, routeId: ROUTE_ID, outcome: 'no_answer' });
     await w.bridge.recordOutcome(outcome);
     expect(w.sent.filter(entry => entry.path === '/calls/log')[1]?.body).not.toHaveProperty('callSessionId');
+  });
+
+  it('a start cancelled while its token was pending never becomes the outcome target, even after a second start', async () => {
+    const SESSION_B = '66666666-6666-4666-8666-666666666666';
+    let sessions = 0;
+    let firstToken: ((answer: HttpAnswer) => void) | null = null;
+    const w = worldWith(
+      path => {
+        if (path === '/calls/session') {
+          sessions += 1;
+          return accepted({ sessionId: sessions === 1 ? SESSION_ID : SESSION_B, expiresAt: '2026-09-21T14:01:00.000Z' });
+        }
+        if (path === '/calls/access-token' && firstToken === null) {
+          return new Promise<HttpAnswer>(resolve => {
+            firstToken = resolve;
+          });
+        }
+        return undefined;
+      },
+      {
+        '/calls/calling': calling(2),
+        '/calls/access-token': tokenAnswer,
+        '/calls/log': accepted({ callLogId: '12121212-1212-4212-8212-121212121212', followUps: [] }),
+      },
+    );
+    await w.bridge.expand({ firmId: FIRM_ID });
+    // A: its token request is on the wire when David hangs up.
+    const a = w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    await vi.waitFor(() => {
+      expect(firstToken).not.toBeNull();
+    });
+    await w.bridge.cancelCall();
+    // B, to the same firm and number, completes.
+    expect(await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID })).toMatchObject({
+      ok: true,
+      sessionId: SESSION_B,
+    });
+    // A's token arrives late: A binds nothing.
+    (firstToken as unknown as (answer: HttpAnswer) => void)(tokenAnswer);
+    expect(await a).toEqual({ ok: false, reason: 'call_cancelled' });
+    await w.bridge.recordOutcome({
+      firmId: FIRM_ID,
+      itemId: null,
+      contactId: null,
+      routeId: null,
+      outcome: 'voicemail_left',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: null,
+    });
+    expect(w.sent.find(entry => entry.path === '/calls/log')?.body).toMatchObject({ callSessionId: SESSION_B });
+  });
+
+  it('a start cancelled after it bound its session unbinds it: the next outcome names no session', async () => {
+    const w = world({
+      '/calls/calling': calling(1),
+      '/calls/session': accepted({ sessionId: SESSION_ID, expiresAt: '2026-09-21T14:01:00.000Z' }),
+      '/calls/access-token': tokenAnswer,
+      '/calls/log': accepted({ callLogId: '12121212-1212-4212-8212-121212121212', followUps: [] }),
+    });
+    await w.bridge.expand({ firmId: FIRM_ID });
+    expect((await w.bridge.startCall({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID })).ok).toBe(true);
+    await w.bridge.cancelCall();
+    expect((await w.bridge.state()).lastCall).toBeNull();
+    await w.bridge.recordOutcome({
+      firmId: FIRM_ID,
+      itemId: null,
+      contactId: null,
+      routeId: null,
+      outcome: 'no_answer',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: null,
+    });
+    expect(w.sent.find(entry => entry.path === '/calls/log')?.body).not.toHaveProperty('callSessionId');
   });
 
   it('answers a session refusal as its code and asks for no token', async () => {

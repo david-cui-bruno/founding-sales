@@ -36,6 +36,8 @@ interface CallLive {
 export interface CallPorts {
   start(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): Promise<CallStart>;
   setActive(active: boolean): Promise<unknown>;
+  /** Give up the current start in the main process, so nothing of it is bound (fold 2). */
+  cancel?(): Promise<unknown>;
   device?: VoiceDeviceFactory;
   now?: () => number;
 }
@@ -66,6 +68,8 @@ export function useCall(ports: CallPorts | null): CallControl {
    * Device, a Call — is disconnected and destroyed at once. No call outlives its controls.
    */
   const generation = useRef(0);
+  /** A start is between Call and a connected call (for unmount's cancel). */
+  const starting = useRef(false);
   const portsRef = useRef(ports);
   portsRef.current = ports;
   const now = (): number => (portsRef.current?.now ?? Date.now)();
@@ -79,6 +83,7 @@ export function useCall(ports: CallPorts | null): CallControl {
   const finish = useCallback(
     (update: (current: CallPhase) => CallPhase): void => {
       call.current = null;
+      starting.current = false;
       device.current?.destroy();
       device.current = null;
       setMuted(false);
@@ -95,6 +100,7 @@ export function useCall(ports: CallPorts | null): CallControl {
       generation.current += 1;
       const mine = generation.current;
       const cancelled = (): boolean => mine !== generation.current;
+      starting.current = true;
       setState({ phase: 'starting', firmId: input.firmId, routeId: input.routeId });
       void (async () => {
         let started: CallStart;
@@ -102,6 +108,7 @@ export function useCall(ports: CallPorts | null): CallControl {
           started = await current.start(input);
         } catch {
           if (!cancelled()) {
+            starting.current = false;
             setState({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: CALL_FAILED_SENTENCE });
           }
           return;
@@ -109,6 +116,7 @@ export function useCall(ports: CallPorts | null): CallControl {
         // Hung up or left while the session and token were being made: nothing is dialled.
         if (cancelled()) return;
         if (!started.ok) {
+          starting.current = false;
           setState({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: callRefusalSentence(started.reason) });
           return;
         }
@@ -150,6 +158,7 @@ export function useCall(ports: CallPorts | null): CallControl {
             return;
           }
           call.current = placed;
+          starting.current = false;
           placed.on('accept', () => {
             if (cancelled()) return;
             setState(prior => (prior.phase === 'ringing' ? { ...prior, phase: 'connected', answeredAt: now() } : prior));
@@ -194,8 +203,11 @@ export function useCall(ports: CallPorts | null): CallControl {
       placed.disconnect();
       return;
     }
-    // Still being set up: cancel it. Whatever the pending start creates is torn down.
+    // Still being set up: cancel it. Whatever the pending start creates is torn down, and
+    // the main process binds nothing of it.
     generation.current += 1;
+    void portsRef.current?.cancel?.().catch(() => undefined);
+    starting.current = false;
     device.current?.destroy();
     device.current = null;
     setLive(false);
@@ -223,6 +235,7 @@ export function useCall(ports: CallPorts | null): CallControl {
     () => () => {
       // A start still pending is cancelled: what it creates after this is torn down.
       generation.current += 1;
+      if (call.current === null && starting.current) void portsRef.current?.cancel?.().catch(() => undefined);
       call.current?.disconnect();
       device.current?.destroy();
       if (live.current) {
@@ -245,5 +258,6 @@ export function registryCallPorts(): CallPorts | null {
   return {
     start: async input => await api.command('calling.start', input),
     setActive: async active => await api.command('calling.setActive', { active }),
+    cancel: async () => await api.command('calling.cancel', {}),
   };
 }

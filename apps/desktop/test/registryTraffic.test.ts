@@ -238,6 +238,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       status: async input => await today.callingStatus(input as { firmId: string }),
       start: async input => await today.startCall(input as Parameters<typeof today.startCall>[0]),
       setActive: async input => await today.setCallActive(input as { active: boolean }),
+      cancel: async () => await today.cancelCall(),
       resume: async input => await today.resumeCalling(input as { firmId: string }),
       history: async input => await today.callHistory(input as { firmId: string }),
       recording: async input => await today.callRecording(input as { sessionId: string }),

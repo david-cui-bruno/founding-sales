@@ -129,8 +129,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 function portsWith(answer: CallStart, sdk = fakeSdk(), now = { value: 1_000_000 }) {
   const active: boolean[] = [];
   const start = vi.fn(async (_input: unknown) => await Promise.resolve(answer));
+  const cancel = vi.fn(async () => await Promise.resolve({ cancelled: true }));
   const ports: CallPorts = {
     start,
+    cancel,
     setActive: async value => {
       active.push(value);
       return await Promise.resolve({ active: value });
@@ -138,7 +140,7 @@ function portsWith(answer: CallStart, sdk = fakeSdk(), now = { value: 1_000_000 
     device: sdk.device,
     now: () => now.value,
   };
-  return { ports, start, active, sdk, now };
+  return { ports, start, cancel, active, sdk, now };
 }
 
 const started = (overrides: Partial<Extract<CallStart, { ok: true }>> = {}): CallStart => ({
@@ -293,6 +295,7 @@ describe('the call view', () => {
     const { unmount } = render(<Harness ports={world.ports} calling={twilio(1)} />);
     fireEvent.click(screen.getByTestId('dial'));
     unmount();
+    expect(world.cancel).toHaveBeenCalledTimes(1);
     start.resolve(started());
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(connects).toEqual([]);
@@ -331,6 +334,8 @@ describe('the call view', () => {
     fireEvent.click(screen.getByTestId('dial'));
     expect(screen.getByTestId('call-status').textContent).toBe('Starting the call…');
     fireEvent.click(screen.getByTestId('call-hang-up'));
+    // The main process is told, so a late session or token binds nothing there either.
+    expect(world.cancel).toHaveBeenCalledTimes(1);
     start.resolve(started());
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(world.sdk.connects).toEqual([]);
