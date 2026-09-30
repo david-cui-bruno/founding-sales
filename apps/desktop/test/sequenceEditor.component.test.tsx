@@ -190,3 +190,92 @@ describe('a published version whose sequence already has a draft', () => {
     expect(document.activeElement?.id).toBe(`version-${DRAFT_ID}`);
   });
 });
+
+describe('a save that is not accepted keeps what was typed (PR 335 review, P1-4)', () => {
+  async function typeIntoPublished(): Promise<HTMLElement> {
+    const panel = await screen.findByTestId('version');
+    const user = userEvent.setup();
+    const amounts = within(panel).getAllByTestId('step-delay-amount');
+    await user.clear(amounts[1] as HTMLElement);
+    await user.type(amounts[1] as HTMLElement, '5');
+    await user.click(within(panel).getByTestId('draft-save'));
+    return panel;
+  }
+  const drafted = sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template, 1)], { id: DRAFT_ID, version: 2, state: 'draft' });
+
+  it('keeps the published edit when the server refuses it with draft_exists', async () => {
+    // Fails if the editor lets go of the edit before the answer (the old order).
+    const calls = install(
+      { 'sequences.saveSteps': base({ versions: [drafted, published], notice: `draft_exists:2:${DRAFT_ID}` }) },
+      base(),
+    );
+    renderRoute();
+    await typeIntoPublished();
+    await waitFor(() => {
+      expect(screen.getByTestId('sequence-notice').textContent).toContain('Not saved: version 2 is already a draft');
+    });
+    expect(calls.some(call => call.operation === 'sequences.saveSteps')).toBe(true);
+    const publishedPanel = screen
+      .getAllByTestId('version')
+      .find(entry => within(entry).getByTestId('version-heading').textContent === 'Version 1 — published');
+    expect((within(publishedPanel as HTMLElement).getAllByTestId('step-delay-amount')[1] as HTMLInputElement).value).toBe('5');
+  });
+
+  it('keeps the published edit when the save could not reach the server', async () => {
+    install({ 'sequences.saveSteps': base({ online: false, notice: 'offline' }) }, base());
+    renderRoute();
+    const panel = await typeIntoPublished();
+    await waitFor(() => {
+      expect(screen.getByTestId('sequence-notice')).toBeDefined();
+    });
+    expect((within(panel).getAllByTestId('step-delay-amount')[1] as HTMLInputElement).value).toBe('5');
+  });
+
+  async function editTemplateAndSave(): Promise<void> {
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('template-edit'));
+    const subject = screen.getByTestId('template-form-subject');
+    await user.clear(subject);
+    await user.type(subject, 'A better question');
+    await user.click(screen.getByTestId('template-save'));
+  }
+
+  it('keeps the template form open with the typed text when the save is refused', async () => {
+    // Fails if the form clears its draft and closes before the answer.
+    const calls = install(
+      { 'sequences.saveTemplate': base({ notice: 'template_unapproved:template_footer_missing' }) },
+      base(),
+    );
+    renderRoute();
+    await editTemplateAndSave();
+    await waitFor(() => {
+      expect(calls.some(call => call.operation === 'sequences.saveTemplate')).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('template-issues').textContent).toContain('Not approved.');
+    });
+    expect((screen.getByTestId('template-form-subject') as HTMLInputElement).value).toBe('A better question');
+  });
+
+  it('keeps the template form open with the typed text when the save could not reach the server', async () => {
+    const calls = install({ 'sequences.saveTemplate': base({ online: false, notice: 'offline' }) }, base());
+    renderRoute();
+    await editTemplateAndSave();
+    await waitFor(() => {
+      expect(calls.some(call => call.operation === 'sequences.saveTemplate')).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sequence-banner')).toBeDefined();
+    });
+    expect((screen.getByTestId('template-form-subject') as HTMLInputElement).value).toBe('A better question');
+  });
+
+  it('closes the template form once the save is accepted', async () => {
+    install({ 'sequences.saveTemplate': base({ notice: 'template_saved_as_version:2' }) }, base());
+    renderRoute();
+    await editTemplateAndSave();
+    await waitFor(() => {
+      expect(screen.queryByTestId('template-form')).toBeNull();
+    });
+  });
+});

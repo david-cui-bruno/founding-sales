@@ -4,11 +4,13 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { createDraftVersion, publishVersion, retireVersion } from '../../sequences/definitions.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
-import { enrollContact } from '../../sequences/enrollments.ts';
+import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { resolveStepDue } from '../../src/rules/cadence.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { completedPrefix, migrateEnrollment } from '../../sequences/migrateEnrollment.ts';
-import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { listStepExecutions, readEnrollment, readSequenceVersion } from '../../sequences/rows.ts';
 import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
 import { seedCrm } from '../db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
@@ -82,6 +84,7 @@ async function enrolled(
   versionId: string,
   firm: VersionFirm,
   origin: { kind: 'prospecting' } | { kind: 'follow_up'; permissionId: string } = { kind: 'prospecting' },
+  anchor: string = ANCHOR,
 ): Promise<string> {
   const result = await enrollContact(salesperson(), {
     sequenceVersionId: versionId,
@@ -95,14 +98,45 @@ async function enrolled(
   const enrollmentId = result.value.enrollmentId;
   await database.session.query('UPDATE sequence_enrollments SET started_at = $2::timestamptz WHERE id = $1', [
     enrollmentId,
-    ANCHOR,
+    anchor,
   ]);
   await database.session.query(
     `UPDATE step_executions SET due_at = $2::timestamptz, not_before = $2::timestamptz, original_due_at = $2::timestamptz
       WHERE enrollment_id = $1`,
-    [enrollmentId, ANCHOR],
+    [enrollmentId, anchor],
   );
   return enrollmentId;
+}
+
+const ZONE = 'America/New_York';
+/** The seeded calendar every fixture enrollment freezes (`sequenceFixtures.ts`). */
+const CALENDAR = { version: 'holidays.2026', dates: ['2026-12-25', '2027-01-01'] };
+
+/** A version's step at `ordinal`, in the cadence rule's shape. */
+async function stepOf(versionId: string, ordinal: number): Promise<ReturnType<typeof stepForCadence>> {
+  const step = (await readSequenceVersion(admin(), versionId))?.steps.find(entry => entry.ordinal === ordinal);
+  if (step === undefined) throw new Error(`the version has no step ${String(ordinal)}`);
+  return stepForCadence(step);
+}
+
+/** A `single_email` permission for `templateVersionId`, on a recorded interested call. */
+async function singleEmailPermission(firm: VersionFirm, templateVersionId: string): Promise<string> {
+  const { rows } = await database.session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_template_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5, 'single_email', $6)
+     RETURNING id`,
+    [seeded.alpha.workspaceId, firm.firmId, firm.contactId, firm.opportunityId, seeded.alpha.salesperson.userId, templateVersionId],
+  );
+  const granted = await grantFollowUpPermission(salesperson(), {
+    firmId: firm.firmId,
+    contactId: firm.contactId,
+    callLogId: rows[0]?.id ?? '',
+    grantedByUserId: seeded.alpha.salesperson.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission was refused: ${granted.reason}`);
+  return granted.value.id;
 }
 
 /** Complete the enrollment's unfinished step at its due instant, creating its successor. */
@@ -204,13 +238,21 @@ describe('the happy migration', () => {
     // old version's, the old enrollment is not ended, or the lineage is not written.
     const { v1, v2 } = await twoVersions();
     const firm = await newFirm(database.session, seeded.alpha);
-    const old = await enrolled(v1, firm);
+    // An anchor an hour ago, so the plan's step 2 is still ahead and keeps its instant.
+    const anchor = new Date(Date.parse(await databaseNow(admin())) - 60 * 60 * 1000).toISOString();
+    const old = await enrolled(v1, firm, { kind: 'prospecting' }, anchor);
     await publish(v2);
     await completeCurrent(old);
 
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 });
     if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
-    expect(migrated.value).toMatchObject({ oldEnrollmentId: old, carriedOrdinals: [1], nextOrdinal: 2, completed: false });
+    expect(migrated.value).toMatchObject({
+      oldEnrollmentId: old,
+      carriedOrdinals: [1],
+      nextOrdinal: 2,
+      completed: false,
+      rescheduledTo: null,
+    });
 
     const before = await readEnrollment(admin(), { enrollmentId: old });
     expect(before).toMatchObject({ state: 'stopped', endReason: 'migration_superseded', sequenceVersionId: v1 });
@@ -249,8 +291,14 @@ describe('the happy migration', () => {
 
     const steps = await listStepExecutions(admin(), { enrollmentId: fresh });
     expect(steps).toHaveLength(1);
-    // v2's step 2 is three business days after the anchor: Thursday 24 September, 08:00 EDT.
-    expect(steps[0]).toMatchObject({ ordinal: 2, channel: 'call_task', state: 'pending', dueAt: '2026-09-24T12:00:00.000Z' });
+    // v2's step 2 is three business days after the anchor (v1's was two).
+    const [v2Two, v2Three] = [(await stepOf(v2, 2)), (await stepOf(v2, 3))];
+    expect(steps[0]).toMatchObject({
+      ordinal: 2,
+      channel: 'call_task',
+      state: 'pending',
+      dueAt: resolveStepDue(v2Two, anchor, ZONE, CALENDAR).dueAt,
+    });
     const { rows: stepRow } = await database.session.query<{ sequence_version_id: string }>(
       'SELECT sequence_version_id FROM sequence_steps WHERE id = $1',
       [steps[0]?.stepId],
@@ -260,7 +308,7 @@ describe('the happy migration', () => {
     // And the plan continues on the target from there: step 3 at v2's seven days.
     await completeCurrent(fresh);
     const third = (await listStepExecutions(admin(), { enrollmentId: fresh })).find(step => step.ordinal === 3);
-    expect(third?.dueAt).toBe('2026-09-30T12:00:00.000Z');
+    expect(third?.dueAt).toBe(resolveStepDue(v2Three, anchor, ZONE, CALENDAR).dueAt);
   });
 
   it('writes one audit event naming both enrollments, both versions, the carried steps and the note', async () => {
@@ -526,6 +574,137 @@ describe('the agreed follow-up scope', () => {
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2, permissionId: permission }),
     ).toEqual({ ok: false, reason: 'invalid_input' });
+  });
+});
+
+describe('a replacement step whose planned instant has passed (PR 335 review, P1-6)', () => {
+  it('is placed at its delay from now, never on the next tick, and the answer says when', async () => {
+    // Fails if the migration keeps the planned instant (21 September + 48 h, long past)
+    // and lets the replacement e-mail go on the next tick.
+    const template = await approvedTemplate(admin(), 'Late plan.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const old = await enrolled(plan.versionId, await newFirm(database.session, seeded.alpha));
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, 48)]);
+
+    const before = Date.parse(await databaseNow(admin()));
+    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target });
+    const after = Date.parse(await databaseNow(admin()));
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    expect(migrated.value.nextOrdinal).toBe(2);
+    const moved = Date.parse(migrated.value.rescheduledTo ?? '');
+    const hours48 = 48 * 60 * 60 * 1000;
+    expect(moved).toBeGreaterThanOrEqual(before + hours48 - 1000);
+    expect(moved).toBeLessThanOrEqual(after + hours48 + 1000);
+    const [step] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
+    expect(step).toMatchObject({ ordinal: 2, channel: 'email', dueAt: migrated.value.rescheduledTo, notBefore: migrated.value.rescheduledTo });
+    expect(Date.parse(step?.dueAt ?? '')).toBeGreaterThan(after);
+  });
+});
+
+describe('a one-message permission buys an e-mail (PR 335 review, P1-5)', () => {
+  it('refuses a single_email permission for a replacement whose next step is a call', async () => {
+    // Fails if the verifier skips the channel when the next template is null.
+    const template = await approvedTemplate(admin(), 'One e-mail.');
+    const plan = await publishedPlan(admin(), [emailStep(template)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await singleEmailPermission(firm, template) });
+    const callOnly = await publishedVersionOf(admin(), plan.sequenceId, [callStep(1, 0)]);
+    const fresh = await singleEmailPermission(firm, template);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: callOnly, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+  });
+
+  it('refuses a single_email permission for a target with no step after the prefix', async () => {
+    // Fails if a one-message permission may bind to a run that completes at once.
+    const template = await approvedTemplate(admin(), 'Agreed, then shortened.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
+    await completeCurrent(old);
+    const oneStep = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template)]);
+    const fresh = await singleEmailPermission(firm, template);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: oneStep, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('refuses to enrol on a single_email permission in a plan whose first step is a call', async () => {
+    // The enrolment path of the same rule: `enrollContact` names its first step.
+    const template = await approvedTemplate(admin(), 'Promised an e-mail.');
+    const callFirst = await publishedPlan(admin(), [callStep(1, 0)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const permission = await singleEmailPermission(firm, template);
+    expect(
+      await enrollContact(salesperson(), {
+        sequenceVersionId: callFirst.versionId,
+        originKind: 'follow_up',
+        permissionId: permission,
+        opportunityId: firm.opportunityId,
+        firmId: firm.firmId,
+        contactId: firm.contactId,
+      }),
+    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    // The same permission still enrols in the e-mail it promised.
+    const promised = await publishedPlan(admin(), [emailStep(template)]);
+    expect(
+      (
+        await enrollContact(salesperson(), {
+          sequenceVersionId: promised.versionId,
+          originKind: 'follow_up',
+          permissionId: permission,
+          opportunityId: firm.opportunityId,
+          firmId: firm.firmId,
+          contactId: firm.contactId,
+        })
+      ).ok,
+    ).toBe(true);
+  });
+});
+
+describe('a publication racing a migration onto the version it would retire (PR 335 review, P2-a)', () => {
+  async function ready(): Promise<{ old: string; v2: string; v3: string }> {
+    const { v1, v2, template, sequenceId } = await twoVersions();
+    const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
+    const v3 = await createDraftVersion(admin(), { sequenceId, steps: [emailStep(template), callStep(2, 9)] });
+    if (!v3.ok) throw new Error(`the draft was refused: ${v3.reason}`);
+    return { old, v2, v3: v3.value.sequenceVersionId };
+  }
+
+  it('a publication holding the retirement makes the migration wait, and the migration then refuses', async () => {
+    // Fails if the target is read without a lock: the migration would move the enrollment
+    // onto a version the committed publication has retired.
+    const { old, v2, v3 } = await ready();
+    await second.query('BEGIN');
+    expect((await publishVersion(contextOn(second, 'admin'), { sequenceVersionId: v3 })).ok).toBe(true);
+    const migrating = inTransaction(third, async () =>
+      await migrateEnrollment(contextOn(third, 'salesperson'), { enrollmentId: old, targetSequenceVersionId: v2 }),
+    );
+    expect(await someoneWaitsOnALock()).toBe(true);
+    await second.query('COMMIT');
+    expect(await migrating).toEqual({ ok: false, reason: 'version_retired' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+  });
+
+  it('a migration holding the target makes the publication wait; the moved enrollment keeps running on the retired version', async () => {
+    const { old, v2, v3 } = await ready();
+    await second.query('BEGIN');
+    const migrated = await migrateEnrollment(contextOn(second, 'salesperson'), { enrollmentId: old, targetSequenceVersionId: v2 });
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    const publishing = inTransaction(third, async () => await publishVersion(contextOn(third, 'admin'), { sequenceVersionId: v3 }));
+    expect(await someoneWaitsOnALock()).toBe(true);
+    await second.query('COMMIT');
+    expect((await publishing).ok).toBe(true);
+    expect((await readSequenceVersion(admin(), v2))?.state).toBe('retired');
+    expect(await readEnrollment(admin(), { enrollmentId: migrated.value.newEnrollmentId })).toMatchObject({
+      state: 'active',
+      sequenceVersionId: v2,
+    });
   });
 });
 

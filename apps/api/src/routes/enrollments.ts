@@ -165,10 +165,11 @@ export async function routeEnrollments(
         ...(body.changeNote === undefined ? {} : { changeNote: body.changeNote }),
       });
       if (!migrated.ok) return migrated;
-      // Exactly `enrollmentMigrateResultSchema`: whether the new enrollment completed at
+      // `enrollmentMigrateResultSchema` and `rescheduledTo`, the instant a past-due next
+      // step was moved to (PR 335 review, P1-6). Whether the new enrollment completed at
       // once is on the enrollment itself, which the Mac reads anyway.
-      const { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal } = migrated.value;
-      return { ok: true, value: { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal } };
+      const { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal, rescheduledTo } = migrated.value;
+      return { ok: true, value: { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal, rescheduledTo } };
     });
   }
 

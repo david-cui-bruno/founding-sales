@@ -38,8 +38,9 @@ import { Select } from '../ui/select.tsx';
  * The steps being edited are held here, between answers, because every answer redraws
  * the view and an editor redrawn from the server's copy would drop what was being typed.
  * They are forgotten once saved, and whenever the version on screen changes. A published
- * version's editor forgets them as it saves, because its own steps will not change: the
- * edit is in the new draft's panel.
+ * version's editor forgets them once the save is accepted, because its own steps will not
+ * change: the edit is in the new draft's panel. A save that is refused or cannot reach
+ * the server forgets nothing.
  */
 
 function templateLabel(template: TemplateVersion): string {
@@ -60,7 +61,8 @@ export function StepEditor({
   readonly state: SequenceState;
   /** This version's own Save is on the wire; another version's is not this one's wait. */
   readonly saving: boolean;
-  onSave(steps: readonly DraftStep[]): void;
+  /** Resolves true only when the save was accepted; the typed steps stay otherwise. */
+  onSave(steps: readonly DraftStep[]): Promise<boolean>;
   /** Bring the sequence's draft into view (offered when this version's edit would be refused). */
   onOpenDraft?(sequenceVersionId: string): void;
 }): JSX.Element {
@@ -289,8 +291,13 @@ export function StepEditor({
           disabled={!panel.editable || panel.existingDraft !== null || !changed || issues.length > 0 || saving}
           {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
-            onSave(steps);
-            if (panel.state === 'published') setSteps(draftStepsOf(version));
+            // A published version's own steps do not change when its edit is saved (the
+            // edit is the new draft), so its editor lets go of the edit — but only once the
+            // save is accepted: a refusal, `draft_exists` or an offline answer keeps
+            // everything typed (PR 335 review, P1-4).
+            void onSave(steps).then(saved => {
+              if (saved && panel.state === 'published') setSteps(draftStepsOf(version));
+            });
           }}
         >
           {panel.state === 'published' ? 'Save as new draft' : 'Save'}

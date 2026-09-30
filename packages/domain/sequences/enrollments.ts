@@ -196,6 +196,9 @@ export async function enrollContact(
       // Every step's bytes, not only the first: a `single_email` permission buys one
       // template, and a plan whose only step is another template is not that e-mail.
       templateVersionId: firstStep.templateVersionId,
+      // The step the permission pays for: a one-message scope needs it to be an e-mail
+      // with the agreed bytes (PR 335 review, P1-5).
+      nextStep: { channel: firstStep.channel, templateVersionId: firstStep.templateVersionId },
     });
     // The refusal a person reads is the same sentence the step would have held under.
     // A `single_email` or `contextual_reply` permission cannot carry a multi-step

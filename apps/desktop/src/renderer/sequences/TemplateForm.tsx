@@ -49,7 +49,8 @@ export function TemplateForm({
   readonly enabled: boolean;
   /** The issues the server named on the last save, by field. */
   readonly issues: readonly string[];
-  onSave(draft: TemplateDraft): void;
+  /** Resolves true only when the save was accepted; the typed text stays otherwise. */
+  onSave(draft: TemplateDraft): Promise<boolean>;
   onCancel(): void;
 }): JSX.Element {
   const clear = useClearDrafts();
@@ -75,8 +76,11 @@ export function TemplateForm({
       onSubmit={event => {
         event.preventDefault();
         if (found.length > 0) return;
-        clear(DRAFTS);
-        onSave(draft);
+        // The typed text is let go only once the save is accepted: a refused approval or
+        // an offline answer keeps the form and everything in it (PR 335 review, P1-4).
+        void onSave(draft).then(saved => {
+          if (saved) clear(DRAFTS);
+        });
       }}
     >
       <h3 className="text-sm font-medium">{editing === null ? 'New template' : 'Edit this template'}</h3>

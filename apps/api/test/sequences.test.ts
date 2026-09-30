@@ -456,7 +456,11 @@ describe('the sequence, template and enrollment routes', () => {
     const first = command(payload);
     const migrated = await post('/enrollments/migrate', salespersonToken, first);
     expect(migrated.status).toBe(200);
-    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
+    // The contract's fields, and `rescheduledTo` beside them (PR 335 review, P1-6): null
+    // here, because nothing was completed and the first step keeps its plan.
+    const { rescheduledTo, ...declared } = resultOf(migrated);
+    expect(rescheduledTo).toBeNull();
+    expect(wireDrift(enrollmentMigrateResultSchema, declared)).toEqual([]);
     const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
     expect(result).toMatchObject({ oldEnrollmentId: enrolled?.id, carriedOrdinals: [], nextOrdinal: 1 });
 

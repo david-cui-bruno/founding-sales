@@ -31,8 +31,10 @@ import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts'
  *   * **The cadence anchor.** `started_at` is copied from the old row in SQL (so no
  *     microsecond is lost to a JavaScript `Date`), with the frozen zone and holiday
  *     calendar, and step k + 1 is due at the target's delay for that step from that
- *     anchor — 11.1's start-anchored cadence, the same rule every successor uses. A new
- *     anchor is not offered in this slice.
+ *     anchor — 11.1's start-anchored cadence, the same rule every successor uses. When
+ *     that instant has already passed (k > 0), the step is placed at its delay from now
+ *     instead and the answer names the new instant (`rescheduledTo`): a migration never
+ *     makes a replacement e-mail due on the next tick.
  *   * **Only the next execution.** One row, ordinal k + 1. A target with no step k + 1 is
  *     a plan already finished, and the new enrollment completes at once
  *     (`sequence_complete`).
@@ -88,6 +90,12 @@ export interface MigratedEnrollment {
   readonly nextOrdinal: number;
   /** True when the target has no step k + 1 and the new enrollment completed at once. */
   readonly completed: boolean;
+  /**
+   * When step k + 1's planned instant (the target's delay from the original anchor) had
+   * already passed, the instant it was moved to instead — its delay counted from now.
+   * Null when it kept the plan, or when there is no next step.
+   */
+  readonly rescheduledTo: string | null;
 }
 
 interface ExecutionForPrefix {
@@ -181,6 +189,14 @@ export async function migrateEnrollment(
   if (contacts[0]?.status !== 'active') return refuseSequence('contact_unknown');
 
   // 5. The target: a published version of the same sequence, and not the one it runs.
+  //    Its row is held FOR SHARE until the commit (PR 335 review, P2-a): publishing a
+  //    newer version retires this one with an UPDATE, which waits, so a publication cannot
+  //    retire the target between this check and the insert. Taken last, after every row
+  //    above; `publishVersion` takes no row this command holds before it, so no cycle.
+  await context.db.query('SELECT id FROM sequence_versions WHERE workspace_id = $1 AND id = $2 FOR SHARE', [
+    context.scope.workspaceId,
+    input.targetSequenceVersionId,
+  ]);
   const current = await readSequenceVersion(context, old.sequenceVersionId);
   const target = await readSequenceVersion(context, input.targetSequenceVersionId);
   if (current === null || target === null) return refuseSequence('version_unknown');
@@ -225,6 +241,9 @@ export async function migrateEnrollment(
       stepCount: target.steps.length,
       // The bytes that would leave next, which is step k + 1, not the plan's first.
       templateVersionId: next?.templateVersionId ?? null,
+      // A one-message scope buys an e-mail step k + 1 with the agreed bytes, never a call
+      // and never a target with nothing left (PR 335 review, P1-5).
+      nextStep: next === undefined ? null : { channel: next.channel, templateVersionId: next.templateVersionId },
     });
     if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
   }
@@ -251,9 +270,20 @@ export async function migrateEnrollment(
   const newEnrollmentId = inserted[0]?.id;
   if (newEnrollmentId === undefined) throw new Error('the superseding enrollment was not written');
 
+  let rescheduledTo: string | null = null;
   if (next !== undefined) {
     const calendar = await holidayCalendarByVersion(context, old.holidayCalendarVersion);
-    const due = resolveStepDue(stepForCadence(next), old.startedAt, old.firmTimeZone, calendar);
+    const planned = resolveStepDue(stepForCadence(next), old.startedAt, old.firmTimeZone, calendar);
+    // PR 335 review, P1-6: a step whose planned instant has already passed is not sent on
+    // the next tick. For k > 0 it is placed at the target's delay for that step counted
+    // from now — the spacing a successor keeps when its predecessor ran late — and the
+    // answer says so (`rescheduledTo`). The first step of a run that has done nothing
+    // (k = 0) keeps the plan: it is exactly what enrolling now would have scheduled.
+    const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
+    const now = (clock[0]?.now ?? new Date()).toISOString();
+    const late = k > 0 && Date.parse(planned.dueAt) <= Date.parse(now);
+    const due = late ? resolveStepDue(stepForCadence(next), now, old.firmTimeZone, calendar) : planned;
+    if (late) rescheduledTo = due.dueAt;
     await context.db.query(
       `INSERT INTO step_executions
          (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
@@ -298,6 +328,7 @@ export async function migrateEnrollment(
       carriedOrdinals,
       nextOrdinal: k + 1,
       completed: next === undefined,
+      rescheduledTo,
       changeNote: input.changeNote ?? null,
     },
   });
@@ -308,5 +339,6 @@ export async function migrateEnrollment(
     carriedOrdinals,
     nextOrdinal: k + 1,
     completed: next === undefined,
+    rescheduledTo,
   });
 }

@@ -364,9 +364,7 @@ export function SequencesRoute({
                 version={version}
                 state={state}
                 saving={sequences.busy(`steps:${panel.id}`)}
-                onSave={steps => {
-                  sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps });
-                }}
+                onSave={async steps => await sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps })}
                 onOpenDraft={openVersion}
               />
             ) : (
@@ -445,10 +443,15 @@ export function SequencesRoute({
           editing={editing}
           enabled={screen.canAuthor && !sequences.busy('template-form')}
           issues={serverIssues}
-          onSave={draft => {
-            sequences.actions.saveTemplate(draft);
-            setFormOpen(false);
-            setEditing(null);
+          onSave={async draft => {
+            // The form closes only on an accepted save; a refusal leaves it open with the
+            // issues under it and the text as typed (PR 335 review, P1-4).
+            const saved = await sequences.actions.saveTemplate(draft);
+            if (saved) {
+              setFormOpen(false);
+              setEditing(null);
+            }
+            return saved;
           }}
           onCancel={() => {
             setFormOpen(false);

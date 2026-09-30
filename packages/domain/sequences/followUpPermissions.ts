@@ -191,6 +191,19 @@ export interface FollowUpSubject {
    * `single_email`: "the agreed overview", not "whatever approved template was picked".
    */
   readonly templateVersionId?: string | null | undefined;
+  /**
+   * The step the permission would pay for next, when the caller is deciding a run rather
+   * than one send: `enrollContact` (the first step) and `migrateEnrollment` (step k + 1).
+   * `null` means the plan has no such step. Absent means the caller does not describe it
+   * (the grant; the step-time source, which asks about the fence's own bytes).
+   *
+   * A one-message scope is a promise of **an e-mail** (the PR 335 review, P1-5):
+   * `single_email` needs an e-mail step whose template is exactly the permitted one, and
+   * `contextual_reply` needs an e-mail step. Neither buys a call, and neither buys a run
+   * with nothing left to send — which would otherwise bind the permission to a run that
+   * completes at once.
+   */
+  readonly nextStep?: { readonly channel: string; readonly templateVersionId: string | null } | null | undefined;
 }
 
 /**
@@ -263,6 +276,23 @@ export async function verifyFollowUpPermission(
         permission.templateVersionId !== subject.templateVersionId
       ) {
         return { ok: false, refusal: 'follow_up_not_permitted', detail: 'another_template' };
+      }
+      // And for a run, the step it pays for is an e-mail — with exactly the agreed bytes
+      // for a single e-mail — and exists at all.
+      if (subject.nextStep !== undefined) {
+        if (subject.nextStep === null) {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'no_next_step' };
+        }
+        if (subject.nextStep.channel !== 'email') {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'not_an_email' };
+        }
+        if (
+          permission.scope === 'single_email' &&
+          (subject.nextStep.templateVersionId === null ||
+            permission.templateVersionId !== subject.nextStep.templateVersionId)
+        ) {
+          return { ok: false, refusal: 'follow_up_not_permitted', detail: 'another_template' };
+        }
       }
       break;
     case 'agreed_sequence':

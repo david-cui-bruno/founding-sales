@@ -25,7 +25,7 @@ const signOff = 'David\nCallie';
 const form = (editing: Parameters<typeof TemplateForm>[0]['editing'] = null): void => {
   render(
     <DraftsProvider>
-      <TemplateForm editing={editing} enabled issues={[]} onSave={() => undefined} onCancel={() => undefined} />
+      <TemplateForm editing={editing} enabled issues={[]} onSave={async () => await Promise.resolve(true)} onCancel={() => undefined} />
     </DraftsProvider>,
   );
 };

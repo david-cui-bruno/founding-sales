@@ -5,6 +5,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { createDraftVersion, publishVersion } from '../../sequences/definitions.ts';
 import { migrateEnrollment } from '../../sequences/migrateEnrollment.ts';
+import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { readEnrollment } from '../../sequences/rows.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { openExtraSession, prepareFor, seedFirm, waitUntilBlocked, type ExtraSession } from './support/dispatchFixtures.ts';
@@ -13,19 +14,25 @@ import { openExtraSession, prepareFor, seedFirm, waitUntilBlocked, type ExtraSes
  * The real dispatch claim against a real migration (send-path v2, S2; the lock order in
  * `docs/greenfield/decisions/follow-up-eligibility-20260929.md` §6a and §6d).
  *
+ * Every send here is an **evidenced follow-up** (`makeStepExecution`'s default: an
+ * `agreed_sequence` permission on a recorded interested call), not a prospecting e-mail,
+ * so the cases keep sending once prospecting mail through a conversation mailbox is
+ * refused (S4; PR 335 review, P2-b).
+ *
  * A migration ends an enrollment, which is a stop fact, so it takes the send gate
  * EXCLUSIVE before any row, the way `logCallOutcome` does since the second review of PR
  * 332. Two cases:
  *
  *   * **The enrollment's own fence.** A claim holding the gate SHARED, stopped by a barrier
- *     on its fence, makes the migration wait at the gate; the claim sends, and the migration
- *     then refuses `enrollment_dispatching`. The claim and the migration never both proceed.
- *   * **Another enrollment's fence at the same firm.** The claim of the other contact's
- *     prospecting fence ends in `firmExclusivitySource`, which locks the firm row. A
- *     migration that took its rows before the gate would hold the firm and then ask for
- *     the gate the claim holds: PostgreSQL's `40P01`. With the gate first, the migration
- *     queues behind the claim and both finish. Remove the gate line from
- *     `migrateEnrollment` and this case deadlocks.
+ *     on its fence, makes the migration wait at the gate (an advisory wait — remove the
+ *     gate line from `migrateEnrollment` and this case fails); the claim sends, and the
+ *     migration then refuses `enrollment_dispatching`. The two never both proceed.
+ *   * **Another enrollment's fence at the same firm.** The migration of the firm's
+ *     prospecting contact queues behind the follow-up claim of a colleague and both finish:
+ *     the claim sends, the migration goes through, and neither is aborted. A follow-up
+ *     claim does not lock the firm row (`firmExclusivitySource` is prospecting-only), so
+ *     this case proves the two coexist rather than the firm-row deadlock the gate would
+ *     prevent for a prospecting claim.
  */
 
 let world: OutboundWorld;
@@ -60,15 +67,40 @@ const adminOn = (session: ExtraSession['session']): RepositoryContext =>
     session,
   );
 
-async function prospectingStep(firm: Awaited<ReturnType<typeof seedFirm>>): Promise<string> {
+async function stepFor(
+  firm: Awaited<ReturnType<typeof seedFirm>>,
+  originKind: 'prospecting' | 'follow_up',
+): Promise<string> {
   return await makeStepExecution(world.database.session, {
     workspaceId: workspaceId(),
     firmId: firm.firmId,
     opportunityId: firm.opportunityId,
     userId: world.alpha.workspace.salesperson.userId,
     templateVersionId: world.alpha.templateVersionId,
-    originKind: 'prospecting',
+    originKind,
   });
+}
+
+/** A fresh `agreed_sequence` permission for `versionId`, for the enrollment's contact. */
+async function freshPermission(enrollmentId: string, versionId: string): Promise<string> {
+  const enrollment = await readEnrollment(adminOn(world.database.session), { enrollmentId });
+  if (enrollment === null) throw new Error('the enrollment disappeared');
+  const { rows } = await world.database.session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5, 'agreed_sequence', $6)
+     RETURNING id`,
+    [workspaceId(), enrollment.firmId, enrollment.contactId, enrollment.opportunityId, world.alpha.workspace.salesperson.userId, versionId],
+  );
+  const granted = await grantFollowUpPermission(adminOn(world.database.session), {
+    firmId: enrollment.firmId,
+    contactId: enrollment.contactId,
+    callLogId: rows[0]?.id ?? '',
+    grantedByUserId: world.alpha.workspace.admin.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission was refused: ${granted.reason}`);
+  return granted.value.id;
 }
 
 async function enrollmentOf(stepExecutionId: string): Promise<{ enrollmentId: string; sequenceId: string }> {
@@ -109,10 +141,13 @@ function noDeadlock(name: string, result: unknown): void {
 describe('a dispatch claim and a migration', () => {
   it('on the enrollment’s own fence: the claim sends, and the migration waits for it and refuses', async () => {
     const firm = await seedFirm(world, world.alpha, 'own-fence');
-    const stepExecutionId = await prospectingStep(firm);
+    const stepExecutionId = await stepFor(firm, 'follow_up');
     const fenceId = await prepareFor(world, world.alpha, firm, { stepExecutionId });
     const { enrollmentId, sequenceId } = await enrollmentOf(stepExecutionId);
     const target = await nextVersion(sequenceId);
+    // A follow-up moves only on a fresh permission for the target; offered one, the
+    // refusal it meets is the fence's.
+    const permissionId = await freshPermission(enrollmentId, target);
 
     await barrier.session.query('BEGIN');
     await barrier.session.query('SELECT id FROM outbound_messages WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
@@ -126,7 +161,7 @@ describe('a dispatch claim and a migration', () => {
     await waitUntilBlocked(world.database.session, racer.pid);
 
     const migration = withTransaction(second.session as Parameters<typeof withTransaction>[0], async () =>
-      await migrateEnrollment(adminOn(second.session), { enrollmentId, targetSequenceVersionId: target }),
+      await migrateEnrollment(adminOn(second.session), { enrollmentId, targetSequenceVersionId: target, permissionId }),
     );
     // Queued at the gate the claim holds SHARED, before it has locked a row.
     await waitUntilBlocked(world.database.session, second.pid, 'advisory');
@@ -142,16 +177,13 @@ describe('a dispatch claim and a migration', () => {
     expect((await readEnrollment(adminOn(world.database.session), { enrollmentId }))?.state).toBe('active');
   });
 
-  it('on another enrollment’s fence at the same firm: the migration queues at the gate, and neither deadlocks', async () => {
+  it('on another enrollment’s fence at the same firm: the migration queues behind the claim, and both finish', async () => {
     const firm = await seedFirm(world, world.alpha, 'firm-row');
-    // The firm's earlier prospecting contact, with a prepared fence: the winner of
-    // `firmExclusivitySource`, so its claim gets past the precheck and asks for the firm
-    // row inside its claim transaction.
-    const otherStep = await prospectingStep(firm);
+    // A colleague's evidenced follow-up, with a prepared fence.
+    const otherStep = await stepFor(firm, 'follow_up');
     const fenceId = await prepareFor(world, world.alpha, firm, { stepExecutionId: otherStep });
-    // The enrollment to migrate: a later contact at the same firm (the pre-0025 shape the
-    // schema still holds), with no fence.
-    const migratingStep = await prospectingStep(firm);
+    // The enrollment to migrate: the firm's prospecting contact, with no fence.
+    const migratingStep = await stepFor(firm, 'prospecting');
     const { enrollmentId, sequenceId } = await enrollmentOf(migratingStep);
     const target = await nextVersion(sequenceId);
 

@@ -338,6 +338,17 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   enrollment is `dispatched`, has a fence while unfinished, or has a fence `dispatching` or
   `reconciling`. `packages/domain/test/sequences/migrateEnrollment.test.ts` pins both
   orders with a held transaction and races them six times: exactly one proceeds.
+* **After the PR 335 review.** (P1-5) A one-message scope is a promise of an e-mail:
+  `verifyFollowUpPermission` takes the step a run would pay for next (`nextStep`), and a
+  `single_email` needs an e-mail step whose template is exactly the permitted one, a
+  `contextual_reply` an e-mail step, and neither buys a run with no next step. Both
+  `enrollContact` (its first step) and the migration (step k + 1) pass it. (P1-6) When
+  step k + 1's planned instant has already passed (k > 0), it is placed at the target's
+  delay for that step counted from now, never the next tick, and the answer carries
+  `rescheduledTo`; a run that has done nothing (k = 0) keeps its plan. (P2-a) The target
+  version is held `FOR SHARE` from its check to the commit, so a publication cannot
+  retire it in between; the publication waits, and one that commits first makes the
+  migration refuse `version_retired`.
 * **Who may.** An administrator, or the firm's assigned salesperson, decided in the
   domain under the firm's row lock; one audit event (`enrollment.migrated`) names both
   enrollments, both versions, the carried ordinals, the permissions and the person's
