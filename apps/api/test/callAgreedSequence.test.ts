@@ -979,27 +979,51 @@ describe('an agreed sequence recorded on the call card', () => {
       expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
     }, 30_000);
 
-    it('reads the wall clock after the call log’s row lock is granted, not before it waits (round 4, P1-G)', async () => {
+    it('reads the wall clock after the call log’s row lock is granted, not before it waits (rounds 4-5, P1-G)', async () => {
       const { at, callLogId, sequenceVersionId } = await staleCall('Hornbeam Grove Test Advisers');
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      const ageSeconds = async (): Promise<number> => {
+        const { rows } = await fixture.db.query<{ age: string }>(
+          `SELECT extract(epoch FROM clock_timestamp() - LEAST(occurred_at, recorded_at))::text AS age
+             FROM call_logs WHERE workspace_id = $1 AND id = $2`,
+          [fixture.alpha.workspaceId, callLogId],
+        );
+        return Number(rows[0]?.age ?? 'NaN');
+      };
+      // Everything slow is done; now the call is aged to six seconds inside the hour.
       await fixture.db.query(
-        `UPDATE call_logs SET occurred_at = now() - interval '3597 seconds', recorded_at = now() - interval '3597 seconds'
+        `UPDATE call_logs SET occurred_at = clock_timestamp() - interval '3594 seconds',
+                              recorded_at = clock_timestamp() - interval '3594 seconds'
           WHERE workspace_id = $1 AND id = $2`,
         [fixture.alpha.workspaceId, callLogId],
       );
-      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
-      // Another connection holds the call log's row — no change, just the lock — across
-      // the hour boundary. The recovery gets the gate and the firm, waits on the row, and
-      // must judge the hour at the moment the row is its own.
+      // Another connection locks the row and changes nothing — an update would make
+      // PostgreSQL re-evaluate the locking SELECT on the new version and hide the bug.
       const holder = new pg.Client({ connectionString: databaseUrlOf(fixture.database) });
       await holder.connect();
       try {
         await holder.query('BEGIN');
+        const { rows: pid } = await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
         await holder.query('SELECT id FROM call_logs WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
           fixture.alpha.workspaceId,
           callLogId,
         ]);
         const waiting = postOnOwnConnection('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload }));
-        await new Promise(resolve => setTimeout(resolve, 5_000));
+
+        // Until the recovery is blocked behind this connection's row lock.
+        for (let tries = 0; ; tries += 1) {
+          const { rows: blocked } = await fixture.db.query<{ n: string }>(
+            'SELECT count(*)::text AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))',
+            [pid[0]?.pid],
+          );
+          if (Number(blocked[0]?.n ?? '0') > 0) break;
+          if (tries > 200) throw new Error('the recovery never waited on the call log row');
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        // It waits while the call is still inside the hour — else this proves nothing …
+        expect(await ageSeconds()).toBeLessThan(3600);
+        // … and the hour passes while it waits.
+        while ((await ageSeconds()) < 3601) await new Promise(resolve => setTimeout(resolve, 100));
         await holder.query('COMMIT');
         const answer = await waiting;
         expect([answer.status, (answer.body as { reason?: string }).reason]).toEqual([409, 'call_too_old']);

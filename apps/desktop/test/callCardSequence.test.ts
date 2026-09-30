@@ -490,6 +490,90 @@ describe('the Today bridge and an agreed sequence', () => {
     expect(back.followUpPreview).toMatchObject({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED, refusal: null });
   });
 
+  describe('the pending agreement’s lifecycle (round 5, P0)', () => {
+    const OTHER_FIRM = '22222222-2222-4222-8222-222222222222';
+    const CALL_LOG_ID = 'abababab-abab-4bab-8bab-abababababab';
+    const preview = {
+      sequenceVersionId: PUBLISHED,
+      sequenceName: 'After a good call',
+      version: 3,
+      firmTimeZone: 'America/Los_Angeles',
+      holidayCalendarVersion: 'holidays.2',
+      anchoredAt: '2026-09-30T15:05:00.000Z',
+      steps: [
+        {
+          ordinal: 1,
+          channel: 'call_task',
+          templateVersionId: null,
+          templateName: null,
+          subject: null,
+          templateApproved: null,
+          dueAt: '2026-10-01T15:00:00.000Z',
+          estimatedAt: '2026-10-01T15:00:00.000Z',
+        },
+      ],
+    };
+
+    /** A bridge whose card A holds a stale agreement; `other` says how firm B's card answers. */
+    async function staleAt(other: 'ok' | 'offline') {
+      const answers = baseAnswers({
+        '/calls/log': logged([{ kind: 'follow_up_not_granted', reason: 'stale_preview' }]),
+        '/calls/follow-up-preview': { status: 200, body: preview },
+      });
+      const api = createAuthedClient({
+        baseUrl: 'https://api.example.test/',
+        clientVersion: '1.4.0',
+        accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+        send: async (url, init) => {
+          const path = new URL(url).pathname;
+          if (path === '/today/firm' && (JSON.parse(init.body ?? '{}') as { firmId: string }).firmId === OTHER_FIRM) {
+            if (other === 'offline') throw new Error('the network is down');
+            return { status: 200, body: { ...(answers['/today/firm']?.body as object), firmId: OTHER_FIRM } };
+          }
+          return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+        },
+      });
+      const bridge = createTodayBridge({ api, handoff, session });
+      await bridge.expand({ firmId: FIRM_ID });
+      const stale = await bridge.recordOutcome(
+        interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }),
+      );
+      expect(stale.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+      return bridge;
+    }
+
+    it('keeps it when the card is closed, and offers it again on reopening', async () => {
+      const bridge = await staleAt('ok');
+      const closed = await bridge.collapse();
+      expect(closed.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+      const back = await bridge.expand({ firmId: FIRM_ID });
+      expect(back.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+      expect(back.followUpPreview).toMatchObject({ firmId: FIRM_ID, sequenceVersionId: PUBLISHED, refusal: null });
+    });
+
+    it('keeps it when another firm’s card cannot be read offline', async () => {
+      const bridge = await staleAt('offline');
+      const offline = await bridge.expand({ firmId: OTHER_FIRM });
+      expect(offline.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+    });
+
+    it('gives it up when another firm’s card opens', async () => {
+      const bridge = await staleAt('ok');
+      const other = await bridge.expand({ firmId: OTHER_FIRM });
+      expect(other.expanded?.firmId).toBe(OTHER_FIRM);
+      expect(other.pendingAgreement ?? null).toBeNull();
+    });
+
+    it('drops it, and every id of it, on sign-out or another identity', async () => {
+      const bridge = await staleAt('ok');
+      const after = await bridge.forget();
+      expect(after.pendingAgreement ?? null).toBeNull();
+      expect(after.followUpPreview ?? null).toBeNull();
+      const carried = JSON.stringify(after);
+      for (const id of [CALL_LOG_ID, CONTACT_ID, PUBLISHED]) expect(carried).not.toContain(id);
+    });
+  });
+
   it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {
     let release: (() => void) | null = null;
     const answers = baseAnswers();

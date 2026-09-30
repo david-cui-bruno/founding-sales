@@ -562,8 +562,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      */
     async forget() {
       previewRequest += 1;
-      // Closing the card is not giving up the call's agreement (round 4, P1-I): a
-      // pending agreement stays, and reopening the card reads its dates again.
+      // An identity change: nothing of the last person's stays — not their pending
+      // agreement's call, contact and sequence ids either (review of S3, round 5, P0).
+      pendingAgreement = null;
+      openedFirmId = null;
       expanded = null;
       notice = null;
       agreement = null;
@@ -608,7 +610,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // A preview still on the wire belongs to the card being closed (review of S3,
       // round 2, P2): advancing the counter makes its answer land on nothing.
       previewRequest += 1;
-      pendingAgreement = null;
+      // Closing the card is not giving up the call's agreement (round 4, P1-I; round 5,
+      // P0): a pending agreement stays, and reopening the card reads its dates again.
       expanded = null;
       notice = null;
       agreement = null;
