@@ -168,7 +168,7 @@ describe('generation fencing', () => {
     expect(after?.generation).toBe((before?.generation ?? 0) + 1);
   });
 
-  it('the retry after a generation change is harmless: a sync of a baseline_pending mailbox reads no history and writes nothing', async () => {
+  it.each(['baseline_pending', 'recovering'] as const)('the retry after a generation change is harmless: a sync of a %s mailbox reads no history and writes nothing', async syncState => {
     world = await createMailWorld();
     const w = world;
     await completeBaseline(w, w.alpha);
@@ -179,18 +179,24 @@ describe('generation fencing', () => {
     // What an account switch leaves behind: a new generation, a baseline pending, and
     // the new generation's recovery already started.
     await w.database.session.query(
-      "UPDATE mailboxes SET generation = generation + 1, sync_state = 'baseline_pending' WHERE id = $1",
-      [w.alpha.mailboxId],
+      'UPDATE mailboxes SET generation = generation + 1, sync_state = $2 WHERE id = $1',
+      [w.alpha.mailboxId, syncState],
     );
     const switched = await readMailbox(context, w.alpha.mailboxId);
     if (switched === null) throw new Error('the mailbox is gone');
-    await startRecovery(context, { mailbox: switched, reason: 'baseline', startHistoryId: '1000' });
+    await startRecovery(context, {
+      mailbox: switched,
+      reason: syncState === 'recovering' ? 'history_expired' : 'baseline',
+      startHistoryId: '1000',
+    });
 
     const historyReads = w.alpha.gmail.calls.filter(call => call.method === 'listHistory').length;
     const report = await asJob(w, async () => await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId }));
     expect(report.outcome).toBe('recovery_underway');
     expect(w.alpha.gmail.calls.filter(call => call.method === 'listHistory').length).toBe(historyReads);
     expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+    // The recovery's handoff cursor is where the recovery put it.
+    expect((await readMailbox(context, w.alpha.mailboxId))?.historyId).toBe('1000');
   });
 
   it('an in-flight recovery that read generation g writes no progress when the mailbox moves on', async () => {

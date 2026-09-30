@@ -450,19 +450,18 @@ export async function runMailRecovery(
   // id it listed recorded, here or by an earlier run.
   const complete = listingEnded && !unrecordedLeft;
 
-  const progress = await context.db.query(
-    `UPDATE mailbox_recoveries AS r
-        SET pages_completed = $3,
-            messages_seen = r.messages_seen + $4
-       FROM mailboxes AS m
-      WHERE r.workspace_id = $1 AND r.id = $2 AND r.completed_at IS NULL
-        AND m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
-        AND m.generation = $5 AND m.email_address = $6`,
-    [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen, fence.generation, fence.emailAddress],
-  );
-  if ((progress.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery progress', fence);
-
   if (!complete) {
+    const progress = await context.db.query(
+      `UPDATE mailbox_recoveries AS r
+          SET pages_completed = $3,
+              messages_seen = r.messages_seen + $4
+         FROM mailboxes AS m
+        WHERE r.workspace_id = $1 AND r.id = $2 AND r.completed_at IS NULL
+          AND m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
+          AND m.generation = $5 AND m.email_address = $6`,
+      [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen, fence.generation, fence.emailAddress],
+    );
+    if ((progress.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery progress', fence);
     // Another pass is needed, and this run does not schedule it: the handler is
     // inside the runner's transaction and its own job row is still `running`, so it
     // cannot re-arm itself. `mailRecoverySource` finds every incomplete recovery on
@@ -478,7 +477,9 @@ export async function runMailRecovery(
   // Conditional completion: `ready`, the watermark at the interval's end, and the
   // recovery's `completed_at` commit together or not at all, and only while the mailbox
   // is still the generation and address this run read and still stands on the handoff
-  // cursor. The cursor is not written here: it is already the id read before `toAt`.
+  // cursor. The mailbox statement goes first and is the predicate: the row lock it takes
+  // holds to commit, so nothing moves the mailbox between it and the two writes after
+  // it. The cursor is not written here: it is already the id read before `toAt`.
   const completed = await context.db.query(
     `UPDATE mailboxes
         SET sync_state = 'ready',
@@ -501,8 +502,10 @@ export async function runMailRecovery(
   );
   if ((completed.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery completion', fence);
   await context.db.query(
-    `UPDATE mailbox_recoveries SET completed_at = now() WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, recovery.id],
+    `UPDATE mailbox_recoveries
+        SET pages_completed = $3, messages_seen = messages_seen + $4, completed_at = now()
+      WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen],
   );
   // Only now may the hold go; `releaseMailboxHold` re-reads the row and refuses unless
   // it is `ready`, which the statement above made it in this transaction.
