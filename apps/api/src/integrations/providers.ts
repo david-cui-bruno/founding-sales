@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
+import { CALL_RECORDING_MAX_BYTES, VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
 
 /**
  * The two provider integrations of the call-to-booking milestone, as the API holds them
@@ -36,6 +36,47 @@ export interface TwilioVoice {
   verifySignature(externalUrl: string, params: Readonly<Record<string, string>>, header: string | undefined): boolean;
   /** A Voice access token: identity, outgoing application only, no incoming grant. */
   mintAccessToken(identity: string, nowSeconds: number): { readonly token: string; readonly expiresAtSeconds: number };
+  /**
+   * One recording's audio, read from Twilio's REST API with the account's API key (slice
+   * C1). `path` is the stored recording path; anything that is not one of this account's
+   * recordings is `not_found` without a request. The bytes come back to the API, never a
+   * URL to the Mac.
+   */
+  fetchRecording(path: string): Promise<RecordingFetch>;
+}
+
+export type RecordingFetch =
+  | { readonly ok: true; readonly contentType: 'audio/mpeg'; readonly bytes: Buffer }
+  | { readonly ok: false; readonly reason: 'not_found' | 'too_large' | 'unavailable' };
+
+/** The HTTP port `fetchRecording` uses; `fetch` in production, a stub in tests. */
+export type RecordingHttp = (
+  url: string,
+  init: { readonly method: 'GET'; readonly headers: Record<string, string> },
+) => Promise<Response>;
+
+/** Twilio's REST host. The stored path never carries a host; this is the only one asked. */
+export const TWILIO_API_ORIGIN = 'https://api.twilio.com';
+
+/** Read a response body, refusing one larger than `limit` without holding more than that. */
+async function boundedBody(response: Response, limit: number): Promise<Buffer | null> {
+  const declared = Number(response.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > limit) return null;
+  if (response.body === null) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
 }
 
 export interface Calcom {
@@ -86,15 +127,20 @@ export function calcomSignature(webhookSecret: string, rawBody: Buffer): string 
 
 const base64url = (value: string | Buffer): string => Buffer.from(value).toString('base64url');
 
-export function twilioVoice(values: {
-  readonly accountSid: string;
-  readonly apiKeySid: string;
-  readonly apiKeySecret: string;
-  readonly twimlAppSid: string;
-  readonly authToken: string;
-  readonly callerIdE164: string;
-}): TwilioVoice {
+export function twilioVoice(
+  values: {
+    readonly accountSid: string;
+    readonly apiKeySid: string;
+    readonly apiKeySecret: string;
+    readonly twimlAppSid: string;
+    readonly authToken: string;
+    readonly callerIdE164: string;
+  },
+  ports: { readonly http?: RecordingHttp } = {},
+): TwilioVoice {
   const { authToken, apiKeySecret, apiKeySid } = values;
+  const http: RecordingHttp = ports.http ?? (async (url, init) => await fetch(url, init));
+  const recordingPath = new RegExp(`^/2010-04-01/Accounts/${values.accountSid}/Recordings/RE[0-9a-f]{32}$`, 'u');
   return {
     accountSid: values.accountSid,
     twimlAppSid: values.twimlAppSid,
@@ -121,6 +167,27 @@ export function twilioVoice(values: {
       const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
       const signature = createHmac('sha256', apiKeySecret).update(signingInput).digest('base64url');
       return { token: `${signingInput}.${signature}`, expiresAtSeconds: exp };
+    },
+    fetchRecording: async path => {
+      if (!recordingPath.test(path)) return { ok: false, reason: 'not_found' };
+      let response: Response;
+      try {
+        response = await http(`${TWILIO_API_ORIGIN}${path}.mp3`, {
+          method: 'GET',
+          headers: {
+            authorization: `Basic ${Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64')}`,
+            accept: 'audio/mpeg',
+          },
+        });
+      } catch {
+        return { ok: false, reason: 'unavailable' };
+      }
+      if (response.status === 404) return { ok: false, reason: 'not_found' };
+      if (response.status !== 200) return { ok: false, reason: 'unavailable' };
+      const bytes = await boundedBody(response, CALL_RECORDING_MAX_BYTES).catch(() => undefined);
+      if (bytes === undefined) return { ok: false, reason: 'unavailable' };
+      if (bytes === null) return { ok: false, reason: 'too_large' };
+      return { ok: true, contentType: 'audio/mpeg', bytes };
     },
   };
 }

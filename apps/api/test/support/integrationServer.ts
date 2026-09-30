@@ -6,7 +6,7 @@ import { recordingLogger } from '../../src/bootstrap/log.ts';
 
 type RecordingLogger = ReturnType<typeof recordingLogger>;
 import { createApiServer } from '../../src/server.ts';
-import { calcom, calcomSignature, twilioSignature, twilioVoice } from '../../src/integrations/providers.ts';
+import { calcom, calcomSignature, twilioSignature, twilioVoice, type RecordingHttp } from '../../src/integrations/providers.ts';
 import type { AuthFixture } from './authFixture.ts';
 import { testRequestPool } from './poolFixture.ts';
 
@@ -50,7 +50,12 @@ export interface IntegrationServer {
 
 export async function startIntegrationServer(
   fixture: AuthFixture,
-  options: { readonly callerIdE164?: string; readonly configured?: boolean } = {},
+  options: {
+    readonly callerIdE164?: string;
+    readonly configured?: boolean;
+    /** Twilio's REST API for the recording proxy (slice C1); absent is a 404 for every request. */
+    readonly recordingHttp?: RecordingHttp;
+  } = {},
 ): Promise<IntegrationServer> {
   const authToken = hex(20);
   const webhookSecret = hex(24);
@@ -76,7 +81,7 @@ export async function startIntegrationServer(
             twimlAppSid: `AP${hex(16)}`,
             authToken,
             callerIdE164,
-          })
+          }, { http: options.recordingHttp ?? (async () => await Promise.resolve(new Response(null, { status: 404 }))) })
         : null,
       calcom: configured ? calcom({ webhookSecret }) : null,
       decisionAt: () => INSIDE_CALLING_WINDOW,
