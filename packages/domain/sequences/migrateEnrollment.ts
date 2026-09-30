@@ -3,6 +3,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
+import { dispatchHolidayCalendar } from '../outbound/stepPermission.ts';
 import { holidayCalendarByVersion } from './calendars.ts';
 import { completeEnrollment, FollowUpReuseError, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { bindFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
@@ -232,7 +233,19 @@ export async function migrateEnrollment(
   if (k === null) return refuseSequence('completed_prefix_required');
   const next = target.steps.find(step => step.ordinal === k + 1);
 
-  // 7. The fresh permission's own evidence, re-read, for the target plan.
+  // 7a. What a fresh permission may buy, decided on the shape of the remainder before any
+  //     scope is verified (PR 335 rounds 6 and 7), so the answer is the structural one
+  //     whatever the scope: a remainder that begins with a call task is refused
+  //     `remainder_starts_with_call` (record a new agreement from the call card, S3), and
+  //     a remainder with no step at all — a target no longer than the completed prefix —
+  //     is refused `no_remaining_step`: binding would stop the old run and complete the
+  //     replacement at once, spending the agreement on nothing.
+  if (input.permissionId !== undefined) {
+    if (next === undefined) return refuseSequence('no_remaining_step');
+    if (next.channel !== 'email') return refuseSequence('remainder_starts_with_call');
+  }
+
+  // 7b. The fresh permission's own evidence, re-read, for the target plan.
   if (input.permissionId !== undefined) {
     const { rows: clockNow } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
     const verdict = await verifyFollowUpPermission(context, input.permissionId, {
@@ -277,28 +290,27 @@ export async function migrateEnrollment(
     schedule = { dueAt: late ? sendsAt : due.dueAt, sourceZone: due.sourceZone, ruleVersion: due.ruleVersion };
     if (late) rescheduledTo = sendsAt;
 
-    // PR 335 review, rounds 2–6: a fresh permission buys this run only if the run can do
-    // what it was agreed for before the permission ends. Checked here, before the old row
-    // is touched; a refusal leaves the old enrollment active and the permission unbound.
-    //
-    //   * The remainder (k + 1 … n) must **begin with an e-mail**, and that e-mail's placed
-    //     instant (above: `clock_timestamp()` after the locks, the frozen zone and
-    //     calendar, `placeEmailSend`) must precede `expires_at`, else
-    //     `permission_expires_before_step`.
-    //   * A remainder that begins with a **call task** is refused
-    //     `remainder_starts_with_call`. When its e-mail becomes due depends on when the
-    //     call is completed, which depends on when Today builds its card — a projection
-    //     that could only be made exact by coupling the migration to Today's
-    //     materialisation. Fail closed instead: record a new agreement from the call card,
-    //     where a call-first agreed sequence is enrolled directly (S3).
+    // PR 335 review, rounds 2–7: a fresh permission buys this run only if its first
+    // e-mail (step k + 1; 7a has refused every other shape) can be sent before the
+    // permission ends. Checked here, before the old row is touched; a refusal leaves the
+    // old enrollment active and the permission unbound. The instant compared is the
+    // earliest the **dispatch** would let it go: the first sending window at or after the
+    // later of its due instant and now (`clock_timestamp()`, read after the locks — so a
+    // k = 0 step whose planned instant is in the past is not compared at that past
+    // instant), placed on the calendar the dispatch applies, the frozen one **and** the
+    // current one (`dispatchHolidayCalendar`, `outbound/stepPermission.ts`), so a holiday
+    // added before the migration counts. The schedule itself keeps the frozen cadence.
     if (input.permissionId !== undefined) {
-      if (next.channel !== 'email') return refuseSequence('remainder_starts_with_call');
       const { rows: bound } = await context.db.query<{ expires_at: Date }>(
         'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
         [context.scope.workspaceId, input.permissionId],
       );
       const expiresAt = bound[0]?.expires_at;
-      if (expiresAt === undefined || Date.parse(sendsAt) >= expiresAt.getTime()) {
+      const from = new Date(Math.max(Date.parse(due.dueAt), Date.parse(now))).toISOString();
+      const earliestSend = placeEmailSend(from, old.firmTimeZone, {
+        calendar: await dispatchHolidayCalendar(context, old),
+      }).sendAt;
+      if (expiresAt === undefined || Date.parse(earliestSend) >= expiresAt.getTime()) {
         return refuseSequence('permission_expires_before_step');
       }
     }

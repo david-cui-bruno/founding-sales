@@ -100,6 +100,11 @@ export const SEQUENCE_REFUSAL_CODES = [
    * lists the call.
    */
   'remainder_starts_with_call',
+  /**
+   * A migration offered a fresh permission onto a target no longer than the completed
+   * prefix: nothing would remain for the agreement to buy (PR 335 round 7).
+   */
+  'no_remaining_step',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

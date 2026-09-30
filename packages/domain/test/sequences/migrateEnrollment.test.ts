@@ -3,10 +3,12 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { createDraftVersion, publishVersion, retireVersion, type DraftStepInput } from '../../sequences/definitions.ts';
+import { recordHolidayCalendar } from '../../sequences/calendars.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import { resolveStepDue } from '../../src/rules/cadence.ts';
+import { localInstant } from '../../src/rules/localClock.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
@@ -647,13 +649,35 @@ describe('the late decision is taken on the wall clock after the locks (PR 335 r
 });
 
 describe('the fresh permission must outlive the step it pays for (PR 335 review, round 2)', () => {
-  async function lateFollowUp(expiresInMs: number): Promise<{ old: string; target: string; fresh: string; firm: VersionFirm }> {
+  /**
+   * A whole-hour delay from now that lands between 11:00 and 12:00 New York time on a
+   * weekday at least two days out: an instant **inside** the sending window, so the only
+   * thing that can move its send is a holiday on its day. With it the holiday cases are
+   * not vacuous whatever hour the suite runs.
+   */
+  async function midWindowDelay(): Promise<{ hours: number; day: string }> {
+    const now = Date.parse(await databaseNow(admin()));
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE }).format(new Date(now));
+    for (let ahead = 2; ahead < 10; ahead += 1) {
+      const day = new Date(Date.parse(`${today}T12:00:00Z`) + ahead * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+      if (weekday === 0 || weekday === 6 || CALENDAR.dates.includes(day)) continue;
+      const noon = Date.parse(localInstant(day, { hour: 12, minute: 0 }, ZONE));
+      return { hours: Math.floor((noon - now) / (60 * 60 * 1000)), day };
+    }
+    throw new Error('no weekday found');
+  }
+
+  async function lateFollowUp(
+    expiresInMs: number,
+    delayHours = 48,
+  ): Promise<{ old: string; target: string; fresh: string; firm: VersionFirm }> {
     const template = await approvedTemplate(admin(), 'An agreed follow-up.');
     const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
     const firm = await newFirm(database.session, seeded.alpha);
     const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
     await completeCurrent(old);
-    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, 48)]);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), emailStep(template, 2, delayHours)]);
     const expiresAt = new Date(Date.parse(await databaseNow(admin())) + expiresInMs).toISOString();
     return { old, target, fresh: await agreedPermission(firm, target, expiresAt), firm };
   }
@@ -669,14 +693,11 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
   });
 
   it('refuses when the window placement, not the delay, carries the e-mail past the expiry', async () => {
-    // The raw due instant (now + 48 h) is inside the permission; its local day is made a
+    // The raw due instant (inside a window, `midWindowDelay`) is inside the permission; its local day is made a
     // holiday on the calendar the enrollment froze, so the send moves to the next business
     // morning, which is not. Fails if the raw due instant is compared instead of the placed one.
-    const hours48 = 48 * 60 * 60 * 1000;
-    const { old, target, fresh } = await lateFollowUp(hours48 + 2 * 60 * 1000);
-    const rawDay = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE }).format(
-      new Date(Date.parse(await databaseNow(admin())) + hours48),
-    );
+    const { hours, day: rawDay } = await midWindowDelay();
+    const { old, target, fresh } = await lateFollowUp(hours * 60 * 60 * 1000 + 2 * 60 * 1000, hours);
     const version = `holidays.s2-${crypto.randomUUID().slice(0, 8)}`;
     await database.session.query(
       // A historical version (superseded at once): the workspace's current calendar is
@@ -749,6 +770,67 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
     expect((await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target })).ok).toBe(true);
   });
 
+  it('refuses no_remaining_step for an agreed sequence onto a target no longer than the prefix, and touches nothing (round 7)', async () => {
+    // Fails with the guard removed: the old run would be stopped and the replacement
+    // completed at once, spending the agreement on nothing.
+    const template = await approvedTemplate(admin(), 'Agreed, then shortened again.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
+    await completeCurrent(old);
+    const short = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template)]);
+    const tenDays = new Date(Date.parse(await databaseNow(admin())) + 10 * 24 * 60 * 60 * 1000).toISOString();
+    const fresh = await agreedPermission(firm, short, tenDays);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: short, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'no_remaining_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('compares the expiry with the next sending window when a k = 0 step’s planned instant is already past (round 7)', async () => {
+    // The enrollment's frozen zone is set, for this case only, to the fixed-offset zone
+    // where it is about 20:00 now: today's window has closed, so the earliest send is a
+    // later morning, after a permission that ends in two hours. Fails if the past planned
+    // instant (21 September) is compared instead.
+    const template = await approvedTemplate(admin(), 'Planned long ago.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), callStep(2, 3)]);
+    const now = new Date(await databaseNow(admin()));
+    let offset = 20 - now.getUTCHours();
+    if (offset > 14) offset -= 24;
+    if (offset < -12) offset += 24;
+    const zone = offset === 0 ? 'Etc/GMT' : offset > 0 ? `Etc/GMT-${String(offset)}` : `Etc/GMT+${String(-offset)}`;
+    await database.session.query('UPDATE sequence_enrollments SET firm_time_zone = $2 WHERE id = $1', [old, zone]);
+    const fresh = await agreedPermission(firm, target, new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString());
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('counts a holiday on the current calendar, as dispatch does, even though the enrollment froze an older one (round 7)', async () => {
+    // Fails with the frozen calendar alone: the e-mail's day is a holiday only on the
+    // workspace's current calendar, which the dispatch window honours.
+    const { hours, day: rawDay } = await midWindowDelay();
+    const { old, target, fresh } = await lateFollowUp(hours * 60 * 60 * 1000 + 2 * 60 * 1000, hours);
+    const suffix = crypto.randomUUID().slice(0, 8);
+    expect((await recordHolidayCalendar(admin(), { version: `holidays.cur-${suffix}`, dates: [...CALENDAR.dates, rawDay] })).ok).toBe(true);
+    try {
+      expect(
+        await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+      ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+      expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+      expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+    } finally {
+      // The current calendar back to the seeded dates, under a new version.
+      await recordHolidayCalendar(admin(), { version: `holidays.back-${suffix}`, dates: [...CALENDAR.dates] });
+    }
+  });
+
   it('still migrates a kept plan inside the permission, with rescheduledTo null', async () => {
     const template = await approvedTemplate(admin(), 'Kept inside the agreement.');
     const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
@@ -774,8 +856,9 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
 });
 
 describe('a one-message permission buys an e-mail (PR 335 review, P1-5)', () => {
-  it('refuses a single_email permission for a replacement whose next step is a call', async () => {
-    // Fails if the verifier skips the channel when the next template is null.
+  it('refuses a single_email permission for a replacement whose next step is a call, on the shape first (rounds 5 and 7)', async () => {
+    // The structural guard answers before the scope is verified, so a one-message scope
+    // gets the same answer as an agreed sequence (round 7, P2).
     const template = await approvedTemplate(admin(), 'One e-mail.');
     const plan = await publishedPlan(admin(), [emailStep(template)]);
     const firm = await newFirm(database.session, seeded.alpha);
@@ -784,13 +867,12 @@ describe('a one-message permission buys an e-mail (PR 335 review, P1-5)', () => 
     const fresh = await singleEmailPermission(firm, template);
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: callOnly, permissionId: fresh }),
-    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    ).toEqual({ ok: false, reason: 'remainder_starts_with_call' });
     expect((await permissionRow(fresh)).enrollment_id).toBeNull();
     expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
   });
 
-  it('refuses a single_email permission for a target with no step after the prefix', async () => {
-    // Fails if a one-message permission may bind to a run that completes at once.
+  it('refuses a single_email permission for a target with no step after the prefix (round 7: no_remaining_step)', async () => {
     const template = await approvedTemplate(admin(), 'Agreed, then shortened.');
     const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
     const firm = await newFirm(database.session, seeded.alpha);
@@ -800,7 +882,7 @@ describe('a one-message permission buys an e-mail (PR 335 review, P1-5)', () => 
     const fresh = await singleEmailPermission(firm, template);
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: oneStep, permissionId: fresh }),
-    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    ).toEqual({ ok: false, reason: 'no_remaining_step' });
     expect((await permissionRow(fresh)).enrollment_id).toBeNull();
   });
 

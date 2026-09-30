@@ -361,7 +361,14 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   on whether a migration straddles that build; rounds 3–5 tried to project it and each
   round found another reachable case the projection got wrong. An exact answer would
   couple the migration to Today's materialisation, so the rule refuses instead.
-  Migrations without a fresh permission (prospecting) are unchanged. (P2-a) The target
+  Migrations without a fresh permission (prospecting) are unchanged. (Round 7) The shape
+  is decided before any scope is verified, so every scope gets the structural answer, and
+  a remainder with **no step** — a target no longer than the completed prefix — refuses
+  `no_remaining_step` (binding would stop the old run and complete the replacement at
+  once). The expiry is compared with the earliest instant the dispatch would release the
+  e-mail: the first sending window at or after the later of its due instant and
+  `clock_timestamp()`, on the calendar dispatch applies (the frozen one and the current
+  one, `dispatchHolidayCalendar`); the schedule itself keeps the frozen cadence. (P2-a) The target
   version is held `FOR SHARE` from its check to the commit, so a publication cannot
   retire it in between; the publication waits, and one that commits first makes the
   migration refuse `version_retired`.
