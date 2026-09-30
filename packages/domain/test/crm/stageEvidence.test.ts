@@ -220,6 +220,7 @@ describe('applyStageEvidence', () => {
       meeting: null,
       evidence: { kind: 'meeting.booked', evidenceId: 'board-meeting', occurredAt: at, fromStageKey: 'new' },
       pinned: false,
+      nextAction: null,
       closeReason: null,
     });
   });

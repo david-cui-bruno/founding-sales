@@ -25,6 +25,38 @@ export function valueLabel(value: NonNullable<BoardCard['value']>): string {
   return `${text}/mo · ${value.kind}`;
 }
 
+/**
+ * "Call back · Tue 2 pm": the weekday and the hour, in the firm's zone when the board knows
+ * it and the Mac's otherwise (an unknown zone name falls back the same way). Minutes only
+ * when there are some: "Tue 2:30 pm".
+ */
+export function nextActionLabel(
+  next: { readonly label: string; readonly dueAt: string },
+  timeZone: string | null,
+): string {
+  const at = new Date(next.dueAt);
+  const format = (zone: string | undefined): string => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      ...(zone === undefined ? {} : { timeZone: zone }),
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(at);
+    const get = (type: string): string => parts.find(part => part.type === type)?.value ?? '';
+    const minute = get('minute');
+    const time = `${get('hour')}${minute === '00' ? '' : `:${minute}`} ${get('dayPeriod').toLowerCase()}`;
+    return `${get('weekday')} ${time}`;
+  };
+  let when: string;
+  try {
+    when = format(timeZone ?? undefined);
+  } catch {
+    when = format(undefined);
+  }
+  return `${next.label} \u00b7 ${when}`;
+}
+
 export type ValueParse =
   | { readonly ok: true; readonly monthlyCents: number }
   | { readonly ok: false; readonly problem: 'empty' | 'not_a_number' | 'too_many_decimals' | 'negative' | 'too_large' };

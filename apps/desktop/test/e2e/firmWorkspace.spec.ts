@@ -154,14 +154,18 @@ test('the pipeline shows the workspace stages, keeps a retired one that is occup
   // Six of the seven: the empty retired stage is not on screen, the occupied one is.
   await expect(page.getByTestId('pipeline-column')).toHaveCount(6);
   await expect(page.getByTestId('stage-retired')).toHaveCount(1);
-  await expect(page.getByTestId('stage-terminal')).toHaveCount(2);
   await expect(page.getByTestId('pipeline-firm')).toHaveCount(2);
 });
 
 test('a Lost change asks for a reason and will not go without one', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
 
-  const change = page.getByTestId('stage-change').first();
+  // The Kanban card (slice K): "Move to…" sits on the card, quiet until it is hovered, and
+  // opens a small panel with the stage select, the reason and Move.
+  const card = page.getByTestId('pipeline-firm').first();
+  await card.hover();
+  await card.getByTestId('card-move').click();
+  const change = card.getByTestId('move-to-panel');
   await expect(change.getByTestId('stage-submit')).toBeDisabled();
   await expect(change.getByTestId('stage-reason')).toBeHidden();
 
@@ -190,15 +194,22 @@ test('a Lost change asks for a reason and will not go without one', async ({ pag
 
 test('a retired stage is never offered as a destination', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await expect(page.getByTestId('stage-select').first()).toBeVisible();
-  const options = await page.getByTestId('stage-select').first().locator('option').allTextContents();
-  expect(options).toEqual(['Move to…', 'New', 'Contacting', 'Engaged', 'Won', 'Lost']);
+  const card = page.getByTestId('pipeline-firm').first();
+  await card.hover();
+  await card.getByTestId('card-move').click();
+  await expect(card.getByTestId('stage-select')).toBeVisible();
+  const options = await card.getByTestId('stage-select').locator('option').allTextContents();
+  // Not the stage the card is already in (Contacting), and never the retired ones.
+  expect(options).toEqual(['Move to…', 'New', 'Engaged', 'Won', 'Lost']);
 });
 
 test('a firm with no open opportunity offers no stage control at all', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  // The occupied retired column's firm has no open opportunity in the fixture.
-  await expect(page.getByTestId('stage-change-unavailable')).toHaveCount(1);
+  // The occupied retired column's firm has no open opportunity in the fixture, so its card
+  // has no Move to… or Set value… and the other card has both.
+  await expect(page.getByTestId('card-move')).toHaveCount(1);
+  await expect(page.getByTestId('card-set-value')).toHaveCount(1);
+  await expect(page.getByTestId('pipeline-firm').filter({ hasText: 'Larkspur Test Foundry' }).getByTestId('card-move')).toHaveCount(0);
 });
 
 test('opening a firm from the board asks for that firm', async ({ page }) => {

@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { readNextActions, type NextAction } from './boardNextAction.ts';
 import { firmIdentityDtoOf, type FirmIdentityDto } from './dto.ts';
 import { listPipelineStages } from './pipeline.ts';
 import type { FirmRow, PipelineStageRow } from './types.ts';
@@ -57,6 +58,8 @@ export interface PipelineBoardCard {
     readonly fromStageKey: string | null;
   } | null;
   readonly pinned: boolean;
+  /** The earliest of a callback, a pending step, an upcoming demo and a queued call. */
+  readonly nextAction: NextAction | null;
   /** Why the opportunity was lost, for a Lost card; null otherwise. */
   readonly closeReason: string | null;
 }
@@ -195,6 +198,7 @@ export async function readPipelineBoardForActor(
     [context.scope.workspaceId, Math.trunc(options.limit ?? 500)],
   );
 
+  const nextActions = await readNextActions(context);
   const opportunityIdByFirmId: Record<string, string> = {};
   const cards: Record<string, PipelineBoardCard> = {};
   const placed: FirmIdentityDto[] = [];
@@ -233,6 +237,7 @@ export async function readPipelineBoardForActor(
               fromStageKey: row.evidence_from_stage_key,
             },
       pinned: row.pinned,
+      nextAction: nextActions[row.id] ?? null,
       closeReason: row.close_reason,
     };
     if (row.opportunity_status === 'open' && row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {

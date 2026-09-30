@@ -322,6 +322,11 @@ export const boardCardSchema = z.object({
     .object({ kind: z.string(), evidenceId: z.string(), occurredAt: instant, fromStageKey: z.string().nullable().optional() })
     .nullable(),
   pinned: z.boolean(),
+  /** The earliest next action: a callback, a pending step, an upcoming demo or a queued call. */
+  nextAction: z
+    .object({ kind: z.enum(['callback', 'follow_up_email', 'call', 'demo']), label: z.string(), dueAt: instant })
+    .nullable()
+    .optional(),
   /** Why a Lost opportunity was lost (slice K). Optional so older answers parse. */
   closeReason: z.string().nullable().optional(),
 });

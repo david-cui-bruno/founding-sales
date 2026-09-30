@@ -7,7 +7,7 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Select } from '../ui/select.tsx';
 import { Tag } from '../ui/layout.tsx';
-import { evidencePhrase, fullTimeOf, meetingLabel, valueLabel } from './cardText.ts';
+import { evidencePhrase, fullTimeOf, meetingLabel, nextActionLabel, valueLabel } from './cardText.ts';
 import { ValueDialog } from './ValueDialog.tsx';
 
 /**
@@ -158,6 +158,7 @@ export function BoardCard({
   onChangeStage,
   onSetValue,
   onOpenFirm,
+  now = new Date(),
 }: {
   readonly firm: FirmIdentityDto;
   readonly card: BoardCardData | undefined;
@@ -171,6 +172,8 @@ export function BoardCard({
   onChangeStage(change: StageChange): void;
   onSetValue(change: ValueChange): void;
   onOpenFirm(firmId: string): void;
+  /** The instant "overdue" is judged against; the clock unless a test says otherwise. */
+  readonly now?: Date;
 }): JSX.Element {
   const [panel, setPanel] = useState<'none' | 'move' | 'value'>('none');
   const nameOf = (key: string): string => stages.find(s => s.key === key)?.displayName ?? key;
@@ -204,9 +207,15 @@ export function BoardCard({
           </Tag>
         ) : null}
       </div>
-      <p data-testid="card-next-action" className="text-xs text-muted-foreground">
-        Next: {'—'}
-      </p>
+      {card?.nextAction == null ? null : (
+        <p
+          data-testid="card-next-action"
+          {...(Date.parse(card.nextAction.dueAt) < now.getTime() ? { 'data-overdue': 'true' } : {})}
+          className={Date.parse(card.nextAction.dueAt) < now.getTime() ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}
+        >
+          {nextActionLabel(card.nextAction, firm.timeZone)}
+        </p>
+      )}
       {card?.meeting == null ? null : (
         <p data-testid="card-meeting" className="text-xs text-muted-foreground">
           {meetingLabel(card.meeting)}

@@ -12,6 +12,7 @@ import {
   evidencePhrase,
   KNOWN_EVIDENCE_KINDS,
   meetingLabel,
+  nextActionLabel,
   parseMonthlyDollars,
   valueLabel,
 } from '../src/renderer/pipeline/cardText.ts';
@@ -196,7 +197,7 @@ describe('the columns', () => {
   });
 });
 
-const renderCard = (over: { card?: BoardCardData; opportunityId?: string | undefined; onChangeStage?: (c: StageChange) => void; onSetValue?: (c: ValueChange) => void } = {}) => {
+const renderCard = (over: { now?: Date; card?: BoardCardData; opportunityId?: string | undefined; onChangeStage?: (c: StageChange) => void; onSetValue?: (c: ValueChange) => void } = {}) => {
   const pipeline = view();
   return render(
     <ul>
@@ -212,6 +213,7 @@ const renderCard = (over: { card?: BoardCardData; opportunityId?: string | undef
         onChangeStage={over.onChangeStage ?? noop}
         onSetValue={over.onSetValue ?? noop}
         onOpenFirm={noop}
+        {...(over.now === undefined ? {} : { now: over.now })}
       />
     </ul>,
   );
@@ -225,8 +227,27 @@ describe('a card', () => {
     expect(screen.getByTestId('card-value').textContent).toBe('$1,200/mo · agreed');
     expect(screen.getByTestId('card-meeting').textContent).toMatch(/^No-show · Oct 3/u);
     expect(meetingLabel({ meetingId: OPP, state: 'rescheduled', startsAt: '2026-10-03T18:00:00.000Z' })).toMatch(/^Rescheduled/u);
-    // No next-action data on the board read yet: a dash, not a guess.
-    expect(screen.getByTestId('card-next-action').textContent).toBe('Next: —');
+    // Nothing next: nothing shown, not a dash.
+    expect(screen.queryByTestId('card-next-action')).toBeNull();
+  });
+
+  it('shows the next action as "Call back · Tue 2 pm" in the firm\'s zone, muted red when overdue', () => {
+    const next = { kind: 'callback' as const, label: 'Call back', dueAt: '2026-10-06T18:00:00.000Z' };
+    // 18:00Z on Tue 6 Oct is 2 pm in New York and 11 am in Los Angeles.
+    expect(nextActionLabel(next, 'America/New_York')).toBe('Call back \u00b7 Tue 2 pm');
+    expect(nextActionLabel(next, 'America/Los_Angeles')).toBe('Call back \u00b7 Tue 11 am');
+    expect(nextActionLabel({ ...next, dueAt: '2026-10-06T18:30:00.000Z' }, 'America/New_York')).toBe('Call back \u00b7 Tue 2:30 pm');
+    // An unknown zone name falls back to the Mac's rather than throwing.
+    expect(nextActionLabel(next, 'Not/AZone')).toMatch(/^Call back \u00b7 (Mon|Tue) \d/u);
+
+    const withNext = card({ nextAction: next });
+    const { unmount } = renderCard({ card: withNext, now: new Date('2026-10-01T12:00:00.000Z') });
+    expect(screen.getByTestId('card-next-action').className).toContain('text-muted-foreground');
+    expect(screen.getByTestId('card-next-action').getAttribute('data-overdue')).toBeNull();
+    unmount();
+    renderCard({ card: withNext, now: new Date('2026-10-07T12:00:00.000Z') });
+    expect(screen.getByTestId('card-next-action').className).toContain('text-destructive');
+    expect(screen.getByTestId('card-next-action').getAttribute('data-overdue')).toBe('true');
   });
 
   it('shows the evidence line for an automatic move, and the popover holds kind, time and id', async () => {
