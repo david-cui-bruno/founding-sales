@@ -309,6 +309,12 @@ export async function setManualControlMode(
      */
     readonly origin: WritableManualModeOrigin;
     readonly commandId?: string | undefined;
+    /**
+     * Narrow the stop the manual-mode signal owes to the live enrollments of these origin
+     * kinds (`emitCrmDomainEvent`'s `owedOriginKinds`). Only the booked-meeting path
+     * passes it; absent is 7.3's firm-wide stop.
+     */
+    readonly owedOriginKinds?: readonly string[] | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
   // 7.3's manual mode is the confirmed reply's stop, so it takes the send gate before
@@ -377,7 +383,12 @@ export async function setManualControlMode(
     dedupeKey: `${updated.id}:${instantLabel(updated['control_mode_changed_at'])}`,
     reasonCode: 'opportunity_manual',
     commandId: input.commandId,
-    detail: { reason: input.reason.trim(), origin: input.origin },
+    detail: {
+      reason: input.reason.trim(),
+      origin: input.origin,
+      ...(input.owedOriginKinds === undefined ? {} : { owedOriginKinds: [...input.owedOriginKinds] }),
+    },
+    ...(input.owedOriginKinds === undefined ? {} : { owedOriginKinds: input.owedOriginKinds }),
   });
   await recordCrmAuditEvent(context, {
     action: 'opportunity.manual',

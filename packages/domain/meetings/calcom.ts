@@ -344,6 +344,9 @@ async function touch(context: RepositoryContext, meetingId: string, at: string):
   );
 }
 
+/** The enrollment origins a booked demo ends. A follow-up is not one of them. */
+export const BOOKING_STOPS_ORIGIN_KINDS: readonly string[] = Object.freeze(['prospecting', 'cold_legacy']);
+
 /**
  * A booked meeting with a firm: the pipeline move, the stop, the funnel fact.
  */
@@ -363,21 +366,25 @@ async function applyBooked(context: RepositoryContext, meeting: MeetingRow, occu
       meeting.id,
       opportunity.id,
     ]);
-    // The stop: prospecting for this firm ends with a booked demo. The same writers an
-    // engaged call uses, in the same order.
+    // Manual control, origin `engaged_call`. Its signal owes a stop to the firm's live
+    // prospecting and cold_legacy enrollments only (review fold 1, finding 3): the
+    // firm-wide snapshot 7.3 uses for every other cause would owe one to the agreed
+    // follow-up too, and the terminal-stop drain would end it a minute later.
     await setManualControlMode(context, {
       opportunityId: opportunity.id,
       reason: 'meeting booked',
       origin: 'engaged_call',
+      owedOriginKinds: BOOKING_STOPS_ORIGIN_KINDS,
     });
   }
-  // Only prospecting stops. An evidenced follow-up — the overview promised on the call —
+  // Only prospecting stops, now, through the stop writer (the send gate is held since
+  // `applyStageEvidence`). An evidenced follow-up — the overview promised on the call —
   // is compatible with a booked demo and keeps running within its permission.
   const { rows: prospecting } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments
-      WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind IN ('prospecting', 'cold_legacy')
+      WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind = ANY($3::text[])
       ORDER BY id`,
-    [context.scope.workspaceId, firmId],
+    [context.scope.workspaceId, firmId, [...BOOKING_STOPS_ORIGIN_KINDS]],
   );
   if (prospecting.length > 0) {
     const stopped = await stopEnrollments(context, {

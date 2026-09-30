@@ -112,6 +112,14 @@ export interface CrmDomainEventInput {
   readonly reasonCode?: string | undefined;
   readonly commandId?: string | undefined;
   readonly detail?: Readonly<Record<string, unknown>> | undefined;
+  /**
+   * `opportunity.manual_mode` only: owe the stop to the firm's live enrollments of these
+   * origin kinds, not to all of them. A booked meeting (call-to-booking slice W) passes
+   * `prospecting` and `cold_legacy`, because a follow-up the prospect agreed to is
+   * compatible with the demo and must survive the drain. Absent is the firm-wide set,
+   * 7.3's rule for every other manual-mode cause.
+   */
+  readonly owedOriginKinds?: readonly string[] | undefined;
 }
 
 /**
@@ -165,7 +173,8 @@ export async function emitCrmDomainEvent(
                WHEN $2 = 'opportunity.manual_mode' THEN (
                  SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
                    FROM sequence_enrollments n
-                  WHERE n.workspace_id = $1 AND n.firm_id = $3 AND n.ended_at IS NULL)
+                  WHERE n.workspace_id = $1 AND n.firm_id = $3 AND n.ended_at IS NULL
+                    AND ($12::text[] IS NULL OR n.origin_kind = ANY($12::text[])))
                WHEN $2 = 'opportunity.terminal_stop' THEN (
                  SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
                    FROM sequence_enrollments n
@@ -184,6 +193,7 @@ export async function emitCrmDomainEvent(
       actorUserId(context),
       event.commandId ?? null,
       JSON.stringify(event.detail ?? {}),
+      event.owedOriginKinds === undefined ? null : [...event.owedOriginKinds],
     ],
   );
 }
