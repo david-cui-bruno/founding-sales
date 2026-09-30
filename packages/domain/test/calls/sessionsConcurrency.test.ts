@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
-import { consumeCallSession, createCallSession, sweepCallSessionReservations } from '../../calls/sessions.ts';
+import { consumeCallSession, createCallSession, recordCallStatus, sweepCallSessionReservations } from '../../calls/sessions.ts';
 import { sendGateLockName } from '../../policy/sendGate.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -19,8 +19,9 @@ import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
  * `pg_blocking_pids`, so each test proves the wait happened rather than inferring it
  * from an outcome a lucky schedule could also produce.
  *
- * **The attempt limit.** Sessions created before any was placed all pass the creation
- * check; consumption counts again under the firm lock.
+ * **The cadence (slice C1).** Sessions created before any was placed all pass the
+ * creation check; consumption reads the cadence again under the firm lock, where a call
+ * placed a moment ago and still ringing is that day's unanswered attempt.
  */
 describe('call-session consumption under concurrency', () => {
   let database: TestDatabase;
@@ -71,7 +72,7 @@ describe('call-session consumption under concurrency', () => {
     );
   }
 
-  async function create(workspace: 'alpha' | 'beta'): Promise<string> {
+  async function create(workspace: 'alpha' | 'beta', at: string = policy.insideWindow): Promise<string> {
     counter += 1;
     const p = policy[workspace];
     const created = await withTransaction(database.session, async () =>
@@ -92,7 +93,7 @@ describe('call-session consumption under concurrency', () => {
           deviceId: seeded[workspace].salesperson.deviceId,
           commandId: `concurrency-${String(counter)}`,
           configuredCallerIdE164: '+14015550100',
-          at: policy.insideWindow,
+          at,
         },
       ),
     );
@@ -100,13 +101,28 @@ describe('call-session consumption under concurrency', () => {
     return created.value.sessionId;
   }
 
-  const consumeInput = (workspace: 'alpha' | 'beta', sessionId: string) => ({
+  const consumeInput = (workspace: 'alpha' | 'beta', sessionId: string, at: string = policy.insideWindow) => ({
     workspaceId: seeded[workspace].workspaceId,
     sessionId,
     callSid: callSid(),
     identity: `client:${seeded[workspace].salesperson.userId}`,
-    at: policy.insideWindow,
+    at,
   });
+
+  /** The call ends with Twilio's `status`, and it happened at `at` on the firm's clock. */
+  async function endCall(sessionId: string, status: string, at: string): Promise<void> {
+    const { rows } = await database.session.query<{ twilio_call_sid: string }>(
+      'SELECT twilio_call_sid FROM call_sessions WHERE id = $1',
+      [sessionId],
+    );
+    await withTransaction(database.session, async () =>
+      await recordCallStatus(database.session, { callSid: rows[0]?.twilio_call_sid ?? '', providerStatus: status }),
+    );
+    await database.session.query(
+      'UPDATE call_sessions SET consumed_at = $2::timestamptz, expires_at = GREATEST(expires_at, $2::timestamptz) WHERE id = $1',
+      [sessionId, at],
+    );
+  }
 
   const suppressFirm = async (client: pg.Client, eventId: string): Promise<void> => {
     await client.query(
@@ -129,7 +145,7 @@ describe('call-session consumption under concurrency', () => {
     await database.drop();
   });
 
-  it('places only as many of four pre-created sessions as the attempt limit allows', async () => {
+  it('places one of four sessions created together: the others are the same day’s attempt, refused at TwiML', async () => {
     const sessions = [await create('beta'), await create('beta'), await create('beta'), await create('beta')];
     const outcomes: string[] = [];
     for (const sessionId of sessions) {
@@ -138,7 +154,36 @@ describe('call-session consumption under concurrency', () => {
       );
       outcomes.push(consumed.ok ? 'placed' : consumed.reason);
     }
-    expect(outcomes).toEqual(['placed', 'placed', 'placed', 'call_attempt_limit']);
+    expect(outcomes).toEqual(['placed', 'call_attempt_today', 'call_attempt_today', 'call_attempt_today']);
+    // The placed one ends unanswered; the firm's day is spent either way.
+    await endCall(sessions[0] ?? '', 'no-answer', policy.insideWindow);
+  });
+
+  it('refuses at TwiML the attempt past the fourth, when the fourth was placed after this session was created', async () => {
+    // Beta already has Wednesday's unanswered attempt (above). Two more on Thursday and Friday.
+    const THU = '2026-09-17T17:00:00.000Z';
+    const FRI = '2026-09-18T20:00:00.000Z';
+    const MON = '2026-09-21T13:00:00.000Z';
+    for (const at of [THU, FRI]) {
+      const sessionId = await create('beta', at);
+      const consumed = await withTransaction(database.session, async () =>
+        await consumeCallSession(database.session, consumeInput('beta', sessionId, at)),
+      );
+      expect(consumed.ok).toBe(true);
+      await endCall(sessionId, 'no-answer', at);
+    }
+    // Monday: two sessions pass creation as the fourth attempt; one is placed and goes unanswered.
+    const early = await create('beta', MON);
+    const late = await create('beta', MON);
+    const placed = await withTransaction(database.session, async () =>
+      await consumeCallSession(database.session, consumeInput('beta', late, MON)),
+    );
+    expect(placed.ok).toBe(true);
+    await endCall(late, 'no-answer', MON);
+    const refused = await withTransaction(database.session, async () =>
+      await consumeCallSession(database.session, consumeInput('beta', early, MON)),
+    );
+    expect(refused).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
   });
 
   it('holds a suppression writer until the authorization commits, when the consumption took the gate first', async () => {
@@ -165,6 +210,8 @@ describe('call-session consumption under concurrency', () => {
       expect(blocked).toBe(true);
       // The call linearised before the suppression, the ordering the gate allows.
       expect(consumed.ok).toBe(true);
+      // It ended having reached somebody: not an attempt the next test's cadence counts.
+      await endCall(sessionId, 'completed', '2026-09-15T14:00:00.000Z');
     } finally {
       await other.end().catch(() => undefined);
     }

@@ -312,6 +312,8 @@ export async function readCallCadence(
   const count = unanswered.length;
   const parked = count >= CALL_CADENCE.unansweredLimit || parkingHoldId !== null;
   let refusal: CallCadence['refusal'] = parked ? 'call_attempts_exhausted' : null;
+  // A call to this firm is still ringing: one attempt at a time, whatever the clock says.
+  if (refusal === null && unanswered.some(row => row.outcome === null && row.pending)) refusal = 'call_attempt_today';
   if (refusal === null && last !== null) {
     const { rows: firms } = await context.db.query<{ time_zone: string | null }>(
       'SELECT time_zone FROM firms WHERE workspace_id = $1 AND id = $2',

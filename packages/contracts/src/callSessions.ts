@@ -194,8 +194,15 @@ export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalC
   caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
 });
 
+/**
+ * Slice W's attempt limit, which the cadence replaced. No route answers it any more; a
+ * receipt stored before the cadence can still replay it, so it keeps a sentence.
+ */
+export const CALL_ATTEMPT_LIMIT_SENTENCE = 'This firm has had as many calls as Callie allows for now. Try again on another day.';
+
 /** The sentence for a call-session refusal, or null for a code this map does not own. */
 export function callSessionRefusalSentence(code: string): string | null {
+  if (code === 'call_attempt_limit') return CALL_ATTEMPT_LIMIT_SENTENCE;
   return Object.hasOwn(CALL_SESSION_REFUSAL_SENTENCES, code)
     ? (CALL_SESSION_REFUSAL_SENTENCES[code as CallSessionRefusalCode] ?? null)
     : null;
