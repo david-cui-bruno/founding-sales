@@ -6,9 +6,9 @@ import { playRecording, type Playback } from './playRecording.ts';
 
 /**
  * The firm's calls placed from Callie, with their duration and a Play control (slice C1).
- * A NEW component for the firm page; `FirmPage.tsx` belongs to another slice, and the
- * coordinator wires this in there. The audio comes through the API's proxy — the Mac
- * never holds a Twilio URL — and plays through Web Audio (`playRecording.ts`).
+ * Shown on the firm page (`FirmPage.tsx`). The audio comes through the API's proxy — the
+ * Mac never holds a Twilio URL — and plays from a `blob:` URL revoked when it stops
+ * (`playRecording.ts`).
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -27,8 +27,11 @@ const when = (value: string | null): string =>
 
 export interface CallHistoryPorts {
   history(firmId: string): Promise<{ readonly calls: readonly CallSessionDto[] | null }>;
-  recording(sessionId: string): Promise<{ readonly recording: { readonly audioBase64: string } | null; readonly reason: string | null }>;
-  play?: (audioBase64: string) => Promise<Playback>;
+  recording(sessionId: string): Promise<{
+    readonly recording: { readonly audioBase64: string; readonly contentType: string } | null;
+    readonly reason: string | null;
+  }>;
+  play?: (audioBase64: string, contentType: string) => Promise<Playback>;
 }
 
 export function registryHistoryPorts(): CallHistoryPorts | null {
@@ -86,7 +89,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
         setPlaying(null);
         return;
       }
-      const started = await (ports.play ?? playRecording)(answer.recording.audioBase64);
+      const started = await (ports.play ?? playRecording)(answer.recording.audioBase64, answer.recording.contentType);
       playback.current = started;
       await started.ended;
     } catch {

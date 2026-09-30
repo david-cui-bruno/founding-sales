@@ -92,17 +92,38 @@ function fakeSdk() {
   };
 }
 
-function Harness({ ports, calling, actions }: { readonly ports: CallPorts; readonly calling: CallingView; readonly actions?: TodayActions }) {
+function Harness({
+  ports,
+  calling,
+  actions,
+  resume = async () => undefined,
+  onResumed,
+}: {
+  readonly ports: CallPorts;
+  readonly calling: CallingView | null;
+  readonly actions?: TodayActions;
+  readonly resume?: () => Promise<void>;
+  readonly onResumed?: () => void;
+}) {
   const call = useCall(ports);
-  const status: CallingStatus = { view: calling, resuming: false, reload: () => undefined, resume: () => undefined };
+  const status: CallingStatus = { view: calling, resuming: false, reload: () => undefined, resume };
   return (
     <DialPanel
       state={state}
       view={view}
       actions={actions ?? ({ busy: () => false, dial: () => undefined } as unknown as TodayActions)}
-      calling={{ status, call }}
+      calling={{ status, call, ...(onResumed === undefined ? {} : { onResumed }) }}
     />
   );
+}
+
+/** A promise the test settles. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>(settle => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 function portsWith(answer: CallStart, sdk = fakeSdk(), now = { value: 1_000_000 }) {
@@ -220,7 +241,104 @@ describe('the call view', () => {
     expect(screen.getByTestId('dial')).toHaveProperty('disabled', true);
   });
 
-  it('keeps the phone-app handoff exactly when calling is not twilio', () => {
+  it('waits, with Call disabled, while the calling status is unknown, and says so when it could not be read', () => {
+    const dial = vi.fn();
+    const world = portsWith(started());
+    const actions = { busy: () => false, dial } as unknown as TodayActions;
+    render(<Harness ports={world.ports} calling={null} actions={actions} />);
+    expect(screen.getByTestId('calling-status').textContent).toBe('Checking how to place calls…');
+    expect(screen.getByTestId('dial')).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByTestId('dial'));
+    expect(dial).not.toHaveBeenCalled();
+    cleanup();
+
+    // A 503, no answer or a refusal from the status read: unavailable, never the phone app.
+    render(<Harness ports={world.ports} calling={{ provider: 'unavailable', cadence: null }} actions={actions} />);
+    expect(screen.getByTestId('calling-status').textContent).toBe('Calling is unavailable right now.');
+    expect(screen.getByTestId('dial')).toHaveProperty('disabled', true);
+    expect(screen.queryByTestId('dial-limitation')).toBeNull();
+    fireEvent.click(screen.getByTestId('dial'));
+    expect(dial).not.toHaveBeenCalled();
+    expect(world.start).not.toHaveBeenCalled();
+  });
+
+  it('reads the card again after Resume calling, so its Call is enabled by fresh dial advice', async () => {
+    const world = portsWith(started());
+    const onResumed = vi.fn();
+    const resume = vi.fn(async () => await Promise.resolve());
+    render(<Harness ports={world.ports} calling={twilio(null)} resume={resume} onResumed={onResumed} />);
+    fireEvent.click(screen.getByTestId('call-resume'));
+    await waitFor(() => {
+      expect(onResumed).toHaveBeenCalledTimes(1);
+    });
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a call still being set up when the card closes: the Device made afterwards is destroyed, nothing dials', async () => {
+    const world = portsWith(started());
+    const start = deferred<CallStart>();
+    world.ports.start = async () => await start.promise;
+    const destroyed: number[] = [];
+    const connects: unknown[] = [];
+    world.ports.device = async () =>
+      await Promise.resolve({
+        connect: async params => {
+          connects.push(params);
+          return await Promise.resolve(world.sdk.call);
+        },
+        destroy: () => {
+          destroyed.push(1);
+        },
+      });
+    const { unmount } = render(<Harness ports={world.ports} calling={twilio(1)} />);
+    fireEvent.click(screen.getByTestId('dial'));
+    unmount();
+    start.resolve(started());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(connects).toEqual([]);
+    expect(world.active).not.toContain(true);
+  });
+
+  it('disconnects and destroys a Call that connects after the card closed', async () => {
+    const world = portsWith(started());
+    const connected = deferred<VoiceCall>();
+    const destroyed: number[] = [];
+    world.ports.device = async () =>
+      await Promise.resolve({
+        connect: async () => await connected.promise,
+        destroy: () => {
+          destroyed.push(1);
+        },
+      });
+    const { unmount } = render(<Harness ports={world.ports} calling={twilio(1)} />);
+    fireEvent.click(screen.getByTestId('dial'));
+    await waitFor(() => {
+      expect(screen.getByTestId('call-status').textContent).toBe('Ringing…');
+    });
+    unmount();
+    connected.resolve(world.sdk.call);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(world.sdk.call.disconnected).toBe(1);
+    expect(destroyed.length).toBeGreaterThanOrEqual(1);
+    expect(world.active).toEqual([true, false]);
+  });
+
+  it('cancels on Hang up pressed while the call is starting: nothing dials, and the panel is back to Call', async () => {
+    const world = portsWith(started());
+    const start = deferred<CallStart>();
+    world.ports.start = async () => await start.promise;
+    render(<Harness ports={world.ports} calling={twilio(1)} />);
+    fireEvent.click(screen.getByTestId('dial'));
+    expect(screen.getByTestId('call-status').textContent).toBe('Starting the call…');
+    fireEvent.click(screen.getByTestId('call-hang-up'));
+    start.resolve(started());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(world.sdk.connects).toEqual([]);
+    expect(screen.queryByTestId('call-status')).toBeNull();
+    expect(screen.getByTestId('dial')).toHaveProperty('disabled', false);
+  });
+
+  it('keeps the phone-app handoff exactly when the server says calling is off', () => {
     const dial = vi.fn();
     const world = portsWith(started());
     render(
@@ -254,7 +372,7 @@ describe('the firm’s call history', () => {
 
   it('lists calls with their duration and plays a recording through the proxy', async () => {
     const recording = vi.fn(async (_sessionId: string) =>
-      await Promise.resolve({ recording: { audioBase64: 'AAAA' }, reason: null }),
+      await Promise.resolve({ recording: { audioBase64: 'AAAA', contentType: 'audio/mpeg' }, reason: null }),
     );
     const played: string[] = [];
     render(
@@ -266,8 +384,8 @@ describe('the firm’s call history', () => {
               calls: [call(), call({ sessionId: '99999999-9999-4999-8999-999999999999', hasRecording: false, durationSeconds: null })],
             }),
           recording,
-          play: async audio => {
-            played.push(audio);
+          play: async (audio, type) => {
+            played.push(`${type}:${audio}`);
             return await Promise.resolve({ stop: () => undefined, ended: new Promise<void>(() => undefined) });
           },
         }}
@@ -280,9 +398,48 @@ describe('the firm’s call history', () => {
     expect(screen.getAllByTestId('call-history-play')).toHaveLength(1);
     fireEvent.click(screen.getByTestId('call-history-play'));
     await waitFor(() => {
-      expect(played).toEqual(['AAAA']);
+      expect(played).toEqual(['audio/mpeg:AAAA']);
     });
     expect(recording).toHaveBeenCalledWith(SESSION_ID);
     expect(screen.getByTestId('call-history-play').textContent).toBe('Stop');
+  });
+});
+
+describe('playing a recording', () => {
+  it('plays a blob: URL of the bytes and revokes it when stopped', async () => {
+    const created: Blob[] = [];
+    const revoked: string[] = [];
+    const listeners = new Map<string, () => void>();
+    const audio = {
+      play: vi.fn(async () => await Promise.resolve()),
+      pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: (event: string, listener: () => void) => {
+        listeners.set(event, listener);
+      },
+    } as unknown as HTMLAudioElement;
+    const { playRecording } = await import('../src/renderer/calling/playRecording.ts');
+    const playback = await playRecording(btoa('ID3bytes'), 'audio/mpeg', {
+      createObjectURL: blob => {
+        created.push(blob);
+        return 'blob:callie-app://bundle/1';
+      },
+      revokeObjectURL: url => {
+        revoked.push(url);
+      },
+      audio: url => {
+        expect(url).toBe('blob:callie-app://bundle/1');
+        return audio;
+      },
+    });
+    expect(created[0]?.type).toBe('audio/mpeg');
+    expect(created[0]?.size).toBe(8);
+    expect(revoked).toEqual([]);
+    playback.stop();
+    expect(revoked).toEqual(['blob:callie-app://bundle/1']);
+    await playback.ended;
+    // Ending as well does not revoke twice.
+    listeners.get('ended')?.();
+    expect(revoked).toHaveLength(1);
   });
 });

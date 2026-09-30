@@ -10,10 +10,12 @@
       `connect-src` and `media-src` are exactly the entries Twilio documents for it
       (https://twilio.github.io/twilio-voice.js/, "Content Security Policy"). Its
       `script-src` entries are not added: the SDK is in renderer.js, not fetched.
+      `media-src` also admits `blob:`, for a call recording played from bytes the API
+      proxied (the URL is revoked when playback stops); no other directive admits it.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://eventgw.twilio.com wss://voice-js.roaming.twilio.com https://media.twiliocdn.com https://sdk.twilio.com; media-src mediastream: https://media.twiliocdn.com https://sdk.twilio.com; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://eventgw.twilio.com wss://voice-js.roaming.twilio.com https://media.twiliocdn.com https://sdk.twilio.com; media-src mediastream: blob: https://media.twiliocdn.com https://sdk.twilio.com; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Callie</title>

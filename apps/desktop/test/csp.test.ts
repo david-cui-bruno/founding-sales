@@ -35,13 +35,16 @@ describe('the renderer’s CSP', () => {
       'https://media.twiliocdn.com',
       'https://sdk.twilio.com',
     ]);
-    expect(directives.get('media-src')).toEqual(['mediastream:', 'https://media.twiliocdn.com', 'https://sdk.twilio.com']);
+    // Twilio's entries, and `blob:` for a recording played from the proxied bytes.
+    expect(directives.get('media-src')).toEqual(['mediastream:', 'blob:', 'https://media.twiliocdn.com', 'https://sdk.twilio.com']);
   });
 
   it('has no unsafe source, no wildcard, and nothing but these eight directives', () => {
     expect(policy).not.toMatch(/unsafe-/u);
     expect(policy).not.toContain('*');
-    expect(policy).not.toMatch(/\b(data|blob|http):/u);
+    expect(policy).not.toMatch(/\b(data|http):/u);
+    // `blob:` is a media source and nothing else.
+    for (const [name, sources] of directives) if (name !== 'media-src') expect(sources, name).not.toContain('blob:');
     expect([...directives.keys()].sort()).toEqual(
       ['base-uri', 'connect-src', 'default-src', 'form-action', 'img-src', 'media-src', 'script-src', 'style-src'].sort(),
     );

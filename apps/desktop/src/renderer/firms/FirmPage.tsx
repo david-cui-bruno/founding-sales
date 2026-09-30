@@ -13,6 +13,7 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Section, Tag } from '../ui/layout.tsx';
 import { Select } from '../ui/select.tsx';
+import { CallHistory } from '../calling/CallHistory.tsx';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -769,6 +770,8 @@ export function FirmPage({
           <Opportunity page={page} actionsEnabled={actionsEnabled} busy={busy} onTakeOver={onTakeOver} />
           <FollowUpPermissions page={page} />
           <Holds page={page} />
+          {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
+          <CallHistory firmId={page.read.firm.id} />
         </>
       )}
     </>
