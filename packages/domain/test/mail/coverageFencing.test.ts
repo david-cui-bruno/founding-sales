@@ -764,6 +764,122 @@ describe('recovery budgets (fold 1)', () => {
   });
 });
 
+describe('the listing walk (fold 3)', () => {
+  const recoveryBounds = async (w: MailWorld): Promise<{ readonly fromMs: number; readonly toMs: number }> => {
+    const { rows } = await w.database.session.query<{ from_at: Date; to_at: Date }>(
+      'SELECT from_at, to_at FROM mailbox_recoveries WHERE mailbox_id = $1 AND generation = 1',
+      [w.alpha.mailboxId],
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error('no recovery');
+    return { fromMs: row.from_at.getTime(), toMs: row.to_at.getTime() };
+  };
+
+  it.each([
+    ['fromAt', 'after_inclusive'],
+    ['toAt', 'after_inclusive'],
+    ['fromAt', 'strict'],
+    ['toAt', 'strict'],
+  ] as const)('a message exactly at %s is listed when the bounds read %s', async (edge, listBounds) => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const bounds = await recoveryBounds(w);
+    // Both ends are whole seconds here, which is the exact-second case.
+    expect(bounds.fromMs % 1000).toBe(0);
+    expect(bounds.toMs % 1000).toBe(0);
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'edge1',
+        historyId: '999',
+        from: STRANGER,
+        to: 'sales.alpha@example.test',
+        internalDateEpochMilliseconds: edge === 'fromAt' ? bounds.fromMs : bounds.toMs,
+      }),
+    );
+    const gmail = w.clientWith(w.alpha, { listBounds });
+    const report = await asJob(w, async () =>
+      await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(report.outcome).toBe('completed');
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(1);
+  });
+
+  it('two adjacent seconds holding more than a page complete, by paging within that one small query', async () => {
+    const second = Date.parse('2026-09-10T10:00:00Z');
+    world = await createMailWorld({
+      alphaMessages: [0, 1, 2, 3, 4, 5].map(index =>
+        fixtureMessage({
+          id: `dense${String(index)}`,
+          historyId: String(1001 + index),
+          from: STRANGER,
+          to: 'sales.alpha@example.test',
+          internalDateEpochMilliseconds: second + (index < 3 ? 0 : 1000),
+        }),
+      ),
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const log = recordingMailLog();
+    const reports: MailRecoveryReport[] = [];
+    for (let run = 0; run < 6; run += 1) {
+      const report = await asJob(w, async () =>
+        await runMailRecovery(context, { ...w.syncDeps(w.alpha), log, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+      );
+      reports.push(report);
+      if (report.outcome !== 'continued') break;
+    }
+    expect(reports.at(-1)?.outcome).toBe('completed');
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(6);
+    expect(log.lines.some(line => line.event === 'mail.recovery_slice_paginated')).toBe(true);
+  });
+});
+
+describe('cursor_moved is fenced to commit (fold 3)', () => {
+  it('a sync whose CAS finds the cursor moved holds the row at its generation until it commits', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'moved1', historyId: '1013', from: STRANGER, to: w.alpha.address }),
+    );
+    const other = await otherConnection(w);
+    let bump: Promise<unknown> | null = null;
+    let blocked = false;
+    try {
+      const base = w.alpha.gmail;
+      const gmail: GmailClient = {
+        ...base,
+        listHistory: async (...args) => {
+          // Another sync advances the cursor first, so this run's CAS matches nothing.
+          await other.query("UPDATE mailboxes SET history_id = '1500', history_id_updated_at = now() WHERE id = $1", [w.alpha.mailboxId]);
+          return await base.listHistory(...args);
+        },
+      };
+      const report = await asJob(w, async () => {
+        const run = await runMailSync(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId });
+        // A switch now must wait for this job's commit.
+        bump = other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+        for (let attempt = 0; attempt < 50 && !blocked; attempt += 1) {
+          const { rows } = await w.database.session.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM pg_stat_activity
+              WHERE pid <> pg_backend_pid() AND pg_backend_pid() = ANY(pg_blocking_pids(pid))`,
+          );
+          blocked = Number(rows[0]?.count ?? 0) > 0;
+          if (!blocked) await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return run;
+      });
+      expect(report.outcome).toBe('cursor_moved');
+      await bump;
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(blocked).toBe(true);
+  });
+});
+
 describe('RFC Message-ID collisions', () => {
   const deliver = async (w: MailWorld, ...messages: ReturnType<typeof fixtureMessage>[]) => {
     const context = w.systemContext(w.alpha.workspace.workspaceId);

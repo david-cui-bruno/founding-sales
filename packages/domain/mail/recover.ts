@@ -90,16 +90,13 @@ import {
 export const RECOVERY_SLICE_SECONDS = 24 * 60 * 60;
 
 /**
- * One second of a mailbox held more messages than one listing page (500 by default).
- * Gmail does not deliver mail that fast into one mailbox; this is the named refusal
- * rather than a silent truncation.
+ * At most this many `users.messages.list` calls per recovery run (fold 3). Without it the
+ * walk is bounded only by the window's days times the bisection depth. A run that
+ * reaches it continues next run; a window that needs more calls than this in one run
+ * cannot complete (about 50,000 messages at the default page size), which needs a
+ * durable slice checkpoint — a migration — to lift.
  */
-export class RecoverySliceOverflow extends Error {
-  override readonly name = 'RecoverySliceOverflow';
-  constructor(readonly mailboxId: string, readonly atEpochSeconds: number, readonly pageSize: number) {
-    super(`one second of the recovery interval holds more than ${String(pageSize)} messages`);
-  }
-}
+export const RECOVERY_LISTING_CALL_CAP = 400;
 
 /** A recovery run reads at most this many times `maxMessages` ids (fold 1). */
 export const RECOVERY_READ_CAP_FACTOR = 3;
@@ -284,7 +281,10 @@ export async function beginRestoreRecovery(
     readonly floor?: RecoveryFloorSource | undefined;
   },
 ): Promise<RecoveryRow> {
-  const generation = await advanceGeneration(context, input.mailbox.id);
+  // Gate first, then the row, at the generation and address the caller read (fold 3):
+  // the hold below takes the gate, and a row taken before it could deadlock.
+  await lockForFencedStopFact(context, { mailboxId: input.mailbox.id, fence: fenceOf(input.mailbox), write: 'restore recovery' });
+  const generation = await advanceGeneration(context, input.mailbox.id, fenceOf(input.mailbox));
   await setSyncState(context, { mailboxId: input.mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {
     mailboxId: input.mailbox.id,
@@ -436,6 +436,7 @@ export async function runMailRecovery(
   const unrecorded: string[] = [];
   const seen = new Set<string>();
   let slicesListed = 0;
+  let listingCalls = 0;
   let listingEnded = false;
   // Pending slices, earliest last so `pop` takes the earliest.
   const pending: { readonly from: number; readonly to: number }[] = [];
@@ -444,41 +445,84 @@ export async function runMailRecovery(
   }
   pending.reverse();
 
-  for (;;) {
-    const slice = pending.pop();
-    if (slice === undefined) {
-      listingEnded = true;
-      break;
-    }
+  /** The ids of one query, or a refusal the run returns on. */
+  type Listed = { readonly ok: true; readonly ids: readonly string[]; readonly more: boolean } | { readonly ok: false; readonly report: MailRecoveryReport };
+  const listOnce = async (query: { readonly after: number; readonly before: number }, pageToken?: string): Promise<Listed & { readonly next?: string | null }> => {
+    listingCalls += 1;
     const outcome = await deps.gmail.listMessageIds(access.access, {
-      // One second of overlap below every slice but the first, so a message at a
-      // boundary second is in a slice whichever way Gmail treats `after:` and `before:`.
-      afterEpochSeconds: slice.from === afterEpochSeconds ? slice.from : slice.from - 1,
-      beforeEpochSeconds: slice.to,
+      afterEpochSeconds: query.after,
+      beforeEpochSeconds: query.before,
       maxResults: pageSize,
+      ...(pageToken === undefined ? {} : { pageToken }),
     });
     if (!outcome.ok) {
       if (outcome.reason === 'grant_revoked') {
         await holdForRevokedGrant(context, mailbox);
-        return recoveryReport(mailbox.id, input.generation, 'grant_revoked');
+        return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'grant_revoked') };
       }
       await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited', fence });
-      return recoveryReport(mailbox.id, input.generation, 'rate_limited');
+      return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'rate_limited') };
     }
+    return { ok: true, ids: outcome.messageIds, more: outcome.nextPageToken !== null, next: outcome.nextPageToken };
+  };
+
+  for (;;) {
+    if (pending.length === 0) {
+      listingEnded = true;
+      break;
+    }
+    // A bounded walk (fold 3): at most `RECOVERY_LISTING_CALL_CAP` listing calls per run.
+    // A run that reaches it has not listed the whole window, so it cannot complete, and
+    // the next run walks again.
+    if (listingCalls >= RECOVERY_LISTING_CALL_CAP) break;
+    const slice = pending.pop();
+    if (slice === undefined) continue;
+    // Every slice's `after:` is one second below it and the last slice's `before:` one
+    // second above the window (fold 3), so the closed interval [fromAt, toAt] is listed
+    // whichever way Gmail treats an exact-second bound: a boundary second is in two
+    // queries, and a message just outside the window in one, which recording by Gmail
+    // id makes harmless.
+    const query = { after: slice.from - 1, before: slice.to === beforeEpochSeconds ? slice.to + 1 : slice.to };
+    const listed = await listOnce(query);
+    if (!listed.ok) return listed.report;
     slicesListed += 1;
-    if (outcome.nextPageToken !== null) {
-      if (slice.to - slice.from <= 1) {
-        throw new RecoverySliceOverflow(mailbox.id, slice.from, pageSize);
+    let ids: readonly string[] = listed.ids;
+    if (listed.more) {
+      if (slice.to - slice.from > 1) {
+        // More than a page: discard this answer and list the two halves instead.
+        const middle = slice.from + Math.floor((slice.to - slice.from) / 2);
+        pending.push({ from: middle, to: slice.to }, { from: slice.from, to: middle });
+        continue;
       }
-      const middle = slice.from + Math.floor((slice.to - slice.from) / 2);
-      pending.push({ from: middle, to: slice.to }, { from: slice.from, to: middle });
-      continue;
+      // The smallest queryable window — one logical second, queried over two or three
+      // with its padding — still holds more than a page. Only here does the recovery
+      // follow Gmail's page tokens, within this one query. The residual: a message
+      // deleted within these few seconds, during this one listing, could shift another
+      // across a page boundary; the next run lists the slice again from its first page.
+      const all = [...listed.ids];
+      let next = listed.next ?? null;
+      let pages = 1;
+      while (next !== null) {
+        const page = await listOnce(query, next);
+        if (!page.ok) return page.report;
+        all.push(...page.ids);
+        next = page.next ?? null;
+        pages += 1;
+      }
+      (deps.log ?? stdoutMailLog)('warn', 'mail.recovery_slice_paginated', {
+        mailboxId: mailbox.id,
+        generation: input.generation,
+        afterEpochSeconds: query.after,
+        beforeEpochSeconds: query.before,
+        pages,
+      });
+      ids = all;
     }
     const recorded = await recordedProviderMessageIds(context, {
       mailboxId: mailbox.id,
-      providerMessageIds: outcome.messageIds,
+      providerMessageIds: ids,
     });
-    for (const id of outcome.messageIds) {
+    for (const id of ids) {
       if (recorded.has(id) || seen.has(id)) continue;
       seen.add(id);
       unrecorded.push(id);
@@ -636,6 +680,11 @@ async function adoptHandoffCursor(
   const profile = await deps.gmail.getProfile(input.access);
   const capturedAt = new Date().toISOString();
   const fence = fenceOf(input.mailbox);
+  // Gate first, then the row (fold 3): the pipeline later in this run takes the gate for
+  // a matched message, and a mailbox row updated before it would deadlock with a sync
+  // that holds the gate and waits for this row. The price is that this run — a legacy
+  // recovery's first, once — holds the gate through its Gmail listing and reads.
+  await lockForFencedStopFact(context, { mailboxId: input.mailbox.id, fence, write: 'recovery handoff' });
   const cursor = await context.db.query(
     `UPDATE mailboxes
         SET history_id = $5, history_id_updated_at = now(), updated_at = now()

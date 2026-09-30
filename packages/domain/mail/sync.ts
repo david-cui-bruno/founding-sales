@@ -425,6 +425,10 @@ async function beginRecoveryForExpiredCursor(
   // The continuous handoff: the profile's history id is read first, before the
   // recovery fixes the end of its interval, and becomes the cursor completion adopts.
   const profile = await deps.gmail.getProfile(access);
+  // Gate first, then the row (fold 3): this transaction updates the mailbox and then
+  // opens a hold, which takes the gate; taking the row first would deadlock with a job
+  // that holds the gate and waits for this row.
+  await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'expired-cursor recovery' });
   const generation = await advanceGeneration(context, mailbox.id, fenceOf(mailbox));
   await setSyncState(context, { mailboxId: mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {

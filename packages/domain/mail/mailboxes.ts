@@ -413,12 +413,11 @@ export async function advanceCursor(
   );
   const row = rows[0];
   if (row === undefined) {
-    // Which predicate failed decides the answer. Read after the UPDATE, in the same
-    // transaction, so it sees what the UPDATE saw.
-    const now = await readMailbox(context, input.mailboxId);
-    if (now === null || now.generation !== input.fence.generation || now.emailAddress !== input.fence.emailAddress) {
-      throw new StaleMailboxGeneration(input.mailboxId, 'cursor compare-and-set', input.fence);
-    }
+    // Which predicate failed decides the answer, and the answer must hold to commit
+    // (fold 3): an UPDATE that matched nothing locked nothing, so a plain read here could
+    // see generation g and a switch commit g+1 before this job commits its messages. The
+    // fenced lock throws on a mismatch and otherwise holds the row at g to commit.
+    await lockMailboxAtFence(context, { mailboxId: input.mailboxId, fence: input.fence, write: 'cursor compare-and-set' });
     return { advanced: false, reason: 'cursor_moved' };
   }
   return {
