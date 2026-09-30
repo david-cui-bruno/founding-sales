@@ -92,7 +92,7 @@ const hosts = () => {
     today: today as unknown as TodayBridgeHost,
     replies: replies as unknown as ReplyBridgeHost,
     crm: stub<CrmBridgeHost>(
-      ['state', 'openFirm', 'openPipeline', 'openAddFirm', 'openImport', 'addFirm', 'previewImport', 'commitImport', 'saveContact', 'changeStage', 'resolveMerge', 'openOpportunity', 'enroll', 'checkRoute'],
+      ['state', 'openFirm', 'openPipeline', 'openAddFirm', 'openImport', 'addFirm', 'previewImport', 'commitImport', 'saveContact', 'changeStage', 'setValue', 'resolveMerge', 'openOpportunity', 'enroll', 'checkRoute'],
       () => ({}) as never,
     ),
     sequences: stub<SequenceBridgeHost>(

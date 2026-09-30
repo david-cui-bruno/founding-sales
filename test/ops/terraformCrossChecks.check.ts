@@ -90,7 +90,7 @@ function secretsMapOf(resource: string): string | null {
   return /secrets = \[for name in sort\(keys\(local\.([a-z_]+)\)\)/u.exec(block)?.[1] ?? null;
 }
 
-/** The seven entries the secrets module creates: its `local.secret_names` list. */
+/** The nine entries the secrets module creates: its `local.secret_names` list. */
 const DEFAULT_SECRET_NAMES = ((): string[] => {
   const start = SECRETS.indexOf('\n  secret_names = [\n');
   if (start < 0) return [];

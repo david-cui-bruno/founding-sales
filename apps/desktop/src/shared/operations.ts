@@ -219,6 +219,15 @@ const contactEditInput = z.strictObject({
   makePrimary: z.boolean(),
 });
 
+/** The board read: Lost sits behind a filter the window remembers (slice K). */
+const openPipelineInput = z.strictObject({ includeLost: z.boolean().optional() });
+
+const valueChangeInput = z.strictObject({
+  opportunityId: uuid,
+  monthlyCents: z.number().int().min(0).max(100_000_000),
+  kind: z.enum(['estimated', 'agreed']),
+});
+
 const stageChangeInput = z.strictObject({
   opportunityId: uuid,
   toStageKey: z.string().min(1).max(80),
@@ -679,9 +688,9 @@ export const OPERATIONS = {
       { method: 'GET', path: '/pipeline/stages' },
       { method: 'GET', path: '/firms' },
     ],
-    input: nothing,
+    input: openPipelineInput,
     output: crmStateSchema,
-    transform: 'the board, or the two reads that built it before the board endpoint, with the opportunity ids a firm page has already shown',
+    transform: 'the board (Lost only when includeLost is set, and remembered until a read says otherwise), or the two reads that built it before the board endpoint, with the opportunity ids a firm page has already shown',
   },
   'crm.openAddFirm': {
     kind: 'read',
@@ -736,6 +745,17 @@ export const OPERATIONS = {
     input: stageChangeInput,
     output: crmStateSchema,
     transform: 'an absent reason is left out of the body, and the board is read again when the change landed',
+  },
+  'crm.setValue': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/opportunities/value' },
+      { method: 'POST', path: '/pipeline/board' },
+      { method: 'GET', path: '/pipeline/stages' },
+    ],
+    input: valueChangeInput,
+    output: crmStateSchema,
+    transform: 'the amount in whole cents and its kind; the board is read again when the value landed',
   },
   'crm.resolveMerge': {
     kind: 'command',

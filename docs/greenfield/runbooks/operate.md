@@ -195,7 +195,7 @@ gh workflow run greenfield-release.yml --ref main -f mode=schema \
 
 ## Secrets
 
-Seven Secrets Manager entries, created empty by Terraform and listed in `infra/modules/secrets/main.tf`: `google-oidc-client`, `google-gmail-oauth-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key`, `migration-database` and `app-runtime-database`, each under `fss-prod/`. RDS manages an eighth, the master user secret, which nothing in the cluster may read.
+Nine Secrets Manager entries, created empty by Terraform and listed in `infra/modules/secrets/main.tf`: `google-oidc-client`, `google-gmail-oauth-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key`, `twilio-voice`, `calcom`, `migration-database` and `app-runtime-database`, each under `fss-prod/`. The two call-to-booking entries hold `{}` (unconfigured) until calling and bookings are set up, and must hold at least that before the apply that names them in the API task ([calling.md](../calling.md)). RDS manages an eighth, the master user secret, which nothing in the cluster may read.
 
 Terraform never writes, reads or plans a value. A value goes in from stdin, so it reaches neither shell history nor the process table, and then the tasks are made to pick it up:
 

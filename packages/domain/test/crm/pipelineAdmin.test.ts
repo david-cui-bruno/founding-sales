@@ -311,7 +311,7 @@ describe('the pipeline board read', () => {
     const holding = board.columns.filter(column => column.firms.length > 0);
     expect(holding).toHaveLength(1);
     expect(holding[0]?.stage.key).toBe('new');
-    expect(board.cards[crm.alpha.firmId]).toEqual({ value: null, meeting: null, evidence: null, pinned: false });
+    expect(board.cards[crm.alpha.firmId]).toEqual({ value: null, meeting: null, evidence: null, pinned: false, nextAction: null, closeReason: null });
 
     // Absent is true: an installed desktop sends `{}` and builds its stage selector from
     // the columns, so it must still see Lost.
