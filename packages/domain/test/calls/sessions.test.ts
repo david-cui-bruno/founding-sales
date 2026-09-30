@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import { withTransaction } from '../../db/queryable.ts';
+import { withTransaction, type Queryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   consumeCallSession,
@@ -209,6 +209,29 @@ describe('call sessions', () => {
       await recordCallStatus(database.session, { callSid: callSid(), providerStatus: 'completed' }),
     );
     expect(outcome).toEqual({ known: false });
+  });
+
+  it('answers unknown for a final no-answer whose SID the unlocked lookup missed, and writes nothing (C1 fold 3)', async () => {
+    const created = await create('alpha');
+    if (!created.ok) throw new Error(created.reason);
+    const sid = callSid();
+    expect((await consume('alpha', created.value.sessionId, sid)).ok).toBe(true);
+    // The placement commits between the unlocked lookup and the locked read: the lookup
+    // misses. Without the gate and the firm, the session must not be locked or written.
+    const racing: Queryable = {
+      query: async <Row extends object>(text: string, values?: readonly unknown[]) =>
+        text.includes('SELECT workspace_id, firm_id FROM call_sessions')
+          ? { rows: [] as Row[], rowCount: 0 }
+          : await database.session.query<Row>(text, values),
+    } as Queryable;
+    const outcome = await withTransaction(database.session, async () =>
+      await recordCallStatus(racing, { callSid: sid, providerStatus: 'no-answer' }),
+    );
+    expect(outcome).toEqual({ known: false });
+    const { rows } = await database.session.query<{ status: string }>('SELECT status FROM call_sessions WHERE id = $1', [
+      created.value.sessionId,
+    ]);
+    expect(rows[0]?.status).toBe('authorized');
   });
 
   it('refuses an expired session, and the sweep releases its reservation', async () => {
@@ -485,6 +508,21 @@ describe('call sessions', () => {
       // call holds days 7, 14 and 15 only.
       expect((await record(first, 'no_answer', day(15, 3))).ok).toBe(true);
       expect(await openParkingHolds()).toBe(0);
+    });
+
+    it('parks on a fourth placed at a microsecond past the millisecond: the window ends at the database’s instant (C1 fold 3)', async () => {
+      await reset('2026-12-28T12:00:00.000Z');
+      const base = Date.parse('2027-01-04T15:00:00.000Z'); // Monday 10:00 in New York
+      const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
+      await attempt(day(0), { provider: 'no-answer' });
+      await attempt(day(1, 3), { provider: 'no-answer' });
+      await attempt(day(2), { provider: 'no-answer' });
+      expect(await openParkingHolds()).toBe(0);
+      // Through a JS Date this instant is .123, before the call itself: the window would
+      // end before its own latest call and hold three.
+      await attempt(day(3, 3).replace('.000Z', '.123456Z'), { provider: 'no-answer' });
+      expect(await openParkingHolds()).toBe(1);
+      expect((await resume()).ok).toBe(true);
     });
   });
 });

@@ -265,14 +265,32 @@ export interface CallCadenceState extends CallCadence {
  * previous one's time of day. The calling window itself is `authorizeDial`'s. A firm with
  * no zone is not spaced here; `authorizeDial` refuses it (`zone_unresolved`).
  */
+/** A timestamptz expression as ISO 8601 text in UTC, to the microsecond (no JS Date). */
+function isoMicroseconds(expression: string): string {
+  return `to_char((${expression}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/** The database's instant of this statement, not of the transaction's start. */
+async function clockInstant(db: Queryable): Promise<string> {
+  const { rows } = await db.query<{ at: string }>(`SELECT ${isoMicroseconds('clock_timestamp()')} AS at`);
+  const at = rows[0]?.at;
+  if (at === undefined) throw new Error('the database did not answer with its clock');
+  return at;
+}
+
 export async function readCallCadence(
   context: RepositoryContext,
   firmId: string,
   at: string,
+  /**
+   * Count every call placed up to this instant as well, when it is later than `at`.
+   * Consumption passes `clock_timestamp()` read after its locks (review of C1, fold 3).
+   */
+  countThrough?: string,
 ): Promise<CallCadenceState> {
   const workspaceId = context.scope.workspaceId;
-  const { rows: resets } = await context.db.query<{ reset_at: Date | null }>(
-    `SELECT max(t) AS reset_at FROM (
+  const { rows: resets } = await context.db.query<{ reset_at: string | null }>(
+    `SELECT ${isoMicroseconds('max(t)')} AS reset_at FROM (
        SELECT occurred_at AS t FROM call_logs
         WHERE workspace_id = $1 AND firm_id = $2 AND outcome = ANY($3::text[])
        UNION ALL
@@ -290,10 +308,10 @@ export async function readCallCadence(
        LEFT JOIN call_logs l ON l.workspace_id = s.workspace_id AND l.id = s.call_log_id
       WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.consumed_at IS NOT NULL
         AND s.consumed_at > $3::timestamptz - make_interval(days => $4)
-        AND s.consumed_at <= $3::timestamptz
+        AND s.consumed_at <= GREATEST($3::timestamptz, COALESCE($6::timestamptz, $3::timestamptz))
         AND ($5::timestamptz IS NULL OR s.consumed_at > $5::timestamptz)
       ORDER BY s.consumed_at, s.id`,
-    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt],
+    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt, countThrough ?? null],
   );
   const attempts = sessions.filter(row => row.outcome === null || !RESETTING_OUTCOMES.includes(row.outcome));
   const last = attempts.at(-1) ?? null;
@@ -351,14 +369,16 @@ export async function parkIfCadenceSpent(
   // Counted in the 14-day window that ends at the firm's latest placed call: four there
   // is four within one window. A late classification of an old call can complete that
   // window, never a window that never held four (review of C1, fold 2, finding 3).
-  const { rows } = await context.db.query<{ placed: boolean; latest: Date | null }>(
+  // The bound stays text at the database's microseconds (review of C1, fold 3): through
+  // a JS Date it would lose them, and the latest call would fall outside its own window.
+  const { rows } = await context.db.query<{ placed: boolean; latest: string | null }>(
     `SELECT EXISTS (SELECT 1 FROM call_sessions WHERE workspace_id = $1 AND id = $3 AND consumed_at IS NOT NULL) AS placed,
-            (SELECT max(consumed_at) FROM call_sessions WHERE workspace_id = $1 AND firm_id = $2) AS latest`,
+            (SELECT ${isoMicroseconds('max(consumed_at)')} FROM call_sessions WHERE workspace_id = $1 AND firm_id = $2) AS latest`,
     [context.scope.workspaceId, input.firmId, input.sessionId],
   );
   const latest = rows[0]?.latest ?? null;
   if (rows[0]?.placed !== true || latest === null) return null;
-  const cadence = await readCallCadence(context, input.firmId, latest.toISOString());
+  const cadence = await readCallCadence(context, input.firmId, latest);
   if (cadence.unansweredAttempts < CALL_CADENCE.unansweredLimit) return cadence.parkingHoldId;
   return await parkFirmForReview(context, input.firmId, input.sessionId);
 }
@@ -688,7 +708,11 @@ export async function consumeCallSession(
   //    (`readCallCadence`), so the second of two sessions is refused as the same day's
   //    attempt, or as the one past the limit. Nothing is parked from here: recording the
   //    fourth unanswered attempt does that (`parkIfCadenceSpent`).
-  const cadence = await readCallCadence(context, session.firm_id, input.at ?? (await databaseNow(context)));
+  //    The bound is `clock_timestamp()`, read here after the locks (review of C1, fold 3):
+  //    a transaction's `now()` is its start, and a call another consumption placed and
+  //    committed while this one waited on the firm lock is later than that start.
+  const clock = await clockInstant(db);
+  const cadence = await readCallCadence(context, session.firm_id, input.at ?? clock, clock);
   if (cadence.refusal !== null) return refused(cadence.refusal);
 
   const { rows: tickets } = await db.query<{ device_id: string; calling_identity_id: string }>(
@@ -853,10 +877,13 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
       [input.callSid],
     );
     const at = located[0];
-    if (at !== undefined) {
-      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(at.workspace_id)]);
-      await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
-    }
+    // Not found unlocked is not found (review of C1, fold 3): a session the locked read
+    // below could still find would then be held before the gate. The SID is set when the
+    // call is placed, so only a callback racing its own placement lands here, and it is
+    // answered as any unknown SID is.
+    if (at === undefined) return { known: false };
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(at.workspace_id)]);
+    await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
   }
   const session = await sessionBySid(db, input.callSid);
   if (session === null || status === null) return { known: false };

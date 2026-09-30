@@ -329,6 +329,38 @@ describe('call-session consumption under concurrency', () => {
     }
   });
 
+  it('counts a call another consumption placed after this transaction began, while it waited on the firm (C1 fold 3)', async () => {
+    // Alpha's calls so far are before 16 September; this pair is on a later Wednesday.
+    const WED = '2026-09-30T14:00:00.000Z';
+    const [first, second] = [await create('alpha', WED), await create('alpha', WED)];
+    const a = await otherConnection();
+    const b = await otherConnection();
+    try {
+      const bPid = await pidOf(async sql => await b.query<{ pid: number }>(sql));
+      // B consumes and holds the firm row; its call is dated a moment after the decision.
+      await b.query('BEGIN');
+      const placed = await consumeCallSession(b, consumeInput('alpha', first ?? '', WED));
+      expect(placed.ok).toBe(true);
+      await b.query("UPDATE call_sessions SET consumed_at = $2::timestamptz + INTERVAL '1 second' WHERE id = $1", [first, WED]);
+      // A's transaction begins before B commits: its `now()` is earlier than B's call.
+      await a.query('BEGIN');
+      await a.query('SELECT now()');
+      const consuming = consumeCallSession(a, consumeInput('alpha', second ?? '', WED));
+      expect(await waitsOn(b as never, bPid)).toBe(true);
+      await b.query('COMMIT');
+      const consumed = await consuming;
+      await a.query(consumed.ok ? 'COMMIT' : 'ROLLBACK');
+      // Both calls are counted: B's is A's same-day attempt.
+      expect(consumed).toEqual({ ok: false, reason: 'call_attempt_today' });
+      // Consumption counts to the present: the call moves weeks back, out of the next
+      // test's window.
+      await database.session.query("UPDATE call_sessions SET consumed_at = '2026-08-03T14:00:00Z' WHERE id = $1", [first]);
+    } finally {
+      await a.end().catch(() => undefined);
+      await b.end().catch(() => undefined);
+    }
+  });
+
   it('refuses at TwiML when a suppression writer holding the gate commits during the consumption', async () => {
     const sessionId = await create('alpha');
     const other = await otherConnection();
