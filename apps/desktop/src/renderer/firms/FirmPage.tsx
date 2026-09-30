@@ -1,4 +1,4 @@
-import type { ContactDto, FirmPageResponse, HeldOutgoingMessage, RouteDto } from '@fss/contracts';
+import { reasonSentence, type ContactDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
 import { useState, type JSX } from 'react';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
 import type {
@@ -591,7 +591,7 @@ function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility
           {page.holds.map(hold => (
             <Row key={`${hold.reasonCode}:${hold.startedAt}`} data-testid="firm-hold">
               <RowMain
-                line={<span data-testid="hold-reason">{inWords(hold.reasonCode)}</span>}
+                line={<span data-testid="hold-reason">{reasonSentence(hold.reasonCode)}</span>}
                 detail={
                   <>
                     <span data-testid="hold-blocks">{hold.blockedActionKinds.map(inWords).join(', ')}</span>

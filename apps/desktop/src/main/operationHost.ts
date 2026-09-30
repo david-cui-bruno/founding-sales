@@ -157,6 +157,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'mailbox.state': async () => await deps.mailbox.state(),
     'mailbox.refresh': async () => await deps.mailbox.refresh(),
     'mailbox.connect': async () => await deps.mailbox.connect(),
+    'mailbox.switch': async (input: { readonly switchTo: string }) => await deps.mailbox.switch(input),
 
     // Settings › Diagnostics. Straight through the authenticated client: there is no
     // state to keep and nothing to transform, and the recovery forms read the answer.

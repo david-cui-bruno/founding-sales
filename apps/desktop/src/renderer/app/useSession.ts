@@ -53,6 +53,7 @@ export interface Session {
   /** Read the session again — after a command, so the banners follow what it found. */
   reread(): Promise<void>;
   connectMailbox(): Promise<void>;
+  switchMailbox(switchTo: string): Promise<void>;
   refreshMailbox(): Promise<void>;
   restartToUpdate(): void;
   checkForUpdate(): Promise<UpdateStatus | null>;
@@ -108,6 +109,21 @@ export function useSession(): Session {
       setMailboxWaiting(false);
     }
   }, [guard]);
+
+  const switchMailbox = useCallback(
+    async (switchTo: string): Promise<void> => {
+      const api = operations();
+      if (api === undefined) return;
+      setMailboxWaiting(true);
+      const keep = guard.keep(setMailbox);
+      try {
+        keep(await api.command('mailbox.switch', { switchTo }));
+      } finally {
+        setMailboxWaiting(false);
+      }
+    },
+    [guard],
+  );
 
   const loadUpdate = useCallback(async (): Promise<void> => {
     const bridge = updateBridge();
@@ -215,6 +231,7 @@ export function useSession(): Session {
       revokeDevice,
       reread,
       connectMailbox,
+      switchMailbox,
       refreshMailbox,
       restartToUpdate,
       checkForUpdate,
@@ -234,6 +251,7 @@ export function useSession(): Session {
       revokeDevice,
       reread,
       connectMailbox,
+      switchMailbox,
       refreshMailbox,
       restartToUpdate,
       checkForUpdate,

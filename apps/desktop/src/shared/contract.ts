@@ -306,10 +306,24 @@ export const mailboxStateSchema = z.strictObject({
           emailAddress: z.string().min(3).max(320),
           status: z.enum(MAILBOX_STATUSES),
           syncState: z.enum(MAILBOX_SYNC_STATES),
+          /** When the last sync finished, or null. */
+          lastSyncedAt: z.string().max(40).nullable().optional(),
+          /** "Reading the last 30 days: N messages so far"; null when there is no baseline. */
+          baseline: z
+            .strictObject({
+              messagesSeen: z.number().int().nonnegative(),
+              completed: z.boolean(),
+            })
+            .nullable()
+            .optional(),
         })
         .nullable(),
+      /** The latest refused grant after the last successful connect or switch, by its stable code. */
+      lastGrantRefusal: z.strictObject({ reason: z.string().min(1).max(80), at: z.string().max(40) }).nullable().optional(),
     })
     .nullable(),
+  /** The address a switch is waiting for while the consent screen is open, or null. */
+  switchingTo: z.string().max(320).nullable().optional(),
   /** True while the consent screen is open and the main process is waiting for the grant. */
   connecting: z.boolean(),
   /** Whether a connection may be started now: signed in, online, a supported version, not already waiting. */
@@ -333,6 +347,11 @@ export interface MailboxBridge {
   refresh(): Promise<MailboxState>;
   /** Starts the grant, opens Google's consent screen in the system browser, and waits for it. */
   connect(): Promise<MailboxState>;
+  /**
+   * Switches the connected mailbox to another address: the same grant, with `switchTo`,
+   * and a wait that is tied to this attempt (A3).
+   */
+  switch(input: { readonly switchTo: string }): Promise<MailboxState>;
 }
 
 declare global {

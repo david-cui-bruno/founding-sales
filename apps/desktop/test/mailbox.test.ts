@@ -142,7 +142,12 @@ describe('the Mailbox bridge: connect', () => {
     expect(connectMailboxCommandSchema.safeParse(mac.calls[0]?.body).success).toBe(true);
 
     expect(answer).toEqual({
-      status: { connected: true, mailbox: { emailAddress: ADDRESS, status: 'connected', syncState: 'baseline_pending' } },
+      status: {
+        connected: true,
+        mailbox: { emailAddress: ADDRESS, status: 'connected', syncState: 'baseline_pending', lastSyncedAt: null, baseline: null },
+        lastGrantRefusal: null,
+      },
+      switchingTo: null,
       connecting: false,
       mayConnect: true,
       notice: null,
@@ -309,7 +314,14 @@ describe('the Mailbox bridge: status', () => {
     expect(mac.calls).toEqual([{ method: 'GET', path: '/gmail/status', body: null }]);
     expect(answer.status).toEqual({
       connected: true,
-      mailbox: { emailAddress: ADDRESS, status: 'connected', syncState: 'ready' },
+      mailbox: {
+        emailAddress: ADDRESS,
+        status: 'connected',
+        syncState: 'ready',
+        lastSyncedAt: '2026-09-24T15:00:00.000Z',
+        baseline: null,
+      },
+      lastGrantRefusal: null,
     });
   });
 
@@ -354,7 +366,7 @@ describe('the Mailbox bridge: status', () => {
     expect(first.status).toBeNull();
     const second = await mac.bridge.state();
     expect(second.notice).toBeNull();
-    expect(second.status).toEqual({ connected: false, mailbox: null });
+    expect(second.status).toEqual({ connected: false, mailbox: null, lastGrantRefusal: null });
   });
 
   it('turns an answer that is not the contract into a notice, not a guess', async () => {
@@ -369,6 +381,7 @@ describe('the Mailbox bridge: status', () => {
       'callie:mailbox:state',
       'callie:mailbox:refresh',
       'callie:mailbox:connect',
+      'callie:mailbox:switch',
     ]);
     expect(Object.values(MAILBOX_API_PATHS)).toEqual(['/gmail/status', '/gmail/connect']);
   });
@@ -441,6 +454,176 @@ describe('the Mailbox row', () => {
       'Gmail was not connected in time. Press Connect Gmail to start again.',
     );
     expect(mailboxNoticeSentence('device_revoked')).toBe('This Mac was signed out remotely. Sign in with Google again.');
-    expect(mailboxNoticeSentence('http_502')).toBe('http_502');
+    // An unknown code is a generic sentence that still names it, never the raw code alone.
+    expect(mailboxNoticeSentence('http_502')).toContain('(http_502)');
+    expect(mailboxNoticeSentence('http_502')).not.toBe('http_502');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Switch mailbox (call-to-booking A3)
+// ---------------------------------------------------------------------------
+
+const NEW_ADDRESS = 'david@example.test';
+const ATTEMPT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const EARLIER_ATTEMPT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+/** `/gmail/status` with `address` connected, and optionally a refused grant. */
+function statusOf(
+  address: string,
+  options: { refusal?: { reason: string; attemptId: string | null }; syncState?: string; baseline?: object } = {},
+): HttpAnswer {
+  return {
+    status: 200,
+    body: {
+      connected: true,
+      mailbox: {
+        id: MAILBOX_ID,
+        emailAddress: address,
+        status: 'connected',
+        syncState: options.syncState ?? 'ready',
+        coverageWatermarkAt: null,
+        lastSyncedAt: null,
+        lastSyncError: null,
+        ...(options.baseline === undefined ? {} : { baseline: options.baseline }),
+      },
+      ...(options.refusal === undefined ? {} : { lastGrantRefusal: { ...options.refusal, at: '2026-09-30T12:00:00.000Z' } }),
+    },
+  };
+}
+
+const switching = (expiresInMs = 600_000): HttpAnswer =>
+  accepted({
+    authorizationUrl: consentUrl,
+    expiresAt: new Date(START + expiresInMs).toISOString(),
+    attemptId: ATTEMPT,
+  });
+
+/** A bridge that has read the old mailbox once, as the Settings section has before it offers Switch. */
+async function readyWorld(answers: Record<string, readonly Scripted[]>) {
+  // The first status answer is the read that put the old mailbox on the row.
+  const first = answers[MAILBOX_API_PATHS.status];
+  const mac = world(first === undefined || first.length < 2 ? answers : { ...answers, [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS), ...first] });
+  await mac.bridge.state();
+  mac.calls.length = 0;
+  return mac;
+}
+
+describe('the Mailbox bridge: switch', () => {
+  it('sends switchTo with the envelope the API parses, opens the consent URL, and succeeds only on the expected address', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [switching()],
+      // The old mailbox is connected the whole time: two polls see it, the third sees the new one.
+      [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS), statusOf(ADDRESS), statusOf(NEW_ADDRESS, { syncState: 'baseline_pending' })],
+    });
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(mac.calls[0]?.body).toMatchObject({ switchTo: NEW_ADDRESS });
+    expect(connectMailboxCommandSchema.safeParse(mac.calls[0]?.body).success).toBe(true);
+    expect(mac.opened).toEqual([consentUrl]);
+    expect(answer.notice).toBeNull();
+    expect(answer.connecting).toBe(false);
+    expect(answer.switchingTo).toBeNull();
+    expect(answer.status?.mailbox?.emailAddress).toBe(NEW_ADDRESS);
+  });
+
+  it('does not treat "connected" as success while the old mailbox is still the connected one', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [switching()],
+      [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)],
+    });
+    // The clock moves two seconds per poll; the grant lives ten minutes.
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    expect(mac.paths().filter(path => path === '/gmail/status').length).toBeGreaterThan(100);
+    expect(answer.notice).toBe('mailbox_switch_timed_out');
+    expect(answer.status?.mailbox?.emailAddress).toBe(ADDRESS);
+    expect(buildMailboxView(answer).notice).toBe(`Google didn’t confirm the switch. Your mailbox is still ${ADDRESS}.`);
+  });
+
+  it('times out at the attempt’s expiry when consent is cancelled', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [switching(6_000)],
+      [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)],
+    });
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(answer.notice).toBe('mailbox_switch_timed_out');
+    expect(answer.connecting).toBe(false);
+  });
+
+  it('shows the sentence of a refusal that carries this attempt’s id (the wrong account)', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [switching()],
+      [MAILBOX_API_PATHS.status]: [
+        statusOf(ADDRESS),
+        statusOf(ADDRESS, { refusal: { reason: 'mailbox_switch_address_mismatch', attemptId: ATTEMPT } }),
+      ],
+    });
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    expect(answer.notice).toBe('mailbox_switch_address_mismatch');
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status']);
+    const text = buildMailboxView(answer).notice ?? '';
+    expect(text).toContain('different Google account');
+    expect(text).not.toContain('mailbox_switch');
+  });
+
+  it('ignores a refusal from an earlier attempt', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [switching()],
+      [MAILBOX_API_PATHS.status]: [
+        statusOf(ADDRESS, { refusal: { reason: 'grant_refused', attemptId: EARLIER_ATTEMPT } }),
+        statusOf(ADDRESS, { refusal: { reason: 'grant_refused', attemptId: null } }),
+        statusOf(NEW_ADDRESS, { refusal: { reason: 'grant_refused', attemptId: EARLIER_ATTEMPT } }),
+      ],
+    });
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    // Two polls with the old refusal passed over, then the expected address wins.
+    expect(mac.paths()).toEqual(['/gmail/connect', '/gmail/status', '/gmail/status', '/gmail/status']);
+    expect(answer.notice).toBeNull();
+    expect(answer.status?.mailbox?.emailAddress).toBe(NEW_ADDRESS);
+  });
+
+  it('shows a refusal from the command itself as its sentence, and opens nothing', async () => {
+    const mac = await readyWorld({
+      [MAILBOX_API_PATHS.connect]: [{ status: 409, body: { status: 'refused', reason: 'mailbox_switch_pending_sends' } }],
+      [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)],
+    });
+    const answer = await mac.bridge.switch({ switchTo: NEW_ADDRESS });
+    expect(mac.opened).toEqual([]);
+    expect(answer.notice).toBe('mailbox_switch_pending_sends');
+    expect(buildMailboxView(answer).notice).toBe('A message is still being sent from the current mailbox. Try again in a few minutes.');
+  });
+
+  it('refuses the current address, a non-address, and a switch with nothing connected, without asking the API', async () => {
+    const same = await readyWorld({ [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)] });
+    expect((await same.bridge.switch({ switchTo: ADDRESS.toUpperCase() })).notice).toBe('mailbox_switch_same_address');
+    expect((await same.bridge.switch({ switchTo: 'not an address' })).notice).toBe('invalid_input');
+    expect(same.paths()).toEqual([]);
+
+    const none = await readyWorld({ [MAILBOX_API_PATHS.status]: [status(false)] });
+    expect((await none.bridge.switch({ switchTo: NEW_ADDRESS })).notice).toBe('mailbox_not_connected');
+    expect(none.paths()).toEqual([]);
+  });
+
+  it('leaves plain Connect refusing while a mailbox is connected', async () => {
+    const mac = await readyWorld({ [MAILBOX_API_PATHS.status]: [statusOf(ADDRESS)] });
+    expect((await mac.bridge.connect()).notice).toBe('mailbox_already_connected');
+    expect(mac.paths()).toEqual([]);
+  });
+
+  it('passes baseline progress and the last refusal to the row, and nothing else', async () => {
+    const mac = world({
+      [MAILBOX_API_PATHS.status]: [
+        statusOf(NEW_ADDRESS, {
+          syncState: 'baseline_pending',
+          baseline: { pagesCompleted: 3, messagesSeen: 140, completedAt: null },
+          refusal: { reason: 'grant_refused', attemptId: ATTEMPT },
+        }),
+      ],
+    });
+    const answer = await mac.bridge.state();
+    expect(answer.status?.mailbox?.baseline).toEqual({ messagesSeen: 140, completed: false });
+    expect(answer.status?.lastGrantRefusal).toEqual({ reason: 'grant_refused', at: '2026-09-30T12:00:00.000Z' });
+    expect(JSON.stringify(answer)).not.toContain(ATTEMPT);
   });
 });

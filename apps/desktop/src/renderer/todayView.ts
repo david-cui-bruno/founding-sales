@@ -1,4 +1,4 @@
-import { callbackInstant, localParts } from '@fss/contracts';
+import { callbackInstant, localParts, reasonSentence } from '@fss/contracts';
 import type { DialAdviceView, TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
 import { OFFLINE_SENTENCE } from './readError.ts';
 import { agreementSentence } from './today/followUpView.ts';
@@ -96,7 +96,7 @@ const DIAL_REASONS: Readonly<Record<string, string>> = Object.freeze({
 
 /** The one place a dial reason becomes English. Unknown codes are shown as-is. */
 function dialReasonSentence(code: string): string {
-  return DIAL_REASONS[code] ?? code;
+  return DIAL_REASONS[code] ?? reasonSentence(code);
 }
 
 /** One number on the expanded card: what it is, and whether the server will advise it. */
@@ -173,7 +173,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
 
 /** The one place a refusal code becomes English. Unknown codes are shown as-is. */
 export function noticeSentence(code: string): string {
-  return NOTICES[code] ?? code;
+  return NOTICES[code] ?? reasonSentence(code);
 }
 
 export interface CardView {
