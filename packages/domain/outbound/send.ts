@@ -357,10 +357,22 @@ async function recheckAndClaim(
     // down: send gate (shared) → fence → enrollment → permission → firm.
     const permission = await lockPermissionForClaim(context, fence.id);
 
+    const gate = await decideSend(context, fence, deps);
+    if (!gate.ok) {
+      const held = await holdFence(context, {
+        outboundMessageId: fence.id,
+        reason: gate.reason,
+        ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+      });
+      await context.db.query('COMMIT');
+      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
+    }
+    const plan = gate.value;
     // An agreed-sequence e-mail to somebody the salesperson wrote to by hand within the
     // quiet window waits (send-path v2, S1 review P1-4). Asked here, under the gate, so a
     // direct send whose effect committed after this fence was prepared still stops it;
-    // `not_ready` rolls back and leaves the fence prepared for later.
+    // `not_ready` rolls back and leaves the fence prepared for later. After the recheck,
+    // so its refusals — S4's cold-mailbox rule among them — hold visibly first.
     if (
       permission !== null &&
       permission.scope === 'agreed_sequence' &&
@@ -387,17 +399,6 @@ async function recheckAndClaim(
       }
     }
 
-    const gate = await decideSend(context, fence, deps);
-    if (!gate.ok) {
-      const held = await holdFence(context, {
-        outboundMessageId: fence.id,
-        reason: gate.reason,
-        ...(deps.actor === undefined ? {} : { actor: deps.actor }),
-      });
-      await context.db.query('COMMIT');
-      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
-    }
-    const plan = gate.value;
     if (plan.mailbox.id !== precheck.mailbox.id) {
       // A `prepared` fence's envelope is still mutable, its mailbox included, and the
       // token in hand belongs to the mailbox the precheck named. Sending another
