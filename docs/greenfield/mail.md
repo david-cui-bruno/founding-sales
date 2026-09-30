@@ -576,6 +576,111 @@ processing; FSS has no queue of unprocessed opt-outs to put a deadline on. What 
 one does not have is a *record* that the obligation was met per mailbox, which is what
 the later guard lane is for.
 
+## Switching the mailbox
+
+Call-to-booking slice A2 (30 September 2026): the owner's mailbox moves from one Google
+account of the hosted domain to another — `callie@usecallie.com` to
+`david@usecallie.com` — **in place**. The `mailboxes` row keeps its id, so everything
+that references it carries over. Automated sending stays paused; nothing here touches
+the pause.
+
+### The contract
+
+* **Intent, at `POST /gmail/connect`.** `switchTo` names the new account. It is refused
+  before any consent screen with `mailbox_switch_same_address` (the mailbox's own
+  address), `mailbox_switch_wrong_domain` (not the hosted domain) or
+  `mailbox_switch_pending_sends` (any fence of the mailbox in `prepared`, `held`,
+  `dispatching` or `reconciling`). Otherwise the lowercased address goes into the signed
+  grant state (state version `g2`, with a fresh `attemptId`) and into the consent URL as
+  `login_hint`. Every connect gets an `attemptId`, returned in the result; only a switch
+  gets a hint. An owner with no mailbox has nothing to switch: that is a plain connect.
+* **The callback refuses a silent switch.** A re-consent whose chosen account is not the
+  mailbox's address is `mailbox_switch_not_requested` unless the state carries the
+  intent, and `mailbox_switch_address_mismatch` when the intent names another account.
+  The older refusals (hosted domain, address taken, scopes, no refresh token) are
+  unchanged. Every callback refusal writes `mailbox.grant_refused { reason, attemptId }`
+  on the user and changes nothing else; `/gmail/status` reports the latest one after the
+  latest `mailbox.connected` or `mailbox.switched` as `lastGrantRefusal`, which is how
+  the Mac learns what the browser page deliberately does not say. An expired state is
+  audited the same way (`authorization_request_unknown`).
+* **One commit.** Every provider call comes first, outside any lock: the code exchange,
+  the profile read (address and `historyId`) and, for a switch, a best-effort
+  `users.stop` on the old account's watch with the old refresh token
+  (`oldWatchStopped`, recorded, never blocking). Then one transaction on the request's
+  session, in this lock order: the exclusive send gate, the mailbox row, the fence
+  re-check (a fence prepared since the connect refuses `mailbox_switch_pending_sends`
+  and rolls back). A switch then resets the account's history state
+  (`resetAccountState`: cursor, watermark, sync error, last sync) and cancels the current
+  watch row — `listWatchesDue` treats the mailbox as due at once, so the new account's
+  watch registers on the next scheduler pass — before the revive (address, account id,
+  generation + 1, `baseline_pending`), the token replacement, the `mailbox_accounts`
+  rows, the coverage hold, the new generation's baseline from the profile's `historyId`,
+  the release of every `mailbox_disconnected` hold of the mailbox (nothing released it
+  before A2, on reconnect either), and `mailbox.switched { from, to, attemptId,
+  oldWatchStopped }`. A same-address re-consent is what it was, plus the
+  `mailbox_disconnected` release.
+* **`mailbox_accounts` (migration 0027).** One row per account interval, at most one
+  open. No rows means the mailbox has only ever had its current address. A switch closes
+  the open row, or writes the old account's closed interval from the mailbox's creation
+  (the old account held it since generation 1), and opens the new account's.
+
+### What carries over, and what is bounded
+
+The conversation history, suppression, follow-up permission evidence, fences, the
+send-ramp history and the links to old messages all carry over, because all of them
+reference the mailbox id or nothing mailbox-specific at all.
+
+Two things are bounded by the account, both by Gmail internal date and both only on the
+outgoing side (`mail/effects.ts`, `sequences/followUpPermissions.ts`):
+
+* an outgoing message sent before the current account's `active_from` is never a direct
+  send — the new account's own Sent folder from before the switch is that account's
+  history, not the salesperson writing through Callie's mailbox;
+* a message consumes a permission only if sent at or after the permission's creation,
+  and ends an enrollment only if sent at or after the enrollment's creation (so a
+  delayed import of an old message does not spend a newer grant).
+
+Inbound processing — replies, opt-outs, suppression — is not bounded: an opt-out the new
+account received before the switch still suppresses. The open-in-Gmail link
+(`retention/attachments.ts`) names the account the message was **recorded** under
+(`mail_messages.recorded_at` against the intervals), so a message recorded while the row
+was `callie@` still opens in `callie@`'s Gmail.
+
+### The operator's steps
+
+1. In `callie@usecallie.com`'s Gmail settings, forward all mail to `david@usecallie.com`
+   and **keep a copy** in the old inbox. A prospect who replies to an old thread writes
+   to `callie@`; the forwarded copy is what reaches the synced account.
+2. Run `fss admin mailbox switch-preflight` on the operations task. It is one READ ONLY
+   transaction: the mailbox, message counts, fences by state, live permissions and
+   enrollments, open holds, watch rows, mail jobs, send-day totals, the account
+   intervals, and `wouldRefuse`. Wait while `wouldRefuse` lists
+   `non_terminal_fences` (settle them first) or
+   `old_account_not_synced_within_2_minutes` (the old account's last reads must be in).
+3. David starts the switch from the Mac, naming `david@usecallie.com`, and consents as
+   that account. The Mac reads the outcome from `/gmail/status`: the new address and
+   `baseline_pending`, then `mailbox.baseline` progress; or `lastGrantRefusal` with the
+   attempt's id.
+4. `fss admin send-path preview` shows, for every prepared or held fence and due e-mail
+   step, each send condition on its own and the sender it would leave from — the new
+   address once the switch has committed.
+
+### Residuals
+
+* The old account's refresh token is replaced, not revoked: the `callie@` grant stays
+  listed in that Google account's third-party access until someone removes it there.
+* The best-effort `users.stop` runs before the transaction. If the transaction then
+  refuses (a fence prepared in between), the old watch has been stopped while the row
+  still names the old account; its watch row is untouched and the daily renewal
+  registers it again, and the once-a-minute check covers the gap.
+* A reply that reaches `callie@` after the switch is seen only through the forwarded
+  copy, as an incoming message of the new account. Forwarding off means such a reply —
+  including an opt-out — is not read.
+* A switch waits for every non-terminal fence, `held` ones included. While the domain
+  switch is off a held fence does not settle by itself; the preflight names them.
+* The ramp is the mailbox's, so the new account inherits the old account's sending days.
+  Nothing is sent while the pause stands; the choice is recorded here for when it lifts.
+
 ## What is deliberately not here
 
 * **Sending.** G7-2 added it: the at-most-once fence and the reputation ramp, in
