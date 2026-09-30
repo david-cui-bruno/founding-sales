@@ -93,6 +93,13 @@ export const SEQUENCE_REFUSAL_CODES = [
    * sent (step k + 1 placed in the window); refused before the old run is touched.
    */
   'permission_expires_before_step',
+  /**
+   * A migration offered a fresh permission onto a remainder that begins with a call task:
+   * record a new agreement from the call card instead (S3 enrols call-first agreed
+   * sequences there). Fail closed, because the e-mail's timing would depend on when Today
+   * lists the call.
+   */
+  'remainder_starts_with_call',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

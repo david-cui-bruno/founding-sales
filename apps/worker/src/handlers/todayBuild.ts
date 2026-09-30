@@ -4,7 +4,7 @@ import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import { buildTodaySnapshot, type TodaySource } from '@fss/domain/today/build.ts';
-import { TODAY_ALGORITHM_VERSION, TODAY_BUILD_LOCAL_MINUTE } from '@fss/domain/today/types.ts';
+import { TODAY_ALGORITHM_VERSION } from '@fss/domain/today/types.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**
@@ -26,8 +26,8 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * proves it against a real theft rather than by calling the handler twice.
  */
 
-/** 05:00 in the workspace business zone (8.2), as minutes past local midnight. Shared with the domain. */
-export { TODAY_BUILD_LOCAL_MINUTE };
+/** 05:00 in the workspace business zone (8.2), as minutes past local midnight. */
+export const TODAY_BUILD_LOCAL_MINUTE = 5 * 60;
 
 export function todayBuildJobKey(workspaceSlug: string, businessDate: string): string {
   return jobIdempotencyKey.todayList(workspaceSlug, businessDate, TODAY_ALGORITHM_VERSION);

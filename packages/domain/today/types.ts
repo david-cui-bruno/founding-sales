@@ -41,15 +41,6 @@ export type TodaySourceKind = (typeof TODAY_SOURCE_KINDS)[number];
  */
 export const TODAY_ALGORITHM_VERSION = 'today.2';
 
-/**
- * 05:00 in the workspace business zone (8.2), as minutes past local midnight: the one
- * moment each business date's list is built (`apps/worker/src/handlers/todayBuild.ts`,
- * which materializes one build per date from the first scheduler pass at or after it).
- * Here rather than in the worker so the domain can ask when a task first reaches the
- * list — `migrateEnrollment.ts` projects a call's earliest completion from it.
- */
-export const TODAY_BUILD_LOCAL_MINUTE = 5 * 60;
-
 export const TODAY_REFUSAL_CODES = [
   'invalid_input',
   'not_assigned',

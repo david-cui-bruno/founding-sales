@@ -3,16 +3,11 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
-import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
-import { successorDue } from './successor.ts';
-import { addCalendarDays, localDate, localInstant } from '../src/rules/localClock.ts';
-import { TODAY_BUILD_LOCAL_MINUTE } from '../today/types.ts';
-import { workspaceBusinessTimeZone } from '../today/snapshots.ts';
 import { holidayCalendarByVersion } from './calendars.ts';
 import { completeEnrollment, FollowUpReuseError, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { bindFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
 import { loadEnrollmentForUpdate, readSequenceVersion } from './rows.ts';
-import { acceptSequence, refuseSequence, type SequenceResult, type SequenceStepRow } from './types.ts';
+import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
 
 /**
  * Moving a running enrollment to a newer published version, explicitly (send-path v2, S2).
@@ -127,67 +122,6 @@ export function completedPrefix(executions: readonly ExecutionForPrefix[]): numb
   const unfinished = executions.filter(execution => execution.state !== 'completed');
   if (unfinished.some(execution => execution.ordinal !== k + 1)) return null;
   return k;
-}
-
-/**
- * The **earliest** instant the first e-mail of the remainder could be sent (PR 335
- * review, rounds 4 and 5) — a lower bound on what is reachable, so a migration is
- * refused only when even that cannot precede the permission's expiry.
- *
- * `next` (step k + 1) is due at `nextAt`. A call task is completed only through its
- * Today card: `logCallOutcome` binds a step from an existing Today item
- * (`readTodayItem` → `loadBoundCallStep`, `dial/calls.ts`), and a sequence task reaches
- * the list only when a date's list is **built** — once per business date, at
- * `TODAY_BUILD_LOCAL_MINUTE` (05:00) in the workspace's business time zone
- * (`apps/worker/src/handlers/todayBuild.ts`), listing every step due on or before that
- * date (`dueSequenceWorkSource`). So a call's earliest completion is the first build
- * instant at or after the later of the start of its due date there, the migration
- * instant, and its predecessor's earliest completion: a migration after today's build
- * waits for tomorrow's. Each later step is then where `successorDue` puts it after that
- * completion, and the first e-mail is placed with `placeEmailSend`. (The call log's
- * recorded `occurred_at` may be backdated; the card still cannot be used before it
- * exists.) Null when the remainder has no e-mail.
- */
-export function firstEmailOfRemainder(input: {
-  readonly steps: readonly SequenceStepRow[];
-  readonly next: SequenceStepRow;
-  readonly nextAt: string;
-  readonly startedAt: string;
-  readonly zone: string;
-  readonly calendar: WorkspaceHolidayCalendar;
-  readonly businessTimeZone: string;
-  readonly now: string;
-}): string | null {
-  const { steps, next, nextAt, startedAt, zone, calendar, businessTimeZone, now } = input;
-  if (next.channel === 'email') return nextAt;
-  const buildHour = { hour: Math.floor(TODAY_BUILD_LOCAL_MINUTE / 60), minute: TODAY_BUILD_LOCAL_MINUTE % 60 };
-  const earliestCompletion = (dueAt: string, floor: string): string => {
-    const startOfDueDate = localInstant(localDate(dueAt, businessTimeZone), { hour: 0, minute: 0 }, businessTimeZone);
-    const from = Math.max(Date.parse(startOfDueDate), Date.parse(floor));
-    // The first list built at or after `from`: that date's, or the next date's when its
-    // build has already happened.
-    const day = localDate(from, businessTimeZone);
-    const build = Date.parse(localInstant(day, buildHour, businessTimeZone));
-    return build >= from
-      ? new Date(build).toISOString()
-      : localInstant(addCalendarDays(day, 1), buildHour, businessTimeZone);
-  };
-  let previous = next;
-  let previousDone = earliestCompletion(nextAt, now);
-  for (const step of steps.filter(entry => entry.ordinal > next.ordinal).sort((a, b) => a.ordinal - b.ordinal)) {
-    const due = successorDue({
-      previous: stepForCadence(previous),
-      next: stepForCadence(step),
-      startedAt,
-      zone,
-      calendar,
-      completedAt: previousDone,
-    });
-    if (step.channel === 'email') return placeEmailSend(due.dueAt, zone, { calendar }).sendAt;
-    previous = step;
-    previousDone = earliestCompletion(due.dueAt, previousDone);
-  }
-  return null;
 }
 
 /**
@@ -343,39 +277,28 @@ export async function migrateEnrollment(
     schedule = { dueAt: late ? sendsAt : due.dueAt, sourceZone: due.sourceZone, ruleVersion: due.ruleVersion };
     if (late) rescheduledTo = sendsAt;
 
-    // PR 335 review, rounds 2 and 3: the fresh permission must still be live when the
-    // run it buys can do what it was agreed for. Otherwise binding it would end the old
-    // run for a follow-up that can only be held `follow_up_expired`. Two instants are
-    // compared with `expires_at`, before the old row is touched:
+    // PR 335 review, rounds 2–6: a fresh permission buys this run only if the run can do
+    // what it was agreed for before the permission ends. Checked here, before the old row
+    // is touched; a refusal leaves the old enrollment active and the permission unbound.
     //
-    //   * step k + 1 itself, as placed above (a call task is due where it is);
-    //   * the **earliest** first e-mail of the remainder (k + 1 … n): each call completed
-    //     at the first Today build that lists it, then `successorDue` and
-    //     `placeEmailSend` (`firstEmailOfRemainder`, rounds 4 and 5).
-    //
-    // Either one at or after the expiry refuses `permission_expires_before_step`, with
-    // the permission unbound and the old enrollment active.
+    //   * The remainder (k + 1 … n) must **begin with an e-mail**, and that e-mail's placed
+    //     instant (above: `clock_timestamp()` after the locks, the frozen zone and
+    //     calendar, `placeEmailSend`) must precede `expires_at`, else
+    //     `permission_expires_before_step`.
+    //   * A remainder that begins with a **call task** is refused
+    //     `remainder_starts_with_call`. When its e-mail becomes due depends on when the
+    //     call is completed, which depends on when Today builds its card — a projection
+    //     that could only be made exact by coupling the migration to Today's
+    //     materialisation. Fail closed instead: record a new agreement from the call card,
+    //     where a call-first agreed sequence is enrolled directly (S3).
     if (input.permissionId !== undefined) {
+      if (next.channel !== 'email') return refuseSequence('remainder_starts_with_call');
       const { rows: bound } = await context.db.query<{ expires_at: Date }>(
         'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
         [context.scope.workspaceId, input.permissionId],
       );
-      const expiresAt = bound[0]?.expires_at.getTime();
-      const firstEmail = firstEmailOfRemainder({
-        steps: target.steps,
-        next,
-        nextAt: sendsAt,
-        startedAt: old.startedAt,
-        zone: old.firmTimeZone,
-        calendar,
-        businessTimeZone: await workspaceBusinessTimeZone(context),
-        now,
-      });
-      if (
-        expiresAt === undefined ||
-        Date.parse(sendsAt) >= expiresAt ||
-        (firstEmail !== null && Date.parse(firstEmail) >= expiresAt)
-      ) {
+      const expiresAt = bound[0]?.expires_at;
+      if (expiresAt === undefined || Date.parse(sendsAt) >= expiresAt.getTime()) {
         return refuseSequence('permission_expires_before_step');
       }
     }

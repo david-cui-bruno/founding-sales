@@ -351,19 +351,17 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   window with `placeEmailSend` on the frozen zone and calendar, and that placed instant is
   both `rescheduledTo` and the instant compared with the fresh permission's `expires_at` —
   a permission that would expire first refuses `permission_expires_before_step` before
-  the old run is touched, and stays unbound. (Round 3) Step k + 1 is compared whatever
-  its channel (a call task at its due instant), and so is the **first e-mail** of the
-  remainder, projected with `successorDue` from each predecessor's projected instant and
-  placed with `placeEmailSend` — so a call now and an e-mail after the expiry refuses too.
-  (Rounds 4 and 5) That projection is a **lower bound on what is reachable**: a call is
-  bound to its step only through an existing Today card, and a sequence task reaches the
-  list only when a date's list is built — once per business date at
-  `TODAY_BUILD_LOCAL_MINUTE` (05:00, now shared by the domain and the worker's
-  `today.build`). So each call is taken as completed at the first build instant at or
-  after the later of the start of its due date in the business zone, the migration
-  instant and its predecessor's earliest completion — a migration after today's build
-  waits for tomorrow's. The migration refuses only when even that earliest first e-mail
-  cannot precede the expiry. A call log's recorded `occurred_at` may still be backdated. (P2-a) The target
+  the old run is touched, and stays unbound. (Round 6, the coordinator's decision) A
+  fresh permission moves a run only onto a remainder (k + 1 … n) that **begins with an
+  e-mail**, checked as above; one that begins with a call task is refused
+  `remainder_starts_with_call`, old run untouched, permission unbound — record a new
+  agreement from the call card instead, where S3 enrols call-first agreed sequences.
+  Why fail closed: when that e-mail can go depends on when the call is completed, which
+  depends on when Today builds the call's card (once per date at 05:00 business time) and
+  on whether a migration straddles that build; rounds 3–5 tried to project it and each
+  round found another reachable case the projection got wrong. An exact answer would
+  couple the migration to Today's materialisation, so the rule refuses instead.
+  Migrations without a fresh permission (prospecting) are unchanged. (P2-a) The target
   version is held `FOR SHARE` from its check to the commit, so a publication cannot
   retire it in between; the publication waits, and one that commits first makes the
   migration refuse `version_retired`.

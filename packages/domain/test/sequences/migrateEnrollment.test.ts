@@ -7,11 +7,6 @@ import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import { resolveStepDue } from '../../src/rules/cadence.ts';
-import { localInstant } from '../../src/rules/localClock.ts';
-import { applyCallToStep, loadBoundCallStep } from '../../dial/stepEffects.ts';
-import { logCallOutcome } from '../../dial/calls.ts';
-import { buildTodaySnapshot, defaultTodaySources } from '../../today/build.ts';
-import { dueSequenceWorkSource } from '../../sequences/todaySource.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
@@ -547,7 +542,8 @@ describe('the agreed follow-up scope', () => {
     const original = await agreedPermission(firm, v1);
     const old = await enrolled(v1, firm, { kind: 'follow_up', permissionId: original });
     await publish(v2);
-    await completeCurrent(old);
+    // Nothing completed, so the remainder begins with v2's e-mail (a fresh permission
+    // cannot move a run onto a call-first remainder; round 6).
     const fresh = await agreedPermission(firm, v2);
 
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2, permissionId: fresh });
@@ -719,193 +715,38 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
     return { old, target, fresh: await agreedPermission(firm, target, expiresAt) };
   }
 
-  it('refuses when step k + 1 is a call inside the permission but the first e-mail after it is not (round 3)', async () => {
-    // Fails if only an e-mail step k + 1 is compared: the call is due in an hour, the
-    // e-mail 48 h after it, and the permission ends in a day.
+  it('refuses remainder_starts_with_call for a fresh permission onto a call-first remainder, and touches nothing (round 6)', async () => {
+    // Fails with the refusal removed: the call-first remainder would migrate, with an
+    // e-mail whose timing depends on when Today lists the call.
     const { old, target, fresh } = await lateFollowUpTo(
-      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 49)],
-      24 * 60 * 60 * 1000,
+      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 2)],
+      10 * 24 * 60 * 60 * 1000,
     );
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
-    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    ).toEqual({ ok: false, reason: 'remainder_starts_with_call' });
     expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
     expect((await permissionRow(fresh)).enrollment_id).toBeNull();
   });
 
-  it('migrates a call-then-e-mail remainder when both fit inside the permission (round 3)', async () => {
+  it('migrates a late e-mail-first remainder that can be sent before the expiry (round 6)', async () => {
     const { old, target, fresh } = await lateFollowUpTo(
-      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 49)],
+      template => [emailStep(template), emailStep(template, 2, 48), callAfter(3, 50)],
       10 * 24 * 60 * 60 * 1000,
     );
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
     if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
-    expect(migrated.value.nextOrdinal).toBe(2);
+    expect(migrated.value.rescheduledTo).not.toBeNull();
     expect((await permissionRow(fresh)).enrollment_id).toBe(migrated.value.newEnrollmentId);
   });
 
-  it('refuses when the call task at step k + 1 is itself placed after the expiry (round 3)', async () => {
-    // Fails if a call step k + 1 is not compared: it is due 48 h out, the permission ends in a day.
-    const { old, target, fresh } = await lateFollowUpTo(
-      template => [emailStep(template), callAfter(2, 48)],
-      24 * 60 * 60 * 1000,
-    );
-    expect(
-      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
-    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
-    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
-    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
-  });
-
-  /**
-   * The round-4 weekend: step k + 1 is a call due Friday afternoon, the e-mail after it
-   * is planned eight hours later, and the permission ends on Sunday. Projected from the
-   * call's due instant, the e-mail would fall on Friday night and move to Monday — past
-   * the expiry. But Today shows the call from the start of Friday, and completed then the
-   * runner places the e-mail on Friday morning. The check is a lower bound, so this
-   * migrates.
-   */
-  async function weekendCase(): Promise<{ old: string; target: string; fresh: string; friday: string; fridayStart: string; sundayNoon: string }> {
-    const zone = 'America/New_York';
-    const now = Date.parse(await databaseNow(admin()));
-    let day = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date(now));
-    let friday16 = '';
-    for (let step = 0; step < 14; step += 1) {
-      day = new Date(Date.parse(`${day}T12:00:00Z`) + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const candidate = localInstant(day, { hour: 16, minute: 0 }, zone);
-      if (new Date(`${day}T12:00:00Z`).getUTCDay() === 5 && Date.parse(candidate) - now > 3 * 60 * 60 * 1000) {
-        friday16 = candidate;
-        break;
-      }
-    }
-    const hours = Math.floor((Date.parse(friday16) - now) / (60 * 60 * 1000));
-    const sunday = new Date(Date.parse(`${day}T12:00:00Z`) + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const sundayNoon = localInstant(sunday, { hour: 12, minute: 0 }, zone);
-    const { old, target, fresh } = await lateFollowUpTo(
-      template => [emailStep(template), callAfter(2, hours), emailStep(template, 3, hours + 8)],
-      Date.parse(sundayNoon) - now,
-    );
-    return { old, target, fresh, friday: day, fridayStart: localInstant(day, { hour: 0, minute: 0 }, zone), sundayNoon };
-  }
-
-  it('migrates when the e-mail after a Friday call can still go before a Sunday expiry (round 4)', async () => {
-    // Fails with the call projected as completed at its due instant: the e-mail would be
-    // placed on Monday and the migration refused, stranding the old run.
-    const { old, target, fresh } = await weekendCase();
-    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
-    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
-    expect((await permissionRow(fresh)).enrollment_id).toBe(migrated.value.newEnrollmentId);
-  });
-
-  it('completing that call early through the call path puts the e-mail where the runner places it, inside the permission (round 4)', async () => {
-    const { old, target, fresh, friday, fridayStart, sundayNoon } = await weekendCase();
-    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
-    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
-    const [call] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
-    if (call === undefined) throw new Error('the migrated enrollment has no step');
-    // The call path's own step functions: the step as a call binds it, then the outcome
-    // applied at the start of Friday — the earliest its Today card exists.
-    const bound = await loadBoundCallStep(worker(), { stepExecutionId: call.id, firmId: call.firmId });
-    if (bound === null) throw new Error('the call did not bind');
-    const applied = await applyCallToStep(worker(), {
-      bound,
-      outcome: 'no_answer',
-      stepEffect: 'advance',
-      engaged: false,
-      occurredAt: fridayStart,
-      now: fridayStart,
-    });
-    expect(applied.successorExecutionId).not.toBeNull();
-    const email = (await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId })).find(step => step.ordinal === 3);
-    const placed = placeEmailSend(email?.dueAt ?? '', ZONE, { calendar: CALENDAR }).sendAt;
-    expect(Date.parse(placed)).toBeLessThan(Date.parse(sundayNoon));
-    // Eight hours after the start of Friday, which is the window's opening: Friday 08:00.
-    expect(placed).toBe(localInstant(friday, { hour: 8, minute: 0 }, ZONE));
-  });
-
-  /**
-   * Round 5: a call's Today card exists only from the first list **built** after it is
-   * due, once per date at 05:00 business time. These cases need "after today's build" to
-   * be true whatever hour the suite runs, so the workspace's business zone (and the
-   * enrollment's frozen zone, for the sending window) is set, for the case only, to the
-   * fixed-offset zone where it is about noon now.
-   */
-  async function aroundNoon<T>(work: (zone: string) => Promise<T>): Promise<T> {
-    const hour = new Date(await databaseNow(admin())).getUTCHours();
-    const offset = 12 - hour;
-    const zone = offset === 0 ? 'Etc/GMT' : offset > 0 ? `Etc/GMT-${String(offset)}` : `Etc/GMT+${String(-offset)}`;
-    await database.session.query('UPDATE workspaces SET business_time_zone = $2 WHERE id = $1', [seeded.alpha.workspaceId, zone]);
-    try {
-      return await work(zone);
-    } finally {
-      await database.session.query("UPDATE workspaces SET business_time_zone = 'America/New_York' WHERE id = $1", [
-        seeded.alpha.workspaceId,
-      ]);
-    }
-  }
-
-  async function afterTheBuild(zone: string, expiresInMs: number) {
-    const found = await lateFollowUpTo(
-      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 2)],
-      expiresInMs,
-    );
-    await database.session.query('UPDATE sequence_enrollments SET firm_time_zone = $2 WHERE id = $1', [found.old, zone]);
-    return found;
-  }
-
-  it('refuses when today’s list is already built and the permission ends today (round 5)', async () => {
-    // Fails with the start-of-day bound restored: it would take the call as completable
-    // now and the e-mail an hour later, but the call has no Today card until tomorrow's
-    // 05:00 build, and by then the permission has ended.
-    await aroundNoon(async zone => {
-      const { old, target, fresh } = await afterTheBuild(zone, 4 * 60 * 60 * 1000);
-      expect(
-        await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
-      ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
-      expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
-      expect((await permissionRow(fresh)).enrollment_id).toBeNull();
-    });
-  });
-
-  it('migrates after the build when tomorrow’s card still leaves room; the real build and call path put the e-mail inside the permission (round 5)', async () => {
-    await aroundNoon(async zone => {
-      const now = Date.parse(await databaseNow(admin()));
-      const expiresAt = now + 30 * 60 * 60 * 1000;
-      const { old, target, fresh } = await afterTheBuild(zone, expiresAt - now);
-      const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
-      if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
-      const [call] = await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId });
-      if (call === undefined) throw new Error('the migrated enrollment has no step');
-
-      // Tomorrow's list, through the domain function the worker's `today.build` handler
-      // runs, with the sources the worker registers.
-      const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date(now + 24 * 60 * 60 * 1000));
-      await buildTodaySnapshot(worker(), {
-        businessDate: tomorrow,
-        now: await databaseNow(admin()),
-        sources: [...defaultTodaySources(), dueSequenceWorkSource()],
-      });
-      const { rows: items } = await database.session.query<{ id: string }>(
-        'SELECT id FROM today_items WHERE workspace_id = $1 AND snapshot_date = $2::date AND source_id = $3',
-        [seeded.alpha.workspaceId, tomorrow, call.id],
-      );
-      expect(items).toHaveLength(1);
-
-      // The call, logged from that card.
-      const logged = await logCallOutcome(salesperson(), {
-        firmId: call.firmId,
-        contactId: call.contactId,
-        itemId: items[0]?.id ?? '',
-        outcome: 'no_answer',
-      });
-      expect(logged.ok, JSON.stringify(logged)).toBe(true);
-      const email = (await listStepExecutions(admin(), { enrollmentId: migrated.value.newEnrollmentId })).find(
-        step => step.ordinal === 3,
-      );
-      expect(email).toBeDefined();
-      const placed = placeEmailSend(email?.dueAt ?? '', zone, { calendar: CALENDAR }).sendAt;
-      expect(Date.parse(placed)).toBeLessThan(expiresAt);
-    });
+  it('migrates a prospecting run onto a call-first remainder: without a fresh permission nothing changes (round 6)', async () => {
+    const template = await approvedTemplate(admin(), 'Cold, then a call.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const old = await enrolled(plan.versionId, await newFirm(database.session, seeded.alpha));
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), callAfter(2, 1)]);
+    expect((await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target })).ok).toBe(true);
   });
 
   it('still migrates a kept plan inside the permission, with rescheduledTo null', async () => {
