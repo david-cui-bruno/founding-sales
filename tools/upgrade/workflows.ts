@@ -131,6 +131,20 @@ export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
 export const EXPECTED_PROSPECTING_DECISION = 'cold_outreach_mailbox_required';
 
 /**
+ * The decision a *post-upgrade* evidenced follow-up must reach: the workspace pause
+ * (review of send-path v2 slice S4, P1-b).
+ *
+ * `EXPECTED_PROSPECTING_DECISION` moved to the cold-outreach rule, so the probe that
+ * used to prove "the switch that keeps production silent still holds an otherwise
+ * sendable step" no longer reaches the switch. This probe keeps that proof explicit on a
+ * row written after the upgrade: a `follow_up` enrollment resting on a real permission
+ * with real evidence (an `interested` call that agreed this sequence), which passes the
+ * follow-up and cold-outreach sources and must then be held by the pause. So the upgrade
+ * test proves both halves: prospecting → the cold hold, follow-up → the pause.
+ */
+export const EXPECTED_FOLLOW_UP_DECISION = 'scoped_pause';
+
+/**
  * The lane the fixture's primary firm's card must be in.
  *
  * Only two Today sources have a table to read today — callbacks and new firms — and
@@ -478,7 +492,109 @@ export async function runWorkflows(
           probeContactId,
         ]);
 
-        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}`;
+        // The evidenced follow-up probe (P1-b): written, asked and rolled back in one
+        // transaction of its own, so nothing it writes outlives the question. The
+        // workflows run on an autocommit session, so this BEGIN is the outermost one.
+        let followUpOutcome: Awaited<ReturnType<ReturnType<typeof composeEligibility>['evaluate']>>;
+        await session.query('BEGIN');
+        try {
+          const followUp = await session.query<{ enrollment_id: string }>(
+            `WITH source AS (
+               SELECT e.workspace_id, e.firm_id, e.opportunity_id, e.assigned_user_id, e.sequence_version_id,
+                      e.firm_time_zone, e.holiday_calendar_version
+                 FROM sequence_enrollments e WHERE e.workspace_id = $1 AND e.id = $2
+             ), person AS (
+               INSERT INTO contacts (workspace_id, firm_id, full_name)
+               SELECT workspace_id, firm_id, 'Upgrade Follow-up Probe' FROM source
+               RETURNING id, workspace_id, firm_id
+             ), route AS (
+               INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                            association_confidence, technical_validation, eligibility,
+                                            eligibility_policy_version)
+               SELECT p.workspace_id, p.firm_id, p.id, 'upgrade.follow-up.probe@example.test', 'research_provider',
+                      now(), 0.900, 'passed', 'usable', 'route-policy.1'
+                 FROM person p
+               RETURNING contact_id
+             ), call AS (
+               INSERT INTO call_logs (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect,
+                                      occurred_at, actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+               SELECT s.workspace_id, s.firm_id, p.id, s.opportunity_id, 'interested', 'none',
+                      now() - interval '1 second', s.assigned_user_id, 'agreed_sequence', s.sequence_version_id
+                 FROM source s CROSS JOIN person p
+               RETURNING id
+             ), permission AS (
+               INSERT INTO follow_up_permissions (workspace_id, firm_id, contact_id, kind, scope, call_log_id,
+                                                  sequence_version_id, max_steps, expires_at, granted_by_user_id, note)
+               SELECT s.workspace_id, s.firm_id, p.id, 'agreed_sequence', 'agreed_sequence', c.id,
+                      s.sequence_version_id,
+                      (SELECT count(*) FROM sequence_steps st
+                        WHERE st.workspace_id = s.workspace_id AND st.sequence_version_id = s.sequence_version_id),
+                      now() + interval '365 days', s.assigned_user_id, 'upgrade test follow-up probe'
+                 FROM source s CROSS JOIN person p CROSS JOIN call c
+               RETURNING id
+             ), enrolled AS (
+               INSERT INTO sequence_enrollments
+                 (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+                  started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+               SELECT s.workspace_id, s.sequence_version_id, s.opportunity_id, s.firm_id, p.id, s.assigned_user_id,
+                      now(), s.firm_time_zone, s.holiday_calendar_version, 'follow_up', m.id
+                 FROM source s CROSS JOIN person p CROSS JOIN permission m
+               RETURNING id, workspace_id, firm_id, contact_id, sequence_version_id, permission_id
+             )
+             INSERT INTO step_executions
+               (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
+                due_at, not_before, original_due_at, source_zone, rule_version)
+             SELECT n.workspace_id, n.id, st.id, n.firm_id, n.contact_id, st.channel, st.ordinal,
+                    now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour',
+                    'America/New_York', 'elapsed.1'
+               FROM enrolled n
+               JOIN sequence_steps st
+                 ON st.workspace_id = n.workspace_id AND st.sequence_version_id = n.sequence_version_id
+              ORDER BY st.ordinal
+              LIMIT 1
+             RETURNING enrollment_id`,
+            [candidate.workspace_id, candidate.id],
+          );
+          const followUpEnrollmentId = followUp.rows[0]?.enrollment_id;
+          if (followUpEnrollmentId === undefined) throw new Error('the post-upgrade follow-up probe was not written');
+          // The permission buys this run (`bindFollowUpPermission`). A separate statement:
+          // the data-modifying CTEs above cannot see each other's rows.
+          const bound = await session.query(
+            `UPDATE follow_up_permissions f SET enrollment_id = n.id
+               FROM sequence_enrollments n
+              WHERE n.workspace_id = $1 AND n.id = $2
+                AND f.workspace_id = n.workspace_id AND f.id = n.permission_id AND f.enrollment_id IS NULL`,
+            [candidate.workspace_id, followUpEnrollmentId],
+          );
+          if (bound.rowCount !== 1) throw new Error('the post-upgrade follow-up probe permission was not bound');
+          const followUpEnrollment = await readEnrollment(worker, { enrollmentId: followUpEnrollmentId });
+          const followUpExecution = await nextUnfinishedExecution(worker, followUpEnrollmentId);
+          if (followUpEnrollment === null || followUpExecution === null) {
+            throw new Error('the post-upgrade follow-up probe has no step');
+          }
+          followUpOutcome = await composeEligibility().evaluate(worker, {
+            execution: followUpExecution,
+            opportunityId: followUpEnrollment.opportunityId,
+            firmId: followUpEnrollment.firmId,
+            contactId: followUpEnrollment.contactId,
+            ownerUserId: followUpEnrollment.assignedUserId,
+            channel: followUpExecution.channel,
+            actionKind: CHANNEL_ACTION_KINDS[followUpExecution.channel],
+            now,
+          });
+        } finally {
+          await session.query('ROLLBACK');
+        }
+        if (followUpOutcome.ok) {
+          throw new Error(`expected ${EXPECTED_FOLLOW_UP_DECISION} on the post-upgrade follow-up probe, and it was eligible`);
+        }
+        if (followUpOutcome.reasonCode !== EXPECTED_FOLLOW_UP_DECISION) {
+          throw new Error(
+            `expected ${EXPECTED_FOLLOW_UP_DECISION} on the post-upgrade follow-up probe, got ${followUpOutcome.reasonCode}${followUpOutcome.detail === undefined ? '' : ` (${followUpOutcome.detail})`}`,
+          );
+        }
+
+        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}; post-upgrade follow-up probe: ${followUpOutcome.reasonCode}`;
       },
     },
     {

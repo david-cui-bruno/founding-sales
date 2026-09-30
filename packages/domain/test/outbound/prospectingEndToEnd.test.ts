@@ -9,6 +9,7 @@ import { composeEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
 import { runDueStepExecution } from '../../sequences/executions.ts';
 import { listStepExecutions } from '../../sequences/rows.ts';
+import { listStepWakes } from '../../sequences/wake.ts';
 import type { SendHandoff, SendHandoffRefusal } from '../../sequences/sendHandoff.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { seedFirm } from './support/dispatchFixtures.ts';
@@ -161,5 +162,23 @@ describe('a prospecting enrollment from the command to the held step', () => {
       [workspaceId(), enrolled.value.enrollmentId],
     );
     expect(live[0]?.ended_at).toBeNull();
+
+    // 6. And the scheduler keeps asking (review P2-b): `listStepWakes` does not wake the
+    // held step before its `not_before`, and does wake it after, so the hold is re-read
+    // and stays visible rather than going quiet. (`wake.ts` is untouched by send-path v2:
+    // it excludes `cold_legacy`, not `prospecting`.)
+    const { rows: timing } = await world.database.session.query<{ before: Date; after: Date }>(
+      `SELECT not_before - interval '1 minute' AS before, not_before + interval '1 minute' AS after
+         FROM step_executions WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), execution.id],
+    );
+    const window = timing[0];
+    if (window === undefined) throw new Error('the held step disappeared');
+    const wokenAt = async (at: Date): Promise<boolean> =>
+      (await listStepWakes(world.database.session, { now: at.toISOString(), limit: 1000 })).some(
+        wake => wake.stepExecutionId === execution.id,
+      );
+    expect(await wokenAt(window.before)).toBe(false);
+    expect(await wokenAt(window.after)).toBe(true);
   });
 });

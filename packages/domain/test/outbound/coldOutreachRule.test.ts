@@ -11,6 +11,9 @@ import {
 } from '../../sequences/eligibility.ts';
 import { readEnrollment, readStepExecution } from '../../sequences/rows.ts';
 import type { StepChannel } from '@fss/contracts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
+import { recordSuppression } from '../../suppression/events.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { pausingAtTokenRefresh, prepareFor, seedFirm } from './support/dispatchFixtures.ts';
 
@@ -184,6 +187,49 @@ describe('the dispatch claim', () => {
     expect(report.detail).toBe('cold_outreach_mailbox_required:gmail_dispatch:personal');
     expect(gmail.sends).toHaveLength(0);
     expect((await readFence(context(), fenceId))?.state).toBe('held');
+  });
+
+  it('reports an opt-out on another address of the same person as the suppression, never the cold hold', async () => {
+    // Review P2-a. `decideSend` checks the firm and the fence's own recipient address;
+    // an opt-out recorded on the contact's *other* address is seen only by the
+    // composition's contact-wide `suppressionSource`, which is asked before the
+    // cold-outreach refusal so that the reason reported is the one that matters.
+    const { fenceId, stepExecutionId } = await preparedFence('claim-opted-out', 'prospecting');
+    const { rows } = await world.database.session.query<{ firm_id: string; contact_id: string }>(
+      'SELECT firm_id, contact_id FROM step_executions WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), stepExecutionId],
+    );
+    const step = rows[0];
+    if (step === undefined) throw new Error('the step execution disappeared');
+    const alternate = `alternate.${stepExecutionId.slice(0, 8)}@example.test`;
+    await world.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility, eligibility_policy_version)
+       VALUES ($1, $2, $3, $4, 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')`,
+      [workspaceId(), step.firm_id, step.contact_id, alternate],
+    );
+    const salesperson = repositoryContext(
+      workspaceScope(workspaceId(), {
+        kind: 'user',
+        userId: world.alpha.workspace.salesperson.userId,
+        role: 'salesperson',
+      }),
+      world.database.session,
+    );
+    const suppressed = await recordSuppression(salesperson, {
+      scope: 'handle',
+      firmId: step.firm_id,
+      value: alternate,
+      source: 'prospect_opt_out',
+      journal: recordingSuppressionJournal(),
+    });
+    expect(suppressed.ok).toBe(true);
+
+    const { report, sends } = await dispatch(fenceId);
+    expect(report.outcome, JSON.stringify(report)).toBe('held');
+    expect(report.refusal).toBe('handle_suppressed');
+    expect(report.detail ?? '').not.toContain('cold_outreach_mailbox_required');
+    expect(sends).toBe(0);
   });
 
   it('refuses it again when the held fence returns through dispatch', async () => {
