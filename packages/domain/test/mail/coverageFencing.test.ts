@@ -1,8 +1,28 @@
+import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
-import { readMailbox, readMailboxForUpdate, resetAccountState } from '../../mail/mailboxes.ts';
-import { runMailRecovery } from '../../mail/recover.ts';
-import { createMailWorld, fixtureMessage, type MailWorld, type MailWorldMailbox } from './support/mailWorld.ts';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
+import { coalesceMailSync } from '../../mail/coalesce.ts';
+import type { GmailClient } from '../../mail/gmailClient.ts';
+import { recordingMailLog } from '../../mail/log.ts';
+import {
+  readMailbox,
+  readMailboxForUpdate,
+  readMailboxHold,
+  resetAccountState,
+  StaleMailboxGeneration,
+} from '../../mail/mailboxes.ts';
+import { readRecovery, runMailRecovery, startRecovery, type MailRecoveryReport } from '../../mail/recover.ts';
+import { runMailSync } from '../../mail/sync.ts';
+import { listWatchesDue, readCurrentWatch, renewWatch } from '../../mail/watch.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
+import {
+  createMailWorld,
+  fixtureMessage,
+  TEST_TOPIC_NAME,
+  type MailWorld,
+  type MailWorldMailbox,
+} from './support/mailWorld.ts';
 
 /**
  * Mail core correctness (slice C2B-A1): generation fencing, the continuous handoff,
@@ -16,6 +36,35 @@ afterEach(async () => {
   await world?.stop();
   world = null;
 });
+
+const PROSPECT = 'reception@northwind.example.test';
+const STRANGER = 'someone@elsewhere.example.test';
+
+/**
+ * A second connection to the test database: what another transaction — an account
+ * switch, a new baseline — does while a job's own transaction is still open.
+ */
+async function otherConnection(w: MailWorld): Promise<pg.Client> {
+  const url = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
+  url.pathname = `/${w.database.name}`;
+  const client = new pg.Client({ connectionString: url.toString() });
+  client.on('error', () => undefined);
+  await client.connect();
+  return client;
+}
+
+/** Run a job's body the way the runner does: one transaction, rolled back on a throw. */
+async function asJob<T>(w: MailWorld, work: () => Promise<T>): Promise<T> {
+  return await withTransaction(w.database.session, work);
+}
+
+async function countRows(w: MailWorld, mailboxId: string): Promise<number> {
+  const { rows } = await w.database.session.query<{ count: string }>(
+    'SELECT count(*)::text AS count FROM mail_messages WHERE mailbox_id = $1',
+    [mailboxId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
 
 async function completeBaseline(w: MailWorld, mailbox: MailWorldMailbox): Promise<void> {
   const context = w.systemContext(mailbox.workspace.workspaceId);
@@ -79,5 +128,483 @@ describe('resetAccountState', () => {
     const w = world;
     const context = w.systemContext(w.alpha.workspace.workspaceId);
     await expect(resetAccountState(context, { mailboxId: w.beta.mailboxId })).rejects.toThrow(/found no mailbox/);
+  });
+});
+
+describe('generation fencing', () => {
+  it('an in-flight sync that read generation g commits nothing when the mailbox moves to g+1 before its CAS', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const before = await readMailbox(context, w.alpha.mailboxId);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'fenced-optout', historyId: '1013', from: PROSPECT, to: w.alpha.address, body: 'Please stop emailing me.' }),
+    );
+
+    const other = await otherConnection(w);
+    try {
+      const base = w.syncDeps(w.alpha);
+      const gmail: GmailClient = {
+        ...base.gmail,
+        listHistory: async (...args) => {
+          // Another transaction moves the mailbox on while this sync is reading Gmail.
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return await base.gmail.listHistory(...args);
+        },
+      };
+      await expect(
+        asJob(w, async () => await runMailSync(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+
+    // Nothing it did committed: no message, no suppression, the cursor where it was.
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: PROSPECT })).toBeNull();
+    const after = await readMailbox(context, w.alpha.mailboxId);
+    expect(after?.historyId).toBe(before?.historyId);
+    expect(after?.generation).toBe((before?.generation ?? 0) + 1);
+  });
+
+  it('the retry after a generation change is harmless: a sync of a baseline_pending mailbox reads no history and writes nothing', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'after-switch', historyId: '1013', from: PROSPECT, to: w.alpha.address, body: 'Please stop emailing me.' }),
+    );
+    // What an account switch leaves behind: a new generation, a baseline pending, and
+    // the new generation's recovery already started.
+    await w.database.session.query(
+      "UPDATE mailboxes SET generation = generation + 1, sync_state = 'baseline_pending' WHERE id = $1",
+      [w.alpha.mailboxId],
+    );
+    const switched = await readMailbox(context, w.alpha.mailboxId);
+    if (switched === null) throw new Error('the mailbox is gone');
+    await startRecovery(context, { mailbox: switched, reason: 'baseline', startHistoryId: '1000' });
+
+    const historyReads = w.alpha.gmail.calls.filter(call => call.method === 'listHistory').length;
+    const report = await asJob(w, async () => await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId }));
+    expect(report.outcome).toBe('recovery_underway');
+    expect(w.alpha.gmail.calls.filter(call => call.method === 'listHistory').length).toBe(historyReads);
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+  });
+
+  it('an in-flight recovery that read generation g writes no progress when the mailbox moves on', async () => {
+    world = await createMailWorld({
+      alphaMessages: [1, 2, 3].map(index =>
+        fixtureMessage({ id: `progress${String(index)}`, historyId: String(1000 + index), from: STRANGER, to: 'sales.alpha@example.test' }),
+      ),
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    try {
+      const base = w.syncDeps(w.alpha);
+      const gmail: GmailClient = {
+        ...base.gmail,
+        listMessageIds: async (...args) => {
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return await base.gmail.listMessageIds(...args);
+        },
+      };
+      await expect(
+        asJob(w, async () =>
+          await runMailRecovery(context, { ...base, gmail, pageSize: 2, maxMessages: 1 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+        ),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+    const recovery = await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 });
+    expect(recovery?.pagesCompleted).toBe(0);
+    expect(recovery?.messagesSeen).toBe(0);
+    // The retry: the recovery's generation is superseded, and it writes nothing.
+    const retry = await asJob(w, async () =>
+      await runMailRecovery(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(retry.outcome).toBe('generation_superseded');
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+  });
+});
+
+describe('conditional completion', () => {
+  const finalRunWith = async (
+    w: MailWorld,
+    change: string,
+  ): Promise<void> => {
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    try {
+      const base = w.syncDeps(w.alpha);
+      const gmail: GmailClient = {
+        ...base.gmail,
+        listMessageIds: async (...args) => {
+          await other.query(change, [w.alpha.mailboxId]);
+          return await base.gmail.listMessageIds(...args);
+        },
+      };
+      await expect(
+        asJob(w, async () => await runMailRecovery(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+  };
+
+  const expectNotCompleted = async (w: MailWorld): Promise<void> => {
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const recovery = await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 });
+    expect(recovery?.completedAt).toBeNull();
+    const mailbox = await readMailbox(context, w.alpha.mailboxId);
+    expect(mailbox?.syncState).toBe('baseline_pending');
+    expect(mailbox?.coverageWatermarkAt).toBeNull();
+    expect(await readMailboxHold(context, w.alpha.mailboxId, 'coverage_incomplete')).not.toBeNull();
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+  };
+
+  it('a mailbox bumped to g+1 during the final run: nothing completes, nothing is released, nothing is recorded', async () => {
+    world = await createMailWorld({
+      alphaMessages: [fixtureMessage({ id: 'final1', historyId: '1001', from: STRANGER, to: 'sales.alpha@example.test' })],
+    });
+    await finalRunWith(world, 'UPDATE mailboxes SET generation = generation + 1 WHERE id = $1');
+    await expectNotCompleted(world);
+  });
+
+  it('a cursor moved off the handoff id during the final run: the completion refuses it', async () => {
+    world = await createMailWorld({
+      alphaMessages: [fixtureMessage({ id: 'final2', historyId: '1001', from: STRANGER, to: 'sales.alpha@example.test' })],
+    });
+    await finalRunWith(world, "UPDATE mailboxes SET history_id = '5555', history_id_updated_at = now() WHERE id = $1");
+    await expectNotCompleted(world);
+  });
+});
+
+describe('the continuous handoff', () => {
+  it('an opt-out arriving after toAt, during the recovery, is suppressed by the first mail.sync after completion', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const recovery = await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 });
+    if (recovery === null) throw new Error('the connect started no baseline');
+    const mailbox = await readMailbox(context, w.alpha.mailboxId);
+    // startRecovery stored the profile's history id, read before toAt, as the cursor.
+    expect(mailbox?.historyId).toBe('1000');
+
+    // Gmail receives the opt-out after the interval's end, while the recovery runs, and
+    // the mailbox's history id moves past it.
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'late-optout',
+        historyId: '1013',
+        from: PROSPECT,
+        to: w.alpha.address,
+        body: 'Please stop emailing me.',
+        internalDateEpochMilliseconds: Date.parse(recovery.toAt) + 5 * 60_000,
+      }),
+    );
+    (w.alpha.fixture as { historyId: string }).historyId = '1013';
+
+    const finished = await asJob(w, async () =>
+      await runMailRecovery(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(finished.outcome).toBe('completed');
+    // Completion adopted the captured id, not the profile's current one.
+    expect((await readMailbox(context, w.alpha.mailboxId))?.historyId).toBe('1000');
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: PROSPECT })).toBeNull();
+
+    const synced = await asJob(w, async () => await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId }));
+    expect(synced.outcome).toBe('synced');
+    expect(synced.suppressionsRecorded).toBeGreaterThan(0);
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: PROSPECT })).not.toBeNull();
+  });
+});
+
+describe('resume by recorded ids', () => {
+  const runUntilDone = async (
+    w: MailWorld,
+    between: (run: number) => void = () => undefined,
+  ): Promise<readonly MailRecoveryReport[]> => {
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const reports: MailRecoveryReport[] = [];
+    for (let run = 0; run < 10; run += 1) {
+      const report = await asJob(w, async () =>
+        await runMailRecovery(
+          context,
+          { ...w.syncDeps(w.alpha), pageSize: 2, maxMessages: 2 },
+          { mailboxId: w.alpha.mailboxId, generation: 1 },
+        ),
+      );
+      reports.push(report);
+      if (report.outcome !== 'continued') break;
+      between(run);
+    }
+    return reports;
+  };
+
+  const stranger = (id: string, index: number) =>
+    fixtureMessage({
+      id,
+      historyId: String(1000 + index),
+      from: STRANGER,
+      to: 'sales.alpha@example.test',
+      internalDateEpochMilliseconds: Date.parse('2026-09-10T10:00:00Z') + index * 60_000,
+    });
+
+  it('five messages, pages of two, two per run: each processed exactly once, coverage proved, only issued tokens sent', async () => {
+    const ids = ['walk1', 'walk2', 'walk3', 'walk4', 'walk5'];
+    world = await createMailWorld({ alphaMessages: ids.map((id, index) => stranger(id, index + 1)) });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+
+    const reports = await runUntilDone(w);
+    expect(reports.map(report => report.outcome)).toEqual(['continued', 'continued', 'completed']);
+    expect(reports.at(-1)?.coverageProved).toBe(true);
+    for (const id of ids) expect(w.alpha.gmail.metadataReads.filter(read => read === id), id).toHaveLength(1);
+    expect(await countRows(w, w.alpha.mailboxId)).toBe(5);
+
+    const sent = w.alpha.gmail.calls
+      .filter(call => call.method === 'listMessageIds')
+      .map(call => call.detail['pageToken'])
+      .filter((token): token is string => typeof token === 'string');
+    expect(sent.length).toBeGreaterThan(0);
+    for (const token of sent) expect(w.alpha.gmail.listPageTokensIssued).toContain(token);
+
+    const mailbox = await readMailbox(context, w.alpha.mailboxId);
+    expect(mailbox?.syncState).toBe('ready');
+    expect(await readMailboxHold(context, w.alpha.mailboxId, 'coverage_incomplete')).toBeNull();
+    expect((await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 }))?.completedAt).not.toBeNull();
+  });
+
+  it('a message deleted between runs shifts nothing: the one after it is processed, and completion waits for it', async () => {
+    world = await createMailWorld({
+      alphaMessages: [stranger('keepA', 1), stranger('goneB', 2), stranger('laterC', 3)],
+    });
+    const w = world;
+    const reports = await runUntilDone(w, () => {
+      const index = w.alpha.messages.findIndex(message => message.id === 'goneB');
+      if (index >= 0) w.alpha.messages.splice(index, 1);
+    });
+    expect(reports.map(report => report.outcome)).toEqual(['continued', 'completed']);
+    expect(w.alpha.gmail.metadataReads).toEqual(['keepA', 'goneB', 'laterC']);
+    const { rows } = await w.database.session.query<{ provider_message_id: string }>(
+      'SELECT provider_message_id FROM mail_messages WHERE mailbox_id = $1 ORDER BY provider_message_id',
+      [w.alpha.mailboxId],
+    );
+    expect(rows.map(row => row.provider_message_id)).toEqual(['goneB', 'keepA', 'laterC']);
+  });
+});
+
+describe('RFC Message-ID collisions', () => {
+  const deliver = async (w: MailWorld, ...messages: ReturnType<typeof fixtureMessage>[]) => {
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const log = recordingMailLog();
+    w.alpha.messages.push(...messages);
+    const report = await asJob(w, async () =>
+      await runMailSync(context, { ...w.syncDeps(w.alpha), log }, { mailboxId: w.alpha.mailboxId }),
+    );
+    return { report, log };
+  };
+
+  const rowsOf = async (w: MailWorld) =>
+    (
+      await w.database.session.query<{ provider_message_id: string; rfc_message_id: string | null; direction: string }>(
+        'SELECT provider_message_id, rfc_message_id, direction FROM mail_messages WHERE mailbox_id = $1 ORDER BY provider_message_id',
+        [w.alpha.mailboxId],
+      )
+    ).rows;
+
+  it('a proven duplicate — same direction, From, Subject and Date — is the recorded message, and no effect runs again', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const first = await deliver(
+      w,
+      fixtureMessage({ id: 'dup1', historyId: '1011', from: PROSPECT, to: w.alpha.address, messageId: 'shared@x.test', body: 'Please stop emailing me.' }),
+    );
+    expect(first.report.suppressionsRecorded).toBe(2);
+    const journal = w.journal.appended.length;
+    const second = await deliver(
+      w,
+      fixtureMessage({ id: 'dup2', historyId: '1012', from: PROSPECT, to: w.alpha.address, messageId: 'shared@x.test', body: 'Please stop emailing me.' }),
+    );
+    expect(second.report.outcome).toBe('synced');
+    expect(second.report.duplicateRfcId).toBe(1);
+    expect(second.report.rfcIdConflicts).toBe(0);
+    expect(second.report.messagesRecorded).toBe(0);
+    expect(second.report.suppressionsRecorded).toBe(0);
+    expect(w.journal.appended.length).toBe(journal);
+    expect(await rowsOf(w)).toEqual([{ provider_message_id: 'dup1', rfc_message_id: 'shared@x.test', direction: 'incoming' }]);
+  });
+
+  const expectConflict = async (
+    w: MailWorld,
+    outcome: Awaited<ReturnType<typeof deliver>>,
+    ids: { readonly first: string; readonly second: string },
+  ): Promise<void> => {
+    expect(outcome.report.outcome).toBe('synced');
+    expect(outcome.report.rfcIdConflicts).toBe(1);
+    expect(outcome.report.duplicateRfcId).toBe(0);
+    const rows = await rowsOf(w);
+    expect(rows.find(row => row.provider_message_id === ids.first)?.rfc_message_id).toBe('shared@x.test');
+    expect(rows.find(row => row.provider_message_id === ids.second)?.rfc_message_id).toBeNull();
+    const line = outcome.log.lines.find(entry => entry.event === 'mail.rfc_id_conflict');
+    expect(line?.fields).toEqual({
+      mailboxId: w.alpha.mailboxId,
+      providerMessageId: ids.second,
+      existingProviderMessageId: ids.first,
+      rfcMessageId: 'shared@x.test',
+    });
+  };
+
+  it('a changed sender is a conflict: recorded without the id, logged, counted', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    await deliver(w, fixtureMessage({ id: 'sender1', historyId: '1011', from: STRANGER, to: w.alpha.address, messageId: 'shared@x.test' }));
+    const outcome = await deliver(
+      w,
+      fixtureMessage({ id: 'sender2', historyId: '1012', from: 'another@elsewhere.example.test', to: w.alpha.address, messageId: 'shared@x.test' }),
+    );
+    await expectConflict(w, outcome, { first: 'sender1', second: 'sender2' });
+  });
+
+  it('a changed direction is a conflict, and the new row keeps its own direction', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    await deliver(
+      w,
+      fixtureMessage({ id: 'dir1', historyId: '1011', from: w.alpha.address, to: STRANGER, messageId: 'shared@x.test', labelIds: ['SENT'] }),
+    );
+    const outcome = await deliver(w, fixtureMessage({ id: 'dir2', historyId: '1012', from: w.alpha.address, to: STRANGER, messageId: 'shared@x.test' }));
+    await expectConflict(w, outcome, { first: 'dir1', second: 'dir2' });
+    expect((await rowsOf(w)).map(row => row.direction)).toEqual(['outgoing', 'incoming']);
+  });
+
+  it('changed content is a conflict: another Subject, or the same Subject with another Date', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    await deliver(w, fixtureMessage({ id: 'content1', historyId: '1011', from: STRANGER, to: w.alpha.address, messageId: 'shared@x.test', subject: 'One' }));
+    const subject = await deliver(
+      w,
+      fixtureMessage({ id: 'content2', historyId: '1012', from: STRANGER, to: w.alpha.address, messageId: 'shared@x.test', subject: 'Two' }),
+    );
+    await expectConflict(w, subject, { first: 'content1', second: 'content2' });
+    const date = await deliver(
+      w,
+      fixtureMessage({
+        id: 'content3',
+        historyId: '1013',
+        from: STRANGER,
+        to: w.alpha.address,
+        messageId: 'shared@x.test',
+        subject: 'One',
+        internalDateEpochMilliseconds: Date.parse('2026-09-10T15:00:00Z'),
+      }),
+    );
+    expect(date.report.rfcIdConflicts).toBe(1);
+    expect(date.report.duplicateRfcId).toBe(0);
+  });
+
+  it('an incoming opt-out colliding with an outgoing message id is classified and suppressed', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    await deliver(
+      w,
+      fixtureMessage({ id: 'sent1', historyId: '1011', from: w.alpha.address, to: PROSPECT, messageId: 'shared@x.test', labelIds: ['SENT'] }),
+    );
+    const outcome = await deliver(
+      w,
+      fixtureMessage({ id: 'optout2', historyId: '1012', from: PROSPECT, to: w.alpha.address, messageId: 'shared@x.test', body: 'Please stop emailing me.' }),
+    );
+    await expectConflict(w, outcome, { first: 'sent1', second: 'optout2' });
+    expect(outcome.report.suppressionsRecorded).toBe(2);
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: PROSPECT })).not.toBeNull();
+    const { rows } = await w.database.session.query<{ class: string }>(
+      `SELECT c.class FROM mail_message_classifications AS c
+         JOIN mail_messages AS m ON m.workspace_id = c.workspace_id AND m.id = c.mail_message_id
+        WHERE m.mailbox_id = $1 AND m.provider_message_id = 'optout2'`,
+      [w.alpha.mailboxId],
+    );
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe('watch fencing', () => {
+  const watchDeps = (w: MailWorld, gmail: GmailClient, log = recordingMailLog()) => ({
+    gmail,
+    oauth: w.syncDeps(w.alpha).oauth,
+    cipher: w.cipher,
+    topicName: TEST_TOPIC_NAME,
+    log,
+  });
+
+  it('a registration names the watched address', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const log = recordingMailLog();
+    const report = await asJob(w, async () => await renewWatch(context, watchDeps(w, w.alpha.gmail, log), { mailboxId: w.alpha.mailboxId, generation: 1 }));
+    expect(report.outcome).toBe('renewed');
+    expect(log.lines.find(line => line.event === 'mail.watch_registered')?.fields['watchedAddress']).toBe(w.alpha.address);
+  });
+
+  it('a renewal that read generation g inserts no current watch when the mailbox moves to g+1 before it commits', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    try {
+      const gmail: GmailClient = {
+        ...w.alpha.gmail,
+        watch: async (...args) => {
+          const registered = await w.alpha.gmail.watch(...args);
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return registered;
+        },
+      };
+      await expect(
+        asJob(w, async () => await renewWatch(context, watchDeps(w, gmail), { mailboxId: w.alpha.mailboxId, generation: 1 })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(await readCurrentWatch(context, w.alpha.mailboxId)).toBeNull();
+    const due = await listWatchesDue(w.database.session, new Date().toISOString());
+    expect(due.find(entry => entry.mailboxId === w.alpha.mailboxId)).toMatchObject({ generation: 1, mailboxGeneration: 2 });
+  });
+});
+
+describe('generation-keyed jobs', () => {
+  it('a dead mail.sync for generation g does not block a sync for g+1', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const session = w.database.session;
+    const first = await coalesceMailSync(session, { workspaceId, mailboxId: w.alpha.mailboxId });
+    await session.query("UPDATE jobs SET state = 'dead', dead_at = now() WHERE id = $1", [first.jobId]);
+    // Still generation g: the dead row absorbs the ask, as 13.2 wants.
+    expect((await coalesceMailSync(session, { workspaceId, mailboxId: w.alpha.mailboxId })).outcome).toBe('dead');
+
+    await session.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+    const next = await coalesceMailSync(session, { workspaceId, mailboxId: w.alpha.mailboxId });
+    expect(next.outcome).toBe('enqueued');
+    expect(next.jobId).not.toBe(first.jobId);
+    const { rows } = await session.query<{ idempotency_key: string; state: string }>(
+      "SELECT idempotency_key, state FROM jobs WHERE workspace_id = $1 AND kind = 'mail.sync' ORDER BY idempotency_key",
+      [workspaceId],
+    );
+    expect(rows).toEqual([
+      { idempotency_key: `mail-sync:${w.alpha.mailboxId}:1`, state: 'dead' },
+      { idempotency_key: `mail-sync:${w.alpha.mailboxId}:2`, state: 'queued' },
+    ]);
   });
 });
