@@ -176,6 +176,12 @@ function Column({
             identity={session.identity}
             generation={session.generation}
             guard={session.guard}
+            mailbox={session.mailbox}
+            mailboxWaiting={session.mailboxWaiting}
+            hasMailboxBridge={hasOperations}
+            onSwitchMailbox={switchTo => {
+              void session.switchMailbox(switchTo);
+            }}
           />
         ) : route.name === 'replies' ? (
           <RepliesRoute key={key} column={columnRef} />

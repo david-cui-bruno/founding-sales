@@ -131,6 +131,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   },
   'sequences.publish': { sequenceVersionId: UUID },
   'sequences.retire': { sequenceVersionId: UUID },
+  'mailbox.switch': { switchTo: 'new@example.test' },
   'settings.show': { screen: 'settings' },
   'settings.saveSetting': { settingKey: 'business_time_zone', value: { timeZone: 'America/New_York' }, changeNote: '' },
   'settings.openHistory': { settingKey: 'business_time_zone' },

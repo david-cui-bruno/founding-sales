@@ -1,4 +1,5 @@
 import { useEffect, useRef, type JSX } from 'react';
+import type { MailboxState } from '../../shared/contract.ts';
 import type { Generation } from '../app/generation.ts';
 import { routeShown, SETTINGS_TABS, type Route, type SettingsTab } from '../routes.ts';
 import { adminViewOf } from '../settingsView.ts';
@@ -6,6 +7,7 @@ import { Alert } from '../ui/alert.tsx';
 import { Page, ViewHeader } from '../ui/layout.tsx';
 import { cn } from '../lib/utils.ts';
 import { Administration } from './Administration.tsx';
+import { MailboxSection } from './MailboxSection.tsx';
 import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
 import { RecoveryControls } from './RecoveryControls.tsx';
@@ -35,11 +37,19 @@ export function SettingsView({
   identity,
   generation,
   guard,
+  mailbox,
+  mailboxWaiting,
+  hasMailboxBridge,
+  onSwitchMailbox,
 }: {
   readonly route: Route;
   readonly identity: string | null;
   readonly generation: number;
   readonly guard: Generation;
+  readonly mailbox: MailboxState | null;
+  readonly mailboxWaiting: boolean;
+  readonly hasMailboxBridge: boolean;
+  onSwitchMailbox(switchTo: string): void;
 }): JSX.Element {
   const tab = route.name === 'settings' ? route.tab : 'administration';
   const section = route.name === 'settings' ? (route.section ?? null) : null;
@@ -107,6 +117,12 @@ export function SettingsView({
 
           {tabForScreen(view.screen) === 'administration' ? (
             <>
+              <MailboxSection
+                mailbox={mailbox}
+                waiting={mailboxWaiting}
+                available={hasMailboxBridge}
+                onSwitch={onSwitchMailbox}
+              />
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />

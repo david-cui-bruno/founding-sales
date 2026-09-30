@@ -39,7 +39,6 @@ const VERSION_HAS_NO_STEPS = 'That sequence has no steps. Add a step, then try a
 const STEP_UNKNOWN = 'That step is no longer in the sequence. Refresh and choose again.';
 const CONTACT_UNKNOWN = 'Callie cannot find that person at this firm. Refresh the page and choose again.';
 const OPPORTUNITY_MANUAL = 'This firm is yours to work by hand, so Callie will not act on it automatically.';
-const SEND_UNKNOWN = 'Callie cannot tell whether the last message left. It will not send another until that is settled; check the firm’s page.';
 
 // ---------------------------------------------------------------------------
 // Holds (specification 15)

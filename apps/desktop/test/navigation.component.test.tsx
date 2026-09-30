@@ -92,6 +92,10 @@ describe('Settings', () => {
           identity={null}
           generation={0}
           guard={createGeneration().guard}
+          mailbox={null}
+          mailboxWaiting={false}
+          hasMailboxBridge={false}
+          onSwitchMailbox={() => undefined}
         />
       </QueryClientProvider>,
     );
