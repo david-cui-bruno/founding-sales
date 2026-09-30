@@ -218,13 +218,17 @@ control still pauses automation."* This supersedes the first bullet above.
   The desktop Firm page lists the firm's held outgoing messages
   (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
   same resolve command, and says the outcome or the refusal under the list.
-* **No Gmail call under the gate.** The runner keeps a mail job in one transaction and
-  the import's gated section holds the exclusive send gate until it commits, so the
-  pipeline makes every Gmail call first — each message's metadata, then its body when a
-  match is plausible (judged with this batch's own earlier messages counted, a superset
-  of what the gated section finds; a body it then does not match is not stored) — and a
-  completed recovery reads the profile before the pipeline. The gated section calls no
-  provider.
+* **A residual, recorded (coordinator, round 6).** An import that takes the exclusive
+  send gate — the mail effects always did; S1 adds the outgoing marker path — holds it
+  until the job commits, because the runner keeps a mail job in one transaction. So a
+  slow Gmail call for a *later* message in the same job delays dispatch claims and stop
+  writers for that job's duration, bounded by the job timeout. The fix is per-message
+  committed transactions in the mail runner, a follow-up outside S1. (A two-phase
+  prefetch was tried and reverted: under READ COMMITTED an address added between its two
+  reads could commit an incoming message as matched with no body, and a fetch failure
+  before the gated loop would lose an earlier opt-out's durable journal append.) A
+  completed recovery does read the profile before the pipeline, so that call is never
+  made under the gate.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.
