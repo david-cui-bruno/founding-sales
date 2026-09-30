@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import { useEffect, useRef, type JSX } from 'react';
 import { navigate } from '../routes.ts';
 import type { LaneSection } from '../homeView.ts';
 import type { TodayState } from '../todayContract.ts';
@@ -8,6 +8,20 @@ import { Brief, CallAnnouncement } from '../research/Brief.tsx';
 import { OutcomeForm } from './OutcomeForm.tsx';
 import { TaskRow } from './TaskRow.tsx';
 import { todayForm, type TodayActions } from './useToday.ts';
+import { CallView } from '../calling/CallView.tsx';
+import { attemptLabel } from '../calling/callText.ts';
+import { registryCallPorts, useCall, type CallControl } from '../calling/useCall.ts';
+import { useCallingStatus, type CallingStatus } from '../calling/useCallingStatus.ts';
+
+/**
+ * Calling from Callie on this card (slice C1): the firm's calling status and the call.
+ * Absent, or with any provider but `twilio`, the panel is the `tel:` handoff exactly as it
+ * has always been.
+ */
+export interface DialCalling {
+  readonly status: CallingStatus;
+  readonly call: CallControl;
+}
 
 /**
  * The Today lanes (specification 8.2, 8.3, 9.1, 14.2).
@@ -33,12 +47,17 @@ export function DialPanel({
   state,
   view,
   actions,
+  calling,
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
   readonly actions: TodayActions;
+  readonly calling?: DialCalling | undefined;
 }): JSX.Element {
   const firmId = state.expanded?.firmId ?? '';
+  if (calling?.status.view?.provider === 'twilio') {
+    return <InAppDialPanel firmId={firmId} view={view} calling={calling} cadence={calling.status.view.cadence} />;
+  }
   return (
     <div data-testid="dial-panel" className="mt-3 flex flex-col gap-2">
       {/* First, before the buttons: what is said the moment they answer. Somebody who
@@ -78,6 +97,78 @@ export function DialPanel({
   );
 }
 
+/** The dial panel when calls are placed from Callie (slice C1). */
+function InAppDialPanel({
+  firmId,
+  view,
+  calling,
+  cadence,
+}: {
+  readonly firmId: string;
+  readonly view: TodayScreenView;
+  readonly calling: DialCalling;
+  readonly cadence: NonNullable<NonNullable<CallingStatus['view']>['cadence']> | null;
+}): JSX.Element {
+  const call = calling.call;
+  const busy = call.state.phase === 'starting' || call.state.phase === 'ringing' || call.state.phase === 'connected';
+  const parked = cadence?.parked === true;
+  return (
+    <div data-testid="dial-panel" className="mt-3 flex flex-col gap-2">
+      {/* First, as on the phone-app panel: what is said the moment they answer. */}
+      <CallAnnouncement />
+      {cadence === null ? null : (
+        <div className="flex items-center gap-2">
+          <p data-testid="call-attempt" className="text-xs text-muted-foreground">
+            {attemptLabel(cadence)}
+          </p>
+          {parked ? (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="call-resume"
+              disabled={calling.status.resuming || !view.actionsEnabled}
+              onClick={() => {
+                calling.status.resume();
+              }}
+            >
+              Resume calling
+            </Button>
+          ) : null}
+        </div>
+      )}
+      {view.dialRoutes.map(entry => (
+        <div key={entry.route.routeId} data-testid="dial-route" className="flex flex-wrap items-center gap-2">
+          <Button
+            data-testid="dial"
+            disabled={!entry.enabled || busy || parked}
+            {...(busy && 'routeId' in call.state && call.state.routeId === entry.route.routeId
+              ? { 'aria-busy': true }
+              : {})}
+            onClick={() => {
+              call.place({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId });
+            }}
+          >
+            Call {entry.route.e164}
+          </Button>
+          {entry.advice?.firmLocalTime == null ? null : (
+            <span className="text-xs text-muted-foreground">It is {entry.advice.firmLocalTime} there.</span>
+          )}
+          {entry.reasons.length === 0 ? null : (
+            <ul data-testid="dial-reasons" className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {entry.reasons.map(reason => (
+                <li key={reason} data-testid="dial-reason">
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+      <CallView call={call} />
+    </div>
+  );
+}
+
 function ExpandedFirm({
   state,
   view,
@@ -88,7 +179,25 @@ function ExpandedFirm({
   readonly actions: TodayActions;
 }): JSX.Element | null {
   const expanded = state.expanded;
+  const firmId = expanded?.firmId ?? null;
+  const status = useCallingStatus(firmId);
+  const call = useCall(registryCallPorts());
+  // A call that ended: read the card again (the outcome form names the call) and the
+  // cadence ("Attempt N of 4" moves once the outcome is recorded).
+  const endedSession = call.state.phase === 'ended' ? call.state.sessionId : null;
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (endedSession === null || seen.current === endedSession || firmId === null) return;
+    seen.current = endedSession;
+    actions.expand(firmId);
+    status.reload();
+  }, [endedSession, firmId, actions, status]);
   if (expanded === null) return null;
+  const callHere = 'firmId' in call.state && call.state.firmId === expanded.firmId ? call : null;
+  const callSessionId =
+    callHere !== null && (call.state.phase === 'ended' || call.state.phase === 'connected' || call.state.phase === 'ringing')
+      ? call.state.sessionId
+      : null;
   return (
     <section data-testid="today-firm" className="mt-2 mb-4 ml-1 border-l border-border pl-4">
       {/* The row above already names the firm; the heading is for a screen reader. */}
@@ -109,8 +218,8 @@ function ExpandedFirm({
           <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={view.actionsEnabled} actions={actions} />
         ))}
       </ul>
-      <DialPanel state={state} view={view} actions={actions} />
-      <OutcomeForm state={state} view={view} enabled={view.actionsEnabled} actions={actions} />
+      <DialPanel state={state} view={view} actions={actions} calling={{ status, call }} />
+      <OutcomeForm state={state} view={view} enabled={view.actionsEnabled} actions={actions} callSessionId={callSessionId} />
     </section>
   );
 }
