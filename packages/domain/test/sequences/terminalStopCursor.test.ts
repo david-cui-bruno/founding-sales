@@ -55,28 +55,49 @@ describe('the terminal-stop cursor', () => {
     await second.query('BEGIN');
     const firstReport = await consumeTerminalStops(workerOn(first), { limit: 1 });
     expect(firstReport.eventsConsumed).toBe(1);
-    const { rows: pidRows } = await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
-    const secondPid = pidRows[0]?.pid;
+    const pidOf = async (session: SessionQueryable): Promise<number> => {
+      const { rows: pidRows } = await session.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      const pid = pidRows[0]?.pid;
+      if (pid === undefined) throw new Error('no backend pid');
+      return pid;
+    };
+    const firstPid = await pidOf(first);
+    const secondPid = await pidOf(second);
     let secondDone = false;
     const secondDrain = consumeTerminalStops(workerOn(second), { limit: 2 }).finally(() => {
       secondDone = true;
     });
     // No timer decides the branch. Session 2 is observed in one of exactly two states:
-    // finished (nothing made it wait — the old drain) or waiting on a lock session 1
-    // holds (the gate or the cursor row — the new drain). Anything else within the
-    // deadline fails the test rather than choosing a branch.
+    // finished (nothing made it wait — the old drain), or blocked **by session 1** on a
+    // statement the new drain runs **before it reads**: the send gate, or the cursor
+    // row's insert-or-lock. Waiting on anything else, or on anyone else, is not accepted,
+    // and neither state within the deadline fails the test (round 4 of the review).
+    const PRE_READ_STATEMENTS = [
+      /pg_advisory_xact_lock\(/u,
+      /INSERT INTO sequence_event_cursors \(workspace_id, subscriber\) VALUES/u,
+      /SELECT last_event_at, last_event_id FROM sequence_event_cursors/u,
+    ];
     let secondWaiting = false;
+    let lastSeen = 'nothing observed';
     const deadline = Date.now() + 10_000;
     while (!secondDone && !secondWaiting && Date.now() < deadline) {
-      const { rows: waits } = await database.session.query<{ count: string }>(
-        'SELECT count(*)::text AS count FROM pg_locks WHERE pid = $1 AND NOT granted',
-        [secondPid],
+      const { rows: activity } = await database.session.query<{ blocked_by_first: boolean; query: string }>(
+        `SELECT $1::int = ANY(pg_blocking_pids(pid)) AS blocked_by_first, query
+           FROM pg_stat_activity WHERE pid = $2`,
+        [firstPid, secondPid],
       );
-      secondWaiting = waits[0]?.count !== '0';
+      const row = activity[0];
+      if (row !== undefined) {
+        lastSeen = `blocked by session 1: ${String(row.blocked_by_first)}; statement: ${row.query.slice(0, 120)}`;
+        secondWaiting = row.blocked_by_first && PRE_READ_STATEMENTS.some(pattern => pattern.test(row.query));
+      }
       if (!secondWaiting && !secondDone) await new Promise(resolve => setTimeout(resolve, 10));
     }
     try {
-      expect(secondDone || secondWaiting, 'session 2 was neither finished nor observed waiting on a lock').toBe(true);
+      expect(
+        secondDone || secondWaiting,
+        `session 2 was neither finished nor blocked by session 1 before its read (${lastSeen})`,
+      ).toBe(true);
       if (secondDone) {
         // Nothing made the second drain wait: commit it first, and the older batch after.
         await secondDrain;
