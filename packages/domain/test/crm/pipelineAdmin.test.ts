@@ -63,17 +63,9 @@ describe('stage administration', () => {
     await database.drop();
   });
 
-  it('starts from section 8.1 s default pipeline', async () => {
+  it('starts from the call-to-booking pipeline (0028)', async () => {
     const stages = await listPipelineStages(admin);
-    expect(stages.map(stage => stage.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'won',
-      'lost',
-    ]);
+    expect(stages.map(stage => stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
     expect(stages.filter(stage => stage.terminal_kind !== null).map(stage => stage.key)).toEqual(['won', 'lost']);
   });
 
@@ -82,7 +74,7 @@ describe('stage administration', () => {
       ok: false,
       reason: 'admin_only',
     });
-    expect(await renamePipelineStage(salesperson, { stageKey: 'engaged', displayName: 'Talking' })).toEqual({
+    expect(await renamePipelineStage(salesperson, { stageKey: 'qualified', displayName: 'Talking' })).toEqual({
       ok: false,
       reason: 'admin_only',
     });
@@ -90,28 +82,19 @@ describe('stage administration', () => {
       ok: false,
       reason: 'admin_only',
     });
-    expect(await retirePipelineStage(salesperson, { stageKey: 'proposal' })).toEqual({
+    expect(await retirePipelineStage(salesperson, { stageKey: 'onboarding' })).toEqual({
       ok: false,
       reason: 'admin_only',
     });
-    expect((await listPipelineStages(admin)).map(stage => stage.key)).toHaveLength(7);
+    expect((await listPipelineStages(admin)).map(stage => stage.key)).toHaveLength(6);
   });
 
   it('adds a stage before the terminal ones and keeps Won and Lost last', async () => {
     const created = await createPipelineStage(admin, { key: 'demo', displayName: 'Demo' });
     expect(created.ok).toBe(true);
     const stages = await listPipelineStages(admin);
-    expect(stages.map(stage => stage.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'demo',
-      'won',
-      'lost',
-    ]);
-    expect(stages.map(stage => stage.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(stages.map(stage => stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'demo', 'won', 'lost']);
+    expect(stages.map(stage => stage.position)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     // A second stage with the same key is refused rather than taking the unique
     // index, which would abort the transaction and lose the command receipt.
     expect(await createPipelineStage(admin, { key: 'demo', displayName: 'Demo again' })).toEqual({
@@ -126,12 +109,12 @@ describe('stage administration', () => {
   });
 
   it('renames and reorders the nonterminal stages, and leaves the keys alone', async () => {
-    const renamed = await renamePipelineStage(admin, { stageKey: 'engaged', displayName: 'In conversation' });
+    const renamed = await renamePipelineStage(admin, { stageKey: 'qualified', displayName: 'In conversation' });
     expect(renamed.ok).toBe(true);
     if (renamed.ok) expect(renamed.value.display_name).toBe('In conversation');
     // The key is the stable identifier every other table and every client uses. A
     // rename changes the label a person reads and nothing else.
-    expect((await listPipelineStages(admin)).find(stage => stage.key === 'engaged')?.display_name).toBe(
+    expect((await listPipelineStages(admin)).find(stage => stage.key === 'qualified')?.display_name).toBe(
       'In conversation',
     );
 
@@ -169,7 +152,7 @@ describe('stage administration', () => {
       ok: false,
       reason: 'stage_terminal',
     });
-    expect((await listPipelineStages(admin)).find(stage => stage.key === 'won')?.display_name).toBe('Won');
+    expect((await listPipelineStages(admin)).find(stage => stage.key === 'won')?.display_name).toBe('Live');
   });
 
   it('retires a nonterminal stage, keeps it readable, and refuses the last one', async () => {
@@ -200,17 +183,9 @@ describe('stage administration', () => {
 
   it('keeps the other workspace s pipeline untouched throughout', async () => {
     const beta = await listPipelineStages(betaAdmin);
-    expect(beta.map(stage => stage.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'won',
-      'lost',
-    ]);
+    expect(beta.map(stage => stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
     expect(beta.every(stage => !stage.retired)).toBe(true);
-    expect(beta.find(stage => stage.key === 'engaged')?.display_name).toBe('Engaged');
+    expect(beta.find(stage => stage.key === 'qualified')?.display_name).toBe('Decision pending');
   });
 
   it('refuses a stage key that is not a key', async () => {
@@ -331,15 +306,7 @@ describe('the pipeline board read', () => {
 
   it('puts every stage in the board, including retired ones, in order', async () => {
     const board = await readPipelineBoardForActor(admin);
-    expect(board.columns.map(column => column.stage.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'won',
-      'lost',
-    ]);
+    expect(board.columns.map(column => column.stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
     // Exactly one column holds the seeded firm, and it is the one its stage names.
     const holding = board.columns.filter(column => column.firms.length > 0);
     expect(holding).toHaveLength(1);

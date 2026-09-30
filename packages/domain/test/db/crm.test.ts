@@ -44,37 +44,40 @@ describe('CRM schema', () => {
   };
 
   // ------------------------------------------------------------------ pipeline
-  it('seeds the seven default stages in order, with Won and Lost terminal', async () => {
+  it('seeds the six default stages in order, with Live and Lost terminal (0028)', async () => {
     const { rows } = await session.query<{
       key: string;
+      display_name: string;
       position: number;
       terminal_kind: string | null;
       retired: boolean;
-    }>('SELECT key, position, terminal_kind, retired FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position', [
-      seeded.alpha.workspaceId,
+    }>(
+      'SELECT key, display_name, position, terminal_kind, retired FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position',
+      [seeded.alpha.workspaceId],
+    );
+    expect(rows.map(row => row.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
+    expect(rows.map(row => row.display_name)).toEqual([
+      'Interested',
+      'Demo booked',
+      'Decision pending',
+      'Onboarding',
+      'Live',
+      'Lost',
     ]);
-    expect(rows.map(row => row.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'won',
-      'lost',
-    ]);
-    expect(rows.map(row => row.terminal_kind)).toEqual([null, null, null, null, null, 'won', 'lost']);
+    expect(rows.map(row => row.position)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(rows.map(row => row.terminal_kind)).toEqual([null, null, null, null, 'won', 'lost']);
     expect(rows.every(row => !row.retired)).toBe(true);
   });
 
-  it('gives a workspace created after the migration the same seven stages', async () => {
+  it('gives a workspace created after the migration the same six stages', async () => {
     const created = await session.query<{ id: string }>(
       "INSERT INTO workspaces (slug, display_name) VALUES ('gamma', 'Gamma') RETURNING id",
     );
-    const { rows } = await session.query<{ count: string }>(
-      'SELECT count(*) AS count FROM pipeline_stages WHERE workspace_id = $1',
+    const { rows } = await session.query<{ key: string }>(
+      'SELECT key FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position',
       [created.rows[0]?.id],
     );
-    expect(Number(rows[0]?.count)).toBe(7);
+    expect(rows.map(row => row.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
   });
 
   // ------------------------------------------------- one open opportunity per firm

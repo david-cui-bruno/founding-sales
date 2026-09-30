@@ -49,7 +49,7 @@ describe('the Firm page read', () => {
 
     // A Lost change with its required reason (8.1), and a hold on the firm (15).
     const lost = await stageIdByKey(session, seeded.alpha.workspaceId, 'lost');
-    const contacting = await stageIdByKey(session, seeded.alpha.workspaceId, 'contacting');
+    const contacting = await stageIdByKey(session, seeded.alpha.workspaceId, 'demo_booked');
     await session.query(
       `INSERT INTO opportunity_stage_events (workspace_id, opportunity_id, firm_id, from_stage_id, to_stage_id,
                                              actor_kind, actor_user_id, reason, occurred_at)
@@ -105,7 +105,7 @@ describe('the Firm page read', () => {
 
     // Append-only and in order: the seeded opening, then the Lost change.
     expect(page.value.stageHistory.map(event => event.toStageKey)).toEqual(['new', 'lost']);
-    expect(page.value.stageHistory[1]?.fromStageKey).toBe('contacting');
+    expect(page.value.stageHistory[1]?.fromStageKey).toBe('demo_booked');
     expect(page.value.stageHistory[1]?.reason).toBe('Budget moved to next year');
     expect(page.value.stageHistory[0]?.reason).toBeNull();
 

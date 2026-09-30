@@ -124,7 +124,7 @@ describe('CRM commands', () => {
         }),
         await changeStage(context, {
           opportunityId: crm.alpha.opportunityId,
-          toStageKey: 'contacting',
+          toStageKey: 'demo_booked',
         }),
         await reassignFirm(context, { firmId: crm.alpha.firmId, toUserId: strangerUserId }),
       ]);
@@ -255,7 +255,7 @@ describe('CRM commands', () => {
       await inRolledBackTransaction(assignee, async context => {
         const moved = await changeStage(context, {
           opportunityId: crm.alpha.opportunityId,
-          toStageKey: 'contacting',
+          toStageKey: 'demo_booked',
         });
         expect(moved).toMatchObject({ ok: true });
         const { rows } = await context.db.query<{ count: string }>(
