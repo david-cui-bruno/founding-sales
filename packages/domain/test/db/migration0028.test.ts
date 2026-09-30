@@ -80,6 +80,7 @@ describe('migration 0028 on a database at schema 27', () => {
     readonly key: string;
     readonly status: string;
     readonly updated_at: Date;
+    readonly [column: string]: unknown;
   }
 
   async function stateOf(label: string): Promise<OpportunityState> {

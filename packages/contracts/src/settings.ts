@@ -159,6 +159,71 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
   });
 
 // ---------------------------------------------------------------------------
+// The call-to-booking switches (migration 0028)
+// ---------------------------------------------------------------------------
+
+/**
+ * Three workspace settings that are **not** in `SETTING_KEYS`, on purpose.
+ *
+ * `GET /settings` answers with a `strictObject` whose `settingKey` is `z.enum(SETTING_KEYS)`,
+ * and every installed Mac parses it with the enum it was built with. A key added to that
+ * list would make the settings page of every installed build fail to parse. So these live
+ * in the same versioned table (`workspace_settings`, whose CHECK 0028 widens), are written
+ * by the same `updateSetting` command, and are left out of the settings snapshot.
+ *
+ *   * `calling_provider` — `tel` (the Mac opens a `tel:` link; the default) or `twilio`
+ *     (the new call-session routes answer). The default leaves every new route at 404.
+ *   * `calendar_integration` — `off` (the default) or `calcom` (the Cal.com webhook is
+ *     accepted for this workspace).
+ *   * `telephony_budget` — the per-day ceiling in cents for Twilio minutes, the most minutes
+ *     one call reserves, and the price per minute in micro-dollars. A ceiling of 0 means
+ *     telephony spend is disabled: `POST /calls/session` refuses `telephony_budget_disabled`.
+ */
+export const INTEGRATION_SETTING_KEYS = ['calling_provider', 'calendar_integration', 'telephony_budget'] as const;
+export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
+
+/** Every key the versioned store may hold. */
+export type StoredSettingKey = ActiveSettingKey | IntegrationSettingKey;
+
+export const callingProviderSettingSchema = z.strictObject({ provider: z.enum(['tel', 'twilio']) });
+export type CallingProviderSetting = z.infer<typeof callingProviderSettingSchema>;
+
+export const calendarIntegrationSettingSchema = z.strictObject({ integration: z.enum(['off', 'calcom']) });
+export type CalendarIntegrationSetting = z.infer<typeof calendarIntegrationSettingSchema>;
+
+export const telephonyBudgetSettingSchema = z.strictObject({
+  /** Cents per business day for Twilio minutes. 0 disables telephony spend. At most $100. */
+  dailyCeilingCents: z.number().int().min(0).max(10_000),
+  /** Minutes one call session reserves before it is placed. */
+  maxMinutesPerCall: z.number().int().min(1).max(240),
+  /** Micro-dollars per minute (Twilio US outbound is about 14 000). */
+  unitPriceMicros: z.number().int().min(0).max(10_000_000),
+});
+export type TelephonyBudgetSetting = z.infer<typeof telephonyBudgetSettingSchema>;
+
+export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
+  calling_provider: callingProviderSettingSchema,
+  calendar_integration: calendarIntegrationSettingSchema,
+  telephony_budget: telephonyBudgetSettingSchema,
+} as const satisfies Record<IntegrationSettingKey, z.ZodType>;
+
+export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
+  calling_provider: { provider: 'tel' },
+  calendar_integration: { integration: 'off' },
+  telephony_budget: { dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14_000 },
+});
+
+/** The schema and default for any stored key. */
+export const STORED_SETTING_VALUE_SCHEMAS: Readonly<Record<StoredSettingKey, z.ZodType>> = Object.freeze({
+  ...SETTING_VALUE_SCHEMAS,
+  ...INTEGRATION_SETTING_VALUE_SCHEMAS,
+});
+export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, unknown>> = Object.freeze({
+  ...DEFAULT_SETTING_VALUES,
+  ...DEFAULT_INTEGRATION_SETTING_VALUES,
+});
+
+// ---------------------------------------------------------------------------
 // Commands and reads
 // ---------------------------------------------------------------------------
 
@@ -170,7 +235,11 @@ const activeSettingKeySchema = settingKeySchema;
 
 export const updateSettingCommandSchema = z.strictObject({
   ...commandEnvelope,
-  settingKey: activeSettingKeySchema,
+  /**
+   * A settings-page key, or one of the call-to-booking switches (0028). Only a new
+   * client names the latter; the snapshot below never carries them.
+   */
+  settingKey: z.enum([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS]),
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
   /**

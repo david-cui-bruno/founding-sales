@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
+import { MEETING_STATES } from './meetings.ts';
 
 /**
  * The wire contract of the CRM (specification 7.2, 7.3, 8.1, 9.1, 14.1, Appendix F).
@@ -297,11 +298,29 @@ export const pipelineStagesResponseSchema = z.object({ stages: z.array(pipelineS
 export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
 
 /** `POST /pipeline/board`: `PipelineBoardDto` in `packages/domain/crm/board.ts`. */
+/**
+ * What a board card shows beyond the firm's identity (call-to-booking slice W): the latest
+ * monthly value with its label, the latest meeting, the evidence of the last automatic
+ * move, and whether a person pinned the card where it is.
+ */
+export const boardCardSchema = z.object({
+  value: z.object({ monthlyCents: z.number().int().min(0), kind: z.enum(['estimated', 'agreed']) }).nullable(),
+  meeting: z.object({ meetingId: uuid, state: z.enum(MEETING_STATES), startsAt: instant }).nullable(),
+  evidence: z.object({ kind: z.string(), evidenceId: z.string(), occurredAt: instant }).nullable(),
+  pinned: z.boolean(),
+});
+export type BoardCard = z.infer<typeof boardCardSchema>;
+
+/** `POST /pipeline/board`'s body. Lost sits behind a filter. */
+export const pipelineBoardRequestSchema = z.object({ includeLost: z.boolean().optional() });
+
 export const pipelineBoardResponseSchema = z.object({
   columns: z.array(z.object({ stage: pipelineStageDtoSchema, firms: z.array(firmIdentityDtoSchema) })),
   /** Firm id to its open opportunity id, only for the firms this caller may change. */
   opportunityIdByFirmId: z.record(uuid, uuid),
   unplacedFirms: z.array(firmIdentityDtoSchema),
+  /** Firm id to its card detail, for every placed firm. Optional so older answers parse. */
+  cards: z.record(uuid, boardCardSchema).optional(),
 });
 
 /**

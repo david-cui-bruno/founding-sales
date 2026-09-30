@@ -53,7 +53,7 @@ export async function listPipelineStages(context: RepositoryContext): Promise<re
   return rows;
 }
 
-async function readStageByKey(context: RepositoryContext, key: string): Promise<PipelineStageRow | null> {
+export async function readStageByKey(context: RepositoryContext, key: string): Promise<PipelineStageRow | null> {
   const { rows } = await context.db.query<PipelineStageRow>(
     `SELECT ${STAGE_COLUMNS} FROM pipeline_stages WHERE workspace_id = $1 AND key = $2`,
     [context.scope.workspaceId, key],
@@ -84,7 +84,7 @@ export async function readOpenOpportunity(
   return rows[0] ?? null;
 }
 
-async function loadOpportunityForUpdate(
+export async function loadOpportunityForUpdate(
   context: RepositoryContext,
   opportunityId: string,
 ): Promise<OpportunityRow | null> {
@@ -176,6 +176,60 @@ export async function changeStage(
     return refuse('lost_reason_required');
   }
 
+  const moved = await moveOpportunityStage(context, opportunity, stage, reason, input.commandId);
+  if (moved === null) return refuse('opportunity_unknown');
+
+  // A person's move is a pin (call-to-booking, 0028): automatic evidence may move this
+  // opportunity again only to a stage later than the one chosen here. A close ends the
+  // opportunity's automatic life, so it clears the pin instead.
+  if (context.scope.actor.kind === 'user' && stage.terminal_kind === null) {
+    await context.db.query(
+      `INSERT INTO opportunity_stage_pins
+         (workspace_id, opportunity_id, firm_id, stage_id, pinned_by_user_id, source_event_id, pinned_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (workspace_id, opportunity_id) DO UPDATE
+          SET firm_id = EXCLUDED.firm_id, stage_id = EXCLUDED.stage_id,
+              pinned_by_user_id = EXCLUDED.pinned_by_user_id,
+              source_event_id = EXCLUDED.source_event_id, pinned_at = EXCLUDED.pinned_at`,
+      [
+        context.scope.workspaceId,
+        moved.opportunity.id,
+        moved.opportunity.firm_id,
+        stage.id,
+        context.scope.actor.userId,
+        moved.stageEventId,
+      ],
+    );
+  } else if (stage.terminal_kind !== null) {
+    await clearStagePin(context, moved.opportunity.id);
+  }
+  return accept(moved.opportunity);
+}
+
+/** Remove an opportunity's pin, if it has one. */
+export async function clearStagePin(context: RepositoryContext, opportunityId: string): Promise<void> {
+  await context.db.query('DELETE FROM opportunity_stage_pins WHERE workspace_id = $1 AND opportunity_id = $2', [
+    context.scope.workspaceId,
+    opportunityId,
+  ]);
+}
+
+/**
+ * The one statement sequence every stage move runs: the update, its append-only event,
+ * the terminal-stop signal for Won and Lost, and the audit row. `changeStage` (a person
+ * or a command) and `applyStageEvidence` (automatic, `crm/stageEvidence.ts`) both call
+ * it, so the two can never write a move differently.
+ *
+ * The caller has taken the send gate, locked the opportunity and the firm, and decided
+ * the move is permitted. Returns null only if the row vanished under the lock.
+ */
+export async function moveOpportunityStage(
+  context: RepositoryContext,
+  opportunity: OpportunityRow,
+  stage: PipelineStageRow,
+  reason: string | undefined,
+  commandId: string | undefined,
+): Promise<{ readonly opportunity: OpportunityRow; readonly stageEventId: string } | null> {
   const terminal = stage.terminal_kind !== null;
   const { rows } = await context.db.query<OpportunityRow>(
     `UPDATE opportunities
@@ -188,16 +242,16 @@ export async function changeStage(
       RETURNING ${OPPORTUNITY_COLUMNS}`,
     [
       context.scope.workspaceId,
-      input.opportunityId,
+      opportunity.id,
       stage.id,
       terminal ? stage.terminal_kind : null,
       reason ?? null,
     ],
   );
   const updated = rows[0];
-  if (updated === undefined) return refuse('opportunity_unknown');
+  if (updated === undefined) return null;
 
-  await writeStageEvent(context, updated, opportunity.stage_id, stage.id, reason, input.commandId);
+  const stageEventId = await writeStageEvent(context, updated, opportunity.stage_id, stage.id, reason, commandId);
 
   if (terminal) {
     // Section 8.1: "Closing an opportunity stops its active enrollments." The
@@ -208,7 +262,7 @@ export async function changeStage(
       firmId: updated.firm_id,
       opportunityId: updated.id,
       dedupeKey: `${updated.id}:${stage.key}`,
-      commandId: input.commandId,
+      commandId,
       detail: { terminalKind: stage.terminal_kind, stage: stage.key },
     });
   }
@@ -219,7 +273,7 @@ export async function changeStage(
     subjectId: updated.id,
     detail: { firmId: updated.firm_id, toStage: stage.key, terminal },
   });
-  return accept(updated);
+  return { opportunity: updated, stageEventId };
 }
 
 /**
@@ -579,7 +633,7 @@ function instantLabel(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
-/** The append-only event every stage change commits with (8.1, Appendix A). */
+/** The append-only event every stage change commits with (8.1, Appendix A). Returns its id. */
 async function writeStageEvent(
   context: RepositoryContext,
   opportunity: OpportunityRow,
@@ -587,11 +641,12 @@ async function writeStageEvent(
   toStageId: string,
   reason: string | undefined,
   commandId: string | undefined,
-): Promise<void> {
-  await context.db.query(
+): Promise<string> {
+  const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO opportunity_stage_events
        (workspace_id, opportunity_id, firm_id, from_stage_id, to_stage_id, actor_kind, actor_user_id, reason, command_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
     [
       context.scope.workspaceId,
       opportunity.id,
@@ -604,4 +659,7 @@ async function writeStageEvent(
       commandId ?? null,
     ],
   );
+  const id = rows[0]?.id;
+  if (id === undefined) throw new Error('the stage event insert returned no row');
+  return id;
 }

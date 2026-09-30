@@ -304,12 +304,23 @@ describe('the pipeline board read', () => {
     expect(board.opportunityIdByFirmId[crm.alpha.firmId]).not.toBe(crm.beta.opportunityId);
   });
 
-  it('puts every stage in the board, including retired ones, in order', async () => {
+  it('shows the five Kanban columns in order, and Lost only behind its filter (0028)', async () => {
     const board = await readPipelineBoardForActor(admin);
-    expect(board.columns.map(column => column.stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
+    expect(board.columns.map(column => column.stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won']);
     // Exactly one column holds the seeded firm, and it is the one its stage names.
     const holding = board.columns.filter(column => column.firms.length > 0);
     expect(holding).toHaveLength(1);
     expect(holding[0]?.stage.key).toBe('new');
+    expect(board.cards[crm.alpha.firmId]).toEqual({ value: null, meeting: null, evidence: null, pinned: false });
+
+    const withLost = await readPipelineBoardForActor(admin, { includeLost: true });
+    expect(withLost.columns.map(column => column.stage.key)).toEqual([
+      'new',
+      'demo_booked',
+      'qualified',
+      'onboarding',
+      'won',
+      'lost',
+    ]);
   });
 });

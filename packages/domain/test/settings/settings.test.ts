@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SETTING_VALUES, SETTING_KEYS } from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, DEFAULT_STORED_SETTING_VALUES, INTEGRATION_SETTING_KEYS, SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -68,7 +68,7 @@ describe('workspace settings', () => {
     for (const entry of current) {
       expect(entry.version, entry.settingKey).toBe(0);
       expect(entry.changedAt, entry.settingKey).toBeNull();
-      expect(entry.value, entry.settingKey).toEqual(DEFAULT_SETTING_VALUES[entry.settingKey]);
+      expect(entry.value, entry.settingKey).toEqual(DEFAULT_STORED_SETTING_VALUES[entry.settingKey]);
     }
   });
 
@@ -414,6 +414,6 @@ describe('the key set', () => {
       .filter((block): block is string => block !== undefined);
     expect(blocks.length, 'no migration declares workspace_settings_key_known').toBeGreaterThan(0);
     const keys = [...(blocks.at(-1) ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
-    expect([...keys].sort()).toEqual([...SETTING_KEYS].sort());
+    expect([...keys].sort()).toEqual([...SETTING_KEYS, ...INTEGRATION_SETTING_KEYS].sort());
   });
 });
