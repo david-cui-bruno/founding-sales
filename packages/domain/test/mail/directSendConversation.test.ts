@@ -18,6 +18,7 @@ import {
 } from '../../mail/matching.ts';
 import type { NormalizedMetadata } from '../../mail/messages.ts';
 import { readMessage } from '../../mail/messages.ts';
+import { runMailRecovery } from '../../mail/recover.ts';
 import { runMailSync } from '../../mail/sync.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
@@ -1051,5 +1052,158 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
     );
     expect(read[0]?.count).toBe('1');
     expect((await readMailbox(worker(), world.alpha.mailboxId))?.lastSyncError).toBeNull();
+  });
+});
+
+describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
+  const headerOf = async (fenceId: string): Promise<string> => {
+    const { rows } = await world.database.session.query<{ header: string | null }>(
+      'SELECT provider_message_id_header AS header FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId],
+    );
+    const header = rows[0]?.header ?? null;
+    if (header !== null) return header.replace(/^<|>$/gu, '');
+    const made = `fss.${fenceId}@example.test`;
+    await world.database.session.query(
+      'UPDATE outbound_messages SET provider_message_id_header = $3 WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId, `<${made}>`],
+    );
+    return made;
+  };
+
+  it('a manual message reusing an automated message id is a direct send: the permission is consumed, and not automated', async () => {
+    const firm = await seedFirm(world, world.alpha, 'rfc-inherit');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    const owned = await headerOf(followUp.fenceId);
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'rfc-auto', historyId: '1301', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'The automated note' }),
+      fixtureMessage({ id: 'rfc-manual', historyId: '1302', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'My own note' }),
+    );
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const report = await withTransaction(session, async () =>
+      await runMailSync(worker(), world.syncDeps(world.alpha), { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(report.rfcIdConflicts).toBe(1);
+    expect(report.automatedSendsRecognised).toBe(1);
+    expect(report.directSendsRecorded).toBe(1);
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+
+    // A replay: the conflict's row holds no Message-ID and is still not looked up by one.
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    const replay = await withTransaction(session, async () =>
+      await runMailSync(worker(), world.syncDeps(world.alpha), { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(replay.automatedSendsRecognised).toBe(1);
+  });
+
+  it('a failed duplicate-proof read stops at that message: the direct send before it commits', async () => {
+    const firm = await seedFirm(world, world.alpha, 'proof-stop');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1400' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const base = world.syncDeps(world.alpha);
+    // The original is recorded by an earlier run.
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'proof-orig', historyId: '1401', from: 'someone@elsewhere.example.test', to: world.alpha.address, messageId: 'proof@x.test', subject: 'Same' }),
+    );
+    await withTransaction(session, async () => await runMailSync(worker(), base, { mailboxId: world.alpha.mailboxId }));
+
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'proof-direct', historyId: '1402', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'proof-copy', historyId: '1403', from: 'someone@elsewhere.example.test', to: world.alpha.address, messageId: 'proof@x.test', subject: 'Same' }),
+    );
+    // Only the proof read fails: the read of the original made for the copy. (The
+    // fixture's current history id is below the cursor, so the run replays the original
+    // first, and that read succeeds.)
+    let copyRead = false;
+    const gmail: GmailClient = {
+      ...base.gmail,
+      getMetadata: async (access, messageId, headers) => {
+        if (messageId === 'proof-copy') copyRead = true;
+        if (messageId === 'proof-orig' && copyRead) throw new GmailClientError('unexpected_status', 'the fixture read failed', 429);
+        return await base.gmail.getMetadata(access, messageId, headers);
+      },
+    };
+    const report = await withTransaction(session, async () =>
+      await runMailSync(worker(), { ...base, gmail }, { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(report.outcome).toBe('read_stopped');
+    expect(report.directSendsRecorded).toBe(1);
+    expect(report.readFailure).toEqual({ providerMessageId: 'proof-copy', read: 'metadata', detail: 'unexpected_status 429' });
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+    // The cursor stands just before the copy's record.
+    expect((await readMailbox(worker(), world.alpha.mailboxId))?.historyId).toBe('1402');
+  });
+});
+
+describe('C2B-A1 fold 3: a recovery adopting its cursor takes the gate before the row', () => {
+  it('a recovery adopting its cursor and a sync taking the gate do not deadlock', async () => {
+    const firm = await seedFirm(world, world.alpha, 'adopt-gate');
+    // A legacy recovery: the mailbox is recovering with no cursor of its own.
+    const { rows: bumped } = await world.database.session.query<{ generation: number }>(
+      `UPDATE mailboxes SET generation = generation + 1, sync_state = 'recovering', history_id = NULL,
+              history_id_updated_at = NULL, coverage_watermark_at = NULL
+        WHERE workspace_id = $1 AND id = $2 RETURNING generation`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    const generation = bumped[0]?.generation ?? 0;
+    await world.database.session.query(
+      `INSERT INTO mailbox_recoveries (workspace_id, mailbox_id, generation, reason, from_at, to_at)
+       VALUES ($1, $2, $3, 'history_expired', now() - interval '1 day', now())`,
+      [workspaceId(), world.alpha.mailboxId, generation],
+    );
+    world.alpha.messages.push(
+      fixtureMessage({
+        id: 'adopt-direct',
+        historyId: '1501',
+        from: world.alpha.address,
+        to: firm.address,
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now() - 3600_000,
+      }),
+    );
+
+    const base = world.syncDeps(world.alpha);
+    let syncRun: Promise<unknown> | null = null;
+    const gmail: GmailClient = {
+      ...base.gmail,
+      listMessageIds: async (...args) => {
+        if (syncRun === null) {
+          // Between the recovery's cursor adoption and its gated pipeline, a sync of the
+          // recovering mailbox takes the gate for its coverage hold.
+          await second.session.query('BEGIN');
+          syncRun = runMailSync(second.context(workspaceId()), base, { mailboxId: world.alpha.mailboxId });
+          await waitUntilBlocked(barrier.session, second.pid);
+        }
+        return await base.gmail.listMessageIds(...args);
+      },
+    };
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const report = await withTransaction(session, async () =>
+      await runMailRecovery(worker(), { ...base, gmail }, { mailboxId: world.alpha.mailboxId, generation }),
+    );
+    expect(report.outcome).toBe('completed');
+    expect(report.directSendsRecorded).toBe(1);
+    const synced = (await syncRun) as { outcome: string } | null;
+    await second.session.query('COMMIT');
+    expect(synced?.outcome).toBe('recovery_underway');
   });
 });

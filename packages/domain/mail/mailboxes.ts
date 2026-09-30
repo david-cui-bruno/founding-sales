@@ -3,6 +3,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordHeartbeat } from '../jobs/heartbeats.ts';
 import { listApplicableHolds, openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { MailboxRow, MailboxStatus, MailboxSyncState } from './types.ts';
 
 /**
@@ -142,6 +143,7 @@ export const MAILBOX_CHECK_INTERVAL_SECONDS = 60;
 export interface MailboxDueRow {
   readonly workspaceId: string;
   readonly mailboxId: string;
+  readonly generation: number;
   readonly historyId: string | null;
 }
 
@@ -165,14 +167,19 @@ export interface MailboxDueRow {
  * baseline would only re-open the recovery it is already in.
  */
 export async function listMailboxesDueForSync(db: Queryable): Promise<readonly MailboxDueRow[]> {
-  const { rows } = await db.query<{ workspace_id: string; id: string; history_id: string | null }>(
-    `SELECT workspace_id, id, history_id
+  const { rows } = await db.query<{ workspace_id: string; id: string; generation: number; history_id: string | null }>(
+    `SELECT workspace_id, id, generation, history_id
        FROM mailboxes
       WHERE status = 'connected'
         AND sync_state = 'ready'
       ORDER BY id`,
   );
-  return rows.map(row => ({ workspaceId: row.workspace_id, mailboxId: row.id, historyId: row.history_id }));
+  return rows.map(row => ({
+    workspaceId: row.workspace_id,
+    mailboxId: row.id,
+    generation: row.generation,
+    historyId: row.history_id,
+  }));
 }
 
 export interface InsertMailboxInput {
@@ -243,6 +250,113 @@ export async function markMailboxDisconnected(
   );
 }
 
+/**
+ * A job read the mailbox at one generation and address, and the row no longer says so
+ * when the job came to write (generation fencing, `docs/greenfield/mail.md`).
+ *
+ * Thrown, never returned: the runner rolls the whole job transaction back — message
+ * effects included — and records the failure as `stale_mailbox_generation` (the
+ * runner's code is the error's name). The retry re-reads the mailbox and acts for the
+ * generation it finds, which is harmless by construction: a sync of a mailbox that is
+ * not `ready` is a no-op, a recovery for a superseded generation answers
+ * `generation_superseded`, and a watch renewal registers the current account's watch.
+ */
+export class StaleMailboxGeneration extends Error {
+  override readonly name = 'StaleMailboxGeneration';
+  constructor(
+    readonly mailboxId: string,
+    readonly write: string,
+    readonly expected: MailboxFence,
+  ) {
+    super(`the mailbox changed generation or address before the job's ${write} could commit`);
+  }
+}
+
+/** What a job read at its start and every write it makes is predicated on. */
+export interface MailboxFence {
+  readonly generation: number;
+  readonly emailAddress: string;
+}
+
+export const fenceOf = (mailbox: MailboxRow): MailboxFence => ({
+  generation: mailbox.generation,
+  emailAddress: mailbox.emailAddress,
+});
+
+/**
+ * Lock the mailbox row and refuse unless it still has the generation and address the
+ * job read at its start. The lock holds until the job commits, so nothing can move the
+ * generation between this check and the writes after it.
+ */
+export async function lockMailboxAtFence(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly fence: MailboxFence; readonly write: string },
+): Promise<MailboxRow> {
+  // `FOR NO KEY UPDATE`, not `FOR UPDATE` (fold 2, from the A2 review): every
+  // `mail_messages` insert takes an implicit KEY SHARE on its mailbox row, and a job
+  // that has inserted messages and then waits for the send gate would deadlock with a
+  // job that holds the gate and asks for `FOR UPDATE` here. NO KEY UPDATE does not
+  // conflict with KEY SHARE, and it still conflicts with itself and with every UPDATE of
+  // the row — a generation bump included — so the fence is held just as firmly. The
+  // writes after it change only non-key columns.
+  const { rows } = await context.db.query<MailboxDbRow>(
+    `SELECT ${MAILBOX_COLUMNS} FROM mailboxes WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  const found = rows[0];
+  const mailbox = found === undefined ? null : toMailbox(found);
+  if (
+    mailbox === null ||
+    mailbox.generation !== input.fence.generation ||
+    mailbox.emailAddress !== input.fence.emailAddress
+  ) {
+    throw new StaleMailboxGeneration(input.mailboxId, input.write, input.fence);
+  }
+  return mailbox;
+}
+
+/**
+ * The lock order for a job's refusal path that writes a stop fact — a revoked grant, a
+ * disconnected hold, a coverage hold (fold 2): the send gate EXCLUSIVE first, because
+ * `openHold` takes it and a claim takes it before any row, then the mailbox row at the
+ * job's fence, held to commit. Never the row and then the gate.
+ */
+export async function lockForFencedStopFact(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly fence: MailboxFence; readonly write: string },
+): Promise<MailboxRow> {
+  await lockSendGateForStopFact(context);
+  return await lockMailboxAtFence(context, input);
+}
+
+/**
+ * Forget everything the mailbox knows about the account it was reading: the history
+ * cursor, its instant, the coverage watermark and the last sync's outcome, in one
+ * statement, so `mailboxes_history_cursor_consistent` and
+ * `mailboxes_coverage_needs_cursor` hold on either side of it.
+ *
+ * The caller must hold the mailbox row lock in the same transaction (`FOR NO KEY
+ * UPDATE` is enough, and is what the fenced paths take: the columns are non-key), and is the one that advances the generation and starts the new
+ * baseline: this is the account-switch half that only clears.
+ */
+export async function resetAccountState(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string },
+): Promise<void> {
+  const { rowCount } = await context.db.query(
+    `UPDATE mailboxes
+        SET history_id = NULL,
+            history_id_updated_at = NULL,
+            coverage_watermark_at = NULL,
+            last_sync_error = NULL,
+            last_synced_at = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  if ((rowCount ?? 0) === 0) throw new Error('an account-state reset found no mailbox');
+}
+
 export type CursorOutcome =
   | { readonly advanced: true; readonly historyId: string; readonly coverageWatermarkAt: string | null }
   | { readonly advanced: false; readonly reason: 'cursor_moved' };
@@ -258,6 +372,14 @@ export async function advanceCursor(
   context: RepositoryContext,
   input: {
     readonly mailboxId: string;
+    /**
+     * The generation and address the job read at its start. A cursor that is still
+     * where the caller left it on a mailbox that has since moved on — an account switch,
+     * a new baseline — is not the caller's to move: that throws
+     * `StaleMailboxGeneration` rather than answering `cursor_moved`, so the job's
+     * message effects roll back with it.
+     */
+    readonly fence: MailboxFence;
     readonly expectedHistoryId: string | null;
     readonly historyId: string;
     readonly coverageWatermarkAt?: string | undefined;
@@ -275,6 +397,8 @@ export async function advanceCursor(
       WHERE workspace_id = $1
         AND id = $2
         AND history_id IS NOT DISTINCT FROM $3
+        AND generation = $7
+        AND email_address = $8
       RETURNING history_id, coverage_watermark_at`,
     [
       context.scope.workspaceId,
@@ -283,10 +407,19 @@ export async function advanceCursor(
       input.historyId,
       input.coverageWatermarkAt ?? null,
       input.syncError ?? null,
+      input.fence.generation,
+      input.fence.emailAddress,
     ],
   );
   const row = rows[0];
-  if (row === undefined) return { advanced: false, reason: 'cursor_moved' };
+  if (row === undefined) {
+    // Which predicate failed decides the answer, and the answer must hold to commit
+    // (fold 3): an UPDATE that matched nothing locked nothing, so a plain read here could
+    // see generation g and a switch commit g+1 before this job commits its messages. The
+    // fenced lock throws on a mismatch and otherwise holds the row at g to commit.
+    await lockMailboxAtFence(context, { mailboxId: input.mailboxId, fence: input.fence, write: 'cursor compare-and-set' });
+    return { advanced: false, reason: 'cursor_moved' };
+  }
   return {
     advanced: true,
     historyId: row.history_id,
@@ -297,8 +430,20 @@ export async function advanceCursor(
 /** Record a sync failure without pretending the cursor moved. */
 export async function recordSyncError(
   context: RepositoryContext,
-  input: { readonly mailboxId: string; readonly error: string },
+  input: {
+    readonly mailboxId: string;
+    readonly error: string;
+    /**
+     * The generation and address the job read at its start (fold 2). With it, the row is
+     * locked at that fence first, and a mailbox that has moved on throws
+     * `StaleMailboxGeneration` instead of taking an older account's error.
+     */
+    readonly fence?: MailboxFence | undefined;
+  },
 ): Promise<void> {
+  if (input.fence !== undefined) {
+    await lockMailboxAtFence(context, { mailboxId: input.mailboxId, fence: input.fence, write: 'sync error' });
+  }
   await context.db.query(
     `UPDATE mailboxes SET last_sync_error = $3, last_synced_at = now(), updated_at = now()
       WHERE workspace_id = $1 AND id = $2`,
@@ -324,15 +469,31 @@ export async function setSyncState(
   );
 }
 
-/** Advance the generation. A watch or recovery for an older one can no longer write. */
-export async function advanceGeneration(context: RepositoryContext, mailboxId: string): Promise<number> {
+/**
+ * Advance the generation. A watch or recovery for an older one can no longer write.
+ *
+ * With a fence, only from the generation and address the caller read: a job that
+ * decided to start a recovery for generation g must not start one for whatever the
+ * mailbox became while it was deciding.
+ */
+export async function advanceGeneration(
+  context: RepositoryContext,
+  mailboxId: string,
+  fence?: MailboxFence,
+): Promise<number> {
   const { rows } = await context.db.query<{ generation: number }>(
     `UPDATE mailboxes SET generation = generation + 1, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 RETURNING generation`,
-    [context.scope.workspaceId, mailboxId],
+      WHERE workspace_id = $1 AND id = $2
+        AND ($3::integer IS NULL OR generation = $3)
+        AND ($4::text IS NULL OR email_address = $4)
+      RETURNING generation`,
+    [context.scope.workspaceId, mailboxId, fence?.generation ?? null, fence?.emailAddress ?? null],
   );
   const generation = rows[0]?.generation;
-  if (generation === undefined) throw new Error('a generation advance found no mailbox');
+  if (generation === undefined) {
+    if (fence !== undefined) throw new StaleMailboxGeneration(mailboxId, 'generation advance', fence);
+    throw new Error('a generation advance found no mailbox');
+  }
   return generation;
 }
 

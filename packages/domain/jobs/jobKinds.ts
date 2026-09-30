@@ -127,11 +127,20 @@ export const jobIdempotencyKey = Object.freeze({
    */
   sequenceAction: (stepExecutionId: string, wake?: string): string =>
     wake === undefined ? `step-execution:${stepExecutionId}` : `step-execution:${stepExecutionId}:${wake}`,
-  mailSync: (mailboxId: string): string => `mail-sync:${mailboxId}`,
+  /**
+   * Appendix C's `mail-sync:{mailbox}`, with the mailbox generation appended (C2B-A1):
+   * a `dead` sync of one generation never absorbs the work of the next.
+   */
+  mailSync: (mailboxId: string, generation: number): string => `mail-sync:${mailboxId}:${String(generation)}`,
   mailReconcile: (mailboxId: string, minuteIso: string): string => `mail-reconcile:${mailboxId}:${minuteIso}`,
   mailRecover: (mailboxId: string, generation: number): string =>
     `mail-recover:${mailboxId}:${String(generation)}`,
-  watchRenew: (mailboxId: string, generation: number): string => `watch:${mailboxId}:${String(generation)}`,
+  /**
+   * Appendix C's `watch:{mailbox}:{generation}` — the renewal counter — with the mailbox
+   * generation in front of it (C2B-A1), for the same reason as `mailSync`.
+   */
+  watchRenew: (mailboxId: string, watchGeneration: number, mailboxGeneration: number): string =>
+    `watch:${mailboxId}:${String(mailboxGeneration)}:${String(watchGeneration)}`,
   todayList: (workspaceSlug: string, businessDate: string, algorithmVersion: string): string =>
     `today:${workspaceSlug}:${businessDate}:${algorithmVersion}`,
   suppressionFinalize: (eventId: string): string => `suppression-finalize:${eventId}`,

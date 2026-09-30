@@ -11,9 +11,9 @@ import { renewWatch, type WatchRenewalDeps } from './watch.ts';
  *
  * | Work | Idempotency key | Effect protection |
  * |---|---|---|
- * | Mail sync | `mail-sync:{mailbox}` single-flight with merged high-water ID | Message uniqueness and cursor CAS |
+ * | Mail sync | `mail-sync:{mailbox}:{generation}` single-flight with merged high-water ID | Message uniqueness and cursor CAS |
  * | Mail recovery | `mail-recover:{mailbox}:{generation}` | Message uniqueness and coverage watermark |
- * | Watch renewal | `watch:{mailbox}:{generation}` | Stored expiry and generation |
+ * | Watch renewal | `watch:{mailbox}:{mailboxGeneration}:{generation}` | Stored expiry and generation |
  *
  * The registry refuses a handler whose declared protection disagrees with that table,
  * so the declarations below are checked rather than described. Each is honest:
@@ -119,8 +119,14 @@ export function watchRenewalHandler(deps: WatchRenewalDeps, options: MailHandler
       if (typeof generation !== 'number' || !Number.isInteger(generation) || generation < 1) {
         throw new Error('a mail.watch_renew payload names the generation it is registering');
       }
+      // Absent on a renewal enqueued before the key carried the mailbox generation.
+      const mailboxGeneration = input.job.payload['mailboxGeneration'];
       const context = repositoryContext(input.scope, input.session);
-      const report = await renewWatch(context, deps, { mailboxId, generation });
+      const report = await renewWatch(context, deps, {
+        mailboxId,
+        generation,
+        ...(typeof mailboxGeneration === 'number' ? { mailboxGeneration } : {}),
+      });
       if (report.outcome === 'mailbox_unknown') {
         throw new Error('a mail.watch_renew payload named a mailbox in another workspace');
       }

@@ -8,7 +8,8 @@ import {
   recordDeterministicClassification,
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
+import { headerValue, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
+import type { MailLog } from './log.ts';
 import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
@@ -33,9 +34,13 @@ import { GmailClientError } from './gmailClient.ts';
  * with the fulfilled follow-up still claimable until the retry. So the loop stops at N
  * and reports how many leading ids it finished (`processedMessages`) and which read
  * failed (`readFailure`). `mail.sync` moves its cursor only to just before N, the job
- * commits 1 to N-1, and N is read again on the next run; `mail.recover`, whose
- * page-count position is not stable across runs, throws on it and keeps its whole-job
- * retry. What N itself wrote before its body read failed is undone by a savepoint, so N
+ * commits 1 to N-1, and N is read again on the next run; `mail.recover` throws on it
+ * and keeps its whole-job retry (its position is the recorded rows, so nothing is lost).
+ *
+ * **An RFC Message-ID collision never raises** (C2B-A1): `recordMessage` returns a proven
+ * duplicate as the recorded message, whose effects are not run again, and records any
+ * other colliding message without the id, which this loop then processes on its own
+ * metadata. What N itself wrote before its body read failed is undone by a savepoint, so N
  * is retried whole. Only a Gmail read is caught: a database error still throws, and the
  * runner still rolls the job back.
  */
@@ -46,6 +51,8 @@ export interface MessagePipelineDeps {
   readonly cipher: EnvelopeCipher;
   readonly journal: SuppressionJournal;
   readonly replyPromoter: ReplyPromoter;
+  /** Where an RFC Message-ID conflict is logged. Stdout unless a test records it. */
+  readonly log?: MailLog | undefined;
 }
 
 export interface MessagePipelineReport {
@@ -63,6 +70,22 @@ export interface MessagePipelineReport {
   readonly directSendsRecorded: number;
   /** Outgoing messages this import matched to a fence FSS had already counted. */
   readonly automatedSendsRecognised: number;
+  /**
+   * Second copies of a message already recorded under the same RFC Message-ID, proven
+   * the same message (direction, From, Subject, `Date`): treated as recorded, no effect
+   * re-run.
+   */
+  readonly duplicateRfcId: number;
+  /**
+   * Messages whose RFC Message-ID another, different message in the mailbox already
+   * holds: recorded without it and processed as new, with their own metadata.
+   */
+  readonly rfcIdConflicts: number;
+  /**
+   * Ids whose metadata read found no message: deleted between the listing (or history
+   * page) and the read. Processed, and gone.
+   */
+  readonly vanishedMessages: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
   readonly newestInternalDate: string | null;
   /**
@@ -92,6 +115,9 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   suppressionsRecorded: 0,
   directSendsRecorded: 0,
   automatedSendsRecognised: 0,
+  duplicateRfcId: 0,
+  rfcIdConflicts: 0,
+  vanishedMessages: 0,
   newestInternalDate: null,
   processedMessages: 0,
   readFailure: null,
@@ -112,6 +138,13 @@ async function gmailRead<T>(read: () => Promise<T>): Promise<GmailRead<T>> {
 }
 
 const MESSAGE_SAVEPOINT = 'mail_pipeline_message';
+
+/** The duplicate-proof read failed; the message stops the batch as a failed metadata read. */
+class ProofReadFailed extends Error {
+  constructor(readonly detail: string) {
+    super('the duplicate-proof metadata read failed');
+  }
+}
 
 /**
  * A savepoint for one message's writes, or false outside a transaction — only a test
@@ -147,6 +180,9 @@ export async function processMessageIds(
   let suppressionsRecorded = 0;
   let directSendsRecorded = 0;
   let automatedSendsRecognised = 0;
+  let duplicateRfcId = 0;
+  let rfcIdConflicts = 0;
+  let vanishedMessages = 0;
   let newestInternalDate: string | null = null;
 
   let processedMessages = 0;
@@ -165,6 +201,7 @@ export async function processMessageIds(
     // A message that vanished between the listing and the read is gone rather than
     // broken: Gmail deletions are real, and the next listing will not mention it.
     if (metadata === null) {
+      vanishedMessages += 1;
       processedMessages = index + 1;
       continue;
     }
@@ -182,21 +219,60 @@ export async function processMessageIds(
       suppressionsRecorded,
       directSendsRecorded,
       automatedSendsRecognised,
+      duplicateRfcId,
+      rfcIdConflicts,
       newestInternalDate,
     };
     const nested = await openMessageSavepoint(context);
-    const step = await (async (): Promise<'done' | { readonly ok: false; readonly detail: string }> => {
+    const step = await (async (): Promise<
+      'done' | { readonly ok: false; readonly read: 'metadata' | 'body'; readonly detail: string }
+    > => {
       messagesSeen += 1;
 
       const normalized = normalizeMetadata(metadata);
-      const stored = await recordMessage(context, { mailboxId: input.mailbox.id, metadata: normalized });
+      let stored;
+      try {
+        stored = await recordMessage(context, {
+          mailboxId: input.mailbox.id,
+          metadata: normalized,
+          // An RFC Message-ID collision is a proven duplicate only if the other message's
+          // `Date` header is this one's too. The table keeps no `Date`, so the other
+          // message's metadata is read again, with the same allowlist; a message Gmail no
+          // longer has proves nothing. The read goes through `gmailRead` (fold 2): a
+          // failure is this message's stopped read, like any other, so `mail.sync`
+          // commits the prefix before it and `mail.recover` takes its whole-job retry.
+          sameDateAs: async existing => {
+            const other = await gmailRead(() =>
+              deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS),
+            );
+            if (!other.ok) throw new ProofReadFailed(other.detail);
+            const mine = headerValue(metadata.headers, 'Date')?.trim();
+            const theirs = other.value === null ? undefined : headerValue(other.value.headers, 'Date')?.trim();
+            return mine !== undefined && mine !== '' && mine === theirs;
+          },
+          ...(deps.log === undefined ? {} : { log: deps.log }),
+        });
+      } catch (error) {
+        if (error instanceof ProofReadFailed) return { ok: false, read: 'metadata', detail: error.detail };
+        throw error;
+      }
       if (stored.inserted) messagesRecorded += 1;
       // Read through a local: the closure's view of the outer `let` is narrowed to its
       // initialiser, and a comparison against it would not type-check.
       const newestSoFar = newestInternalDate as string | null;
-      if (newestSoFar === null || stored.message.internalDate > newestSoFar) {
-        newestInternalDate = stored.message.internalDate;
+      if (newestSoFar === null || normalized.internalDate > newestSoFar) {
+        newestInternalDate = normalized.internalDate;
       }
+      // A proven second copy of a recorded message is that message: nothing is matched,
+      // classified or applied again.
+      if (stored.outcome === 'duplicate_rfc_id') {
+        duplicateRfcId += 1;
+        return 'done';
+      }
+      // A conflict was recorded as its own row, without the RFC Message-ID another
+      // message holds; from here on it is processed as the new message it is, on its own
+      // metadata: `stored.message` is its row, and its own RFC Message-ID is below.
+      if (stored.outcome === 'rfc_id_conflict') rfcIdConflicts += 1;
 
       // Step 2: match, in 12.3's order, first rule that finds anything winning.
       const candidates = await findMatchCandidates(context, {
@@ -214,6 +290,9 @@ export async function processMessageIds(
       if (stored.message.direction === 'outgoing') {
         fenceId = await fenceForOutgoingMessage(context, {
           mailboxId: input.mailbox.id,
+          // The stored row's Message-ID (fold 2): a conflict's row holds none, so a
+          // conflict — first import or replay — is looked up by its own Gmail id only and
+          // can never inherit the fence of the message that owns the colliding id.
           rfcMessageId: stored.message.rfcMessageId,
           providerMessageId: stored.message.providerMessageId,
         });
@@ -259,7 +338,7 @@ export async function processMessageIds(
 
       // Step 3: now, and only now, a body.
       const bodyRead = await gmailRead(() => deps.gmail.getBody(input.access, providerMessageId));
-      if (!bodyRead.ok) return bodyRead;
+      if (!bodyRead.ok) return { ok: false, read: 'body', detail: bodyRead.detail };
       const body = bodyRead.value;
       if (body !== null) {
         bodiesFetched += 1;
@@ -311,9 +390,11 @@ export async function processMessageIds(
         suppressionsRecorded,
         directSendsRecorded,
         automatedSendsRecognised,
+        duplicateRfcId,
+        rfcIdConflicts,
         newestInternalDate,
       } = before);
-      readFailure = { providerMessageId, read: 'body', detail: step.detail };
+      readFailure = { providerMessageId, read: step.read, detail: step.detail };
       break;
     }
     if (nested) await context.db.query(`RELEASE SAVEPOINT ${MESSAGE_SAVEPOINT}`);
@@ -330,8 +411,45 @@ export async function processMessageIds(
     suppressionsRecorded,
     directSendsRecorded,
     automatedSendsRecognised,
+    duplicateRfcId,
+    rfcIdConflicts,
+    vanishedMessages,
     newestInternalDate,
     processedMessages,
     readFailure,
+  };
+}
+
+/**
+ * Two consecutive batches' reports as one: counts add, the newest date is the later,
+ * and the processed prefix and any read failure are the second batch's on top of the
+ * first's. Used by a recovery that processes its ids in budgeted slices.
+ */
+export function combinePipelineReports(
+  first: MessagePipelineReport,
+  second: MessagePipelineReport,
+): MessagePipelineReport {
+  const newest =
+    first.newestInternalDate === null
+      ? second.newestInternalDate
+      : second.newestInternalDate === null || first.newestInternalDate > second.newestInternalDate
+        ? first.newestInternalDate
+        : second.newestInternalDate;
+  return {
+    messagesSeen: first.messagesSeen + second.messagesSeen,
+    messagesRecorded: first.messagesRecorded + second.messagesRecorded,
+    bodiesFetched: first.bodiesFetched + second.bodiesFetched,
+    matched: first.matched + second.matched,
+    ambiguous: first.ambiguous + second.ambiguous,
+    holdsOpened: first.holdsOpened + second.holdsOpened,
+    suppressionsRecorded: first.suppressionsRecorded + second.suppressionsRecorded,
+    directSendsRecorded: first.directSendsRecorded + second.directSendsRecorded,
+    automatedSendsRecognised: first.automatedSendsRecognised + second.automatedSendsRecognised,
+    duplicateRfcId: first.duplicateRfcId + second.duplicateRfcId,
+    rfcIdConflicts: first.rfcIdConflicts + second.rfcIdConflicts,
+    vanishedMessages: first.vanishedMessages + second.vanishedMessages,
+    newestInternalDate: newest,
+    processedMessages: first.processedMessages + second.processedMessages,
+    readFailure: second.readFailure ?? first.readFailure,
   };
 }

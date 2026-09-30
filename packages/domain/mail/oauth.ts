@@ -242,7 +242,7 @@ export async function completeGmailGrant(
     ownerUserId: mailbox.ownerUserId,
     reasonCode: 'coverage_incomplete',
   });
-  await startRecovery(context, { mailbox, reason: 'baseline', fromAt: baselineFromAt, toAt: now.toISOString() });
+  await startRecovery(context, { mailbox, reason: 'baseline', fromAt: baselineFromAt, toAt: now.toISOString(), startHistoryId: profile.historyId });
   await coalesceMailSync(context.db, {
     workspaceId: context.scope.workspaceId,
     mailboxId: mailbox.id,

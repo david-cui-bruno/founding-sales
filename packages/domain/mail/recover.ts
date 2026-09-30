@@ -4,7 +4,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import { GmailClientError, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
+import { GmailClientError, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
 import {
   advanceGeneration,
   openMailboxHold,
@@ -12,9 +12,15 @@ import {
   recordSyncError,
   releaseMailboxHold,
   setSyncState,
-  advanceCursor,
+  fenceOf,
+  lockForFencedStopFact,
+  lockMailboxAtFence,
+  StaleMailboxGeneration,
 } from './mailboxes.ts';
+import { stdoutMailLog } from './log.ts';
+import { recordedProviderMessageIds } from './messages.ts';
 import {
+  combinePipelineReports,
   EMPTY_PIPELINE_REPORT,
   processMessageIds,
   type MessagePipelineDeps,
@@ -44,16 +50,28 @@ import {
  * and a date string is interpreted in a zone nobody chose; the same query run from
  * two containers in two regions would then cover two intervals.
  *
- * **Every page.** The run is resumable rather than unbounded: it processes at most
- * `maxMessages` per job and records how far it got in `pages_completed`. The next
- * one-minute scheduler pass re-arms the same job row — Appendix C's key
+ * **Every page.** The run is resumable rather than unbounded: every run walks the
+ * interval in single-page time slices (never a page token; fold 2), skips the ids this
+ * mailbox already has a row for, and processes at most `maxMessages` of the rest. The rows are
+ * the position; `pages_completed` only says how many pages the last walk read. The
+ * next one-minute scheduler pass re-arms the same job row — Appendix C's key
  * `mail-recover:{mailbox}:{generation}` has no instant in it, so there is exactly one
- * row per generation — and the hold stays on until the last page.
+ * row per generation — and the hold stays on until one walk reaches the end of the
+ * listing with every listed id covered. Only newly recorded messages spend
+ * `maxMessages`; a read cap of three times it bounds a run's Gmail reads. A proven
+ * duplicate or a vanished id leaves no row, so more of them than the read cap stalls
+ * the recovery (`docs/greenfield/mail.md`, rule 3).
  *
- * **The hold clears on proof, not on success.** `completed_at` is written in the same
- * statement as the final watermark, and `releaseMailboxHold` re-reads the mailbox and
+ * **The hold clears on proof, not on success.** `ready`, the watermark and
+ * `completed_at` are written together, predicated on the generation, the address and
+ * the handoff cursor this run read, and `releaseMailboxHold` re-reads the mailbox and
  * refuses unless it is `ready`. 4.2: "It clears only after complete coverage is
  * proven, never after one successful API call."
+ *
+ * **The handoff is continuous.** The recovery's cursor is the profile's history id
+ * read before `toAt` was fixed (`startRecovery`), and completion adopts that id rather
+ * than asking Gmail again, so a message that arrives during the recovery is in the
+ * listing, in the history after the cursor, or in both — never in neither.
  */
 
 /**
@@ -64,6 +82,25 @@ import {
  * which is the truth today — FSS has sent nothing and enrolled nobody — and becomes
  * a two-line query in each of those lanes without changing this file.
  */
+/**
+ * A recovery lists its interval in slices of this width (fold 2): one day. A slice
+ * holding more than a page is bisected, so the width only sets how many listing calls
+ * a quiet mailbox costs — thirty for a thirty-day baseline.
+ */
+export const RECOVERY_SLICE_SECONDS = 24 * 60 * 60;
+
+/**
+ * At most this many `users.messages.list` calls per recovery run (fold 3). Without it the
+ * walk is bounded only by the window's days times the bisection depth. A run that
+ * reaches it continues next run; a window that needs more calls than this in one run
+ * cannot complete (about 50,000 messages at the default page size), which needs a
+ * durable slice checkpoint — a migration — to lift.
+ */
+export const RECOVERY_LISTING_CALL_CAP = 400;
+
+/** A recovery run reads at most this many times `maxMessages` ids (fold 1). */
+export const RECOVERY_READ_CAP_FACTOR = 3;
+
 export interface RecoveryFloorSource {
   oldestUnresolvedAt(context: RepositoryContext, mailboxId: string): Promise<string | null>;
 }
@@ -126,7 +163,18 @@ export interface StartRecoveryInput {
   /** The caller's own floor; the recovery takes the earlier of this and the port's. */
   readonly fromAt?: string | undefined;
   readonly floor?: RecoveryFloorSource | undefined;
-  /** The interval's end. Now, unless a test pins it. */
+  /**
+   * The continuous handoff (`docs/greenfield/mail.md`): the profile's `historyId`, read
+   * *before* the interval's end is fixed. The recovery covers the listing up to `toAt`
+   * and history sync covers everything after this id, so a message that arrives while
+   * the recovery runs is in one or both and never in neither. It is stored as the
+   * mailbox's cursor when the recovery is created, and completion adopts it.
+   */
+  readonly startHistoryId: string;
+  /**
+   * The interval's end. Now, unless a test pins it; either way it must not be earlier
+   * than the instant `startHistoryId` was read.
+   */
   readonly toAt?: string | undefined;
   readonly baselineDays?: number | undefined;
 }
@@ -142,6 +190,9 @@ export async function startRecovery(
   context: RepositoryContext,
   input: StartRecoveryInput,
 ): Promise<RecoveryRow> {
+  if (!/^[0-9]{1,20}$/.test(input.startHistoryId)) {
+    throw new Error('a recovery starts from a Gmail history id');
+  }
   const existing = await readRecovery(context, {
     mailboxId: input.mailbox.id,
     generation: input.mailbox.generation,
@@ -178,6 +229,19 @@ export async function startRecovery(
     return found;
   }
 
+  // The handoff's cursor, written with the recovery that owns it and fenced on the
+  // generation the recovery is for: a mailbox that moved on since the caller read it is
+  // not this recovery's to point anywhere.
+  const cursor = await context.db.query(
+    `UPDATE mailboxes
+        SET history_id = $4, history_id_updated_at = now(), updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND generation = $3 AND email_address = $5`,
+    [context.scope.workspaceId, input.mailbox.id, input.mailbox.generation, input.startHistoryId, input.mailbox.emailAddress],
+  );
+  if ((cursor.rowCount ?? 0) === 0) {
+    throw new StaleMailboxGeneration(input.mailbox.id, 'recovery start', fenceOf(input.mailbox));
+  }
+
   await enqueueJob(context.db, {
     workspaceId: context.scope.workspaceId,
     kind: 'mail.recover',
@@ -212,10 +276,15 @@ export async function beginRestoreRecovery(
     readonly mailbox: MailboxRow;
     /** Appendix E.4's "restore point minus ten minutes". */
     readonly fromAt: string;
+    /** The profile's `historyId`, read before this is called (`StartRecoveryInput`). */
+    readonly startHistoryId: string;
     readonly floor?: RecoveryFloorSource | undefined;
   },
 ): Promise<RecoveryRow> {
-  const generation = await advanceGeneration(context, input.mailbox.id);
+  // Gate first, then the row, at the generation and address the caller read (fold 3):
+  // the hold below takes the gate, and a row taken before it could deadlock.
+  await lockForFencedStopFact(context, { mailboxId: input.mailbox.id, fence: fenceOf(input.mailbox), write: 'restore recovery' });
+  const generation = await advanceGeneration(context, input.mailbox.id, fenceOf(input.mailbox));
   await setSyncState(context, { mailboxId: input.mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {
     mailboxId: input.mailbox.id,
@@ -226,6 +295,7 @@ export async function beginRestoreRecovery(
     mailbox: { ...input.mailbox, generation },
     reason: 'restore',
     fromAt: input.fromAt,
+    startHistoryId: input.startHistoryId,
     ...(input.floor === undefined ? {} : { floor: input.floor }),
   });
 }
@@ -236,6 +306,8 @@ export interface MailRecoveryDeps extends MessagePipelineDeps {
   readonly cipher: EnvelopeCipher;
   readonly maxMessages?: number | undefined;
   readonly pageSize?: number | undefined;
+  /** Listing calls per run; `RECOVERY_LISTING_CALL_CAP` unless a test lowers it. */
+  readonly listingCallCap?: number | undefined;
 }
 
 export type MailRecoveryOutcome =
@@ -289,10 +361,13 @@ export async function runMailRecovery(
 
   // A recovery for a superseded generation must not write. The generation is the
   // fence: something newer has already decided what this mailbox's coverage means.
+  // This is the entry check; every write below is predicated on the same generation
+  // and address again, because the mailbox can move on while this run talks to Gmail.
   if (mailbox.generation !== input.generation) {
     return recoveryReport(input.mailboxId, input.generation, 'generation_superseded');
   }
   if (mailbox.status !== 'connected') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'disconnected hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
@@ -300,14 +375,15 @@ export async function runMailRecovery(
     });
     return recoveryReport(mailbox.id, input.generation, 'mailbox_inactive');
   }
+  const fence = fenceOf(mailbox);
 
-  const recovery = await readRecovery(context, { mailboxId: mailbox.id, generation: input.generation });
-  if (recovery === null) return recoveryReport(mailbox.id, input.generation, 'recovery_unknown');
-  if (recovery.completedAt !== null) {
+  const found = await readRecovery(context, { mailboxId: mailbox.id, generation: input.generation });
+  if (found === null) return recoveryReport(mailbox.id, input.generation, 'recovery_unknown');
+  if (found.completedAt !== null) {
     return recoveryReport(mailbox.id, input.generation, 'already_complete', EMPTY_PIPELINE_REPORT, {
-      fromAt: recovery.fromAt,
-      toAt: recovery.toAt,
-      pagesCompleted: recovery.pagesCompleted,
+      fromAt: found.fromAt,
+      toAt: found.toAt,
+      pagesCompleted: found.pagesCompleted,
       coverageProved: true,
     });
   }
@@ -318,65 +394,174 @@ export async function runMailRecovery(
     return recoveryReport(mailbox.id, input.generation, 'grant_revoked');
   }
 
+  // The continuous handoff's cursor: `startRecovery` stored the profile's history id,
+  // read before `toAt` was fixed, as the mailbox's cursor, and completion adopts
+  // exactly that id. A recovery started before the handoff existed has no cursor; it
+  // takes one now, before the listing, and moves its interval's end to after the read
+  // so the two still meet.
+  //
+  // Fold 2: a cursor is this recovery's captured handoff only if it was written no
+  // earlier than the recovery row (`startRecovery` writes both in one transaction). An
+  // older cursor — none at all, or the expired one a pre-handoff expired-cursor
+  // recovery left behind — is adopted afresh here, before the listing.
+  let recovery = found;
+  let capturedHistoryId = mailbox.historyId;
+  if (!(await cursorIsCapturedHandoff(context, recovery.id))) {
+    const adopted = await adoptHandoffCursor(context, deps, { access: access.access, mailbox, recovery });
+    recovery = adopted.recovery;
+    capturedHistoryId = adopted.historyId;
+  }
+
   // Appendix D: epoch seconds, never an ambiguous date string.
   const afterEpochSeconds = Math.floor(Date.parse(recovery.fromAt) / 1000);
   const beforeEpochSeconds = Math.ceil(Date.parse(recovery.toAt) / 1000);
   const pageSize = deps.pageSize ?? RECOVERY_PAGE_SIZE;
   const maxMessages = deps.maxMessages ?? pageSize;
 
-  // Resume where the last run stopped. The page token is the page count, because the
-  // interval is fixed: the same query over the same bounds returns the same order,
-  // and Gmail's own page tokens do not survive a process.
-  let pageToken: string | undefined = recovery.pagesCompleted === 0 ? undefined : String(recovery.pagesCompleted * pageSize);
-  const ids: string[] = [];
-  let pagesThisRun = 0;
-  let exhausted = false;
+  // Two budgets. `maxMessages` counts only messages this run newly records: a proven
+  // duplicate or a vanished id writes no row and costs nothing against it. The read cap
+  // bounds the run's duration whatever the ids turn out to be: at most
+  // `RECOVERY_READ_CAP_FACTOR × maxMessages` ids are read (one metadata read each; a
+  // collision adds one more read of the other message).
+  const readCap = RECOVERY_READ_CAP_FACTOR * maxMessages;
+  const listingCallCap = deps.listingCallCap ?? RECOVERY_LISTING_CALL_CAP;
 
-  while (ids.length < maxMessages) {
+  // The walk (fold 2): the interval in time slices, each listed by ONE
+  // `users.messages.list` call with no page token. Gmail documents nothing about how a
+  // page token behaves when the mailbox changes between pages — a message deleted
+  // before the second page can shift a surviving one off both — so a recovery never
+  // follows one. A single response is one answer. A slice whose answer says there is
+  // more (`nextPageToken`) holds more than a page: the answer is discarded and the
+  // slice bisected, down to one second. Every run re-walks every slice in order and
+  // skips the ids already recorded; the walk comes before the pipeline, so no listing
+  // call waits behind the send gate, and it stops early once it holds more unrecorded
+  // ids than the read cap lets this run read, because this run then cannot complete.
+  const unrecorded: string[] = [];
+  const seen = new Set<string>();
+  let slicesListed = 0;
+  let listingCalls = 0;
+  let listingEnded = false;
+  // Pending slices, earliest last so `pop` takes the earliest.
+  const pending: { readonly from: number; readonly to: number }[] = [];
+  for (let from = afterEpochSeconds; from < beforeEpochSeconds; from += RECOVERY_SLICE_SECONDS) {
+    pending.push({ from, to: Math.min(beforeEpochSeconds, from + RECOVERY_SLICE_SECONDS) });
+  }
+  pending.reverse();
+
+  /** The ids of one query, or a refusal the run returns on. */
+  type Listed = { readonly ok: true; readonly ids: readonly string[]; readonly more: boolean } | { readonly ok: false; readonly report: MailRecoveryReport };
+  const listOnce = async (query: { readonly after: number; readonly before: number }, pageToken?: string): Promise<Listed & { readonly next?: string | null }> => {
+    listingCalls += 1;
     const outcome = await deps.gmail.listMessageIds(access.access, {
-      afterEpochSeconds,
-      beforeEpochSeconds,
+      afterEpochSeconds: query.after,
+      beforeEpochSeconds: query.before,
       maxResults: pageSize,
       ...(pageToken === undefined ? {} : { pageToken }),
     });
     if (!outcome.ok) {
       if (outcome.reason === 'grant_revoked') {
         await holdForRevokedGrant(context, mailbox);
-        return recoveryReport(mailbox.id, input.generation, 'grant_revoked');
+        return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'grant_revoked') };
       }
-      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited' });
-      return recoveryReport(mailbox.id, input.generation, 'rate_limited');
+      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited', fence });
+      return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'rate_limited') };
     }
-    ids.push(...outcome.messageIds);
-    pagesThisRun += 1;
-    if (outcome.nextPageToken === null) {
-      exhausted = true;
+    return { ok: true, ids: outcome.messageIds, more: outcome.nextPageToken !== null, next: outcome.nextPageToken };
+  };
+
+  for (;;) {
+    if (pending.length === 0) {
+      listingEnded = true;
       break;
     }
-    pageToken = outcome.nextPageToken;
+    // A bounded walk (fold 3): at most `RECOVERY_LISTING_CALL_CAP` listing calls per run.
+    // A run that reaches it has not listed the whole window, so it cannot complete, and
+    // the next run walks again.
+    if (listingCalls >= listingCallCap) break;
+    const slice = pending.pop();
+    if (slice === undefined) continue;
+    // Every slice's `after:` is one second below it and the last slice's `before:` one
+    // second above the window (fold 3), so the closed interval [fromAt, toAt] is listed
+    // whichever way Gmail treats an exact-second bound: a boundary second is in two
+    // queries, and a message just outside the window in one, which recording by Gmail
+    // id makes harmless.
+    const query = { after: slice.from - 1, before: slice.to === beforeEpochSeconds ? slice.to + 1 : slice.to };
+    const listed = await listOnce(query);
+    if (!listed.ok) return listed.report;
+    slicesListed += 1;
+    let ids: readonly string[] = listed.ids;
+    if (listed.more) {
+      if (slice.to - slice.from > 1) {
+        // More than a page: discard this answer and list the two halves instead.
+        const middle = slice.from + Math.floor((slice.to - slice.from) / 2);
+        pending.push({ from: middle, to: slice.to }, { from: slice.from, to: middle });
+        continue;
+      }
+      // The smallest queryable window — one logical second, queried over two or three
+      // with its padding — still holds more than a page. Only here does the recovery
+      // follow Gmail's page tokens, within this one query. The residual: a message
+      // deleted within these few seconds, during this one listing, could shift another
+      // across a page boundary; the next run lists the slice again from its first page.
+      const all = [...listed.ids];
+      let next = listed.next ?? null;
+      let pages = 1;
+      let capped = false;
+      while (next !== null) {
+        // The cap holds inside a token chain too (fold 4): an interrupted chain leaves
+        // the walk unfinished, so the run continues rather than completes.
+        if (listingCalls >= listingCallCap) {
+          capped = true;
+          break;
+        }
+        const page = await listOnce(query, next);
+        if (!page.ok) return page.report;
+        all.push(...page.ids);
+        next = page.next ?? null;
+        pages += 1;
+      }
+      if (capped) break;
+      (deps.log ?? stdoutMailLog)('warn', 'mail.recovery_slice_paginated', {
+        mailboxId: mailbox.id,
+        generation: input.generation,
+        afterEpochSeconds: query.after,
+        beforeEpochSeconds: query.before,
+        pages,
+      });
+      ids = all;
+    }
+    const recorded = await recordedProviderMessageIds(context, {
+      mailboxId: mailbox.id,
+      providerMessageIds: ids,
+    });
+    for (const id of ids) {
+      if (recorded.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      unrecorded.push(id);
+    }
+    if (unrecorded.length > readCap) break;
   }
+  const pagesWalked = slicesListed;
 
-  // A recovery that has read the whole interval re-establishes the cursor from the
-  // mailbox's current history id. Asked before the pipeline (send-path v2, S1 review
-  // round 5): the pipeline's gated phase takes the workspace's exclusive send gate, the
-  // runner holds it until the job commits, and a Gmail call after it would block every
-  // dispatch claim and stop writer for as long as Gmail took. Earlier is also the safe
-  // side of the cursor: a message that arrives while this run processes is after the
-  // id read here, so the next `mail.sync` reads it again rather than skipping it.
-  const profile = exhausted ? await deps.gmail.getProfile(access.access) : null;
-
-  const pipeline = await processMessageIds(context, deps, {
-    mailbox,
-    access: access.access,
-    messageIds: ids,
-  });
+  // The pipeline, in slices no larger than either budget has left. Each id costs at
+  // least one read and at most one new row, so a slice can overrun neither.
+  let pipeline: MessagePipelineReport = EMPTY_PIPELINE_REPORT;
+  let processed = 0;
+  while (processed < unrecorded.length) {
+    const size = Math.min(maxMessages - pipeline.messagesRecorded, readCap - processed, unrecorded.length - processed);
+    if (size <= 0) break;
+    const slice = await processMessageIds(context, deps, {
+      mailbox,
+      access: access.access,
+      messageIds: unrecorded.slice(processed, processed + size),
+    });
+    pipeline = combinePipelineReports(pipeline, slice);
+    processed += slice.processedMessages;
+    if (slice.readFailure !== null) break;
+  }
   // The pipeline stops at a failed Gmail read instead of throwing, which `mail.sync` uses
-  // to commit the prefix it processed. A recovery does not (send-path v2, S1 review round
-  // 8): its position is a page count over a listing that can change between runs — a
-  // message that vanishes shifts every later one forward a place — so resuming a prefix
-  // could skip the failed message and still prove coverage. The whole job rolls back
-  // and is retried, as before; the coverage hold blocks the owner's automated sends
-  // meanwhile.
+  // to commit the prefix it processed. A recovery throws instead and the whole job rolls
+  // back and is retried; the recorded rows are its position, so nothing is lost by
+  // that, and the coverage hold blocks the owner's automated sends meanwhile.
   if (pipeline.readFailure !== null) {
     throw new GmailClientError(
       'unexpected_status',
@@ -384,17 +569,45 @@ export async function runMailRecovery(
     );
   }
 
-  const pagesCompleted = recovery.pagesCompleted + pagesThisRun;
-  await context.db.query(
-    `UPDATE mailbox_recoveries
-        SET pages_completed = $3,
-            messages_seen = messages_seen + $4,
-            completed_at = CASE WHEN $5 THEN now() ELSE completed_at END
-      WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, recovery.id, pagesCompleted, pipeline.messagesSeen, exhausted],
-  );
+  // Coverage is proved only by one walk, in this run, that reached the end of the
+  // listing with every listed id covered: it has a row (from an earlier run, or recorded
+  // now), or this run found it a proven duplicate, or this run found it gone. Every id
+  // this run processed is one of those, so the walk must have ended and every unrecorded
+  // id it collected must have been processed.
+  const complete = listingEnded && processed === unrecorded.length;
 
-  if (!exhausted) {
+  if (!complete) {
+    // The mailbox row at this run's fence, locked to commit (fold 2): the UPDATE below
+    // joins the mailbox but locks only the recovery row, so without this a generation
+    // bump could commit between its predicate and this job's commit. The pipeline may
+    // already hold the send gate, so the order is gate, then row.
+    await lockMailboxAtFence(context, { mailboxId: mailbox.id, fence, write: 'recovery progress' });
+    const progress = await context.db.query(
+      `UPDATE mailbox_recoveries AS r
+          SET pages_completed = $3,
+              messages_seen = r.messages_seen + $4
+         FROM mailboxes AS m
+        WHERE r.workspace_id = $1 AND r.id = $2 AND r.completed_at IS NULL
+          AND m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
+          AND m.generation = $5 AND m.email_address = $6`,
+      [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen, fence.generation, fence.emailAddress],
+    );
+    if ((progress.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery progress', fence);
+    if (pipeline.messagesRecorded === 0) {
+      // A run that recorded nothing and did not complete is not progress, however healthy
+      // its heartbeat: every id it could read was a proven duplicate or gone, or the read
+      // cap stopped it first. Identifiers and counts only.
+      (deps.log ?? stdoutMailLog)('warn', 'mail.recovery_no_progress', {
+        mailboxId: mailbox.id,
+        generation: input.generation,
+        reason: recovery.reason,
+        unrecordedListed: unrecorded.length,
+        idsRead: processed,
+        duplicateRfcId: pipeline.duplicateRfcId,
+        vanishedMessages: pipeline.vanishedMessages,
+        listingEnded,
+      });
+    }
     // Another pass is needed, and this run does not schedule it: the handler is
     // inside the runner's transaction and its own job row is still `running`, so it
     // cannot re-arm itself. `mailRecoverySource` finds every incomplete recovery on
@@ -403,36 +616,103 @@ export async function runMailRecovery(
     return recoveryReport(mailbox.id, input.generation, 'continued', pipeline, {
       fromAt: recovery.fromAt,
       toAt: recovery.toAt,
-      pagesCompleted,
+      pagesCompleted: pagesWalked,
     });
   }
 
-  // The whole interval is processed. Only now is coverage proved: the watermark moves
-  // to the end of the interval, the mailbox becomes `ready`, and the hold may go.
-  await setSyncState(context, {
-    mailboxId: mailbox.id,
-    syncState: 'ready',
-    ...(recovery.reason === 'baseline' ? { baselineCompletedAt: new Date().toISOString() } : {}),
-  });
-  // A recovery re-establishes the cursor too: the mailbox's current history id is the
-  // one every later `mail.sync` reads from, and it is unconditional here because the
-  // recovery is the authority on this generation's coverage.
-  if (profile === null) throw new Error('a completed recovery has no profile: it was read before the pipeline');
-  await advanceCursor(context, {
-    mailboxId: mailbox.id,
-    expectedHistoryId: mailbox.historyId,
-    historyId: profile.historyId,
-    coverageWatermarkAt: recovery.toAt,
-    syncError: null,
-  });
+  // Conditional completion: `ready`, the watermark at the interval's end, and the
+  // recovery's `completed_at` commit together or not at all, and only while the mailbox
+  // is still the generation and address this run read and still stands on the handoff
+  // cursor. The mailbox statement goes first and is the predicate: the row lock it takes
+  // holds to commit, so nothing moves the mailbox between it and the two writes after
+  // it. The cursor is not written here: it is already the id read before `toAt`.
+  const completed = await context.db.query(
+    `UPDATE mailboxes
+        SET sync_state = 'ready',
+            baseline_completed_at = CASE WHEN $6 THEN now() ELSE baseline_completed_at END,
+            coverage_watermark_at = $7::timestamptz,
+            last_synced_at = now(),
+            last_sync_error = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND status = 'connected'
+        AND generation = $3 AND email_address = $4 AND history_id = $5`,
+    [
+      context.scope.workspaceId,
+      mailbox.id,
+      fence.generation,
+      fence.emailAddress,
+      capturedHistoryId,
+      recovery.reason === 'baseline',
+      recovery.toAt,
+    ],
+  );
+  if ((completed.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(mailbox.id, 'recovery completion', fence);
+  await context.db.query(
+    `UPDATE mailbox_recoveries
+        SET pages_completed = $3, messages_seen = messages_seen + $4, completed_at = now()
+      WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, recovery.id, pagesWalked, pipeline.messagesSeen],
+  );
+  // Only now may the hold go; `releaseMailboxHold` re-reads the row and refuses unless
+  // it is `ready`, which the statement above made it in this transaction.
   await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'coverage_incomplete' });
 
   return recoveryReport(mailbox.id, input.generation, 'completed', pipeline, {
     fromAt: recovery.fromAt,
     toAt: recovery.toAt,
-    pagesCompleted,
+    pagesCompleted: pagesWalked,
     coverageProved: true,
   });
+}
+
+/** Whether the mailbox's cursor was written with (or after) this recovery row. */
+async function cursorIsCapturedHandoff(context: RepositoryContext, recoveryId: string): Promise<boolean> {
+  const { rows } = await context.db.query<{ captured: boolean }>(
+    `SELECT (m.history_id IS NOT NULL AND m.history_id_updated_at >= r.started_at) AS captured
+       FROM mailbox_recoveries AS r
+       JOIN mailboxes AS m ON m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
+      WHERE r.workspace_id = $1 AND r.id = $2`,
+    [context.scope.workspaceId, recoveryId],
+  );
+  return rows[0]?.captured === true;
+}
+
+/**
+ * A recovery created before the continuous handoff has no cursor of its own to adopt:
+ * none, or an older one (an expired cursor). Take one
+ * now — the profile first, then the interval's end moved to no earlier than the read —
+ * so that from here on it behaves exactly like one `startRecovery` created.
+ */
+async function adoptHandoffCursor(
+  context: RepositoryContext,
+  deps: MailRecoveryDeps,
+  input: { readonly access: GmailAccessGrant; readonly mailbox: MailboxRow; readonly recovery: RecoveryRow },
+): Promise<{ readonly historyId: string; readonly recovery: RecoveryRow }> {
+  const profile = await deps.gmail.getProfile(input.access);
+  const capturedAt = new Date().toISOString();
+  const fence = fenceOf(input.mailbox);
+  // Gate first, then the row (fold 3): the pipeline later in this run takes the gate for
+  // a matched message, and a mailbox row updated before it would deadlock with a sync
+  // that holds the gate and waits for this row. The price is that this run — a legacy
+  // recovery's first, once — holds the gate through its Gmail listing and reads.
+  await lockForFencedStopFact(context, { mailboxId: input.mailbox.id, fence, write: 'recovery handoff' });
+  const cursor = await context.db.query(
+    `UPDATE mailboxes
+        SET history_id = $5, history_id_updated_at = now(), updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND generation = $3 AND email_address = $4
+        AND history_id IS NOT DISTINCT FROM $6`,
+    [context.scope.workspaceId, input.mailbox.id, fence.generation, fence.emailAddress, profile.historyId, input.mailbox.historyId],
+  );
+  if ((cursor.rowCount ?? 0) === 0) throw new StaleMailboxGeneration(input.mailbox.id, 'recovery handoff', fence);
+  const { rows } = await context.db.query<RecoveryDbRow>(
+    `UPDATE mailbox_recoveries SET to_at = greatest(to_at, $3::timestamptz)
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING id, generation, reason, from_at, to_at, pages_completed, messages_seen, completed_at`,
+    [context.scope.workspaceId, input.recovery.id, capturedAt],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error('a recovery vanished while it adopted its handoff cursor');
+  return { historyId: profile.historyId, recovery: toRecovery(row) };
 }
 
 /**

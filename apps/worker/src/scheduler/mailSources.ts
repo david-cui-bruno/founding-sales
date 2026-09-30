@@ -12,7 +12,7 @@ import type { DueWorkSource } from './schedulerPass.ts';
  * The three mail due-work sources the one-minute pass reads (13.1, 12.3).
  *
  * All three exist because of one fact about Appendix C's mail keys: none of them
- * carries an instant. `mail-sync:{mailbox}` and `mail-recover:{mailbox}:{generation}`
+ * carries an instant. `mail-sync:{mailbox}:{generation}` and `mail-recover:{mailbox}:{generation}`
  * are single-flight rows that outlive the run, which is exactly what makes a hundred
  * pushes one sync — and exactly why `enqueueJob`'s `ON CONFLICT DO NOTHING` cannot
  * put a finished one back on the queue. So two of these sources do their own
@@ -59,6 +59,9 @@ export function mailSyncReconciliationSource(): DueWorkSource {
         await coalesceMailSync(session, {
           workspaceId: mailbox.workspaceId,
           mailboxId: mailbox.mailboxId,
+          // The key is per generation, so a dead sync of an earlier generation — an
+          // account the mailbox no longer reads — cannot absorb this one.
+          generation: mailbox.generation,
           historyId: null,
         });
       }
@@ -111,8 +114,10 @@ export function mailRecoverySource(): DueWorkSource {
  * A Gmail watch expires after seven days and a lapsed watch is silent: no error, no
  * notification, just a mailbox that stops producing push. `listWatchesDue` returns
  * every connected mailbox with no live watch or one inside the renewal window, and
- * the *next* generation, so the key is `watch:{mailbox}:{next}` and a pass that
- * repeats within the minute composes the same key and inserts nothing twice.
+ * the *next* generation, so the key is `watch:{mailbox}:{mailboxGeneration}:{next}` and a
+ * pass that repeats within the minute composes the same key and inserts nothing twice.
+ * The mailbox generation is in the key so a dead renewal for an account the mailbox no
+ * longer reads cannot block the renewal for the one it reads now.
  *
  * This is an ordinary `enqueueJob`: the generation makes the key new every renewal,
  * which is what `fencing_token` protection wants — a renewal that waited through two
@@ -126,8 +131,8 @@ export function watchRenewalSource(): DueWorkSource {
       return due.map(watch => ({
         workspaceId: watch.workspaceId,
         kind: 'mail.watch_renew',
-        idempotencyKey: jobIdempotencyKey.watchRenew(watch.mailboxId, watch.generation),
-        payload: { mailboxId: watch.mailboxId, generation: watch.generation },
+        idempotencyKey: jobIdempotencyKey.watchRenew(watch.mailboxId, watch.generation, watch.mailboxGeneration),
+        payload: { mailboxId: watch.mailboxId, generation: watch.generation, mailboxGeneration: watch.mailboxGeneration },
         maxAttempts: 4,
       }));
     },

@@ -5,6 +5,8 @@ import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
   advanceGeneration,
+  fenceOf,
+  lockForFencedStopFact,
   markMailboxDisconnected,
   openMailboxHold,
   readMailbox,
@@ -19,7 +21,7 @@ import {
   type MessagePipelineReport,
 } from './pipeline.ts';
 import { readRefreshToken } from './tokens.ts';
-import { startRecovery, type RecoveryFloorSource } from './recover.ts';
+import { readRecovery, startRecovery, type RecoveryFloorSource } from './recover.ts';
 import { RECOVERY_OVERLAP_SECONDS, type MailboxRow } from './types.ts';
 
 /**
@@ -34,7 +36,9 @@ import { RECOVERY_OVERLAP_SECONDS, type MailboxRow } from './types.ts';
  *    which is the one place that decides what is read and in which order.
  * 3. **Match, then fetch a body only for what matched** — in the shared pipeline.
  * 4. **Advance the cursor and the watermark by compare-and-set, together.** If the
- *    compare fails, another run got there first and this one stops.
+ *    compare fails, another run got there first and this one stops. The compare is
+ *    also fenced on the generation and address this run read: a mailbox that moved on
+ *    throws `StaleMailboxGeneration` and the whole run rolls back (C2B-A1).
  *
  * An expired cursor is step 2's defined failure and is not a retry either: the
  * mailbox's generation advances, a bounded recovery starts for the new generation,
@@ -73,6 +77,7 @@ export type MailSyncOutcome =
   | 'mailbox_inactive'
   | 'grant_revoked'
   | 'baseline_started'
+  | 'recovery_underway'
   | 'recovery_started'
   | 'cursor_moved'
   | 'rate_limited'
@@ -204,8 +209,16 @@ export async function accessForMailbox(
   return { ok: true, access: outcome.grant };
 }
 
-/** 12.6 and 4.2: the grant is gone, so everything automated for that owner holds. */
+/**
+ * 12.6 and 4.2: the grant is gone, so everything automated for that owner holds.
+ *
+ * `mailbox` is the row the job read at its start, and the writes are fenced on it (fold
+ * 2): the gate, then the row at that generation and address. A refusal Gmail gave for
+ * an account the mailbox no longer reads throws `StaleMailboxGeneration`, and the
+ * replacement mailbox is neither revoked nor held.
+ */
 export async function holdForRevokedGrant(context: RepositoryContext, mailbox: MailboxRow): Promise<void> {
+  await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'grant revocation' });
   await markMailboxDisconnected(context, {
     mailboxId: mailbox.id,
     status: 'revoked',
@@ -226,6 +239,7 @@ export async function runMailSync(
   const mailbox = await readMailbox(context, input.mailboxId);
   if (mailbox === null) return report(input.mailboxId, 'mailbox_unknown', null);
   if (mailbox.status !== 'connected') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'disconnected hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
@@ -242,16 +256,29 @@ export async function runMailSync(
 
   // 12.3: "A newly connected mailbox completes a bounded baseline ... before
   // automation begins." No cursor is the same situation as a baseline that has not
-  // finished, and both are a recovery rather than a history read.
-  if (mailbox.historyId === null || mailbox.syncState === 'baseline_pending') {
+  // finished, and both are a recovery rather than a history read. So is `recovering`:
+  // its cursor is the recovery's handoff id, which only the recovery's completion may
+  // stand on, and a history read from it now would move the cursor under the
+  // recovery's conditional completion. A sync of a mailbox that is not `ready` reads no
+  // history and writes nothing but the hold; it starts the recovery only when its
+  // generation has none.
+  if (mailbox.historyId === null || mailbox.syncState !== 'ready') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'coverage hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
       reasonCode: 'coverage_incomplete',
     });
+    if ((await readRecovery(context, { mailboxId: mailbox.id, generation: mailbox.generation })) !== null) {
+      return report(mailbox.id, 'recovery_underway', mailbox.historyId);
+    }
+    // The continuous handoff: the profile's history id is read before the recovery
+    // fixes the end of its interval.
+    const profile = await deps.gmail.getProfile(access.access);
     await startRecovery(context, {
       mailbox,
-      reason: 'baseline',
+      reason: mailbox.syncState === 'recovering' ? 'history_expired' : 'baseline',
+      startHistoryId: profile.historyId,
       ...(deps.recoveryFloor === undefined ? {} : { floor: deps.recoveryFloor }),
     });
     return report(mailbox.id, 'baseline_started', mailbox.historyId);
@@ -274,13 +301,17 @@ export async function runMailSync(
     });
     if (!outcome.ok) {
       if (outcome.reason === 'history_expired') {
-        return await beginRecoveryForExpiredCursor(context, mailbox, deps.recoveryFloor);
+        return await beginRecoveryForExpiredCursor(context, deps, access.access, mailbox);
       }
       if (outcome.reason === 'grant_revoked') {
         await holdForRevokedGrant(context, mailbox);
         return report(mailbox.id, 'grant_revoked', mailbox.historyId);
       }
-      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail history read was rate limited' });
+      await recordSyncError(context, {
+        mailboxId: mailbox.id,
+        error: 'the Gmail history read was rate limited',
+        fence: fenceOf(mailbox),
+      });
       return report(mailbox.id, 'rate_limited', mailbox.historyId);
     }
 
@@ -338,8 +369,11 @@ export async function runMailSync(
   // capped run has read every message it took, but it has not read the mailbox, and a
   // watermark is a claim about the mailbox.
   const watermark = moreToDo ? undefined : (pipeline.newestInternalDate ?? new Date().toISOString());
+  // Generation fencing: the CAS is predicated on the generation and address read at
+  // this run's start, and a mismatch throws, so the effects above roll back with it.
   const advanced = await advanceCursor(context, {
     mailboxId: mailbox.id,
+    fence: fenceOf(mailbox),
     expectedHistoryId: mailbox.historyId,
     historyId: cursorTo,
     ...(watermark === undefined ? {} : { coverageWatermarkAt: watermark }),
@@ -383,10 +417,19 @@ export async function runMailSync(
  */
 async function beginRecoveryForExpiredCursor(
   context: RepositoryContext,
+  deps: MailSyncDeps,
+  access: GmailAccessGrant,
   mailbox: MailboxRow,
-  floor: RecoveryFloorSource | undefined,
 ): Promise<MailSyncReport> {
-  const generation = await advanceGeneration(context, mailbox.id);
+  const floor = deps.recoveryFloor;
+  // The continuous handoff: the profile's history id is read first, before the
+  // recovery fixes the end of its interval, and becomes the cursor completion adopts.
+  const profile = await deps.gmail.getProfile(access);
+  // Gate first, then the row (fold 3): this transaction updates the mailbox and then
+  // opens a hold, which takes the gate; taking the row first would deadlock with a job
+  // that holds the gate and waits for this row.
+  await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'expired-cursor recovery' });
+  const generation = await advanceGeneration(context, mailbox.id, fenceOf(mailbox));
   await setSyncState(context, { mailboxId: mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {
     mailboxId: mailbox.id,
@@ -402,6 +445,7 @@ async function beginRecoveryForExpiredCursor(
     // Appendix G 13 turns into a test: "a reply just outside nominal bounds is
     // recovered by overlap".
     fromAt: new Date(Date.parse(watermark) - RECOVERY_OVERLAP_SECONDS * 1000).toISOString(),
+    startHistoryId: profile.historyId,
     ...(floor === undefined ? {} : { floor }),
   });
   return report(mailbox.id, 'recovery_started', mailbox.historyId);
