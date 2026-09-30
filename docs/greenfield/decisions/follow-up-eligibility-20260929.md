@@ -290,14 +290,20 @@ found the first sentence false: `saveSteps` updated a published version's steps 
 and `updateTemplateVersion` rewrote an approved template's text in place, so a live
 `agreed_sequence` run could read steps and text its agreement never covered.
 
-* **An edit is a new version.** Steps saved against a published version become the
-  sequence's draft (copy + change; the one-draft rule means a second edit lands on the
-  same draft), and the answer names it. An approved template's edit is its next version,
+* **An edit is a new version.** Steps saved against a published version become a new
+  draft version (copy + change), and the answer names it. While the sequence already has
+  a draft, such a save is refused `draft_exists`, naming the draft (the route answers
+  `draft_exists:<version>:<id>`), rather than overwriting unpublished work; the Mac turns
+  the published Save off and offers the draft. An approved template's edit is its next version,
   pending approval unless the same command approves it. Nothing published or approved is
   written to, and migration 0026's triggers (`sequence_steps_published_immutable`,
   `template_versions_approved_immutable`) say so in the database; a command that reaches
   one answers a refusal (`version_not_draft`, `template_already_approved`) through a
-  savepoint rather than a 500. Publishing does **not** retire the version before it.
+  savepoint rather than a 500. **Publishing retires the version it replaces** (David, 30
+  September 2026): one current version per sequence, so new enrollments — and the Firm
+  page's list — have one choice; a retired version keeps running for the enrollments
+  already on it, its steps frozen by 0026's trigger, and a migration's target is always
+  the current version.
 * **`POST /enrollments/migrate`** moves one live enrollment to a published version of the
   same sequence by **supersede**: the old enrollment ends `migration_superseded` (its
   unfinished step cancelled, its history kept) and a new one is inserted after it — never

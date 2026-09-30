@@ -157,16 +157,24 @@ describe('(a) an edit never writes to a published version or an approved templat
       { unit: 'business_days', days: 2 },
     ]);
 
-    // A second save of the published version lands on the same draft (one per sequence).
+    // A second edit of the published version, while that draft exists, is refused and
+    // names the draft rather than overwriting it (David, 30 September 2026).
+    const draftBytes = await versionBytes(saved.value.sequenceVersionId);
     const again = await saveSteps(contextFor('admin'), {
       sequenceVersionId: plan.versionId,
       steps: [emailStep(template), callStep(2, 4)],
     });
     expect(again).toEqual({
-      ok: true,
-      value: { steps: 2, sequenceVersionId: saved.value.sequenceVersionId, version: 2, newVersion: true },
+      ok: false,
+      reason: 'draft_exists',
+      draft: { sequenceVersionId: saved.value.sequenceVersionId, version: 2 },
     });
+    expect(await versionBytes(saved.value.sequenceVersionId)).toEqual(draftBytes);
     expect(await versionBytes(plan.versionId)).toEqual(before);
+    // The draft itself is still edited directly.
+    expect(
+      await saveSteps(contextFor('admin'), { sequenceVersionId: saved.value.sequenceVersionId, steps: [emailStep(template)] }),
+    ).toMatchObject({ ok: true, value: { newVersion: false, version: 2 } });
   });
 
   it('writes an edit of an approved template as its next version, pending approval, and leaves the approved row as it was', async () => {
@@ -218,7 +226,7 @@ describe('(a) an edit never writes to a published version or an approved templat
 });
 
 describe('(b) and (c): new enrollments run the new version; running ones keep theirs', () => {
-  it('sends the old text and keeps the old cadence for the running enrollment, and the new ones for a new enrollment', async () => {
+  it('retires the replaced version on publish, sends the old text and keeps the old cadence for the running enrollment, and the new ones for a new enrollment', async () => {
     const original = await approvedTemplate('The wording they were enrolled under.');
     const originalHash = (await readTemplateVersion(contextFor('admin'), original))?.contentHash;
     const plan = await publishedPlan([emailStep(original), callStep(2, 2)]);
@@ -240,7 +248,23 @@ describe('(b) and (c): new enrollments run the new version; running ones keep th
     if (!saved.ok) throw new Error(`the save was refused: ${saved.reason}`);
     expect((await publishVersion(contextFor('admin'), { sequenceVersionId: saved.value.sequenceVersionId })).ok).toBe(true);
 
-    // (c) The running enrollment: its own version's steps, the text it was enrolled under.
+    // Publishing the edit retired the version it replaced: one current version per
+    // sequence, and nobody new can be enrolled in the old one.
+    expect((await readSequenceVersion(contextFor('admin'), plan.versionId))?.state).toBe('retired');
+    expect((await readSequenceVersion(contextFor('admin'), saved.value.sequenceVersionId))?.state).toBe('published');
+    const late = await newFirm('late');
+    expect(
+      await enrollContact(contextFor('salesperson'), {
+        sequenceVersionId: plan.versionId,
+        originKind: 'prospecting',
+        opportunityId: late.opportunityId,
+        firmId: late.firmId,
+        contactId: late.contactId,
+      }),
+    ).toEqual({ ok: false, reason: 'version_retired' });
+
+    // (c) The running enrollment: its own (now retired) version's steps, the text it was
+    // enrolled under.
     expect((await readSequenceVersion(contextFor('admin'), plan.versionId))?.steps).toEqual(oldSteps);
     const sent = await sendFirstStep(running);
     expect(sent.hash).toBe(originalHash);

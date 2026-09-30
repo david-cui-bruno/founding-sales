@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { retireVersion } from '../../sequences/definitions.ts';
+import { createDraftVersion, publishVersion, retireVersion } from '../../sequences/definitions.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
@@ -56,12 +56,25 @@ const salesperson = (): RepositoryContext => contextOn(database.session, 'salesp
 const worker = (session: SessionQueryable = database.session): RepositoryContext =>
   repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), session);
 
-/** A three-step plan, and a second published version of the same sequence with other delays. */
+/**
+ * A three-step plan, published, and its next version with other delays as a **draft**.
+ * Publishing v2 retires v1 (one current version per sequence), so a case enrols in v1
+ * first and then calls `publish(v2)` — which is the order it happens in for real.
+ */
 async function twoVersions(): Promise<{ sequenceId: string; v1: string; v2: string; template: string }> {
   const template = await approvedTemplate(admin(), 'Hello from the plan.');
   const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2), callStep(3, 5)]);
-  const v2 = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template), callStep(2, 3), callStep(3, 7)]);
-  return { sequenceId: plan.sequenceId, v1: plan.versionId, v2, template };
+  const draft = await createDraftVersion(admin(), {
+    sequenceId: plan.sequenceId,
+    steps: [emailStep(template), callStep(2, 3), callStep(3, 7)],
+  });
+  if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
+  return { sequenceId: plan.sequenceId, v1: plan.versionId, v2: draft.value.sequenceVersionId, template };
+}
+
+async function publish(sequenceVersionId: string): Promise<void> {
+  const published = await publishVersion(admin(), { sequenceVersionId });
+  if (!published.ok) throw new Error(`the publication was refused: ${published.reason}`);
 }
 
 /** Enrol, pin the anchor and the first step's due instant to ANCHOR, and answer the enrollment. */
@@ -192,6 +205,7 @@ describe('the happy migration', () => {
     const { v1, v2 } = await twoVersions();
     const firm = await newFirm(database.session, seeded.alpha);
     const old = await enrolled(v1, firm);
+    await publish(v2);
     await completeCurrent(old);
 
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 });
@@ -253,6 +267,7 @@ describe('the happy migration', () => {
     // Fails if the audit write is removed.
     const { v1, v2 } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     await completeCurrent(old);
     const migrated = await migrateEnrollment(admin(), {
       enrollmentId: old,
@@ -285,6 +300,7 @@ describe('the happy migration', () => {
     // k = 0 is a contiguous prefix of nothing: the target's step 1, on the original anchor.
     const { v1, v2 } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 });
     if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
     expect(migrated.value).toMatchObject({ carriedOrdinals: [], nextOrdinal: 1 });
@@ -299,8 +315,8 @@ describe('a shorter target', () => {
     // enrollment live with nothing to do.
     const template = await approvedTemplate(admin(), 'Short plan.');
     const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2), callStep(3, 5)]);
-    const short = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template)]);
     const old = await enrolled(plan.versionId, await newFirm(database.session, seeded.alpha));
+    const short = await publishedVersionOf(admin(), plan.sequenceId, [emailStep(template)]);
     await completeCurrent(old);
     await completeCurrent(old);
 
@@ -320,6 +336,7 @@ describe('the refusals', () => {
     // Fails if the target checks are removed: each refusal below would migrate.
     const { v1, v2, sequenceId, template } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     const other = await publishedPlan(admin(), [emailStep(template)]);
     const { rows: draft } = await database.session.query<{ id: string }>(
       `INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 99) RETURNING id`,
@@ -350,6 +367,7 @@ describe('the refusals', () => {
     });
 
     const legacy = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     await database.session.query("UPDATE sequence_enrollments SET origin_kind = 'cold_legacy' WHERE id = $1", [legacy]);
     expect(await migrateEnrollment(salesperson(), { enrollmentId: legacy, targetSequenceVersionId: v2 })).toEqual({
       ok: false,
@@ -363,6 +381,7 @@ describe('the refusals', () => {
     // send, so bytes may be about to leave for the old version's step.
     const { v1, v2 } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     const handed = await runDueStepExecution(worker(), {
       enrollmentId: old,
       now: ANCHOR,
@@ -404,6 +423,7 @@ describe('the refusals', () => {
     // would carry a step that never ran.
     const { v1, v2 } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     const { rows: stepTwo } = await database.session.query<{ id: string }>(
       'SELECT id FROM sequence_steps WHERE sequence_version_id = $1 AND ordinal = 2',
       [v1],
@@ -446,6 +466,7 @@ describe('the agreed follow-up scope', () => {
     const firm = await newFirm(database.session, seeded.alpha);
     const original = await agreedPermission(firm, v1);
     const old = await enrolled(v1, firm, { kind: 'follow_up', permissionId: original });
+    await publish(v2);
 
     expect(await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 })).toEqual({
       ok: false,
@@ -469,6 +490,7 @@ describe('the agreed follow-up scope', () => {
     const firm = await newFirm(database.session, seeded.alpha);
     const original = await agreedPermission(firm, v1);
     const old = await enrolled(v1, firm, { kind: 'follow_up', permissionId: original });
+    await publish(v2);
     await completeCurrent(old);
     const fresh = await agreedPermission(firm, v2);
 
@@ -499,6 +521,7 @@ describe('the agreed follow-up scope', () => {
     const { v1, v2 } = await twoVersions();
     const firm = await newFirm(database.session, seeded.alpha);
     const old = await enrolled(v1, firm);
+    await publish(v2);
     const permission = await agreedPermission(firm, v2);
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2, permissionId: permission }),
@@ -513,6 +536,7 @@ describe('firm exclusivity', () => {
     const { v1, v2 } = await twoVersions();
     const firm = await newFirm(database.session, seeded.alpha);
     const old = await enrolled(v1, firm);
+    await publish(v2);
     const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 });
     if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
     const { rows } = await database.session.query<{ id: string }>(
@@ -553,6 +577,7 @@ describe('authorization', () => {
     });
     if (!result.ok) throw new Error(`the enrollment was refused: ${result.reason}`);
     const old = result.value.enrollmentId;
+    await publish(v2);
 
     expect(await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: v2 })).toEqual({
       ok: false,
@@ -586,6 +611,7 @@ describe('a concurrent step claim and a migration never both proceed', () => {
   async function dueEnrollment(): Promise<{ old: string; v2: string }> {
     const { v1, v2 } = await twoVersions();
     const old = await enrolled(v1, await newFirm(database.session, seeded.alpha));
+    await publish(v2);
     return { old, v2 };
   }
   const claim = async (session: SessionQueryable, enrollmentId: string) => {

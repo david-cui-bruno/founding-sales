@@ -66,6 +66,12 @@ export interface VersionPanel {
    * new draft and that everybody enrolled keeps this one. Null on a draft.
    */
   readonly editNote: string | null;
+  /**
+   * The sequence's draft, on a published version's panel, when one exists: an edit of the
+   * published version is refused while it does (`draft_exists`), so the editor offers the
+   * draft instead of a Save that cannot succeed. Null otherwise.
+   */
+  readonly existingDraft: { readonly id: string; readonly version: number } | null;
   readonly canPublish: boolean;
   readonly publishRefusal: PublishRefusal | null;
   readonly canRetire: boolean;
@@ -142,6 +148,8 @@ export interface SequenceScreen {
   /** Whether the "New sequence" and "New template" forms may be used. */
   readonly canAuthor: boolean;
   readonly notice: string | null;
+  /** The draft the notice's `draft_exists` refusal named, which the page offers. */
+  readonly noticeDraft: { readonly id: string; readonly version: number } | null;
   /** The last template create's or approval's copy warnings, as sentences (wave 1). */
   readonly warnings: readonly string[];
 }
@@ -188,6 +196,7 @@ function versionPanel(
   version: SequenceVersion,
   templates: readonly TemplateVersion[],
   options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
+  draft: SequenceVersion | undefined = undefined,
 ): VersionPanel {
   const refusal = publishRefusalFor(version, templates, options);
   const steps = [...version.steps]
@@ -227,9 +236,13 @@ function versionPanel(
     // enrollment on them, stay as they are. A retired one offers nothing.
     editable: version.state !== 'retired' && options.isAdmin && options.mayMutate,
     editNote:
-      version.state === 'published'
-        ? `Saving makes a new draft version. Everybody already enrolled keeps version ${String(version.version)}.`
-        : null,
+      version.state !== 'published'
+        ? null
+        : draft !== undefined
+          ? `Version ${String(draft.version)} is already a draft of this sequence. Make the change there, or publish it first.`
+          : `Saving makes a new draft version. Everybody already enrolled keeps version ${String(version.version)}.`,
+    existingDraft:
+      version.state === 'published' && draft !== undefined ? { id: draft.id, version: draft.version } : null,
     canPublish: refusal === null,
     publishRefusal: refusal,
     canRetire: version.state === 'published' && options.isAdmin && options.mayMutate,
@@ -347,13 +360,31 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
     })),
     versions: [...state.versions]
       .sort((left, right) => right.version - left.version)
-      .map(version => versionPanel(version, state.templates, options)),
+      .map(version =>
+        versionPanel(
+          version,
+          state.templates,
+          options,
+          state.versions.find(candidate => candidate.state === 'draft'),
+        ),
+      ),
     templates: state.templates.map(template => templatePanel(template, options)),
     enrollments: enrollmentPanel(state),
     canAuthor: state.isAdmin && state.mayMutate,
     notice: state.notice === null ? null : sequenceNotice(state.notice),
+    noticeDraft: state.notice === null ? null : draftNamedBy(state.notice),
     warnings: state.warnings.map(templateWarningSentence),
   };
+}
+
+/**
+ * The draft a `draft_exists:<version>:<id>` refusal names, so the notice can offer it
+ * (send-path v2, S2). Null for every other notice.
+ */
+export function draftNamedBy(code: string): { readonly id: string; readonly version: number } | null {
+  const named = /^draft_exists:(\d{1,4}):([0-9a-f-]{36})$/u.exec(code);
+  if (named === null) return null;
+  return { id: named[2] ?? '', version: Number(named[1]) };
 }
 
 /** The empty screen the window renders before its first answer. */
@@ -709,6 +740,10 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
 export function sequenceNotice(code: string): string {
   // Send-path v2 (S2): an edit of a published version or an approved template is a new
   // version, and the notice names its number so nobody looks for the edit in the old one.
+  const draft = draftNamedBy(code);
+  if (draft !== null) {
+    return `Not saved: version ${String(draft.version)} is already a draft of this sequence. Make the change there, or publish it first.`;
+  }
   const newVersion = /^(steps|template)_saved_as_version:(\d{1,4})$/u.exec(code);
   if (newVersion !== null) {
     const number = newVersion[2] ?? '';

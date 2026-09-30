@@ -35,6 +35,18 @@ const PUBLISH_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.freez
   upgrade_required: 'Update Callie to publish.',
 });
 
+/**
+ * Bring a version's panel into view and put focus on it: how the page offers the draft a
+ * `draft_exists` refusal named (send-path v2, S2). `scrollIntoView` is optional because
+ * not every environment the page renders in has it.
+ */
+function openVersion(sequenceVersionId: string): void {
+  const panel = document.getElementById(`version-${sequenceVersionId}`);
+  if (panel === null) return;
+  panel.scrollIntoView?.({ block: 'start' });
+  panel.focus();
+}
+
 function UnreadSlice({ screen, slice, onRetry }: { readonly screen: SequenceScreen; readonly slice: SequenceReadSlice; onRetry(): void }): JSX.Element | null {
   const unread = screen.unread.find(entry => entry.slice === slice);
   if (unread === undefined) return null;
@@ -198,6 +210,19 @@ export function SequencesRoute({
         {screen.notice === null || serverIssues.length > 0 ? null : (
           <Alert tone="info" data-testid="sequence-notice">
             {screen.notice}
+            {screen.noticeDraft === null ? null : (
+              <Button
+                size="sm"
+                variant="link"
+                data-testid="sequence-notice-open-draft"
+                className="ml-1 h-auto px-0"
+                onClick={() => {
+                  if (screen.noticeDraft !== null) openVersion(screen.noticeDraft.id);
+                }}
+              >
+                {`Open version ${String(screen.noticeDraft.version)}`}
+              </Button>
+            )}
           </Alert>
         )}
         {screen.warnings.map(warning => (
@@ -287,6 +312,8 @@ export function SequencesRoute({
         return (
           <Section
             key={panel.id}
+            id={`version-${panel.id}`}
+            tabIndex={-1}
             data-testid="version"
             title={panel.heading}
             count={panel.steps.length}
@@ -340,6 +367,7 @@ export function SequencesRoute({
                 onSave={steps => {
                   sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps });
                 }}
+                onOpenDraft={openVersion}
               />
             ) : (
               <Rows data-testid="version-steps" className="mt-2">

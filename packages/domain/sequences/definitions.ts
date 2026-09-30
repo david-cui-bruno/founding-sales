@@ -222,6 +222,18 @@ export interface SavedSteps {
   readonly newVersion: boolean;
 }
 
+/**
+ * A save's answer. `draft_exists` carries the draft it would have overwritten, so the
+ * route can name it and the editor can offer it.
+ */
+export type SaveStepsResult =
+  | SequenceResult<SavedSteps>
+  | {
+      readonly ok: false;
+      readonly reason: 'draft_exists';
+      readonly draft: { readonly sequenceVersionId: string; readonly version: number };
+    };
+
 interface LockedVersion {
   readonly id: string;
   readonly sequenceId: string;
@@ -260,10 +272,11 @@ async function lockVersion(context: RepositoryContext, sequenceVersionId: string
  * The steps are the whole list, numbered 1..n by place, which is what the editor sends.
  *
  *   * **A draft** has its steps replaced wholesale.
- *   * **A published version** is not written to. The steps become the sequence's draft —
- *     a new version (copy + change), or the draft that is already there, since there is
- *     at most one per sequence — and the answer names it (`newVersion: true`). The
- *     published version, its steps, and every enrollment on it are exactly as they were.
+ *   * **A published version** is not written to. The steps become a new draft version
+ *     (copy + change) and the answer names it (`newVersion: true`). The published
+ *     version, its steps, and every enrollment on it are exactly as they were. When the
+ *     sequence already has a draft the save refuses `draft_exists`, naming it, rather
+ *     than overwriting somebody's unpublished work (there is at most one per sequence).
  *   * **A retired version** refuses.
  *
  * A draft is held only to its shape; publication checks the rest (at least one step,
@@ -274,14 +287,14 @@ async function lockVersion(context: RepositoryContext, sequenceVersionId: string
 export async function saveSteps(
   context: RepositoryContext,
   input: ReplaceDraftStepsInput,
-): Promise<SequenceResult<SavedSteps>> {
+): Promise<SaveStepsResult> {
   if (!isAdminScope(context.scope)) return refuseSequence('admin_only');
   const shape = validateSteps(input.steps);
   if (shape !== null) return refuseSequence(shape);
 
   return await underImmutabilityGuard(
     context,
-    () => refuseSequence<SavedSteps>('version_not_draft'),
+    (): SaveStepsResult => refuseSequence<SavedSteps>('version_not_draft'),
     async () => {
       const version = await lockVersion(context, input.sequenceVersionId);
       if (version === null) return refuseSequence('version_unknown');
@@ -295,6 +308,21 @@ export async function saveSteps(
           version: version.version,
           newVersion: false,
         });
+      }
+      // One draft per sequence, and somebody else's draft is not overwritten (David,
+      // 30 September 2026): the edit is refused, naming the draft, so the person makes it
+      // there — or publishes that draft first.
+      const { rows: drafts } = await context.db.query<{ id: string; version: number }>(
+        `SELECT id, version FROM sequence_versions WHERE workspace_id = $1 AND sequence_id = $2 AND state = 'draft'`,
+        [context.scope.workspaceId, version.sequenceId],
+      );
+      const existing = drafts[0];
+      if (existing !== undefined) {
+        return {
+          ok: false,
+          reason: 'draft_exists',
+          draft: { sequenceVersionId: existing.id, version: Number(existing.version) },
+        };
       }
       const draft = await createDraftVersion(context, { sequenceId: version.sequenceId, steps: input.steps });
       if (!draft.ok) return draft;
@@ -381,7 +409,8 @@ function validateSteps(steps: readonly DraftStepInput[]): 'invalid_input' | null
 }
 
 /**
- * Publish a draft, which freezes it and everything under it.
+ * Publish a draft, which freezes it and everything under it, and retire the version
+ * that was current before it (one current version per sequence).
  *
  * The three checks above, then one `UPDATE`. The trigger takes over from here: this
  * row and its steps cannot change again, and the only permitted later transition is
@@ -407,6 +436,16 @@ export async function publishVersion(
   const templates = await refuseUnpublishableTemplates(context, version.steps);
   if (templates !== null) return refuseSequence(templates);
 
+  // One current version per sequence (David, 30 September 2026): the version published
+  // before this one is retired in the same command. Retiring stops new enrollments and
+  // nothing else — its running enrollments keep reading its steps, which 0026's trigger
+  // keeps frozen — and the only way one of them moves is `migrateEnrollment`.
+  await context.db.query(
+    `UPDATE sequence_versions
+        SET state = 'retired', retired_at = now(), retired_by_user_id = $4, updated_at = now()
+      WHERE workspace_id = $1 AND sequence_id = $2 AND state = 'published' AND id <> $3`,
+    [context.scope.workspaceId, version.sequenceId, input.sequenceVersionId, context.scope.actor.userId],
+  );
   await context.db.query(
     `UPDATE sequence_versions
         SET state = 'published', published_at = now(), published_by_user_id = $3, updated_at = now()

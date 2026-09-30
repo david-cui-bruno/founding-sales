@@ -86,6 +86,8 @@ export const SEQUENCE_REFUSAL_CODES = [
   'enrollment_dispatching',
   'completed_prefix_required',
   'agreed_scope_bound',
+  /** A published version's edit, refused because the sequence already has a draft (S2). */
+  'draft_exists',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

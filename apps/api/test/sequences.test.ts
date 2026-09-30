@@ -411,6 +411,16 @@ describe('the sequence, template and enrollment routes', () => {
     const draft = versions.find(entry => entry.id === answer['sequenceVersionId']);
     expect(draft?.state).toBe('draft');
     expect(draft?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
+
+    // A second edit of the published version while that draft exists is refused, naming
+    // the draft (`draft_exists:<version>:<id>`), and the draft is left as it was.
+    const again = await post('/sequences/versions/steps', adminToken, command({ sequenceVersionId, steps: [steps[0]] }));
+    expect(again.status).toBe(409);
+    expect(again.body['reason']).toBe(`draft_exists:${String(draft?.version)}:${String(draft?.id)}`);
+    const after = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.id === draft?.id);
+    expect(after).toEqual(draft);
   });
 
   it('migrates an enrollment to the newly published version by supersede, audited, and answers a replay from the receipt (send-path v2, S2)', async () => {
@@ -421,6 +431,14 @@ describe('the sequence, template and enrollment routes', () => {
     expect(draft).toBeDefined();
     const published = await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: draft?.id }));
     expect(published.status).toBe(200);
+    // One current version per sequence: publishing retired the one it replaced.
+    const states = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.map(entry => [entry.id, entry.state]);
+    expect(states).toEqual([
+      [draft?.id, 'published'],
+      [sequenceVersionId, 'retired'],
+    ]);
     const enrolled = enrollmentsResponseSchema
       .parse((await post('/enrollments', salespersonToken, { contactId, liveOnly: true })).body)
       .enrollments.find(entry => entry.sequenceVersionId === sequenceVersionId);

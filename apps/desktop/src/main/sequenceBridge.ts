@@ -37,7 +37,9 @@ import type { AuthedClient } from './authedClient.ts';
  * writes them to the sequence's draft — the server answers which version, and the notice
  * names it — and saving an approved template writes its next version. The published
  * version and the approved template are exactly as they were, and so is everybody
- * already enrolled; publishing the draft is what new enrollments pick up.
+ * already enrolled; publishing the draft is what new enrollments pick up, and it retires
+ * the version it replaces. While a draft exists, an edit of the published version is
+ * refused `draft_exists:<version>:<id>` and the page offers that draft.
  * `/sequences/versions/draft` is still called in one place — the first, empty version
  * of a sequence that has just been created.
  *

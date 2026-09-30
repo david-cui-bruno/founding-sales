@@ -33,7 +33,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * `/sequences/versions/steps` saves a draft's steps. Named against a published version,
  * it writes nothing to it (send-path v2, S2): the steps become the sequence's draft —
  * a new version, copy + change — and the answer says which (`sequenceVersionId`,
- * `version`, `newVersion`). Everybody enrolled keeps the version they started on; the
+ * `version`, `newVersion`); when a draft already exists it refuses
+ * `draft_exists:<version>:<id>` instead of overwriting it. Publishing retires the
+ * version that was current. Everybody enrolled keeps the version they started on; the
  * only way one moves is `POST /enrollments/migrate`. `/sequences/versions/draft` makes a
  * sequence's first version, and "Edit as a new draft" for desktop 1.0.11.
  */
@@ -146,12 +148,15 @@ export async function routeSequences(
   }
 
   if (request.path === '/sequences/versions/steps') {
-    return await runPolicyCommand(deps, stepsSchema, 'replace_sequence_steps', async (context, body) =>
-      await saveSteps(context, {
-        sequenceVersionId: body.sequenceVersionId,
-        steps: body.steps,
-      }),
-    );
+    return await runPolicyCommand(deps, stepsSchema, 'replace_sequence_steps', async (context, body) => {
+      const saved = await saveSteps(context, { sequenceVersionId: body.sequenceVersionId, steps: body.steps });
+      // The refusal names the draft it would have overwritten, so the Mac can offer it:
+      // `draft_exists:<version>:<sequenceVersionId>`.
+      if (!saved.ok && saved.reason === 'draft_exists' && 'draft' in saved) {
+        return { ok: false, reason: `draft_exists:${String(saved.draft.version)}:${saved.draft.sequenceVersionId}` };
+      }
+      return saved;
+    });
   }
 
   if (request.path === '/sequences/versions/publish') {

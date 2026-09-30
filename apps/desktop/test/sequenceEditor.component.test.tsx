@@ -28,7 +28,9 @@ import {
  *   * after the press the published version's editor shows its own steps again (the
  *     edit is in the new draft's panel), and the notice names the draft's number;
  *   * editing an approved template opens the form with the version the save will make;
- *   * a draft's Save is still "Save", with no line.
+ *   * a draft's Save is still "Save", with no line;
+ *   * while the sequence has a draft, the published version's Save is off and its line
+ *     offers the draft; a `draft_exists` refusal's notice offers it too.
  *
  * No real person, firm or address appears.
  */
@@ -152,5 +154,39 @@ describe('the template form on an approved version', () => {
       'Saving makes version 2. Version 1 stays approved as it is, and so does every sequence that sends it.',
     );
     expect(screen.getByTestId('template-label').textContent).toBe('First touch v1');
+  });
+});
+
+describe('a published version whose sequence already has a draft', () => {
+  const draft = sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template, 1)], { id: DRAFT_ID, version: 2, state: 'draft' });
+
+  it('turns the published Save off and offers the draft instead', async () => {
+    install({}, base({ versions: [draft, published] }));
+    renderRoute();
+    const panels = await screen.findAllByTestId('version');
+    const publishedPanel = panels.find(entry => within(entry).getByTestId('version-heading').textContent === 'Version 1 — published');
+    if (publishedPanel === undefined) throw new Error('the published panel is missing');
+    expect(within(publishedPanel).getByTestId('draft-edit-note').textContent).toContain(
+      'Version 2 is already a draft of this sequence. Make the change there, or publish it first.',
+    );
+    const user = userEvent.setup();
+    const amounts = within(publishedPanel).getAllByTestId('step-delay-amount');
+    await user.clear(amounts[1] as HTMLElement);
+    await user.type(amounts[1] as HTMLElement, '5');
+    expect((within(publishedPanel).getByTestId('draft-save') as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(publishedPanel).getByTestId('draft-open-existing'));
+    expect(document.activeElement?.id).toBe(`version-${DRAFT_ID}`);
+  });
+
+  it('shows a draft_exists refusal in words and offers the draft it names', async () => {
+    install({}, base({ versions: [draft, published], notice: `draft_exists:2:${DRAFT_ID}` }));
+    renderRoute();
+    const notice = await screen.findByTestId('sequence-notice');
+    expect(notice.textContent).toContain(
+      'Not saved: version 2 is already a draft of this sequence. Make the change there, or publish it first.',
+    );
+    const user = userEvent.setup();
+    await user.click(within(notice).getByTestId('sequence-notice-open-draft'));
+    expect(document.activeElement?.id).toBe(`version-${DRAFT_ID}`);
   });
 });

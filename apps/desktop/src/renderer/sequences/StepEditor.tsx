@@ -32,6 +32,8 @@ import { Select } from '../ui/select.tsx';
  * cadence"). Its Save reads "Save as new draft": the server writes the edit to the
  * sequence's draft version, which appears as its own panel, and the published steps —
  * and everybody running them — stay as they were. The line under the button says so.
+ * While the sequence already has a draft the server refuses such a save (`draft_exists`)
+ * rather than overwrite it, so Save is off and the line offers that draft instead.
  *
  * The steps being edited are held here, between answers, because every answer redraws
  * the view and an editor redrawn from the server's copy would drop what was being typed.
@@ -51,6 +53,7 @@ export function StepEditor({
   state,
   saving,
   onSave,
+  onOpenDraft,
 }: {
   readonly panel: VersionPanel;
   readonly version: SequenceVersion;
@@ -58,6 +61,8 @@ export function StepEditor({
   /** This version's own Save is on the wire; another version's is not this one's wait. */
   readonly saving: boolean;
   onSave(steps: readonly DraftStep[]): void;
+  /** Bring the sequence's draft into view (offered when this version's edit would be refused). */
+  onOpenDraft?(sequenceVersionId: string): void;
 }): JSX.Element {
   const [steps, setSteps] = useState<readonly DraftStep[]>(() => draftStepsOf(version));
   const stored = JSON.stringify(draftStepsOf(version));
@@ -281,7 +286,7 @@ export function StepEditor({
         <Button
           size="sm"
           data-testid="draft-save"
-          disabled={!panel.editable || !changed || issues.length > 0 || saving}
+          disabled={!panel.editable || panel.existingDraft !== null || !changed || issues.length > 0 || saving}
           {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             onSave(steps);
@@ -306,6 +311,19 @@ export function StepEditor({
       {panel.editNote === null ? null : (
         <p data-testid="draft-edit-note" className="mt-1 text-xs text-muted-foreground">
           {panel.editNote}
+          {panel.existingDraft === null || onOpenDraft === undefined ? null : (
+            <Button
+              size="sm"
+              variant="link"
+              data-testid="draft-open-existing"
+              className="ml-1 h-auto px-0 text-xs"
+              onClick={() => {
+                if (panel.existingDraft !== null) onOpenDraft(panel.existingDraft.id);
+              }}
+            >
+              {`Edit version ${String(panel.existingDraft.version)}`}
+            </Button>
+          )}
         </p>
       )}
     </div>
