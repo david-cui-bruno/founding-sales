@@ -10,6 +10,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
 import {
@@ -18,6 +19,7 @@ import {
   type PolicyRefusalCode,
   type PolicyResult,
 } from '../policy/types.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -88,6 +90,24 @@ export interface LogCallOutcomeInput {
     | undefined;
   /** `do_not_call` suppresses the firm only when the request covered all Callie contact. */
   readonly doNotCallCoversAllContact?: boolean | undefined;
+  /**
+   * The follow-up the salesperson agreed with the person on this call (migration 0025).
+   *
+   * David, 29 September 2026: *"'Email me an overview' permits that email, not an
+   * automatic multi-week sequence. ... An agreed follow-up sequence can run within its
+   * agreed scope."* So the choice belongs to the salesperson at the moment of recording
+   * the outcome, and there are exactly three answers: one e-mail, a named sequence, or
+   * nothing. Permitted only on `interested`, which is the outcome that means a
+   * conversation happened.
+   *
+   * `callback_requested` is deliberately **not** one of them: "Call me Tuesday" means a
+   * callback task, and this command already creates one. It grants no e-mail permission
+   * of any kind.
+   */
+  readonly followUpPermission?:
+    | { readonly scope: 'single_email'; readonly templateVersionId: string }
+    | { readonly scope: 'agreed_sequence'; readonly sequenceVersionId: string }
+    | undefined;
   readonly commandId?: string | undefined;
   /** Required whenever the outcome may suppress. The journal write precedes the row. */
   readonly journal?: SuppressionJournal | undefined;
@@ -111,6 +131,8 @@ export interface LoggedCall {
   readonly successorExecutionId: string | null;
   /** The callback this call fulfilled (Appendix A "Callback confirm/complete"). */
   readonly completedCallbackId: string | null;
+  /** The follow-up permission this outcome granted, if any (migration 0025). */
+  readonly followUpPermissionId: string | null;
   readonly followUps: readonly CallFollowUp[];
 }
 
@@ -144,6 +166,16 @@ export async function logCallOutcome(
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
 
   // ---- 1. Decide ----------------------------------------------------------
+  //
+  // The send gate first, before any row (P1-4 of the second review of PR 332). An
+  // engaged call is a stop fact: it sets the opportunity manual and ends its
+  // enrollments, and `policy/sendGate.ts` asks every stop-fact writer to take the gate
+  // EXCLUSIVE before it locks anything. This function used to lock the firm first and
+  // reach the gate only at step 3 — the opposite of the claim's gate-then-firm order, so
+  // a claim waiting for the firm and a call waiting for the gate could deadlock. Taking
+  // it here costs nothing: the same lock is taken a few statements later either way, and
+  // a call that refuses releases it at the end of the caller's transaction.
+  await lockSendGateForStopFact(context);
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refusePolicy('firm_unknown');
   const permitted = decideFirmMutation(context, firm);
@@ -234,6 +266,22 @@ export async function logCallOutcome(
   }
 
   const effects = effectsForBoundStep(input.outcome, bound);
+  // An agreement belongs to the outcome that means a conversation happened. Anything
+  // else — a voicemail, a no-answer, "call me Tuesday" — agreed to nothing, and migration
+  // 0025's `call_logs_agreement_needs_interest` says so in the database. Refused here so
+  // a client that sends a stale field gets a code rather than a constraint violation.
+  //
+  // And an agreement needs a **person**: a permission is granted to somebody, and a log
+  // with no contact is a call to a main line. Both are checked *before* the call log is
+  // written, which is the third review of PR 332: the contact check used to sit inside
+  // the savepoint that carries the engaged-call stop, so an agreement with no contact
+  // rolled the stop back and the command still answered accepted — the sequences kept
+  // running against a firm that had just had a conversation.
+  if (input.followUpPermission !== undefined) {
+    if (input.outcome !== 'interested') return refusePolicy('invalid_input');
+    if (input.contactId === undefined && ticket?.contact_id == null) return refusePolicy('invalid_input');
+  }
+
   const engaged = effects.setsManual;
   if (effects.suppressesNumber && input.journal === undefined) return refusePolicy('invalid_input');
 
@@ -263,8 +311,9 @@ export async function logCallOutcome(
   const logged = await context.db.query<{ id: string }>(
     `INSERT INTO call_logs
        (workspace_id, firm_id, contact_id, opportunity_id, phone_route_id, calling_identity_id,
-        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14)
+        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note,
+        agreed_follow_up, agreed_template_version_id, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14, $15, $16, $17)
      RETURNING id`,
     [
       context.scope.workspaceId,
@@ -281,6 +330,15 @@ export async function logCallOutcome(
       actor.userId,
       input.commandId ?? null,
       input.note ?? null,
+      // What the person on the call agreed to, on the call log itself (migration 0025,
+      // P0-1). The permission points at this row and re-reads these three columns on
+      // every step, so the log — not the permission — is where the agreement lives, and
+      // a log that agreed to nothing can never be turned into one through any API.
+      input.followUpPermission?.scope ?? null,
+      input.followUpPermission?.scope === 'single_email' ? input.followUpPermission.templateVersionId : null,
+      input.followUpPermission?.scope === 'agreed_sequence'
+        ? input.followUpPermission.sequenceVersionId
+        : null,
     ],
   );
   const callLogId = logged.rows[0]?.id;
@@ -397,8 +455,41 @@ export async function logCallOutcome(
       retiredRouteId,
       completedCallbackId,
       callbackId,
+      followUpPermissionId: null,
     });
   });
+
+  // The follow-up the salesperson agreed to, in a savepoint of its **own** and after the
+  // effects above (the third review of PR 332). It was inside theirs, and a grant that
+  // refused took the engaged-call stop down with it — the one effect of an interested
+  // call that must never be lost, because a sequence still running after a conversation
+  // is exactly what invariant 3 forbids. A grant that fails now costs the permission and
+  // nothing else, and says so on the receipt.
+  //
+  // The evidence is this very call log — the row inserted above — and
+  // `verifyFollowUpPermission` re-reads it before every step: the log's firm must still
+  // be this firm, and, since it names a person, still this person.
+  let followUpPermissionId: string | null = null;
+  if (input.followUpPermission !== undefined && contactId !== undefined) {
+    // A *thrown* refusal is caught too, and for the same reason: `grantFollowUpPermission`
+    // raises on evidence it cannot support, and the savepoint has already been rolled back
+    // by the time the error reaches here. Nothing about granting a permission is worth
+    // losing a recorded conversation and its stop over.
+    const granted = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
+      // The kind and the scope are not passed: the call log decides them, because a
+      // caller that could name them could name a sequence over a callback (P0-1).
+      const outcome = await grantFollowUpPermission(context, {
+        firmId: input.firmId,
+        contactId,
+        callLogId,
+        grantedByUserId: actor.userId,
+        note: 'agreed on the call',
+      });
+      return outcome.ok ? acceptPolicy(outcome.value.id) : refusePolicy('invalid_input');
+    }).catch(() => refusePolicy<string>('invalid_input'));
+    if (granted.ok) followUpPermissionId = granted.value;
+    else followUps.push({ kind: 'follow_up_not_granted', reason: granted.reason });
+  }
 
   const outcomes: AppliedEffects = applied.ok
     ? applied.value
@@ -410,6 +501,7 @@ export async function logCallOutcome(
         retiredRouteId: null,
         completedCallbackId: null,
         callbackId: null,
+        followUpPermissionId: null,
       };
   if (!applied.ok) followUps.push({ kind: 'effects_not_applied', reason: applied.reason });
 
@@ -463,6 +555,10 @@ export async function logCallOutcome(
     stepApplication: outcomes.stepApplication,
     successorExecutionId: outcomes.successorExecutionId,
     completedCallbackId: outcomes.completedCallbackId,
+    // Not `outcomes`: the grant has a savepoint of its own now, so a rolled-back effect
+    // does not erase a permission that was granted, and a refused grant does not erase
+    // the effects.
+    followUpPermissionId,
     followUps,
   });
 }
@@ -475,6 +571,7 @@ interface AppliedEffects {
   readonly retiredRouteId: string | null;
   readonly completedCallbackId: string | null;
   readonly callbackId: string | null;
+  readonly followUpPermissionId: string | null;
 }
 
 /** A suppression refusal, in this command's vocabulary. The code itself is kept in the audit. */

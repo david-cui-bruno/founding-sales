@@ -74,6 +74,12 @@ export const MANUAL_MODE_ORIGINS = [
   'engaged_call',
   'direct_send',
   'salesperson_command',
+  // The fifth is neither an event nor a takeover: it is the person's *choice* to keep
+  // the evidenced follow-up automation running after their own direct Gmail send
+  // (`keepFollowingUpAfterDirectSend`, P1-1 of the GPT-6 review of PR 332). A direct
+  // send is a salesperson taking the conversation over, so `direct_send` blocks a
+  // follow-up; this value is the one exception, and only a person can write it.
+  'direct_send_keep_automation',
 ] as const;
 export type ManualModeOrigin = (typeof MANUAL_MODE_ORIGINS)[number];
 

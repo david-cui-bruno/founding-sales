@@ -76,12 +76,13 @@ export async function prepareFor(
   firm: SeededFirm,
   overrides: Parameters<OutboundWorld['prepare']>[1] = {},
 ): Promise<string> {
+  // Neither the contact nor the route is named here any more: the world takes both from
+  // the enrollment the step execution belongs to, which is what a real request does and
+  // what the claim now requires (P0-2). A case that wants a *wrong* route still passes
+  // one as an override, which is how the malformed-fence cases are written.
   return await world.prepare(mailbox, {
     firmId: firm.firmId,
-    contactId: firm.contactId,
     opportunityId: firm.opportunityId,
-    emailAddressId: firm.routeId,
-    toAddress: firm.address,
     ...overrides,
   });
 }

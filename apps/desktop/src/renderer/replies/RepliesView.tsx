@@ -13,6 +13,7 @@ import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Label } from '../ui/label.tsx';
+import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { orDash } from '../today/text.ts';
 import type { Replies } from './useReplies.ts';
@@ -166,6 +167,9 @@ function Answer({
   const [callbackTime, setCallbackTime] = useState(time ?? '');
   const [firmWide, setFirmWide] = useState(false);
   const [note, setNote] = useState('');
+  // Migration 0025: an inbound question permits a contextual reply, so the default is
+  // to grant one — and the select is how a person says no to it.
+  const [grantFollowUp, setGrantFollowUp] = useState(true);
   if (card.choices.length === 0) return null;
 
   /*
@@ -181,6 +185,10 @@ function Answer({
 
   const chosen = replies.chosen;
   const consequence = card.choices.find(choice => choice.selected)?.consequence ?? '';
+  // Only the two dispositions that mean "they want to hear from us" permit a follow-up.
+  // `not_interested` and `opt_out` are refusals, and a permission from one would be
+  // absurd; the server ignores the field for them either way.
+  const permitsFollowUp = chosen === 'interested' || chosen === 'follow_up_later';
 
   return (
     <div data-testid="disposition-form" className="mt-4 flex flex-col gap-2 border-t border-border pt-3">
@@ -211,6 +219,27 @@ function Answer({
       <p data-testid="consequence" className="text-xs leading-relaxed text-muted-foreground empty:hidden">
         {consequence}
       </p>
+
+      <label
+        data-testid="follow-up-label"
+        hidden={!permitsFollowUp}
+        className="flex flex-col items-start gap-1 text-sm"
+      >
+        May Callie reply?
+        <Select
+          data-testid="follow-up-scope"
+          value={grantFollowUp ? 'contextual_reply' : ''}
+          onChange={event => {
+            setGrantFollowUp(event.target.value === 'contextual_reply');
+          }}
+        >
+          <option value="contextual_reply">Yes — one reply to what they asked</option>
+          <option value="">No follow-up</option>
+        </Select>
+        <span className="text-xs text-muted-foreground">
+          A reply to this message, for fourteen days. Not a sequence.
+        </span>
+      </label>
 
       <fieldset data-testid="callback" hidden={!card.callbackOffered} className="flex flex-wrap items-end gap-2 border-0 p-0">
         <legend className="mb-1 w-full text-xs font-medium text-muted-foreground">
@@ -290,6 +319,7 @@ function Answer({
                 : null,
               firmWideOptOut: card.firmWideOptOutOffered && firmWide,
               note: note.trim(),
+              grantFollowUp,
             });
             setNote('');
           }}

@@ -13,7 +13,12 @@ import {
   type SequenceStepRow,
   type SequenceVersionRow,
 } from './types.ts';
-import type { EnrollmentEndReason } from '@fss/contracts';
+import type { EnrollableOriginKind, EnrollmentEndReason } from '@fss/contracts';
+import {
+  agreedSequenceExpiry,
+  bindFollowUpPermission,
+  verifyFollowUpPermission,
+} from './followUpPermissions.ts';
 
 /**
  * Enrollment, and the terminal stop (specification 11.2, 7.3, 8.1, Appendix A).
@@ -36,6 +41,14 @@ import type { EnrollmentEndReason } from '@fss/contracts';
  */
 
 export interface EnrollContactInput {
+  /**
+   * What this enrollment is for (migration 0025). Required, and never defaulted: the
+   * column's DEFAULT is `cold_legacy`, which is history, and a command that inherited
+   * it would be a command creating an enrollment nothing will ever send.
+   */
+  readonly originKind: EnrollableOriginKind;
+  /** The permission a `follow_up` enrollment rests on. Required for it, refused otherwise. */
+  readonly permissionId?: string | undefined;
   readonly sequenceVersionId: string;
   readonly opportunityId: string;
   readonly firmId: string;
@@ -73,6 +86,17 @@ export async function enrollContact(
   context: RepositoryContext,
   input: EnrollContactInput,
 ): Promise<SequenceResult<EnrolledOutcome>> {
+  // The send gate, exclusively, before any row. Enrolling can be a **stop fact**: a
+  // valid later request supersedes a live `cold_legacy` enrollment (P1-2), and a stop
+  // fact takes the gate before the rows it stops (`policy/sendGate.ts`). Taking it
+  // unconditionally, rather than only on the path that stops something, is what makes
+  // the lock order one order rather than two: gate → firm → opportunity → contact →
+  // enrollment. A dispatch claim holds the same gate *shared*, so an enrollment and a
+  // claim are never inside each other's window at all, and the deadlock the review
+  // found between a claim waiting for a firm and a command waiting for the gate cannot
+  // form (P1-4, `docs/greenfield/decisions/follow-up-eligibility-20260929.md`).
+  await lockSendGateForStopFact(context);
+
   const version = await readSequenceVersion(context, input.sequenceVersionId);
   if (version === null) return refuseSequence('version_unknown');
   if (version.state === 'retired') return refuseSequence('version_retired');
@@ -118,8 +142,79 @@ export async function enrollContact(
     return refuseSequence('contact_unknown');
   }
 
+  // ------------------------------------------------- the contact's live enrollment
+  //
+  // One live enrollment per contact (`sequence_enrollments_one_active_per_contact`),
+  // with one exception David's decision requires: *"A later valid request can establish
+  // a new evidenced follow-up. It must not automatically revive the old cold
+  // sequence."* A `cold_legacy` row that is still live would have blocked that request
+  // for ever (P1-2), so an evidenced follow-up **supersedes** it — terminally, in this
+  // transaction, with its history kept and an end reason that names what happened.
+  //
+  // Only `cold_legacy` is superseded, and only by a `follow_up`: a prospecting
+  // enrollment is live work somebody chose, and it still refuses.
   const live = await listEnrollments(context, { contactId: input.contactId, liveOnly: true });
-  if (live.length > 0) return refuseSequence('contact_already_enrolled');
+  const superseded = live.filter(enrollment => enrollment.originKind === 'cold_legacy');
+  if (live.length > superseded.length || (superseded.length > 0 && input.originKind !== 'follow_up')) {
+    return refuseSequence('contact_already_enrolled');
+  }
+
+  // ------------------------------------------------------- the origin, and its evidence
+  //
+  // David, 29 September 2026, item 2: "Enforce the rule at enrollment and immediately
+  // before sending." This is the enrollment half, and it is correct under concurrent
+  // workers because the firm row above was locked `FOR UPDATE` before it was read: a
+  // second command for another contact at the same firm waits here and then reads what
+  // the first committed. The send half is `firmExclusivitySource`, which takes the same
+  // lock in the same order, for the rows that already exist.
+  //
+  // Prospecting only. "This restriction applies to prospecting; it must not prevent
+  // ordinary customer conversations involving multiple people."
+  /** The scope the permission turned out to be, for the bind below. */
+  let permittedScope: string | null = null;
+  if (input.originKind === 'prospecting') {
+    if (input.permissionId !== undefined) return refuseSequence('invalid_input');
+    const atFirm = await listEnrollments(context, { firmId: input.firmId, liveOnly: true });
+    if (atFirm.some(enrollment => enrollment.originKind === 'prospecting')) {
+      return refuseSequence('firm_already_enrolled');
+    }
+  } else {
+    const permissionId = input.permissionId;
+    if (permissionId === undefined) return refuseSequence('invalid_input');
+    // `clock_timestamp()`, not `now()`. `now()` is the instant the transaction began,
+    // and this one began before it waited for the send gate and for the firm's row — so a
+    // permission that expired during the wait would still be read as live, and a live
+    // `cold_legacy` enrollment could be superseded on the strength of it (the second
+    // review of PR 332). The wall clock inside the transaction is the honest answer.
+    const { rows: clockNow } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+    const verdict = await verifyFollowUpPermission(context, permissionId, {
+      firmId: input.firmId,
+      contactId: input.contactId,
+      now: (clockNow[0]?.now ?? new Date()).toISOString(),
+      sequenceVersionId: input.sequenceVersionId,
+      stepCount: version.steps.length,
+      // Every step's bytes, not only the first: a `single_email` permission buys one
+      // template, and a plan whose only step is another template is not that e-mail.
+      templateVersionId: firstStep.templateVersionId,
+    });
+    // The refusal a person reads is the same sentence the step would have held under.
+    // A `single_email` or `contextual_reply` permission cannot carry a multi-step
+    // version: `verifyFollowUpPermission` compares the plan against `max_steps` and
+    // refuses `follow_up_scope_exhausted`, which is 'that permission does not buy this
+    // plan'.
+    if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
+    permittedScope = verdict.permission.scope;
+  }
+
+  // The supersession, after every refusal and before the insert, so a command that is
+  // going to be refused never stops anything. The gate is already held exclusively.
+  for (const legacy of superseded) {
+    await stopEnrollments(context, {
+      enrollmentId: legacy.id,
+      reason: 'superseded_by_follow_up',
+      cancelReason: 'superseded by an evidenced follow-up',
+    });
+  }
 
   const calendar = await currentHolidayCalendar(context);
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
@@ -137,8 +232,8 @@ export async function enrollContact(
     `WITH enrolled AS (
        INSERT INTO sequence_enrollments
          (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-          started_at, firm_time_zone, holiday_calendar_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9)
+          started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $16, $17)
        RETURNING id
      ), executed AS (
        INSERT INTO step_executions
@@ -166,15 +261,51 @@ export async function enrollContact(
       due.dueAt,
       due.sourceZone,
       due.ruleVersion,
+      input.originKind,
+      input.permissionId ?? null,
     ],
   );
   const created = rows[0];
   if (created === undefined) return refuseSequence('invalid_input');
+
+  // The permission buys **this** run, and only this one. The bind is conditional on
+  // `enrollment_id IS NULL`, so a second enrollment on the same permission finds it
+  // taken and this command refuses rather than quietly running twice (P0-3) — and on the
+  // permission still being live at the database's own clock, so a permission that died
+  // between the verification above and here takes the whole transaction down, including
+  // the supersession of any `cold_legacy` row (third review of PR 332).
+  if (input.permissionId !== undefined) {
+    // An agreed sequence is agreed for the length of **the run it bought**, so the bound
+    // is recomputed here: the grant could only guess at the start (it used its own
+    // instant and the calendar as it stood then), and this enrollment knows the start it
+    // actually took and the calendar it froze (the third review of PR 332). The
+    // verification above already refused a permission that was not live at this moment,
+    // so this can only move the end of a live permission to where its own plan ends.
+    const runExpiry =
+      permittedScope === 'agreed_sequence'
+        ? agreedSequenceExpiry(version.steps, startedAt, firm.time_zone, calendar)
+        : undefined;
+    const bound = await bindFollowUpPermission(context, input.permissionId, created.enrollment_id, runExpiry);
+    if (!bound) throw new FollowUpReuseError(input.permissionId);
+  }
   return acceptSequence({
     enrollmentId: created.enrollment_id,
     firstExecutionId: created.execution_id,
     firstDueAt: due.dueAt,
   });
+}
+
+/**
+ * A permission that already bought a run was offered for a second (P0-3).
+ *
+ * Thrown rather than returned, so the enrollment that was just inserted rolls back with
+ * it: by the time the bind fails the row exists, and a refusal value would leave it.
+ */
+export class FollowUpReuseError extends Error {
+  constructor(public readonly permissionId: string) {
+    super('that follow-up permission is spent, expired, revoked or already bound to a run');
+    this.name = 'FollowUpReuseError';
+  }
 }
 
 /** G0's `SequenceStep`, from this lane's row. The two shapes differ only in naming. */

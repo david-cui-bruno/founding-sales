@@ -582,6 +582,7 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
       disposition: 'interested',
       callback: null,
       firmWideOptOut: false,
+    grantFollowUp: true,
       note: '',
     });
     await sent;
@@ -678,6 +679,7 @@ describe('the reply bridge', () => {
       disposition: 'follow_up_later',
       callback: { localDate: '2026-09-28', localTime: '09:00', sourceTimeZone: '' },
       firmWideOptOut: false,
+    grantFollowUp: true,
       note: '',
     });
     const sent = calls.find(call => call.path === '/replies/confirm')?.body;
@@ -705,6 +707,7 @@ describe('the reply bridge', () => {
       disposition: 'follow_up_later',
       callback: { localDate: '2026-09-28', localTime: '', sourceTimeZone: '' },
       firmWideOptOut: false,
+    grantFollowUp: true,
       note: '',
     });
     expect(after.notice).toBe('callback_required');
@@ -733,6 +736,7 @@ describe('the reply bridge', () => {
       disposition: 'not_interested',
       callback: null,
       firmWideOptOut: false,
+    grantFollowUp: true,
       note: '',
     });
     expect(after.notice).toBe('suggests_lost');

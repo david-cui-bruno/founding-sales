@@ -56,7 +56,14 @@ export function OutcomeForm({
   const [callbackDate, setCallbackDate] = useDraft(`${prefix}callbackDate`);
   const [callbackTime, setCallbackTime] = useDraft(`${prefix}callbackTime`);
   const [coversAll, setCoversAll] = useDraft(`${prefix}coversAll`);
+  // Migration 0025: the follow-up agreed on the call. Empty is "none", which is the
+  // default, because a permission to write to somebody is not something a form should
+  // grant by accident.
+  const [followUp, setFollowUp] = useDraft(`${prefix}followUp`);
   const clear = useClearDrafts();
+  // The approved templates this call may promise. The value the select holds is the
+  // template version's id, which is what the permission is bound to (P0-2).
+  const templates = state.followUpTemplates;
   if (expanded === null) return null;
 
   const draft: OutcomeDraft = {
@@ -80,6 +87,15 @@ export function OutcomeForm({
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
   const suppression = outcomeSuppresses(draft);
   const wantsCallback = draft.outcome === 'callback_requested';
+  // Who this call was with. A permission is granted to *a person*, so the form offers one
+  // only when it can name one: a call to a main line is evidence about a firm and not
+  // somebody's consent (the third review of PR 332, where an agreement with no contact
+  // rolled the engaged-call stop back).
+  const task = callable.find(entry => entry.task.itemId === itemId)?.task ?? null;
+  const contactId = lastCall?.contactId ?? task?.contactId ?? null;
+  // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
+  // grants no e-mail permission, which is David's own distinction of 29 September 2026.
+  const offersFollowUp = draft.outcome === 'interested' && contactId !== null;
 
   return (
     <form
@@ -96,10 +112,9 @@ export function OutcomeForm({
           draft,
         });
         if ('problem' in built) return;
-        const task = callable.find(entry => entry.task.itemId === itemId)?.task ?? null;
         actions.recordOutcome({
             firmId: expanded.firmId,
-            contactId: lastCall?.contactId ?? task?.contactId ?? null,
+            contactId,
             routeId: lastCall?.routeId ?? null,
             itemId: itemId === '' ? null : itemId,
             outcome: built.command.outcome,
@@ -114,6 +129,10 @@ export function OutcomeForm({
                     sourceTimeZone: draft.callbackTimeZone,
                   },
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
+          // Never without a person: the select is hidden in that case, and a draft kept
+          // from a moment when it was not is not a reason to send one.
+          followUpPermission:
+            offersFollowUp && followUp !== '' ? { scope: 'single_email', templateVersionId: followUp } : null,
         });
         clear(prefix);
       }}
@@ -161,6 +180,30 @@ export function OutcomeForm({
           </Select>
         </Label>
       </div>
+
+      <Label data-testid="outcome-follow-up-label" hidden={!offersFollowUp} className="flex-col items-start gap-1">
+        Did they ask for an e-mail?
+        <Select
+          data-testid="outcome-follow-up"
+          disabled={!enabled || busy}
+          value={followUp}
+          onChange={event => {
+            setFollowUp(event.target.value);
+          }}
+        >
+          <option value="">No follow-up e-mail</option>
+          {templates.map(template => (
+            <option key={template.id} value={template.id}>
+              {`Yes — ${template.name}`}
+            </option>
+          ))}
+        </Select>
+        <span className="text-xs text-muted-foreground">
+          {templates.length === 0
+            ? 'No approved template to promise yet. Approve one in Sequences first.'
+            : 'One e-mail, the approved one you name, for fourteen days. A sequence is agreed on the firm page.'}
+        </span>
+      </Label>
 
       <fieldset data-testid="outcome-callback" hidden={!wantsCallback} className="flex flex-wrap items-end gap-2 border-0 p-0">
         <legend className="mb-1 w-full text-xs font-medium text-muted-foreground">

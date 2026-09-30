@@ -4,6 +4,7 @@ import {
   callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
   loggedCallResultSchema,
+  templateVersionsResponseSchema,
   todayFirmResponseSchema,
   todayPauseReleaseResultSchema,
   todaySnoozeResultSchema,
@@ -137,6 +138,10 @@ export function outcomeNotice(result: LoggedCallResult | null): string {
   const kinds = new Set((result?.followUps ?? []).map(entry => entry.kind));
   if (kinds.has('effects_not_applied')) return 'outcome_recorded_effects_not_applied';
   if (kinds.has('callback_time_needed')) return 'outcome_recorded_callback_time_needed';
+  // Above `route_not_named`, because it is the more surprising of the two: the person
+  // chose an e-mail to promise and Callie did not get permission to send it, which is a
+  // thing they said out loud on the call (migration 0025).
+  if (kinds.has('follow_up_not_granted')) return 'outcome_recorded_follow_up_not_granted';
   if (kinds.has('route_not_named')) return 'outcome_recorded_route_not_named';
   return 'outcome_recorded';
 }
@@ -168,6 +173,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let lastCall: LastCall | null = null;
   /** `POST /dial/check`'s answer for each of the expanded card's usable numbers. */
   let dialAdvice: readonly DialAdviceView[] = [];
+  /**
+   * The approved templates an outcome may promise (migration 0025). Read with the
+   * expansion, because that is when the form that offers them appears, and left alone
+   * when the read fails: an empty list means "nothing to promise", which is the safe
+   * answer and not a silent one — the form says so.
+   */
+  let followUpTemplates: readonly { readonly id: string; readonly name: string }[] = [];
   /**
    * The URI each advised number would open, by route. It never crosses the bridge: a
    * renderer that cannot name a `tel:` string cannot ask for one to be opened, however
@@ -227,6 +239,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       notice,
       handoffNotice: HANDOFF_LIMITATION_NOTICE,
       dialAdvice,
+      followUpTemplates,
       lastCall:
         lastCall === null
           ? null
@@ -280,6 +293,23 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     remember(page.value);
     notice = null;
     dialAdvice = await adviseRoutes(page.value);
+    followUpTemplates = await approvedTemplates();
+  };
+
+  /**
+   * The approved, unretired template versions, newest first, as names a person reads.
+   *
+   * One read, with the expansion. A salesperson promising "an overview" on a call is
+   * promising *approved bytes*: the call log records which, the permission is bound to
+   * it, and the claim refuses a fence carrying anything else (P0-2). So the form needs
+   * the list, and this is the smallest read that answers it.
+   */
+  const approvedTemplates = async (): Promise<readonly { readonly id: string; readonly name: string }[]> => {
+    const answer = await deps.api.read('/templates', value => templateVersionsResponseSchema.parse(value), {});
+    if (!answer.ok) return [];
+    return answer.value.templates
+      .filter(template => template.approvedAt !== null && template.retiredAt === null)
+      .map(template => ({ id: template.id, name: template.name }));
   };
 
   /**
@@ -503,6 +533,16 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(callback === undefined ? {} : { callback }),
           ...(input.outcome === 'do_not_call'
             ? { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
+            : {}),
+          // The agreed follow-up (migration 0025). Sent only for `interested`, which
+          // is the only outcome the server grants one on: another outcome would be
+          // refused, and refusing a whole call log because of a stale field in the
+          // form would lose the outcome itself.
+          // …and only when the call names a person. A permission is granted to somebody,
+          // and the server refuses an agreement with no contact — which would take the
+          // whole call log with it, losing the outcome (the third review of PR 332).
+          ...(input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
+            ? { followUpPermission: input.followUpPermission }
             : {}),
         },
         value => {

@@ -120,12 +120,14 @@ const firmPageBody = {
     stageKey: 'new',
     controlMode: 'automated',
     controlModeReason: null,
+    controlModeOrigin: null,
     openedAt: '2026-09-25T12:00:00.000Z',
     closedAt: null,
     closeReason: null,
   },
   stageHistory: [],
   holds: [],
+  followUpPermissions: [],
 };
 
 const settingsBody = {

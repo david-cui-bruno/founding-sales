@@ -142,6 +142,12 @@ export interface ConfirmReplyRequest {
   } | null;
   readonly firmWideOptOut: boolean;
   readonly note: string;
+  /**
+   * Whether this confirmation grants a contextual-reply permission (migration 0025).
+   * The form's default is `true` for `interested` and `follow_up_later`, because an
+   * inbound question permits a contextual reply; the server ignores it for the rest.
+   */
+  readonly grantFollowUp: boolean;
 }
 
 /**

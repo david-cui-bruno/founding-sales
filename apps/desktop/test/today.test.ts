@@ -100,6 +100,7 @@ function state(overrides: Partial<TodayState> = {}): TodayState {
     mayMutate: true,
     role: 'salesperson',
     dialAdvice: [],
+    followUpTemplates: [],
     notice: null,
     handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',
     ...overrides,
@@ -418,6 +419,96 @@ describe('the Today bridge', () => {
     });
   });
 
+  it('offers the approved templates a call may promise, and sends the one chosen', async () => {
+    // The second review of PR 332 found the call-outcome grant path disconnected: the
+    // form offered a yes/no, the contract carried no template, and the route dropped the
+    // field. What a person promises on a call is *approved bytes*, so the form reads them
+    // and the command names the one chosen.
+    const TEMPLATE_ID = '66666666-6666-4666-8666-666666666666';
+    const { api, calls } = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/dial/check': advice(),
+      '/templates': {
+        status: 200,
+        body: {
+          templates: [
+            {
+              id: TEMPLATE_ID,
+              templateId: '77777777-7777-4777-8777-777777777777',
+              version: 1,
+              name: 'The overview',
+              subject: 'A note about {firm_name}',
+              body: 'Hello {contact_first_name}.',
+              contentHash: 'a'.repeat(64),
+              footerSignOff: 'Sam Example',
+              requiredVariables: [],
+              approvedAt: '2026-09-20T12:00:00.000Z',
+              retiredAt: null,
+              personalizationStrategy: null,
+            },
+            {
+              // Retired: offered by nothing, because nothing may promise it.
+              id: '88888888-8888-4888-8888-888888888888',
+              templateId: '99999999-9999-4999-8999-999999999999',
+              version: 1,
+              name: 'The old note',
+              subject: 'A note',
+              body: 'Hello.',
+              contentHash: 'b'.repeat(64),
+              footerSignOff: 'Sam Example',
+              requiredVariables: [],
+              approvedAt: '2026-09-01T12:00:00.000Z',
+              retiredAt: '2026-09-10T12:00:00.000Z',
+              personalizationStrategy: null,
+            },
+          ],
+        },
+      },
+      '/calls/log': accepted(null),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const expanded = await bridge.expand({ firmId: FIRM_ID });
+    expect(expanded.followUpTemplates).toEqual([{ id: TEMPLATE_ID, name: 'The overview' }]);
+
+    const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: CONTACT_ID,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({
+      contactId: CONTACT_ID,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+
+    // …and never without a person. A permission is granted to somebody, and the server
+    // refuses an agreement that names nobody — which would take the call log with it
+    // (the third review of PR 332).
+    calls.length = 0;
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
+  });
+
   it('never puts a token, a URI or a command id in the state it returns', async () => {
     const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({
@@ -600,6 +691,7 @@ describe('the Today bridge', () => {
         stepApplication: 'completed',
         callbackId: null,
         completedCallbackId: null,
+        followUpPermissionId: null,
         followUps: [],
       }),
     });
@@ -621,6 +713,7 @@ describe('the Today bridge', () => {
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     expect(answer.notice).toBe('outcome_recorded');
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
@@ -652,6 +745,7 @@ describe('the Today bridge', () => {
         stepApplication: null,
         callbackId: null,
         completedCallbackId: null,
+        followUpPermissionId: null,
         followUps: [{ kind: 'callback_time_needed', reason: 'no_instant' }],
       }),
     });
@@ -669,10 +763,61 @@ describe('the Today bridge', () => {
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     expect(answer.notice).toBe('outcome_recorded_callback_time_needed');
     expect(noticeSentence('outcome_recorded_callback_time_needed')).toContain('needs a time');
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('callback');
+  });
+
+  it('says so when the follow-up the call promised was not permitted', async () => {
+    // Migration 0025, and the fourth review of PR 332. The grant has a savepoint of its
+    // own, so an interested call keeps its stop even when the permission fails — and the
+    // person has to be told, because "Call recorded" alone leaves them believing the
+    // e-mail they promised is on its way.
+    const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const TEMPLATE_ID = '66666666-6666-4666-8666-666666666666';
+    const { api } = scriptedApi({
+      '/calls/log': accepted({
+        callLogId: 'abababab-abab-4bab-8bab-abababababab',
+        outcome: 'interested',
+        stepEffect: 'complete_and_advance',
+        occurredAt: '2026-09-21T13:05:00.000Z',
+        setManual: true,
+        suggestedStageKey: null,
+        suppressionEventIds: [],
+        retiredRouteId: null,
+        successorExecutionId: null,
+        stepExecutionId: null,
+        stepApplication: 'completed_and_stopped',
+        callbackId: null,
+        completedCallbackId: null,
+        followUpPermissionId: null,
+        followUps: [{ kind: 'follow_up_not_granted', reason: 'invalid_input' }],
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const answer = await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: CONTACT_ID,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(answer.notice).toBe('outcome_recorded_follow_up_not_granted');
+    const sentence = noticeSentence('outcome_recorded_follow_up_not_granted');
+    // The two facts a person needs: the call landed, and the e-mail is not permitted.
+    expect(sentence).toContain('Call recorded');
+    expect(sentence).toContain('not given permission');
+    expect(sentence).toContain('firm');
   });
 
   it('sends a callback’s local fields with the instant the domain clock gives them (C18)', async () => {
@@ -691,6 +836,7 @@ describe('the Today bridge', () => {
       note: '',
       callback: { localDate: '2026-03-08', localTime: '02:30', dueAt: '', sourceTimeZone: '' },
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
     expect(sent['callback']).toEqual({
@@ -846,9 +992,10 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
     expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
-    // Fifteen named channels until 1.0.13; the CRM bridge is thirteen operations of the
-    // registry now, and `operations.test.ts` holds the list.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(13);
+    // Fifteen named channels until 1.0.13; the CRM bridge is fourteen operations of the
+    // registry now — the fourteenth is `crm.takeOver`, the explicit takeover (P1-1 of
+    // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(14);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

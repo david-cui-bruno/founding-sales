@@ -7,11 +7,17 @@ import { emitCrmDomainEvent } from '../../crm/events.ts';
 import { changeStage, setManualControlMode } from '../../crm/pipeline.ts';
 import { enrollmentFacts } from '../../dashboard/enrollmentSource.ts';
 import { createDraftVersion, createSequence, publishVersion } from '../../sequences/definitions.ts';
-import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import {
+  CHANNEL_ACTION_KINDS,
+  allowAllEligibility,
+  firmExclusivitySource,
+  followUpPermissionSource,
+} from '../../sequences/eligibility.ts';
+import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
 import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
 import { resumeEnrollment } from '../../sequences/resume.ts';
-import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { listEnrollments, listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
 import { recordingSendHandoff, type RecordingSendHandoff } from '../../sequences/sendHandoff.ts';
 import { consumeTerminalStops } from '../../sequences/terminalStops.ts';
 import { listStepWakes } from '../../sequences/wake.ts';
@@ -53,9 +59,16 @@ const worker = (workspace: 'alpha' | 'beta' = 'alpha'): RepositoryContext =>
   );
 
 async function clearEnrollments(): Promise<void> {
+  // The two tables point at each other since migration 0025 (a permission names the one
+  // run it bought), so the binding is released before either is deleted.
+  await database.session.query('UPDATE follow_up_permissions SET enrollment_id = NULL');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
+  // Migration 0025: the permission before the call log it points at, and both before
+  // the next scenario, so a firm's exclusivity is decided by this scenario's rows only.
+  await database.session.query('DELETE FROM follow_up_permissions');
+  await database.session.query('DELETE FROM call_logs');
   await database.session.query('DELETE FROM sequence_event_cursors');
   await database.session.query('DELETE FROM today_items');
   await database.session.query('DELETE FROM today_snapshots');
@@ -93,12 +106,108 @@ async function backdateStart(enrollmentId: string, interval: string): Promise<vo
 async function enrollAlpha(contactId: string = crm.alpha.contactId): Promise<string> {
   const result = await enrollContact(contextFor('alpha', 'salesperson'), {
     sequenceVersionId: sequences.alpha.publishedVersionId,
+    originKind: 'prospecting' as const,
     opportunityId: crm.alpha.opportunityId,
     firmId: crm.alpha.firmId,
     contactId,
   });
   if (!result.ok) throw new Error(`the enrollment fixture was refused: ${result.reason}`);
   return result.value.enrollmentId;
+}
+
+/**
+ * A follow-up permission for one person at the seeded firm, on a recorded call.
+ *
+ * The evidence is real, because `verifyFollowUpPermission` re-reads it: the call log's
+ * firm and contact are compared with the permission's on every step.
+ */
+async function grantFor(contactId: string): Promise<{ contactId: string; permissionId: string }> {
+  const { rows: calls } = await database.session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5,
+             'agreed_sequence', $6)
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+      contactId,
+      crm.alpha.opportunityId,
+      seeded.alpha.salesperson.userId,
+      sequences.alpha.publishedVersionId,
+    ],
+  );
+  const granted = await grantFollowUpPermission(contextFor('alpha', 'salesperson'), {
+    firmId: crm.alpha.firmId,
+    contactId,
+    callLogId: calls[0]?.id ?? '',
+    grantedByUserId: seeded.alpha.salesperson.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
+  return { contactId, permissionId: granted.value.id };
+}
+
+/** Enrol one person as an evidenced follow-up. */
+async function enrollFollowUp(
+  contactId: string,
+  permission: string | { permissionId: string },
+): Promise<string> {
+  const permissionId = typeof permission === 'string' ? permission : permission.permissionId;
+  const result = await enrollContact(contextFor('alpha', 'salesperson'), {
+    sequenceVersionId: sequences.alpha.publishedVersionId,
+    originKind: 'follow_up',
+    permissionId,
+    opportunityId: crm.alpha.opportunityId,
+    firmId: crm.alpha.firmId,
+    contactId,
+  });
+  if (!result.ok) throw new Error(`the follow-up enrollment was refused: ${result.reason}`);
+  return result.value.enrollmentId;
+}
+
+/**
+ * A live prospecting enrollment written straight into the table, with its first step.
+ *
+ * This is the pre-0025 state `enrollContact` now refuses: two people at one firm in
+ * cold sequences at once. The send-time guard is for exactly these rows, so the test of
+ * it has to be able to create them.
+ */
+async function insertProspecting(contactId: string): Promise<string> {
+  const { rows } = await database.session.query<{ id: string }>(
+    `INSERT INTO sequence_enrollments
+       (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+        firm_time_zone, holiday_calendar_version, origin_kind)
+     VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1', 'prospecting')
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      sequences.alpha.publishedVersionId,
+      crm.alpha.opportunityId,
+      crm.alpha.firmId,
+      contactId,
+      seeded.alpha.salesperson.userId,
+    ],
+  );
+  const enrollmentId = rows[0]?.id ?? '';
+  await database.session.query(
+    `INSERT INTO step_executions
+       (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
+        due_at, not_before, original_due_at, source_zone, rule_version)
+     SELECT $1, $2, s.id, $3, $4, s.channel, s.ordinal, now(), now(), now(), 'America/New_York', 'elapsed.1'
+       FROM sequence_steps s
+      WHERE s.workspace_id = $1 AND s.sequence_version_id = $5
+      ORDER BY s.ordinal
+      LIMIT 1`,
+    [
+      seeded.alpha.workspaceId,
+      enrollmentId,
+      crm.alpha.firmId,
+      contactId,
+      sequences.alpha.publishedVersionId,
+    ],
+  );
+  return enrollmentId;
 }
 
 beforeAll(async () => {
@@ -130,6 +239,7 @@ describe('enrollment and its first execution commit together (Appendix A "Enroll
     await enrollAlpha();
     const again = await enrollContact(contextFor('alpha', 'salesperson'), {
       sequenceVersionId: sequences.alpha.publishedVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
@@ -140,6 +250,7 @@ describe('enrollment and its first execution commit together (Appendix A "Enroll
   it('refuses enrollment in a draft version (11.2: enrollments freeze to an immutable version)', async () => {
     const result = await enrollContact(contextFor('alpha', 'salesperson'), {
       sequenceVersionId: sequences.alpha.draftVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
@@ -461,42 +572,115 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
   });
 });
 
-describe('scenario 33: many contacts at one firm, due on the same day', () => {
-  it('gives each contact one enrollment and holds the ones the cap refuses', async () => {
-    const context = contextFor('alpha', 'salesperson');
-    const contactIds: string[] = [crm.alpha.contactId];
-    for (const name of ['Alex Example', 'Jordan Example']) {
-      const { rows } = await database.session.query<{ id: string }>(
-        `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
-        [seeded.alpha.workspaceId, crm.alpha.firmId, name],
-      );
-      contactIds.push(rows[0]?.id ?? '');
-    }
+describe('scenario 33: one active prospecting contact per firm', () => {
+  /**
+   * Appendix G scenario 33 was "many contacts at one firm, due on the same day", and
+   * `docs/greenfield/sequences.md` said so on purpose: "There is deliberately no index
+   * on (workspace_id, firm_id): 11.2 permits unlimited contacts at one firm to be
+   * enrolled and to receive mail on the same day."
+   *
+   * David reversed that on 29 September 2026, and reversed it precisely:
+   *
+   * > "One active prospecting contact per firm: the directive wins. Update Appendix G
+   * > scenario 33 and its test. Enforce the rule at enrollment and immediately before
+   * > sending, including concurrent-worker behavior. This restriction applies to
+   * > prospecting; it must not prevent ordinary customer conversations involving
+   * > multiple people."
+   *
+   * So the scenario is now the refusal, and its exception: two prospecting contacts at
+   * one firm is refused at the command; two *evidenced follow-ups* to two people at one
+   * firm both proceed.
+   */
+  const addContact = async (name: string): Promise<string> => {
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, name],
+    );
+    return rows[0]?.id ?? '';
+  };
 
-    const enrollmentIds: string[] = [];
-    for (const contactId of contactIds) enrollmentIds.push(await enrollAlpha(contactId));
-    expect(new Set(enrollmentIds).size).toBe(3);
-
-    // The cap belongs to the sending lane and arrives here as a refusal from the
-    // eligibility port. The step holds; it is never sent anyway.
-    const capped = await runDueStepExecution(worker(), {
-      enrollmentId: enrollmentIds[2] ?? '',
-      now: await databaseNow(worker()),
-      eligibility: { evaluate: async () => await Promise.resolve({ ok: false, reasonCode: 'daily_cap' }) },
-      sendHandoff: recordingSendHandoff(),
-    });
-    expect(capped.kind === 'held' ? capped.reasonCode : '').toBe('daily_cap');
-
-    // One reply stops all three: the same outbox event, one consumption.
-    await emitCrmDomainEvent(context, {
-      kind: 'opportunity.terminal_stop',
-      firmId: crm.alpha.firmId,
+  it('refuses the second prospecting enrollment at a firm, at the command', async () => {
+    await enrollAlpha();
+    const colleague = await addContact('Alex Example');
+    const second = await enrollContact(contextFor('alpha', 'salesperson'), {
+      sequenceVersionId: sequences.alpha.publishedVersionId,
+      originKind: 'prospecting',
       opportunityId: crm.alpha.opportunityId,
-      dedupeKey: `terminal-stop:test:${crm.alpha.opportunityId}`,
-      detail: { status: 'lost' },
+      firmId: crm.alpha.firmId,
+      contactId: colleague,
     });
-    const report = await consumeTerminalStops(worker());
-    expect(report.enrollmentsStopped).toBe(3);
+    expect(second).toEqual({ ok: false, reason: 'firm_already_enrolled' });
+    // The refusal is about the firm, not about the person: the colleague has no
+    // enrollment of their own, so `contact_already_enrolled` would be the wrong answer.
+    expect(await listEnrollments(worker(), { contactId: colleague, liveOnly: true })).toEqual([]);
+  });
+
+  it('permits follow-up permissions to two people at one firm, and both steps are eligible', async () => {
+    const first = await grantFor(crm.alpha.contactId);
+    const second = await grantFor(await addContact('Jordan Example'));
+    const enrollments = [
+      await enrollFollowUp(crm.alpha.contactId, first),
+      await enrollFollowUp(second.contactId, second.permissionId),
+    ];
+    expect(new Set(enrollments).size).toBe(2);
+
+    // Both pass the two sources this rule is made of: `firmExclusivitySource` exempts a
+    // follow-up, which is David's own exception, and `followUpPermissionSource` verifies
+    // each one's own evidence. The rest of the composition (a mailbox, a route, a
+    // template) is other lanes' and is asked in their own files.
+    for (const enrollmentId of enrollments) {
+      const [execution] = await listStepExecutions(worker(), { enrollmentId });
+      if (execution === undefined) throw new Error('the enrollment has no step');
+      const enrollment = await readEnrollment(worker(), { enrollmentId });
+      if (enrollment === null) throw new Error('the enrollment disappeared');
+      const input = {
+        execution,
+        opportunityId: enrollment.opportunityId,
+        firmId: enrollment.firmId,
+        contactId: enrollment.contactId,
+        ownerUserId: enrollment.assignedUserId,
+        channel: execution.channel,
+        actionKind: CHANNEL_ACTION_KINDS[execution.channel],
+        now: await databaseNow(worker()),
+      };
+      expect(await followUpPermissionSource().evaluate(worker(), input)).toEqual({ ok: true });
+      expect(await firmExclusivitySource().evaluate(worker(), input)).toEqual({ ok: true });
+    }
+  });
+
+  it('refuses the later of two prospecting rows that already exist, at the step, under the firm lock', async () => {
+    // The rows the enrollment-time refusal cannot help with: two live prospecting
+    // enrollments created directly, as they were before 0025 landed. Exactly one of
+    // them may proceed, and which one is deterministic — the earlier `started_at`.
+    const first = await enrollAlpha();
+    const colleague = await addContact('Rowan Example');
+    const second = await insertProspecting(colleague);
+    await database.session.query(
+      `UPDATE sequence_enrollments SET started_at = now() - interval '1 hour'
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, first],
+    );
+
+    const verdicts: Record<string, unknown> = {};
+    for (const [label, enrollmentId] of [['first', first], ['second', second]] as const) {
+      const [execution] = await listStepExecutions(worker(), { enrollmentId });
+      if (execution === undefined) throw new Error('the enrollment has no step');
+      const enrollment = await readEnrollment(worker(), { enrollmentId });
+      if (enrollment === null) throw new Error('the enrollment disappeared');
+      const outcome = await firmExclusivitySource().evaluate(worker(), {
+        execution,
+        opportunityId: enrollment.opportunityId,
+        firmId: enrollment.firmId,
+        contactId: enrollment.contactId,
+        ownerUserId: enrollment.assignedUserId,
+        channel: execution.channel,
+        actionKind: CHANNEL_ACTION_KINDS[execution.channel],
+        now: await databaseNow(worker()),
+      });
+      verdicts[label] = outcome;
+    }
+    expect(verdicts['first']).toEqual({ ok: true });
+    expect(verdicts['second']).toEqual({ ok: false, reasonCode: 'firm_already_enrolled', detail: first });
   });
 });
 
@@ -556,6 +740,7 @@ describe('the send hand-off is a rendered request, and the fence is G7-2’s', (
     const contactId = rows[0]?.id ?? '';
     const enrolled = await enrollContact(contextFor('alpha', 'salesperson'), {
       sequenceVersionId: draft.value.sequenceVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId,

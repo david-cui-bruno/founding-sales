@@ -3,6 +3,7 @@ import type { SequenceDelay } from '../src/rules/businessDays.ts';
 import {
   STEP_CHANNELS,
   type EnrollmentEndReason,
+  type EnrollmentOriginKind,
   type EnrollmentState,
   type SequenceStopCondition,
   type SequenceVersionState,
@@ -49,6 +50,15 @@ export const SEQUENCE_REFUSAL_CODES = [
   'template_retired',
   'contact_unknown',
   'contact_already_enrolled',
+  /**
+   * Migration 0025, David's decisions of 29 September 2026. `firm_already_enrolled` is
+   * "one active prospecting contact per firm" refused at the command;
+   * `follow_up_not_permitted` is a follow-up enrollment whose permission does not hold
+   * up when its evidence is re-read. Both are also `hold_reason_codes`, because the
+   * same two questions are asked again at the step.
+   */
+  'firm_already_enrolled',
+  'follow_up_not_permitted',
   'firm_unknown',
   'firm_zone_unknown',
   'opportunity_unknown',
@@ -119,6 +129,14 @@ export interface EnrollmentRow {
   readonly endReason: EnrollmentEndReason | null;
   readonly firmTimeZone: string;
   readonly holidayCalendarVersion: string;
+  /**
+   * What the enrollment was created for (migration 0025). `cold_legacy` is the
+   * column's DEFAULT and therefore every row written before 0025: excluded from
+   * automatic sending for ever.
+   */
+  readonly originKind: EnrollmentOriginKind;
+  /** The permission a `follow_up` enrollment rests on. Null for the other two kinds. */
+  readonly permissionId: string | null;
   readonly reviewUnionMilliseconds: null;
 }
 

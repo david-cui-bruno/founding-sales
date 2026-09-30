@@ -78,6 +78,7 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
       stageKey: 'contacting',
       controlMode: 'automated',
       controlModeReason: null,
+      controlModeOrigin: null,
       openedAt: '2026-09-01T12:00:00.000Z',
       closedAt: null,
       closeReason: null,
@@ -93,6 +94,33 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
         blockedActionKinds: ['email_send', 'call_task'],
         startedAt: '2026-09-03T12:00:00.000Z',
         recoveryAction: 'resume_after_review',
+      },
+    ],
+    // Migration 0025: one live permission, so the section has something to render and
+    // the empty case is the one the other fixture shows.
+    followUpPermissions: [
+      {
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        firmId: IDENTITY.id,
+        contactId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        kind: 'conversation',
+        scope: 'single_email',
+        callLogId: '11111111-1111-4111-8111-111111111111',
+        mailMessageId: null,
+        bookingReference: null,
+        // What the permission is bound to since P0-2: one approved template version, no
+        // sequence, one run, one step.
+        templateVersionId: '33333333-3333-4333-8333-333333333333',
+        sequenceVersionId: null,
+        enrollmentId: null,
+        maxSteps: 1,
+        grantedAt: '2026-09-28T12:00:00.000Z',
+        expiresAt: '2026-10-12T12:00:00.000Z',
+        grantedByUserId: '22222222-2222-4222-8222-222222222222',
+        grantedByRule: null,
+        consumedAt: null,
+        revokedAt: null,
+        note: 'They asked for an overview.',
       },
     ],
   };
@@ -197,9 +225,18 @@ export const EMPTY_DRAFT = {
 
 /** Lane g88: one published sequence, and nobody at the firm enrolled yet. */
 export const SEQUENCE_VERSION_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+/** The one approved template that version's single step sends. */
+export const SEQUENCE_TEMPLATE_VERSION_ID = '33333333-3333-4333-8333-333333333333';
 export function firmSequences(overrides: Partial<NonNullable<CrmState['sequences']>> = {}): NonNullable<CrmState['sequences']> {
   return {
-    published: [{ sequenceVersionId: SEQUENCE_VERSION_ID, label: 'Founder plan v1' }],
+    published: [
+      {
+        sequenceVersionId: SEQUENCE_VERSION_ID,
+        label: 'Founder plan v1',
+        templateVersionIds: [SEQUENCE_TEMPLATE_VERSION_ID],
+        stepCount: 1,
+      },
+    ],
     enrollments: [],
     readError: null,
     ...overrides,

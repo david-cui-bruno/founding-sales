@@ -1,5 +1,6 @@
-import { knownBlockedActionKinds } from '@fss/contracts';
+import { knownBlockedActionKinds, type FollowUpPermissionDto } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
 import { accept, type CrmResult } from './types.ts';
@@ -51,6 +52,13 @@ export interface OpportunitySummaryDto {
   readonly stageKey: string;
   readonly controlMode: 'automated' | 'manual';
   readonly controlModeReason: string | null;
+  readonly controlModeOrigin:
+    | 'human_reply'
+    | 'engaged_call'
+    | 'direct_send'
+    | 'salesperson_command'
+    | 'direct_send_keep_automation'
+    | null;
   readonly openedAt: string;
   readonly closedAt: string | null;
   readonly closeReason: string | null;
@@ -64,6 +72,7 @@ export type FirmPageDto =
       readonly opportunity: OpportunitySummaryDto | null;
       readonly stageHistory: readonly StageEventDto[];
       readonly holds: readonly FirmHoldDto[];
+      readonly followUpPermissions: readonly FollowUpPermissionDto[];
     };
 
 interface StageEventRow {
@@ -91,6 +100,7 @@ interface OpportunityRowShape {
   readonly stage_key: string;
   readonly control_mode: 'automated' | 'manual';
   readonly control_mode_reason: string | null;
+  readonly control_mode_origin: string | null;
   readonly opened_at: Date;
   readonly closed_at: Date | null;
   readonly close_reason: string | null;
@@ -116,7 +126,7 @@ export async function readFirmPage(
   // to show what was lost and why, which is what `closeReason` is for.
   const opportunity = await context.db.query<OpportunityRowShape>(
     `SELECT o.id::text AS id, o.status, s.key AS stage_key, o.control_mode, o.control_mode_reason,
-            o.opened_at, o.closed_at, o.close_reason
+            o.control_mode_origin, o.opened_at, o.closed_at, o.close_reason
        FROM opportunities o
        JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
       WHERE o.workspace_id = $1 AND o.firm_id = $2
@@ -159,6 +169,7 @@ export async function readFirmPage(
             stageKey: row.stage_key,
             controlMode: row.control_mode,
             controlModeReason: row.control_mode_reason,
+            controlModeOrigin: (row.control_mode_origin ?? null) as OpportunitySummaryDto['controlModeOrigin'],
             openedAt: row.opened_at.toISOString(),
             closedAt: row.closed_at === null ? null : row.closed_at.toISOString(),
             closeReason: row.close_reason,
@@ -178,5 +189,10 @@ export async function readFirmPage(
       startedAt: hold.started_at.toISOString(),
       recoveryAction: hold.recovery_action,
     })),
+    // Migration 0025. Read after the holds because it is the same kind of fact: what
+    // the automation may and may not do about this firm, and on whose authority.
+    followUpPermissions: (await listFollowUpPermissions(context, { firmId: input.firmId })).map(
+      followUpPermissionDto,
+    ),
   });
 }

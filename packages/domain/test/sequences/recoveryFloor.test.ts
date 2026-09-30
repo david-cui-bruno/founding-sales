@@ -47,6 +47,7 @@ async function enrol(): Promise<{ enrollmentId: string; executionId: string }> {
     ),
     {
       sequenceVersionId: sequences.alpha.publishedVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
@@ -86,6 +87,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
+  // Migration 0025: a permission names the one run it bought, so the binding is
+  // released before the enrollment it names is deleted.
+  await database.session.query('UPDATE follow_up_permissions SET enrollment_id = NULL');
   await database.session.query('DELETE FROM sequence_enrollments');
 });
 

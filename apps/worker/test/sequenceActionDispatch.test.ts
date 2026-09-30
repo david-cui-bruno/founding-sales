@@ -77,6 +77,10 @@ async function dueEmailStep(label: string): Promise<{
     opportunityId: firm.opportunityId,
     userId: world.alpha.workspace.salesperson.userId,
     templateVersionId: world.alpha.templateVersionId,
+    // A cold first touch, one contact at a firm of its own: this file's cases are about
+    // a reply stopping a send, and a confirmed reply stops a prospecting step by manual
+    // mode (migration 0025 changes that only for evidenced follow-ups).
+    originKind: 'prospecting',
   });
   const { rows } = await session.query<{ enrollment_id: string; contact_id: string }>(
     'SELECT enrollment_id, contact_id FROM step_executions WHERE workspace_id = $1 AND id = $2',

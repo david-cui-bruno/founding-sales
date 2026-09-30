@@ -96,6 +96,17 @@ const outcomeInput = z.strictObject({
     })
     .nullable(),
   doNotCallCoversAllContact: z.boolean(),
+  /**
+   * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
+   * "none", which is the default the form offers, and the only value the server accepts
+   * for any outcome other than `interested`. It names the approved template version that
+   * was promised, because that is what the permission is bound to (P0-2). An agreed
+   * *sequence* is granted from the firm page; "Call me Tuesday" is `callback` above and
+   * grants no e-mail permission at all.
+   */
+  followUpPermission: z
+    .strictObject({ scope: z.literal('single_email'), templateVersionId: uuid })
+    .nullable(),
 });
 
 /**
@@ -123,6 +134,13 @@ const confirmReplyInput = z.strictObject({
     .nullable(),
   firmWideOptOut: z.boolean(),
   note: z.string().max(2000),
+  /**
+   * Whether this confirmation grants a contextual-reply permission (migration 0025).
+   * `true` is the default the form offers for `interested` and `follow_up_later` — David:
+   * "an inbound question permits a contextual reply" — and `false` is the person saying
+   * no follow-up. It is ignored for every other disposition.
+   */
+  grantFollowUp: z.boolean(),
 });
 
 /** One dead job, as `GET /admin/jobs/dead` lists it. Never a payload: a job's arguments
@@ -192,6 +210,14 @@ const mergeResolutionInput = z.strictObject({
 const enrollInput = z.strictObject({ sequenceVersionId: uuid, contactId: uuid });
 
 /** "Check again" on an address, at the version the page showed (lane g90). */
+/**
+ * "I will handle this firm myself" (P1-1 of the GPT-6 review of PR 332). The reason is
+ * the person's sentence; the opportunity is the open page's, never the window's word for
+ * it. This is the only control that writes the `salesperson_command` origin, which is the
+ * one manual mode an evidenced follow-up does not run beside.
+ */
+const takeOverInput = z.strictObject({ reason: z.string().min(1).max(2000) });
+
 const checkRouteInput = z.strictObject({ routeId: uuid, routeVersion: z.number().int().min(1) });
 
 const saveStepsInput = z.strictObject({
@@ -270,10 +296,12 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [{ method: 'POST', path: '/today/firm' },
       { method: 'POST', path: '/dial/check' },
+      // The approved templates the outcome form may promise on a call (migration 0025).
+      { method: 'POST', path: '/templates' },
     ],
     input: z.strictObject({ firmId: uuid }),
     output: todayStateSchema,
-    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, and the dial advice per usable number',
+    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, the dial advice per usable number, and the approved templates a call may promise',
   },
   'today.callsPlaced': {
     kind: 'read',
@@ -568,6 +596,19 @@ export const OPERATIONS = {
     input: nothing,
     output: crmStateSchema,
     transform: 'the open firm page\u2019s own id, never the window\u2019s word for it',
+  },
+  'crm.takeOver': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/opportunities/manual' },
+      { method: 'POST', path: '/crm/firm-page' },
+      { method: 'GET', path: '/sequences' },
+      { method: 'POST', path: '/sequences/versions' },
+      { method: 'POST', path: '/enrollments' },
+    ],
+    input: takeOverInput,
+    output: crmStateSchema,
+    transform: 'the open firm page\u2019s own opportunity, and a reason the person typed',
   },
   'crm.enroll': {
     kind: 'command',

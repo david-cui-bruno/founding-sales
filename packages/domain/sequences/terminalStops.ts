@@ -106,6 +106,10 @@ const MANUAL_MODE_END_REASONS: Readonly<Record<ManualModeOrigin, EnrollmentEndRe
   // A person inside the workspace deciding, which is not one of 7.3's prospect
   // signals: the vocabulary reserves its first four members for those.
   salesperson_command: 'admin_stop',
+  // The salesperson sent by hand and asked for the follow-up automation to continue;
+  // the enrollments this manual mode stops are stopped for the same reason as any other
+  // direct send (P1-1).
+  direct_send_keep_automation: 'direct_send',
 });
 
 const KNOWN_ORIGINS: ReadonlySet<string> = new Set(MANUAL_MODE_ORIGINS);

@@ -77,6 +77,7 @@ const firmPage = (emailRoutes: readonly RouteDto[]) => ({
   opportunity: null,
   stageHistory: [],
   holds: [],
+  followUpPermissions: [],
 });
 
 const reads = (emailRoutes: readonly RouteDto[]): Record<string, HttpAnswer> => ({

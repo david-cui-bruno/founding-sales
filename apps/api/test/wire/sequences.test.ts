@@ -12,7 +12,7 @@ import {
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
-import { seedContact, seedFirm } from '../support/crmSeed.ts';
+import { seedContact, seedFirm, seedFollowUpPermission } from '../support/crmSeed.ts';
 import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
 import { sequenceScreen } from '../../../desktop/src/renderer/sequenceView.ts';
 import {
@@ -146,14 +146,26 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     const live = await post(
       '/enrollments/enroll',
       salespersonToken,
-      command({ sequenceVersionId, opportunityId, firmId, contactId: await contact('Dana Example') }),
+      command({ originKind: 'prospecting', sequenceVersionId, opportunityId, firmId, contactId: await contact('Dana Example') }),
     );
     expect(live.status).toBe(200);
     liveEnrollmentId = String(result(live)['enrollmentId']);
+    // The second person at the same firm is a **follow-up**, not a second cold
+    // sequence: migration 0025 permits one active prospecting contact per firm, and
+    // permits follow-up permissions to several people at one firm. Two enrollments on
+    // two contacts is still what this case needs, and this is now the only shape that
+    // produces it.
+    const robin = await contact('Robin Example');
+    const permissionId = await seedFollowUpPermission(fixture, {
+      firmId,
+      contactId: robin,
+      opportunityId,
+      sequenceVersionId,
+    });
     const second = await post(
       '/enrollments/enroll',
       salespersonToken,
-      command({ sequenceVersionId, opportunityId, firmId, contactId: await contact('Robin Example') }),
+      command({ originKind: 'follow_up', permissionId, sequenceVersionId, opportunityId, firmId, contactId: robin }),
     );
     expect(second.status).toBe(200);
     secondEnrollmentId = String(result(second)['enrollmentId']);
@@ -224,7 +236,17 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     const liveRow = rows.find(row => row.state === 'active');
     const secondRow = rows.find(row => row.id === secondEnrollmentId);
     expect(shapeOf(liveRow)).toEqual(shapeOf(enrollmentAnswer()));
-    expect(shapeOf(secondRow)).toEqual(shapeOf(enrollmentAnswer()));
+    // The follow-up row carries a `permissionId`, so the fixture it is held to carries
+    // one too: `shapeOf` reports `null` and `string` as different shapes, which is the
+    // point of it — a nullable field has two shapes and both must be readable.
+    expect(shapeOf(secondRow)).toEqual(
+      shapeOf(
+        enrollmentAnswer({
+          originKind: 'follow_up',
+          permissionId: '99999999-9999-4999-8999-999999999999',
+        }),
+      ),
+    );
 
     // The two fields the defects were about, said outright.
     expect(Object.keys((version as { steps: object[] }).steps[0] ?? {})).toContain('sequenceVersionId');

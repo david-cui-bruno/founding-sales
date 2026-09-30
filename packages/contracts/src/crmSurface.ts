@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { followUpPermissionDtoSchema } from './followUps.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { holdReasonCodeSchema } from './reasonCodes.ts';
@@ -305,6 +306,14 @@ const opportunitySummaryDtoSchema = z.strictObject({
   stageKey: z.string(),
   controlMode: z.enum(['automated', 'manual']),
   controlModeReason: z.string().nullable(),
+  /**
+   * Which of migration 0025's causes put it in manual, or null for an opportunity that
+   * went manual before the column existed. The page uses it to decide whether the
+   * takeover control has anything left to say (P1-1 of the second review of PR 332).
+   */
+  controlModeOrigin: z
+    .enum(['human_reply', 'engaged_call', 'direct_send', 'salesperson_command', 'direct_send_keep_automation'])
+    .nullable(),
   openedAt: z.iso.datetime(),
   closedAt: z.iso.datetime().nullable(),
   closeReason: z.string().nullable(),
@@ -323,6 +332,13 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
     opportunity: opportunitySummaryDtoSchema.nullable(),
     stageHistory: z.array(stageEventDtoSchema),
     holds: z.array(firmHoldDtoSchema),
+    /**
+     * The firm's follow-up permissions, newest grant first (migration 0025). Here
+     * rather than on a screen of its own because the question a person asks is "why
+     * may Callie write to these people, and until when?", and the firm page is where
+     * they ask it.
+     */
+    followUpPermissions: z.array(followUpPermissionDtoSchema),
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

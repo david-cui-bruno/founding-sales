@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { enrollmentOriginKindSchema } from './followUps.ts';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
 
 /**
@@ -65,6 +66,13 @@ export const ENROLLMENT_END_REASONS = [
   'reassignment',
   'sequence_complete',
   'admin_stop',
+  /**
+   * A live `cold_legacy` enrollment that a later evidenced follow-up superseded
+   * (migration 0025; GPT-6 review of PR 332, P1-2). Its own reason rather than
+   * `admin_stop`, because no administrator did anything: the prospect asked, and the
+   * old cold sequence had to end for the new one to exist. The history stays.
+   */
+  'superseded_by_follow_up',
 ] as const;
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 
@@ -218,6 +226,13 @@ export const enrollmentDtoSchema = z.object({
    * parses the enrollment row strictly and would throw on its absence.
    */
   reviewUnionMilliseconds: z.null(),
+  /**
+   * Migration 0025. `cold_legacy` on every enrollment that existed before it, and the
+   * fail-closed default for anything that forgets to say. Additive on the wire: these
+   * objects strip rather than refuse an unknown key, so an older Mac ignores both.
+   */
+  originKind: enrollmentOriginKindSchema,
+  permissionId: uuid.nullable(),
 });
 export type EnrollmentDto = z.infer<typeof enrollmentDtoSchema>;
 

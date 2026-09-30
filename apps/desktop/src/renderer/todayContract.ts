@@ -115,6 +115,15 @@ export const todayStateSchema = z.strictObject({
     .strictObject({ firmId: uuid, routeId: uuid, contactId: uuid.nullable(), e164: z.string().max(20) })
     .nullable()
     .optional(),
+  /**
+   * The approved templates a salesperson may promise on a call (migration 0025).
+   *
+   * "E-mail me an overview" permits *that* e-mail, so the permission carries the approved
+   * bytes it was promised as and the call log records them — which means the form has to
+   * offer a choice rather than a yes. Empty until a card is open, and empty when the
+   * workspace has approved nothing.
+   */
+  followUpTemplates: z.array(z.strictObject({ id: uuid, name: z.string().min(1).max(200) })),
 });
 export type TodayState = z.infer<typeof todayStateSchema>;
 
@@ -166,6 +175,11 @@ export interface OutcomeRequest {
     readonly sourceTimeZone: string;
   } | null;
   readonly doNotCallCoversAllContact: boolean;
+  /**
+   * The follow-up agreed on the call (migration 0025). `null` is "none", and it is the
+   * only value any outcome other than `interested` may carry.
+   */
+  readonly followUpPermission: { readonly scope: 'single_email'; readonly templateVersionId: string } | null;
 }
 
 /**

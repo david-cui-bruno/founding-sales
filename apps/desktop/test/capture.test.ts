@@ -86,6 +86,7 @@ const firmPage = {
   opportunity: null,
   stageHistory: [],
   holds: [],
+  followUpPermissions: [],
 };
 
 const firmRow = {

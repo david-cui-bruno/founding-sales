@@ -11,9 +11,49 @@ This document is the trace. It is a read of the code at `23ec4338`, plus two tes
 added for the one property that had enforcement but no test of its own. Nothing here
 was run against production, and nothing here changes what the system sends today.
 
-**Verdict in one line: two of the four properties are enforced and now pinned by
-tests; two are not enforced at all and cannot be without a decision from David.**
-The pause should stay.
+**Verdict in one line, as first written (29 September, at `23ec4338`): two of the four
+properties are enforced and now pinned by tests; two are not enforced at all and cannot
+be without a decision from David.** The pause should stay.
+
+---
+
+## Update, 29 September 2026 evening — after David's decisions and migration 0025
+
+David answered the three questions this document stopped on
+(`.context/DECISION-20260929-send-path-decisions.md`, items 1–3), and lane FU built them:
+migration `0025_follow_up_permissions.sql`, and
+`docs/greenfield/decisions/follow-up-eligibility-20260929.md` for the design as built.
+
+**The four verdicts now:**
+
+| property | was | is | where | test |
+| --- | --- | --- | --- | --- |
+| 1. Follow-up eligibility | OPEN | **CLOSED** | `sequences/eligibility.ts` `followUpPermissionSource`, second source after suppression, asked at preparation and again inside the dispatch claim; `sequences/followUpPermissions.ts` `verifyFollowUpPermission` re-reads the evidence row | `test/sequences/followUpEligibility.test.ts` (19 cases), `test/outbound/firmExclusivityAtSend.test.ts` |
+| 2. Suppression | PROVEN | **PROVEN, unchanged** | `suppressionSource` is still first, and nothing in 0025 touches it | `test/sequences/suppressionOutlivesReenrollment.test.ts`, unchanged and still passing |
+| 3. Firm-wide coordination | partly PROVEN, one clause OPEN | **CLOSED** | `enrollContact` refuses `firm_already_enrolled` under the firm row lock; `firmExclusivitySource` refuses the pre-existing rows at the step and in the claim | `test/sequences/scenarios.test.ts` scenario 33 (rewritten), `test/outbound/firmExclusivityAtSend.test.ts` — two real claims on two connections, exactly one e-mail |
+| 4. Exclusion of old cold-e-mail enrollments | OPEN | **CLOSED** | `sequence_enrollments.origin_kind NOT NULL DEFAULT 'cold_legacy'` — the DEFAULT *is* the backfill, with no `UPDATE`; `listStepWakes` excludes it and `followUpPermissionSource` refuses it | `test/sequences/followUpEligibility.test.ts`, "cold_legacy" — the pre-0025 insert shape, no wake, refused at the step, and a resume cannot revive it |
+
+**The manual-mode wall of section 1 is resolved for follow-ups only.**
+`opportunities.control_mode_origin` records which of `MANUAL_MODE_ORIGINS` set manual
+mode; a prospect *signal* (`human_reply`, `engaged_call`, `direct_send`) no longer blocks
+an evidenced follow-up step, while a person's `salesperson_command` takeover — and an
+unrecorded origin, which is every opportunity that went manual before 0025 — still does.
+Nothing reverses manual mode, and prospecting and legacy steps are unchanged.
+
+**What did not change.** The three switches of section 0 are untouched: nothing here
+lifts the pause, and `sending_enabled` is still `{"enabled": false}`. The read list at
+the bottom of this document still applies, and read 2 should now answer **zero** — every
+live enrollment is `cold_legacy` and `listStepWakes` will not wake one. The sole
+remaining gap named in this document and *not* closed by 0025 is the last paragraph of
+section 2: `enrollContact` still accepts a re-enrollment of a suppressed contact, which
+is a hygiene problem and not a sending one.
+
+One thing to note rather than to discover later: the send path does not compare a fence's
+own `contact_id` with its enrollment's, and did not before 0025 either. In the product
+they are always the same person — `runEmailStep` addresses the enrollment's contact — so
+the permission check reads the enrollment's column, and a fence's recipient address is
+covered by suppression and by the frozen-route check. Closing it would be a one-line
+refusal in `outbound/stepPermission.ts`; lane FU's brief did not ask for it.
 
 ---
 
@@ -53,7 +93,7 @@ proves each half separately.)
 
 ---
 
-## 1. Follow-up eligibility — **OPEN**
+## 1. Follow-up eligibility — **CLOSED by migration 0025** (read as written on 29 Sep, at `23ec4338`)
 
 **The property David asked for:** every message that can leave belongs to an
 enrollment created by a permitted origin — a recorded conversation, an explicit
@@ -130,6 +170,9 @@ three decisions only David can make:
 itself; recording the origin *on the enrollment* rather than inferring it would need
 one, and would be the better design.)
 
+*Answered: David chose exactly that — the origin on the enrollment, with its supporting
+event, its recipient, the permitted follow-up and its timing. See the update at the top.*
+
 ---
 
 ## 2. Suppression — **PROVEN** (with one test added)
@@ -153,7 +196,7 @@ desktop string). Noted, not changed.
 
 ---
 
-## 3. Firm-wide coordination — **partly PROVEN, one clause OPEN**
+## 3. Firm-wide coordination — **CLOSED by migration 0025** (read as written on 29 Sep, at `23ec4338`)
 
 | Clause | State | Site / test |
 |---|---|---|
@@ -173,8 +216,13 @@ own test (`packages/domain/test/sequences/scenarios.test.ts:464`). Adding a firm
 refusal to `enrollContact` would delete a specified acceptance scenario.
 
 That is a product decision between the directive and the specification, not a missing
-check, so this lane stopped rather than picking one. **STOP: this needs David.** If he
-confirms the directive wins, the change is small and has two halves worth doing
+check, so this lane stopped rather than picking one. **STOP: this needs David.**
+
+*Answered: "the directive wins." Both halves below were built, and scenario 33 is
+rewritten. The exception David added in the same sentence is that follow-up permissions
+to several people at one firm are not limited by the rule.*
+
+If he confirms the directive wins, the change is small and has two halves worth doing
 together:
 
 * `enrollContact`: after the firm lock (already `FOR UPDATE`, so it serialises), refuse
@@ -186,7 +234,7 @@ together:
 
 ---
 
-## 4. Exclusion of old cold-e-mail enrollments — **OPEN**
+## 4. Exclusion of old cold-e-mail enrollments — **CLOSED by migration 0025** (read as written on 29 Sep, at `23ec4338`)
 
 **Nothing in the data distinguishes them.** I looked for every discriminator the brief
 names:
@@ -241,6 +289,11 @@ Anything better than either of those — an `origin` or `programme` column on
 `sequence_enrollments` — is a schema change (0025) and the brief says stop rather than
 write one. **STOP: this needs David to name `T`, or the allow-list, or to approve a
 migration.**
+
+*Answered: neither `T` nor an allow-list. David refused to infer anything from dates,
+sequence names or templates, and approved the migration: `origin_kind` defaults to
+`cold_legacy`, so the excluded set is exactly the set of rows that existed, with no
+`UPDATE` and no cut-off date anybody had to choose.*
 
 ---
 

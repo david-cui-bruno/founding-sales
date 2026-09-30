@@ -14,6 +14,7 @@ import { listApplicableHolds, openHold } from '../../policy/holds.ts';
 import { openPause, releasePause } from '../../policy/pauses.ts';
 import { revokeStatePosture } from '../../policy/postures.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
+import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { localInstant } from '../../src/rules/localClock.ts';
 import { recordSuppression } from '../../suppression/events.ts';
 import { recordingSuppressionJournal } from '../../suppression/journal.ts';
@@ -178,10 +179,52 @@ interface EnrolledCall {
   readonly itemId: string;
 }
 
+/**
+ * A permission for this contact, on the strength of a recorded call (migration 0025).
+ *
+ * Every enrollment in this file is a `follow_up` rather than a `prospecting` one, and
+ * the reason is a rule of David's from 29 September 2026: one active *prospecting*
+ * contact per firm, while follow-up permissions to several people at a firm are
+ * explicitly permitted. Two of the cases below need two people at one firm — "no
+ * successor anywhere at the firm" is only a fact about the outcome if a colleague had a
+ * step — so `prospecting` would make them refuse with `firm_already_enrolled`, which is
+ * a true refusal about the wrong thing. The evidence is a real call log, so the
+ * permission is verified rather than assumed.
+ */
+async function permissionFor(firm: Firm, contactId: string, versionId: string): Promise<string> {
+  const { rows: calls } = await database.session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, command_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5, $6,
+             'agreed_sequence', $7)
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      firm.firmId,
+      contactId,
+      firm.opportunityId,
+      seeded.alpha.salesperson.userId,
+      `${FIXTURE_EVIDENCE_COMMAND}:${contactId}`,
+      versionId,
+    ],
+  );
+  const granted = await grantFollowUpPermission(salesperson(), {
+    firmId: firm.firmId,
+    contactId,
+    callLogId: calls[0]?.id ?? '',
+    grantedByUserId: seeded.alpha.salesperson.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
+  return granted.value.id;
+}
+
 /** Enrol a contact and put its due call task on today's list, as the 05:00 build does. */
 async function enrolWithCallTask(firm: Firm, contactId: string, versionId: string): Promise<EnrolledCall> {
   const enrolled = await enrollContact(salesperson(), {
     sequenceVersionId: versionId,
+    originKind: 'follow_up' as const,
+    permissionId: await permissionFor(firm, contactId, versionId),
     opportunityId: firm.opportunityId,
     firmId: firm.firmId,
     contactId,
@@ -229,10 +272,21 @@ async function itemStatus(itemId: string): Promise<string | undefined> {
   return rows[0]?.status;
 }
 
+/**
+ * The calls this file's *commands* recorded at a firm.
+ *
+ * `permissionFor` also writes a call log — the evidence a migration-0025 follow-up
+ * permission points at — and those carry a `command_id` of their own so a count of
+ * "what `logCallOutcome` did" is still that.
+ */
+const FIXTURE_EVIDENCE_COMMAND = 'fixture-evidence';
+
 async function callLogCount(firmId: string): Promise<number> {
   const { rows } = await database.session.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM call_logs WHERE workspace_id = $1 AND firm_id = $2',
-    [seeded.alpha.workspaceId, firmId],
+    `SELECT count(*)::text AS count FROM call_logs
+      WHERE workspace_id = $1 AND firm_id = $2
+        AND (command_id IS NULL OR command_id NOT LIKE $3)`,
+    [seeded.alpha.workspaceId, firmId, `${FIXTURE_EVIDENCE_COMMAND}%`],
   );
   return Number(rows[0]?.count ?? '0');
 }
@@ -356,6 +410,63 @@ describe('C04: a logged call applies the frozen step, bound through its Today ta
     ]);
     expect(await executionsOf(colleague.enrollmentId)).toEqual([{ ordinal: 1, state: 'cancelled' }]);
     expect((await readOpenOpportunity(salesperson(), firm.firmId))?.control_mode).toBe('manual');
+  });
+
+  it('an engaged call still stops its sequences when the agreed follow-up cannot be granted', async () => {
+    // The third review of PR 332's new P0, in its general form: the grant used to share a
+    // savepoint with the engaged-call stop, so anything that refused it rolled the stop
+    // back — and the command still answered accepted. A conversation was recorded and the
+    // sequences kept running, which is the one outcome invariant 3 forbids.
+    const firm = await makeFirm();
+    const called = await enrolWithCallTask(firm, firm.contactId, await callFirstVersion('advance'));
+    const { id: templateVersionId } = await one<{ id: string }>(
+      `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
+                                      content_hash, footer_sign_off, approved_at, approved_by_user_id)
+       VALUES ($1, gen_random_uuid(), 1, 'The overview', 'A question about {firm_name}',
+               'Hello {contact_first_name}.', encode(sha256(random()::text::bytea), 'hex'),
+               'Sam Example', now(), $2)
+       RETURNING id`,
+      [seeded.alpha.workspaceId, seeded.alpha.admin.userId],
+    );
+    // Every new permission refused, at the database, which is the bluntest way to make
+    // the grant fail without pretending the rest of the call went wrong. `NOT VALID`
+    // leaves existing rows alone and still applies to inserts.
+    await database.session.query(
+      'ALTER TABLE follow_up_permissions ADD CONSTRAINT fu_grant_blocked CHECK (false) NOT VALID',
+    );
+    try {
+      const logged = await inTransaction(async context =>
+        await logCallOutcome(context, {
+          firmId: firm.firmId,
+          contactId: firm.contactId,
+          itemId: called.itemId,
+          outcome: 'interested',
+          followUpPermission: { scope: 'single_email', templateVersionId },
+        }),
+      );
+      if (!logged.ok) throw new Error(`refused: ${logged.reason}`);
+      // The permission is the only thing lost, and the receipt says so.
+      expect(logged.value.followUpPermissionId).toBeNull();
+      expect(logged.value.followUps).toContainEqual({ kind: 'follow_up_not_granted', reason: 'invalid_input' });
+      expect(logged.value.followUps.some(entry => entry.kind === 'effects_not_applied')).toBe(false);
+      // And everything an interested call must do, it did.
+      expect(logged.value.setManual).toBe(true);
+      expect(logged.value.stepApplication).toBe('completed_and_stopped');
+      const { rows } = await database.session.query<{ state: string; end_reason: string | null }>(
+        'SELECT state, end_reason FROM sequence_enrollments WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firm.firmId],
+      );
+      expect(rows.map(row => [row.state, row.end_reason])).toEqual([['stopped', 'engaged_call']]);
+      expect((await readOpenOpportunity(salesperson(), firm.firmId))?.control_mode).toBe('manual');
+      // The call log is there, with what was agreed on it.
+      const log = await one<{ agreed_follow_up: string | null }>(
+        'SELECT agreed_follow_up FROM call_logs WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firm.firmId],
+      );
+      expect(log.agreed_follow_up).toBe('single_email');
+    } finally {
+      await database.session.query('ALTER TABLE follow_up_permissions DROP CONSTRAINT fu_grant_blocked');
+    }
   });
 
   it('a wrong number or a failed call completes nothing, and the task stays', async () => {

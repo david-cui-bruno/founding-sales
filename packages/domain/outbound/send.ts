@@ -14,6 +14,11 @@ import {
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
+import {
+  consumeFollowUpPermission,
+  lockPermissionForClaim,
+  permissionStillLive,
+} from '../sequences/followUpPermissions.ts';
 import { reconcileFenceFooter } from './footer.ts';
 import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
@@ -346,6 +351,11 @@ async function recheckAndClaim(
     // The recheck. `precheck` is the answer from before the token refresh, and it is
     // not an answer to act on: a reply may have committed since. It is consulted for
     // one thing only, below — which mailbox the access token was minted for.
+    // The permission, locked, before anything is decided about the fence's contents
+    // (P0-4). The order inside this transaction is the one the decision document writes
+    // down: send gate (shared) → fence → enrollment → permission → firm.
+    const permission = await lockPermissionForClaim(context, fence.id);
+
     const gate = await decideSend(context, fence, deps);
     if (!gate.ok) {
       const held = await holdFence(context, {
@@ -417,6 +427,30 @@ async function recheckAndClaim(
       // Unreachable while the row lock is held; a rollback takes the reservation back.
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: claim.reason, detail: claim.detail };
+    }
+    // The one message a `single_email` or `contextual_reply` follow-up permission bought,
+    // spent — and the spend is the *authorization*, not a note about it (P0-4, P2-1).
+    //
+    // The permission row was locked at the top of this transaction, and the UPDATE
+    // carries the whole of its liveness: unspent, unrevoked, and unexpired against the
+    // database's own `clock_timestamp()` rather than against the instant the gate
+    // sampled minutes ago. **Zero affected rows aborts the claim**, so a revocation that
+    // commits between the recheck and here, or an expiry that passes during a long
+    // claim, stops the send instead of being overtaken by it.
+    if (permission !== null && (permission.scope === 'single_email' || permission.scope === 'contextual_reply')) {
+      if (!(await consumeFollowUpPermission(context, permission.id))) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_scope_exhausted' };
+      }
+    } else if (permission !== null) {
+      // The scopes that spend nothing still have to be live at the instant the claim
+      // commits (P0-4 of the second review). `agreed_sequence` used to be admitted on the
+      // expiry the gate sampled before the token refresh, so a permission that expired —
+      // or was revoked — while this claim waited on a lock could still send.
+      if (!(await permissionStillLive(context, permission.id))) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_expired' };
+      }
     }
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value };

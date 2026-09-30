@@ -11,11 +11,13 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * launches the migration task. Stale text inside an applied migration stays stale
  * forever. That is the cost of the checksum, and it is the right cost.
  *
- * **0022, 0023 and 0024 are pinned before they are applied**, and that is not the same claim
+ * **0022, 0023, 0024 and 0025 are pinned before they are applied**, and that is not the same claim
  * as the rest. The twenty-one below them say "this is what production recorded" —
  * production ran schema 21 on 28 September 2026 — and these two say "these are the
  * bytes the release will record", each written as the last commit of its lane once the
- * file was final (J-facts for 0022, R for 0023, E for 0024).
+ * file was final (J-facts for 0022, R for 0023, E for 0024, FU for 0025 — whose pin moved
+ * once more after the GPT-6 review of PR 332, on the bytes the upgrade test then passed
+ * 24 → 25).
  * 0022's pin has moved with each round of review of PR 307 — a workspace foreign
  * key and a column-level UPDATE grant in the first, a CHECK function over `detail`
  * in the second. The rule those moves follow: **the file changes in the commit that
@@ -67,6 +69,7 @@ const APPLIED: readonly (readonly [number, string, string])[] = [
   [22, '0022_funnel_facts.sql', '24a12518575536f95ca1f098d0af45ec341f43dfa3fc738365bfb4afab80f2aa'],
   [23, '0023_research.sql', 'f3aa198989dca6cdbe6292fded4f16a015c1bc4ad7df490f955dad10bf2bab6d'],
   [24, '0024_email_presentation.sql', '9211992c06d7eb43b094c6bc42db0c523c1b9260e09359f0e1212b9da79a5a5f'],
+  [25, '0025_follow_up_permissions.sql', '3403935c669d54f9b814346bb6a5d983dce5b83f46de649fd5e781d23b1c14d1'],
 ];
 
 const EDITED = (fileName: string): string =>

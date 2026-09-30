@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -11,12 +10,7 @@ import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts
 import { openHold, releaseHold } from '../../policy/holds.ts';
 import { recordHolidayCalendar } from '../../sequences/calendars.ts';
 import { stopEnrollments } from '../../sequences/enrollments.ts';
-import {
-  TEMPLATE_BODY,
-  TEMPLATE_SUBJECT,
-  createOutboundWorld,
-  type OutboundWorld,
-} from './support/outboundWorld.ts';
+import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { automatedSent, prepareFor, seedFirm } from './support/dispatchFixtures.ts';
 
 /**
@@ -72,30 +66,32 @@ const why = (report: SendReport): string => `${report.outcome} ${report.refusal 
 describe('S02: the complete eligibility, asked again at the claim', () => {
   it('refuses a fence whose template approval was withdrawn after it was prepared', async () => {
     const firm = await seedFirm(world, world.alpha, 'template');
-    // A template version of its own, so withdrawing it leaves the world's alone.
-    const templateId = '33333333-4444-4555-8666-777777777777';
-    const hash = createHash('sha256').update(`g77 fixture template ${templateId}`, 'utf8').digest('hex');
-    const { rows } = await world.database.session.query<{ id: string }>(
-      `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
-                                      content_hash, footer_sign_off, approved_at, approved_by_user_id)
-       VALUES ($1, $2, 1, 'Withdrawn later', $3, $4, $5, 'Signed off', now(), $6)
-       RETURNING id`,
-      [workspaceId(), templateId, TEMPLATE_SUBJECT, TEMPLATE_BODY, hash, world.alpha.workspace.admin.userId],
-    );
-    const templateVersionId = rows[0]?.id ?? '';
-    const fenceId = await prepareFor(world, world.alpha, firm, { templateVersionId, templateContentHash: hash });
+    const fenceId = await prepareFor(world, world.alpha, firm);
 
-    // Nothing retires a version since wave 2 (S3) but a stored row still can be one.
+    // The version withdrawn is the step's own. It used to be a version minted for this
+    // case, which the claim now refuses earlier for a different reason: since P0-2 of the
+    // second review a fence must carry the template **its step names**, so a fence frozen
+    // on any other version — approved or not — never reaches the approval question.
+    // Nothing retires a version since wave 2 (S3) but a stored row still can be one, and
+    // `retired_at` is not one of the columns the approved-immutable trigger freezes.
     const retired = await world.database.session.query(
       'UPDATE template_versions SET retired_at = now() WHERE workspace_id = $1 AND id = $2',
-      [workspaceId(), templateVersionId],
+      [workspaceId(), world.alpha.templateVersionId],
     );
     expect(retired.rowCount).toBe(1);
 
-    const { report, sends } = await dispatch(fenceId);
-    expect(report.outcome, why(report)).toBe('held');
-    expect(report.refusal).toBe('template_unapproved');
-    expect(sends).toBe(0);
+    try {
+      const { report, sends } = await dispatch(fenceId);
+      expect(report.outcome, why(report)).toBe('held');
+      expect(report.refusal).toBe('template_unapproved');
+      expect(sends).toBe(0);
+    } finally {
+      // The world's own template, so it goes back for the cases after this one.
+      await world.database.session.query(
+        'UPDATE template_versions SET retired_at = NULL WHERE workspace_id = $1 AND id = $2',
+        [workspaceId(), world.alpha.templateVersionId],
+      );
+    }
   });
 
   it('refuses a fence whose frozen route was re-decided since, even though it is usable again', async () => {
@@ -108,7 +104,9 @@ describe('S02: the complete eligibility, asked again at the claim', () => {
       await world.database.session.query(
         `UPDATE email_addresses SET eligibility = $3, version = version + 1, updated_at = now()
           WHERE workspace_id = $1 AND id = $2`,
-        [workspaceId(), firm.routeId, eligibility],
+        // The route the *fence* froze, which since P0-2 is the enrollment's contact's
+        // own address rather than a route shared with the firm's first contact.
+        [workspaceId(), frozen?.recipientRouteId ?? firm.routeId, eligibility],
       );
     }
 
@@ -129,10 +127,11 @@ describe('S02: the complete eligibility, asked again at the claim', () => {
   it('refuses a candidate route, which the gate used to let through', async () => {
     const firm = await seedFirm(world, world.alpha, 'route-candidate');
     const fenceId = await prepareFor(world, world.alpha, firm);
+    const frozen = await readFence(context(), fenceId);
     await world.database.session.query(
       `UPDATE email_addresses SET eligibility = 'candidate', version = version + 1, updated_at = now()
         WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), firm.routeId],
+      [workspaceId(), frozen?.recipientRouteId ?? firm.routeId],
     );
     const { report, sends } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('held');

@@ -29,6 +29,7 @@ import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
 // Sequences, templates and enrollments.
 import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
+import { FOLLOW_UP_PERMISSION_PATHS, routeFollowUpPermissions } from './followUpPermissions.ts';
 import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
 import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
 // Administration, the dashboard and Diagnostics.
@@ -195,6 +196,15 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
     moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
     moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
+    // Follow-up permissions (migration 0025). Its own module and exact paths: the
+    // grant is the row that decides whether Callie may write to a prospect at all, and
+    // an unknown path near it must be `not_found` rather than an unauthorized write.
+    moduleOf(
+      'follow-up-permissions',
+      { paths: FOLLOW_UP_PERMISSION_PATHS },
+      routeFollowUpPermissions,
+      routing,
+    ),
     // The administration surface. Exact paths, and three modules rather than one:
     // settings is a read and a command family, the dashboard is one aggregate read and
     // Diagnostics is an operational read with its own visibility rule. A single

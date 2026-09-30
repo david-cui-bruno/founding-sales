@@ -16,6 +16,7 @@ import {
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   type FirmIdentityDto,
+  type FirmPageResponse,
   type MergeConflict,
   type PipelineStageDto,
 } from '@fss/contracts';
@@ -111,6 +112,7 @@ export interface CrmBridgeHost {
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
   openOpportunity(): Promise<CrmState>;
+  takeOver(input: { readonly reason: string }): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
   checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
@@ -285,7 +287,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return;
     }
     const labels = new Map<string, string>();
-    const published: { sequenceVersionId: string; label: string }[] = [];
+    const published: {
+      sequenceVersionId: string;
+      label: string;
+      templateVersionIds: string[];
+      stepCount: number;
+    }[] = [];
     for (const sequence of list.value.sequences.slice(0, FIRM_PAGE_SEQUENCE_LIMIT)) {
       if (sequence.archivedAt !== null) continue;
       const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
@@ -301,7 +308,16 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         // A version with a LinkedIn step stored before 25 September 2026 (lane A2) is not
         // offered: `enrollContact` refuses it (`step_unknown`).
         const enrollable = version.state === 'published' && version.steps.every(step => step.channel !== 'removed');
-        if (enrollable) published.push({ sequenceVersionId: version.id, label });
+        if (enrollable) {
+          published.push({
+            sequenceVersionId: version.id,
+            label,
+            templateVersionIds: version.steps
+              .map(step => step.templateVersionId)
+              .filter((id): id is string => id !== null),
+            stepCount: version.steps.length,
+          });
+        }
       }
     }
     sequences = {
@@ -547,6 +563,31 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     },
 
     /**
+     * "I will handle this myself": the explicit takeover (P1-1 of the GPT-6 review of PR
+     * 332).
+     *
+     * The opportunity goes to manual with the one origin that is a person's decision
+     * rather than a prospect's signal, which is what stops the follow-up automation
+     * running beside it. There is no control that reverses it: automation never reverses
+     * manual mode, and this app does not pretend otherwise.
+     */
+    async takeOver(input) {
+      const page = firm;
+      if (page === null || page.visibility !== 'assigned_or_admin' || page.opportunity?.status !== 'open') {
+        notice = 'opportunity_not_open';
+        return await snapshot();
+      }
+      const answer = await deps.api.command(
+        '/opportunities/manual',
+        { opportunityId: page.opportunity.id, reason: input.reason },
+        () => null,
+      );
+      notice = answer.ok ? 'taken_over' : answer.reason;
+      await loadFirm(page.read.firm.id);
+      return await snapshot();
+    },
+
+    /**
      * Enrol a contact of the open Firm page (lane g88, audit G03). The firm and its open
      * opportunity are the page's, never the window's word; the server decides everything
      * else — the version is published, the contact has no live enrolment, the firm's zone
@@ -558,6 +599,22 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'opportunity_not_open';
         return await snapshot();
       }
+      // Migration 0025: an enrollment says what it is for, and there is no default.
+      // The Mac does not ask — it reads. If the firm page already shows a live
+      // follow-up permission for this person, granted from the reply card or the call
+      // outcome, this is that follow-up; otherwise it is a cold first touch, and the
+      // server refuses a second prospecting contact at the firm with
+      // `firm_already_enrolled`. No new control, which is what "the minimum that lets
+      // David grant a permission from the flows he already uses" asks for.
+      const plan = sequences?.published.find(entry => entry.sequenceVersionId === input.sequenceVersionId);
+      const permission =
+        plan === undefined
+          ? null
+          : livePermissionFor(page, input.contactId, {
+              sequenceVersionId: plan.sequenceVersionId,
+              templateVersionIds: plan.templateVersionIds,
+              stepCount: plan.stepCount,
+            });
       const answer = await deps.api.command(
         '/enrollments/enroll',
         {
@@ -565,6 +622,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
           opportunityId: page.opportunity.id,
           firmId: page.read.firm.id,
           contactId: input.contactId,
+          originKind: permission === null ? 'prospecting' : 'follow_up',
+          ...(permission === null ? {} : { permissionId: permission }),
         },
         () => null,
       );
@@ -641,6 +700,51 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return await snapshot();
     },
   };
+}
+
+/**
+ * A live follow-up permission for this person on the firm page, or null.
+ *
+ * Live is all four of David's conditions read from the row the page already carries:
+ * unrevoked, unspent, unexpired against this Mac's clock, and *this* person's. The
+ * server re-reads the permission and its evidence anyway — that is the whole design —
+ * so a clock a few seconds out costs at most a refusal the operator can read.
+ */
+export function livePermissionFor(
+  page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>,
+  contactId: string,
+  plan: {
+    readonly sequenceVersionId: string;
+    readonly templateVersionIds: readonly string[];
+    readonly stepCount: number;
+  },
+): string | null {
+  const now = Date.now();
+  const usable = page.followUpPermissions.find(permission => {
+    if (permission.contactId !== contactId) return false;
+    if (permission.revokedAt !== null || permission.consumedAt !== null) return false;
+    if (Date.parse(permission.expiresAt) <= now) return false;
+    // Unbound. A permission that has already bought a run cannot buy another, and
+    // offering it here would be an enrollment the server rolls back (P0-3).
+    if (permission.enrollmentId !== null) return false;
+    // And it has to be a permission *for this plan*. An `agreed_sequence` names the
+    // published version it agreed to; a one-message scope names the approved bytes, so
+    // the plan must be the single step that sends them.
+    if (permission.scope === 'agreed_sequence') return permission.sequenceVersionId === plan.sequenceVersionId;
+    if (permission.scope === 'single_email' || permission.scope === 'contextual_reply') {
+      // One message means a plan of **one step**, not a plan with one template in it: an
+      // e-mail followed by a call task has exactly one template id and is two steps of
+      // contact (the third review of PR 332). The server refuses it either way; the Mac
+      // should not offer it.
+      return (
+        plan.stepCount === 1 &&
+        plan.templateVersionIds.length === 1 &&
+        (permission.templateVersionId === null || permission.templateVersionId === plan.templateVersionIds[0])
+      );
+    }
+    return false;
+  });
+  return usable?.id ?? null;
 }
 
 /** Turn a refused merge body into the conflicts screen, when it carries them. */

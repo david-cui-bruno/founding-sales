@@ -40,6 +40,7 @@ const todayState = (notice: string | null = null): TodayState => ({
   notice,
   handoffNotice: '',
   dialAdvice: [],
+  followUpTemplates: [],
   lastCall: null,
 });
 

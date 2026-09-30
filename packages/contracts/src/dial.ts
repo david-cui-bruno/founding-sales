@@ -480,6 +480,25 @@ export const logCallOutcomeCommandSchema = z.strictObject({
     .optional(),
   /** `do_not_call` suppresses the firm only when the request covered all Callie contact (9.1). */
   doNotCallCoversAllContact: z.boolean().optional(),
+  /**
+   * The follow-up the salesperson agreed to on this call (migration 0025). Permitted
+   * only for `interested`: "Call me Tuesday" is the `callback` above and grants no
+   * e-mail permission, which is David's own distinction of 29 September 2026.
+   */
+  followUpPermission: z
+    .strictObject({
+      scope: z.literal('single_email'),
+      /**
+       * The approved bytes that were promised. `logCallOutcome` writes it onto the call
+       * log (`agreed_template_version_id`), which is where the agreement lives, and the
+       * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
+       * rather than whichever approved template somebody picks later (P0-2). An
+       * `agreed_sequence` is granted through `POST /follow-up-permissions`, because it
+       * needs a version picker this command has no screen for (deviation 5).
+       */
+      templateVersionId: uuid,
+    })
+    .optional(),
 });
 
 /**
@@ -503,8 +522,18 @@ export const CALL_OCCURRED_AT_TOLERANCE_SECONDS = 120;
  *    and no number was named, so nothing was retired or suppressed by number.
  *  * `effects_not_applied` — applying the outcome was refused part-way. Every effect
  *    was rolled back to a savepoint; the call itself is recorded.
+ *  * `follow_up_not_granted` — the call was recorded and its effects applied, but the
+ *    follow-up agreed on it could not be granted. Its own savepoint, so the one effect
+ *    an interested call must never lose — the engaged-call stop — is not taken down with
+ *    it (the third review of PR 332). A person grants the permission from the firm page,
+ *    or the conversation simply has none.
  */
-const CALL_FOLLOW_UP_KINDS = ['callback_time_needed', 'route_not_named', 'effects_not_applied'] as const;
+const CALL_FOLLOW_UP_KINDS = [
+  'callback_time_needed',
+  'route_not_named',
+  'effects_not_applied',
+  'follow_up_not_granted',
+] as const;
 
 const callFollowUpSchema = z.object({
   kind: z.enum(CALL_FOLLOW_UP_KINDS),
@@ -557,6 +586,8 @@ export const loggedCallResultSchema = z.object({
   successorExecutionId: uuid.nullable(),
   /** The callback this call fulfilled (Appendix A "Callback confirm/complete"). */
   completedCallbackId: uuid.nullable(),
+  /** The follow-up permission this outcome granted, if the salesperson agreed to one (0025). */
+  followUpPermissionId: uuid.nullable(),
   followUps: z.array(callFollowUpSchema),
 });
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;

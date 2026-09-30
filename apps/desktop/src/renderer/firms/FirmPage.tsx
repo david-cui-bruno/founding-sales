@@ -386,7 +386,76 @@ function Sequences({
   );
 }
 
-function Opportunity({ page }: { readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }> }): JSX.Element {
+/**
+ * "I will handle this myself" (P1-1 of the GPT-6 review of PR 332).
+ *
+ * The one control that records an explicit takeover, which is the manual mode an
+ * evidenced follow-up does not run beside. It is offered only while the opportunity is
+ * open and automated: a firm already in manual needs no button to say so, and nothing
+ * here reverses manual mode, because automation never does.
+ */
+function TakeOver({
+  enabled,
+  saving,
+  onTakeOver,
+}: {
+  readonly enabled: boolean;
+  readonly saving: boolean;
+  onTakeOver(reason: string): void;
+}): JSX.Element {
+  const [reason, setReason] = useState('');
+  return (
+    <div data-testid="take-over" className="flex items-center gap-2 py-2">
+      <Input
+        data-testid="take-over-reason"
+        aria-label="Why you are taking this over"
+        placeholder="Why you are taking this over"
+        value={reason}
+        onChange={event => setReason(event.target.value)}
+      />
+      <Button
+        data-testid="take-over-submit"
+        disabled={!enabled || saving || reason.trim() === ''}
+        onClick={() => {
+          onTakeOver(reason.trim());
+          setReason('');
+        }}
+      >
+        I will handle this myself
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Whether "I will handle this myself" has anything left to say (P1-1 of the second review
+ * of PR 332).
+ *
+ * It used to be offered only while the opportunity was automated, which hid it in exactly
+ * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or a
+ * direct send they said to keep following up after — is the state in which an evidenced
+ * follow-up still runs beside them. So the control is offered for every open opportunity
+ * except one already taken over by hand, where pressing it would change nothing.
+ */
+function takeoverOffered(
+  opportunity: NonNullable<Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>['opportunity']>,
+): boolean {
+  if (opportunity.status !== 'open') return false;
+  if (opportunity.controlMode === 'automated') return true;
+  return opportunity.controlModeOrigin !== 'salesperson_command';
+}
+
+function Opportunity({
+  page,
+  actionsEnabled,
+  busy,
+  onTakeOver,
+}: {
+  readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+  readonly actionsEnabled: boolean;
+  busy(form: string): boolean;
+  onTakeOver(reason: string): void;
+}): JSX.Element {
   const opportunity = page.opportunity;
   return (
     <Section data-testid="firm-opportunity" title="Opportunity">
@@ -400,6 +469,9 @@ function Opportunity({ page }: { readonly page: Extract<FirmPageResponse, { visi
             {`${inWords(opportunity.status)} at ${inWords(opportunity.stageKey)}, opened ${shortDay(opportunity.openedAt)}`}
             {opportunity.closeReason === null ? '' : ` · closed because ${inWords(opportunity.closeReason)}`}
           </p>
+          {takeoverOffered(opportunity) ? (
+            <TakeOver enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
+          ) : null}
           <ol data-testid="stage-history" className="mt-1 flex flex-col border-t border-border">
             {page.stageHistory.map(event => (
               <li
@@ -463,6 +535,73 @@ function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility
   );
 }
 
+/**
+ * The firm's follow-up permissions (migration 0025).
+ *
+ * The four facts David's decision names, in the order a person reads them: what was
+ * agreed, how much it permits, when it stops, and the event it rests on. The evidence is
+ * shown as what it is — a recorded call, an inbound e-mail, a booking reference — rather
+ * than as an id, because the id means nothing to the one person who uses this app; the
+ * id is in the title attribute for the day it is needed.
+ */
+function FollowUpPermissions({
+  page,
+}: {
+  readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+}): JSX.Element {
+  const permissions = page.followUpPermissions;
+  return (
+    <Section data-testid="firm-follow-ups" title="Follow-up permissions" count={permissions.length}>
+      {permissions.length === 0 ? (
+        <p data-testid="follow-ups-none" className="py-2 text-sm text-muted-foreground">
+          Callie may not write to anybody at this firm.
+        </p>
+      ) : (
+        <Rows>
+          {permissions.map(permission => (
+            <Row key={permission.id} data-testid="firm-follow-up">
+              <RowMain
+                line={<span data-testid="follow-up-scope">{inWords(permission.scope)}</span>}
+                detail={
+                  <>
+                    <span data-testid="follow-up-kind">{inWords(permission.kind)}</span>
+                    {' · '}
+                    <span data-testid="follow-up-evidence" title={evidenceId(permission)}>
+                      {evidenceWords(permission)}
+                    </span>
+                    {' · '}
+                    <span data-testid="follow-up-state">{permissionState(permission)}</span>
+                  </>
+                }
+              />
+            </Row>
+          ))}
+        </Rows>
+      )}
+    </Section>
+  );
+}
+
+type FollowUp = Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>['followUpPermissions'][number];
+
+function evidenceWords(permission: FollowUp): string {
+  if (permission.callLogId !== null) return 'from a recorded call';
+  if (permission.mailMessageId !== null) return 'from an e-mail they sent';
+  return 'from a booking';
+}
+
+function evidenceId(permission: FollowUp): string {
+  return permission.callLogId ?? permission.mailMessageId ?? permission.bookingReference ?? '';
+}
+
+/** Revoked, spent, expired or live — the one sentence that says whether it still counts. */
+function permissionState(permission: FollowUp): string {
+  if (permission.revokedAt !== null) return `withdrawn ${shortDayTime(permission.revokedAt)}`;
+  if (permission.consumedAt !== null) return `used ${shortDayTime(permission.consumedAt)}`;
+  if (Date.parse(permission.expiresAt) <= Date.now()) return `expired ${shortDayTime(permission.expiresAt)}`;
+  return `until ${shortDayTime(permission.expiresAt)}`;
+}
+
 export function FirmPage({
   page,
   sequences,
@@ -473,6 +612,7 @@ export function FirmPage({
   onCheckRoute,
   onOpenOpportunity,
   onEnroll,
+  onTakeOver,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -484,6 +624,7 @@ export function FirmPage({
   onCheckRoute(request: CheckRouteRequest): void;
   onOpenOpportunity(): void;
   onEnroll(request: EnrollRequest): void;
+  onTakeOver(reason: string): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -530,7 +671,8 @@ export function FirmPage({
               onEnroll={onEnroll}
             />
           )}
-          <Opportunity page={page} />
+          <Opportunity page={page} actionsEnabled={actionsEnabled} busy={busy} onTakeOver={onTakeOver} />
+          <FollowUpPermissions page={page} />
           <Holds page={page} />
         </>
       )}

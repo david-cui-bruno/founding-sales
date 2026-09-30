@@ -113,9 +113,33 @@ Three things freeze at that moment and each has a reason:
   from a bug.
 
 `sequence_enrollments_one_active_per_contact` is a partial unique index on
-`(workspace_id, contact_id) WHERE ended_at IS NULL`. There is deliberately no index on
-`(workspace_id, firm_id)`: 11.2 permits unlimited contacts at one firm to be enrolled
-and to receive mail on the same day.
+`(workspace_id, contact_id) WHERE ended_at IS NULL`. There is still no index on
+`(workspace_id, firm_id)`, and since migration 0025 that is for a different reason.
+
+**One active prospecting contact per firm** (David, 29 September 2026;
+`docs/greenfield/decisions/follow-up-eligibility-20260929.md`). This replaces 11.2's
+"unlimited contacts at one firm may be enrolled and receive mail on the same day", and
+**Appendix G scenario 33 is rewritten** from "many contacts at one firm, due on the same
+day" to the refusal and its exception:
+
+* a second *prospecting* enrollment at a firm is refused `firm_already_enrolled` —
+  by `enrollContact` under the firm's row lock, and again at the step and inside the
+  dispatch claim by `firmExclusivitySource`, because the rows that already exist were
+  created while the schema permitted them. The deterministic winner is the live
+  prospecting enrollment with the earliest `(started_at, id)`;
+* **follow-up permissions to several people at one firm all proceed.** David's own
+  exception, in the same sentence: the restriction "must not prevent ordinary customer
+  conversations involving multiple people".
+
+It is enforced in the domain rather than by a partial unique index on purpose: such an
+index would fail to build against a production database that already holds two live
+contacts at one firm, and the rule is about *prospecting* rather than about enrollments.
+
+**Every enrollment says what it is for.** `origin_kind` is `cold_legacy` (the DEFAULT,
+and therefore every row written before 0025 — excluded from automatic sending for ever,
+history preserved, never revived), `prospecting`, or `follow_up`, and a `follow_up` names
+the `follow_up_permissions` row it rests on (`sequence_enrollments_follow_up_has_permission`).
+`enrollContact` requires the kind and never writes the default.
 
 ### 3. Eligibility is one read at one instant, in a fixed order
 
@@ -123,8 +147,18 @@ and to receive mail on the same day.
 `composeEligibility` asks them in the order of `eligibility.ts`, first refusal wins:
 
 ```
-suppression → control mode → holds → assignment → route → mailbox → template approval
+suppression → follow-up permission → firm exclusivity → control mode → holds
+  → assignment → route → mailbox → template approval
 ```
+
+The two sources after suppression are migration 0025's. `followUpPermissionSource`
+refuses `cold_legacy` outright, lets `prospecting` past, and for a `follow_up` **re-reads
+the permission's evidence** — the call log, or the inbound message's match to the firm —
+because "the origin label alone must not authorize sending" applies to the permission row
+as much as to the column. `firmExclusivitySource` is the firm rule above, asked again
+under the firm's row lock. `controlModeSource` gained one clause: a manual mode set by a
+prospect *signal* does not block an evidenced follow-up, while a person's explicit
+takeover, and an unrecorded origin, still do (`opportunities.control_mode_origin`).
 
 Suppression before assignment for the reason `docs/greenfield/policy.md` gives about
 dialing: an unassigned salesperson should be told the firm is suppressed rather than

@@ -226,8 +226,8 @@ describe('the worker publishes ActiveEnrollments and HeldEnrollments on every pa
       const enrollmentId = await one(
         `INSERT INTO sequence_enrollments
            (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-            firm_time_zone, holiday_calendar_version)
-         VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1') RETURNING id`,
+            firm_time_zone, holiday_calendar_version, origin_kind)
+         VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1', 'prospecting') RETURNING id`,
         [workspaceId, versionId, prospect.opportunityId, prospect.firmId, prospect.contactId, userId],
       );
       await database.session.query(

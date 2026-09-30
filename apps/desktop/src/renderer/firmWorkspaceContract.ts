@@ -131,7 +131,25 @@ export type MergeConflict = MergeView['conflicts'][number];
  * is labelled with the sequence's name and version, which is what a person recognises.
  */
 export const firmSequencesViewSchema = z.object({
-  published: z.array(z.object({ sequenceVersionId: uuid, label: z.string().max(300) })),
+  published: z.array(
+    z.object({
+      sequenceVersionId: uuid,
+      label: z.string().max(300),
+      /**
+       * The approved bytes this version's steps would send, in order. The Mac matches a
+       * follow-up permission against them before it enrols (migration 0025): a
+       * `single_email` permission is for one named template, and offering it for a plan
+       * that sends something else is a refusal the person would have to read back.
+       */
+      templateVersionIds: z.array(uuid),
+      /**
+       * How many steps the version has in all. One template id is not one step — an
+       * e-mail followed by a call task has exactly one — so "the one e-mail they asked
+       * for" is a plan of one step and nothing else (the third review of PR 332).
+       */
+      stepCount: z.number().int().min(0),
+    }),
+  ),
   enrollments: z.array(
     z.object({
       enrollmentId: uuid,
