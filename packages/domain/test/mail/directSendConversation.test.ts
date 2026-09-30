@@ -1053,3 +1053,102 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
     expect((await readMailbox(worker(), world.alpha.mailboxId))?.lastSyncError).toBeNull();
   });
 });
+
+describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
+  const headerOf = async (fenceId: string): Promise<string> => {
+    const { rows } = await world.database.session.query<{ header: string | null }>(
+      'SELECT provider_message_id_header AS header FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId],
+    );
+    const header = rows[0]?.header ?? null;
+    if (header !== null) return header.replace(/^<|>$/gu, '');
+    const made = `fss.${fenceId}@example.test`;
+    await world.database.session.query(
+      'UPDATE outbound_messages SET provider_message_id_header = $3 WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId, `<${made}>`],
+    );
+    return made;
+  };
+
+  it('a manual message reusing an automated message id is a direct send: the permission is consumed, and not automated', async () => {
+    const firm = await seedFirm(world, world.alpha, 'rfc-inherit');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    const owned = await headerOf(followUp.fenceId);
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'rfc-auto', historyId: '1301', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'The automated note' }),
+      fixtureMessage({ id: 'rfc-manual', historyId: '1302', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'My own note' }),
+    );
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const report = await withTransaction(session, async () =>
+      await runMailSync(worker(), world.syncDeps(world.alpha), { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(report.rfcIdConflicts).toBe(1);
+    expect(report.automatedSendsRecognised).toBe(1);
+    expect(report.directSendsRecorded).toBe(1);
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+
+    // A replay: the conflict's row holds no Message-ID and is still not looked up by one.
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    const replay = await withTransaction(session, async () =>
+      await runMailSync(worker(), world.syncDeps(world.alpha), { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(replay.automatedSendsRecognised).toBe(1);
+  });
+
+  it('a failed duplicate-proof read stops at that message: the direct send before it commits', async () => {
+    const firm = await seedFirm(world, world.alpha, 'proof-stop');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1400' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const base = world.syncDeps(world.alpha);
+    // The original is recorded by an earlier run.
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'proof-orig', historyId: '1401', from: 'someone@elsewhere.example.test', to: world.alpha.address, messageId: 'proof@x.test', subject: 'Same' }),
+    );
+    await withTransaction(session, async () => await runMailSync(worker(), base, { mailboxId: world.alpha.mailboxId }));
+
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'proof-direct', historyId: '1402', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'proof-copy', historyId: '1403', from: 'someone@elsewhere.example.test', to: world.alpha.address, messageId: 'proof@x.test', subject: 'Same' }),
+    );
+    // Only the proof read fails: the read of the original made for the copy. (The
+    // fixture's current history id is below the cursor, so the run replays the original
+    // first, and that read succeeds.)
+    let copyRead = false;
+    const gmail: GmailClient = {
+      ...base.gmail,
+      getMetadata: async (access, messageId, headers) => {
+        if (messageId === 'proof-copy') copyRead = true;
+        if (messageId === 'proof-orig' && copyRead) throw new GmailClientError('unexpected_status', 'the fixture read failed', 429);
+        return await base.gmail.getMetadata(access, messageId, headers);
+      },
+    };
+    const report = await withTransaction(session, async () =>
+      await runMailSync(worker(), { ...base, gmail }, { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(report.outcome).toBe('read_stopped');
+    expect(report.directSendsRecorded).toBe(1);
+    expect(report.readFailure).toEqual({ providerMessageId: 'proof-copy', read: 'metadata', detail: 'unexpected_status 429' });
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+    // The cursor stands just before the copy's record.
+    expect((await readMailbox(worker(), world.alpha.mailboxId))?.historyId).toBe('1402');
+  });
+});

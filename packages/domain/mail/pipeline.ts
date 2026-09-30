@@ -139,6 +139,13 @@ async function gmailRead<T>(read: () => Promise<T>): Promise<GmailRead<T>> {
 
 const MESSAGE_SAVEPOINT = 'mail_pipeline_message';
 
+/** The duplicate-proof read failed; the message stops the batch as a failed metadata read. */
+class ProofReadFailed extends Error {
+  constructor(readonly detail: string) {
+    super('the duplicate-proof metadata read failed');
+  }
+}
+
 /**
  * A savepoint for one message's writes, or false outside a transaction — only a test
  * calling the domain directly on an autocommit session — where each statement is its
@@ -217,25 +224,38 @@ export async function processMessageIds(
       newestInternalDate,
     };
     const nested = await openMessageSavepoint(context);
-    const step = await (async (): Promise<'done' | { readonly ok: false; readonly detail: string }> => {
+    const step = await (async (): Promise<
+      'done' | { readonly ok: false; readonly read: 'metadata' | 'body'; readonly detail: string }
+    > => {
       messagesSeen += 1;
 
       const normalized = normalizeMetadata(metadata);
-      const stored = await recordMessage(context, {
-        mailboxId: input.mailbox.id,
-        metadata: normalized,
-        // An RFC Message-ID collision is a proven duplicate only if the other message's
-        // `Date` header is this one's too. The table keeps no `Date`, so the other
-        // message's metadata is read again, with the same allowlist; a message Gmail no
-        // longer has proves nothing, and a failed read throws and retries the job.
-        sameDateAs: async existing => {
-          const other = await deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS);
-          const mine = headerValue(metadata.headers, 'Date')?.trim();
-          const theirs = other === null ? undefined : headerValue(other.headers, 'Date')?.trim();
-          return mine !== undefined && mine !== '' && mine === theirs;
-        },
-        ...(deps.log === undefined ? {} : { log: deps.log }),
-      });
+      let stored;
+      try {
+        stored = await recordMessage(context, {
+          mailboxId: input.mailbox.id,
+          metadata: normalized,
+          // An RFC Message-ID collision is a proven duplicate only if the other message's
+          // `Date` header is this one's too. The table keeps no `Date`, so the other
+          // message's metadata is read again, with the same allowlist; a message Gmail no
+          // longer has proves nothing. The read goes through `gmailRead` (fold 2): a
+          // failure is this message's stopped read, like any other, so `mail.sync`
+          // commits the prefix before it and `mail.recover` takes its whole-job retry.
+          sameDateAs: async existing => {
+            const other = await gmailRead(() =>
+              deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS),
+            );
+            if (!other.ok) throw new ProofReadFailed(other.detail);
+            const mine = headerValue(metadata.headers, 'Date')?.trim();
+            const theirs = other.value === null ? undefined : headerValue(other.value.headers, 'Date')?.trim();
+            return mine !== undefined && mine !== '' && mine === theirs;
+          },
+          ...(deps.log === undefined ? {} : { log: deps.log }),
+        });
+      } catch (error) {
+        if (error instanceof ProofReadFailed) return { ok: false, read: 'metadata', detail: error.detail };
+        throw error;
+      }
       if (stored.inserted) messagesRecorded += 1;
       // Read through a local: the closure's view of the outer `let` is narrowed to its
       // initialiser, and a comparison against it would not type-check.
@@ -270,8 +290,10 @@ export async function processMessageIds(
       if (stored.message.direction === 'outgoing') {
         fenceId = await fenceForOutgoingMessage(context, {
           mailboxId: input.mailbox.id,
-          // The message's own Message-ID, from its headers: a conflict's row holds none.
-          rfcMessageId: normalized.rfcMessageId,
+          // The stored row's Message-ID (fold 2): a conflict's row holds none, so a
+          // conflict — first import or replay — is looked up by its own Gmail id only and
+          // can never inherit the fence of the message that owns the colliding id.
+          rfcMessageId: stored.message.rfcMessageId,
           providerMessageId: stored.message.providerMessageId,
         });
       }
@@ -316,7 +338,7 @@ export async function processMessageIds(
 
       // Step 3: now, and only now, a body.
       const bodyRead = await gmailRead(() => deps.gmail.getBody(input.access, providerMessageId));
-      if (!bodyRead.ok) return bodyRead;
+      if (!bodyRead.ok) return { ok: false, read: 'body', detail: bodyRead.detail };
       const body = bodyRead.value;
       if (body !== null) {
         bodiesFetched += 1;
@@ -372,7 +394,7 @@ export async function processMessageIds(
         rfcIdConflicts,
         newestInternalDate,
       } = before);
-      readFailure = { providerMessageId, read: 'body', detail: step.detail };
+      readFailure = { providerMessageId, read: step.read, detail: step.detail };
       break;
     }
     if (nested) await context.db.query(`RELEASE SAVEPOINT ${MESSAGE_SAVEPOINT}`);
