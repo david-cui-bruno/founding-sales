@@ -5,7 +5,10 @@ import {
   callRecordingResponseSchema,
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
+  firmMeetingDtoSchema,
   instant,
+  meetingMatchedSchema,
+  unmatchedMeetingDtoSchema,
   uuid,
 } from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
@@ -1189,6 +1192,30 @@ export const OPERATIONS = {
     output: mailboxStateSchema,
     transform:
       'the same consent flow as connect, asking Google for the named account; the status is polled until that address is the connected one, this attempt is refused, or its grant expires',
+  },
+
+  // --- Meetings (slice M1) ------------------------------------------------
+  // Straight through the authenticated client, like Diagnostics: no state is kept.
+  'meetings.forFirm': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable() }),
+    transform: 'none: the firm’s meetings with their state and time, or null when the read did not answer',
+  },
+  'meetings.unmatched': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/meetings/unmatched' }],
+    input: nothing,
+    output: z.strictObject({ meetings: z.array(unmatchedMeetingDtoSchema).nullable() }),
+    transform: 'none: the bookings no firm is attached to, or null when the read did not answer',
+  },
+  'meetings.match': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/meetings/match' }],
+    input: z.strictObject({ meetingId: uuid, firmId: uuid }),
+    output: z.strictObject({ matched: meetingMatchedSchema.nullable(), reason: z.string().max(80).nullable() }),
+    transform: 'none: the match, or the refusal code the window turns into a sentence',
   },
 } as const satisfies Readonly<Record<string, Operation>>;
 

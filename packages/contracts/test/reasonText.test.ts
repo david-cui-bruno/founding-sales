@@ -146,3 +146,15 @@ describe('reasonSentence covers every list of codes', () => {
     expect(reasonSentence('constructor')).toContain('(constructor)');
   });
 });
+
+// Slice M1: the match command's refusals.
+describe('the meeting match refusals', () => {
+  it('has a sentence for every code, and no code in any of them', async () => {
+    const { MEETING_MATCH_REFUSAL_CODES, MEETING_MATCH_REFUSAL_SENTENCES } = await import('../src/index.ts');
+    expect(Object.keys(MEETING_MATCH_REFUSAL_SENTENCES).sort()).toEqual([...MEETING_MATCH_REFUSAL_CODES].sort());
+    for (const code of MEETING_MATCH_REFUSAL_CODES) {
+      expect(hasReasonSentence(code), code).toBe(true);
+      expect(reasonSentence(code), code).not.toContain('_');
+    }
+  });
+});

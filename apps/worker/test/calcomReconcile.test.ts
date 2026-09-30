@@ -112,7 +112,7 @@ describe('the calcom.reconcile job and its source', () => {
     expect(workerDueWorkSources().map(source => source.name)).toContain('calcom-reconcile');
     const without = registerHandlers(new HandlerRegistry(), {} as Parameters<typeof registerHandlers>[1]);
     expect(without.get('calcom.reconcile')).toBeUndefined();
-    const withKey = registerHandlers(new HandlerRegistry(), { calcom: { client: fake([]) } } as Parameters<typeof registerHandlers>[1]);
+    const withKey = registerHandlers(new HandlerRegistry(), { calcom: { client: fake([]) } } as unknown as Parameters<typeof registerHandlers>[1]);
     expect(withKey.get('calcom.reconcile')?.protection).toBe('business_uniqueness');
     expect(JOB_KIND_CLASS['calcom.reconcile']).toBe('bulk');
   });

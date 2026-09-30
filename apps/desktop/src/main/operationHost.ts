@@ -1,3 +1,4 @@
+import { firmMeetingsResponseSchema, meetingMatchedSchema, unmatchedMeetingsResponseSchema } from '@fss/contracts';
 import {
   DIAL_IPC_CHANNELS,
   OPERATIONS,
@@ -193,6 +194,22 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       const answer = await deps.api.read('/admin/jobs/requeue', value => value, input);
       if (!answer.ok) throw new Error(answer.reason);
       return answer.value;
+    },
+
+    // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
+    'meetings.forFirm': async (input: { readonly firmId: string }) => {
+      const answer = await deps.api.read(`/meetings/firm?firmId=${encodeURIComponent(input.firmId)}`, value =>
+        firmMeetingsResponseSchema.parse(value),
+      );
+      return { meetings: answer.ok ? answer.value.meetings : null };
+    },
+    'meetings.unmatched': async () => {
+      const answer = await deps.api.read('/meetings/unmatched', value => unmatchedMeetingsResponseSchema.parse(value));
+      return { meetings: answer.ok ? answer.value.meetings : null };
+    },
+    'meetings.match': async (input: { readonly meetingId: string; readonly firmId: string }) => {
+      const answer = await deps.api.command('/meetings/match', input, value => meetingMatchedSchema.parse(value));
+      return answer.ok ? { matched: answer.value, reason: null } : { matched: null, reason: answer.reason.slice(0, 80) };
     },
   } satisfies Readonly<Record<OperationName, (input: never) => Promise<unknown>>>;
   return handlers as Readonly<Record<OperationName, Handler>>;

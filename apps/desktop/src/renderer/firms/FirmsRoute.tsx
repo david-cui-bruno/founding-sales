@@ -7,9 +7,10 @@ import { Banners, Page, ViewHeader } from '../ui/layout.tsx';
 import { AddFirmForm } from './AddFirmForm.tsx';
 import { FirmMerge } from './FirmMerge.tsx';
 import { FirmPage } from './FirmPage.tsx';
-import { FirmsList } from './FirmsList.tsx';
+import { FirmsList, firmsOf } from './FirmsList.tsx';
 import { ImportScreen } from './ImportScreen.tsx';
 import { emptyBoardMemory, PipelineBoard, type BoardMemory } from './PipelineBoard.tsx';
+import { BookingsToMatch } from '../meetings/BookingsToMatch.tsx';
 import { FirmResearch } from '../research/FirmResearch.tsx';
 import { buildFirmWorkspaceView, FIRMS_HEADING, PIPELINE_HEADING } from '../firmWorkspaceView.ts';
 import { useCrm } from './useCrm.ts';
@@ -184,19 +185,29 @@ export function FirmsRoute({
           /* The board, and only the firms in a stage on it. Firms with no open
              opportunity have no column to be in and are under Firms instead, where
              a firm just added or imported is the first thing a person sees. */
-          <PipelineBoard
-            pipeline={state.pipeline}
-            actionsEnabled={view.actionsEnabled}
-            stageBusy={opportunityId => crm.busy(`stage:${opportunityId}`)}
-            valueBusy={opportunityId => crm.busy(`value:${opportunityId}`)}
-            search={boardSearch}
-            memory={boardMemory}
-            onSearch={setBoardSearch}
-            onShowLost={crm.actions.openPipeline}
-            onChangeStage={crm.actions.changeStage}
-            onSetValue={crm.actions.setValue}
-            onOpenFirm={crm.actions.openFirm}
-          />
+          <>
+            {/* Slice M1: Cal.com bookings Callie could not attach to a firm. Nothing while there are none. */}
+            <BookingsToMatch
+              firms={firmsOf(state.pipeline)}
+              actionsEnabled={view.actionsEnabled}
+              onMatched={() => {
+                crm.actions.openPipeline(state.pipeline?.includeLost === true);
+              }}
+            />
+            <PipelineBoard
+              pipeline={state.pipeline}
+              actionsEnabled={view.actionsEnabled}
+              stageBusy={opportunityId => crm.busy(`stage:${opportunityId}`)}
+              valueBusy={opportunityId => crm.busy(`value:${opportunityId}`)}
+              search={boardSearch}
+              memory={boardMemory}
+              onSearch={setBoardSearch}
+              onShowLost={crm.actions.openPipeline}
+              onChangeStage={crm.actions.changeStage}
+              onSetValue={crm.actions.setValue}
+              onOpenFirm={crm.actions.openFirm}
+            />
+          </>
         ) : (
           <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />
         )

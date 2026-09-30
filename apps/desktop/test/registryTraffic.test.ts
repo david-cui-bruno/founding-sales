@@ -8,6 +8,7 @@ import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
+import { operationHandlers, type OperationHostDeps } from '../src/main/operationHost.ts';
 import { OPERATIONS, OPERATION_NAMES, type OperationName } from '../src/shared/operations.ts';
 import { BRIDGE_ANSWERS, FIXTURE_IDS, STALE_CALL_LOG_ID } from './support/bridgeAnswers.ts';
 
@@ -162,6 +163,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'settings.retireCallingNumber': { identityId: UUID },
   'settings.allowStates': { states: ['RI'], confirmed: true, note: '' },
   'settings.revokePosture': { postureId: UUID },
+  'meetings.forFirm': { firmId: UUID },
+  'meetings.match': { meetingId: UUID, firmId: UUID },
   'diagnostics.requeueJob': { jobId: UUID, reason: 'the mailbox was reconnected' },
   'diagnostics.resolveSend': { outboundMessageId: UUID, resolution: 'delivered' },
 });
@@ -250,6 +253,16 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
+    // Slice M1: answered by `operationHost.ts` against the client directly, like
+    // Diagnostics — but walked here, so its declared paths are the ones it asks.
+    meetings: (() => {
+      const handlers = operationHandlers({ api } as unknown as OperationHostDeps);
+      return {
+        forFirm: async input => await handlers['meetings.forFirm'](input as never),
+        unmatched: async () => await handlers['meetings.unmatched'](undefined as never),
+        match: async input => await handlers['meetings.match'](input as never),
+      };
+    })(),
     mailbox: createMailboxBridge({
       api,
       session,

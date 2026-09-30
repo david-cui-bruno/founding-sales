@@ -50,14 +50,106 @@ the state it replaced so an unmark restores it.
 
 ## The secret
 
-Secrets Manager entry `<prefix>/calcom`, injected into the API task as the variable
-`calcom`: `{"webhook_secret": "..."}` (at least 16 characters). Missing or misshapen
-means 503 and `integration_unconfigured`. As with `twilio-voice`, put a value (`{}` is
-enough) in the entry **before** the apply that adds it to the API task, because ECS
-refuses to start a task whose secret has no value.
+Secrets Manager entry `<prefix>/calcom`, a JSON object:
+`{"webhook_secret": "...", "api_key": "cal_..."}`. The shape is read in one place,
+`packages/domain/meetings/calcomSecret.ts`, by both processes.
+
+* `webhook_secret` (required, at least 16 characters) is the API's: without it the
+  entry is not configured, and the webhook answers 503 and `integration_unconfigured`.
+* `api_key` (optional; a Cal.com key, `cal_` or `cal_live_`) is the worker's, for the
+  reconciliation below. Without it reconciliation is simply off, which is not an
+  error; a value that is not a Cal.com key is reported by name (`field:api_key`) on the
+  worker's startup line (`calcom_reconcile`) and reconciliation stays off.
+
+A problem is always reported as a field name, never a value. As with `twilio-voice`,
+put a value (`{}` is enough) in the entry **before** the apply that adds it to a task,
+because ECS refuses to start a task whose secret has no value.
+
+**The worker is not given the entry yet.** `infra/modules/cluster/main.tf` injects
+`calcom` into the API task only (`api_secret_names`); reconciliation runs once
+`worker_secret_names` names it too, which is an infrastructure change of its own (the
+same "value before apply" rule). Until then the worker's startup line says
+`calcom_reconcile: absent` and the webhook alone keeps meetings current.
 
 Cal.com console: a webhook to `<public origin>/integrations/calcom/webhook` with the
-five triggers above and the same secret.
+five triggers above and the same secret; and, for reconciliation, a Cal.com API key
+in `api_key`.
+
+## Reconciliation (slice M1)
+
+A webhook Cal.com gave up on would leave a demo booked in Callie that was cancelled or
+moved in Cal.com. So once an hour the worker's `calcom.reconcile` job reads Cal.com's
+bookings and repairs the difference.
+
+* **When.** Only in a worker with an `api_key`, and only for the one workspace with
+  `calendar_integration = calcom` (the webhook's rule; with two, neither). One job an
+  hour (`calcom-reconcile:{workspace}:{hour}`), in the bulk lane.
+* **What it reads.** Cal.com API v2 `GET https://api.cal.com/v2/bookings` with
+  `Authorization: Bearer <api_key>` and `cal-api-version: 2026-05-01`, for bookings with
+  `afterStart = now − 7 days` and `beforeEnd = now + 60 days`, every status, 100 a
+  page, following `pagination.nextCursor` while `pagination.hasMore`
+  ([get all bookings](https://cal.com/docs/api-reference/v2/bookings/get-all-bookings),
+  [introduction](https://cal.com/docs/api-reference/v2/introduction)). At most ten
+  pages and thirty seconds of fetching; a run that hit either says `truncated` and
+  applies what it read. A failed request fails the job, which the runner retries; nothing
+  is applied until the read is complete.
+* **What it does.** Each booking whose state or times differ from its meeting, or that
+  has no meeting, becomes a **synthesized event fed to the webhook's own path**
+  (`receiveSynthesizedCalcomEvent` → `applyEvent`): the same `calcom_events` dedupe, the
+  same ordering, the same matching, the same `applyBooked`. Its delivery id is the
+  sha256 of `reconcile:{uid}:{trigger}:{status}:{instant}`, so a replayed run is a
+  duplicate and applies nothing; its `createdAt` is the booking's own `updatedAt`, so a
+  webhook newer than the API's answer stays authoritative (the older event is recorded
+  `stale`). An end is dated at the booking's `end`, as Cal.com's own `MEETING_ENDED` is;
+  a no-show mark at the later of `updatedAt` and `end`.
+* **The mapping.** `accepted` → `BOOKING_CREATED`, or `BOOKING_RESCHEDULED` when it has
+  a `rescheduledFromUid`; `cancelled` → `BOOKING_CANCELLED`, except the old half of a
+  reschedule (it names `rescheduledToUid`; the new booking carries the move) and a
+  cancelled booking Callie never saw (nothing to undo); an attendee marked `absent` →
+  the no-show mark, and none marked on a `no_show` meeting → its reversal; an accepted
+  booking whose end has passed on a meeting still booked or rescheduled →
+  `MEETING_ENDED`. `pending`, `rejected` and `awaiting_host` are skipped, as the webhook
+  ignores `BOOKING_REQUESTED` and `BOOKING_REJECTED`. A cancelled meeting is terminal and
+  never compared.
+* **What it never does.** It never deletes a meeting, and a booking the API no longer
+  lists leaves its meeting alone. It sends nothing to anybody.
+* **What it leaves behind.** A log line `calcom_reconcile` with the counts (bookings,
+  unchanged, skipped, synthesized, applied, stale, duplicate, unmatched, pages,
+  truncated) and, when anything was synthesized, one audit event `meeting.reconciled`
+  with the same counts. Never a booking's details.
+
+## Matching a booking by hand (slice M1)
+
+A booking Callie could not attach to a firm (`firm_unmatched`, `firm_ambiguous`) is
+listed on the Pipeline screen under **Bookings to match**, with the attendee's address,
+the time and a firm picker (the board's own firm search). Picking the firm and pressing
+Match sends `POST /meetings/match { meetingId, firmId }`:
+
+* the assignee of the firm or an administrator (`not_assigned` otherwise; a merged firm
+  is `firm_merged`); a meeting already attached to a firm is `meeting_already_matched`;
+* the meeting names the firm and the contact whose address the attendee booked with,
+  or a new contact at the firm with that address (named by the address until somebody
+  types a name) when nobody there has it;
+* the meeting's review item is resolved by that person;
+* unless the meeting is cancelled, the booking is then applied **exactly as a matched
+  webhook applies it** (`applyBooked`): the move to Demo booked, manual control, the
+  stop owed to prospecting and cold_legacy enrollments (an agreed follow-up keeps
+  running), the funnel fact. If it still cannot apply — the firm's opportunity is
+  closed, say — the review item is reopened with that reason.
+
+Lock order, as every stop-fact writer: the send gate, then the firm, then the meeting,
+then what `applyStageEvidence` locks. Every refusal reaches the window as its sentence
+(`reasonText.ts`, `MEETING_MATCH_REFUSAL_SENTENCES`).
+
+`GET /meetings/unmatched` (any active member) is the list; `GET /meetings/firm?firmId=`
+(any active member: state and time are Appendix F's first row) is the firm page's
+**Meetings** rows. None of the three reaches Cal.com or depends on the switch.
+
+## Reminders
+
+Callie sends no reminder of its own. Cal.com already sends the attendee the 24-hour
+reminder and the calendar invitation, and a booking or a reschedule enqueues no e-mail,
+no step and no job to the attendee (`apps/api/test/calcomDepth.test.ts`).
 
 ## The pipeline these moves land in
 

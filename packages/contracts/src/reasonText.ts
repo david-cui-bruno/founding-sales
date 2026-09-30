@@ -3,6 +3,7 @@ import type { CrmRefusalCode } from './crm.ts';
 import type { DialRefusalCode } from './dial.ts';
 import type { GrantRefusalCode } from './mail.ts';
 import type { HoldReasonCode } from './reasonCodes.ts';
+import type { MeetingMatchRefusalCode } from './meetings.ts';
 import type { RESEARCH_REFUSAL_CODES } from './research.ts';
 
 /**
@@ -358,6 +359,19 @@ const INTEGRATION_SETTINGS_SENTENCES: Readonly<Record<string, string>> = Object.
   unreadable_answer: 'Callie could not read the answer. Refresh and try again.',
 });
 
+// ---------------------------------------------------------------------------
+// Slice M1: matching a Cal.com booking to a firm (`POST /meetings/match`)
+// ---------------------------------------------------------------------------
+
+export const MEETING_MATCH_REFUSAL_SENTENCES: Readonly<Record<MeetingMatchRefusalCode, string>> = Object.freeze({
+  meeting_unknown: 'Callie cannot find that booking any more. Refresh the list.',
+  meeting_already_matched: 'That booking is already attached to a firm. Refresh the list to see where.',
+  firm_unknown: FIRM_UNKNOWN,
+  firm_merged: FIRM_MERGED,
+  not_assigned: NOT_ASSIGNED,
+  invalid_input: INVALID_INPUT,
+});
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...INTEGRATION_SETTINGS_SENTENCES,
@@ -374,6 +388,7 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...CALL_START_REFUSAL_SENTENCES,
   ...STAGE_REVIEW_SENTENCES,
   ...MAILBOX_DETAIL_SENTENCES,
+  ...MEETING_MATCH_REFUSAL_SENTENCES,
 });
 
 /** Whether `code` has a sentence of its own (not the generic one). */

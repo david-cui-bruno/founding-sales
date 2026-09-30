@@ -308,7 +308,7 @@ describe('Cal.com depth, over HTTP', () => {
   // ---- no reminder of Callie's own ------------------------------------------------------
   it('enqueues no e-mail and no step to the attendee on a booking or a reschedule', async () => {
     const world = await firmWithWork();
-    const counts = async (): Promise<Record<string, number>> => {
+    const counts = async (): Promise<{ outbound: number; steps: number; jobs: number }> => {
       const { rows } = await fixture.db.query<{ outbound: string; steps: string; jobs: string }>(
         `SELECT (SELECT count(*) FROM outbound_messages WHERE firm_id = $1) AS outbound,
                 (SELECT count(*) FROM step_executions WHERE firm_id = $1 AND state IN ('pending', 'held', 'dispatched')) AS steps,
