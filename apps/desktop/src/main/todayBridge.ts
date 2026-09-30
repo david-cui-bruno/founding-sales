@@ -138,6 +138,10 @@ export function outcomeNotice(result: LoggedCallResult | null): string {
   const kinds = new Set((result?.followUps ?? []).map(entry => entry.kind));
   if (kinds.has('effects_not_applied')) return 'outcome_recorded_effects_not_applied';
   if (kinds.has('callback_time_needed')) return 'outcome_recorded_callback_time_needed';
+  // Above `route_not_named`, because it is the more surprising of the two: the person
+  // chose an e-mail to promise and Callie did not get permission to send it, which is a
+  // thing they said out loud on the call (migration 0025).
+  if (kinds.has('follow_up_not_granted')) return 'outcome_recorded_follow_up_not_granted';
   if (kinds.has('route_not_named')) return 'outcome_recorded_route_not_named';
   return 'outcome_recorded';
 }

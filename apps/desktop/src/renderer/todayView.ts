@@ -126,6 +126,11 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
     'Call recorded. No number was chosen, so Callie did not retire or suppress one. Do that from the firm’s page.',
   outcome_recorded_effects_not_applied:
     'Call recorded, but Callie could not apply what it means. Nothing else changed; check the firm’s page.',
+  // The call and everything it means landed; only the permission did not. Said in full,
+  // because "recorded" alone would leave a person believing the e-mail they promised is
+  // on its way (migration 0025).
+  outcome_recorded_follow_up_not_granted:
+    'Call recorded and its sequences stopped, but Callie was not given permission to send the follow-up e-mail you chose. Grant it from the firm’s page, or promise it again on your next call.',
   callback_scheduled: 'Callback scheduled.',
   callback_time_invalid: 'That is not a day and time Callie can place a callback at.',
   callback_already_scheduled: 'That call already has its callback.',

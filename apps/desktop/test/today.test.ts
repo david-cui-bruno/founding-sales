@@ -770,6 +770,56 @@ describe('the Today bridge', () => {
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('callback');
   });
 
+  it('says so when the follow-up the call promised was not permitted', async () => {
+    // Migration 0025, and the fourth review of PR 332. The grant has a savepoint of its
+    // own, so an interested call keeps its stop even when the permission fails — and the
+    // person has to be told, because "Call recorded" alone leaves them believing the
+    // e-mail they promised is on its way.
+    const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const TEMPLATE_ID = '66666666-6666-4666-8666-666666666666';
+    const { api } = scriptedApi({
+      '/calls/log': accepted({
+        callLogId: 'abababab-abab-4bab-8bab-abababababab',
+        outcome: 'interested',
+        stepEffect: 'complete_and_advance',
+        occurredAt: '2026-09-21T13:05:00.000Z',
+        setManual: true,
+        suggestedStageKey: null,
+        suppressionEventIds: [],
+        retiredRouteId: null,
+        successorExecutionId: null,
+        stepExecutionId: null,
+        stepApplication: 'completed_and_stopped',
+        callbackId: null,
+        completedCallbackId: null,
+        followUpPermissionId: null,
+        followUps: [{ kind: 'follow_up_not_granted', reason: 'invalid_input' }],
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const answer = await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: CONTACT_ID,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(answer.notice).toBe('outcome_recorded_follow_up_not_granted');
+    const sentence = noticeSentence('outcome_recorded_follow_up_not_granted');
+    // The two facts a person needs: the call landed, and the e-mail is not permitted.
+    expect(sentence).toContain('Call recorded');
+    expect(sentence).toContain('not given permission');
+    expect(sentence).toContain('firm');
+  });
+
   it('sends a callback’s local fields with the instant the domain clock gives them (C18)', async () => {
     const { api, calls } = scriptedApi({ '/calls/log': accepted(null) });
     const bridge = createTodayBridge({
