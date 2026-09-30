@@ -206,7 +206,7 @@ jobs:
           done
           : > "$work/paths"
           for built in $(sort -u "$work/production-commits"); do
-            git -c core.quotePath=false log --no-renames --no-ext-diff --no-textconv --format= --name-only \
+            git -c core.quotePath=false log --first-parent --no-renames --no-ext-diff --no-textconv --format= --name-only \
               --diff-merges=first-parent "$built..$COMMIT" >> "$work/paths"
           done
           sort -u "$work/paths" | sed '/^$/d' > "$work/touched"
