@@ -60,6 +60,10 @@ export const CRM_REFUSAL_CODES = [
   'merge_cross_firm',
   'merge_conflicts',
   'merge_already_performed',
+  // Send-path v2 (S1 review P1-3): releasing an old manual mode to automated is refused
+  // while the opportunity still has a live enrollment or a pending step; an administrator
+  // decides those first.
+  'live_work_present',
   'invalid_input',
 ] as const;
 export type CrmRefusalCode = (typeof CRM_REFUSAL_CODES)[number];

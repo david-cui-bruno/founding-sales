@@ -4,6 +4,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import type { MatchCandidate } from '../../mail/matching.ts';
+import { recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { readMessage } from '../../mail/messages.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
@@ -74,13 +75,15 @@ let messages = 0;
 async function storeDirectSend(input: {
   readonly to: readonly string[];
   readonly cc?: readonly string[];
+  /** The unbracketed RFC Message-ID; a fence's header makes the message FSS's own send. */
+  readonly rfcMessageId?: string;
 }): Promise<MailMessageRow> {
   messages += 1;
   const { rows } = await world.database.session.query<{ id: string }>(
     `INSERT INTO mail_messages
        (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
-        internal_date, header_from, header_to, header_cc, matched)
-     VALUES ($1, $2, $3, $3, 'outgoing', now(), $4, $5::text[], $6::text[], true)
+        internal_date, header_from, header_to, header_cc, rfc_message_id, matched)
+     VALUES ($1, $2, $3, $3, 'outgoing', now(), $4, $5::text[], $6::text[], $7, true)
      RETURNING id`,
     [
       workspaceId(),
@@ -89,6 +92,7 @@ async function storeDirectSend(input: {
       world.alpha.address,
       [...input.to],
       [...(input.cc ?? [])],
+      input.rfcMessageId ?? null,
     ],
   );
   const message = await readMessage(worker(), rows[0]?.id ?? '');
@@ -440,6 +444,8 @@ describe('(e) once per message, and an audit row of ids', () => {
       recipientContactIds: [],
       consumedPermissionIds: [],
       endedEnrollmentIds: [],
+      deferredExecutionIds: [],
+      deferredUntil: null,
     });
 
     const { rows: markers } = await world.database.session.query<{ effect_kind: string; target_key: string }>(
@@ -465,6 +471,8 @@ describe('(e) once per message, and an audit row of ids', () => {
       recipientContactIds: [firm.contactId],
       consumedPermissionIds: [],
       endedEnrollmentIds: [prospecting.enrollmentId],
+      deferredExecutionIds: [],
+      deferredUntil: first.deferredUntil,
     });
     // Ids only: no address, no Gmail id, no subject.
     const text = JSON.stringify(audits[0]?.detail);
@@ -560,5 +568,178 @@ describe('(g) a claim racing the effect is serialized by the send gate', () => {
     expect(outcome.recorded).toBe(true);
     expect(outcome.consumedPermissionIds).toEqual([]);
     expect(await permissionState(followUp.permissionId ?? '')).toEqual({ consumed: true, consumed_reason: 'sent' });
+  });
+});
+
+describe('S1 review P1-4: an agreed sequence waits a day after the salesperson’s own e-mail', () => {
+  it('reschedules the due agreed e-mail, refuses its prepared fence at the claim, and sends it once the day has passed', async () => {
+    const firm = await seedFirm(world, world.alpha, 'agreed-waits');
+    const agreed = await fenceOfEnrollment(firm);
+    const { rows: scope } = await world.database.session.query<{ scope: string }>(
+      'SELECT scope FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), agreed.permissionId],
+    );
+    expect(scope[0]?.scope).toBe('agreed_sequence');
+    const { rows: before } = await world.database.session.query<{ id: string; not_before: Date }>(
+      `SELECT e.id, e.not_before FROM outbound_messages f
+         JOIN step_executions e ON e.workspace_id = f.workspace_id AND e.id = f.step_execution_id
+        WHERE f.workspace_id = $1 AND f.id = $2`,
+      [workspaceId(), agreed.fenceId],
+    );
+    const executionId = before[0]?.id ?? '';
+
+    const message = await storeDirectSend({ to: [agreed.address] });
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+
+    // Rescheduled, not ended: the permission and the run stand.
+    expect(outcome.deferredExecutionIds).toEqual([executionId]);
+    expect(outcome.deferredUntil).toBe(new Date(Date.parse(message.internalDate) + 24 * 3_600_000).toISOString());
+    const { rows: after } = await world.database.session.query<{ not_before: Date }>(
+      'SELECT not_before FROM step_executions WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), executionId],
+    );
+    expect(after[0]?.not_before.toISOString()).toBe(outcome.deferredUntil);
+    expect((await enrollmentState(agreed.enrollmentId)).end_reason).toBeNull();
+    expect(await permissionState(agreed.permissionId ?? '')).toEqual({ consumed: false, consumed_reason: null });
+    const { rows: audit } = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events
+        WHERE workspace_id = $1 AND action = 'mail.direct_send_conversation' AND subject_id = $2`,
+      [workspaceId(), message.id],
+    );
+    expect(audit[0]?.detail).toMatchObject({ deferredExecutionIds: [executionId], deferredUntil: outcome.deferredUntil });
+
+    // The fence was prepared before the direct send; the claim re-asks under the gate.
+    const first = await dispatch(agreed.fenceId);
+    expect(first.sends).toBe(0);
+    expect(first.report.outcome, JSON.stringify(first.report)).toBe('not_ready');
+    expect(first.report.detail).toBe('direct_send_quiet_window');
+
+    // A day later — the direct send's own instant moved back 25 hours — the same fence sends.
+    await world.database.session.query(
+      "UPDATE mail_messages SET internal_date = internal_date - interval '25 hours' WHERE workspace_id = $1 AND id = $2",
+      [workspaceId(), message.id],
+    );
+    const later = await dispatch(agreed.fenceId);
+    expect(later.report.outcome, JSON.stringify(later.report)).toBe('sent');
+    expect(later.sends).toBe(1);
+  });
+
+  it('does not delay an agreed e-mail to somebody the direct send did not address', async () => {
+    const firm = await seedFirm(world, world.alpha, 'agreed-elsewhere');
+    const agreed = await fenceOfEnrollment(firm);
+    const message = await storeDirectSend({ to: [firm.address] });
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    expect(outcome.deferredExecutionIds).toEqual([]);
+    const { report, sends } = await dispatch(agreed.fenceId);
+    expect(report.outcome, JSON.stringify(report)).toBe('sent');
+    expect(sends).toBe(1);
+  });
+});
+
+describe('resolving an ambiguous outgoing message', () => {
+  /** An outgoing message matched to two firms, held by `recordMatches` as the import would. */
+  async function ambiguousOutgoing(
+    left: SeededFirm,
+    right: SeededFirm,
+    rfcMessageId?: string,
+  ): Promise<MailMessageRow> {
+    const message = await storeDirectSend({
+      to: [left.address, right.address],
+      ...(rfcMessageId === undefined ? {} : { rfcMessageId }),
+    });
+    const matches = await recordMatches(worker(), {
+      messageId: message.id,
+      candidates: [candidateOf(left), candidateOf(right)],
+    });
+    expect(matches.ambiguous).toBe(true);
+    return message;
+  }
+
+  async function activeHoldReasons(opportunityId: string): Promise<readonly string[]> {
+    const { rows } = await world.database.session.query<{ reason_code: string }>(
+      `SELECT reason_code FROM active_holds
+        WHERE workspace_id = $1 AND scope_kind = 'opportunity' AND scope_key = $2 AND released_at IS NULL`,
+      [workspaceId(), opportunityId],
+    );
+    return rows.map(row => row.reason_code);
+  }
+
+  it('S1 review P2: an FSS-fenced one releases its holds and does nothing else, even when called human', async () => {
+    const left = await seedFirm(world, world.alpha, 'fenced-left');
+    const right = await seedFirm(world, world.alpha, 'fenced-right');
+    const own = await fenceOfEnrollment(left);
+    const { rows: header } = await world.database.session.query<{ header: string }>(
+      'SELECT provider_message_id_header AS header FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), own.fenceId],
+    );
+    const rfc = (header[0]?.header ?? '').replace(/^</, '').replace(/>$/, '');
+    const message = await ambiguousOutgoing(left, right, rfc);
+    const prospecting = await enrollmentAt(right, 'prospecting');
+
+    const resolved = await resolveAmbiguity(salesperson(), {
+      messageId: message.id,
+      selectedOpportunityId: right.opportunityId,
+      human: true,
+    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.manualOpportunityId).toBeNull();
+    for (const firm of [left, right]) {
+      expect(await activeHoldReasons(firm.opportunityId)).toEqual([]);
+      expect(await opportunityControl(firm.opportunityId)).toEqual({ control_mode: 'automated', control_mode_origin: null });
+    }
+    const { rows } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects WHERE workspace_id = $1 AND mail_message_id = $2`,
+      [workspaceId(), message.id],
+    );
+    expect(rows[0]?.count).toBe('0');
+    expect((await enrollmentState(prospecting.enrollmentId)).end_reason).toBeNull();
+  });
+
+  it('S1 review P1-2: two concurrent resolutions serialize on the gate, and the second is refused', async () => {
+    const left = await seedFirm(world, world.alpha, 'race-left');
+    const right = await seedFirm(world, world.alpha, 'race-right');
+    const message = await ambiguousOutgoing(left, right);
+    const asUser = (session: ExtraSession): RepositoryContext =>
+      repositoryContext(
+        workspaceScope(workspaceId(), {
+          kind: 'user',
+          userId: world.alpha.workspace.salesperson.userId,
+          role: 'salesperson',
+        }),
+        session.session,
+      );
+
+    await barrier.session.query('BEGIN');
+    const first = await resolveAmbiguity(asUser(barrier), {
+      messageId: message.id,
+      selectedOpportunityId: left.opportunityId,
+      human: false,
+    });
+    expect(first.ok).toBe(true);
+
+    await second.session.query('BEGIN');
+    const racing = resolveAmbiguity(asUser(second), {
+      messageId: message.id,
+      selectedOpportunityId: right.opportunityId,
+      human: false,
+    });
+    await waitUntilBlocked(barrier.session, second.pid, 'advisory');
+    await barrier.session.query('COMMIT');
+    const refused = await racing;
+    await second.session.query('COMMIT');
+    expect(refused).toEqual({ ok: false, reason: 'already_resolved' });
+
+    const { rows: selection } = await world.database.session.query<{ opportunity_id: string; selected: boolean }>(
+      `SELECT opportunity_id, selected FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND selected`,
+      [workspaceId(), message.id],
+    );
+    expect(selection).toEqual([{ opportunity_id: left.opportunityId, selected: true }]);
+    const { rows: markers } = await world.database.session.query<{ firm_id: string }>(
+      `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId(), message.id],
+    );
+    expect(markers).toEqual([{ firm_id: left.firmId }]);
   });
 });

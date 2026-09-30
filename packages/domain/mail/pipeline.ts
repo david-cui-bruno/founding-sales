@@ -9,7 +9,7 @@ import {
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
-import { findMatchCandidates, recordMatches } from './matching.ts';
+import { findMatchCandidates, recordMatches, withOutgoingRecipientConflicts } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
 import { METADATA_HEADERS, type MailboxRow } from './types.ts';
@@ -102,12 +102,28 @@ export async function processMessageIds(
     }
 
     // Step 2: match, in 12.3's order, first rule that finds anything winning.
-    const candidates = await findMatchCandidates(context, {
+    let candidates = await findMatchCandidates(context, {
       mailboxId: input.mailbox.id,
       messageId: stored.message.id,
       metadata: normalized,
     });
     if (candidates.length === 0) continue;
+
+    // An outgoing message is FSS's own send when a fence names it. One that is not — the
+    // salesperson's direct send — has its To/Cc checked against the rule that matched it
+    // before the match is recorded, so a recipient at another firm makes the match
+    // ambiguous rather than updating the wrong conversation (S1 review, P1-1).
+    let fenceId: string | null = null;
+    if (stored.message.direction === 'outgoing') {
+      fenceId = await fenceForOutgoingMessage(context, {
+        mailboxId: input.mailbox.id,
+        rfcMessageId: stored.message.rfcMessageId,
+        providerMessageId: stored.message.providerMessageId,
+      });
+      if (fenceId === null) {
+        candidates = await withOutgoingRecipientConflicts(context, { candidates, metadata: normalized });
+      }
+    }
 
     const matches = await recordMatches(context, { messageId: stored.message.id, candidates });
     matched += 1;
@@ -117,11 +133,6 @@ export async function processMessageIds(
     if (stored.message.direction === 'outgoing') {
       // A *direct* Gmail send is an update to the conversation (send-path v2); a
       // sequence step FSS sent itself is not one, and is recognised by its fence.
-      const fenceId = await fenceForOutgoingMessage(context, {
-        mailboxId: input.mailbox.id,
-        rfcMessageId: stored.message.rfcMessageId,
-        providerMessageId: stored.message.providerMessageId,
-      });
       if (fenceId === null) {
         // Only a match resolved to one opportunity. Several candidates are held by
         // `recordMatches` for the person's resolution, and `resolveAmbiguity` applies

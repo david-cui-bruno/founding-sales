@@ -4,6 +4,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   classifyControlModeOrigin,
+  reopenOpportunity,
   setManualControlMode,
   takeOverOpportunity,
 } from '../../crm/pipeline.ts';
@@ -1130,9 +1131,7 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
   });
 
   it('an administrator classifying a NULL origin as a direct send returns it to automated, audited (send-path v2)', async () => {
-    const contactId = await addContact('Classified As A Direct Send');
-    const granted = await grantAgreedSequence(contactId);
-    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    // Nothing is live at the opportunity: the release is refused otherwise (the next case).
     await database.session.query(
       `UPDATE opportunities
           SET control_mode = 'manual', control_mode_reason = 'set before 0025',
@@ -1168,7 +1167,6 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
     expect(rows[0]?.control_mode_origin).toBeNull();
     expect(rows[0]?.control_mode_reason).toContain('direct Gmail send');
     expect(rows[0]?.control_mode_reason).toContain('30 September 2026');
-    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
 
     const { rows: audited } = await database.session.query<{ action: string; detail: Record<string, unknown> }>(
       `SELECT action, detail FROM audit_events
@@ -1191,6 +1189,90 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
       reason: 'again',
     });
     expect(again).toEqual({ ok: false, reason: 'invalid_input' });
+  });
+
+  it('S1 review P1-3: the release waits while anything is live at the opportunity, and names it', async () => {
+    const contactId = await addContact('Live At Release');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await database.session.query(
+      `UPDATE opportunities
+          SET control_mode = 'manual', control_mode_reason = 'set before 0025',
+              control_mode_changed_at = now(), control_mode_origin = NULL
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    const refused = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'direct_send',
+      reason: 'it was a hand-written e-mail',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'live_work_present', liveEnrollmentIds: [enrollmentId] });
+    // Still manual, and the live step is still refused.
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:unrecorded',
+    });
+  });
+
+  it('S1 review P1-3: a reopen after 0025 with a pending step is never released as a direct send', async () => {
+    const second = await secondFirmWithOpportunity();
+    await database.session.query(
+      `UPDATE opportunities SET status = 'lost', closed_at = now(), close_reason = 'went quiet'
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, second.opportunityId],
+    );
+    const reopened = await reopenOpportunity(salesperson(), { firmId: second.firmId, reason: 'they wrote again' });
+    if (!reopened.ok) throw new Error(`the reopen was refused: ${reopened.reason}`);
+    const opportunityId = reopened.value.opportunityId;
+    const { rows: contact } = await database.session.query<{ id: string }>(
+      "INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, 'Reopened Contact') RETURNING id",
+      [seeded.alpha.workspaceId, second.firmId],
+    );
+    const { rows: enrollment } = await database.session.query<{ id: string }>(
+      `INSERT INTO sequence_enrollments
+         (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+          firm_time_zone, holiday_calendar_version, origin_kind)
+       VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1', 'prospecting')
+       RETURNING id`,
+      [
+        seeded.alpha.workspaceId,
+        sequences.alpha.publishedVersionId,
+        opportunityId,
+        second.firmId,
+        contact[0]?.id ?? '',
+        seeded.alpha.salesperson.userId,
+      ],
+    );
+    await database.session.query(
+      `INSERT INTO step_executions
+         (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
+          due_at, not_before, original_due_at, source_zone, rule_version)
+       SELECT $1, $2, s.id, $3, $4, s.channel, s.ordinal, now(), now(), now(), 'America/New_York', 'elapsed.1'
+         FROM sequence_steps s
+        WHERE s.workspace_id = $1 AND s.sequence_version_id = $5
+        ORDER BY s.ordinal LIMIT 1`,
+      [seeded.alpha.workspaceId, enrollment[0]?.id ?? '', second.firmId, contact[0]?.id ?? '', sequences.alpha.publishedVersionId],
+    );
+    const { rows: shape } = await database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, opportunityId],
+    );
+    // Exactly the state the release reads: manual, with no origin.
+    expect(shape[0]).toEqual({ control_mode: 'manual', control_mode_origin: null });
+
+    const refused = await classifyControlModeOrigin(admin(), {
+      opportunityId,
+      origin: 'direct_send',
+      reason: 'it was a hand-written e-mail',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'invalid_input' });
+    const { rows: after } = await database.session.query<{ control_mode: string }>(
+      'SELECT control_mode FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, opportunityId],
+    );
+    expect(after[0]?.control_mode).toBe('manual');
   });
 
   it('a salesperson cannot release one: the direct-send classification is administrator-only', async () => {

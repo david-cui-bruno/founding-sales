@@ -385,7 +385,10 @@ const DIRECT_SEND_RELEASE_REASON =
  * automated**, with `control_mode_origin` NULL, and says so in `control_mode_reason` and
  * in the audit row (the label, the rule, the administrator's reason and the evidence
  * facts). It is a person's explicit, audited decision, not automation reversing manual
- * mode; it starts nothing — every enrollment the old stop ended stays ended.
+ * mode; it starts nothing — every enrollment the old stop ended stays ended. It is
+ * refused for a reopened opportunity (a reopen is not a direct send) and, with
+ * `live_work_present` naming the enrollments, while any enrollment or pending step is
+ * still live at the opportunity.
  */
 export async function classifyControlModeOrigin(
   context: RepositoryContext,
@@ -417,6 +420,25 @@ export async function classifyControlModeOrigin(
   };
 
   if (releasesToAutomated) {
+    // A reopen is manual with a NULL origin by construction (8.1: it "never silently
+    // restarts old automation"), not a direct send, so it is never released this way.
+    if (opportunity['reopened_from_opportunity_id'] != null) return refuse('invalid_input');
+    // Releasing makes the opportunity's steps eligible again, so it waits until nothing
+    // is live there: an administrator stops or completes those enrollments first, and
+    // the refusal names them (S1 review P1-3).
+    const { rows: live } = await context.db.query<{ id: string }>(
+      `SELECT n.id FROM sequence_enrollments AS n
+        WHERE n.workspace_id = $1 AND n.opportunity_id = $2
+          AND (n.ended_at IS NULL
+               OR EXISTS (SELECT 1 FROM step_executions AS e
+                           WHERE e.workspace_id = n.workspace_id AND e.enrollment_id = n.id
+                             AND e.state IN ('pending', 'held')))
+        ORDER BY n.id`,
+      [context.scope.workspaceId, input.opportunityId],
+    );
+    if (live.length > 0) {
+      return { ok: false, reason: 'live_work_present', liveEnrollmentIds: live.map(row => row.id) };
+    }
     const { rows: releasedRows } = await context.db.query<OpportunityRow>(
       `UPDATE opportunities
           SET control_mode = 'automated', control_mode_origin = NULL, control_mode_reason = $3,

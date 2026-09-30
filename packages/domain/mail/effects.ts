@@ -11,6 +11,7 @@ import { stopEnrollments } from '../sequences/enrollments.ts';
 import { consumeFulfilledByDirectSend } from '../sequences/followUpPermissions.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply, type ReplyClassification } from '../src/rules/replyClassification.ts';
+import { DIRECT_SEND_QUIET_HOURS } from './directSendRecency.ts';
 import { discardMessageBody } from './messages.ts';
 import type { MatchCandidate } from './matching.ts';
 import { replyItemKey, type ReplyPromoter } from './replyLane.ts';
@@ -442,6 +443,13 @@ export interface DirectSendOutcome {
   readonly consumedPermissionIds: readonly string[];
   /** The enrollments this send ended `direct_send`: live prospecting, and the fulfilled ones. */
   readonly endedEnrollmentIds: readonly string[];
+  /**
+   * The next pending e-mail of each live agreed-sequence enrollment to a recipient,
+   * pushed to at least `deferredUntil` (S1 review P1-4). The enrollments keep running.
+   */
+  readonly deferredExecutionIds: readonly string[];
+  /** The message's send instant plus `DIRECT_SEND_QUIET_HOURS`; null when nothing was recorded. */
+  readonly deferredUntil: string | null;
 }
 
 const NOT_RECORDED: DirectSendOutcome = Object.freeze({
@@ -449,6 +457,8 @@ const NOT_RECORDED: DirectSendOutcome = Object.freeze({
   recipientContactIds: [],
   consumedPermissionIds: [],
   endedEnrollmentIds: [],
+  deferredExecutionIds: [],
+  deferredUntil: null,
 });
 
 /**
@@ -474,9 +484,12 @@ const NOT_RECORDED: DirectSendOutcome = Object.freeze({
  *     `email_addresses` at the matched firm — a match candidate's `contact_id` is not a
  *     recipient: a thread match carries whoever the thread first matched, and matching
  *     keeps one contact per opportunity.
- *   * **An agreed sequence keeps running.** `agreed_sequence` permissions and their
- *     enrollments are not touched: one hand-written e-mail does not end a programme the
- *     prospect agreed to.
+ *   * **An agreed sequence keeps running, a day later.** `agreed_sequence` permissions
+ *     and their enrollments are not ended: one hand-written e-mail does not end a
+ *     programme the prospect agreed to. But the next pending e-mail of each such
+ *     enrollment to a recipient waits `DIRECT_SEND_QUIET_HOURS` after this send, and the
+ *     claim re-asks (S1 review P1-4), so the agreed e-mail is not a duplicate minutes
+ *     after the salesperson's own.
  *
  * Everything happens under the exclusive send gate, taken first (as `logCallOutcome`
  * does), so a dispatch claim racing this effect is serialized with it: whichever holds the
@@ -559,6 +572,38 @@ export async function applyDirectSendEffects(
   }
 
   const endedEnrollmentIds = [...new Set(ended)].sort();
+
+  // An agreed sequence keeps running, but not straight after the salesperson's own
+  // e-mail to the same person (S1 review P1-4): the next pending e-mail of each live
+  // agreed-sequence enrollment to a recipient waits until a day after this send. Never
+  // earlier than it already was (`greatest`), and no hold: the step simply is not due
+  // yet. The dispatch claim asks the same question for a fence already prepared.
+  const { rows: deferred } = await context.db.query<{ id: string }>(
+    `WITH agreed AS (
+       SELECT n.id
+         FROM sequence_enrollments AS n
+         JOIN follow_up_permissions AS p ON p.workspace_id = n.workspace_id AND p.id = n.permission_id
+        WHERE n.workspace_id = $1 AND n.firm_id = $2 AND n.ended_at IS NULL
+          AND n.origin_kind = 'follow_up' AND p.scope = 'agreed_sequence'
+          AND n.contact_id = ANY ($3::uuid[])
+     ),
+     next_email AS (
+       SELECT DISTINCT ON (e.enrollment_id) e.id
+         FROM step_executions AS e
+         JOIN agreed AS a ON a.id = e.enrollment_id
+        WHERE e.workspace_id = $1 AND e.channel = 'email' AND e.state IN ('pending', 'held')
+        ORDER BY e.enrollment_id, e.ordinal
+     )
+     UPDATE step_executions AS s
+        SET not_before = greatest(s.not_before, $4::timestamptz + make_interval(hours => $5)),
+            updated_at = now()
+       FROM next_email
+      WHERE s.workspace_id = $1 AND s.id = next_email.id
+      RETURNING s.id`,
+    [context.scope.workspaceId, candidate.firmId, [...recipientContactIds], message.internalDate, DIRECT_SEND_QUIET_HOURS],
+  );
+  const deferredExecutionIds = deferred.map(row => row.id).sort();
+  const deferredUntil = new Date(Date.parse(message.internalDate) + DIRECT_SEND_QUIET_HOURS * 3_600_000).toISOString();
   await recordEffect(context, {
     messageId: message.id,
     kind: 'direct_send_conversation',
@@ -569,6 +614,8 @@ export async function applyDirectSendEffects(
       recipientContactIds,
       consumedPermissionIds,
       endedEnrollmentIds,
+      deferredExecutionIds,
+      deferredUntil,
     },
   });
   // Ids only (5.2): the subject is the stored message row, never Gmail's id or the
@@ -583,9 +630,18 @@ export async function applyDirectSendEffects(
       recipientContactIds,
       consumedPermissionIds,
       endedEnrollmentIds,
+      deferredExecutionIds,
+      deferredUntil,
     },
   });
-  return { recorded: true, recipientContactIds, consumedPermissionIds, endedEnrollmentIds };
+  return {
+    recorded: true,
+    recipientContactIds,
+    consumedPermissionIds,
+    endedEnrollmentIds,
+    deferredExecutionIds,
+    deferredUntil,
+  };
 }
 
 /**

@@ -183,13 +183,24 @@ control still pauses automation."* This supersedes the first bullet above.
   never a match candidate's `contact_id` — is consumed with
   `consumed_reason = 'fulfilled_by_direct_send'` (`consumeFulfilledByDirectSend`), and the
   enrollment bound to it ends `direct_send`. `agreed_sequence` permissions and their
-  enrollments keep running.
-* **Ambiguous matches wait.** The import applies the effect only to a match with one
-  candidate; several candidates stay held by their `ambiguous_match` holds, and
+  enrollments keep running — a day later: the next pending e-mail of each live
+  agreed-sequence enrollment to a recipient gets `not_before = max(not_before, send +
+  24 h)`, recorded in the marker and the audit row (no note field exists on
+  `step_executions` and no hold code is added), and the dispatch claim refuses
+  `not_ready` (`step_ineligible:direct_send_quiet_window`), under the gate, for an
+  agreed-sequence e-mail whose recipient has a `direct_send_conversation` marker younger
+  than 24 h, which also stops a fence prepared before the send.
+* **Ambiguous matches wait.** For an unfenced outgoing message the To/Cc recipients are
+  checked against the rule that matched it: a recipient at a firm the thread or reference
+  rule did not name (including an address associated with two firms) adds that firm as a
+  candidate, so the match is ambiguous and held. The import applies the effect only to a
+  match with one candidate; several candidates stay held by their `ambiguous_match` holds, and
   `resolveAmbiguity` applies it to the opportunity the person selects. An outgoing
   message is not a prospect's reply, so its resolution releases the ambiguity holds and
   applies only the direct-send effect: no `uncertain_reply` keeper and no `human_reply`
-  manual mode, whatever the `human` flag says.
+  manual mode, whatever the `human` flag says (an FSS-fenced one gets no effect at all).
+  `resolveAmbiguity` takes the gate before it reads, locks the match rows, and resolves
+  only unresolved rows, so a second concurrent resolution is refused `already_resolved`.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.
@@ -201,7 +212,9 @@ control still pauses automation."* This supersedes the first bullet above.
   opportunity to **automated** (origin NULL, `control_mode_reason` naming the label and the
   30 September rule, an `opportunity.automated` audit row with the rule, the reason and
   the evidence facts). It restarts nothing: the enrollments the old stop ended stay
-  ended. `direct_send_keep_automation` is refused. `direct_send` and
+  ended. It is refused for a reopened opportunity (a reopen is not a direct send), and
+  refused `live_work_present`, naming the enrollments, while any enrollment or pending
+  step is live at the opportunity. `direct_send_keep_automation` is refused. `direct_send` and
   `direct_send_keep_automation` stay in `MANUAL_MODE_ORIGINS` as **history**: stored
   opportunities and events keep the reading in the table above (a stored `direct_send`
   still blocks a follow-up; a stored `direct_send_keep_automation` does not; the drain

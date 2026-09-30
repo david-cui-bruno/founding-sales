@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
+import { directSendWithinQuietWindow } from '../mail/directSendRecency.ts';
 import { lockSendGateForDispatch } from '../policy/sendGate.ts';
 import type { EnvelopeCipher } from '../mail/envelope.ts';
 import type { GmailClient, GmailOAuthConfig } from '../mail/gmailClient.ts';
@@ -355,6 +356,19 @@ async function recheckAndClaim(
     // (P0-4). The order inside this transaction is the one the decision document writes
     // down: send gate (shared) → fence → enrollment → permission → firm.
     const permission = await lockPermissionForClaim(context, fence.id);
+
+    // An agreed-sequence e-mail to somebody the salesperson wrote to by hand within the
+    // quiet window waits (send-path v2, S1 review P1-4). Asked here, under the gate, so a
+    // direct send whose effect committed after this fence was prepared still stops it;
+    // `not_ready` rolls back and leaves the fence prepared for later.
+    if (
+      permission !== null &&
+      permission.scope === 'agreed_sequence' &&
+      (await directSendWithinQuietWindow(context, { firmId: fence.firmId, contactId: permission.contactId }))
+    ) {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'direct_send_quiet_window' };
+    }
 
     const gate = await decideSend(context, fence, deps);
     if (!gate.ok) {

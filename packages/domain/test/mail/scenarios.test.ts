@@ -609,6 +609,116 @@ describe('matching and its consequences', () => {
       { control_mode: 'automated', control_mode_origin: null },
     ]);
   });
+
+  /** The matches, holds and direct-send markers of one stored message, by provider id. */
+  const outgoingState = async (
+    w: MailWorld,
+    providerMessageId: string,
+  ): Promise<{
+    readonly messageId: string;
+    readonly matches: readonly { firm_id: string; ambiguous: boolean; held: boolean }[];
+    readonly markers: number;
+  }> => {
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const { rows: message } = await w.database.session.query<{ id: string }>(
+      'SELECT id FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2',
+      [workspaceId, providerMessageId],
+    );
+    const messageId = message[0]?.id ?? '';
+    const { rows: matches } = await w.database.session.query<{ firm_id: string; ambiguous: boolean; held: boolean }>(
+      `SELECT firm_id, ambiguous, hold_id IS NOT NULL AS held FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 ORDER BY firm_id`,
+      [workspaceId, messageId],
+    );
+    const { rows: markers } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId, messageId],
+    );
+    return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
+  };
+
+  it('S1 review P1-1: a direct send in firm A’s thread to a contact at firm B is held for the person, not applied to A', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, {
+      name: 'Southwind Test Partners',
+      address: 'partner@southwind.example.test',
+    });
+
+    // The thread is firm A's: a prospect at A wrote in it first.
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'conflict-in', threadId: 'thread-conflict', historyId: '1020', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({
+        id: 'conflict-out',
+        threadId: 'thread-conflict',
+        historyId: '1021',
+        from: w.alpha.address,
+        to: 'partner@southwind.example.test',
+        labelIds: ['SENT'],
+      }),
+    );
+    const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(report.directSendsRecorded).toBe(0);
+
+    const state = await outgoingState(w, 'conflict-out');
+    expect(state.markers).toBe(0);
+    expect(state.matches).toEqual(
+      [w.crm.alpha.firmId, other.firmId].sort().map(firm_id => ({ firm_id, ambiguous: true, held: true })),
+    );
+
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId: state.messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    expect((await outgoingState(w, 'conflict-out')).markers).toBe(1);
+  });
+
+  it('S1 review P1-1: a direct send in A’s thread to an address A and B share is held too', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    // A second address of A's contact, which only A has, starts the thread.
+    await w.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility, eligibility_policy_version)
+       VALUES ($1, $2, $3, 'only-a@northwind.example.test', 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')`,
+      [w.alpha.workspace.workspaceId, w.crm.alpha.firmId, w.crm.alpha.contactId],
+    );
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Southwind Test Partners', address: PROSPECT });
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'shared-in',
+        threadId: 'thread-shared',
+        historyId: '1030',
+        from: 'only-a@northwind.example.test',
+        to: w.alpha.address,
+      }),
+      fixtureMessage({
+        id: 'shared-out',
+        threadId: 'thread-shared',
+        historyId: '1031',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+      }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    const inbound = await outgoingState(w, 'shared-in');
+    expect(inbound.matches.map(match => match.firm_id)).toEqual([w.crm.alpha.firmId]);
+    const state = await outgoingState(w, 'shared-out');
+    expect(state.markers).toBe(0);
+    expect(state.matches).toEqual(
+      [w.crm.alpha.firmId, other.firmId].sort().map(firm_id => ({ firm_id, ambiguous: true, held: true })),
+    );
+  });
 });
 
 describe('deterministic classification effects (12.4)', () => {

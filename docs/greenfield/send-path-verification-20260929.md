@@ -134,7 +134,10 @@ all set the opportunity `manual` (`crm/pipeline.ts:238` `setManualControlMode`; 
 send no longer does since send-path v2, 30 September 2026), and
 **there is no `manual → automated` path in the codebase** — `pipeline.ts:229` says so
 outright, and a grep for a write of `control_mode = 'automated'` finds only the table
-default. A reopened opportunity also starts manual (`pipeline.ts:308`).
+default. A reopened opportunity also starts manual (`pipeline.ts:308`). (Since send-path
+v2, 30 September 2026, there is exactly one: an administrator classifying an old
+NULL-origin manual mode as a direct send returns it to automated — never a reopen, and
+only once nothing is live at the opportunity; `classifyControlModeOrigin`.)
 
 So today the set of enrollments that can send automatically is precisely the set whose
 firm has *not* had a recorded conversation or reply — the opposite of the property.

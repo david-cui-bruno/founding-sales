@@ -219,6 +219,39 @@ export async function findMatchCandidates(
   return await resolveAll(await byParticipant(context, participants), 'participant');
 }
 
+/**
+ * An unfenced outgoing message's recipients, checked against the rule that matched it
+ * (send-path v2, S1 review P1-1).
+ *
+ * Matching stops at the first rule that finds anything, so a message in a thread FSS
+ * matched to firm A is firm A's even when its To/Cc names a known contact at firm B — or
+ * an address associated with both firms. For a prospect's reply that is the point; for
+ * the salesperson's own send it would update the wrong conversation: end A's
+ * prospecting, and leave B's untouched. So for an unfenced outgoing message the To/Cc
+ * participants are looked up too, and every firm they name that the match did not is
+ * added as a candidate. More than one candidate is an ambiguity: `recordMatches` holds
+ * each, and the direct-send effect waits for the person's resolution.
+ *
+ * A match that is already the participant rule has nothing to add (it read To/Cc), and
+ * recipients that name no known firm add nothing.
+ */
+export async function withOutgoingRecipientConflicts(
+  context: RepositoryContext,
+  input: { readonly candidates: readonly MatchCandidate[]; readonly metadata: NormalizedMetadata },
+): Promise<readonly MatchCandidate[]> {
+  if (input.candidates.length === 0 || input.candidates.every(candidate => candidate.rule === 'participant')) {
+    return input.candidates;
+  }
+  const recipients = [...new Set([...input.metadata.headerTo, ...input.metadata.headerCc])];
+  const rows = await byParticipant(context, recipients);
+  const named: MatchCandidate[] = [];
+  for (const row of rows) {
+    const candidate = await resolveToOpenOpportunity(context, row, 'participant');
+    if (candidate !== null) named.push(candidate);
+  }
+  return distinct([...input.candidates, ...named]);
+}
+
 export interface RecordedMatches {
   readonly candidates: readonly MatchCandidate[];
   readonly ambiguous: boolean;
@@ -366,24 +399,38 @@ export async function resolveAmbiguity(
   },
 ): Promise<MailResult<AmbiguityResolution>> {
   const actor = context.scope.actor;
+  // The send gate before the first row this command reads or writes (decision document
+  // 6a): a human resolution sets manual mode below, whose event records the enrollments
+  // it owes (migration 0026), and the hold opened first is a stop fact of its own. Taken
+  // before the read as well (S1 review, P1-2): two resolutions of one message serialize
+  // here, and the second reads the first's selection and is refused, instead of both
+  // reading "unresolved" and the second re-pointing the selection after the first's
+  // once-per-message direct-send effect.
+  await lockSendGateForStopFact(context);
+  await context.db.query(
+    `SELECT id FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2
+      ORDER BY id
+      FOR UPDATE`,
+    [context.scope.workspaceId, input.messageId],
+  );
   const candidates = await listMatches(context, input.messageId);
   if (candidates.length === 0) return refuseMail('match_unknown');
   if (candidates.some(candidate => candidate.selected !== null)) return refuseMail('already_resolved');
   const selected = candidates.find(candidate => candidate.opportunityId === input.selectedOpportunityId);
   if (selected === undefined) return refuseMail('match_unknown');
 
-  // The send gate before the first row this command writes (decision document 6a): a
-  // human resolution sets manual mode below, whose event records the enrollments it owes
-  // (migration 0026), and the hold opened first is a stop fact of its own.
-  await lockSendGateForStopFact(context);
   const now = await databaseNow(context);
   const resolvedBy = actor.kind === 'user' ? actor.userId : null;
-  await context.db.query(
+  // Unresolved → resolved only: a row somebody else resolved is not re-pointed, and the
+  // count says whether every candidate was still unresolved.
+  const resolution = await context.db.query(
     `UPDATE mail_message_matches
         SET selected = (opportunity_id = $3), resolved_at = $4, resolved_by_user_id = $5
-      WHERE workspace_id = $1 AND mail_message_id = $2`,
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
     [context.scope.workspaceId, input.messageId, input.selectedOpportunityId, now, resolvedBy],
   );
+  if ((resolution.rowCount ?? 0) !== candidates.length) return refuseMail('already_resolved');
 
   // Send-path v2 (slice S1; the coordinator's decision of 30 September 2026): an
   // OUTGOING message is not a prospect's reply. It gets no `uncertain_reply` keeper and
