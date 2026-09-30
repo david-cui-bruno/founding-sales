@@ -129,11 +129,15 @@ interface MeetingRow {
   readonly state: MeetingState;
   readonly state_before_no_show: MeetingState | null;
   readonly booking_uid: string;
+  readonly current_booking_uid: string;
+  readonly starts_at: Date;
+  readonly ends_at: Date;
   readonly last_event_at: Date;
   readonly [column: string]: unknown;
 }
 
-const MEETING_COLUMNS = 'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, last_event_at';
+const MEETING_COLUMNS =
+  'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at';
 
 async function meetingByUid(context: RepositoryContext, uid: string): Promise<MeetingRow | null> {
   const { rows } = await context.db.query<MeetingRow>(
@@ -241,7 +245,26 @@ async function applyEvent(
 
   const lookupUid = kind === 'BOOKING_RESCHEDULED' ? (event.rescheduleUid ?? event.uid) : event.uid;
   if (lookupUid === null) return none('malformed');
-  const existing = await meetingByUid(context, lookupUid);
+  let existing = await meetingByUid(context, lookupUid);
+
+  // Both uids of a reschedule are resolved before anything else (review fold 2, the
+  // partial half of finding 7). When the original was never ingested but the
+  // replacement already has a row — its cancellation arrived first — that row *is* the
+  // meeting: it takes the original's uid as the one it began as (so a late event about
+  // the original finds it instead of creating a second meeting), and the ordering below
+  // decides whether the reschedule still changes it.
+  if (existing === null && kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
+    const replacement = await meetingByUid(context, event.uid);
+    if (replacement !== null) {
+      const { rows: adopted } = await context.db.query<MeetingRow>(
+        `UPDATE meetings SET booking_uid = $3, updated_at = now()
+          WHERE workspace_id = $1 AND id = $2
+          RETURNING ${MEETING_COLUMNS}`,
+        [context.scope.workspaceId, replacement.id, lookupUid],
+      );
+      existing = adopted[0] ?? replacement;
+    }
+  }
 
   if (existing !== null) {
     // Ordered by the payload's own timestamp; an older event is history, not state.
@@ -324,13 +347,23 @@ async function applyEvent(
   // Both uids are resolved before the ordering is applied (review fold 1, finding 7):
   // the replacement row is folded into this meeting, and its later state wins.
   let lastEventAt = event.createdAt;
+  let startsAt = event.startsAt;
+  let endsAt = event.endsAt;
+  let currentUid = kind === 'BOOKING_RESCHEDULED' ? event.uid : null;
   if (kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
     const replacement = await meetingByUid(context, event.uid);
     if (replacement !== null && replacement.id !== existing.id) {
       await foldReplacement(context, existing, replacement);
       if (replacement.last_event_at.getTime() > Date.parse(event.createdAt)) {
+        // The replacement's row is newer than this reschedule: it may itself have been
+        // rescheduled on (B→C before the delayed A→B, review fold 2). Its state, its
+        // current uid and its times are the meeting's now; this event only joins the
+        // two rows.
         next = { state: replacement.state, before: replacement.state_before_no_show };
         lastEventAt = replacement.last_event_at.toISOString();
+        startsAt = replacement.starts_at.toISOString();
+        endsAt = replacement.ends_at.toISOString();
+        currentUid = replacement.current_booking_uid;
       }
     }
   }
@@ -350,9 +383,9 @@ async function applyEvent(
       next.state,
       next.before,
       timesChange,
-      event.startsAt,
-      event.endsAt,
-      kind === 'BOOKING_RESCHEDULED' ? event.uid : null,
+      startsAt,
+      endsAt,
+      currentUid,
       lastEventAt,
     ],
   );

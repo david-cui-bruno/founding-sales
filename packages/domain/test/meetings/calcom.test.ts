@@ -161,6 +161,57 @@ describe('Cal.com deliveries', () => {
     expect(earlyCancel.meetingId).not.toBe(rows[0]?.id);
   });
 
+  it('keeps a newer reschedule s uid and times when folding it (B→C before the delayed A→B, fold 2)', async () => {
+    const a = uid();
+    const b = uid();
+    const c = uid();
+    await send(delivery('BOOKING_CREATED', '2026-09-30T17:00:00.000Z', booking(a)));
+    await send(
+      delivery('BOOKING_RESCHEDULED', '2026-09-30T17:20:00.000Z', booking(c, { rescheduleUid: b, startTime: '2026-10-12T18:00:00.000Z', endTime: '2026-10-12T18:30:00.000Z' })),
+    );
+    const late = await send(
+      delivery('BOOKING_RESCHEDULED', '2026-09-30T17:10:00.000Z', booking(b, { rescheduleUid: a, startTime: '2026-10-10T18:00:00.000Z', endTime: '2026-10-10T18:30:00.000Z' })),
+    );
+    expect(late).toMatchObject({ outcome: 'applied', meetingState: 'rescheduled' });
+    const { rows } = await database.session.query<{ booking_uid: string; current_booking_uid: string; starts_at: Date; state: string }>(
+      `SELECT booking_uid, current_booking_uid, starts_at, state FROM meetings
+        WHERE workspace_id = $1 AND (booking_uid IN ($2, $3, $4) OR current_booking_uid IN ($2, $3, $4))`,
+      [workspaceId(), a, b, c],
+    );
+    expect(rows.map(row => ({ ...row, starts_at: row.starts_at.toISOString() }))).toEqual([
+      { booking_uid: a, current_booking_uid: c, starts_at: '2026-10-12T18:00:00.000Z', state: 'rescheduled' },
+    ]);
+    // C still resolves: its end marks the meeting held.
+    const ended = {
+      triggerEvent: 'MEETING_ENDED',
+      uid: c,
+      startTime: '2026-10-12T18:00:00.000Z',
+      endTime: '2026-10-12T18:30:00.000Z',
+      createdAt: '2026-09-30T17:20:00.000Z',
+      attendees: [{ email: 'partner@northwind-law.example', noShow: false }],
+    };
+    expect(await send({ raw: Buffer.from(JSON.stringify(ended)), body: ended })).toMatchObject({ outcome: 'applied', meetingState: 'held' });
+  });
+
+  it('adopts the replacement row when the original was never ingested (the partial half of finding 7, fold 2)', async () => {
+    const a = uid();
+    const b = uid();
+    const cancelled = await send(delivery('BOOKING_CANCELLED', '2026-09-30T18:20:00.000Z', booking(b)));
+    const reschedule = await send(
+      delivery('BOOKING_RESCHEDULED', '2026-09-30T18:10:00.000Z', booking(b, { rescheduleUid: a })),
+    );
+    expect(reschedule).toMatchObject({ meetingId: cancelled.meetingId, meetingState: 'cancelled' });
+    // A late delivery about the original finds the same meeting instead of booking a second one.
+    const lateCreate = await send(delivery('BOOKING_CREATED', '2026-09-30T18:00:00.000Z', booking(a)));
+    expect(lateCreate).toMatchObject({ outcome: 'stale', meetingId: cancelled.meetingId });
+    const { rows } = await database.session.query<{ booking_uid: string; current_booking_uid: string; state: string }>(
+      `SELECT booking_uid, current_booking_uid, state FROM meetings
+        WHERE workspace_id = $1 AND (booking_uid IN ($2, $3) OR current_booking_uid IN ($2, $3))`,
+      [workspaceId(), a, b],
+    );
+    expect(rows).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+  });
+
   it('marks a meeting held from Cal.com s flat MEETING_ENDED body (review fold 1, finding 8)', async () => {
     const id = uid();
     await send(delivery('BOOKING_CREATED', '2026-09-30T15:10:00.000Z', booking(id)));
