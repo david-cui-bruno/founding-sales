@@ -6,6 +6,8 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import {
   consumeCallSession,
   createCallSession,
+  readCallCadence,
+  resumeCallCadence,
   recordCallRecording,
   recordCallStatus,
   sweepCallSessionReservations,
@@ -226,13 +228,144 @@ describe('call sessions', () => {
     expect(await create('alpha')).toEqual({ ok: false, reason: 'firm_suppressed' });
   });
 
-  it('refuses a fourth placed call at one firm in a day', async () => {
-    await budget('beta', 500);
-    for (let placed = 0; placed < 3; placed += 1) {
-      const created = await create('beta');
-      if (!created.ok) throw new Error(created.reason);
-      expect((await consume('beta', created.value.sessionId, callSid())).ok).toBe(true);
+  describe('the cadence (slice C1)', () => {
+    // Beta's firm is in America/New_York; every instant is inside the weekday window.
+    const WED_10 = '2026-09-16T14:00:00.000Z';
+    const WED_15 = '2026-09-16T19:00:00.000Z';
+    const THU_11 = '2026-09-17T15:00:00.000Z';
+    const THU_13 = '2026-09-17T17:00:00.000Z';
+    const FRI_16 = '2026-09-18T20:00:00.000Z';
+    const MON_09 = '2026-09-21T13:00:00.000Z';
+    const TUE_12 = '2026-09-22T16:00:00.000Z';
+    const WED_NEXT_15 = '2026-09-30T19:00:00.000Z';
+
+    async function createAt(at: string) {
+      counter += 1;
+      return await withTransaction(database.session, async () =>
+        await createCallSession(salesperson('beta'), {
+          firmId: crm.beta.firmId,
+          routeId: policy.beta.phoneRouteId,
+          routeVersion: policy.beta.phoneRouteVersion,
+          callingIdentityId: policy.beta.callingIdentityId,
+          deviceId: seeded.beta.salesperson.deviceId,
+          commandId: `cadence-${String(counter)}`,
+          configuredCallerIdE164: '+14015550100',
+          at,
+        }),
+      );
     }
-    expect(await create('beta')).toEqual({ ok: false, reason: 'call_attempt_limit' });
+
+    /** Place a call at `at` and end it as `ending`: Twilio's status, or a recorded outcome. */
+    async function attempt(at: string, ending: { provider?: string; outcome?: string }): Promise<string> {
+      const created = await createAt(at);
+      if (!created.ok) throw new Error(`refused at ${at}: ${created.reason}`);
+      const sid = callSid();
+      const consumed = await withTransaction(database.session, async () =>
+        await consumeCallSession(database.session, {
+          workspaceId: seeded.beta.workspaceId,
+          sessionId: created.value.sessionId,
+          callSid: sid,
+          identity: `client:${seeded.beta.salesperson.userId}`,
+          at,
+        }),
+      );
+      if (!consumed.ok) throw new Error(consumed.reason);
+      await withTransaction(database.session, async () =>
+        await recordCallStatus(database.session, { callSid: sid, providerStatus: ending.provider ?? 'completed' }),
+      );
+      // The call happened at `at` on the firm's clock, not at the test's wall clock.
+      await database.session.query(
+        `UPDATE call_sessions SET consumed_at = $2::timestamptz, expires_at = GREATEST(expires_at, $2::timestamptz)
+          WHERE id = $1`,
+        [created.value.sessionId, at],
+      );
+      if (ending.outcome !== undefined) await logOutcome(at, ending.outcome, created.value.sessionId);
+      return created.value.sessionId;
+    }
+
+    async function logOutcome(at: string, outcome: string, sessionId?: string): Promise<void> {
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+         VALUES ($1, $2, $3, 'none', $4::timestamptz, $4::timestamptz, $5) RETURNING id`,
+        [seeded.beta.workspaceId, crm.beta.firmId, outcome, at, seeded.beta.salesperson.userId],
+      );
+      if (sessionId !== undefined) {
+        await database.session.query('UPDATE call_sessions SET call_log_id = $2 WHERE id = $1', [sessionId, rows[0]?.id]);
+      }
+    }
+
+    const cadenceAt = async (at: string) =>
+      await withTransaction(database.session, async () => await readCallCadence(salesperson('beta'), crm.beta.firmId, at));
+
+    async function openParkingHolds(): Promise<number> {
+      const { rows } = await database.session.query<{ count: string }>(
+        `SELECT count(*) AS count FROM active_holds
+          WHERE workspace_id = $1 AND scope_key = $2 AND source_event_kind = 'call_cadence_parked' AND released_at IS NULL`,
+        [seeded.beta.workspaceId, crm.beta.firmId],
+      );
+      return Number(rows[0]?.count ?? 0);
+    }
+
+    beforeAll(async () => {
+      await budget('beta', 5000);
+    });
+
+    it('spaces unanswered attempts: one a business day, two hours of the clock apart, and parks after the fourth', async () => {
+      expect(await cadenceAt(WED_10)).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, parked: false, refusal: null });
+      await attempt(WED_10, { provider: 'no-answer' });
+      // Same local day: refused, whatever the hour.
+      expect(await createAt(WED_15)).toEqual({ ok: false, reason: 'call_attempt_today' });
+      // Next day, but within two hours of 10:00 on their clock.
+      expect(await createAt(THU_11)).toEqual({ ok: false, reason: 'call_attempt_too_soon' });
+      await attempt(THU_13, { provider: 'busy' });
+      await attempt(FRI_16, { outcome: 'voicemail_left', provider: 'completed' });
+      expect(await cadenceAt(MON_09)).toMatchObject({ unansweredAttempts: 3, nextAttempt: 4, parked: false });
+      await attempt(MON_09, { provider: 'no-answer' });
+      expect(await cadenceAt(TUE_12)).toMatchObject({ unansweredAttempts: 4, nextAttempt: null, parked: true });
+
+      // The fifth: refused, and the firm is parked with one firm-scoped hold.
+      expect(await createAt(TUE_12)).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      expect(await openParkingHolds()).toBe(1);
+      const { rows: holds } = await database.session.query<{ reason_code: string; blocked_action_kinds: string[] }>(
+        `SELECT reason_code, blocked_action_kinds FROM active_holds
+          WHERE workspace_id = $1 AND scope_key = $2 AND source_event_kind = 'call_cadence_parked'`,
+        [seeded.beta.workspaceId, crm.beta.firmId],
+      );
+      expect(holds[0]).toMatchObject({ reason_code: 'scoped_pause', blocked_action_kinds: ['dial_authorization'] });
+      // A second try does not open a second hold.
+      expect(await createAt(TUE_12)).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      expect(await openParkingHolds()).toBe(1);
+
+      // Fourteen days after the first, still parked: the hold is the review, not the clock.
+      expect(await cadenceAt(WED_NEXT_15)).toMatchObject({ parked: true, refusal: 'call_attempts_exhausted' });
+
+      // Resume calling: the review releases the hold and starts the count again.
+      const resumed = await withTransaction(database.session, async () =>
+        await resumeCallCadence(salesperson('beta'), { firmId: crm.beta.firmId }),
+      );
+      expect(resumed.ok).toBe(true);
+      expect(await openParkingHolds()).toBe(0);
+      const after = await cadenceAt(new Date(Date.now() + 60_000).toISOString());
+      expect(after).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, parked: false });
+    });
+
+    it('counts neither a conversation nor a call that failed, and a conversation or a callback request resets the count', async () => {
+      // Move this firm's history out of the way: everything above is before the reset.
+      await logOutcome('2026-10-01T14:00:00.000Z', 'interested');
+      const base = Date.parse('2026-10-05T14:00:00.000Z'); // Monday 10:00 in New York
+      const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
+
+      await attempt(day(0), { provider: 'no-answer' });
+      await attempt(day(1, 3), { provider: 'failed' }); // a failed call is not an attempt
+      await attempt(day(2, 3), { provider: 'completed', outcome: 'not_interested' }); // a conversation resets
+      expect(await cadenceAt(day(3))).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1 });
+
+      await attempt(day(3), { provider: 'no-answer' });
+      await attempt(day(4, 3), { provider: 'no-answer' });
+      expect(await cadenceAt(day(7))).toMatchObject({ unansweredAttempts: 2, nextAttempt: 3 });
+      // "Call me back": recorded on any call log, placed from Callie or not.
+      await logOutcome(day(7), 'callback_requested');
+      expect(await cadenceAt(day(7, 1))).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, refusal: null });
+    });
   });
 });

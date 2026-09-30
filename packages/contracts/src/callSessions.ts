@@ -43,23 +43,163 @@ export type CallSessionCreated = z.infer<typeof callSessionCreatedSchema>;
 /**
  * The refusals a call session adds to the dial refusals `authorizeDial` answers with.
  *
- *   * `call_attempt_limit` — the firm already had `CALL_SESSION_DAILY_ATTEMPT_LIMIT`
- *     sessions placed in the last 24 hours.
+ *   * `call_attempts_exhausted` — the firm already had `CALL_CADENCE.unansweredLimit`
+ *     unanswered attempts in the last `CALL_CADENCE.windowDays` days (since the last
+ *     conversation, callback request or review). The firm is parked for review: a
+ *     firm-scoped `scoped_pause` hold is opened, and "Resume calling" releases it (slice C1).
+ *   * `call_attempt_today` — an unanswered attempt was already made on the firm's local
+ *     date: at most one a business day.
+ *   * `call_attempt_too_soon` — the previous unanswered attempt was at nearly the same
+ *     time of day: the next one is at least `CALL_CADENCE.spacingMinutes` from it.
  *   * `telephony_budget_disabled` — the workspace's telephony ceiling is 0 (the default).
  *   * `telephony_budget_exhausted` — this call's reservation would pass today's ceiling.
  *   * `caller_id_mismatch` — the calling identity is not the caller id the Twilio
  *     configuration names, so Twilio would refuse or misrepresent the call.
  */
 export const CALL_SESSION_REFUSAL_CODES = [
-  'call_attempt_limit',
+  'call_attempts_exhausted',
+  'call_attempt_today',
+  'call_attempt_too_soon',
   'telephony_budget_disabled',
   'telephony_budget_exhausted',
   'caller_id_mismatch',
 ] as const;
 export type CallSessionRefusalCode = (typeof CALL_SESSION_REFUSAL_CODES)[number];
 
-/** How many sessions one firm may have placed in a rolling 24 hours. */
-export const CALL_SESSION_DAILY_ATTEMPT_LIMIT = 3;
+/**
+ * The calling cadence (slice C1), decided server-side in `createCallSession`.
+ *
+ * An *unanswered attempt* is a placed session that ended as no answer or busy, or whose
+ * recorded outcome is no answer, busy or a voicemail left. At most `unansweredLimit` of
+ * them in `windowDays` days, at most one a business day (the firm's local date), each at
+ * least `spacingMinutes` of the clock from the previous one's time of day. A conversation
+ * or a callback request recorded for the firm starts the count again, and so does
+ * resuming a firm the cadence parked.
+ */
+export const CALL_CADENCE = Object.freeze({
+  unansweredLimit: 4,
+  windowDays: 14,
+  spacingMinutes: 120,
+  /** The attempts on which the call view shows the voicemail script. */
+  voicemailAttempts: Object.freeze([1, 4]) as readonly number[],
+});
+
+/** The cadence as the Mac reads it (`GET /calls/calling`). */
+export const callCadenceSchema = z.strictObject({
+  /** Unanswered attempts since the count last started, within the window. */
+  unansweredAttempts: z.number().int().min(0),
+  /** The attempt the next call would be, 1..limit; null when the firm is parked. */
+  nextAttempt: z.number().int().min(1).nullable(),
+  limit: z.number().int().min(1),
+  /** The limit is reached: calling waits for "Resume calling". */
+  parked: z.boolean(),
+  /** Why a call now would be refused by the cadence, or null. */
+  refusal: z.enum(['call_attempts_exhausted', 'call_attempt_today', 'call_attempt_too_soon']).nullable(),
+});
+export type CallCadence = z.infer<typeof callCadenceSchema>;
+
+/**
+ * `GET /calls/calling?firmId=`: what the Mac needs to offer an in-app call for one firm.
+ * 404 while `calling_provider` is not `twilio`, like every other call-session route, so a
+ * Mac that is not told "twilio" keeps its `tel:` handoff.
+ */
+export const callingStatusResponseSchema = z.strictObject({
+  provider: z.literal('twilio'),
+  cadence: callCadenceSchema,
+  /** The voicemail template, with its four placeholders (see `renderVoicemailScript`). */
+  voicemailTemplate: z.string().min(1).max(2000),
+  /** The signed-in person's name, for `{callerName}`. */
+  callerName: z.string().max(200),
+  /** The person's own verified calling number, for `{callbackNumber}`; null when none. */
+  callbackNumber: z.string().max(20).nullable(),
+});
+export type CallingStatusResponse = z.infer<typeof callingStatusResponseSchema>;
+
+/** `POST /calls/cadence/resume`: the review of a parked firm, which starts the count again. */
+export const resumeCallCadenceCommandSchema = z.strictObject({ ...commandEnvelope, firmId: uuid });
+export const callCadenceResumedSchema = z.strictObject({ firmId: uuid, releasedHoldId: uuid });
+
+/**
+ * `GET /calls/recording?sessionId=`: the recording, proxied from Twilio by the API with
+ * the account's own key. Never a Twilio URL. Base64 inside JSON, because every route of
+ * this API and every read of the Mac's client is JSON (see docs/greenfield/calling.md).
+ */
+export const callRecordingResponseSchema = z.strictObject({
+  sessionId: uuid,
+  contentType: z.enum(['audio/mpeg', 'audio/wav']),
+  audioBase64: z.string().min(1),
+});
+export type CallRecordingResponse = z.infer<typeof callRecordingResponseSchema>;
+
+/** The largest recording the proxy returns (a half-hour dual-channel MP3 is well under). */
+export const CALL_RECORDING_MAX_BYTES = 40 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// The voicemail script
+// ---------------------------------------------------------------------------
+
+/** The default template (David, call-to-booking C1). Editable once its setting key lands. */
+export const DEFAULT_VOICEMAIL_SCRIPT =
+  "Hi {contactFirstName}, this is {callerName} from Callie. I'm calling about how {firmName} handles maintenance requests after hours. I'll try you again, or you can reach me at {callbackNumber}. Thanks.";
+
+export const VOICEMAIL_PLACEHOLDERS = ['contactFirstName', 'firmName', 'callerName', 'callbackNumber'] as const;
+
+/**
+ * The template with its placeholders filled. A missing first name reads "there"; any
+ * other missing value leaves the placeholder's words out rather than printing braces.
+ */
+export function renderVoicemailScript(
+  template: string,
+  values: {
+    readonly contactFirstName: string | null;
+    readonly firmName: string;
+    readonly callerName: string;
+    readonly callbackNumber: string | null;
+  },
+): string {
+  const filled: Readonly<Record<(typeof VOICEMAIL_PLACEHOLDERS)[number], string>> = {
+    contactFirstName: values.contactFirstName?.trim() || 'there',
+    firmName: values.firmName.trim(),
+    callerName: values.callerName.trim(),
+    callbackNumber: values.callbackNumber?.trim() ?? '',
+  };
+  return template.replace(/\{(contactFirstName|firmName|callerName|callbackNumber)\}/gu, (_match, name: string) =>
+    filled[name as keyof typeof filled],
+  );
+}
+
+/** The first word of a contact's name, for `{contactFirstName}`. */
+export function firstNameOf(fullName: string | null | undefined): string | null {
+  const first = (fullName ?? '').trim().split(/\s+/u)[0] ?? '';
+  return first === '' ? null : first;
+}
+
+// ---------------------------------------------------------------------------
+// Sentences
+// ---------------------------------------------------------------------------
+
+/**
+ * The call-session refusals in words. `reasonText.ts` (`reasonSentence`) does not know
+ * these codes yet and belongs to another slice, so the call view asks this map first and
+ * `reasonSentence` for every dial refusal; the coordinator folds it into `reasonText.ts`.
+ */
+export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
+  call_attempts_exhausted:
+    'Four calls to this firm went unanswered in the last 14 days, so calling it is parked for review. Resume calling when you want to try again.',
+  call_attempt_today: 'This firm was already called without an answer today. Try again on another business day.',
+  call_attempt_too_soon:
+    'The last unanswered call was at about this time of day. Try at least two hours earlier or later in their day.',
+  telephony_budget_disabled: 'Calling from Callie has no budget set. An administrator can set one in Settings, under Calling.',
+  telephony_budget_exhausted: 'Calling paused: today’s calling budget is used.',
+  caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
+});
+
+/** The sentence for a call-session refusal, or null for a code this map does not own. */
+export function callSessionRefusalSentence(code: string): string | null {
+  return Object.hasOwn(CALL_SESSION_REFUSAL_SENTENCES, code)
+    ? (CALL_SESSION_REFUSAL_SENTENCES[code as CallSessionRefusalCode] ?? null)
+    : null;
+}
 
 /** A session's life: the dial ticket's sixty seconds. */
 export const CALL_SESSION_SECONDS = 60;
@@ -80,6 +220,10 @@ export const callSessionDtoSchema = z.object({
   callLogId: uuid.nullable(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
+
+/** `GET /calls/history?firmId=`: the firm's placed calls, newest first. No number, no URL. */
+export const callHistoryResponseSchema = z.strictObject({ calls: z.array(callSessionDtoSchema) });
+export type CallHistoryResponse = z.infer<typeof callHistoryResponseSchema>;
 
 /** `POST /calls/access-token`. */
 export const voiceAccessTokenResponseSchema = z.strictObject({
