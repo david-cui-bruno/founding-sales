@@ -1,3 +1,4 @@
+import type { BridgeIdentity } from './identityReset.ts';
 import {
   TODAY_CARD_VERSION,
   callbackInstant,
@@ -112,6 +113,11 @@ export interface TodayBridgeDeps {
 export interface TodayBridgeHost {
   /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
   forget(): Promise<TodayState>;
+  /**
+   * The bridge's identity generation (send-path v2, S3, round 6, P0), for `guardIdentity`:
+   * a late method never clears a newer generation's state.
+   */
+  readonly identity: BridgeIdentity;
   state(): Promise<TodayState>;
   refresh(input?: RefreshRequest): Promise<TodayState>;
   expand(input: { readonly firmId: string }): Promise<TodayState>;
@@ -235,6 +241,16 @@ export function localToInstant(local: string, zone: string): string | null {
 const EXPANSION_CACHE_LIMIT = 200;
 
 export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
+  /**
+   * The identity generation (send-path v2, S3, round 6, P0). `forget` advances it; every
+   * method takes a copy when it starts, and every write that follows an `await` asks
+   * `stale(mine)` first. A `/calls/log` from the last person that answers after the
+   * clear must not put their pending agreement, preview, last call or opened firm back
+   * into the fields the next person is reading, and it must not clear the next person's
+   * own (see `identity` below).
+   */
+  let generation = 0;
+  const stale = (mine: number): boolean => mine !== generation;
   let expanded: TodayFirm | null = null;
   let notice: string | null = null;
   let lastCall: LastCall | null = null;
@@ -310,8 +326,32 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     };
   };
 
-  const snapshot = async (): Promise<TodayState> => {
+  const snapshot = async (options: { readonly blank?: boolean } = {}): Promise<TodayState> => {
     const session = await deps.session.state();
+    // The empty state a late method answers with when a newer generation owns the
+    // fields: the session's facts, and nothing this bridge holds.
+    if (options.blank === true) {
+      return todayStateSchema.parse({
+        snapshotDate: session.today?.snapshotDate ?? null,
+        businessTimeZone: session.today?.businessTimeZone ?? null,
+        cards: session.today?.cards ?? [],
+        expanded: null,
+        online: session.online,
+        stale: session.stale,
+        asOf: session.asOf,
+        mayMutate: session.mayMutate,
+        role: session.device?.role ?? null,
+        notice: null,
+        handoffNotice: HANDOFF_LIMITATION_NOTICE,
+        dialAdvice: [],
+        followUpTemplates: [],
+        followUpSequences: [],
+        followUpPreview: null,
+        agreement: null,
+        pendingAgreement: null,
+        lastCall: null,
+      });
+    }
     return todayStateSchema.parse({
       snapshotDate: session.today?.snapshotDate ?? null,
       businessTimeZone: session.today?.businessTimeZone ?? null,
@@ -337,6 +377,9 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     });
   };
 
+  /** A method's answer: the empty state when a newer generation owns the fields. */
+  const answerFor = async (mine: number): Promise<TodayState> => await snapshot({ blank: stale(mine) });
+
   /** Record what a call answered, and forget any expansion it invalidated. */
   const note = (outcome: ApiOutcome<unknown>, accepted: string | null): boolean => {
     if (outcome.ok) {
@@ -347,7 +390,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     return false;
   };
 
-  const loadExpansion = async (firmId: string): Promise<void> => {
+  const loadExpansion = async (firmId: string, mine: number): Promise<void> => {
+    if (stale(mine)) return;
     // Another firm's card: a preview in flight for the last one must not land here. At
     // the start, before the read — a read that fails or is refused returns early, and
     // the old request must be dead on those paths too (review of S3, round 3, P2-a).
@@ -356,6 +400,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     if (openedFirmId !== firmId) previewRequest += 1;
     openedFirmId = firmId;
     const session = await deps.session.state();
+    if (stale(mine)) return;
     const owner = session.device?.deviceId ?? null;
     if (owner !== expansionsOwner) {
       expansions.clear();
@@ -369,6 +414,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       firmId,
       cardVersion: TODAY_CARD_VERSION,
     });
+    if (stale(mine)) return;
     if (!page.ok) {
       dialAdvice = [];
       note(page, null);
@@ -396,9 +442,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     // preview again if it has none.
     if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
 
-    dialAdvice = await adviseRoutes(page.value);
-    followUpTemplates = await approvedTemplates();
-    followUpSequences = await publishedSequences();
+    const advice = await adviseRoutes(page.value, mine);
+    if (stale(mine)) return;
+    dialAdvice = advice;
+    const templates = await approvedTemplates();
+    if (stale(mine)) return;
+    followUpTemplates = templates;
+    const sequences = await publishedSequences();
+    if (stale(mine)) return;
+    followUpSequences = sequences;
     const pending = pendingAgreement;
     if (
       pending !== null &&
@@ -406,7 +458,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         followUpPreview.contactId !== pending.contactId ||
         followUpPreview.sequenceVersionId !== pending.sequenceVersionId)
     ) {
-      await loadPreview(pending);
+      await loadPreview(pending, mine);
     }
   };
 
@@ -466,17 +518,17 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
    * string that reaches macOS is re-read at the moment of the press and never crosses the
    * bridge at all.
    */
-  const adviseRoutes = async (page: TodayFirm): Promise<readonly DialAdviceView[]> => {
+  const adviseRoutes = async (page: TodayFirm, mine: number): Promise<readonly DialAdviceView[]> => {
     const usable = page.routes.filter(route => route.eligibility === 'usable');
     const answers: (DialAdviceView | null)[] = await Promise.all(
-      usable.map(async route => await adviseRoute(page.firmId, route.routeId)),
+      usable.map(async route => await adviseRoute(page.firmId, route.routeId, mine)),
     );
     return answers.filter((answer): answer is DialAdviceView => answer !== null);
   };
 
-  const adviseRoute = async (firmId: string, routeId: string): Promise<DialAdviceView | null> => {
+  const adviseRoute = async (firmId: string, routeId: string, mine: number): Promise<DialAdviceView | null> => {
     const answer = await deps.api.read('/dial/check', value => dialCheckResponseSchema.parse(value), { firmId, routeId });
-    if (!answer.ok) return null;
+    if (!answer.ok || stale(mine)) return null;
     const advice = answer.value.advice;
     telUris.set(routeId, advice.telUri);
     return {
@@ -488,17 +540,20 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     };
   };
 
-  const loadPreview = async (input: FollowUpPreviewRequest): Promise<void> => {
+  const loadPreview = async (input: FollowUpPreviewRequest, mine: number): Promise<void> => {
+    // A continuation of the last person's must not even advance the counter: that would
+    // kill the next person's own preview in flight (round 6, P0).
+    if (stale(mine)) return;
     // Only the newest request may land (review of S3, P2-b): a person who changes the
     // sequence while an older preview is in flight must not see the older answer.
     previewRequest += 1;
-    const mine = previewRequest;
+    const request = previewRequest;
     const answer = await deps.api.read(
       '/calls/follow-up-preview',
       value => followUpPreviewResponseSchema.parse(value),
       { firmId: input.firmId, contactId: input.contactId, sequenceVersionId: input.sequenceVersionId },
     );
-    if (mine !== previewRequest) return;
+    if (stale(mine) || request !== previewRequest) return;
     if (answer.ok) {
       followUpPreview = {
         firmId: input.firmId,
@@ -540,19 +595,21 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
    * would clear it, and a firm whose last task the mutation finished has left today's
    * list — its card closes, and "not found" is not what the person should read.
    */
-  const reloadAfterMutation = async (options: { readonly refreshList: boolean }): Promise<void> => {
+  const reloadAfterMutation = async (options: { readonly refreshList: boolean }, mine: number): Promise<void> => {
+    if (stale(mine)) return;
     if (options.refreshList) await deps.session.refreshToday();
-    if (expanded === null) return;
+    if (stale(mine) || expanded === null) return;
     const kept = notice;
     const keptAgreement = agreement;
-    await loadExpansion(expanded.firmId);
+    await loadExpansion(expanded.firmId, mine);
+    if (stale(mine)) return;
     if (expanded !== null || notice === 'not_found') {
       notice = kept;
       agreement = keptAgreement;
     }
   };
 
-  return {
+  const host: TodayBridgeHost = {
     /**
      * Forget everything this bridge is holding (1.0.13, P0-A).
      *
@@ -561,6 +618,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * work shown to somebody else.
      */
     async forget() {
+      generation += 1;
       previewRequest += 1;
       // An identity change: nothing of the last person's stays — not their pending
       // agreement's call, contact and sequence ids either (review of S3, round 5, P0).
@@ -578,25 +636,40 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       return await snapshot();
     },
 
-    state: snapshot,
+    /**
+     * For `guardIdentity` (round 6, P0). A method that outlived its session clears the
+     * bridge only while the bridge is still on the generation that method began under;
+     * once `forget` has run since, the fields are the next person's and are left alone.
+     */
+    identity: {
+      current: () => generation,
+      async forgetIfCurrent(since: number): Promise<TodayState> {
+        if (!stale(since)) return await host.forget();
+        return await snapshot({ blank: true });
+      },
+    },
+
+    state: async () => await snapshot(),
 
     async refresh(input = {}) {
+      const mine = generation;
       // A read Home made by itself — on focus, at the rollover (lane g84, G05) — keeps
       // the last notice, exactly as the re-read after a mutation does: "Call recorded."
       // should not vanish because the person came back to the window. Refresh pressed
       // is a fresh look and clears it, as it always has.
       if (input.quiet === true) {
-        await reloadAfterMutation({ refreshList: true });
-        return await snapshot();
+        await reloadAfterMutation({ refreshList: true }, mine);
+        return await answerFor(mine);
       }
       await deps.session.refreshToday();
-      if (expanded !== null) await loadExpansion(expanded.firmId);
-      return await snapshot();
+      if (!stale(mine) && expanded !== null) await loadExpansion(expanded.firmId, mine);
+      return await answerFor(mine);
     },
 
     async expand(input) {
-      await loadExpansion(input.firmId);
-      return await snapshot();
+      const mine = generation;
+      await loadExpansion(input.firmId, mine);
+      return await answerFor(mine);
     },
 
     async callsPlaced() {
@@ -622,7 +695,9 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     },
 
     async snooze(input) {
+      const mine = generation;
       const session = await deps.session.state();
+      if (stale(mine)) return await answerFor(mine);
       const zone = session.today?.businessTimeZone ?? null;
       // The window sends what a `datetime-local` gives it, or nothing for an automated
       // task's pause. A zone-less instant is not something the server may be asked to
@@ -638,16 +713,17 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
               : localToInstant(wanted, zone);
       if (returnAt === null) {
         notice = 'snooze_return_not_future';
-        return await snapshot();
+        return await answerFor(mine);
       }
       const answer = await deps.api.command(
         '/today/snooze',
         { itemId: input.itemId, reason: input.reason, ...(returnAt === undefined ? {} : { returnAt }) },
         value => todaySnoozeResultSchema.parse(value),
       );
+      if (stale(mine)) return await answerFor(mine);
       if (note(answer, null) && answer.ok) notice = answer.value.outcome;
-      await reloadAfterMutation({ refreshList: false });
-      return await snapshot();
+      await reloadAfterMutation({ refreshList: false }, mine);
+      return await answerFor(mine);
     },
 
     /**
@@ -660,8 +736,9 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * one.
      */
     async previewFollowUp(input) {
-      await loadPreview(input);
-      return await snapshot();
+      const mine = generation;
+      await loadPreview(input, mine);
+      return await answerFor(mine);
     },
 
     /**
@@ -674,24 +751,30 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      * own reason and nothing opened.
      */
     async dial(input) {
+      const mine = generation;
       const setup = await deps.handoff.checkSetup();
+      if (stale(mine)) return await answerFor(mine);
       if (!setup.ready) {
         notice = setup.reason;
-        return await snapshot();
+        return await answerFor(mine);
       }
-      const fresh = await adviseRoute(input.firmId, input.routeId);
+      const fresh = await adviseRoute(input.firmId, input.routeId, mine);
+      if (stale(mine)) return await answerFor(mine);
       if (fresh === null) {
         notice = 'dial_advice_unavailable';
-        return await snapshot();
+        return await answerFor(mine);
       }
       // The card is told what the fresh read found, whether or not the call goes ahead.
       dialAdvice = dialAdvice.map(entry => (entry.routeId === fresh.routeId ? fresh : entry));
       const telUri = telUris.get(input.routeId) ?? null;
       if (!fresh.callable || telUri === null) {
         notice = fresh.reasons[0] ?? 'not_callable';
-        return await snapshot();
+        return await answerFor(mine);
       }
       const outcome = await deps.handoff.open({ telUri, e164: fresh.e164 ?? '' });
+      // The number was handed to macOS either way; what the window shows is only the
+      // current person's to be told.
+      if (stale(mine)) return await answerFor(mine);
       notice =
         outcome.status === 'opened'
           ? 'dial_opened'
@@ -709,11 +792,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           e164: fresh.e164 ?? route?.e164 ?? '',
         };
       }
-      return await snapshot();
+      return await answerFor(mine);
     },
 
     async recordOutcome(input) {
+      const mine = generation;
       const session = await deps.session.state();
+      if (stale(mine)) return await answerFor(mine);
       const zone = session.today?.businessTimeZone ?? null;
       let callback: Record<string, string> | undefined;
       if (input.callback !== null && input.callback.localDate !== '') {
@@ -771,6 +856,10 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           return parsed.success ? parsed.data : null;
         },
       );
+      // The person who recorded this call has left this Mac while it was on the wire:
+      // nothing of theirs — the pending agreement's call, contact and sequence ids, the
+      // last call — goes into the fields the next person reads (round 6, P0).
+      if (stale(mine)) return await answerFor(mine);
       // What was actually sent, for the notice: the same condition as the body above.
       const agreed =
         input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
@@ -802,12 +891,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       }
       // The outcome may have created a callback, stopped a sequence or suppressed a
       // number. Re-read rather than patching the page: the server decided, not us.
-      await reloadAfterMutation({ refreshList: true });
-      if (pendingAgreement !== null) await loadPreview(pendingAgreement);
-      return await snapshot();
+      await reloadAfterMutation({ refreshList: true }, mine);
+      if (!stale(mine) && pendingAgreement !== null) await loadPreview(pendingAgreement, mine);
+      return await answerFor(mine);
     },
 
     async recordAgreedDates(input) {
+      const mine = generation;
       const pending = pendingAgreement;
       const preview = followUpPreview;
       const basis =
@@ -821,7 +911,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           : null;
       if (pending === null || basis === null) {
         notice = 'agreed_dates_need_preview';
-        return await snapshot();
+        return await answerFor(mine);
       }
       const answer = await deps.api.command(
         '/calls/follow-up',
@@ -834,6 +924,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           return parsed.success ? parsed.data : null;
         },
       );
+      if (stale(mine)) return await answerFor(mine);
       const recorded = answer.ok ? answer.value : null;
       if (note(answer, null) && recorded !== null) {
         const followUps = recorded.followUps;
@@ -848,7 +939,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         notice = agreement.started === true ? 'outcome_recorded_sequence_started' : 'outcome_recorded_sequence_not_started';
         if (stillStale) {
           // The dates moved again while the person listened: read them again.
-          await loadPreview(pending);
+          await loadPreview(pending, mine);
         } else {
           pendingAgreement = null;
           followUpPreview = null;
@@ -856,17 +947,19 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       } else if (!answer.ok && answer.reason === 'agreement_exists') {
         pendingAgreement = null;
       }
-      await reloadAfterMutation({ refreshList: true });
-      return await snapshot();
+      await reloadAfterMutation({ refreshList: true }, mine);
+      return await answerFor(mine);
     },
 
     async scheduleCallback(input) {
+      const mine = generation;
       const session = await deps.session.state();
+      if (stale(mine)) return await answerFor(mine);
       const zone = session.today?.businessTimeZone ?? null;
       const dueAt = zone === null ? null : callbackInstant(input.localDate, input.localTime, zone);
       if (zone === null || dueAt === null) {
         notice = 'callback_time_invalid';
-        return await snapshot();
+        return await answerFor(mine);
       }
       const answer = await deps.api.command(
         '/callbacks/schedule',
@@ -879,18 +972,22 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         },
         () => null,
       );
+      if (stale(mine)) return await answerFor(mine);
       note(answer, 'callback_scheduled');
-      await reloadAfterMutation({ refreshList: true });
-      return await snapshot();
+      await reloadAfterMutation({ refreshList: true }, mine);
+      return await answerFor(mine);
     },
 
     async releasePause(input) {
+      const mine = generation;
       const answer = await deps.api.command('/today/pause/release', { holdId: input.holdId }, value =>
         todayPauseReleaseResultSchema.parse(value),
       );
+      if (stale(mine)) return await answerFor(mine);
       note(answer, 'pause_released');
-      await reloadAfterMutation({ refreshList: true });
-      return await snapshot();
+      await reloadAfterMutation({ refreshList: true }, mine);
+      return await answerFor(mine);
     },
   };
+  return host;
 }

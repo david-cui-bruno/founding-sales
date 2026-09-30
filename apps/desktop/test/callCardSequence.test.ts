@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
 import type { DialHandoff } from '../src/main/dialHandoff.ts';
+import { guardIdentity, resetBridges } from '../src/main/identityReset.ts';
 import { createTodayBridge, outcomeNotice } from '../src/main/todayBridge.ts';
 import { agreementSentence } from '../src/renderer/today/followUpView.ts';
 import type { OutcomeRequest } from '../src/renderer/todayContract.ts';
@@ -572,6 +573,137 @@ describe('the Today bridge and an agreed sequence', () => {
       const carried = JSON.stringify(after);
       for (const id of [CALL_LOG_ID, CONTACT_ID, PUBLISHED]) expect(carried).not.toContain(id);
     });
+  });
+
+  it('keeps a late call of the last person’s out of the next person’s card, and does not clear theirs (round 6, P0)', async () => {
+    /*
+     * Identity A records a call whose answer is held inside the server. A signs out and
+     * B signs in; B records a call of their own that keeps an agreement pending. Then
+     * A's answer lands, and A's continuation is held again in the list refresh that
+     * follows it. B's state is read before A's answer, during A's held refresh, and
+     * after A's call has finished: none of A's ids appears, and B's pending agreement
+     * is B's throughout — the guard's late clear must not erase it.
+     */
+    const OTHER_FIRM = '22222222-2222-4222-8222-222222222222';
+    const B_CONTACT = 'dededede-dede-4ede-8ede-dededededede';
+    const B_ROUTE = '55555555-5555-4555-8555-555555555555';
+    const A_CALL = 'abababab-abab-4bab-8bab-abababababab';
+    const B_CALL = 'bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc';
+    const answers = baseAnswers();
+    const staleLog = (callLogId: string): HttpAnswer => {
+      const answer = logged([{ kind: 'follow_up_not_granted', reason: 'stale_preview' }]);
+      const body = answer.body as { result: Record<string, unknown> };
+      return { ...answer, body: { ...body, result: { ...body.result, callLogId } } };
+    };
+    let logCalls = 0;
+    let releaseLog: (() => void) | null = null;
+    let holdRefresh = false;
+    let releaseRefresh: (() => void) | null = null;
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        const body = JSON.parse(init.body ?? '{}') as { firmId?: string; sequenceVersionId?: string };
+        if (path === '/today/firm' && body.firmId === OTHER_FIRM) {
+          return {
+            status: 200,
+            body: {
+              ...firmPage,
+              firmId: OTHER_FIRM,
+              firmName: 'Contoso Test Partners',
+              routes: [{ routeId: B_ROUTE, contactId: B_CONTACT, e164: '+14015550142', version: 1, eligibility: 'candidate' }],
+            },
+          };
+        }
+        if (path === '/calls/log') {
+          logCalls += 1;
+          if (logCalls === 1) {
+            await new Promise<void>(resolve => {
+              releaseLog = resolve;
+            });
+            return staleLog(A_CALL);
+          }
+          return staleLog(B_CALL);
+        }
+        if (path === '/calls/follow-up-preview') {
+          return {
+            status: 200,
+            body: {
+              sequenceVersionId: body.sequenceVersionId,
+              sequenceName: 'After a good call',
+              version: 3,
+              firmTimeZone: 'America/New_York',
+              holidayCalendarVersion: 'none.1',
+              anchoredAt: '2026-09-30T15:00:00.000Z',
+              steps: [],
+            },
+          };
+        }
+        return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+      },
+    });
+    const heldSession = {
+      state: session.state,
+      refreshToday: async () => {
+        if (holdRefresh) {
+          await new Promise<void>(resolve => {
+            releaseRefresh = resolve;
+          });
+        }
+        return null;
+      },
+    };
+    const sessionGeneration = { value: 1 };
+    const bridge = guardIdentity(createTodayBridge({ api, handoff, session: heldSession }), () => sessionGeneration.value);
+    const agreeTo = { scope: 'agreed_sequence' as const, sequenceVersionId: PUBLISHED, previewBasis: BASIS };
+    const aIds = [A_CALL, CONTACT_ID, FIRM_ID];
+    const expectB = (state: Awaited<ReturnType<typeof bridge.state>>, when: string): void => {
+      const carried = JSON.stringify(state);
+      for (const id of aIds) expect(carried, `${when}: B's state carries A's ${id}`).not.toContain(id);
+      expect(state.pendingAgreement, `${when}: B's pending agreement`).toEqual({
+        firmId: OTHER_FIRM,
+        callLogId: B_CALL,
+        contactId: B_CONTACT,
+        sequenceVersionId: PUBLISHED,
+        name: 'After a good call v3',
+      });
+    };
+
+    // A: the card is open, the call is recorded, and its answer is held.
+    await bridge.expand({ firmId: FIRM_ID });
+    let aSettled = false;
+    const late = bridge.recordOutcome(interested(agreeTo)).finally(() => {
+      aSettled = true;
+    });
+    for (let tick = 0; tick < 200 && releaseLog === null; tick += 1) await new Promise(resolve => setTimeout(resolve, 1));
+    expect(releaseLog, 'A’s call reached the server').not.toBeNull();
+
+    // A signs out, B signs in: the session moves, the transition's reset runs.
+    sessionGeneration.value = 2;
+    await resetBridges([bridge]);
+
+    // B records a call of their own, which keeps an agreement pending.
+    await bridge.expand({ firmId: OTHER_FIRM });
+    const recorded = await bridge.recordOutcome({ ...interested(agreeTo, B_CONTACT), firmId: OTHER_FIRM });
+    expectB(recorded, 'B’s own answer');
+    expectB(await bridge.state(), 'before A’s answer lands');
+
+    // A's answer lands; its continuation is held in the refresh that would follow it.
+    holdRefresh = true;
+    (releaseLog as (() => void) | null)?.();
+    for (let tick = 0; tick < 200 && !aSettled && releaseRefresh === null; tick += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    expectB(await bridge.state(), 'while A’s call is still finishing');
+
+    (releaseRefresh as (() => void) | null)?.();
+    const lateAnswer = await late;
+    // A's caller is told nothing of B's either.
+    expect(lateAnswer.pendingAgreement ?? null).toBeNull();
+    expect(JSON.stringify(lateAnswer)).not.toContain(B_CALL);
+    expectB(await bridge.state(), 'after A’s call finished');
   });
 
   it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {
