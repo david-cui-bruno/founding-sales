@@ -33,10 +33,10 @@ jobs:
       # The test harness adopts this cluster instead of starting embedded-postgres.
       FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
       - name: Install
@@ -104,14 +104,14 @@ jobs:
       # actually on. No credential; the deploy workflow's smoke reads the same origin.
       FSS_PRODUCTION_ORIGIN: ${{ vars.FSS_PRODUCTION_ORIGIN || 'https://api.usecallie.com' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # The deployed commit has to be in this checkout: the schema production runs
           # is read out of its own copy of `schemaRange.ts`, and its own migration files
           # are what build the deployed schema.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         # Before the guard, not after it: the guard runs the tool's own deployed-range
         # comparison, which is TypeScript. It needs no `npm ci` — that module imports
         # nothing but Node's own and a dependency-free file in this repository — but it
@@ -339,7 +339,7 @@ jobs:
         # died in the install leaves one.
         if: always() && steps.range.outputs.run == 'yes'
         # actions/upload-artifact v4, the same pin the images and release workflows use.
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: upgrade-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           # Outside both checkouts: the tool refuses an evidence path inside one,
@@ -358,7 +358,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install integrity-pinned actionlint 1.7.12
@@ -386,12 +386,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
       - name: Install integrity-pinned Gitleaks 8.30.1

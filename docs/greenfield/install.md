@@ -216,7 +216,7 @@ GitHub wraps any download in a zip of its own, so a download is
 `callie-macos-arm64-1.0.0.zip` and there is one unzip before the two files appear.
 
 The upload uses `actions/upload-artifact` pinned to
-`ea165f8d65b6e75b540449e92b4886f43607fa02` — v4.6.2, resolved with `git ls-remote` and
+`043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` — v7.0.1, resolved with `git ls-remote` and
 confirmed to be a commit rather than a tag object
 (`docs/archive/decisions/g13b-the-artifact-leaves-on-a-pinned-action.md`). It runs only after
 the verifier passed, the manifest was signed and the stamp matched the commit, and it

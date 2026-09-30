@@ -86,7 +86,7 @@ jobs:
           [ -z "$problems" ] || { echo "::error::the images run cannot be deployed: ${problems#; }"; exit 1; }
           printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\n' "$commit" "$RUN_ID" "$attempt" | tee -a "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.run.outputs.commit }}
           sparse-checkout: infra/scripts
@@ -138,14 +138,14 @@ jobs:
             || { echo "::error::the gates job's commit, run, attempt or gate run is malformed"; exit 1; }
 
       # The images commit and its history. Nothing in it runs before the guard has passed.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.gates.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Assume the production CI deploy role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -278,12 +278,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.gates.outputs.commit }}
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
@@ -327,14 +327,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_RECORD: ${{ needs.deploy.outputs.release_record }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.gates.outputs.commit }}
           sparse-checkout: infra/scripts
           persist-credentials: false
 
       - name: Assume the production CI deploy role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

@@ -100,7 +100,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -194,11 +194,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
 
@@ -248,9 +248,9 @@ jobs:
             echo "WORKER_SCHEMA_MAX=$worker_max"
           } >> "$GITHUB_ENV"
 
-      # aws-actions/configure-aws-credentials v4, the pin the rehearsal uses.
+      # aws-actions/configure-aws-credentials v6, the pin the rehearsal uses.
       - name: Assume the rehearsal deployment role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -325,7 +325,7 @@ jobs:
       # Whatever this attempt's end, what it pushed: a re-run reuses only a tag this attests.
       - name: Keep what this attempt pushed
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: fss-image-pushed-${{ github.run_attempt }}
           path: ${{ runner.temp }}/fss-image-pushed/
@@ -365,7 +365,7 @@ jobs:
 
       # actions/upload-artifact v4, the pin the rehearsal uses.
       - name: Keep the digests
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: fss-image-digests
           path: ${{ runner.temp }}/fss-image-digests/image-digests.json

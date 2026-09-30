@@ -74,7 +74,7 @@ jobs:
       STATE_KMS_KEY_ARN: arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404
     steps:
       # The commit, before any credential and with none of its own.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -97,7 +97,7 @@ jobs:
             || { echo "::error::stage=apply needs plan_sha256: the digest on the first line of that run's plan.txt."; exit 1; }
 
       - name: Assume the narrow AWS state role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN }}
           aws-region: us-east-1
@@ -143,8 +143,8 @@ jobs:
           [ "$account" = "$GOOGLE_CI_SERVICE_ACCOUNT" ] \
             || { echo "::error::the active Google account is '$account', not $GOOGLE_CI_SERVICE_ACCOUNT"; exit 1; }
 
-      # hashicorp/setup-terraform v3, the pin greenfield-infra.yml uses.
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      # hashicorp/setup-terraform v4, the pin greenfield-infra.yml uses.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
@@ -176,7 +176,7 @@ jobs:
       # explicit paths, never a directory: the credential file sits in the workspace root.
       - name: Upload exactly the plan and its text
         if: inputs.stage == 'plan'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: google-plan
           if-no-files-found: error
