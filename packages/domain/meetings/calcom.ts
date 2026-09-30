@@ -250,26 +250,38 @@ async function applyEvent(
   // Both uids of a reschedule are resolved before anything else (review fold 2, the
   // partial half of finding 7). When the original was never ingested but the
   // replacement already has a row — its cancellation arrived first — that row *is* the
-  // meeting: it takes the original's uid as the one it began as (so a late event about
-  // the original finds it instead of creating a second meeting), and the ordering below
-  // decides whether the reschedule still changes it.
+  // meeting, and the ordering below decides whether the reschedule still changes it.
+  let adoptOriginal = false;
   if (existing === null && kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
     const replacement = await meetingByUid(context, event.uid);
     if (replacement !== null) {
-      const { rows: adopted } = await context.db.query<MeetingRow>(
-        `UPDATE meetings SET booking_uid = $3, updated_at = now()
-          WHERE workspace_id = $1 AND id = $2
-          RETURNING ${MEETING_COLUMNS}`,
-        [context.scope.workspaceId, replacement.id, lookupUid],
-      );
-      existing = adopted[0] ?? replacement;
+      existing = replacement;
+      // The row takes the original's uid as the one it began as only when it has no
+      // established original of its own: it was created from an event about the
+      // replacement itself (`booking_uid` is the replacement's uid). A row found through
+      // `current_booking_uid` already knows where it began — A→B, B→C, cancel C, then a
+      // B→C replay with new bytes must not rename A to B (review fold 3).
+      adoptOriginal = replacement.booking_uid === event.uid;
     }
   }
 
   if (existing !== null) {
     // Ordered by the payload's own timestamp; an older event is history, not state.
-    if (Date.parse(event.createdAt) < existing.last_event_at.getTime()) return none('stale', existing);
-    if (existing.state === 'cancelled') return none('stale', existing);
+    const stale = Date.parse(event.createdAt) < existing.last_event_at.getTime() || existing.state === 'cancelled';
+    // The one identity write, after the staleness decision. It is made for a stale
+    // reschedule too, and only for a row with no established original: "B replaced A"
+    // is a fact whatever the order of delivery, and without it a late event about A
+    // would book a second meeting (the fold 2 adoption test).
+    if (adoptOriginal) {
+      const { rows: adopted } = await context.db.query<MeetingRow>(
+        `UPDATE meetings SET booking_uid = $3, updated_at = now()
+          WHERE workspace_id = $1 AND id = $2 AND booking_uid = $4
+          RETURNING ${MEETING_COLUMNS}`,
+        [context.scope.workspaceId, existing.id, lookupUid, event.uid],
+      );
+      existing = adopted[0] ?? existing;
+    }
+    if (stale) return none('stale', existing);
   }
 
   // ---- no meeting yet -----------------------------------------------------

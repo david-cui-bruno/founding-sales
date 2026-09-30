@@ -212,6 +212,28 @@ describe('Cal.com deliveries', () => {
     expect(rows).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
   });
 
+  it('keeps an established original when a replayed reschedule is found by its current uid (fold 3)', async () => {
+    const a = uid();
+    const b = uid();
+    const c = uid();
+    await send(delivery('BOOKING_RESCHEDULED', '2026-09-30T19:10:00.000Z', booking(b, { rescheduleUid: a })));
+    await send(delivery('BOOKING_RESCHEDULED', '2026-09-30T19:20:00.000Z', booking(c, { rescheduleUid: b })));
+    await send(delivery('BOOKING_CANCELLED', '2026-09-30T19:30:00.000Z', booking(c)));
+    // The B→C replay with different bytes: past the delivery dedupe, stale by its time.
+    const replay = await send(
+      delivery('BOOKING_RESCHEDULED', '2026-09-30T19:20:00.000Z', booking(c, { rescheduleUid: b, title: 'replayed' })),
+    );
+    expect(replay).toMatchObject({ outcome: 'stale', meetingState: 'cancelled' });
+    const lateCreate = await send(delivery('BOOKING_CREATED', '2026-09-30T19:00:00.000Z', booking(a)));
+    expect(lateCreate).toMatchObject({ outcome: 'stale', meetingId: replay.meetingId, meetingState: 'cancelled' });
+    const { rows } = await database.session.query<{ booking_uid: string; current_booking_uid: string; state: string }>(
+      `SELECT booking_uid, current_booking_uid, state FROM meetings
+        WHERE workspace_id = $1 AND (booking_uid IN ($2, $3, $4) OR current_booking_uid IN ($2, $3, $4))`,
+      [workspaceId(), a, b, c],
+    );
+    expect(rows).toEqual([{ booking_uid: a, current_booking_uid: c, state: 'cancelled' }]);
+  });
+
   it('marks a meeting held from Cal.com s flat MEETING_ENDED body (review fold 1, finding 8)', async () => {
     const id = uid();
     await send(delivery('BOOKING_CREATED', '2026-09-30T15:10:00.000Z', booking(id)));
