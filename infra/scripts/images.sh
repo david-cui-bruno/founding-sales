@@ -595,9 +595,17 @@ images_promote() {
   else
     command "$(rehearsal_aws_command)" ecr get-login-password | images_docker login --username AWS --password-stdin "$registry" >/dev/null
   fi
+  local promote_started
+  promote_started="$(date -u +%s)"
   promote_one api "$api" "$source_api" "$destination_api"
   promote_one worker "$worker" "$source_worker" "$destination_worker"
   rehearsal_log "both images are in production by digest"
+  # What the release timings read (deploy.sh release): the promotion's wall clock, named
+  # with the digests it promoted. Not in a dry run, which promoted nothing.
+  if ! rehearsal_dry_run; then
+    rehearsal_write_report "release-promote-timing.txt" \
+      "api_digest=$api worker_digest=$worker promote_seconds=$(( $(date -u +%s) - promote_started ))"
+  fi
 }
 
 # ---------------------------------------------------------------------------

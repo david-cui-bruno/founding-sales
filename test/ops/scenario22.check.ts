@@ -342,6 +342,8 @@ interface OrderRun {
   /** Each service's counts afterwards, as the fake ECS holds them. */
   readonly counts: Readonly<Record<string, ServiceCounts>>;
   readonly report: string | null;
+  /** The reports directory, for the files a script wrote beside its report. */
+  readonly reports: string;
 }
 
 /**
@@ -502,6 +504,8 @@ interface OrderOptions {
   }>>>;
   /** The stop marker `stop.sh` leaves, as the contents of release-stop-instant.txt. */
   readonly stopInstant?: string;
+  /** Other files of the reports directory, by name: what earlier scripts of the release left. */
+  readonly reportFiles?: Readonly<Record<string, string>>;
   /** The task-definition ARN the apply's `deployment_plan` names, per service. */
   readonly plan?: Readonly<Partial<Record<'api' | 'worker', string>>>;
 }
@@ -539,6 +543,7 @@ function runOrder(
     }
   }
   if (options.stopInstant !== undefined) writeFileSync(join(reports, 'release-stop-instant.txt'), `${options.stopInstant}\n`);
+  for (const [name, text] of Object.entries(options.reportFiles ?? {})) writeFileSync(join(reports, name), `${text}\n`);
   if (options.oneOffsPass === true) writeFileSync(join(directory, 'one-offs-pass'), '');
   if (options.logEvents !== undefined) writeFileSync(join(directory, 'log-events.json'), options.logEvents);
   const env: Record<string, string> = {};
@@ -631,6 +636,7 @@ function runOrder(
     calls: (read('calls.log') ?? '').split('\n').filter(line => line !== ''),
     counts,
     report: existsSync(report) ? readFileSync(report, 'utf8').trim() : null,
+    reports,
   };
 }
 
@@ -1271,9 +1277,40 @@ describe('g80: an app-only release is one rolling deployment, and ends only when
   });
 });
 
+/**
+ * `stop.sh` first asks whether the stack is idle (slice A4): a one-off `release idle-check`
+ * on the operations task. These cases are about the stop, so the fake lets that one task
+ * pass and answers it idle; `releaseIdle.check.ts` judges the idle check itself. The
+ * operations definition is this prefix's worker image by digest, as the task is held to it.
+ */
+const IDLE_ANSWER = '{"events":[{"message":"{\\"idle\\":true,\\"reasons\\":[]}"}]}';
+const runStop = (
+  args: readonly string[],
+  services: Readonly<Record<'api' | 'worker', ServiceCounts>>,
+  options: OrderOptions = {},
+): OrderRun =>
+  runOrder(STOP, args, services, {
+    oneOffsPass: true,
+    logEvents: IDLE_ANSWER,
+    ...options,
+    fixtures: {
+      FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
+        containerDefinitions: [
+          {
+            name: 'operations',
+            image: `${ORDER_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/${ORDER_PREFIX}-worker@${ORDER_WORKER_DIGEST}`,
+            environment: [{ name: 'FSS_DATABASE_HOST', value: ORDER_HOST }],
+            secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: ORDER_RUNTIME_SECRET }],
+          },
+        ],
+      }),
+      ...options.fixtures,
+    },
+  });
+
 describe('Appendix G 22 (g70), continued: the stop', () => {
   it('stops the API, then the worker, and reads both back', () => {
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING);
+    const run = runStop(['infra/roots/rehearsal', ORDER_PREFIX], RUNNING);
     expect(run.code, run.output).toBe(0);
     expect(scaled(run.calls)).toEqual([
       `ecs update-service --cluster ${ORDER_CLUSTER} --service ${ORDER_PREFIX}-api --desired-count 0 --query service.[serviceName,desiredCount] --output text`,
@@ -1287,17 +1324,23 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     expect(workerScaled).toBeGreaterThan(apiWaited);
     expect(run.counts).toEqual(STOPPED);
     expect(run.report).toBe(
-      `prefix=${ORDER_PREFIX} environment=rehearsal ${ORDER_PREFIX}-api=stopped_from_2 ${ORDER_PREFIX}-worker=stopped_from_1`,
+      `prefix=${ORDER_PREFIX} environment=rehearsal idle=idle ${ORDER_PREFIX}-api=stopped_from_2 ${ORDER_PREFIX}-worker=stopped_from_1`,
     );
-    // And the deploy that follows it is the one that reaches the migration.
-    expect(launched(run.calls)).toEqual([]);
+    // And the deploy that follows it is the one that reaches the migration: the only task
+    // the stop launched is the idle check, before anything was scaled.
+    expect(launched(run.calls)).toHaveLength(1);
+    const firstScale = run.calls.findIndex(call => call.startsWith('ecs update-service'));
+    const idleAsked = run.calls.findIndex(call => call.startsWith('ecs run-task'));
+    expect(idleAsked).toBeGreaterThanOrEqual(0);
+    expect(idleAsked).toBeLessThan(firstScale);
+    expect(run.calls.find(call => call.startsWith('ecs run-task'))).toContain('"idle-check"');
   });
 
   it('records the instant the API’s last task went away, for the deploy to measure against', () => {
     // PR 310 review, P2. `api_unreachable` pairs this marker with the registration the
     // deploy's own scale-up produces; nothing else in the release knows this instant.
     const before = Math.floor(Date.now() / 1000);
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { report: 'release-stop-instant.txt' });
+    const run = runStop(['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { report: 'release-stop-instant.txt' });
     expect(run.code, run.output).toBe(0);
     const recorded = new RegExp(
       `^root=${canonicalRehearsalRoot().replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)} prefix=fss-rh-order api_stopped_at=([0-9]+)$`,
@@ -1318,7 +1361,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     const reports = mkdtempSync(join(tmpdir(), 'fss-order-stale-'));
     const earlier = join(reports, 'release-stop-instant.txt');
     writeFileSync(earlier, `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 60)}\n`);
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED, {
+    const run = runStop(['infra/roots/rehearsal', ORDER_PREFIX], STOPPED, {
       report: 'release-stop-instant.txt',
       fixtures: { FSS_REHEARSAL_REPORTS: reports },
     });
@@ -1328,7 +1371,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
   });
 
   it('is idempotent: services already at zero are reported and not touched', () => {
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED);
+    const run = runStop(['infra/roots/rehearsal', ORDER_PREFIX], STOPPED);
     expect(run.code, run.output).toBe(0);
     expect(scaled(run.calls)).toEqual([]);
     expect(run.output).toContain(`${ORDER_PREFIX}-api is already stopped`);
@@ -1336,7 +1379,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
   });
 
   it('fails, naming the counts, when a service is still running after the wait', () => {
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { sticky: true });
+    const run = runStop(['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { sticky: true });
     expect(run.code).not.toBe(0);
     expect(run.output).toContain(`${ORDER_PREFIX}-api is not stopped: desired 0, running 2, pending 0`);
     // It stopped at the API: the worker is not scaled behind a failure it cannot see.
@@ -1480,5 +1523,121 @@ describe('P7: deploy.sh release reads the record back', () => {
     expect(failLines(refused)[0]).toContain('--worker-digest is required');
     expect(refused.calls).toEqual([]);
     expect(refused.report).toBeNull();
+  });
+});
+
+/**
+ * Slice A4: the release's time in four separate parts, and the idle wait. The numbers
+ * come from files earlier scripts of the release left in the reports directory, each
+ * naming the digests, root and prefix it is for; a number no script can see is null and
+ * named, never estimated.
+ */
+describe('release-timings: preparation, automated checks, operator, downtime, idle wait', () => {
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const timings = (output: string): RegExpExecArray | null =>
+    /release-timings: preparation=(\S+) automated_checks=(\S+) operator=(\S+) downtime=(\S+) idle_wait=(\S+)/u.exec(output);
+  const seconds = (value: string | undefined): number => Number(String(value).replace('s', ''));
+  const PREPARE = (api: string, worker: string): string =>
+    `api_digest=${api} worker_digest=${worker} commit=${'c'.repeat(40)} images_run_seconds=300 gate_run_seconds=600`;
+  const PROMOTE = (api: string, worker: string): string => `api_digest=${api} worker_digest=${worker} promote_seconds=40`;
+  const STOP_TIMING = (finishedAt: number, idle = 'idle'): string =>
+    `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} idle=${idle} idle_wait_seconds=30 stop_started_at=${String(finishedAt - 100)} stop_finished_at=${String(finishedAt)}`;
+  const read = (reports: string): { timings: Record<string, number | null>; nulls: Record<string, string>; idle: { result: string | null; forced: boolean } } =>
+    JSON.parse(readFileSync(join(reports, 'release-timings.json'), 'utf8')) as never;
+
+  it('reports all five from the files the release left, and writes release-timings.json', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(now() - 540)}`,
+      reportFiles: {
+        'release-prepare-timing.txt': PREPARE(ORDER_API_DIGEST, ORDER_WORKER_DIGEST),
+        'release-promote-timing.txt': PROMOTE(ORDER_API_DIGEST, ORDER_WORKER_DIGEST),
+        'release-stop-timing.txt': STOP_TIMING(now() - 120),
+      },
+    });
+    expect(run.code, run.output).toBe(0);
+    const line = timings(run.output);
+    expect(line, run.output).not.toBeNull();
+    expect(line?.[1]).toBe('340s');
+    expect(line?.[2]).toBe('600s');
+    // Stop finished 120 s before this deploy began; the deploy itself takes a few seconds.
+    expect(seconds(line?.[3])).toBeGreaterThanOrEqual(119);
+    expect(seconds(line?.[3])).toBeLessThan(180);
+    // Downtime: the stop marker (540 s ago) to the deployed verify that just passed.
+    expect(seconds(line?.[4])).toBeGreaterThanOrEqual(540);
+    expect(seconds(line?.[4])).toBeLessThan(600);
+    expect(line?.[5]).toBe('30s');
+    expect(run.report).toContain('release-timings: preparation=340s');
+    const json = read(run.reports);
+    expect(json.timings['preparationSeconds']).toBe(340);
+    expect(json.timings['idleWaitSeconds']).toBe(30);
+    expect(json.nulls).toEqual({});
+    expect(json.idle).toEqual({ result: 'idle', forced: false });
+  });
+
+  it('says a forced stop was forced, in the line and in the JSON', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      reportFiles: { 'release-stop-timing.txt': STOP_TIMING(now() - 60, 'forced') },
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(run.output).toContain('FORCED (the idle check was skipped)');
+    expect(read(run.reports).idle).toEqual({ result: 'forced', forced: true });
+  });
+
+  it('records null, and says why, for every number no script could see', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, { oneOffsPass: true });
+    expect(run.code, run.output).toBe(0);
+    expect(timings(run.output)?.slice(1, 6)).toEqual(['unknown', 'unknown', 'unknown', 'unknown', 'unknown']);
+    const json = read(run.reports);
+    expect(json.timings).toEqual({
+      preparationSeconds: null,
+      automatedChecksSeconds: null,
+      operatorSeconds: null,
+      downtimeSeconds: null,
+      idleWaitSeconds: null,
+    });
+    expect(Object.keys(json.nulls).sort()).toEqual(['automatedChecksSeconds', 'downtimeSeconds', 'idleWaitSeconds', 'operatorSeconds', 'preparationSeconds']);
+    for (const reason of Object.values(json.nulls)) expect(reason.length).toBeGreaterThan(20);
+  });
+
+  it('takes no number from another release: other digests, another prefix, a stale stop', () => {
+    const other = `sha256:${'e'.repeat(64)}`;
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      reportFiles: {
+        'release-prepare-timing.txt': PREPARE(other, ORDER_WORKER_DIGEST),
+        'release-promote-timing.txt': PROMOTE(ORDER_API_DIGEST, other),
+        'release-stop-timing.txt': `root=${canonicalRehearsalRoot()} prefix=fss-rh-elsewhere idle=idle idle_wait_seconds=30 stop_started_at=${String(now() - 200)} stop_finished_at=${String(now() - 100)}`,
+      },
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(timings(run.output)?.slice(1, 6)).toEqual(['unknown', 'unknown', 'unknown', 'unknown', 'unknown']);
+    // Seven hours between the stop and this deploy is another release's stop.
+    const stale = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      reportFiles: { 'release-stop-timing.txt': STOP_TIMING(now() - 7 * 60 * 60) },
+    });
+    expect(timings(stale.output)?.[3], 'a seven-hour gap was called operator time').toBe('unknown');
+  });
+
+  it('never reports half a preparation: images without a promotion is unknown', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      reportFiles: { 'release-prepare-timing.txt': PREPARE(ORDER_API_DIGEST, ORDER_WORKER_DIGEST) },
+    });
+    const line = timings(run.output);
+    expect(line?.[1]).toBe('unknown');
+    expect(line?.[2], 'the gate run is its own fact').toBe('600s');
+    expect(read(run.reports).nulls['preparationSeconds']).toContain('no promotion timing');
+  });
+
+  it('has no downtime on a rolling release, which stops nothing', () => {
+    const run = runOrder(DEPLOY, deployArgs(), RUNNING, {
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(now() - 540)}`,
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(timings(run.output)?.[4]).toBe('unknown');
+    expect(read(run.reports).nulls['downtimeSeconds']).toContain('rolling release');
   });
 });

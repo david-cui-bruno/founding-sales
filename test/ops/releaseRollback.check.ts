@@ -646,6 +646,11 @@ describe('rollback.sh plans the previous release and stops', () => {
     const smoke = stub.calls().find(call => call.tool === 'smoke');
     expect(smoke?.args).toEqual(['--origin', `https://${HOSTNAME}`, '--canary-age-seconds', '12.5', '--expect-sending', 'enabled']);
     expect(run.output).toContain(`rolled back to ${stub.commit}`);
+    // Slice A4: the rollback path turns the release drain off after its smoke. The fake
+    // account has no operations task to run it on, so the attempt is what is asserted, and
+    // that a failure only warns.
+    expect(run.output).toContain('release-drain-off: fss admin release drain off');
+    expect(run.output).toContain('WARN: the release drain could not be turned off');
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
   });
 
@@ -901,6 +906,7 @@ describe('rollback.sh in a dry run', () => {
     expect(run.output).toContain(`PLAN terraform -chdir=${stub.root} apply -input=false -no-color rollback.tfplan`);
     expect(run.output).toContain(`deploy.sh release ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);
     expect(run.output).toContain('scripts/productionSmoke.mjs');
+    expect(run.output).toContain('idle.sh drain-off');
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
   });
 });
