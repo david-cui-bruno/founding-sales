@@ -960,7 +960,17 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
       world.alpha.mailboxId,
     ]);
     world.alpha.messages.push(
-      fixtureMessage({ id: 'read-stop-1', historyId: '1101', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      // Sent now, after the permission was granted: a message from before the grant does
+      // not fulfil it (call-to-booking A2, boundary (b)), and the fixture's default date
+      // is in the past.
+      fixtureMessage({
+        id: 'read-stop-1',
+        historyId: '1101',
+        from: world.alpha.address,
+        to: followUp.address,
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now(),
+      }),
       fixtureMessage({ id: 'read-stop-2', historyId: '1102', from: followUp.address, to: world.alpha.address }),
     );
     const base = world.syncDeps(world.alpha);
@@ -1082,7 +1092,7 @@ describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
     ]);
     world.alpha.messages.push(
       fixtureMessage({ id: 'rfc-auto', historyId: '1301', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'The automated note' }),
-      fixtureMessage({ id: 'rfc-manual', historyId: '1302', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'My own note' }),
+      fixtureMessage({ id: 'rfc-manual', historyId: '1302', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], messageId: owned, subject: 'My own note', internalDateEpochMilliseconds: Date.now() }), // sent after the grant (A2 boundary (b))
     );
     const session = world.database.session as Parameters<typeof withTransaction>[0];
     const report = await withTransaction(session, async () =>
@@ -1124,7 +1134,7 @@ describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
     await withTransaction(session, async () => await runMailSync(worker(), base, { mailboxId: world.alpha.mailboxId }));
 
     world.alpha.messages.push(
-      fixtureMessage({ id: 'proof-direct', historyId: '1402', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'proof-direct', historyId: '1402', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'], internalDateEpochMilliseconds: Date.now() }), // sent after the grant (A2 boundary (b))
       fixtureMessage({ id: 'proof-copy', historyId: '1403', from: 'someone@elsewhere.example.test', to: world.alpha.address, messageId: 'proof@x.test', subject: 'Same' }),
     );
     // Only the proof read fails: the read of the original made for the copy. (The

@@ -2,7 +2,43 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { authenticationPasses, readPrimarySendingDomain } from '@fss/domain/outbound/domainGuard.ts';
+import { readFence, type OutboundFenceRow } from '@fss/domain/outbound/fence.ts';
+import { effectiveDailyCap, readRamp, scheduledCap } from '@fss/domain/outbound/ramp.ts';
+import {
+  coldOutreachDispatchRefusal,
+  decideStepPermission,
+  dispatchHolidayCalendar,
+  insideSendingWindow,
+} from '@fss/domain/outbound/stepPermission.ts';
+import { footerSourceFor } from '@fss/domain/outbound/footer.ts';
+import type { SendRefusalCode } from '@fss/domain/outbound/types.ts';
+import { directSendWithinQuietWindow } from '@fss/domain/mail/directSendRecency.ts';
+import { readFollowUpPermission } from '@fss/domain/sequences/followUpPermissions.ts';
+import { composeSendBody, SEND_FOOTER_POLICY, sendBodyIssue } from '@fss/domain/src/rules/templates.ts';
+import {
+  CHANNEL_ACTION_KINDS,
+  assignmentSource,
+  coldOutreachTransportSource,
+  composeEligibility,
+  controlModeSource,
+  emailRouteSource,
+  enrollmentSource,
+  firmExclusivitySource,
+  followUpPermissionSource,
+  holdSource,
+  mailboxSource,
+  suppressionSource,
+  templateApprovalSource,
+  type StepEligibilityInput,
+  type StepEligibilityOutcome,
+} from '@fss/domain/sequences/eligibility.ts';
+import { readEnrollment, readStepExecution } from '@fss/domain/sequences/rows.ts';
+import type { EnrollmentRow } from '@fss/domain/sequences/types.ts';
+import { readSetting } from '@fss/domain/settings/store.ts';
+import { firstSuppressed } from '@fss/domain/suppression/effective.ts';
+import { businessDateOf } from '@fss/domain/today/snapshots.ts';
 import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
 import { readSentMessageBytes, scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
@@ -16,7 +52,7 @@ import {
   recoverSentFolderMessage,
   type SentMessageRecovery,
 } from '@fss/domain/restore';
-import { HOLD_REASON_CODES, releaseRecordSource, type HoldReasonCode } from '@fss/contracts';
+import { HOLD_REASON_CODES, releaseRecordSource, sendingEnabledSettingSchema, type HoldReasonCode } from '@fss/contracts';
 import type { MailWorkerOptions } from '../../handlers/mail.ts';
 import type { ToolConfig } from './config.ts';
 import { readOnlyGmail } from './readOnlyGmail.ts';
@@ -1625,6 +1661,629 @@ export async function sendPathReportCommand(invocation: AdminInvocation): Promis
         sample,
         deviations: [...SEND_PATH_DEVIATIONS],
         sections,
+      },
+    });
+  } finally {
+    await session.query('ROLLBACK');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Call-to-booking A2: the mailbox switch's two read-only commands.
+// ---------------------------------------------------------------------------
+
+/** How recently the old account must have synced before a switch, in seconds. */
+export const SWITCH_PREFLIGHT_SYNC_SECONDS = 120;
+
+/** The fence states a switch waits for: `NON_TERMINAL_FENCE_STATES` in `mail/oauth.ts`. */
+const NON_TERMINAL_FENCES = ['prepared', 'held', 'dispatching', 'reconciling'] as const;
+
+/**
+ * The mailbox a switch command is about: `--mailbox`, or the workspace's only mailbox.
+ * Refuses rather than pick when the workspace has several.
+ */
+async function readSwitchMailbox(
+  session: SessionQueryable,
+  workspaceId: string,
+  named: string | undefined,
+): Promise<{ readonly ok: true; readonly mailboxId: string } | { readonly ok: false; readonly outcome: AdminOutcome }> {
+  const { rows } = await session.query<{ id: string }>(
+    'SELECT id FROM mailboxes WHERE workspace_id = $1 ORDER BY id',
+    [workspaceId],
+  );
+  const ids = rows.map(row => row.id);
+  if (named !== undefined) {
+    if (!ids.includes(named)) return { ok: false, outcome: refuse('mailbox_unknown', 'no mailbox in that workspace has that id') };
+    return { ok: true, mailboxId: named };
+  }
+  if (ids.length !== 1) {
+    return {
+      ok: false,
+      outcome: refuse('mailbox_ambiguous', `this workspace has ${String(ids.length)} mailboxes; name one with --mailbox`),
+    };
+  }
+  return { ok: true, mailboxId: ids[0] ?? '' };
+}
+
+/**
+ * `fss admin mailbox switch-preflight [--workspace <id>] [--mailbox <id>]`.
+ *
+ * What an operator reads before David consents to the new account
+ * (`docs/greenfield/mail.md`, "Switching the mailbox"): the mailbox as it stands, what
+ * references it, and `wouldRefuse` — the conditions under which the switch should not be
+ * started now. One `READ ONLY` transaction, rolled back; it decides nothing and changes
+ * nothing. `wouldRefuse` is a list for a person, not a gate: the switch's own refusals
+ * are the API's (`mailbox_switch_pending_sends` among them).
+ */
+export async function mailboxSwitchPreflightCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const scoped = readSendPathScope(
+      invocation.options['--workspace'] === undefined ? {} : { '--workspace': invocation.options['--workspace'] },
+      await listWorkspaceIds(session),
+    );
+    if (!scoped.ok) return scoped.outcome;
+    const { workspaceId } = scoped.scope;
+    const chosen = await readSwitchMailbox(session, workspaceId, invocation.options['--mailbox']);
+    if (!chosen.ok) return chosen.outcome;
+    const { mailboxId } = chosen;
+    const values = [workspaceId, mailboxId];
+
+    const clock = await session.query<{ now: Date | string }>('SELECT now() AS now');
+    const { rows: mailboxRows } = await session.query(
+      `SELECT id, owner_user_id, email_address, status, sync_state, generation, last_synced_at, last_sync_error,
+              (last_synced_at IS NOT NULL AND last_synced_at >= now() - make_interval(secs => $3)) AS synced_recently
+         FROM mailboxes WHERE workspace_id = $1 AND id = $2`,
+      [...values, SWITCH_PREFLIGHT_SYNC_SECONDS],
+    );
+    const mailbox = mailboxRows[0] ?? {};
+    const ownerUserId = String(mailbox['owner_user_id'] ?? '');
+
+    const messages = await session.query(
+      `SELECT direction, count(*) AS count, min(internal_date) AS first_at, max(internal_date) AS last_at
+         FROM mail_messages WHERE workspace_id = $1 AND mailbox_id = $2 GROUP BY direction ORDER BY direction`,
+      values,
+    );
+    const fencesByState = await session.query(
+      `SELECT state, count(*) AS count FROM outbound_messages
+        WHERE workspace_id = $1 AND mailbox_id = $2 GROUP BY state ORDER BY state`,
+      values,
+    );
+    const lastSent = await session.query(
+      'SELECT max(sent_at) AS last_sent_at FROM outbound_messages WHERE workspace_id = $1 AND mailbox_id = $2',
+      values,
+    );
+    const pending = await session.query(
+      `SELECT id, state, created_at FROM outbound_messages
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND state = ANY ($3::text[])
+        ORDER BY created_at, id`,
+      [...values, [...NON_TERMINAL_FENCES]],
+    );
+    const permissions = await session.query(
+      `SELECT scope, count(*) AS count FROM follow_up_permissions
+        WHERE workspace_id = $1 AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at > now()
+        GROUP BY scope ORDER BY scope`,
+      [workspaceId],
+    );
+    const enrollments = await session.query(
+      `SELECT origin_kind, count(*) AS count FROM sequence_enrollments
+        WHERE workspace_id = $1 AND assigned_user_id = $2 AND ended_at IS NULL
+        GROUP BY origin_kind ORDER BY origin_kind`,
+      [workspaceId, ownerUserId],
+    );
+    const holds = await session.query(
+      `SELECT reason_code, count(*) AS count FROM active_holds
+        WHERE workspace_id = $1 AND released_at IS NULL
+          AND (owner_user_id = $2 OR (scope_kind = 'owner' AND scope_key = $2::text)
+               OR (scope_kind = 'mailbox' AND scope_key = $3::text) OR source_event_id = $3::text)
+        GROUP BY reason_code ORDER BY reason_code`,
+      [workspaceId, ownerUserId, mailboxId],
+    );
+    const watches = await session.query(
+      `SELECT generation, registered_at, expires_at, cancelled_at, cancelled_reason
+         FROM mailbox_watches WHERE workspace_id = $1 AND mailbox_id = $2 ORDER BY generation`,
+      values,
+    );
+    // Both key formats (lane A1): `mail-sync:{mailbox}:{generation}` and
+    // `watch:{mailbox}:{mailboxGeneration}:{renewal}` now, `mail-sync:{mailbox}` and
+    // `watch:{mailbox}:{renewal}` before. A pre-generation row is never claimed again
+    // under the new keys, so it is reported as orphaned rather than as live work. The
+    // mailbox is the key's second field in every format.
+    const jobs = await session.query(
+      `SELECT kind,
+              CASE
+                WHEN kind = 'mail.sync' AND array_length(string_to_array(idempotency_key, ':'), 1) = 2 THEN 'orphaned_pre_generation'
+                WHEN kind = 'mail.watch_renew' AND array_length(string_to_array(idempotency_key, ':'), 1) = 3 THEN 'orphaned_pre_generation'
+                ELSE 'current'
+              END AS key_format,
+              count(*) FILTER (WHERE state IN ('queued', 'retryable')) AS queued,
+              count(*) FILTER (WHERE state = 'running') AS running,
+              count(*) FILTER (WHERE state = 'dead') AS dead
+         FROM jobs
+        WHERE workspace_id = $1 AND kind LIKE 'mail.%' AND split_part(idempotency_key, ':', 2) = $2::text
+        GROUP BY 1, 2 ORDER BY 1, 2`,
+      values,
+    );
+    const sendDays = await session.query(
+      `SELECT count(*) AS days, coalesce(sum(automated_sent), 0) AS automated_sent, max(business_date) AS last_day
+         FROM mailbox_send_days WHERE workspace_id = $1 AND mailbox_id = $2`,
+      values,
+    );
+    const accounts = await session.query(
+      `SELECT email_address, active_from, active_until, generation_from
+         FROM mailbox_accounts WHERE workspace_id = $1 AND mailbox_id = $2 ORDER BY active_from`,
+      values,
+    );
+
+    const wouldRefuse: string[] = [];
+    if (mailbox['status'] !== 'connected') wouldRefuse.push('mailbox_not_connected');
+    if (mailbox['synced_recently'] !== true || mailbox['sync_state'] !== 'ready') {
+      wouldRefuse.push('old_account_not_synced_within_2_minutes');
+    }
+    if (pending.rows.length > 0) wouldRefuse.push('non_terminal_fences');
+
+    return accept({
+      ok: true,
+      report: {
+        readAt: asInstant(clock.rows[0]?.now),
+        workspaceId,
+        mailbox: {
+          id: mailbox['id'],
+          address: String(mailbox['email_address'] ?? '').trim().toLowerCase(),
+          status: mailbox['status'],
+          syncState: mailbox['sync_state'],
+          generation: asCount(mailbox['generation']),
+          lastSyncedAt: asInstant(mailbox['last_synced_at']),
+          lastSyncError: mailbox['last_sync_error'],
+        },
+        messages: messages.rows.map(row => ({
+          direction: row['direction'],
+          count: asCount(row['count']),
+          firstInternalDate: asInstant(row['first_at']),
+          lastInternalDate: asInstant(row['last_at']),
+        })),
+        fences: {
+          byState: fencesByState.rows.map(row => ({ state: row['state'], count: asCount(row['count']) })),
+          lastSentAt: asInstant(lastSent.rows[0]?.['last_sent_at']),
+          nonTerminal: pending.rows.map(row => ({
+            id: row['id'],
+            state: row['state'],
+            createdAt: asInstant(row['created_at']),
+          })),
+        },
+        liveFollowUpPermissions: permissions.rows.map(row => ({ scope: row['scope'], count: asCount(row['count']) })),
+        liveEnrollments: enrollments.rows.map(row => ({ originKind: row['origin_kind'], count: asCount(row['count']) })),
+        openHolds: holds.rows.map(row => ({ reasonCode: row['reason_code'], count: asCount(row['count']) })),
+        watches: watches.rows.map(row => ({
+          generation: asCount(row['generation']),
+          registeredAt: asInstant(row['registered_at']),
+          expiresAt: asInstant(row['expires_at']),
+          cancelledAt: asInstant(row['cancelled_at']),
+          cancelledReason: row['cancelled_reason'],
+        })),
+        mailJobs: jobs.rows.map(row => ({
+          kind: row['kind'],
+          keyFormat: row['key_format'],
+          queued: asCount(row['queued']),
+          running: asCount(row['running']),
+          dead: asCount(row['dead']),
+        })),
+        sendDays: {
+          days: asCount(sendDays.rows[0]?.['days']),
+          automatedSent: asCount(sendDays.rows[0]?.['automated_sent']),
+          lastBusinessDate: asDate(sendDays.rows[0]?.['last_day']),
+        },
+        accounts: accounts.rows.map(row => ({
+          emailAddress: row['email_address'],
+          activeFrom: asInstant(row['active_from']),
+          activeUntil: asInstant(row['active_until']),
+          generationFrom: asCount(row['generation_from']),
+        })),
+        wouldRefuse,
+      },
+    });
+  } finally {
+    await session.query('ROLLBACK');
+  }
+}
+
+/** One condition of the send path, evaluated on its own. */
+interface PreviewCondition {
+  readonly pass: boolean;
+  readonly reason: string | null;
+}
+
+const passed: PreviewCondition = Object.freeze({ pass: true, reason: null });
+const failed = (reason: string): PreviewCondition => ({ pass: false, reason });
+const fromOutcome = (outcome: StepEligibilityOutcome): PreviewCondition =>
+  outcome.ok ? passed : failed(outcome.detail === undefined ? outcome.reasonCode : `${outcome.reasonCode}:${outcome.detail}`);
+
+/**
+ * Every condition the preview reports, in the order a reader goes down them.
+ *
+ * `workspaceAttestation` is the **stored half only** of 16.2: the deployment flag and the
+ * binding of the release record to the running worker's digest are that process's own
+ * facts, which the operations task cannot know.
+ */
+export const SEND_PATH_PREVIEW_CONDITIONS = [
+  'fenceState',
+  'mailbox',
+  'suppression',
+  'permission',
+  'coldOutreach',
+  'firmExclusivity',
+  'controlMode',
+  'enrollment',
+  'holds',
+  'assignment',
+  'route',
+  'mailboxCoverage',
+  'templateApproval',
+  'stepPermission',
+  'workspaceAttestation',
+  'domainSwitch',
+  'sendingWindow',
+  'cap',
+  'quietWindow',
+  'notYetDue',
+  'footer',
+] as const;
+export type SendPathPreviewCondition = (typeof SEND_PATH_PREVIEW_CONDITIONS)[number];
+
+/**
+ * Which preview condition answers each refusal the send path has (review of 5015abd8,
+ * finding 8). Typed over every `SendRefusalCode`, so a new code does not compile until it
+ * is placed; `fssMailboxSwitch.test.ts` holds each named condition to the report.
+ *
+ * `step_ineligible` is the claim's catch-all for the step's own eligibility, so it names
+ * `stepPermission` — the claim's own composition, asked whole — and each source is also
+ * reported on its own. The three `not_claim_decided` codes are Gmail's answers to the
+ * send itself, and `template_mismatch` is refused when a fence is prepared
+ * (`outbound/fence.ts`), never at a claim: none of the four is a condition to preview.
+ */
+export const PREVIEW_CONDITION_FOR_REFUSAL: Readonly<
+  Record<SendRefusalCode, SendPathPreviewCondition | { readonly notClaimDecided: string }>
+> = Object.freeze({
+  fence_unknown: 'fenceState',
+  fence_not_ready: 'fenceState',
+  mailbox_unknown: 'mailbox',
+  mailbox_inactive: 'mailbox',
+  grant_revoked: 'holds',
+  coverage_incomplete: 'mailboxCoverage',
+  automated_sending_disabled: 'domainSwitch',
+  workspace_sending_not_attested: 'workspaceAttestation',
+  sending_domain_unknown: 'domainSwitch',
+  template_unapproved: 'templateApproval',
+  template_mismatch: { notClaimDecided: 'refused by prepareOutboundMessage when the fence is prepared' },
+  footer_not_composed: 'footer',
+  postal_address_required: 'footer',
+  route_invalid: 'route',
+  firm_suppressed: 'suppression',
+  handle_suppressed: 'suppression',
+  outside_email_window: 'sendingWindow',
+  daily_cap: 'cap',
+  rate_limited: { notClaimDecided: 'Gmail’s answer to the send' },
+  recipient_rejected: { notClaimDecided: 'Gmail’s answer to the send' },
+  provider_refusal: { notClaimDecided: 'Gmail’s answer to the send' },
+  step_ineligible: 'stepPermission',
+});
+
+/**
+ * The same connection with row locks removed from every statement. The claim's sources
+ * lock the rows they read (`firmExclusivitySource` locks the firm, the footer takes the
+ * template `FOR SHARE`); a `READ ONLY` transaction refuses those clauses, and in a
+ * rolled-back snapshot a lock changes no answer. Nothing else about the SQL changes.
+ */
+function withoutRowLocks(context: RepositoryContext): RepositoryContext {
+  const LOCK_CLAUSE =
+    /\bFOR\s+(?:NO\s+KEY\s+UPDATE|KEY\s+SHARE|UPDATE|SHARE)(?:\s+OF\s+[a-z_][a-z0-9_]*(?:\s*,\s*[a-z_][a-z0-9_]*)*)?(?:\s+NOWAIT|\s+SKIP\s+LOCKED)?/giu;
+  return {
+    scope: context.scope,
+    db: {
+      query: async (text, values) => await context.db.query(text.replace(LOCK_CLAUSE, ''), values),
+    },
+  };
+}
+
+/** The conditions that belong to the workspace and the mailbox: read once per sender. */
+async function senderConditions(
+  context: RepositoryContext,
+  mailboxId: string | null,
+  now: Date,
+): Promise<Pick<Record<SendPathPreviewCondition, PreviewCondition>, 'mailbox' | 'domainSwitch' | 'workspaceAttestation' | 'cap'>> {
+  let mailbox: PreviewCondition = failed('mailbox_unknown');
+  if (mailboxId !== null) {
+    const { rows } = await context.db.query<{ status: string }>(
+      'SELECT status FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, mailboxId],
+    );
+    const status = rows[0]?.status;
+    mailbox = status === undefined ? failed('mailbox_unknown') : status !== 'connected' ? failed(`mailbox_inactive:${status}`) : passed;
+  }
+  const domain = await readPrimarySendingDomain(context);
+  const domainSwitch =
+    domain === null
+      ? failed('sending_domain_unknown')
+      : !authenticationPasses(domain) || !domain.automatedSendingEnabled
+        ? failed('automated_sending_disabled')
+        : passed;
+  const attestation = sendingEnabledSettingSchema.safeParse((await readSetting(context, 'sending_enabled')).value);
+  const workspaceAttestation = !attestation.success
+    ? failed('workspace_sending_not_attested:unreadable')
+    : !attestation.data.enabled
+      ? failed('workspace_sending_not_attested:disabled')
+      : attestation.data.releaseGateReference === null
+        ? failed('workspace_sending_not_attested:no_reference')
+        : passed;
+  let cap: PreviewCondition = failed('mailbox_unknown');
+  if (mailboxId !== null) {
+    const ramp = await readRamp(context, mailboxId);
+    const limit = ramp === null ? scheduledCap(0) : effectiveDailyCap(ramp);
+    const businessDate = await businessDateOf(context, now.toISOString());
+    const { rows } = await context.db.query<{ automated_sent: number }>(
+      `SELECT automated_sent FROM mailbox_send_days
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
+      [context.scope.workspaceId, mailboxId, businessDate],
+    );
+    const sent = Number(rows[0]?.automated_sent ?? 0);
+    cap = sent >= limit ? failed(`daily_cap:automated ${String(sent)}/${String(limit)}`) : passed;
+  }
+  return { mailbox, domainSwitch, workspaceAttestation, cap };
+}
+
+/** Every step-owned source, each asked on its own. */
+async function sourceConditions(
+  context: RepositoryContext,
+  input: StepEligibilityInput,
+  enrollment: EnrollmentRow,
+  zone: string,
+  now: Date,
+): Promise<Pick<
+  Record<SendPathPreviewCondition, PreviewCondition>,
+  | 'suppression'
+  | 'permission'
+  | 'coldOutreach'
+  | 'firmExclusivity'
+  | 'controlMode'
+  | 'enrollment'
+  | 'holds'
+  | 'assignment'
+  | 'route'
+  | 'mailboxCoverage'
+  | 'templateApproval'
+  | 'sendingWindow'
+  | 'notYetDue'
+>> {
+  const calendar = await dispatchHolidayCalendar(context, enrollment);
+  return {
+    suppression: fromOutcome(await suppressionSource().evaluate(context, input)),
+    permission: fromOutcome(await followUpPermissionSource().evaluate(context, input)),
+    coldOutreach: fromOutcome(await coldOutreachTransportSource().evaluate(context, input)),
+    firmExclusivity: fromOutcome(await firmExclusivitySource().evaluate(context, input)),
+    controlMode: fromOutcome(await controlModeSource().evaluate(context, input)),
+    enrollment: fromOutcome(await enrollmentSource().evaluate(context, input)),
+    holds: fromOutcome(await holdSource().evaluate(context, input)),
+    assignment: fromOutcome(await assignmentSource().evaluate(context, input)),
+    route: fromOutcome(await emailRouteSource().evaluate(context, input)),
+    mailboxCoverage: fromOutcome(await mailboxSource().evaluate(context, input)),
+    templateApproval: fromOutcome(await templateApprovalSource().evaluate(context, input)),
+    sendingWindow: insideSendingWindow(now, zone, calendar) ? passed : failed(`outside_email_window:${zone}`),
+    notYetDue: Date.parse(input.execution.notBefore) > now.getTime() ? failed('step_ineligible:not_yet_due') : passed,
+  };
+}
+
+/** What the claim's footer reconciliation would decide about this fence, without writing. */
+async function footerCondition(context: RepositoryContext, fence: OutboundFenceRow): Promise<PreviewCondition> {
+  const source = await footerSourceFor(context, fence.templateVersionId);
+  if (source === null) {
+    const issue = sendBodyIssue(fence.body);
+    return issue === null ? passed : failed(`footer_not_composed:template_version_unknown:${issue}`);
+  }
+  const decision = composeSendBody(fence.body, source, SEND_FOOTER_POLICY);
+  if (!decision.composed) {
+    return failed(
+      `${decision.reason === 'postal_address_required' ? 'postal_address_required' : 'footer_not_composed'}:${decision.detail ?? decision.reason}`,
+    );
+  }
+  const issue = sendBodyIssue(decision.changed ? decision.body : fence.body);
+  return issue === null ? passed : failed(`footer_not_composed:${issue}`);
+}
+
+async function mailboxAddress(context: RepositoryContext, mailboxId: string | null): Promise<string | null> {
+  if (mailboxId === null) return null;
+  const { rows } = await context.db.query<{ email_address: string }>(
+    'SELECT email_address FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, mailboxId],
+  );
+  return rows[0]?.email_address ?? null;
+}
+
+const notApplicable = (why: string): PreviewCondition => ({ pass: true, reason: `not_applicable:${why}` });
+
+/**
+ * `fss admin send-path preview [--workspace <id>] [--sample <n>]`.
+ *
+ * For every prepared or held fence, and every due e-mail step, **every** condition the
+ * dispatch claim can refuse on (`PREVIEW_CONDITION_FOR_REFUSAL`), each asked of its own
+ * source, with its pass or fail and reason, and the sender the send would leave from (the
+ * fence's mailbox address, as `outbound/send.ts` uses it; for a step, the owner's mailbox
+ * a fence would be prepared on). The gate short-circuits at its first refusal — the
+ * disabled domain, while sending is paused — so it cannot say what else would stop a
+ * send; `stepPermission` is the claim's own composition asked whole, beside its sources.
+ * One `READ ONLY` transaction, rolled back, with the sources' row locks removed
+ * (`withoutRowLocks`); `ensureRamp`, `openSendDay` and the footer rewrite, which the
+ * claim performs, are replaced by reads.
+ */
+export async function sendPathPreviewCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const scoped = readSendPathScope(invocation.options, await listWorkspaceIds(session));
+    if (!scoped.ok) return scoped.outcome;
+    const { workspaceId, sample } = scoped.scope;
+    const context = withoutRowLocks(
+      repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), session),
+    );
+    const { rows: clock } = await session.query<{ now: Date }>('SELECT now() AS now');
+    const now = clock[0]?.now ?? new Date();
+
+    const senders = new Map<string, Awaited<ReturnType<typeof senderConditions>>>();
+    const forSender = async (mailboxId: string | null): Promise<Awaited<ReturnType<typeof senderConditions>>> => {
+      const key = mailboxId ?? '';
+      const known = senders.get(key);
+      if (known !== undefined) return known;
+      const computed = await senderConditions(context, mailboxId, now);
+      senders.set(key, computed);
+      return computed;
+    };
+
+    const { rows: fenceIds } = await session.query<{ id: string }>(
+      `SELECT id FROM outbound_messages WHERE workspace_id = $1 AND state IN ('prepared', 'held')
+        ORDER BY created_at, id LIMIT $2`,
+      [workspaceId, sample],
+    );
+    const fences: Record<string, unknown>[] = [];
+    for (const { id } of fenceIds) {
+      const fence = await readFence(context, id);
+      if (fence === null) continue;
+      const shared = await forSender(fence.mailboxId);
+      const execution = fence.stepExecutionId === null ? null : await readStepExecution(context, fence.stepExecutionId);
+      const enrollment = execution === null ? null : await readEnrollment(context, { enrollmentId: execution.enrollmentId });
+      const fenceState =
+        fence.state === 'prepared' ? passed : failed(`fence_not_ready:${fence.state}${fence.heldReason === null ? '' : `:${fence.heldReason}`}`);
+      const { rows: kind } = await session.query<{ kind: string; owner_user_id: string }>(
+        'SELECT kind, owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+        [workspaceId, fence.mailboxId],
+      );
+      const mailboxKind = kind[0]?.kind ?? 'personal';
+      let conditions: Record<SendPathPreviewCondition, PreviewCondition>;
+      if (execution === null || enrollment === null) {
+        const missing = failed('step_ineligible:no_step_execution');
+        conditions = Object.fromEntries(SEND_PATH_PREVIEW_CONDITIONS.map(name => [name, missing])) as Record<
+          SendPathPreviewCondition,
+          PreviewCondition
+        >;
+        conditions = { ...conditions, fenceState, ...shared, footer: await footerCondition(context, fence) };
+      } else {
+        const input: StepEligibilityInput = {
+          execution,
+          opportunityId: enrollment.opportunityId,
+          firmId: fence.firmId,
+          contactId: fence.contactId ?? enrollment.contactId,
+          ownerUserId: enrollment.assignedUserId,
+          channel: 'email',
+          actionKind: CHANNEL_ACTION_KINDS.email,
+          now: now.toISOString(),
+          frozen: {
+            routeId: fence.recipientRouteId,
+            routeVersion: fence.recipientRouteVersion,
+            templateVersionId: fence.templateVersionId,
+          },
+        };
+        const sources = await sourceConditions(context, input, enrollment, fence.sourceZone, now);
+        // The gate's own suppression read, on the fence's firm and recipient, beside the
+        // source's contact-wide one.
+        const fenceSuppressed = await firstSuppressed(context, [
+          { scope: 'firm', canonicalKey: fence.firmId },
+          { scope: 'handle', canonicalKey: fence.recipientAddress },
+        ]);
+        const cold = coldOutreachDispatchRefusal(enrollment, { kind: mailboxKind });
+        const decided = await decideStepPermission(
+          context,
+          fence,
+          { id: fence.mailboxId, ownerUserId: kind[0]?.owner_user_id ?? '', kind: mailboxKind },
+          now,
+        );
+        const permission = enrollment.permissionId === null ? null : await readFollowUpPermission(context, enrollment.permissionId);
+        const quiet =
+          permission !== null &&
+          permission.scope === 'agreed_sequence' &&
+          (await directSendWithinQuietWindow(context, { firmId: fence.firmId, contactId: permission.contactId }));
+        conditions = {
+          fenceState,
+          ...shared,
+          ...sources,
+          suppression:
+            fenceSuppressed !== null
+              ? failed(fenceSuppressed.scope === 'firm' ? 'firm_suppressed' : 'handle_suppressed')
+              : sources.suppression,
+          coldOutreach: cold === null ? sources.coldOutreach : failed(cold),
+          stepPermission: decided.ok ? passed : failed(decided.detail === undefined ? decided.reason : `${decided.reason}:${decided.detail}`),
+          quietWindow: quiet ? failed('step_ineligible:direct_send_quiet_window') : passed,
+          footer: await footerCondition(context, fence),
+        };
+      }
+      fences.push({
+        outboundMessageId: fence.id,
+        state: fence.state,
+        firmId: fence.firmId,
+        enrollmentId: fence.enrollmentId,
+        resolvedSender: await mailboxAddress(context, fence.mailboxId),
+        conditions,
+      });
+    }
+
+    const { rows: dueIds } = await session.query<{ id: string }>(
+      `SELECT e.id FROM step_executions e
+         JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+        WHERE e.workspace_id = $1 AND e.channel = 'email' AND e.state IN ('pending', 'held')
+          AND e.due_at <= now() AND e.not_before <= now()
+          AND n.ended_at IS NULL AND n.state = 'active'
+          AND NOT EXISTS (SELECT 1 FROM outbound_messages o
+                           WHERE o.workspace_id = e.workspace_id AND o.step_execution_id = e.id)
+        ORDER BY e.due_at, e.id LIMIT $2`,
+      [workspaceId, sample],
+    );
+    const steps: Record<string, unknown>[] = [];
+    for (const { id } of dueIds) {
+      const execution = await readStepExecution(context, id);
+      if (execution === null) continue;
+      const enrollment = await readEnrollment(context, { enrollmentId: execution.enrollmentId });
+      if (enrollment === null) continue;
+      const { rows: owned } = await session.query<{ id: string }>(
+        'SELECT id FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2',
+        [workspaceId, enrollment.assignedUserId],
+      );
+      const mailboxId = owned[0]?.id ?? null;
+      const input: StepEligibilityInput = {
+        execution,
+        opportunityId: enrollment.opportunityId,
+        firmId: enrollment.firmId,
+        contactId: enrollment.contactId,
+        ownerUserId: enrollment.assignedUserId,
+        channel: 'email',
+        actionKind: CHANNEL_ACTION_KINDS.email,
+        now: now.toISOString(),
+      };
+      const conditions: Record<SendPathPreviewCondition, PreviewCondition> = {
+        fenceState: notApplicable('no_fence_yet'),
+        ...(await forSender(mailboxId)),
+        ...(await sourceConditions(context, input, enrollment, enrollment.firmTimeZone, now)),
+        stepPermission: fromOutcome(await composeEligibility().evaluate(context, input)),
+        quietWindow: notApplicable('asked_of_a_prepared_fence'),
+        footer: notApplicable('composed_when_the_fence_is_prepared'),
+      };
+      steps.push({
+        stepExecutionId: execution.id,
+        enrollmentId: enrollment.id,
+        firmId: enrollment.firmId,
+        originKind: enrollment.originKind,
+        resolvedSender: await mailboxAddress(context, mailboxId),
+        conditions,
+      });
+    }
+
+    return accept({
+      ok: true,
+      report: {
+        readAt: now.toISOString(),
+        workspaceId,
+        sample,
+        conditionFor: PREVIEW_CONDITION_FOR_REFUSAL,
+        note: 'Each condition is asked of its own source, so every one that would refuse is shown, not only the first. workspaceAttestation is the stored half only: the deployment flag and the binding of the release record to the running worker digest are the worker process\'s own facts and are not evaluated here. stepPermission is the claim\'s own composition, asked whole (its first refusal).',
+        fences,
+        dueEmailSteps: steps,
       },
     });
   } finally {

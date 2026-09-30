@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
@@ -7,8 +8,10 @@ import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
 import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
+import { completeGmailGrant, signGrantState } from '../../mail/oauth.ts';
 import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts';
 import { runMailRecovery } from '../../mail/recover.ts';
+import { staticSecretProvider } from '../../mail/secretProvider.ts';
 import { runMailSync } from '../../mail/sync.ts';
 import { hoursToSoonestWatchExpiry, listWatchesDue, readCurrentWatch, renewWatch } from '../../mail/watch.ts';
 import { receivePushNotification } from '../../mail/webhook.ts';
@@ -1642,5 +1645,212 @@ describe('the import feeds the reputation ramp (12.7)', () => {
 
     // Nothing reached the other workspace, which holds the same firm and address.
     expect(await day(w, w.beta.workspace.workspaceId, w.beta.mailboxId, yesterday)).toBeUndefined();
+  });
+});
+
+describe('a mailbox switched to another account (call-to-booking A2)', () => {
+  it('applies the new account’s pre-switch inbound opt-out, and counts only its post-switch Sent items as direct sends', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const context = w.systemContext(workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Switch Fixture Firm', address: 'office@switch.example.test' });
+
+    // The new account's own history: an opt-out it received and a message it sent, both
+    // before the switch. The baseline of the new generation reads both.
+    const newAddress = 'david.alpha@example.test';
+    const newMessages = [
+      fixtureMessage({
+        id: 'newacct-optout',
+        historyId: '4990',
+        from: PROSPECT,
+        to: newAddress,
+        body: 'Please stop emailing me.',
+        internalDateEpochMilliseconds: Date.now() - 2 * 86_400_000,
+      }),
+      fixtureMessage({
+        id: 'newacct-sent-before',
+        historyId: '4991',
+        from: newAddress,
+        to: 'office@switch.example.test',
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now() - 86_400_000,
+      }),
+    ];
+    const gmail = w.clientWith(w.alpha, {
+      emailAddress: newAddress,
+      historyId: '5000',
+      messages: newMessages,
+      refreshToken: randomBytes(24).toString('base64url'),
+    });
+    const key = randomBytes(32);
+    const state = signGrantState(key, {
+      workspaceId,
+      userId: w.alpha.workspace.salesperson.userId,
+      expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 600,
+      attemptId: randomUUID(),
+      switchTo: newAddress,
+    });
+    const switched = await completeGmailGrant(
+      w.userContext(workspaceId),
+      {
+        gmail,
+        config: w.config,
+        secrets: staticSecretProvider({ gmail_oauth_client_secret: w.syncDeps(w.alpha).oauth.clientSecret }),
+        cipher: w.cipher,
+        stateSigningKey: key,
+      },
+      { state, code: 'switch-code' },
+    );
+    expect(switched).toMatchObject({ ok: true, value: { mailboxId: w.alpha.mailboxId, switched: true } });
+
+    const deps = { ...w.syncDeps(w.alpha), gmail };
+    const baseline = await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 2 });
+    expect(baseline.outcome).toBe('completed');
+
+    // Inbound is not bounded: the opt-out the new account received before the switch holds.
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: PROSPECT })).not.toBeNull();
+    const directSends = async (): Promise<readonly string[]> => {
+      const { rows } = await w.database.session.query<{ provider_message_id: string }>(
+        `SELECT m.provider_message_id FROM mail_message_effects f
+           JOIN mail_messages m ON m.workspace_id = f.workspace_id AND m.id = f.mail_message_id
+          WHERE f.workspace_id = $1 AND f.effect_kind = 'direct_send_conversation' AND f.detail->>'firmId' = $2
+          ORDER BY m.provider_message_id`,
+        [workspaceId, other.firmId],
+      );
+      return rows.map(row => row.provider_message_id);
+    };
+    // The account's own Sent item from before it was this mailbox's was imported and
+    // matched to the firm — and is not a direct send.
+    const { rows: imported } = await w.database.session.query<{ direction: string; firm_id: string | null }>(
+      `SELECT m.direction, x.firm_id FROM mail_messages m
+         LEFT JOIN mail_message_matches x ON x.workspace_id = m.workspace_id AND x.mail_message_id = m.id
+        WHERE m.workspace_id = $1 AND m.provider_message_id = 'newacct-sent-before'`,
+      [workspaceId],
+    );
+    expect(imported).toEqual([{ direction: 'outgoing', firm_id: other.firmId }]);
+    expect(await directSends()).toEqual([]);
+
+    // After the switch, the salesperson writes from the new account: that one is.
+    newMessages.push(
+      fixtureMessage({
+        id: 'newacct-sent-after',
+        historyId: '5001',
+        from: newAddress,
+        to: 'office@switch.example.test',
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now(),
+      }),
+    );
+    const report = await runMailSync(context, deps, { mailboxId: w.alpha.mailboxId });
+    expect(report.directSendsRecorded).toBe(1);
+    expect(await directSends()).toEqual(['newacct-sent-after']);
+  });
+  it('covers a message that arrives between the profile read and the baseline’s end (toAt after the capture)', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const context = w.systemContext(workspaceId);
+    const newAddress = 'david.alpha@example.test';
+    const messages: ReturnType<typeof fixtureMessage>[] = [];
+    const base = w.clientWith(w.alpha, {
+      emailAddress: newAddress,
+      historyId: '5000',
+      messages,
+      refreshToken: randomBytes(24).toString('base64url'),
+    });
+    // The grant's clock: its first reading is the start, every later one ten seconds on.
+    const start = Date.now();
+    let readings = 0;
+    const clock = (): Date => new Date(readings++ === 0 ? start : start + 10_000);
+    // A message lands while the profile is being read: its history record is the one
+    // the profile names (so history *after* it never lists it), and its date is after
+    // the grant began. Only a listing that ends after the capture can see it.
+    const gmail: GmailClient = {
+      ...base,
+      getProfile: async (...args: Parameters<GmailClient['getProfile']>) => {
+        messages.push(
+          fixtureMessage({
+            id: 'during-capture',
+            historyId: '5000',
+            from: PROSPECT,
+            to: newAddress,
+            internalDateEpochMilliseconds: start + 5_000,
+          }),
+        );
+        return await base.getProfile(...args);
+      },
+    };
+    const key = randomBytes(32);
+    const state = signGrantState(key, {
+      workspaceId,
+      userId: w.alpha.workspace.salesperson.userId,
+      expiresAtEpochSeconds: Math.floor(start / 1000) + 600,
+      attemptId: randomUUID(),
+      switchTo: newAddress,
+    });
+    const switched = await completeGmailGrant(
+      w.userContext(workspaceId),
+      {
+        gmail,
+        config: w.config,
+        secrets: staticSecretProvider({ gmail_oauth_client_secret: w.syncDeps(w.alpha).oauth.clientSecret }),
+        cipher: w.cipher,
+        stateSigningKey: key,
+        now: clock,
+      },
+      { state, code: 'switch-code' },
+    );
+    expect(switched.ok).toBe(true);
+
+    const deps = { ...w.syncDeps(w.alpha), gmail };
+    expect((await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 2 })).outcome).toBe('completed');
+    await runMailSync(context, deps, { mailboxId: w.alpha.mailboxId });
+    const { rows } = await w.database.session.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = 'during-capture'",
+      [workspaceId],
+    );
+    expect(rows[0]?.count).toBe('1');
+  });
+
+  it('sets no bound on an expired-cursor recovery: an old Sent item of the same account is still a direct send', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const context = w.systemContext(workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Expired Cursor Firm', address: 'office@expired.example.test' });
+    const cursor = (await readMailbox(context, w.alpha.mailboxId))?.historyId ?? '';
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'expired-sent',
+        historyId: '1050',
+        from: w.alpha.address,
+        to: 'office@expired.example.test',
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now() - 3_600_000,
+      }),
+    );
+    const gmail = w.clientWith(w.alpha, { expiredHistoryIds: [cursor] });
+    const deps = { ...w.syncDeps(w.alpha), gmail };
+    const expired = await runMailSync(context, deps, { mailboxId: w.alpha.mailboxId });
+    expect(expired.outcome).toBe('recovery_started');
+    const mailbox = await readMailbox(context, w.alpha.mailboxId);
+    const recovered = await runMailRecovery(context, deps, {
+      mailboxId: w.alpha.mailboxId,
+      generation: mailbox?.generation ?? 0,
+    });
+    expect(recovered.outcome).toBe('completed');
+    const { rows } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND effect_kind = 'direct_send_conversation' AND detail->>'firmId' = $2`,
+      [workspaceId, other.firmId],
+    );
+    expect(rows[0]?.count).toBe('1');
+    expect(
+      (await w.database.session.query('SELECT 1 FROM mailbox_accounts WHERE workspace_id = $1', [workspaceId])).rows,
+    ).toEqual([]);
   });
 });
