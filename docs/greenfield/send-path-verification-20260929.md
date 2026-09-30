@@ -431,6 +431,11 @@ SELECT n.id AS enrollment_id,
  ORDER BY n.started_at;
 ```
 
+**One correction to the SQL above, and the report makes it:** `mm.direction = 'inbound'`
+is not a value `mail_messages_direction_known` admits — the vocabulary is `incoming` and
+`outgoing` — so `had_inbound` was false for every row this query was ever run against.
+The report reads `'incoming'`, and says so in its `deviations`.
+
 *Expect:* rows with `had_conversation = false AND had_inbound = false` are enrollments
 with no permitted origin under any reading of David's rule. Rows with
 `control_mode = 'manual'` will never send at all (section 1) — if *every* row with an
@@ -549,7 +554,7 @@ in the command: the command prints numbers, and this is where the numbers are ju
 |---|---|
 | 1 `switches` | `sending_enabled` is `{"enabled": false}` until the moment of the lift. When it is turned on, note the `releaseGateReference` it carries: the worker's image digest must match that release record. `automated_sending_enabled` and all three of SPF/DKIM/DMARC must be true on the primary domain before anything can leave at all. |
 | 2 `dueNow` | **`wouldLeaveOnFirstTick` must be 0 before the first lift.** `total` may be non-zero and that is expected: every live enrollment is `cold_legacy`, which `listStepWakes` does not wake and `followUpPermissionSource` refuses, so `byOriginKind.cold_legacy` is listed for completeness. Any `prospecting` or `follow_up` row here is a message that leaves within a minute of the switch; read section 4 for each before deciding. |
-| 3 `liveEnrollments` | The whole of section 4's evidence, now with `origin_kind` in the grouping, so "what predates the CRM redesign" is answered by the column rather than by a date somebody chose. A `cold_legacy` group of any size is fine and expected; it is history. |
+| 3 `liveEnrollments` | The whole of §4 of this document's evidence, now with `origin_kind` in the grouping, so "what predates the CRM redesign" is answered by the column rather than by a date somebody chose. A `cold_legacy` group of any size is fine and expected; it is history. |
 | 4 `liveEnrollmentRows` | Every `follow_up` row must have `permissionLive: true`. A `follow_up` row with `permissionLive: false` is a run whose permission is spent, revoked or expired — it will refuse at the step, which is correct, but it should be stopped for tidiness. `controlMode: 'manual'` with `controlModeOrigin: null` never sends (an unrecorded origin reads as a person's takeover); `hadConversation`/`hadInbound` are the old proxies, kept for continuity and enforced by nothing. |
 | 5 `firmsWithParallelThreads` | **`prospectingOnly` must be empty** — that is the firm-exclusivity rule David's directive asked for, enforced in `enrollContact` under the firm lock and again by `firmExclusivitySource` at the step. `anyOrigin` may have rows: several people at one customer firm may each hold a follow-up permission, which is the exception written into the same sentence. |
 | 6 `suppression` | `byScope` non-empty is the sanity check that the view the gate reads is readable at all. `liveEnrollmentsOfSuppressedPeople` may be non-zero and that is safe: those steps hold. It is a count of enrollments to stop for tidiness, not a sending risk. |
