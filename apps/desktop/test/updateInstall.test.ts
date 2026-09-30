@@ -74,6 +74,8 @@ interface Harness {
   offer(bundle: FakeBundle): void;
   /** This build is blocked by a raised minimum (5.3) from now on. */
   block(): void;
+  /** A call placed from Callie is live, or not, from now on (slice C1). */
+  onCall(live: boolean): void;
   /** The same Mac, started again as `version` — the relaunch the swap asked for. */
   startAs(version: string): Harness;
 }
@@ -112,6 +114,7 @@ function harness(options: HarnessOptions = {}): Harness {
   let bytes = fakeZip(bundle);
   let decision = options.decision ?? available(manifestFor(bytes, options.offeredVersion ?? bundle.version));
   let blocked = false;
+  let live = false;
 
   const tools = createFakeTools(fake);
   const told: { message: string; detail: string }[] = [];
@@ -163,6 +166,7 @@ function harness(options: HarnessOptions = {}): Harness {
       published.push(status);
       events.push(`publish ${status.kind}`);
     },
+    callActive: () => live,
   });
 
   return {
@@ -187,6 +191,9 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     block: () => {
       blocked = true;
+    },
+    onCall: next => {
+      live = next;
     },
     startAs: version => harness({ ...options, current: version, fake, placeRunning: false, offered: bundle, decision }),
   };
@@ -628,6 +635,48 @@ describe('while in use', () => {
     const h = harness();
     await expect(h.updater.restartToUpdate()).resolves.toEqual({ kind: 'nothing', decision: null });
     expectApplicationsUntouched(h);
+  });
+});
+
+describe('during a call (slice C1)', () => {
+  it('does not install a blocked build’s update while a call is live, and installs it when the call ends', async () => {
+    const h = harness();
+    h.block();
+    h.onCall(true);
+
+    await expect(h.updater.periodic()).resolves.toEqual({ kind: 'deferred', version: '1.0.6' });
+    expectApplicationsUntouched(h);
+    // Still owed while the call goes on.
+    await expect(h.updater.callEnded()).resolves.toEqual({ kind: 'nothing', decision: null });
+    expectApplicationsUntouched(h);
+
+    h.onCall(false);
+    await expect(h.updater.callEnded()).resolves.toEqual({ kind: 'relaunching', version: '1.0.6' });
+    expect(h.fake.bundleAt(RUNNING)?.version).toBe('1.0.6');
+    expect(h.relaunched).toEqual([EXE]);
+  });
+
+  it('defers Restart to update pressed during a call until the call ends', async () => {
+    const h = harness();
+    await h.updater.periodic();
+    h.onCall(true);
+
+    await expect(h.updater.restartToUpdate()).resolves.toEqual({ kind: 'deferred', version: '1.0.6' });
+    expectApplicationsUntouched(h);
+
+    h.onCall(false);
+    await expect(h.updater.callEnded()).resolves.toEqual({ kind: 'relaunching', version: '1.0.6' });
+    expect(h.relaunched).toEqual([EXE]);
+  });
+
+  it('installs nothing when a call ends with no install owed', async () => {
+    const h = harness();
+    await h.updater.periodic();
+    h.onCall(true);
+    h.onCall(false);
+    await expect(h.updater.callEnded()).resolves.toEqual({ kind: 'nothing', decision: null });
+    expectApplicationsUntouched(h);
+    expect(h.updater.status()).toEqual({ kind: 'ready', version: '1.0.6' });
   });
 });
 

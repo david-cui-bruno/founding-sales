@@ -54,6 +54,8 @@ export interface UpdateWatchOptions {
   readonly tell?: UpdaterOptions['tell'];
   readonly reveal?: UpdaterOptions['reveal'];
   readonly downloadDirectory?: () => string;
+  /** A call placed from Callie is live: an install waits for it to end (slice C1). */
+  readonly callActive?: () => boolean;
 }
 
 export interface UpdateWatch {
@@ -62,6 +64,8 @@ export interface UpdateWatch {
   /** The in-use check, now. */
   checkNow(): Promise<UpdateOutcome>;
   restart(): Promise<UpdateOutcome>;
+  /** The call ended: install what it deferred, if anything (slice C1). */
+  callEnded(): Promise<UpdateOutcome>;
   stop(): void;
 }
 
@@ -100,6 +104,7 @@ export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
     log: line => {
       console.error(line);
     },
+    ...(options.callActive === undefined ? {} : { callActive: options.callActive }),
   });
 
   // The page asks for the state, and for a restart; neither takes an argument, so
@@ -124,6 +129,7 @@ export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
     launch,
     checkNow: async () => await updater.periodic(),
     restart: async () => await updater.restartToUpdate(),
+    callEnded: async () => await updater.callEnded(),
     stop: () => {
       clearInterval(timer);
     },
