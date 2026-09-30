@@ -4,6 +4,7 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { readFirm } from '../crm/firms.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
+import { localParts } from '../src/rules/localClock.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { currentHolidayCalendar } from '../sequences/calendars.ts';
 import { stepForCadence } from '../sequences/enrollments.ts';
@@ -191,7 +192,8 @@ export interface PreviewBasis {
 /**
  * Whether the schedule an enrolment started now would have is the schedule the person
  * was read (review of S3, round 2, P1-A): the same zone, the same calendar version, and
- * every step at the same minute — the precision the card displays. `now` is the
+ * every step on the same local day in the firm's zone and within fifteen minutes of the
+ * instant the card showed (`PREVIEW_DRIFT_TOLERANCE_MS`). `now` is the
  * transaction's sampled `now()`, which is the instant `enrollContact` anchors at in the
  * same transaction. A step missing from either side is a difference.
  */
@@ -207,11 +209,24 @@ export function previewBasisHolds(
   if (current.zone === null || current.zone !== basis.timeZone) return false;
   if (current.calendar.version !== basis.calendarVersionId) return false;
   if (basis.steps === undefined) return true;
-  const schedule = scheduleOf(current.steps, current.now, current.zone, current.calendar);
+  const zone = current.zone;
+  const schedule = scheduleOf(current.steps, current.now, zone, current.calendar);
   if (schedule.length !== basis.steps.length) return false;
-  const minute = (instant: string): number => Math.floor(Date.parse(instant) / 60_000);
   return schedule.every(planned => {
     const shown = basis.steps?.find(entry => entry.ordinal === planned.ordinal);
-    return shown !== undefined && minute(shown.sendAt) === minute(planned.sendAt);
+    return (
+      shown !== undefined &&
+      localParts(shown.sendAt, zone).date === localParts(planned.sendAt, zone).date &&
+      Math.abs(Date.parse(shown.sendAt) - Date.parse(planned.sendAt)) <= PREVIEW_DRIFT_TOLERANCE_MS
+    );
   });
 }
+
+/**
+ * How far a step may drift from the instant the card showed and still be the step the
+ * person agreed to: fifteen minutes, on the same local day in the firm's zone
+ * (coordinator's rule, 30 September 2026). An hour-delay step drifts by exactly the time
+ * between the preview and the recording, which is minutes; a day change — a window that
+ * closed, a holiday, midnight — is a different date and is always stale.
+ */
+export const PREVIEW_DRIFT_TOLERANCE_MS = 15 * 60_000;

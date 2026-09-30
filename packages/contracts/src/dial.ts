@@ -459,7 +459,8 @@ const agreedFollowUpSchema = z
        * preview's anchor, the firm's zone, the holiday calendar version and each step's
        * displayed instant, as `POST /calls/follow-up-preview` answered them. Before
        * anything is written the command recomputes the schedule at its transaction's
-       * sampled `now()`; a changed zone, calendar version or step minute answers
+       * sampled `now()`; a changed zone or calendar version, or a step that moved to
+       * another local day or more than fifteen minutes from its shown instant, answers
        * `follow_up_not_granted` with reason `stale_preview` and writes no agreement and
        * no permission, so nobody is enrolled on dates they did not hear.
        */
@@ -469,8 +470,9 @@ const agreedFollowUpSchema = z
         calendarVersionId: z.string().min(1).max(64),
         /**
          * The instant each step was displayed at — the preview's `estimatedAt` — which
-         * the command compares, to the minute, with the schedule it would start in its
-         * own transaction (review of S3, round 2, P1-A).
+         * the command compares with the schedule it would start in its own transaction:
+         * the same local day in the firm's zone and within fifteen minutes (review of
+         * S3, round 2, P1-A; coordinator's tolerance rule).
          */
         steps: z
           .array(z.strictObject({ ordinal: z.number().int().min(1).max(50), sendAt: instant }))

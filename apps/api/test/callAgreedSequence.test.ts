@@ -787,7 +787,7 @@ describe('an agreed sequence recorded on the call card', () => {
       );
     });
 
-    it('writes nothing beyond the call when a displayed step instant is not the one it would start with', async () => {
+    it('writes nothing beyond the call when a step would start more than fifteen minutes from its shown instant', async () => {
       // Round 2, P1-A, through the route: the card's displayed minute for step 1 differs
       // from what the command recomputes at its own transaction start.
       const sequenceVersionId = await publishedVersion(adminToken);
@@ -797,7 +797,8 @@ describe('an agreed sequence recorded on the call card', () => {
       if (first === undefined) throw new Error('no step');
       const previewBasis = {
         ...shown,
-        steps: [{ ordinal: 1, sendAt: new Date(Date.parse(first.sendAt) + 60_000).toISOString() }, ...shown.steps.slice(1)],
+        // Sixteen minutes from the shown instant: past the fifteen-minute tolerance.
+        steps: [{ ordinal: 1, sendAt: new Date(Date.parse(first.sendAt) + 16 * 60_000).toISOString() }, ...shown.steps.slice(1)],
       };
       await expectStaleAndNothingWritten(
         at,

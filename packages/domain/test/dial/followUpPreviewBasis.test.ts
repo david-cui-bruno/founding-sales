@@ -7,11 +7,12 @@ import type { SequenceStepRow } from '../../sequences/types.ts';
  * Whether the dates a person was read are the dates an enrolment started now would use
  * (send-path v2, review of S3, round 2, P1-A).
  *
- * The card shows each step's expected instant to the minute; the command recomputes the
- * schedule at its own transaction's sampled `now()` — the instant `enrollContact`
- * anchors at — and starts the sequence only if every step lands on the same minute. The
- * case the review named: an e-mail with no delay previewed at 16:59 on a Friday shows
- * Friday 16:59; recorded at 17:01 the window has closed and it would send Monday 08:00.
+ * The card shows each step's date and time in the firm's zone; the command recomputes
+ * the schedule at its own transaction's sampled `now()` — the instant `enrollContact`
+ * anchors at — and starts the sequence only if every step lands on the same local day
+ * and within fifteen minutes of what was shown (coordinator's rule, 30 September 2026).
+ * The case the review named — an e-mail with no delay previewed at 16:59 on a Friday
+ * and recorded at 17:01, which would send Monday 08:00 — is a day change and refused.
  */
 
 const ZONE = 'America/New_York';
@@ -39,7 +40,21 @@ function basisAt(anchor: string) {
   };
 }
 
-describe('the preview basis at the send window’s edge', () => {
+const call: SequenceStepRow = { ...email, id: '00000000-0000-4000-8000-000000000002', channel: 'call_task', templateVersionId: null };
+const hourLater: SequenceStepRow = { ...email, delay: { unit: 'elapsed', hours: 1 } };
+
+const holds = (steps: readonly SequenceStepRow[], shownAt: string, now: string, zone = ZONE) =>
+  previewBasisHolds(
+    {
+      anchorAt: shownAt,
+      timeZone: ZONE,
+      calendarVersionId: CALENDAR.version,
+      steps: scheduleOf(steps, shownAt, ZONE, CALENDAR).map(step => ({ ordinal: step.ordinal, sendAt: step.sendAt })),
+    },
+    { steps, now, zone, calendar: CALENDAR },
+  );
+
+describe('the preview basis: same local day, and within fifteen minutes', () => {
   it('shows Friday 16:59 at 16:59, and Monday 08:00 two minutes later', () => {
     expect(basisAt(at('16:59:00')).steps).toEqual([{ ordinal: 1, sendAt: at('16:59:00') }]);
     expect(scheduleOf([email], at('17:01:00'), ZONE, CALENDAR)[0]?.sendAt).toBe(
@@ -47,15 +62,27 @@ describe('the preview basis at the send window’s edge', () => {
     );
   });
 
-  it('refuses the Friday agreement recorded after the window closed', () => {
-    const shown = basisAt(at('16:59:00'));
-    expect(previewBasisHolds(shown, { steps: [email], now: at('17:01:00'), zone: ZONE, calendar: CALENDAR })).toBe(false);
+  it('holds a step recorded two minutes after its 16:59 preview on the same day', () => {
+    // A call task has no send window: 16:59 shown, 17:01 recomputed — the same Friday,
+    // two minutes apart, so the person agreed to it.
+    expect(holds([call], at('16:59:00'), at('17:01:00'))).toBe(true);
+    // And an hour-delay e-mail previewed at 10:00 and recorded at 10:07 lands at 11:07,
+    // seven minutes from the 11:00 shown: the same agreement, no extra step.
+    expect(holds([hourLater], at('10:00:00'), at('10:07:00'))).toBe(true);
   });
 
-  it('holds within the displayed minute, and refuses the next one', () => {
-    const shown = basisAt(at('16:58:05'));
-    expect(previewBasisHolds(shown, { steps: [email], now: at('16:58:55'), zone: ZONE, calendar: CALENDAR })).toBe(true);
-    expect(previewBasisHolds(shown, { steps: [email], now: at('16:59:01'), zone: ZONE, calendar: CALENDAR })).toBe(false);
+  it('refuses the Friday e-mail recorded after the window closed: it would send Monday', () => {
+    expect(holds([email], at('16:59:00'), at('17:01:00'))).toBe(false);
+  });
+
+  it('refuses a step that crosses midnight in the firm’s zone, however few minutes it moved', () => {
+    // A call task shown 23:55 Friday; recorded at 00:05 it is due Saturday.
+    expect(holds([call], at('23:55:00'), new Date('2026-09-26T00:05:00-04:00').toISOString())).toBe(false);
+  });
+
+  it('refuses a drift of sixteen minutes, and holds one of fifteen', () => {
+    expect(holds([hourLater], at('10:00:00'), at('10:16:00'))).toBe(false);
+    expect(holds([hourLater], at('10:00:00'), at('10:15:00'))).toBe(true);
   });
 
   it('refuses a changed zone, a changed calendar version, and a missing step', () => {

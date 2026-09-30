@@ -713,7 +713,8 @@ type AgreedFollowUp = NonNullable<LogCallOutcomeInput['followUpPermission']>;
  *   0. **Standing, before any write.** A single e-mail's template must still be this
  *      workspace's, approved and not retired (P1-4). An agreed sequence's preview basis
  *      must still be the schedule an enrolment started now would have (P1-A):
- *      the firm's zone, the calendar version and every step to the minute, recomputed
+ *      the firm's zone, the calendar version, and every step on the same local day and
+ *      within fifteen minutes of its shown instant (`previewBasisHolds`), recomputed
  *      at the transaction's sampled `now()` — the instant `enrollContact` anchors at in
  *      the same transaction. Either failing is `follow_up_not_granted` with the reason
  *      (`template_*`, `stale_preview`) and **nothing** is written: no agreement on the
