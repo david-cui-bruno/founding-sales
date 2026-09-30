@@ -19,7 +19,7 @@ import {
   type MessagePipelineReport,
 } from './pipeline.ts';
 import { readRefreshToken } from './tokens.ts';
-import { startRecovery, type RecoveryFloorSource } from './recover.ts';
+import { readRecovery, startRecovery, type RecoveryFloorSource } from './recover.ts';
 import { RECOVERY_OVERLAP_SECONDS, type MailboxRow } from './types.ts';
 
 /**
@@ -249,11 +249,17 @@ export async function runMailSync(
       ownerUserId: mailbox.ownerUserId,
       reasonCode: 'coverage_incomplete',
     });
-    await startRecovery(context, {
-      mailbox,
-      reason: 'baseline',
-      ...(deps.recoveryFloor === undefined ? {} : { floor: deps.recoveryFloor }),
-    });
+    if ((await readRecovery(context, { mailboxId: mailbox.id, generation: mailbox.generation })) === null) {
+      // The continuous handoff: the profile's history id is read before the recovery
+      // fixes the end of its interval.
+      const profile = await deps.gmail.getProfile(access.access);
+      await startRecovery(context, {
+        mailbox,
+        reason: 'baseline',
+        startHistoryId: profile.historyId,
+        ...(deps.recoveryFloor === undefined ? {} : { floor: deps.recoveryFloor }),
+      });
+    }
     return report(mailbox.id, 'baseline_started', mailbox.historyId);
   }
 
@@ -274,7 +280,7 @@ export async function runMailSync(
     });
     if (!outcome.ok) {
       if (outcome.reason === 'history_expired') {
-        return await beginRecoveryForExpiredCursor(context, mailbox, deps.recoveryFloor);
+        return await beginRecoveryForExpiredCursor(context, deps, access.access, mailbox);
       }
       if (outcome.reason === 'grant_revoked') {
         await holdForRevokedGrant(context, mailbox);
@@ -383,9 +389,14 @@ export async function runMailSync(
  */
 async function beginRecoveryForExpiredCursor(
   context: RepositoryContext,
+  deps: MailSyncDeps,
+  access: GmailAccessGrant,
   mailbox: MailboxRow,
-  floor: RecoveryFloorSource | undefined,
 ): Promise<MailSyncReport> {
+  const floor = deps.recoveryFloor;
+  // The continuous handoff: the profile's history id is read first, before the
+  // recovery fixes the end of its interval, and becomes the cursor completion adopts.
+  const profile = await deps.gmail.getProfile(access);
   const generation = await advanceGeneration(context, mailbox.id);
   await setSyncState(context, { mailboxId: mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {
@@ -402,6 +413,7 @@ async function beginRecoveryForExpiredCursor(
     // Appendix G 13 turns into a test: "a reply just outside nominal bounds is
     // recovered by overlap".
     fromAt: new Date(Date.parse(watermark) - RECOVERY_OVERLAP_SECONDS * 1000).toISOString(),
+    startHistoryId: profile.historyId,
     ...(floor === undefined ? {} : { floor }),
   });
   return report(mailbox.id, 'recovery_started', mailbox.historyId);

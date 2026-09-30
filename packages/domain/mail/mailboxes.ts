@@ -243,6 +243,87 @@ export async function markMailboxDisconnected(
   );
 }
 
+/**
+ * A job read the mailbox at one generation and address, and the row no longer says so
+ * when the job came to write (generation fencing, `docs/greenfield/mail.md`).
+ *
+ * Thrown, never returned: the runner rolls the whole job transaction back — message
+ * effects included — and records the failure as `stale_mailbox_generation` (the
+ * runner's code is the error's name). The retry re-reads the mailbox and acts for the
+ * generation it finds, which is harmless by construction: a sync of a mailbox that is
+ * not `ready` is a no-op, a recovery for a superseded generation answers
+ * `generation_superseded`, and a watch renewal registers the current account's watch.
+ */
+export class StaleMailboxGeneration extends Error {
+  override readonly name = 'StaleMailboxGeneration';
+  constructor(
+    readonly mailboxId: string,
+    readonly write: string,
+    readonly expected: MailboxFence,
+  ) {
+    super(`the mailbox changed generation or address before the job's ${write} could commit`);
+  }
+}
+
+/** What a job read at its start and every write it makes is predicated on. */
+export interface MailboxFence {
+  readonly generation: number;
+  readonly emailAddress: string;
+}
+
+export const fenceOf = (mailbox: MailboxRow): MailboxFence => ({
+  generation: mailbox.generation,
+  emailAddress: mailbox.emailAddress,
+});
+
+/**
+ * Lock the mailbox row and refuse unless it still has the generation and address the
+ * job read at its start. The lock holds until the job commits, so nothing can move the
+ * generation between this check and the writes after it.
+ */
+export async function lockMailboxAtFence(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly fence: MailboxFence; readonly write: string },
+): Promise<MailboxRow> {
+  const mailbox = await readMailboxForUpdate(context, input.mailboxId);
+  if (
+    mailbox === null ||
+    mailbox.generation !== input.fence.generation ||
+    mailbox.emailAddress !== input.fence.emailAddress
+  ) {
+    throw new StaleMailboxGeneration(input.mailboxId, input.write, input.fence);
+  }
+  return mailbox;
+}
+
+/**
+ * Forget everything the mailbox knows about the account it was reading: the history
+ * cursor, its instant, the coverage watermark and the last sync's outcome, in one
+ * statement, so `mailboxes_history_cursor_consistent` and
+ * `mailboxes_coverage_needs_cursor` hold on either side of it.
+ *
+ * The caller must hold the mailbox row lock (`readMailboxForUpdate`) in the same
+ * transaction, and is the one that advances the generation and starts the new
+ * baseline: this is the account-switch half that only clears.
+ */
+export async function resetAccountState(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string },
+): Promise<void> {
+  const { rowCount } = await context.db.query(
+    `UPDATE mailboxes
+        SET history_id = NULL,
+            history_id_updated_at = NULL,
+            coverage_watermark_at = NULL,
+            last_sync_error = NULL,
+            last_synced_at = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  if ((rowCount ?? 0) === 0) throw new Error('an account-state reset found no mailbox');
+}
+
 export type CursorOutcome =
   | { readonly advanced: true; readonly historyId: string; readonly coverageWatermarkAt: string | null }
   | { readonly advanced: false; readonly reason: 'cursor_moved' };

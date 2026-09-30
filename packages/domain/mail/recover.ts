@@ -13,6 +13,8 @@ import {
   releaseMailboxHold,
   setSyncState,
   advanceCursor,
+  fenceOf,
+  StaleMailboxGeneration,
 } from './mailboxes.ts';
 import {
   EMPTY_PIPELINE_REPORT,
@@ -126,7 +128,18 @@ export interface StartRecoveryInput {
   /** The caller's own floor; the recovery takes the earlier of this and the port's. */
   readonly fromAt?: string | undefined;
   readonly floor?: RecoveryFloorSource | undefined;
-  /** The interval's end. Now, unless a test pins it. */
+  /**
+   * The continuous handoff (`docs/greenfield/mail.md`): the profile's `historyId`, read
+   * *before* the interval's end is fixed. The recovery covers the listing up to `toAt`
+   * and history sync covers everything after this id, so a message that arrives while
+   * the recovery runs is in one or both and never in neither. It is stored as the
+   * mailbox's cursor when the recovery is created, and completion adopts it.
+   */
+  readonly startHistoryId: string;
+  /**
+   * The interval's end. Now, unless a test pins it; either way it must not be earlier
+   * than the instant `startHistoryId` was read.
+   */
   readonly toAt?: string | undefined;
   readonly baselineDays?: number | undefined;
 }
@@ -142,6 +155,9 @@ export async function startRecovery(
   context: RepositoryContext,
   input: StartRecoveryInput,
 ): Promise<RecoveryRow> {
+  if (!/^[0-9]{1,20}$/.test(input.startHistoryId)) {
+    throw new Error('a recovery starts from a Gmail history id');
+  }
   const existing = await readRecovery(context, {
     mailboxId: input.mailbox.id,
     generation: input.mailbox.generation,
@@ -178,6 +194,19 @@ export async function startRecovery(
     return found;
   }
 
+  // The handoff's cursor, written with the recovery that owns it and fenced on the
+  // generation the recovery is for: a mailbox that moved on since the caller read it is
+  // not this recovery's to point anywhere.
+  const cursor = await context.db.query(
+    `UPDATE mailboxes
+        SET history_id = $4, history_id_updated_at = now(), updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND generation = $3 AND email_address = $5`,
+    [context.scope.workspaceId, input.mailbox.id, input.mailbox.generation, input.startHistoryId, input.mailbox.emailAddress],
+  );
+  if ((cursor.rowCount ?? 0) === 0) {
+    throw new StaleMailboxGeneration(input.mailbox.id, 'recovery start', fenceOf(input.mailbox));
+  }
+
   await enqueueJob(context.db, {
     workspaceId: context.scope.workspaceId,
     kind: 'mail.recover',
@@ -212,6 +241,8 @@ export async function beginRestoreRecovery(
     readonly mailbox: MailboxRow;
     /** Appendix E.4's "restore point minus ten minutes". */
     readonly fromAt: string;
+    /** The profile's `historyId`, read before this is called (`StartRecoveryInput`). */
+    readonly startHistoryId: string;
     readonly floor?: RecoveryFloorSource | undefined;
   },
 ): Promise<RecoveryRow> {
@@ -226,6 +257,7 @@ export async function beginRestoreRecovery(
     mailbox: { ...input.mailbox, generation },
     reason: 'restore',
     fromAt: input.fromAt,
+    startHistoryId: input.startHistoryId,
     ...(input.floor === undefined ? {} : { floor: input.floor }),
   });
 }
