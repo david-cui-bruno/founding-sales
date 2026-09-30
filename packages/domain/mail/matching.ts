@@ -3,7 +3,9 @@ import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { markMessageMatched } from './messages.ts';
+import { fenceForOutgoingMessage } from '../outbound/fence.ts';
+import { applyDirectSendEffects } from './effects.ts';
+import { markMessageMatched, readMessage } from './messages.ts';
 import type { NormalizedMetadata } from './messages.ts';
 import { acceptMail, refuseMail, type MailMatchRule, type MailResult } from './types.ts';
 
@@ -411,6 +413,21 @@ export async function resolveAmbiguity(
   );
 
   const releasedIds = released.map(hold => hold.id).filter(id => id !== selected.holdId);
+
+  // Send-path v2 (slice S1): the salesperson's own outgoing message, matched to several
+  // firms, waited for this resolution rather than updating a conversation it might not
+  // belong to. Now that a person has named the opportunity, the direct send is applied
+  // to it — once, by the effect's own marker. An FSS send is recognised by its fence and
+  // has no direct-send effect.
+  const message = await readMessage(context, input.messageId);
+  if (message !== null && message.direction === 'outgoing') {
+    const fenceId = await fenceForOutgoingMessage(context, {
+      mailboxId: message.mailboxId,
+      rfcMessageId: message.rfcMessageId,
+      providerMessageId: message.providerMessageId,
+    });
+    if (fenceId === null) await applyDirectSendEffects(context, { message, candidate: selected });
+  }
 
   let manualOpportunityId: string | null = null;
   if (input.human) {

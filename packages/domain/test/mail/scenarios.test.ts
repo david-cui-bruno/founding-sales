@@ -483,7 +483,7 @@ describe('matching and its consequences', () => {
     expect(holds.map(hold => hold.reasonCode)).toContain('uncertain_reply');
   });
 
-  it('Appendix G 19: a direct Gmail send switches an automated firm to manual, once', async () => {
+  it('Appendix G 19, send-path v2: a direct Gmail send updates the conversation once, and never makes the firm manual', async () => {
     world = await createMailWorld();
     const w = world;
     await completeBaseline(w, w.alpha);
@@ -501,7 +501,7 @@ describe('matching and its consequences', () => {
     );
 
     const first = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(first.directSendsSwitchedToManual).toBe(1);
+    expect(first.directSendsRecorded).toBe(1);
 
     // Import the same message again — a duplicate push, a reconciliation pass.
     await w.database.session.query(
@@ -509,24 +509,86 @@ describe('matching and its consequences', () => {
       [context.scope.workspaceId, w.alpha.mailboxId],
     );
     const second = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(second.directSendsSwitchedToManual).toBe(0);
+    expect(second.directSendsRecorded).toBe(0);
 
-    const { rows } = await w.database.session.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM mail_message_effects
-        WHERE workspace_id = $1 AND effect_kind = 'direct_send_manual'`,
+    const { rows } = await w.database.session.query<{ effect_kind: string; count: string }>(
+      `SELECT effect_kind, count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND effect_kind IN ('direct_send_conversation', 'direct_send_manual')
+        GROUP BY effect_kind`,
       [context.scope.workspaceId],
     );
-    expect(rows[0]?.count).toBe('1');
+    expect(rows).toEqual([{ effect_kind: 'direct_send_conversation', count: '1' }]);
 
+    // No takeover: the opportunity stays automated, with no origin, and no manual-mode
+    // signal was written for the drain to act on.
     const events = await w.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM crm_domain_events
         WHERE workspace_id = $1 AND event_kind = 'opportunity.manual_mode'`,
       [context.scope.workspaceId],
     );
-    expect(events.rows[0]?.count).toBe('1');
+    expect(events.rows[0]?.count).toBe('0');
+    const control = await w.database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, w.crm.alpha.opportunityId],
+    );
+    expect(control.rows[0]).toEqual({ control_mode: 'automated', control_mode_origin: null });
 
     // No body was fetched for an outgoing message: 12.3 matches it, it does not read it.
     expect(w.alpha.gmail.bodyReads).not.toContain('direct1');
+  });
+
+  it('send-path v2: a direct send matched to two firms waits for the person, then updates only the one they select', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, {
+      name: 'Southwind Test Partners',
+      address: PROSPECT,
+    });
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'directshared1',
+        historyId: '1013',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+        body: 'Following up directly.',
+      }),
+    );
+    const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(report.ambiguous).toBe(1);
+    expect(report.directSendsRecorded).toBe(0);
+
+    const { rows: message } = await w.database.session.query<{ id: string }>(
+      'SELECT id FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2',
+      [context.scope.workspaceId, 'directshared1'],
+    );
+    const messageId = message[0]?.id ?? '';
+    const markers = async (): Promise<readonly { firm_id: string }[]> =>
+      (
+        await w.database.session.query<{ firm_id: string }>(
+          `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+            WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+          [context.scope.workspaceId, messageId],
+        )
+      ).rows;
+    // Held, not guessed: both candidates carry an ambiguity hold, and no conversation was
+    // updated.
+    expect(await markers()).toEqual([]);
+    for (const opportunityId of [w.crm.alpha.opportunityId, other.opportunityId]) {
+      const holds = await listApplicableHolds(context, { actionKind: 'email_send', opportunityId });
+      expect(holds.map(hold => hold.reasonCode)).toContain('ambiguous_match');
+    }
+
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    expect(await markers()).toEqual([{ firm_id: other.firmId }]);
   });
 });
 
@@ -907,7 +969,7 @@ describe('the import feeds the reputation ramp (12.7)', () => {
     expect(report.automatedSendsRecognised).toBe(1);
     // 7.3 reserves manual mode for a *direct* send. Switching here would terminally
     // stop the enrollment that had just sent step one.
-    expect(report.directSendsSwitchedToManual).toBe(0);
+    expect(report.directSendsRecorded).toBe(0);
 
     const events = await w.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM crm_domain_events

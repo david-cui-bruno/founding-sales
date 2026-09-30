@@ -2,11 +2,13 @@ import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { setManualControlMode } from '../crm/pipeline.ts';
+import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
 import { originatingSend } from '../outbound/fence.ts';
 import { recordBounceAgainstDay, recordDaySignal } from '../outbound/ramp.ts';
+import { stopEnrollments } from '../sequences/enrollments.ts';
+import { consumeFulfilledByDirectSend } from '../sequences/followUpPermissions.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply, type ReplyClassification } from '../src/rules/replyClassification.ts';
 import { discardMessageBody } from './messages.ts';
@@ -44,8 +46,8 @@ import {
  * | `automated` | Nothing is released. The body is discarded when it is an out-of-office. |
  *
  * An outgoing message FSS did not send is the fifth case and it is not a class at all:
- * 12.2's "a direct Gmail send to a firm with an automated opportunity switches the
- * opportunity to manual ... in the import transaction" (Appendix G 19).
+ * a direct Gmail send. Since send-path v2 (David, 30 September 2026) it is an update to
+ * the conversation, not a takeover — `applyDirectSendEffects` below.
  */
 
 /** Everything an automated step could do, held by a reply nobody has confirmed yet. */
@@ -428,50 +430,191 @@ async function invalidateBouncedRoute(
 }
 
 export interface DirectSendOutcome {
-  /** The opportunities switched to manual by this send. Empty when none was automated. */
-  readonly switchedToManual: readonly string[];
+  /**
+   * True when this call recorded the conversation update. False on a replay, on a
+   * message a historical `direct_send_manual` marker already processed, and on a message
+   * whose match is not resolved to one opportunity.
+   */
+  readonly recorded: boolean;
+  /** The verified To/Cc recipients at the matched firm, as contact ids. */
+  readonly recipientContactIds: readonly string[];
+  /** The one-message permissions this send fulfilled (`fulfilled_by_direct_send`). */
+  readonly consumedPermissionIds: readonly string[];
+  /** The enrollments this send ended `direct_send`: live prospecting, and the fulfilled ones. */
+  readonly endedEnrollmentIds: readonly string[];
 }
 
+const NOT_RECORDED: DirectSendOutcome = Object.freeze({
+  recorded: false,
+  recipientContactIds: [],
+  consumedPermissionIds: [],
+  endedEnrollmentIds: [],
+});
+
 /**
- * 12.2 and Appendix G 19: "A direct Gmail send to a firm with an automated
- * opportunity switches the opportunity to manual and stops current enrollments in the
- * import transaction."
+ * A direct Gmail send by the salesperson is an update to the conversation, not a
+ * takeover (send-path v2, slice S1).
  *
- * "Once" is the part the scenario names, and it is `mail_message_effects`'
- * uniqueness: the same outgoing message imported twice — a duplicate push, a
- * reconciliation pass — records one effect and calls `setManualControlMode` once.
- * `setManualControlMode` is itself idempotent, so even a lost race is harmless; the
- * effect row is what makes the count of *transitions* one.
+ * David, 30 September 2026: *"My email should update the conversation, complete any
+ * fulfilled request, and prevent duplicate follow-ups. It should not automatically
+ * impose permanent manual takeover. The explicit 'I will handle this myself' control
+ * still pauses automation."* So, for one outgoing message with no FSS fence, resolved to
+ * one opportunity:
  *
- * G7-2 calls this only for outgoing messages with no `outbound_messages` fence. Until
- * the fence exists, every outgoing message that matches is a direct send, which is
- * correct for G7-1 because FSS has not sent anything yet.
+ *   * **Control mode is not touched.** No `setManualControlMode`, no
+ *     `control_mode_origin`, no `opportunity.manual_mode` event. A stored takeover
+ *     (`salesperson_command`) is left exactly as it is and keeps blocking.
+ *   * **Cold outreach to the firm ends.** Every live `prospecting` enrollment at the
+ *     firm ends `direct_send`: the salesperson is now in a conversation with this firm,
+ *     and a cold step after it would be the duplicate David named.
+ *   * **A fulfilled request is complete.** Every unspent `single_email` or
+ *     `contextual_reply` permission whose recipient is a verified To/Cc recipient of this
+ *     message is consumed `fulfilled_by_direct_send`, and the enrollment bound to it ends
+ *     `direct_send`. The recipients come from the message's own addresses through
+ *     `email_addresses` at the matched firm — a match candidate's `contact_id` is not a
+ *     recipient: a thread match carries whoever the thread first matched, and matching
+ *     keeps one contact per opportunity.
+ *   * **An agreed sequence keeps running.** `agreed_sequence` permissions and their
+ *     enrollments are not touched: one hand-written e-mail does not end a programme the
+ *     prospect agreed to.
+ *
+ * Everything happens under the exclusive send gate, taken first (as `logCallOutcome`
+ * does), so a dispatch claim racing this effect is serialized with it: whichever holds the
+ * gate first wins, and the other sees the consumed permission or the ended enrollment. A
+ * claim that **committed** before this message was imported is not undone — the import
+ * cannot see a message Gmail has not reported yet, and a dispatched fence is irreversible
+ * (Appendix B). `docs/greenfield/decisions/follow-up-eligibility-20260929.md` §5 records
+ * the boundary.
+ *
+ * Idempotent: one `direct_send_conversation` marker per message (`message:<id>`),
+ * checked under the gate. A message that already carries a historical
+ * `direct_send_manual` marker — the takeover this replaced — was processed then and is
+ * not processed again. One audit row, of ids only.
+ *
+ * The caller asks only for a resolved match: an ambiguous import holds every candidate
+ * (`recordMatches`) and this runs when a person resolves it (`resolveAmbiguity`).
  */
 export async function applyDirectSendEffects(
   context: RepositoryContext,
-  input: { readonly message: MailMessageRow; readonly candidates: readonly MatchCandidate[] },
+  input: { readonly message: MailMessageRow; readonly candidate: MatchCandidate },
 ): Promise<DirectSendOutcome> {
-  const switched: string[] = [];
-  for (const candidate of input.candidates) {
-    const targetKey = `opportunity:${candidate.opportunityId}`;
-    if (await effectRecorded(context, { messageId: input.message.id, kind: 'direct_send_manual', targetKey })) {
-      continue;
-    }
-    const outcome = await setManualControlMode(context, {
-      opportunityId: candidate.opportunityId,
-      reason: 'direct Gmail send by the salesperson',
-      origin: 'direct_send',
+  const { message, candidate } = input;
+  await lockSendGateForStopFact(context);
+
+  const { rows: processed } = await context.db.query<{ present: boolean }>(
+    `SELECT true AS present FROM mail_message_effects
+      WHERE workspace_id = $1 AND mail_message_id = $2
+        AND effect_kind IN ('direct_send_conversation', 'direct_send_manual')
+      LIMIT 1`,
+    [context.scope.workspaceId, message.id],
+  );
+  if (processed[0]?.present === true) return NOT_RECORDED;
+
+  const recipientContactIds = await verifiedRecipientContacts(context, {
+    firmId: candidate.firmId,
+    addresses: [...message.headerTo, ...message.headerCc],
+  });
+
+  const ended: string[] = [];
+  const { rows: prospecting } = await context.db.query<{ id: string }>(
+    `SELECT id FROM sequence_enrollments
+      WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind = 'prospecting'
+      ORDER BY id`,
+    [context.scope.workspaceId, candidate.firmId],
+  );
+  for (const enrollment of prospecting) {
+    const stopped = await stopEnrollments(context, {
+      enrollmentId: enrollment.id,
+      reason: 'direct_send',
+      cancelReason: 'direct_send',
     });
-    if (!outcome.ok) continue;
-    await recordEffect(context, {
-      messageId: input.message.id,
-      kind: 'direct_send_manual',
-      targetKey,
-      detail: { firmId: candidate.firmId },
-    });
-    switched.push(candidate.opportunityId);
+    ended.push(...stopped.enrollmentIds);
   }
-  return { switchedToManual: switched };
+
+  const consumed = await consumeFulfilledByDirectSend(context, {
+    firmId: candidate.firmId,
+    contactIds: recipientContactIds,
+  });
+  const consumedPermissionIds = consumed.map(permission => permission.permissionId);
+  if (consumedPermissionIds.length > 0) {
+    const { rows: bound } = await context.db.query<{ id: string }>(
+      `SELECT id FROM sequence_enrollments
+        WHERE workspace_id = $1 AND ended_at IS NULL
+          AND (permission_id = ANY ($2::uuid[]) OR id = ANY ($3::uuid[]))
+        ORDER BY id`,
+      [
+        context.scope.workspaceId,
+        consumedPermissionIds,
+        consumed.flatMap(permission => (permission.enrollmentId === null ? [] : [permission.enrollmentId])),
+      ],
+    );
+    for (const enrollment of bound) {
+      const stopped = await stopEnrollments(context, {
+        enrollmentId: enrollment.id,
+        reason: 'direct_send',
+        cancelReason: 'direct_send',
+      });
+      ended.push(...stopped.enrollmentIds);
+    }
+  }
+
+  const endedEnrollmentIds = [...new Set(ended)].sort();
+  await recordEffect(context, {
+    messageId: message.id,
+    kind: 'direct_send_conversation',
+    targetKey: `message:${message.id}`,
+    detail: {
+      firmId: candidate.firmId,
+      opportunityId: candidate.opportunityId,
+      recipientContactIds,
+      consumedPermissionIds,
+      endedEnrollmentIds,
+    },
+  });
+  // Ids only (5.2): the subject is the stored message row, never Gmail's id or the
+  // RFC Message-ID, and no address, subject or body is in the detail.
+  await recordCrmAuditEvent(context, {
+    action: 'mail.direct_send_conversation',
+    subjectKind: 'mail_message',
+    subjectId: message.id,
+    detail: {
+      firmId: candidate.firmId,
+      opportunityId: candidate.opportunityId,
+      recipientContactIds,
+      consumedPermissionIds,
+      endedEnrollmentIds,
+    },
+  });
+  return { recorded: true, recipientContactIds, consumedPermissionIds, endedEnrollmentIds };
+}
+
+/**
+ * The contacts at this firm a message was addressed to, To and Cc, by their stored
+ * addresses. A retired address is no longer the contact's, and an address that is one of
+ * this workspace's own mailboxes is never a prospect's (`byParticipant`'s rule).
+ */
+async function verifiedRecipientContacts(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly addresses: readonly string[] },
+): Promise<readonly string[]> {
+  if (input.addresses.length === 0) return [];
+  const { rows } = await context.db.query<{ contact_id: string }>(
+    `SELECT DISTINCT e.contact_id
+       FROM email_addresses AS e
+       JOIN contacts AS c ON c.workspace_id = e.workspace_id AND c.id = e.contact_id AND c.firm_id = e.firm_id
+      WHERE e.workspace_id = $1
+        AND e.firm_id = $2
+        AND e.contact_id IS NOT NULL
+        AND e.address = ANY ($3::text[])
+        AND e.eligibility <> 'retired'
+        AND NOT EXISTS (
+          SELECT 1 FROM mailboxes AS b
+           WHERE b.workspace_id = e.workspace_id AND b.email_address = e.address
+        )
+      ORDER BY e.contact_id`,
+    [context.scope.workspaceId, input.firmId, [...new Set(input.addresses)]],
+  );
+  return rows.map(row => row.contact_id);
 }
 
 /**

@@ -42,7 +42,11 @@ export interface MessagePipelineReport {
   readonly ambiguous: number;
   readonly holdsOpened: number;
   readonly suppressionsRecorded: number;
-  readonly directSendsSwitchedToManual: number;
+  /**
+   * Direct Gmail sends recorded as an update to the conversation (send-path v2). Not a
+   * count of opportunities made manual: a direct send no longer makes one manual.
+   */
+  readonly directSendsRecorded: number;
   /** Outgoing messages this import matched to a fence FSS had already counted. */
   readonly automatedSendsRecognised: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
@@ -57,7 +61,7 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   ambiguous: 0,
   holdsOpened: 0,
   suppressionsRecorded: 0,
-  directSendsSwitchedToManual: 0,
+  directSendsRecorded: 0,
   automatedSendsRecognised: 0,
   newestInternalDate: null,
 });
@@ -78,7 +82,7 @@ export async function processMessageIds(
   let ambiguous = 0;
   let holdsOpened = 0;
   let suppressionsRecorded = 0;
-  let directSendsSwitchedToManual = 0;
+  let directSendsRecorded = 0;
   let automatedSendsRecognised = 0;
   let newestInternalDate: string | null = null;
 
@@ -111,18 +115,22 @@ export async function processMessageIds(
     holdsOpened += matches.holdIds.length;
 
     if (stored.message.direction === 'outgoing') {
-      // 12.2 and Appendix G 19, and the fence lookup the comment here used to promise.
-      // 7.3 makes a *direct* Gmail send enter manual mode; a sequence step
-      // FSS sent itself is not one, and switching its own opportunity to manual would
-      // terminally stop the enrollment that had just sent step one.
+      // A *direct* Gmail send is an update to the conversation (send-path v2); a
+      // sequence step FSS sent itself is not one, and is recognised by its fence.
       const fenceId = await fenceForOutgoingMessage(context, {
         mailboxId: input.mailbox.id,
         rfcMessageId: stored.message.rfcMessageId,
         providerMessageId: stored.message.providerMessageId,
       });
       if (fenceId === null) {
-        const outcome = await applyDirectSendEffects(context, { message: stored.message, candidates });
-        directSendsSwitchedToManual += outcome.switchedToManual.length;
+        // Only a match resolved to one opportunity. Several candidates are held by
+        // `recordMatches` for the person's resolution, and `resolveAmbiguity` applies
+        // the direct send to the one they select.
+        const only = matches.ambiguous ? undefined : candidates[0];
+        if (only !== undefined) {
+          const outcome = await applyDirectSendEffects(context, { message: stored.message, candidate: only });
+          if (outcome.recorded) directSendsRecorded += 1;
+        }
       } else {
         automatedSendsRecognised += 1;
       }
@@ -172,7 +180,7 @@ export async function processMessageIds(
     ambiguous,
     holdsOpened,
     suppressionsRecorded,
-    directSendsSwitchedToManual,
+    directSendsRecorded,
     automatedSendsRecognised,
     newestInternalDate,
   };

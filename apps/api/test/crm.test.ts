@@ -263,6 +263,32 @@ describe('CRM routes', () => {
     expect((resolved.body['result'] as { sourceId: string }).sourceId).toBe(duplicateId);
   });
 
+  it('send-path v2: the keep-following-up command is gone, and no origin command records a direct send', async () => {
+    const opened = await post('/opportunities/open', assigneeToken, command({ firmId: await seedFirm(fixture, {
+      name: 'Southwind Test Holdings',
+      assignedUserId: assigneeUserId,
+    }) }));
+    expect(opened.status).toBe(200);
+    const opportunityId = (opened.body['result'] as { id: string }).id;
+
+    const retired = await post(
+      '/opportunities/keep-following-up',
+      assigneeToken,
+      command({ opportunityId, reason: 'Callie keeps the agreed sequence' }),
+    );
+    expect(retired.status).toBe(404);
+    expect(retired.body['error']).toBe('not_found');
+
+    for (const origin of ['direct_send', 'direct_send_keep_automation']) {
+      const refused = await post(
+        '/opportunities/control-mode-origin',
+        adminToken,
+        command({ opportunityId, origin, reason: 'it was a hand-written e-mail' }),
+      );
+      expect(refused.status, origin).toBe(400);
+    }
+  });
+
   it('never lets a session from the other workspace see this one, even with the same ids', async () => {
     const betaAdmin = await issueSessionFor(fixture, fixture.beta, fixture.beta.admin);
     const crossed = await get(`/firms/${firmId}`, betaAdmin.accessToken);

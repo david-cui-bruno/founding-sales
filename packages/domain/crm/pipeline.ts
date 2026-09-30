@@ -2,7 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
-import { emitCrmDomainEvent, type ManualModeOrigin } from './events.ts';
+import { emitCrmDomainEvent, isWritableManualModeOrigin, type WritableManualModeOrigin } from './events.ts';
 import { loadFirmForUpdate } from './firms.ts';
 import {
   accept,
@@ -248,19 +248,19 @@ export async function setManualControlMode(
     readonly opportunityId: string;
     readonly reason: string;
     /**
-     * One of the four causes. `direct_send_keep_automation` is **not** one of them: it is
-     * a person's choice rather than a cause of manual mode, and only
-     * `keepFollowingUpAfterDirectSend` may write it (P1-1 of the second review of PR
-     * 332). Excluding it here is what makes that a fact about the code rather than a rule
-     * about the routes.
+     * One of the causes a writer may still record. Since send-path v2 (slice S1) a
+     * direct Gmail send is an update to the conversation rather than a cause of manual
+     * mode, so neither `direct_send` nor `direct_send_keep_automation` is accepted — by
+     * the type, and again at run time below, so an untyped caller cannot write one.
      */
-    readonly origin: Exclude<ManualModeOrigin, 'direct_send_keep_automation'>;
+    readonly origin: WritableManualModeOrigin;
     readonly commandId?: string | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
   // 7.3's manual mode is the confirmed reply's stop, so it takes the send gate before
   // any row (`policy/sendGate.ts`): a send whose claim is in flight commits
   // first, and one that has not claimed yet reads `manual` and does not.
+  if (!isWritableManualModeOrigin(input.origin)) return refuse('invalid_input');
   await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
@@ -276,19 +276,13 @@ export async function setManualControlMode(
     // follow-up, an explicit takeover does. An opportunity that went manual on a reply
     // and is then taken over by a person must stop being a signal, or the takeover
     // would be the one fact this design ignores. Escalation only — a signal never
-    // overwrites a recorded takeover, and nothing here reverses manual mode.
-    // A *later* direct Gmail send is a fresh takeover, even of an opportunity whose
-    // origin is the choice to keep following up (P1-1 of the second review of PR 332).
-    // The person chose to let the automation continue after one hand-written message;
-    // writing again by hand is them taking the conversation back, and the choice can be
-    // made again with `keepFollowingUpAfterDirectSend`. It is still escalation only: a
-    // `salesperson_command` is never downgraded to `direct_send`.
+    // overwrites a recorded takeover, and nothing here reverses manual mode. (The
+    // direct-send escalation that stood here went with send-path v2: a direct send no
+    // longer calls this function at all.)
     const escalation =
       input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command'
         ? 'salesperson_command'
-        : input.origin === 'direct_send' && opportunity['control_mode_origin'] === 'direct_send_keep_automation'
-          ? 'direct_send'
-          : null;
+        : null;
     if (escalation !== null) {
       const { rows: escalated } = await context.db.query<OpportunityRow>(
         `UPDATE opportunities
@@ -363,64 +357,6 @@ export async function takeOverOpportunity(
 }
 
 /**
- * The user chooses to keep the follow-up automation running after their own direct
- * Gmail send (P1-1).
- *
- * A salesperson writing to a prospect from Gmail is that salesperson taking the
- * conversation over, not the prospect signalling something — so `direct_send` blocks an
- * evidenced follow-up like any other takeover. The review asked for the one exception to
- * be a *choice*, made by the person, recorded where the gate reads: this command moves
- * the stored origin from `direct_send` to `direct_send_keep_automation`, which is the
- * fifth member of `MANUAL_MODE_ORIGINS` and the only one of them created by a person
- * asking for automation rather than by an event.
- *
- * It is deliberately narrow. The UPDATE is conditional on the origin still being
- * `direct_send`, so a takeover recorded in between — or a manual mode that a reply or a
- * call put there — is never relabelled, and a takeover can never be downgraded by this
- * path. The control mode itself does not change: the opportunity stays manual.
- */
-export async function keepFollowingUpAfterDirectSend(
-  context: RepositoryContext,
-  input: {
-    readonly opportunityId: string;
-    readonly reason: string;
-    readonly commandId?: string | undefined;
-  },
-): Promise<CrmResult<OpportunityRow>> {
-  await lockSendGateForStopFact(context);
-  const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
-  if (opportunity === null) return refuse('opportunity_unknown');
-  const firm = await loadFirmForUpdate(context, opportunity.firm_id);
-  if (firm === null) return refuse('firm_unknown');
-  const decision = decideFirmMutation(context, firm);
-  if (!decision.permitted) return refuse(decision.reason);
-  if (input.reason.trim().length === 0) return refuse('invalid_input');
-
-  const { rows } = await context.db.query<OpportunityRow>(
-    `UPDATE opportunities
-        SET control_mode_origin = 'direct_send_keep_automation', updated_at = now()
-      WHERE workspace_id = $1 AND id = $2
-        AND control_mode = 'manual' AND control_mode_origin = 'direct_send'
-      RETURNING ${OPPORTUNITY_COLUMNS}`,
-    [context.scope.workspaceId, input.opportunityId],
-  );
-  const chosen = rows[0];
-  if (chosen === undefined) return refuse('invalid_input');
-  await recordCrmAuditEvent(context, {
-    action: 'opportunity.manual',
-    subjectKind: 'opportunity',
-    subjectId: chosen.id,
-    detail: {
-      firmId: chosen.firm_id,
-      origin: 'direct_send_keep_automation',
-      from: 'direct_send',
-      reason: input.reason.trim(),
-    },
-  });
-  return accept(chosen);
-}
-
-/**
  * An administrator classifies one opportunity whose manual mode predates
  * `control_mode_origin` (P1-1).
  *
@@ -441,13 +377,18 @@ export async function classifyControlModeOrigin(
   context: RepositoryContext,
   input: {
     readonly opportunityId: string;
-    readonly origin: ManualModeOrigin;
+    /**
+     * Never `direct_send` or `direct_send_keep_automation` (send-path v2): a direct send
+     * is not a cause of manual mode, so it is not a classification of one either.
+     */
+    readonly origin: WritableManualModeOrigin;
     readonly reason: string;
     readonly commandId?: string | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
   const permitted = decideAdminOnly(context);
   if (!permitted.permitted) return refuse(permitted.reason);
+  if (!isWritableManualModeOrigin(input.origin)) return refuse('invalid_input');
   await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');

@@ -1,0 +1,564 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { takeOverOpportunity } from '../../crm/pipeline.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import { applyDirectSendEffects } from '../../mail/effects.ts';
+import type { MatchCandidate } from '../../mail/matching.ts';
+import { readMessage } from '../../mail/messages.ts';
+import type { MailMessageRow } from '../../mail/types.ts';
+import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
+import { createOutboundWorld, type OutboundWorld } from '../outbound/support/outboundWorld.ts';
+import {
+  openExtraSession,
+  prepareFor,
+  seedFirm,
+  waitUntilBlocked,
+  type ExtraSession,
+  type SeededFirm,
+} from '../outbound/support/dispatchFixtures.ts';
+
+/**
+ * A direct Gmail send is an update to the conversation, not a takeover (send-path v2,
+ * slice S1).
+ *
+ * David, 30 September 2026: *"My email should update the conversation, complete any
+ * fulfilled request, and prevent duplicate follow-ups. It should not automatically
+ * impose permanent manual takeover. The explicit 'I will handle this myself' control
+ * still pauses automation."*
+ *
+ * Every case calls the real `applyDirectSendEffects` on a stored outgoing message and a
+ * resolved candidate, which is what the import (`mail/pipeline.ts`) and the ambiguity
+ * resolution (`mail/matching.ts`) hand it; the import's own wiring — once per message,
+ * ambiguous matches held — is in `scenarios.test.ts`. The race cases run the real
+ * dispatch claim against the effect on two connections.
+ *
+ * No real person, firm or address: every address is in `example.test` (RFC 6761).
+ */
+
+let world: OutboundWorld;
+let barrier: ExtraSession;
+let second: ExtraSession;
+
+beforeAll(async () => {
+  world = await createOutboundWorld();
+  barrier = await openExtraSession(world);
+  second = await openExtraSession(world);
+}, 180_000);
+
+afterAll(async () => {
+  await barrier?.close();
+  await second?.close();
+  await world?.stop();
+});
+
+afterEach(async () => {
+  await barrier?.session.query('ROLLBACK');
+  await second?.session.query('ROLLBACK');
+});
+
+const workspaceId = (): string => world.alpha.workspace.workspaceId;
+const worker = (): RepositoryContext => world.systemContext(workspaceId());
+const salesperson = (): RepositoryContext =>
+  repositoryContext(
+    workspaceScope(workspaceId(), {
+      kind: 'user',
+      userId: world.alpha.workspace.salesperson.userId,
+      role: 'salesperson',
+    }),
+    world.database.session,
+  );
+
+let messages = 0;
+
+/** The salesperson's own outgoing message, as the import stores it. */
+async function storeDirectSend(input: {
+  readonly to: readonly string[];
+  readonly cc?: readonly string[];
+}): Promise<MailMessageRow> {
+  messages += 1;
+  const { rows } = await world.database.session.query<{ id: string }>(
+    `INSERT INTO mail_messages
+       (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+        internal_date, header_from, header_to, header_cc, matched)
+     VALUES ($1, $2, $3, $3, 'outgoing', now(), $4, $5::text[], $6::text[], true)
+     RETURNING id`,
+    [
+      workspaceId(),
+      world.alpha.mailboxId,
+      `direct-send-${String(messages)}`,
+      world.alpha.address,
+      [...input.to],
+      [...(input.cc ?? [])],
+    ],
+  );
+  const message = await readMessage(worker(), rows[0]?.id ?? '');
+  if (message === null) throw new Error('the message fixture was not stored');
+  return message;
+}
+
+/** The candidate a resolved match hands the effect. `contactId` is whatever matching carried. */
+function candidateOf(firm: SeededFirm, contactId: string | null = firm.contactId): MatchCandidate {
+  return {
+    firmId: firm.firmId,
+    opportunityId: firm.opportunityId,
+    contactId,
+    rule: 'thread',
+    viaClosedOpportunity: false,
+  };
+}
+
+interface FixtureEnrollment {
+  readonly enrollmentId: string;
+  readonly contactId: string;
+  readonly address: string;
+  readonly permissionId: string | null;
+}
+
+/** A live enrollment at the firm, for a contact of its own, with the given origin. */
+async function enrollmentAt(
+  firm: SeededFirm,
+  originKind: 'prospecting' | 'follow_up',
+): Promise<FixtureEnrollment> {
+  const executionId = await makeStepExecution(world.database.session, {
+    workspaceId: workspaceId(),
+    firmId: firm.firmId,
+    opportunityId: firm.opportunityId,
+    userId: world.alpha.workspace.salesperson.userId,
+    templateVersionId: world.alpha.templateVersionId,
+    originKind,
+  });
+  return await enrollmentOfExecution(executionId);
+}
+
+async function enrollmentOfExecution(executionId: string): Promise<FixtureEnrollment> {
+  const { rows } = await world.database.session.query<{
+    id: string;
+    contact_id: string;
+    permission_id: string | null;
+    address: string;
+  }>(
+    `SELECT n.id, n.contact_id, n.permission_id,
+            (SELECT a.address FROM email_addresses a
+              WHERE a.workspace_id = n.workspace_id AND a.contact_id = n.contact_id
+              ORDER BY a.created_at, a.id LIMIT 1) AS address
+       FROM step_executions e
+       JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+      WHERE e.workspace_id = $1 AND e.id = $2`,
+    [workspaceId(), executionId],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error('the enrollment fixture is missing');
+  return { enrollmentId: row.id, contactId: row.contact_id, address: row.address, permissionId: row.permission_id };
+}
+
+/** The follow-up fixture's `agreed_sequence` permission, re-scoped to the one e-mail agreed on the call. */
+async function becomeSingleEmail(permissionId: string): Promise<void> {
+  const updated = await world.database.session.query(
+    `UPDATE follow_up_permissions
+        SET kind = 'conversation', scope = 'single_email', sequence_version_id = NULL,
+            template_version_id = $3, max_steps = 1
+      WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId(), permissionId, world.alpha.templateVersionId],
+  );
+  expect(updated.rowCount).toBe(1);
+}
+
+/**
+ * The follow-up fixture's permission as a `contextual_reply` on real inbound evidence:
+ * the message, the match a person selected, and the confirmation they made — the shape
+ * `test/outbound/permissionSpend.test.ts` proves the dispatch sends on.
+ */
+async function becomeContextualReply(permissionId: string, firm: SeededFirm, contactId: string): Promise<void> {
+  const session = world.database.session;
+  messages += 1;
+  const { rows: message } = await session.query<{ id: string }>(
+    `INSERT INTO mail_messages
+       (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+        internal_date, header_from, matched)
+     VALUES ($1, $2, $3, $3, 'incoming', now(), 'prospect@example.test', true)
+     RETURNING id`,
+    [workspaceId(), world.alpha.mailboxId, `inbound-request-${String(messages)}`],
+  );
+  const messageId = message[0]?.id ?? '';
+  await session.query(
+    `INSERT INTO mail_message_matches
+       (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule,
+        selected, resolved_at, resolved_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, 'participant', true, now(), $6)`,
+    [workspaceId(), messageId, firm.firmId, firm.opportunityId, contactId, world.alpha.workspace.salesperson.userId],
+  );
+  await session.query(
+    `INSERT INTO mail_reply_confirmations
+       (workspace_id, mail_message_id, firm_id, opportunity_id, disposition, suggested_disposition,
+        suggested_by, corrected, confirmed_by_user_id, consequences)
+     VALUES ($1, $2, $3, $4, 'interested', 'interested', 'deterministic', false, $5, $6::text[])`,
+    [workspaceId(), messageId, firm.firmId, firm.opportunityId, world.alpha.workspace.salesperson.userId, ['opportunity_manual']],
+  );
+  const updated = await session.query(
+    `UPDATE follow_up_permissions
+        SET kind = 'request', scope = 'contextual_reply', call_log_id = NULL,
+            mail_message_id = $3, sequence_version_id = NULL, template_version_id = NULL,
+            max_steps = 1
+      WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId(), permissionId, messageId],
+  );
+  expect(updated.rowCount).toBe(1);
+}
+
+async function enrollmentState(enrollmentId: string): Promise<{ state: string; end_reason: string | null }> {
+  const { rows } = await world.database.session.query<{ state: string; end_reason: string | null }>(
+    'SELECT state, end_reason FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+    [workspaceId(), enrollmentId],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error('the enrollment disappeared');
+  return row;
+}
+
+async function permissionState(permissionId: string): Promise<{ consumed: boolean; consumed_reason: string | null }> {
+  const { rows } = await world.database.session.query<{ consumed: boolean; consumed_reason: string | null }>(
+    `SELECT consumed_at IS NOT NULL AS consumed, consumed_reason
+       FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId(), permissionId],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error('the permission disappeared');
+  return row;
+}
+
+async function opportunityControl(
+  opportunityId: string,
+): Promise<{ control_mode: string; control_mode_origin: string | null }> {
+  const { rows } = await world.database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+    'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+    [workspaceId(), opportunityId],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error('the opportunity disappeared');
+  return row;
+}
+
+async function dispatch(fenceId: string): Promise<{ readonly report: SendReport; readonly sends: number }> {
+  const gmail = world.clientWith(world.alpha, {});
+  const report = await dispatchOutboundMessage(worker(), world.sendDeps(world.alpha, { gmail }), {
+    outboundMessageId: fenceId,
+  });
+  return { report, sends: gmail.sends.length };
+}
+
+async function fenceOfEnrollment(firm: SeededFirm): Promise<{ readonly fenceId: string } & FixtureEnrollment> {
+  const fenceId = await prepareFor(world, world.alpha, firm);
+  const { rows } = await world.database.session.query<{ step_execution_id: string }>(
+    'SELECT step_execution_id FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+    [workspaceId(), fenceId],
+  );
+  return { fenceId, ...(await enrollmentOfExecution(rows[0]?.step_execution_id ?? '')) };
+}
+
+async function backendOf(session: ExtraSession['session'] | OutboundWorld['database']['session']): Promise<number> {
+  const { rows } = await session.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+  return Number(rows[0]?.pid ?? 0);
+}
+
+describe('(a) a direct send is not a takeover', () => {
+  it('leaves an automated opportunity automated, writes no origin and no manual-mode signal', async () => {
+    const firm = await seedFirm(world, world.alpha, 'no-takeover');
+    const message = await storeDirectSend({ to: [firm.address] });
+
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    expect(outcome.recorded).toBe(true);
+
+    expect(await opportunityControl(firm.opportunityId)).toEqual({
+      control_mode: 'automated',
+      control_mode_origin: null,
+    });
+    const { rows } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM crm_domain_events
+        WHERE workspace_id = $1 AND opportunity_id = $2 AND event_kind = 'opportunity.manual_mode'`,
+      [workspaceId(), firm.opportunityId],
+    );
+    expect(rows[0]?.count).toBe('0');
+  });
+
+  it("leaves a person's takeover exactly as it was, and it still blocks the follow-up", async () => {
+    const firm = await seedFirm(world, world.alpha, 'takeover-stands');
+    const followUp = await fenceOfEnrollment(firm);
+    const taken = await takeOverOpportunity(salesperson(), {
+      opportunityId: firm.opportunityId,
+      reason: 'I will handle this firm myself',
+    });
+    expect(taken.ok).toBe(true);
+
+    const message = await storeDirectSend({ to: [followUp.address] });
+    await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+
+    expect(await opportunityControl(firm.opportunityId)).toEqual({
+      control_mode: 'manual',
+      control_mode_origin: 'salesperson_command',
+    });
+    const { report, sends } = await dispatch(followUp.fenceId);
+    expect(sends).toBe(0);
+    expect(`${report.refusal ?? ''}:${report.detail ?? ''}`).toContain('opportunity_manual');
+  });
+});
+
+describe('(b) under the send gate, only live prospecting at the matched firm ends', () => {
+  it('ends the prospecting enrollment direct_send and leaves the follow-ups and the other firm running', async () => {
+    const firm = await seedFirm(world, world.alpha, 'prospecting-ends');
+    const other = await seedFirm(world, world.alpha, 'prospecting-elsewhere');
+    const prospecting = await enrollmentAt(firm, 'prospecting');
+    const elsewhere = await enrollmentAt(other, 'prospecting');
+    const agreed = await enrollmentAt(firm, 'follow_up');
+    const single = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(single.permissionId ?? '');
+
+    // To the firm's seeded contact only: nobody with a permission is a recipient, so
+    // every follow-up here is one the prospecting rule alone must not touch.
+    const message = await storeDirectSend({ to: [firm.address] });
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+
+    expect(outcome.endedEnrollmentIds).toEqual([prospecting.enrollmentId]);
+    expect(await enrollmentState(prospecting.enrollmentId)).toEqual({ state: 'stopped', end_reason: 'direct_send' });
+    const { rows: executions } = await world.database.session.query<{ state: string; cancel_reason: string | null }>(
+      'SELECT state, cancel_reason FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2',
+      [workspaceId(), prospecting.enrollmentId],
+    );
+    expect(executions.every(row => row.state === 'cancelled' && row.cancel_reason === 'direct_send')).toBe(true);
+
+    for (const live of [elsewhere, agreed, single]) {
+      expect((await enrollmentState(live.enrollmentId)).end_reason).toBeNull();
+    }
+  });
+
+  it('takes the send gate before it touches a row, even with no prospecting to end', async () => {
+    // No prospecting enrollment here, so nothing reaches `stopEnrollments` (which takes
+    // the gate itself) before the permission is spent: the only thing that can make the
+    // spend wait for another stop-fact writer is the effect's own gate, taken first.
+    const firm = await seedFirm(world, world.alpha, 'gate-first');
+    const single = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(single.permissionId ?? '');
+    const message = await storeDirectSend({ to: [single.address] });
+
+    await barrier.session.query('BEGIN');
+    await barrier.session.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `fss.send-gate:${workspaceId()}`,
+    ]);
+    await second.session.query('BEGIN');
+    const effect = applyDirectSendEffects(second.context(workspaceId()), { message, candidate: candidateOf(firm) });
+    await waitUntilBlocked(barrier.session, second.pid, 'advisory');
+    // Waiting on the gate, it holds nothing on the rows a claim locks: no permission, no
+    // enrollment, no step execution has been written or locked yet.
+    const { rows: held } = await barrier.session.query<{ relation: string }>(
+      `SELECT relation::regclass::text AS relation FROM pg_locks
+        WHERE pid = $1 AND granted AND locktype = 'relation'
+          AND relation IN ('follow_up_permissions'::regclass, 'sequence_enrollments'::regclass,
+                           'step_executions'::regclass)`,
+      [second.pid],
+    );
+    expect(held).toEqual([]);
+    await barrier.session.query('COMMIT');
+    const outcome = await effect;
+    await second.session.query('COMMIT');
+    expect(outcome.consumedPermissionIds).toEqual([single.permissionId]);
+  });
+});
+
+describe('(c) a request the salesperson fulfilled by hand is complete', () => {
+  it('consumes the verified To/Cc recipients’ one-message permissions and ends their runs; an agreed sequence keeps running', async () => {
+    const firm = await seedFirm(world, world.alpha, 'fulfilled');
+    const toSingle = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(toSingle.permissionId ?? '');
+    const ccReply = await enrollmentAt(firm, 'follow_up');
+    await becomeContextualReply(ccReply.permissionId ?? '', firm, ccReply.contactId);
+    const notAddressed = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(notAddressed.permissionId ?? '');
+    const toAgreed = await enrollmentAt(firm, 'follow_up');
+
+    const message = await storeDirectSend({ to: [toSingle.address, toAgreed.address], cc: [ccReply.address] });
+    // The candidate carries the contact that is NOT addressed — as a thread match carries
+    // whoever the thread first matched. It is not a recipient, and its permission stands.
+    const outcome = await applyDirectSendEffects(worker(), {
+      message,
+      candidate: candidateOf(firm, notAddressed.contactId),
+    });
+
+    expect([...outcome.recipientContactIds].sort()).toEqual(
+      [toSingle.contactId, ccReply.contactId, toAgreed.contactId].sort(),
+    );
+    expect([...outcome.consumedPermissionIds].sort()).toEqual(
+      [toSingle.permissionId ?? '', ccReply.permissionId ?? ''].sort(),
+    );
+    for (const fulfilled of [toSingle, ccReply]) {
+      expect(await permissionState(fulfilled.permissionId ?? '')).toEqual({
+        consumed: true,
+        consumed_reason: 'fulfilled_by_direct_send',
+      });
+      expect(await enrollmentState(fulfilled.enrollmentId)).toEqual({ state: 'stopped', end_reason: 'direct_send' });
+    }
+    for (const standing of [notAddressed, toAgreed]) {
+      expect(await permissionState(standing.permissionId ?? '')).toEqual({ consumed: false, consumed_reason: null });
+      expect((await enrollmentState(standing.enrollmentId)).end_reason).toBeNull();
+    }
+  });
+
+  it('does not record a revoked or an expired permission as fulfilled', async () => {
+    const firm = await seedFirm(world, world.alpha, 'dead-permissions');
+    const revoked = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(revoked.permissionId ?? '');
+    await world.database.session.query(
+      'UPDATE follow_up_permissions SET revoked_at = now() WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), revoked.permissionId],
+    );
+    const expired = await enrollmentAt(firm, 'follow_up');
+    await becomeSingleEmail(expired.permissionId ?? '');
+    await world.database.session.query(
+      `UPDATE follow_up_permissions SET granted_at = now() - interval '2 days', expires_at = now() - interval '1 day'
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), expired.permissionId],
+    );
+
+    const message = await storeDirectSend({ to: [revoked.address, expired.address] });
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    expect(outcome.consumedPermissionIds).toEqual([]);
+    for (const dead of [revoked, expired]) {
+      expect(await permissionState(dead.permissionId ?? '')).toEqual({ consumed: false, consumed_reason: null });
+    }
+  });
+});
+
+describe('(e) once per message, and an audit row of ids', () => {
+  it('records one marker and one audit row, and a replay does nothing', async () => {
+    const firm = await seedFirm(world, world.alpha, 'once');
+    const prospecting = await enrollmentAt(firm, 'prospecting');
+    const message = await storeDirectSend({ to: [firm.address] });
+
+    const first = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    const again = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    expect(first.recorded).toBe(true);
+    expect(again).toEqual({
+      recorded: false,
+      recipientContactIds: [],
+      consumedPermissionIds: [],
+      endedEnrollmentIds: [],
+    });
+
+    const { rows: markers } = await world.database.session.query<{ effect_kind: string; target_key: string }>(
+      'SELECT effect_kind, target_key FROM mail_message_effects WHERE workspace_id = $1 AND mail_message_id = $2',
+      [workspaceId(), message.id],
+    );
+    expect(markers).toEqual([{ effect_kind: 'direct_send_conversation', target_key: `message:${message.id}` }]);
+
+    const { rows: audits } = await world.database.session.query<{
+      subject_kind: string;
+      subject_id: string;
+      detail: Record<string, unknown>;
+    }>(
+      `SELECT subject_kind, subject_id, detail FROM audit_events
+        WHERE workspace_id = $1 AND action = 'mail.direct_send_conversation' AND subject_id = $2`,
+      [workspaceId(), message.id],
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.subject_kind).toBe('mail_message');
+    expect(audits[0]?.detail).toEqual({
+      firmId: firm.firmId,
+      opportunityId: firm.opportunityId,
+      recipientContactIds: [firm.contactId],
+      consumedPermissionIds: [],
+      endedEnrollmentIds: [prospecting.enrollmentId],
+    });
+    // Ids only: no address, no Gmail id, no subject.
+    const text = JSON.stringify(audits[0]?.detail);
+    expect(text).not.toContain('@');
+    expect(text).not.toContain(message.providerMessageId);
+  });
+
+  it('treats a message a historical direct_send_manual marker already processed as done', async () => {
+    const firm = await seedFirm(world, world.alpha, 'historical-marker');
+    const prospecting = await enrollmentAt(firm, 'prospecting');
+    const message = await storeDirectSend({ to: [firm.address] });
+    // What the takeover wrote before send-path v2, per opportunity.
+    await world.database.session.query(
+      `INSERT INTO mail_message_effects (workspace_id, mail_message_id, effect_kind, target_key, detail)
+       VALUES ($1, $2, 'direct_send_manual', $3, $4::jsonb)`,
+      [workspaceId(), message.id, `opportunity:${firm.opportunityId}`, JSON.stringify({ firmId: firm.firmId })],
+    );
+
+    const outcome = await applyDirectSendEffects(worker(), { message, candidate: candidateOf(firm) });
+    expect(outcome.recorded).toBe(false);
+    expect((await enrollmentState(prospecting.enrollmentId)).end_reason).toBeNull();
+    const { rows } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId(), message.id],
+    );
+    expect(rows[0]?.count).toBe('0');
+  });
+});
+
+describe('(g) a claim racing the effect is serialized by the send gate', () => {
+  it('the effect holds the gate first: the claim waits, then sees the consumed permission and the ended run', async () => {
+    const firm = await seedFirm(world, world.alpha, 'effect-first');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    const message = await storeDirectSend({ to: [followUp.address] });
+
+    await barrier.session.query('BEGIN');
+    const effect = await applyDirectSendEffects(barrier.context(workspaceId()), {
+      message,
+      candidate: candidateOf(firm),
+    });
+    expect(effect.consumedPermissionIds).toEqual([followUp.permissionId]);
+
+    // The claim runs its precheck (it cannot see the uncommitted effect), refreshes the
+    // token, and then waits for the gate the effect holds.
+    const claim = dispatch(followUp.fenceId);
+    await waitUntilBlocked(barrier.session, await backendOf(world.database.session), 'advisory');
+    await barrier.session.query('COMMIT');
+
+    const { report, sends } = await claim;
+    expect(sends).toBe(0);
+    expect(report.outcome, JSON.stringify(report)).not.toBe('sent');
+    const { rows: fence } = await world.database.session.query<{ state: string }>(
+      'SELECT state FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), followUp.fenceId],
+    );
+    expect(['dispatching', 'sent']).not.toContain(fence[0]?.state);
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+    expect(await enrollmentState(followUp.enrollmentId)).toEqual({ state: 'stopped', end_reason: 'direct_send' });
+  });
+
+  it('the claim holds the gate first: it sends, and the effect then finds the permission already spent', async () => {
+    const firm = await seedFirm(world, world.alpha, 'claim-first');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    const message = await storeDirectSend({ to: [followUp.address] });
+
+    // The claim takes the gate SHARED and then waits on the fence row, which the barrier
+    // holds; the effect, arriving now, waits on the gate behind the claim.
+    await barrier.session.query('BEGIN');
+    await barrier.session.query('SELECT id FROM outbound_messages WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+      workspaceId(),
+      followUp.fenceId,
+    ]);
+    const claim = dispatch(followUp.fenceId);
+    await waitUntilBlocked(barrier.session, await backendOf(world.database.session));
+
+    await second.session.query('BEGIN');
+    const effect = applyDirectSendEffects(second.context(workspaceId()), { message, candidate: candidateOf(firm) });
+    await waitUntilBlocked(barrier.session, second.pid, 'advisory');
+    await barrier.session.query('COMMIT');
+
+    const { report, sends } = await claim;
+    expect(report.outcome, JSON.stringify(report)).toBe('sent');
+    expect(sends).toBe(1);
+    const outcome = await effect;
+    await second.session.query('COMMIT');
+
+    expect(outcome.recorded).toBe(true);
+    expect(outcome.consumedPermissionIds).toEqual([]);
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({ consumed: true, consumed_reason: 'sent' });
+  });
+});

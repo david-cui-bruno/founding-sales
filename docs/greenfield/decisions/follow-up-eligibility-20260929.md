@@ -165,6 +165,47 @@ coordinator took on 29 September 2026 and flagged to David:
   facts the administrator was shown. There is no blanket backfill and there will not be
   one.
 
+**Send-path v2, slice S1 (30 September 2026): a direct send is an update to the
+conversation, not a takeover.** David: *"My email should update the conversation,
+complete any fulfilled request, and prevent duplicate follow-ups. It should not
+automatically impose permanent manual takeover. The explicit 'I will handle this myself'
+control still pauses automation."* This supersedes the first bullet above.
+
+* **No control-mode write.** `applyDirectSendEffects` (`packages/domain/mail/effects.ts`)
+  no longer calls `setManualControlMode`; a direct send writes no `control_mode`, no
+  `control_mode_origin` and no `opportunity.manual_mode` event. A stored
+  `salesperson_command` is untouched and still blocks.
+* **Under the exclusive send gate, taken first** (as `logCallOutcome` does), for the one
+  opportunity the message is resolved to: every live `prospecting` enrollment at the firm
+  ends `direct_send`; every unspent, unrevoked, unexpired `single_email` or
+  `contextual_reply` permission whose contact is a **verified To/Cc recipient** of the
+  message — resolved through the message's addresses to `email_addresses` at that firm,
+  never a match candidate's `contact_id` — is consumed with
+  `consumed_reason = 'fulfilled_by_direct_send'` (`consumeFulfilledByDirectSend`), and the
+  enrollment bound to it ends `direct_send`. `agreed_sequence` permissions and their
+  enrollments keep running.
+* **Ambiguous matches wait.** The import applies the effect only to a match with one
+  candidate; several candidates stay held by their `ambiguous_match` holds, and
+  `resolveAmbiguity` applies it to the opportunity the person selects.
+* **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
+  message that already carries a historical `direct_send_manual` marker is treated as
+  processed. One `mail.direct_send_conversation` audit row of ids only.
+* **Retired.** `POST /opportunities/keep-following-up` and `keepFollowingUpAfterDirectSend`
+  are gone; `setManualControlMode` and `classifyControlModeOrigin` accept only
+  `human_reply`, `engaged_call` and `salesperson_command`, by type and at run time, and the
+  contract's classification enum is the same three. `direct_send` and
+  `direct_send_keep_automation` stay in `MANUAL_MODE_ORIGINS` as **history**: stored
+  opportunities and events keep the reading in the table above (a stored `direct_send`
+  still blocks a follow-up; a stored `direct_send_keep_automation` does not; the drain
+  still ends their enrollments `direct_send`), and nothing writes either.
+* **The boundary.** A dispatch claim that **commits** before the direct send's import
+  observes the message is not prevented: the import cannot act on a message Gmail has not
+  reported, and a dispatched fence is irreversible (Appendix B). A claim **racing** the
+  effect is serialized by the send gate — the claim holds it shared from its recheck to
+  its commit, the effect exclusive — so whichever takes the gate first wins, and the
+  other sees the consumed permission or the ended enrollment
+  (`packages/domain/test/mail/directSendConversation.test.ts`, section g).
+
 ## 6. Where a permission comes from
 
 * **A confirmed reply** with disposition `interested` or `follow_up_later` →

@@ -432,9 +432,10 @@ function TakeOver({
  * of PR 332).
  *
  * It used to be offered only while the opportunity was automated, which hid it in exactly
- * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or a
- * direct send they said to keep following up after — is the state in which an evidenced
- * follow-up still runs beside them. So the control is offered for every open opportunity
+ * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or
+ * (history since send-path v2, when a direct send stopped being a takeover) a direct send
+ * they said to keep following up after — is the state in which an evidenced follow-up
+ * still runs beside them. So the control is offered for every open opportunity
  * except one already taken over by hand, where pressing it would change nothing.
  */
 function takeoverOffered(

@@ -335,9 +335,33 @@ describe('the manual-mode stop records the origin it came from (7.3, G15 follow-
   const originCases = [
     ['human_reply', 'human_reply'],
     ['engaged_call', 'engaged_call'],
-    ['direct_send', 'direct_send'],
     ['salesperson_command', 'admin_stop'],
   ] as const;
+
+  // Send-path v2: nothing writes a direct-send origin any more, and the drain still reads
+  // the events that carry one — a stored `opportunity.manual_mode` from before the change.
+  for (const origin of ['direct_send', 'direct_send_keep_automation'] as const) {
+    it(`still ends the enrollment direct_send for a historical event whose origin is ${origin}`, async () => {
+      const enrollmentId = await enrollAlpha();
+      await database.session.query(
+        `UPDATE opportunities SET control_mode = 'manual', control_mode_reason = 'direct send, before v2',
+                control_mode_changed_at = now(), control_mode_origin = $3
+          WHERE workspace_id = $1 AND id = $2`,
+        [seeded.alpha.workspaceId, crm.alpha.opportunityId, origin],
+      );
+      await emitCrmDomainEvent(contextFor('alpha', 'admin'), {
+        kind: 'opportunity.manual_mode',
+        firmId: crm.alpha.firmId,
+        opportunityId: crm.alpha.opportunityId,
+        dedupeKey: `manual-mode:historical:${origin}:${crm.alpha.opportunityId}`,
+        reasonCode: 'opportunity_manual',
+        detail: { reason: 'direct Gmail send by the salesperson', origin },
+      });
+      const report = await consumeTerminalStops(worker());
+      expect(report.enrollmentsStopped).toBe(1);
+      expect((await readEnrollment(worker(), { enrollmentId }))?.endReason).toBe('direct_send');
+    });
+  }
 
   for (const [origin, endReason] of originCases) {
     it(`ends the enrollment with ${endReason} when the origin is ${origin}`, async () => {

@@ -808,6 +808,53 @@ export async function consumeFollowUpPermission(
 }
 
 /**
+ * The promised e-mail was sent by hand: spend every unspent one-message permission the
+ * salesperson's own Gmail message fulfilled (send-path v2, slice S1; David, 30 September
+ * 2026: "My email should update the conversation, complete any fulfilled request, and
+ * prevent duplicate follow-ups").
+ *
+ * The recipients are the **verified** To/Cc recipients of the message at this firm —
+ * contacts the caller resolved through the message's own addresses, never a match
+ * candidate's contact — so a permission for somebody the message did not go to is not
+ * touched. Only the two scopes that buy one message are spent: an `agreed_sequence` is a
+ * programme the person agreed to, and one hand-written e-mail does not complete it.
+ *
+ * The liveness predicate is `consumeFollowUpPermission`'s — unrevoked, unexpired by the
+ * database's own clock, unspent — so a revoked or an expired permission is not recorded
+ * as fulfilled: it bought nothing any more, and saying the salesperson fulfilled it
+ * would be a fact that never happened. `consumed_reason = 'fulfilled_by_direct_send'`
+ * is migration 0026's word for this spend, beside the claim's `sent`.
+ *
+ * Called by `applyDirectSendEffects` under the exclusive send gate, which it takes
+ * first: a dispatch claim holds the gate shared from its recheck to its commit, so a
+ * claim and this spend are totally ordered and exactly one of them spends the row.
+ *
+ * Returns the spent permissions with the enrollment each was bound to, if any.
+ */
+export async function consumeFulfilledByDirectSend(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly contactIds: readonly string[] },
+): Promise<readonly { readonly permissionId: string; readonly enrollmentId: string | null }[]> {
+  if (input.contactIds.length === 0) return [];
+  const { rows } = await context.db.query<{ id: string; enrollment_id: string | null }>(
+    `UPDATE follow_up_permissions
+        SET consumed_at = now(), consumed_reason = 'fulfilled_by_direct_send'
+      WHERE workspace_id = $1
+        AND firm_id = $2
+        AND contact_id = ANY ($3::uuid[])
+        AND scope IN ('single_email', 'contextual_reply')
+        AND consumed_at IS NULL
+        AND revoked_at IS NULL
+        AND expires_at > clock_timestamp()
+      RETURNING id, enrollment_id`,
+    [context.scope.workspaceId, input.firmId, [...input.contactIds]],
+  );
+  return rows
+    .map(row => ({ permissionId: row.id, enrollmentId: row.enrollment_id }))
+    .sort((left, right) => left.permissionId.localeCompare(right.permissionId));
+}
+
+/**
  * Is this permission still live, asked of the database's own clock inside the claim's
  * transaction, immediately before it commits (P0-4 of the second review of PR 332)?
  *

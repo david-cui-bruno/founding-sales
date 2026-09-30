@@ -168,16 +168,8 @@ export const takeOverOpportunityCommandSchema = z.strictObject({
   reason: z.string().min(1).max(2000),
 });
 
-/**
- * The user chooses to keep the evidenced follow-up automation running after their own
- * direct Gmail send: `POST /opportunities/keep-following-up` (P1-1). A direct send is a
- * takeover unless this command says otherwise; the opportunity stays manual either way.
- */
-export const keepFollowingUpCommandSchema = z.strictObject({
-  ...command,
-  opportunityId: uuid,
-  reason: z.string().min(1).max(2000),
-});
+/** The origins an administrator may classify a NULL origin as. */
+export const CLASSIFIABLE_MANUAL_MODE_ORIGINS = ['human_reply', 'engaged_call', 'salesperson_command'] as const;
 
 /**
  * An administrator classifies an opportunity whose manual mode predates
@@ -188,7 +180,10 @@ export const keepFollowingUpCommandSchema = z.strictObject({
 export const classifyControlModeOriginCommandSchema = z.strictObject({
   ...command,
   opportunityId: uuid,
-  origin: z.enum(['human_reply', 'engaged_call', 'direct_send', 'salesperson_command']),
+  // Never `direct_send` (send-path v2, slice S1): a direct Gmail send is an update to the
+  // conversation, not a cause of manual mode, so no command may record one. Stored
+  // `direct_send` origins are history and stay readable (`crmSurface.ts`).
+  origin: z.enum(CLASSIFIABLE_MANUAL_MODE_ORIGINS),
   reason: z.string().min(1).max(2000),
 });
 

@@ -1,14 +1,12 @@
 import {
   changeStageCommandSchema,
   classifyControlModeOriginCommandSchema,
-  keepFollowingUpCommandSchema,
   openOpportunityCommandSchema,
   takeOverOpportunityCommandSchema,
 } from '@fss/contracts';
 import {
   changeStage,
   classifyControlModeOrigin,
-  keepFollowingUpAfterDirectSend,
   openOpportunity,
   takeOverOpportunity,
 } from '@fss/domain/crm/pipeline.ts';
@@ -28,10 +26,13 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * `/opportunities/manual` came back with migration 0025, and for a reason wave 2 did not
  * have: the eligibility gate now distinguishes a prospect's signal from a person's
  * decision, so the explicit takeover has to be writable by a person (P1-1 of the GPT-6
- * review of PR 332). Two neighbours come with it — the choice to keep the follow-up
- * automation running after a direct Gmail send, and an administrator's classification of
- * one pre-0025 manual mode whose origin is NULL. All three authorize in the domain,
- * under the firm row lock, inside the command transaction.
+ * review of PR 332). A neighbour comes with it — an administrator's classification of
+ * one pre-0025 manual mode whose origin is NULL. Both authorize in the domain, under the
+ * firm row lock, inside the command transaction.
+ *
+ * `/opportunities/keep-following-up` went with send-path v2 (slice S1, 30 September
+ * 2026): a direct Gmail send no longer makes an opportunity manual, so there is no
+ * direct-send takeover left to undo, and the path answers `not_found` like any other.
  */
 export async function routeOpportunities(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/opportunities')) return null;
@@ -66,14 +67,6 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
     case '/opportunities/manual':
       return await runRouteCommand(deps, takeOverOpportunityCommandSchema, 'opportunity.manual', async (repository, body) =>
         await takeOverOpportunity(repository, {
-          opportunityId: body.opportunityId,
-          reason: body.reason,
-          commandId: body.commandId,
-        }),
-      );
-    case '/opportunities/keep-following-up':
-      return await runRouteCommand(deps, keepFollowingUpCommandSchema, 'opportunity.manual', async (repository, body) =>
-        await keepFollowingUpAfterDirectSend(repository, {
           opportunityId: body.opportunityId,
           reason: body.reason,
           commandId: body.commandId,
