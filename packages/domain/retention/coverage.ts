@@ -111,6 +111,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   mailbox_tokens: coverage(['departure_revokes'], 'The envelope-encrypted refresh token, deleted outright by departure.'),
   mailbox_watches: coverage(['departure_revokes'], 'Cancelled when the grant goes.'),
   mailbox_recoveries: coverage(['swept'], 'Mailbox diagnostics; completed runs go after seven days.'),
+  mailbox_accounts: coverage(
+    ['retained'],
+    'Which Google account a mailbox row was, and when (0027): the salesperson’s own addresses, kept as long as the mailbox row whose messages they name the account of.',
+  ),
   gmail_push_notifications: coverage(['swept'], 'Temporary mailbox material; seven days.'),
   mail_messages: coverage(['swept', 'retained', 'deletion_removes'], 'Unmatched metadata goes at thirty days, matched correspondence is business history, and a deletion removes the deleted firm’s.'),
   mail_message_bodies: coverage(['swept', 'retained', 'deletion_removes'], 'Follows its message through the cascade.'),

@@ -16,6 +16,7 @@ import { FUNNEL_CONSTRAINT_CASES } from './support/funnelCases.ts';
 import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
 import { FOLLOW_UP_CONSTRAINT_CASES } from './support/followUpCases.ts';
 import { SEND_PATH_V2_CONSTRAINT_CASES } from './support/sendPathV2Cases.ts';
+import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from './support/mailboxAccountsCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1359,6 +1360,7 @@ const cases: readonly Case[] = [
   ...RESEARCH_CONSTRAINT_CASES,
   ...FOLLOW_UP_CONSTRAINT_CASES,
   ...SEND_PATH_V2_CONSTRAINT_CASES,
+  ...MAILBOX_ACCOUNTS_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {
