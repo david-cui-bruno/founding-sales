@@ -979,6 +979,36 @@ describe('an agreed sequence recorded on the call card', () => {
       expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
     }, 30_000);
 
+    it('reads the wall clock after the call log’s row lock is granted, not before it waits (round 4, P1-G)', async () => {
+      const { at, callLogId, sequenceVersionId } = await staleCall('Hornbeam Grove Test Advisers');
+      await fixture.db.query(
+        `UPDATE call_logs SET occurred_at = now() - interval '3597 seconds', recorded_at = now() - interval '3597 seconds'
+          WHERE workspace_id = $1 AND id = $2`,
+        [fixture.alpha.workspaceId, callLogId],
+      );
+      const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };
+      // Another connection holds the call log's row — no change, just the lock — across
+      // the hour boundary. The recovery gets the gate and the firm, waits on the row, and
+      // must judge the hour at the moment the row is its own.
+      const holder = new pg.Client({ connectionString: databaseUrlOf(fixture.database) });
+      await holder.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT id FROM call_logs WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+          fixture.alpha.workspaceId,
+          callLogId,
+        ]);
+        const waiting = postOnOwnConnection('/calls/follow-up', salespersonToken, command({ callLogId, followUpPermission: payload }));
+        await new Promise(resolve => setTimeout(resolve, 5_000));
+        await holder.query('COMMIT');
+        const answer = await waiting;
+        expect([answer.status, (answer.body as { reason?: string }).reason]).toEqual([409, 'call_too_old']);
+      } finally {
+        await holder.end();
+      }
+      expect(await rowsAt('follow_up_permissions', at.firmId)).toHaveLength(0);
+    }, 30_000);
+
     it('lets exactly one of two racing recoveries record the agreement (round 3, P2-b)', async () => {
       const { at, callLogId, sequenceVersionId } = await staleCall('Laurel Grove Test Advisers');
       const payload = { scope: 'agreed_sequence', sequenceVersionId, previewBasis: await previewBasisFor(at, sequenceVersionId) };

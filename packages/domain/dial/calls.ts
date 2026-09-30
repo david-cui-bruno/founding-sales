@@ -659,18 +659,13 @@ export async function recordCallFollowUp(
     outcome: string;
     agreed_follow_up: string | null;
     actor_user_id: string;
-    too_old: boolean;
+    occurred_at: Date;
+    recorded_at: Date;
   }>(
-    // `clock_timestamp()`, not `now()`: the transaction began before it waited for the
-    // gate and the firm, and a request that waited past the hour must not be judged by
-    // the instant it started (review of S3, round 3, P1-G). Both instants count: an
-    // entered past `occurred_at` is a call that happened then, whenever it was logged.
-    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id,
-            (occurred_at < clock_timestamp() - make_interval(mins => $3)
-             OR recorded_at < clock_timestamp() - make_interval(mins => $3)) AS too_old
+    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
        FROM call_logs WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
-    [context.scope.workspaceId, input.callLogId, CALL_FOLLOW_UP_WINDOW_MINUTES],
+    [context.scope.workspaceId, input.callLogId],
   );
   const log = rows[0];
   if (log === undefined || log.firm_id !== firmId) return refusePolicy('call_log_unknown');
@@ -679,7 +674,17 @@ export async function recordCallFollowUp(
   if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
   if (log.outcome !== 'interested' || log.contact_id === null) return refusePolicy('invalid_input');
   if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
-  if (log.too_old) return refusePolicy('call_too_old');
+  // The wall clock, read in its own statement **after** the row lock was granted
+  // (review of S3, rounds 3 and 4, P1-G): the transaction's `now()` predates the waits for
+  // the gate, the firm and this row, and an expression projected inside the locking
+  // SELECT can be computed before the lock wait. Both instants count: an entered past
+  // `occurred_at` is a call that happened then, whenever it was logged.
+  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  const wallClock = (clock[0]?.now ?? new Date()).getTime();
+  const windowMs = CALL_FOLLOW_UP_WINDOW_MINUTES * 60_000;
+  if (wallClock - log.occurred_at.getTime() > windowMs || wallClock - log.recorded_at.getTime() > windowMs) {
+    return refusePolicy('call_too_old');
+  }
   if (input.followUpPermission.scope === 'agreed_sequence') {
     const version = await readSequenceVersion(context, input.followUpPermission.sequenceVersionId);
     if (version === null) return refusePolicy('version_unknown');

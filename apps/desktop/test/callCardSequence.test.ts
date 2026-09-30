@@ -435,6 +435,61 @@ describe('the Today bridge and an agreed sequence', () => {
     expect(landed.followUpPreview ?? null).toBeNull();
   });
 
+  it('keeps a pending agreement when another firm’s card is refused, and offers it again on reopening (round 4, P1-I)', async () => {
+    const OTHER_FIRM = '22222222-2222-4222-8222-222222222222';
+    const CALL_LOG_ID = 'abababab-abab-4bab-8bab-abababababab';
+    const preview = {
+      sequenceVersionId: PUBLISHED,
+      sequenceName: 'After a good call',
+      version: 3,
+      firmTimeZone: 'America/Los_Angeles',
+      holidayCalendarVersion: 'holidays.2',
+      anchoredAt: '2026-09-30T15:05:00.000Z',
+      steps: [
+        {
+          ordinal: 1,
+          channel: 'call_task',
+          templateVersionId: null,
+          templateName: null,
+          subject: null,
+          templateApproved: null,
+          dueAt: '2026-10-01T15:00:00.000Z',
+          estimatedAt: '2026-10-01T15:00:00.000Z',
+        },
+      ],
+    };
+    const answers = baseAnswers({
+      '/calls/log': logged([{ kind: 'follow_up_not_granted', reason: 'stale_preview' }]),
+      '/calls/follow-up-preview': { status: 200, body: preview },
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === '/today/firm' && (JSON.parse(init.body ?? '{}') as { firmId: string }).firmId === OTHER_FIRM) {
+          return { status: 404, body: { error: 'not_found' } };
+        }
+        return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+      },
+    });
+    const bridge = createTodayBridge({ api, handoff, session });
+    await bridge.expand({ firmId: FIRM_ID });
+    const stale = await bridge.recordOutcome(
+      interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }),
+    );
+    expect(stale.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+
+    const refused = await bridge.expand({ firmId: OTHER_FIRM });
+    expect(refused.expanded).toBeNull();
+    expect(refused.pendingAgreement?.callLogId).toBe(CALL_LOG_ID);
+
+    const back = await bridge.expand({ firmId: FIRM_ID });
+    expect(back.pendingAgreement).toMatchObject({ firmId: FIRM_ID, callLogId: CALL_LOG_ID, sequenceVersionId: PUBLISHED });
+    expect(back.followUpPreview).toMatchObject({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED, refusal: null });
+  });
+
   it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {
     let release: (() => void) | null = null;
     const answers = baseAnswers();
@@ -540,6 +595,9 @@ describe('the Today bridge and an agreed sequence', () => {
         ]),
       ),
     ).toBe('outcome_recorded_effects_not_applied');
+    // The recovery's own refusals read as sentences, not codes (round 4, P2).
+    expect(noticeSentence('not_call_actor')).toBe('Only the person who made that call can record what was agreed on it.');
+    expect(noticeSentence('call_too_old')).toContain('happened, and been recorded, within the last hour');
     // A single e-mail names the template; a refused grant says so.
     expect(
       agreementSentence({ scope: 'single_email', name: 'The overview', granted: true, started: null, reason: null }),

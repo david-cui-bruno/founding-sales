@@ -351,11 +351,9 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     // Another firm's card: a preview in flight for the last one must not land here. At
     // the start, before the read — a read that fails or is refused returns early, and
     // the old request must be dead on those paths too (review of S3, round 3, P2-a).
-    if (openedFirmId !== firmId) {
-      previewRequest += 1;
-      followUpPreview = null;
-      if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
-    }
+    // Only the request: a pending agreement and its fresh preview belong to their own
+    // card and survive a refused or offline read of another one (round 4, P1-I).
+    if (openedFirmId !== firmId) previewRequest += 1;
     openedFirmId = firmId;
     const session = await deps.session.state();
     const owner = session.device?.deviceId ?? null;
@@ -393,10 +391,23 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     notice = null;
     agreement = null;
     if (followUpPreview !== null && followUpPreview.firmId !== firmId) followUpPreview = null;
+    // A pending agreement is given up only when the person has actually moved on to
+    // another firm's card (round 4, P1-I); back on its own card, it gets its fresh
+    // preview again if it has none.
+    if (pendingAgreement !== null && pendingAgreement.firmId !== firmId) pendingAgreement = null;
 
     dialAdvice = await adviseRoutes(page.value);
     followUpTemplates = await approvedTemplates();
     followUpSequences = await publishedSequences();
+    const pending = pendingAgreement;
+    if (
+      pending !== null &&
+      (followUpPreview === null ||
+        followUpPreview.contactId !== pending.contactId ||
+        followUpPreview.sequenceVersionId !== pending.sequenceVersionId)
+    ) {
+      await loadPreview(pending);
+    }
   };
 
   /**
@@ -551,7 +562,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
      */
     async forget() {
       previewRequest += 1;
-      pendingAgreement = null;
+      // Closing the card is not giving up the call's agreement (round 4, P1-I): a
+      // pending agreement stays, and reopening the card reads its dates again.
       expanded = null;
       notice = null;
       agreement = null;
