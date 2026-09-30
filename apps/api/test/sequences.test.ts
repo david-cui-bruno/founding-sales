@@ -346,7 +346,7 @@ describe('the sequence, template and enrollment routes', () => {
     expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
   });
 
-  it('edits a template in place and saves and approves in one command (wave 2, S3)', async () => {
+  it('writes an edit of an approved template as its next version, and saves and approves in one command (send-path v2, S2)', async () => {
     const payload = {
       templateVersionId,
       name: 'First touch',
@@ -356,13 +356,19 @@ describe('the sequence, template and enrollment routes', () => {
       requiredVariables: ['firm_name', 'contact_first_name'],
     };
     expect((await post('/templates/update', salespersonToken, command(payload))).body['reason']).toBe('admin_only');
+    const before = templateVersionsResponseSchema
+      .parse((await post('/templates', adminToken, {})).body)
+      .templates.find(template => template.id === templateVersionId);
+    expect(before?.approvedAt).not.toBeNull();
 
-    // A plain save of text that passes keeps the approval; the answer carries warnings and issues.
+    // A plain save of an approved version is its next version, pending approval; the
+    // approved one is untouched. The answer carries warnings and issues.
     const saved = await post('/templates/update', adminToken, command(payload));
     expect(saved.status).toBe(200);
     const result = templateSaveResultSchema.parse(resultOf(saved));
-    expect(result).toMatchObject({ id: templateVersionId, issues: [], warnings: [] });
-    expect(result.approvedAt).not.toBeNull();
+    expect(result).toMatchObject({ templateId: before?.templateId, version: (before?.version ?? 0) + 1, issues: [], warnings: [] });
+    expect(result.id).not.toBe(templateVersionId);
+    expect(result.approvedAt).toBeNull();
 
     // Save and approve with a rule broken: refused with every issue, and nothing written.
     const refused = await post(
@@ -373,7 +379,8 @@ describe('the sequence, template and enrollment routes', () => {
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('template_unapproved:template_footer_missing');
     const listed = templateVersionsResponseSchema.parse((await post('/templates', adminToken, {})).body);
-    expect(listed.templates.find(template => template.id === templateVersionId)?.body).toBe(payload.body);
+    expect(listed.templates.find(template => template.id === templateVersionId)).toEqual(before);
+    expect(listed.templates.filter(template => template.templateId === before?.templateId)).toHaveLength(2);
 
     // A new template saved and approved in one command.
     const { templateVersionId: _edited, ...text } = payload;
@@ -382,28 +389,26 @@ describe('the sequence, template and enrollment routes', () => {
     expect(templateSaveResultSchema.parse(resultOf(created)).approvedAt).not.toBeNull();
   });
 
-  it('edits a published version’s steps in place, and refuses to rewrite a step an execution names (wave 2, S3)', async () => {
+  it('writes an edit of a published version’s steps to a new draft version and leaves the published one as it was (send-path v2, S2)', async () => {
+    const before = sequenceVersionsResponseSchema
+      .parse((await post('/sequences/versions', adminToken, { sequenceId })).body)
+      .versions.find(entry => entry.id === sequenceVersionId);
+    expect(before?.state).toBe('published');
     const steps = [
       { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
       { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 5 }, onNoAnswer: 'advance' },
     ];
     const saved = await post('/sequences/versions/steps', adminToken, command({ sequenceVersionId, steps }));
     expect(saved.status).toBe(200);
+    const answer = resultOf(saved);
+    expect(answer).toMatchObject({ steps: 2, version: (before?.version ?? 0) + 1, newVersion: true });
     const versions = sequenceVersionsResponseSchema.parse(
       (await post('/sequences/versions', adminToken, { sequenceId })).body,
     ).versions;
-    const version = versions.find(entry => entry.id === sequenceVersionId);
-    expect(version?.state).toBe('published');
-    expect(version?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
-
-    // The enrolment above executed step 1; it keeps its channel.
-    const refused = await post(
-      '/sequences/versions/steps',
-      adminToken,
-      command({ sequenceVersionId, steps: [{ ...steps[1], ordinal: 1 }] }),
-    );
-    expect(refused.status).toBe(409);
-    expect(refused.body['reason']).toBe('step_in_use');
+    expect(versions.find(entry => entry.id === sequenceVersionId)).toEqual(before);
+    const draft = versions.find(entry => entry.id === answer['sequenceVersionId']);
+    expect(draft?.state).toBe('draft');
+    expect(draft?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
   });
 
   it('leaves no draft behind when it refuses one (lane D1)', async () => {

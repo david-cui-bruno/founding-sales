@@ -1,5 +1,6 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { readTemplateVersion } from '../templates/templates.ts';
+import { underImmutabilityGuard } from './immutability.ts';
 import { listSequenceVersions, readSequenceSteps, readSequenceVersion } from './rows.ts';
 import {
   acceptSequence,
@@ -14,17 +15,24 @@ import {
 import type { StepChannel } from '@fss/contracts';
 
 /**
- * Sequence definition and publication (specification 11.1; wave 2, S3).
+ * Sequence definition and publication (specification 11.1; wave 2, S3; send-path v2, S2).
  *
  * `sequences`, `sequence_versions` and ordered `sequence_steps` define email and
  * call-task plans with delays and step-specific behavior. A draft may change in every
- * way. Since migration 0019 a published version's steps are edited in place too
- * (`saveSteps`): the edit reaches every live enrollment on the version, because a step
- * not yet prepared for sending reads its step and template when it runs, and a send
- * already prepared keeps the bytes its outbound fence froze. What an in-place edit may
- * not do is rewrite history: a step that already has executions keeps its channel and
- * cannot be removed (`step_in_use`). "Edit as a new draft" (`createDraftVersion`) is
- * kept for desktop 1.0.11 and deprecated.
+ * way. **A published version never changes** (David, 30 September 2026: "Existing
+ * enrollments keep their original steps, template versions, and cadence. Edits affect
+ * new enrollments by default."). Saving steps against a published version writes them
+ * to the sequence's draft — a new version, copied from the published one with the edit
+ * applied — and leaves every published row as it was; publishing that draft is what
+ * makes it the version new enrollments use. An enrollment already running keeps its
+ * own version, and moves to a newer one only through the explicit, audited migration
+ * (`migrateEnrollment.ts`). Migration 0026 puts the trigger that refuses an UPDATE or
+ * DELETE of a published version's steps back, and `underImmutabilityGuard` answers it as
+ * a refusal rather than a 500 should any path ever reach it.
+ *
+ * Wave 2 (S3, migration 0019) edited published steps in place so that a fix reached the
+ * live enrollments; that is exactly the guarantee David's decision withdrew, because a
+ * live enrollment could then run steps nobody had agreed to under its old agreement.
  *
  * Publication checks three things a CHECK constraint cannot:
  *
@@ -40,6 +48,11 @@ import type { StepChannel } from '@fss/contracts';
  * The third is the only one of the three that is a judgement call, and it is
  * deliberately the strict reading: a draft may name an unapproved template and be
  * saved, and cannot be published until somebody approves it.
+ *
+ * Lock order for every command here that decides about a version: the sequence row,
+ * then the version row, both `FOR UPDATE`, before the state is read. So a save and a
+ * publication of the same draft serialize, and neither decides on a state the other is
+ * about to change.
  */
 
 export interface DraftStepInput {
@@ -118,9 +131,8 @@ export interface CreateDraftVersionInput {
 
 /**
  * Start a draft: with no steps it copies the newest published version ("Edit as a new
- * draft" on desktop 1.0.11). @deprecated since wave 2 (S3): a published version is
- * edited in place with `saveSteps`, which reaches its live enrollments; a new version
- * does not. Kept until desktop 1.0.12 is in use.
+ * draft" on desktop 1.0.11). `saveSteps` against a published version comes here too,
+ * with the edited steps: that is how an edit of a published version becomes a new one.
  *
  * There is at most one draft per sequence (`sequence_versions_one_draft`), so a second
  * request answers the draft that is already there — with the steps it was given, when
@@ -200,91 +212,100 @@ export interface ReplaceDraftStepsInput {
   readonly steps: readonly DraftStepInput[];
 }
 
+/** What a save answers: where the steps went, which is not always the version named. */
+export interface SavedSteps {
+  readonly steps: number;
+  /** The version the steps were written to: the one named, or the draft a published edit became. */
+  readonly sequenceVersionId: string;
+  readonly version: number;
+  /** True when the named version was published and the edit was written as a new draft. */
+  readonly newVersion: boolean;
+}
+
+interface LockedVersion {
+  readonly id: string;
+  readonly sequenceId: string;
+  readonly version: number;
+  readonly state: 'draft' | 'published' | 'retired';
+}
+
 /**
- * Save a version's steps: a draft's wholesale, a published version's in place (wave 2, S3).
+ * Lock a version for a decision about it: its sequence row, then the version row, both
+ * `FOR UPDATE`, and the state read after the locks are held (the order in the header).
+ */
+async function lockVersion(context: RepositoryContext, sequenceVersionId: string): Promise<LockedVersion | null> {
+  const { rows: owner } = await context.db.query<{ sequence_id: string }>(
+    'SELECT sequence_id FROM sequence_versions WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, sequenceVersionId],
+  );
+  const sequenceId = owner[0]?.sequence_id;
+  if (sequenceId === undefined) return null;
+  await context.db.query('SELECT id FROM sequences WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+    context.scope.workspaceId,
+    sequenceId,
+  ]);
+  const { rows } = await context.db.query<{ id: string; sequence_id: string; version: number; state: LockedVersion['state'] }>(
+    `SELECT id, sequence_id, version, state FROM sequence_versions
+      WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, sequenceVersionId],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  return { id: row.id, sequenceId: row.sequence_id, version: Number(row.version), state: row.state };
+}
+
+/**
+ * Save a version's steps (send-path v2, S2).
  *
  * The steps are the whole list, numbered 1..n by place, which is what the editor sends.
- * A retired version refuses. A published one is held to what publication checks — at
- * least one step, and every email step on an approved, unretired template — and is
- * matched to its stored steps by ordinal: a step at an ordinal that exists is updated in
- * place (delay, template, no-answer rule, and channel while it has no executions), a
- * new ordinal is added, and a trailing step is removed only while nothing has executed
- * it. Every check runs before anything is written, because a refusal commits with its
- * receipt. A delay edit moves the steps whose executions do not exist yet; one already
- * scheduled keeps its due instant.
+ *
+ *   * **A draft** has its steps replaced wholesale.
+ *   * **A published version** is not written to. The steps become the sequence's draft —
+ *     a new version (copy + change), or the draft that is already there, since there is
+ *     at most one per sequence — and the answer names it (`newVersion: true`). The
+ *     published version, its steps, and every enrollment on it are exactly as they were.
+ *   * **A retired version** refuses.
+ *
+ * A draft is held only to its shape; publication checks the rest (at least one step,
+ * every email step on an approved template). The writes run under
+ * `underImmutabilityGuard`, so 0026's trigger, should anything reach it, is the refusal
+ * `version_not_draft` rather than a 500.
  */
 export async function saveSteps(
   context: RepositoryContext,
   input: ReplaceDraftStepsInput,
-): Promise<SequenceResult<{ readonly steps: number }>> {
+): Promise<SequenceResult<SavedSteps>> {
   if (!isAdminScope(context.scope)) return refuseSequence('admin_only');
-
-  const version = await readSequenceVersion(context, input.sequenceVersionId);
-  if (version === null) return refuseSequence('version_unknown');
-  if (version.state === 'retired') return refuseSequence('version_retired');
-  if (version.state === 'draft') return await replaceDraftSteps(context, input);
-
   const shape = validateSteps(input.steps);
   if (shape !== null) return refuseSequence(shape);
-  if (input.steps.length === 0) return refuseSequence('version_has_no_steps');
-  const templates = await refuseUnpublishableTemplates(context, input.steps);
-  if (templates !== null) return refuseSequence(templates);
 
-  const executed = await stepsWithExecutions(context, input.sequenceVersionId);
-  const byOrdinal = new Map(version.steps.map(step => [step.ordinal, step]));
-  const wanted = [...input.steps].sort((left, right) => left.ordinal - right.ordinal);
-  for (const step of version.steps) {
-    const replacement = wanted[step.ordinal - 1];
-    if (!executed.has(step.id)) continue;
-    if (replacement === undefined || replacement.channel !== step.channel) return refuseSequence('step_in_use');
-  }
-
-  for (const step of version.steps) {
-    if (step.ordinal > wanted.length) {
-      await context.db.query('DELETE FROM sequence_steps WHERE workspace_id = $1 AND id = $2', [
-        context.scope.workspaceId,
-        step.id,
-      ]);
-    }
-  }
-  for (const step of wanted) {
-    const stored = byOrdinal.get(step.ordinal);
-    const values = [
-      step.channel,
-      step.delay.unit,
-      step.delay.unit === 'elapsed' ? step.delay.hours : step.delay.days,
-      step.onNoAnswer ?? null,
-      step.templateVersionId ?? null,
-    ];
-    if (stored === undefined) {
-      await context.db.query(
-        `INSERT INTO sequence_steps
-           (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount,
-            on_no_answer, template_version_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [context.scope.workspaceId, input.sequenceVersionId, step.ordinal, ...values],
-      );
-    } else {
-      await context.db.query(
-        `UPDATE sequence_steps
-            SET channel = $3, delay_unit = $4, delay_amount = $5, on_no_answer = $6, template_version_id = $7
-          WHERE workspace_id = $1 AND id = $2`,
-        [context.scope.workspaceId, stored.id, ...values],
-      );
-    }
-  }
-  return acceptSequence({ steps: wanted.length });
-}
-
-/** The ids of a version's steps that any execution names. */
-async function stepsWithExecutions(context: RepositoryContext, sequenceVersionId: string): Promise<ReadonlySet<string>> {
-  const { rows } = await context.db.query<{ step_id: string }>(
-    `SELECT DISTINCT e.step_id FROM step_executions e
-       JOIN sequence_steps s ON s.workspace_id = e.workspace_id AND s.id = e.step_id
-      WHERE e.workspace_id = $1 AND s.sequence_version_id = $2`,
-    [context.scope.workspaceId, sequenceVersionId],
+  return await underImmutabilityGuard(
+    context,
+    () => refuseSequence<SavedSteps>('version_not_draft'),
+    async () => {
+      const version = await lockVersion(context, input.sequenceVersionId);
+      if (version === null) return refuseSequence('version_unknown');
+      if (version.state === 'retired') return refuseSequence('version_retired');
+      if (version.state === 'draft') {
+        const written = await replaceDraftSteps(context, input);
+        if (!written.ok) return written;
+        return acceptSequence({
+          steps: written.value.steps,
+          sequenceVersionId: version.id,
+          version: version.version,
+          newVersion: false,
+        });
+      }
+      const draft = await createDraftVersion(context, { sequenceId: version.sequenceId, steps: input.steps });
+      if (!draft.ok) return draft;
+      return acceptSequence({
+        steps: input.steps.length,
+        sequenceVersionId: draft.value.sequenceVersionId,
+        version: draft.value.version,
+        newVersion: true,
+      });
+    },
   );
-  return new Set(rows.map(row => row.step_id));
 }
 
 /** 12.2 at publication: every email step names an approved, unretired template. Null means fine. */
@@ -373,6 +394,7 @@ export async function publishVersion(
   if (!isAdminScope(context.scope)) return refuseSequence('admin_only');
   if (context.scope.actor.kind !== 'user') return refuseSequence('admin_only');
 
+  if ((await lockVersion(context, input.sequenceVersionId)) === null) return refuseSequence('version_unknown');
   const version = await readSequenceVersion(context, input.sequenceVersionId);
   if (version === null) return refuseSequence('version_unknown');
   if (version.state !== 'draft') return refuseSequence('version_not_draft');
@@ -402,7 +424,8 @@ export async function publishVersion(
  * Retiring stops new enrollments and does not touch the ones already running: 11.2
  * freezes an enrollment to its version, and pulling the plan out from under a firm
  * halfway through a cadence is not a thing this system does. A fix to a plan in use is
- * an edit in place (`saveSteps`), which reaches the enrollments already on it.
+ * a new version (`saveSteps`, then `publishVersion`), and an enrollment moves to it only
+ * through the explicit migration (`migrateEnrollment.ts`).
  */
 export async function retireVersion(
   context: RepositoryContext,
@@ -411,6 +434,7 @@ export async function retireVersion(
   if (!isAdminScope(context.scope)) return refuseSequence('admin_only');
   if (context.scope.actor.kind !== 'user') return refuseSequence('admin_only');
 
+  if ((await lockVersion(context, input.sequenceVersionId)) === null) return refuseSequence('version_unknown');
   const version = await readSequenceVersion(context, input.sequenceVersionId);
   if (version === null) return refuseSequence('version_unknown');
   if (version.state === 'retired') return refuseSequence('version_retired');

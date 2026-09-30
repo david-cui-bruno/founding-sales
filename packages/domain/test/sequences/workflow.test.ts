@@ -441,7 +441,7 @@ describe('one draft per sequence (11.1)', () => {
   });
 });
 
-describe('templates edit in place (wave 2, S3)', () => {
+describe('template edits (wave 2, S3; send-path v2, S2)', () => {
   const text = (opening: string) => ({
     name: 'Edited in place',
     subject: 'Following up',
@@ -469,22 +469,24 @@ describe('templates edit in place (wave 2, S3)', () => {
     expect(refused).toEqual({ ok: false, reason: 'template_unapproved', issues: ['template_footer_missing'] });
   });
 
-  it('keeps the approval when the edited text passes every rule, and recomputes the hash', async () => {
+  it('writes an edit of an approved version as the next version, and leaves the approved one as it was', async () => {
     const id = await approvedTemplate('The first wording.');
     const before = await readTemplateVersion(contextFor('alpha', 'admin'), id);
     const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), { ...text('A typo, fixed.'), templateVersionId: id });
     if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
     expect(edited.value).toMatchObject({
-      id,
-      version: before?.version,
+      templateId: before?.templateId,
+      version: (before?.version ?? 0) + 1,
       body: fixtureBody('A typo, fixed.'),
-      approvedAt: before?.approvedAt,
+      approvedAt: null,
       issues: [],
     });
+    expect(edited.value.id).not.toBe(id);
     expect(edited.value.contentHash).not.toBe(before?.contentHash);
+    expect(await readTemplateVersion(contextFor('alpha', 'admin'), id)).toEqual(before);
   });
 
-  it('drops the approval when a plain save breaks a rule, and says which', async () => {
+  it('answers a plain save that breaks a rule with the new version unapproved, and says which', async () => {
     const id = await approvedTemplate('Approved wording.');
     const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), {
       ...text('ignored'),
@@ -493,6 +495,8 @@ describe('templates edit in place (wave 2, S3)', () => {
     });
     if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
     expect(edited.value).toMatchObject({ approvedAt: null, issues: ['template_footer_missing'] });
+    expect(edited.value.id).not.toBe(id);
+    expect((await readTemplateVersion(contextFor('alpha', 'admin'), id))?.approvedAt).not.toBeNull();
   });
 
   it('refuses a save and approve that breaks a rule, and leaves the live text as it was', async () => {
@@ -538,41 +542,6 @@ describe('templates edit in place (wave 2, S3)', () => {
     expect(
       await updateTemplateVersion(contextFor('alpha', 'admin'), { ...text('x'), templateVersionId: created.value.id }),
     ).toEqual({ ok: false, reason: 'template_retired' });
-  });
-
-  it('sends the edited text, byte for byte, from a step not yet prepared', async () => {
-    const templateVersionId = sequences.alpha.template.templateVersionId;
-    const enrollmentId = await enroll('alpha');
-    // Monday 09:00 New York, inside the window.
-    await setDue('alpha', enrollmentId, '2026-09-21T13:00:00Z');
-
-    // The seeded template is edited in place while the enrollment's first step waits.
-    const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), {
-      name: 'Seeded, edited',
-      subject: 'Hello {firm_name}',
-      body: fixtureBody('Edited after enrolment.'),
-      footer: { signOff: FIXTURE_SIGN_OFF },
-      requiredVariables: ['firm_name'],
-      templateVersionId,
-    });
-    if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
-    expect(edited.value.approvedAt).not.toBeNull();
-
-    const handoff = recordingSendHandoff();
-    const outcome = await runDueStepExecution(worker(), {
-      enrollmentId,
-      now: '2026-09-21T13:00:00Z',
-      eligibility: allowAllEligibility(),
-      sendHandoff: handoff,
-    });
-    expect(outcome.kind).toBe('handed_to_send');
-    const [request] = handoff.prepared;
-    expect(request?.templateContentHash).toBe(edited.value.contentHash);
-    // The composed body, which with no address configured is byte for byte the approved
-    // body: the legacy block is recognised and replaced by the same bytes (lane W3-F).
-    expect(request?.body).toBe(fixtureBody('Edited after enrolment.'));
-    expect(request?.body.endsWith(FIXTURE_SIGN_OFF)).toBe(true);
-    expect(request?.body).not.toContain(SENDING_STOP_LINE);
   });
 
   it('approves both shapes, signed and footerless, and refuses a stray legacy stop line', async () => {
@@ -631,93 +600,6 @@ describe('templates edit in place (wave 2, S3)', () => {
       ['(https?://|www\\.)[^\\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'],
     );
     expect(Number(rows[0]?.count)).toBe(0);
-  });
-});
-
-describe('published steps edit in place (wave 2, S3)', () => {
-  const emailStep = () => ({
-    ordinal: 1,
-    channel: 'email' as const,
-    delay: { unit: 'elapsed' as const, hours: 0 },
-    templateVersionId: sequences.alpha.template.templateVersionId,
-  });
-  const callStep = (ordinal: number, days: number) => ({
-    ordinal,
-    channel: 'call_task' as const,
-    delay: { unit: 'business_days' as const, days },
-    onNoAnswer: 'advance' as const,
-  });
-
-  async function publishedPlan(): Promise<string> {
-    const sequence = await createSequence(contextFor('alpha', 'admin'), { name: `Edited plan ${String(Date.now())}` });
-    if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
-    const draft = await createDraftVersion(contextFor('alpha', 'admin'), {
-      sequenceId: sequence.value.id,
-      steps: [emailStep(), callStep(2, 3)],
-    });
-    if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
-    const published = await publishVersion(contextFor('alpha', 'admin'), { sequenceVersionId: draft.value.sequenceVersionId });
-    if (!published.ok) throw new Error(`the publication was refused: ${published.reason}`);
-    return draft.value.sequenceVersionId;
-  }
-
-  it('updates a published step in place and adds one, keeping the step rows live enrollments point at', async () => {
-    const versionId = await publishedPlan();
-    const before = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
-    const saved = await saveSteps(contextFor('alpha', 'admin'), {
-      sequenceVersionId: versionId,
-      steps: [emailStep(), callStep(2, 9), callStep(3, 2)],
-    });
-    expect(saved).toEqual({ ok: true, value: { steps: 3 } });
-    const after = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
-    expect(after?.state).toBe('published');
-    expect(after?.steps.map(step => step.id).slice(0, 2)).toEqual(before?.steps.map(step => step.id));
-    expect(after?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 9 });
-    expect(after?.steps).toHaveLength(3);
-  });
-
-  it('refuses to change the channel of, or remove, a step something has executed', async () => {
-    const enrollmentId = await enroll('alpha');
-    expect(enrollmentId).toBeTruthy();
-    const versionId = sequences.alpha.publishedVersionId;
-    const before = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
-    // The enrollment's first execution names step 1.
-    expect(
-      await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [callStep(1, 0), callStep(2, 3)] }),
-    ).toEqual({ ok: false, reason: 'step_in_use' });
-    expect(await readSequenceVersion(contextFor('alpha', 'admin'), versionId)).toEqual(before);
-  });
-
-  it('holds a published edit to what publication checks, and refuses a retired version', async () => {
-    const versionId = await publishedPlan();
-    expect(await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [] })).toEqual({
-      ok: false,
-      reason: 'version_has_no_steps',
-    });
-    const unapproved = await createTemplateVersion(contextFor('alpha', 'admin'), {
-      name: 'Not yet',
-      subject: 'Hello',
-      body: fixtureBody('Not approved.'),
-      footer: { signOff: FIXTURE_SIGN_OFF },
-      requiredVariables: [],
-    });
-    if (!unapproved.ok) throw new Error(`the template was refused: ${unapproved.reason}`);
-    expect(
-      await saveSteps(contextFor('alpha', 'admin'), {
-        sequenceVersionId: versionId,
-        steps: [{ ...emailStep(), templateVersionId: unapproved.value.id }],
-      }),
-    ).toEqual({ ok: false, reason: 'template_unapproved' });
-    expect(await saveSteps(contextFor('alpha', 'salesperson'), { sequenceVersionId: versionId, steps: [emailStep()] })).toEqual({
-      ok: false,
-      reason: 'admin_only',
-    });
-
-    expect((await retireVersion(contextFor('alpha', 'admin'), { sequenceVersionId: versionId })).ok).toBe(true);
-    expect(await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [emailStep()] })).toEqual({
-      ok: false,
-      reason: 'version_retired',
-    });
   });
 });
 
