@@ -365,6 +365,15 @@ export async function logCallOutcome(
   );
   const callLogId = logged.rows[0]?.id;
   if (callLogId === undefined) throw new Error('the call log insert returned no row');
+  // A call placed through a Twilio call session (0028) is linked to the outcome David
+  // recorded for it: the session's ticket is the call log's ticket. First log wins.
+  if (input.ticketId !== undefined) {
+    await context.db.query(
+      `UPDATE call_sessions SET call_log_id = $3, updated_at = now()
+        WHERE workspace_id = $1 AND ticket_id = $2 AND call_log_id IS NULL`,
+      [context.scope.workspaceId, input.ticketId, callLogId],
+    );
+  }
 
   // ---- 3. Apply -----------------------------------------------------------
   const applied = await withinSavepoint(context, async (): Promise<PolicyResult<AppliedEffects>> => {

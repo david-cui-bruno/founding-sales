@@ -3,7 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { finaliseSubjectReservations } from '../research/reservations.ts';
+import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -273,6 +273,34 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM record_aliases
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
+    // Migration 0028: the Twilio sessions (a recording reference), the Cal.com meetings
+    // (the attendee's e-mail) and their delivery digests, and the review items that name
+    // the firm.
+    call_sessions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_sessions
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
+    meetings: await countOf(
+      context,
+      `SELECT count(*) AS count FROM meetings
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
+    calcom_events: await countOf(
+      context,
+      `SELECT count(*) AS count FROM calcom_events e
+         JOIN meetings m ON m.workspace_id = e.workspace_id AND m.id = e.meeting_id
+        WHERE e.workspace_id = $1 AND m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')}`,
+      byContact,
+    ),
+    stage_review_items: await countOf(
+      context,
+      `SELECT count(*) AS count FROM stage_review_items
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
       byContact,
     ),
     // G7b. A confirmation would cascade with its message anyway, but it is counted
@@ -645,6 +673,48 @@ export async function commitDeletion(
         SELECT x.mail_message_id FROM mail_message_matches x
          WHERE x.workspace_id = $1 AND x.firm_id = $3 AND ${contactPredicate('x.contact_id', '$2')}
       )`,
+    byContact,
+  );
+  // Migration 0028's rows before the tickets and call logs they point at. A session's
+  // open reservation is closed first, as the research sweep closes a run's: `reserved`
+  // is released (no call can have happened), `calling` is estimated (one may have).
+  const { rows: openSessions } = await context.db.query<{ reservation_id: string; state: string }>(
+    `SELECT s.reservation_id, r.state FROM call_sessions s
+       JOIN provider_reservations r ON r.workspace_id = s.workspace_id AND r.id = s.reservation_id
+      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}
+        AND r.state IN ('reserved', 'calling')`,
+    byContact,
+  );
+  if (openSessions.length > 0) {
+    const at = await databaseNow(context);
+    for (const open of openSessions) {
+      await settleAttempt(context, {
+        reservationId: open.reservation_id,
+        at,
+        outcome: open.state === 'calling' ? { kind: 'estimated' } : { kind: 'released' },
+      });
+    }
+  }
+  await remove(
+    'call_sessions',
+    `DELETE FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    byContact,
+  );
+  await remove(
+    'calcom_events',
+    `DELETE FROM calcom_events e USING meetings m
+      WHERE e.workspace_id = $1 AND m.workspace_id = e.workspace_id AND m.id = e.meeting_id
+        AND m.firm_id = $3 AND ${contactPredicate('m.contact_id', '$2')}`,
+    byContact,
+  );
+  await remove(
+    'meetings',
+    `DELETE FROM meetings WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    byContact,
+  );
+  await remove(
+    'stage_review_items',
+    `DELETE FROM stage_review_items WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   // Then the things that point at a route, then the routes.
