@@ -1,10 +1,12 @@
 import {
   DEFAULT_SETTING_VALUES,
+  DEFAULT_STORED_SETTING_VALUES,
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
   SETTING_KEYS,
-  SETTING_VALUE_SCHEMAS,
+  STORED_SETTING_VALUE_SCHEMAS,
   type ActiveSettingKey,
   type SendingEnabledSetting,
+  type StoredSettingKey,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
@@ -55,7 +57,7 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * own transaction: the send's claim does that for `postal_address`, which is how the
  * footer a fence is about to carry cannot be changed between the read and the claim.
  */
-export function settingLockName(workspaceId: string, settingKey: ActiveSettingKey): string {
+export function settingLockName(workspaceId: string, settingKey: StoredSettingKey): string {
   return `${workspaceId}:${settingKey}`;
 }
 
@@ -88,7 +90,7 @@ export type SettingsResult<T> =
   | { readonly ok: false; readonly reason: SettingsRefusalCode };
 
 export interface SettingVersionRow {
-  readonly settingKey: ActiveSettingKey;
+  readonly settingKey: StoredSettingKey;
   readonly version: number;
   readonly value: unknown;
   readonly changeNote: string | null;
@@ -99,7 +101,7 @@ export interface SettingVersionRow {
 
 /** One slice as it stands. `version` is 0 when no admin has ever set it. */
 export interface CurrentSetting {
-  readonly settingKey: ActiveSettingKey;
+  readonly settingKey: StoredSettingKey;
   readonly value: unknown;
   readonly version: number;
   readonly changedAt: string | null;
@@ -108,7 +110,7 @@ export interface CurrentSetting {
 }
 
 interface SettingDbRow {
-  readonly setting_key: ActiveSettingKey;
+  readonly setting_key: StoredSettingKey;
   readonly version: number;
   readonly value: unknown;
   readonly change_note: string | null;
@@ -170,7 +172,7 @@ export async function readCurrentSettings(context: RepositoryContext): Promise<r
 }
 
 /** One slice, typed by its key's schema. Falls back to the default. */
-export async function readSetting<K extends ActiveSettingKey>(
+export async function readSetting<K extends StoredSettingKey>(
   context: RepositoryContext,
   key: K,
 ): Promise<{ readonly value: unknown; readonly version: number }> {
@@ -180,14 +182,14 @@ export async function readSetting<K extends ActiveSettingKey>(
     [context.scope.workspaceId, key],
   );
   const row = rows[0];
-  if (row === undefined) return { value: DEFAULT_SETTING_VALUES[key], version: 0 };
+  if (row === undefined) return { value: DEFAULT_STORED_SETTING_VALUES[key], version: 0 };
   return { value: row.value, version: row.version };
 }
 
 /** Every version of one key, newest first. 10.1's "reason history". */
 export async function readSettingHistory(
   context: RepositoryContext,
-  key: ActiveSettingKey,
+  key: StoredSettingKey,
   options: { readonly limit?: number } = {},
 ): Promise<readonly SettingVersionRow[]> {
   const { rows } = await context.db.query<SettingDbRow>(
@@ -208,7 +210,8 @@ export async function readSettingHistory(
 export const DEFAULT_SETTING_CHANGE_NOTE = 'Changed on the Mac';
 
 export interface UpdateSettingInput {
-  readonly settingKey: ActiveSettingKey;
+  /** A settings-page key or one of the call-to-booking keys (`INTEGRATION_SETTING_KEYS`). */
+  readonly settingKey: StoredSettingKey;
   readonly value: unknown;
   /** Optional since wave 2 (D5): blank or absent records `DEFAULT_SETTING_CHANGE_NOTE`. */
   readonly changeNote?: string | undefined;
@@ -251,7 +254,7 @@ export async function updateSetting(
   if (actor.kind !== 'user') return { ok: false, reason: 'admin_only' };
 
   const changeNote = input.changeNote?.trim() || DEFAULT_SETTING_CHANGE_NOTE;
-  const schema = SETTING_VALUE_SCHEMAS[input.settingKey];
+  const schema = STORED_SETTING_VALUE_SCHEMAS[input.settingKey];
   const parsed = schema.safeParse(input.value);
   if (!parsed.success) return { ok: false, reason: 'invalid_value' };
   const value: unknown = parsed.data;

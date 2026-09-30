@@ -74,6 +74,47 @@ export function checkEnvelope(request: RequestEnvelope): EnvelopeDecision {
   return { accepted: true };
 }
 
+// ---------------------------------------------------------------------------
+// The provider integration paths (call-to-booking slice W)
+// ---------------------------------------------------------------------------
+
+/**
+ * The only paths that accept something other than JSON, and the only ones whose raw
+ * bytes are kept after parsing: a provider's signature is over the bytes it sent (Cal.com)
+ * or over the URL and the form parameters (Twilio), and a re-serialised body is not what
+ * was signed. Every other path is exactly as `checkEnvelope` and `readBody` say.
+ */
+export const INTEGRATION_CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
+  '/integrations/twilio/': 'application/x-www-form-urlencoded',
+  '/integrations/calcom/': 'application/json',
+});
+
+/** A provider callback is small; 64 KiB is far above either provider's largest. */
+export const MAX_INTEGRATION_REQUEST_BYTES = 64 * 1024;
+
+/** The content type an integration path requires, or null for every other path. */
+export function integrationContentTypeOf(path: string): string | null {
+  for (const [prefix, contentType] of Object.entries(INTEGRATION_CONTENT_TYPES)) {
+    if (path.startsWith(prefix)) return contentType;
+  }
+  return null;
+}
+
+/** `checkEnvelope` for an integration path: its own content type and its own size limit. */
+export function checkIntegrationEnvelope(request: RequestEnvelope & { readonly path: string }): EnvelopeDecision {
+  const required = integrationContentTypeOf(request.path);
+  if (required === null) return checkEnvelope(request);
+  if (request.method !== 'POST') return { accepted: false, code: 'method_not_allowed' };
+  const declaredType = (request.contentType ?? '').split(';')[0]?.trim().toLowerCase();
+  if (declaredType !== required) return { accepted: false, code: 'unsupported_media_type' };
+  const declaredLength = Number(request.contentLength);
+  if (request.contentLength === undefined || !Number.isInteger(declaredLength) || declaredLength < 0) {
+    return { accepted: false, code: 'payload_too_large' };
+  }
+  if (declaredLength > MAX_INTEGRATION_REQUEST_BYTES) return { accepted: false, code: 'payload_too_large' };
+  return { accepted: true };
+}
+
 export interface RedactedError {
   readonly error: RefusalCode;
   /** A short, fixed sentence. Never a stack, a SQL fragment, a path or a value. */

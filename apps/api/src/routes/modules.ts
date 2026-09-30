@@ -21,6 +21,10 @@ import { REPLY_PATHS, routeReplies } from './replies.ts';
 // The policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
+// The call-to-booking milestone: Twilio call sessions and the two provider webhooks.
+import { CALL_SESSION_PATHS, routeCallSessions } from './callSessions.ts';
+import { CALCOM_PATHS, routeCalcom } from './calcom.ts';
+import { TWILIO_PATHS, routeTwilio } from './twilio.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
 // The calling numbers: the identity a dial is placed from.
 import { CALLING_IDENTITY_PATHS, routeCallingIdentities } from './callingIdentities.ts';
@@ -75,6 +79,7 @@ function asApiRequest(request: BootstrapRequest): ApiRequest {
     query: request.query ?? new URLSearchParams(),
     headers: request.headers,
     body: request.body,
+    ...(request.integration === undefined ? {} : { integration: request.integration }),
   };
 }
 
@@ -154,6 +159,12 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('calling-identities', { paths: CALLING_IDENTITY_PATHS }, routeCallingIdentities, routing),
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
+    // The call-to-booking milestone (slice W). Exact paths. The webhooks are the only
+    // paths that take a form body or keep their raw bytes (`limits.ts`), and each is 404
+    // until a workspace turns its switch on.
+    moduleOf('call-sessions', { paths: CALL_SESSION_PATHS }, routeCallSessions, routing),
+    moduleOf('twilio', { paths: TWILIO_PATHS }, routeTwilio, routing),
+    moduleOf('calcom', { paths: CALCOM_PATHS }, routeCalcom, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
     // The Gmail surface. Exact paths again, and two of them are not ours to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push

@@ -1,4 +1,5 @@
 import {
+  pipelineBoardRequestSchema,
   createPipelineStageCommandSchema,
   renamePipelineStageCommandSchema,
   reorderPipelineStagesCommandSchema,
@@ -87,7 +88,15 @@ export async function routePipeline(request: ApiRequest, options: RoutingOptions
   if (request.path === '/pipeline/board') {
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
-    return { status: 200, body: await readPipelineBoardForActor(scoped.context) };
+    // Lost is shown unless the request says `includeLost: false` (call-to-booking, 0028).
+    // An installed Mac sends `{}` and builds its stage selector from the columns, so the
+    // default keeps Lost; the new desktop sends `false` to hide it.
+    const filter = pipelineBoardRequestSchema.safeParse(request.body ?? {});
+    if (!filter.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    return {
+      status: 200,
+      body: await readPipelineBoardForActor(scoped.context, { includeLost: filter.data.includeLost !== false }),
+    };
   }
 
   switch (request.path) {

@@ -324,12 +324,60 @@ export async function runWorkflows(
       run: async () => {
         const board = await readPipelineBoardForActor(admin);
         const placed = board.columns.reduce((total, column) => total + column.firms.length, 0);
-        if (board.columns.length < 7) throw new Error(`${String(board.columns.length)} stage column(s); 0004 seeds seven`);
+        // 0028 (call-to-booking): Interested, Demo booked, Decision pending, Onboarding,
+        // Live and — by default, because installed desktops build their stage selector
+        // from the columns — Lost; a retired stage only while something still sits in it.
+        const keys = board.columns.map(column => column.stage.key);
+        for (const key of ['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']) {
+          if (!keys.includes(key)) throw new Error(`the board has no ${key} column; it shows ${keys.join(', ')}`);
+        }
+        const hidden = await readPipelineBoardForActor(admin, { includeLost: false });
+        if (hidden.columns.some(column => column.stage.key === 'lost')) {
+          throw new Error('the board shows Lost although the request said includeLost: false');
+        }
         if (placed === 0) throw new Error('no firm is placed on the board, though the fixture opens opportunities');
         if (board.opportunityIdByFirmId[handles.primaryFirmId] === undefined) {
           throw new Error('the fixture firm has no opportunity an admin may change');
         }
         return `${String(board.columns.length)} column(s), ${String(placed)} placed firm(s), ${String(board.unplacedFirms.length)} unplaced`;
+      },
+    },
+    {
+      name: 'crm.stages (a new workspace, 0028)',
+      run: async () => {
+        // The replaced `seed_default_pipeline_stages`, called the way production calls
+        // it: by the workspace insert trigger. Inside a transaction that is rolled back,
+        // so the probe workspace never exists for the steps after this one; the call
+        // count in `pg_stat_user_functions` survives the rollback.
+        await session.query('BEGIN');
+        try {
+          const { rows: created } = await session.query<{ id: string }>(
+            `INSERT INTO workspaces (slug, display_name, business_time_zone)
+             VALUES ($1, 'Upgrade stage probe', 'America/New_York') RETURNING id`,
+            [`upgrade-probe-${randomUUID().slice(0, 8)}`],
+          );
+          const probe = created[0]?.id;
+          if (probe === undefined) throw new Error('the probe workspace was not created');
+          const { rows } = await session.query<{ key: string; display_name: string; retired: boolean }>(
+            'SELECT key, display_name, retired FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position',
+            [probe],
+          );
+          const seeded = rows.map(row => `${row.key}:${row.display_name}${row.retired ? ':retired' : ''}`);
+          const expected = [
+            'new:Interested',
+            'demo_booked:Demo booked',
+            'qualified:Decision pending',
+            'onboarding:Onboarding',
+            'won:Live',
+            'lost:Lost',
+          ];
+          if (seeded.join('|') !== expected.join('|')) {
+            throw new Error(`a new workspace is seeded with ${seeded.join(', ')}; 0028 seeds ${expected.join(', ')}`);
+          }
+          return `a new workspace is seeded with ${String(seeded.length)} stages: ${rows.map(row => row.key).join(', ')}`;
+        } finally {
+          await session.query('ROLLBACK');
+        }
       },
     },
     {

@@ -221,6 +221,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
     // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.
     upgradeUrl: deployment.upgradeUrl,
+    // Call-to-booking (slice W): Twilio and Cal.com, each null until its secret is set.
+    integrations: deployment.integrations,
     log,
   });
   const heartbeat = startApiHeartbeat({

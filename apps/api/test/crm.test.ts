@@ -175,15 +175,7 @@ describe('CRM routes', () => {
     const answer = await get('/pipeline/stages', strangerToken);
     expect(answer.status).toBe(200);
     const stages = answer.body['stages'] as { key: string; terminalKind: string | null }[];
-    expect(stages.map(stage => stage.key)).toEqual([
-      'new',
-      'contacting',
-      'engaged',
-      'qualified',
-      'proposal',
-      'won',
-      'lost',
-    ]);
+    expect(stages.map(stage => stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
   });
 
   it('runs the whole pipeline of a firm through commands', async () => {
@@ -211,7 +203,7 @@ describe('CRM routes', () => {
     expect(opened.status).toBe(200);
     const opportunityId = (opened.body['result'] as { id: string }).id;
 
-    const moved = await post('/opportunities/stage', assigneeToken, command({ opportunityId, toStageKey: 'contacting' }));
+    const moved = await post('/opportunities/stage', assigneeToken, command({ opportunityId, toStageKey: 'demo_booked' }));
     expect(moved.status).toBe(200);
 
     const lostWithoutReason = await post('/opportunities/stage', assigneeToken, command({ opportunityId, toStageKey: 'lost' }));

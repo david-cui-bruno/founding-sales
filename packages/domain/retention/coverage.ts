@@ -199,6 +199,22 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ['deletion_removes'],
     'Why Callie might write to one person at this firm, and the event it rests on; removed with the firm.',
   ),
+
+  // ------------------------------------------------ call-to-booking (0028)
+  // The pipeline's own history: keyed on the opportunity, which a deletion keeps (the
+  // firm is redacted, its opportunities stay as business history), and carrying no
+  // name, address or number.
+  opportunity_values: coverage(['retained'], 'Monthly value per opportunity, append-only; no prospect identity.'),
+  opportunity_stage_pins: coverage(['retained'], 'Which opportunity a person placed by hand; ids only.'),
+  opportunity_stage_evidence: coverage(['retained'], 'The evidence id an automatic move rested on, append-only; ids only.'),
+  stage_rules: coverage(['operational'], 'The evidence-to-stage vocabulary.'),
+  // These three name a firm's call or meeting — the call's recording, the attendee's
+  // e-mail — so they go with the firm or the person, as `call_logs` does.
+  stage_review_items: coverage(['deletion_removes'], 'Evidence waiting for a person, naming the firm; removed with the firm.'),
+  call_sessions: coverage(['deletion_removes'], 'One Twilio call attempt and its recording reference; removed with the firm or the person.'),
+  meetings: coverage(['deletion_removes'], 'A Cal.com booking and the attendee’s e-mail; removed with the firm or the person.'),
+  mail_message_duplicates: coverage(['swept', 'deletion_removes'], 'A provider message id the pipeline skips; goes with the message it names (ON DELETE CASCADE).'),
+  calcom_events: coverage(['deletion_removes'], 'Delivery digests of a deleted meeting; removed with it. Unmatched ones carry no identity.'),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

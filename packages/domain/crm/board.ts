@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { firmIdentityDtoOf, type FirmIdentityDto } from './dto.ts';
 import { listPipelineStages } from './pipeline.ts';
 import type { FirmRow, PipelineStageRow } from './types.ts';
+import type { MeetingState } from '@fss/contracts';
 
 /**
  * The pipeline board, as one read (specification 8.1, Appendix F, Appendix G 7).
@@ -40,6 +41,14 @@ export interface PipelineBoardColumn {
   readonly firms: readonly FirmIdentityDto[];
 }
 
+/** What a card shows beyond the firm's identity (call-to-booking slice W). */
+export interface PipelineBoardCard {
+  readonly value: { readonly monthlyCents: number; readonly kind: 'estimated' | 'agreed' } | null;
+  readonly meeting: { readonly meetingId: string; readonly state: MeetingState; readonly startsAt: string } | null;
+  readonly evidence: { readonly kind: string; readonly evidenceId: string; readonly occurredAt: string } | null;
+  readonly pinned: boolean;
+}
+
 export interface PipelineBoardDto {
   readonly columns: readonly PipelineBoardColumn[];
   /**
@@ -47,8 +56,10 @@ export interface PipelineBoardDto {
    * design; a firm absent from it is a firm whose column offers no stage control.
    */
   readonly opportunityIdByFirmId: Readonly<Record<string, string>>;
-  /** Firms with no open opportunity. They are in no column and a person opens them. */
+  /** Firms in no column: no opportunity, or a Lost one while the Lost filter is off. */
   readonly unplacedFirms: readonly FirmIdentityDto[];
+  /** Card detail for every placed firm. */
+  readonly cards: Readonly<Record<string, PipelineBoardCard>>;
 }
 
 function columnOf(stage: PipelineStageRow, firms: readonly FirmIdentityDto[]): PipelineBoardColumn {
@@ -71,6 +82,15 @@ type BoardRow = FirmRow & {
   readonly opportunity_status: 'open' | 'won' | 'lost' | null;
   readonly control_mode: 'automated' | 'manual' | null;
   readonly opened_at: Date | null;
+  readonly value_cents: number | null;
+  readonly value_kind: 'estimated' | 'agreed' | null;
+  readonly meeting_id: string | null;
+  readonly meeting_state: MeetingState | null;
+  readonly meeting_starts_at: Date | null;
+  readonly evidence_kind: string | null;
+  readonly evidence_id: string | null;
+  readonly evidence_occurred_at: Date | null;
+  readonly pinned: boolean;
 };
 
 /**
@@ -90,17 +110,57 @@ function mayChangeStage(context: RepositoryContext, assignedUserId: string | nul
   return assignedUserId === actor.userId;
 }
 
+/**
+ * The Kanban (call-to-booking, 0028): Interested, Demo booked, Decision pending,
+ * Onboarding and Live, and Lost unless `includeLost` is explicitly false.
+ *
+ * Lost is shown by default (review fold 1, finding 4): installed desktops send `{}`
+ * and build their stage selector from these columns, so a board without Lost would
+ * take the Lost action away from them. The new desktop (slice K) sends `false`.
+ *
+ * Each firm is placed by its **current** opportunity — the open one, or else the most
+ * recently closed one — so a Live customer stays in the Live column and a Lost firm
+ * appears only when the filter asks. Retired stages are not columns unless an open
+ * opportunity still sits in one (after 0028's remap none does). A closed opportunity's
+ * id is never in `opportunityIdByFirmId`: closed opportunities are not moved from here.
+ */
 export async function readPipelineBoardForActor(
   context: RepositoryContext,
-  options: { readonly limit?: number } = {},
+  options: { readonly limit?: number; readonly includeLost?: boolean } = {},
 ): Promise<PipelineBoardDto> {
+  const includeLost = options.includeLost !== false;
   const stages = await listPipelineStages(context);
   const { rows } = await context.db.query<BoardRow>(
     `SELECT f.*, s.key AS stage_key, o.id AS opportunity_id, o.status AS opportunity_status,
-            o.control_mode, o.opened_at
+            o.control_mode, o.opened_at,
+            v.monthly_cents AS value_cents, v.kind AS value_kind,
+            m.id AS meeting_id, m.state AS meeting_state, m.starts_at AS meeting_starts_at,
+            ev.evidence_kind, ev.evidence_id, ev.occurred_at AS evidence_occurred_at,
+            (p.opportunity_id IS NOT NULL) AS pinned
        FROM firms f
-       LEFT JOIN opportunities o ON o.workspace_id = f.workspace_id AND o.firm_id = f.id AND o.status = 'open'
+       LEFT JOIN LATERAL (
+         SELECT * FROM opportunities x
+          WHERE x.workspace_id = f.workspace_id AND x.firm_id = f.id
+          ORDER BY (x.status = 'open') DESC, x.closed_at DESC NULLS LAST, x.id
+          LIMIT 1
+       ) o ON true
        LEFT JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
+       LEFT JOIN LATERAL (
+         SELECT monthly_cents, kind FROM opportunity_values y
+          WHERE y.workspace_id = o.workspace_id AND y.opportunity_id = o.id
+          ORDER BY y.recorded_at DESC, y.id DESC LIMIT 1
+       ) v ON true
+       LEFT JOIN LATERAL (
+         SELECT id, state, starts_at FROM meetings z
+          WHERE z.workspace_id = f.workspace_id AND z.firm_id = f.id
+          ORDER BY z.updated_at DESC, z.id DESC LIMIT 1
+       ) m ON true
+       LEFT JOIN LATERAL (
+         SELECT evidence_kind, evidence_id, occurred_at FROM opportunity_stage_evidence e
+          WHERE e.workspace_id = o.workspace_id AND e.opportunity_id = o.id
+          ORDER BY e.recorded_at DESC, e.id DESC LIMIT 1
+       ) ev ON true
+       LEFT JOIN opportunity_stage_pins p ON p.workspace_id = o.workspace_id AND p.opportunity_id = o.id
       WHERE f.workspace_id = $1 AND f.status = 'active'
       ORDER BY f.name, f.id
       LIMIT $2`,
@@ -108,29 +168,48 @@ export async function readPipelineBoardForActor(
   );
 
   const opportunityIdByFirmId: Record<string, string> = {};
+  const cards: Record<string, PipelineBoardCard> = {};
   const placed: FirmIdentityDto[] = [];
   const unplacedFirms: FirmIdentityDto[] = [];
 
   for (const row of rows) {
+    const shown =
+      row.stage_key !== null &&
+      (row.opportunity_status === 'open' ||
+        row.opportunity_status === 'won' ||
+        (row.opportunity_status === 'lost' && includeLost));
     const dto = firmIdentityDtoOf(row, {
-      stageKey: row.stage_key,
-      status: row.opportunity_status,
-      controlMode: row.control_mode,
-      openedAt: row.opened_at === null ? null : row.opened_at.toISOString(),
+      stageKey: shown ? row.stage_key : null,
+      status: shown ? row.opportunity_status : null,
+      controlMode: shown ? row.control_mode : null,
+      openedAt: !shown || row.opened_at === null ? null : row.opened_at.toISOString(),
     });
-    if (row.stage_key === null) {
+    if (!shown) {
       unplacedFirms.push(dto);
       continue;
     }
     placed.push(dto);
-    if (row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {
+    cards[row.id] = {
+      value: row.value_cents === null || row.value_kind === null ? null : { monthlyCents: Number(row.value_cents), kind: row.value_kind },
+      meeting:
+        row.meeting_id === null || row.meeting_state === null || row.meeting_starts_at === null
+          ? null
+          : { meetingId: row.meeting_id, state: row.meeting_state, startsAt: row.meeting_starts_at.toISOString() },
+      evidence:
+        row.evidence_kind === null || row.evidence_id === null || row.evidence_occurred_at === null
+          ? null
+          : { kind: row.evidence_kind, evidenceId: row.evidence_id, occurredAt: row.evidence_occurred_at.toISOString() },
+      pinned: row.pinned,
+    };
+    if (row.opportunity_status === 'open' && row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {
       opportunityIdByFirmId[row.id] = row.opportunity_id;
     }
   }
 
-  return {
-    columns: stages.map(stage => columnOf(stage, placed)),
-    opportunityIdByFirmId,
-    unplacedFirms,
-  };
+  const occupied = new Set(placed.map(firm => firm.stageKey));
+  const columns = stages
+    .filter(stage => (stage.terminal_kind === 'lost' ? includeLost : !stage.retired || occupied.has(stage.key)))
+    .map(stage => columnOf(stage, placed));
+
+  return { columns, opportunityIdByFirmId, unplacedFirms, cards };
 }

@@ -613,7 +613,7 @@ describe('the administration surface', () => {
     const stages = await call('GET', '/pipeline/stages', salespersonToken);
     expect(wireDrift(pipelineStagesResponseSchema, stages.body)).toEqual([]);
     const keys = (stages.body['stages'] as readonly { key: string }[]).map(entry => entry.key);
-    expect(keys).toEqual(['new', 'contacting', 'engaged', 'qualified', 'proposal', 'demo', 'won', 'lost']);
+    expect(keys).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'demo', 'won', 'lost']);
   });
 
   it('gives the board its columns and the opportunity ids the caller may act on', async () => {
@@ -621,15 +621,17 @@ describe('the administration surface', () => {
     expect(answer.status).toBe(200);
     expect(wireDrift(pipelineBoardResponseSchema, answer.body)).toEqual([]);
     const columns = answer.body['columns'] as readonly { stage: { key: string } }[];
-    expect(columns.map(column => column.stage.key)).toEqual([
+    // The Kanban (0028). An installed desktop sends `{}` and still gets Lost, which its
+    // stage selector is built from; `includeLost: false` hides it.
+    expect(columns.map(column => column.stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'demo', 'won', 'lost']);
+    const hidden = await call('POST', '/pipeline/board', salespersonToken, { includeLost: false });
+    expect((hidden.body['columns'] as readonly { stage: { key: string } }[]).map(column => column.stage.key)).toEqual([
       'new',
-      'contacting',
-      'engaged',
+      'demo_booked',
       'qualified',
-      'proposal',
+      'onboarding',
       'demo',
       'won',
-      'lost',
     ]);
     // No firms in this fixture, so the map is empty rather than absent: a client
     // that has to distinguish "no ids" from "no field" would get it wrong once.

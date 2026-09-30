@@ -97,7 +97,12 @@ locals {
   #
   # The database entries are not in these lists: they arrive through the two named
   # inputs, as before, and the runtime one is added to each map below.
-  api_secret_names        = ["device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"]
+  #   * the API also reads `twilio-voice` and `calcom` (call-to-booking slice W,
+  #     `apps/api/src/integrations/providers.ts`). ECS refuses to start a task whose
+  #     `secrets` block names an entry with no value, so both entries must hold a value
+  #     (`{}` is enough: the API reads an incomplete entry as "not configured") before
+  #     the apply that adds them here.
+  api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
   worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]
   operations_secret_names = ["google-gmail-oauth-client"]
 

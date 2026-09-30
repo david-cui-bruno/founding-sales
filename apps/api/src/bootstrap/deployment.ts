@@ -30,6 +30,7 @@ import { createGoogleClient, httpFetch as authHttpFetch, type GoogleClient } fro
 import { createLogger, type LogFields, type Logger } from './log.ts';
 import { requireDurableJournal, resolveSuppressionJournal, type JournalPutObject } from '../journal/index.ts';
 import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';
+import { readIntegrationSecrets, type IntegrationDeps } from '../integrations/providers.ts';
 
 /**
  * What a deployed API was actually given, and what it refuses to start without.
@@ -252,6 +253,13 @@ export interface ApiDeployment {
   readonly signInSource: 'google' | 'fixture' | 'absent';
   readonly pushTopicSource: PublicIdentifierSource | 'absent';
   readonly hostedDomainSource: PublicIdentifierSource | 'absent';
+  /**
+   * Twilio Voice and Cal.com (call-to-booking slice W). Always present; either provider
+   * may be null, which is fine while its workspace switch is off.
+   */
+  readonly integrations: IntegrationDeps;
+  /** Which of the two entries parsed, or why not — a field *name*, never a value. */
+  readonly integrationSources: { readonly twilio: string; readonly calcom: string };
 }
 
 /**
@@ -317,6 +325,19 @@ export async function readApiDeployment(
   const sendingEnabled = readBooleanFlag(environment, VARIABLES.sendingEnabled);
   const upgrade = readUpgradeUrl(environment);
   const bucket = environment[VARIABLES.journalBucket]?.trim() ?? '';
+  const integrationSecrets = readIntegrationSecrets(environment);
+  const publicOriginRaw = environment[VARIABLES.publicOrigin]?.trim() ?? '';
+  const integrationsPart = {
+    integrations: {
+      publicOrigin: publicOriginRaw.length > 0 ? publicOriginRaw.replace(/\/+$/u, '') : null,
+      twilio: integrationSecrets.twilio,
+      calcom: integrationSecrets.calcom,
+    },
+    integrationSources: {
+      twilio: integrationSecrets.twilioProblem ?? 'configured',
+      calcom: integrationSecrets.calcomProblem ?? 'configured',
+    },
+  };
 
   const resolved = resolveSuppressionJournal({
     bucket: bucket.length > 0 ? bucket : null,
@@ -344,6 +365,7 @@ export async function readApiDeployment(
       signInSource: 'absent',
       pushTopicSource: 'absent',
       hostedDomainSource: 'absent',
+      ...integrationsPart,
     };
   }
 
@@ -412,6 +434,7 @@ export async function readApiDeployment(
       signInSource: 'fixture',
       pushTopicSource,
       hostedDomainSource,
+      ...integrationsPart,
     };
   }
 
@@ -450,6 +473,7 @@ export async function readApiDeployment(
     signInSource: 'google',
     pushTopicSource,
     hostedDomainSource,
+    ...integrationsPart,
   };
 }
 
@@ -493,6 +517,12 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
     // The source, not the address: a field whose name says `url` is redacted by the
     // logger, and the rule above is that this line carries no operator-supplied string.
     upgrade_notice_source: deployment.upgradeUrlSource,
+    // Call-to-booking (slice W): which provider entry parsed. `configured`, `absent`,
+    // `not_json` or `field:<name>` — never a value. Needed only once a workspace turns
+    // its switch on; the route answers 503 and logs `integration_unconfigured` until then.
+    twilio_voice_config: deployment.integrationSources.twilio,
+    calcom_config: deployment.integrationSources.calcom,
+    public_origin_configured: deployment.integrations.publicOrigin !== null,
   };
 }
 

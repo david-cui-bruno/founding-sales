@@ -221,8 +221,12 @@ export async function markCalling(context: RepositoryContext, reservationId: str
 export type SettleOutcome =
   /** The provider reported a figure. */
   | { readonly kind: 'settled'; readonly cents: number }
-  /** Nobody reported one. The reservation is the cost. */
-  | { readonly kind: 'estimated' }
+  /**
+   * Nobody reported one. The reservation is the cost — unless the caller has a better
+   * estimate than the worst case (telephony: the call's own duration at the reserved
+   * unit price, `calls/sessions.ts`), which it passes as `cents`.
+   */
+  | { readonly kind: 'estimated'; readonly cents?: number | undefined }
   /**
    * No call happened and none can have — permitted **only** from `reserved`.
    *
@@ -276,7 +280,7 @@ export async function settleAttempt(
         SET state = $3,
             settled_cents = CASE
               WHEN $3 = 'settled' THEN $4::integer
-              WHEN $3 = 'estimated' THEN cents
+              WHEN $3 = 'estimated' THEN COALESCE($7::integer, cents)
               ELSE 0
             END,
             settled_at = $5::timestamptz
@@ -290,6 +294,9 @@ export async function settleAttempt(
       input.outcome.kind === 'settled' ? Math.max(0, Math.trunc(input.outcome.cents)) : 0,
       input.at,
       fromCalling,
+      input.outcome.kind === 'estimated' && input.outcome.cents !== undefined
+        ? Math.max(0, Math.trunc(input.outcome.cents))
+        : null,
     ],
   );
   const row = rows[0];

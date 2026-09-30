@@ -29,15 +29,15 @@ export const FUNNEL_FACT_KINDS = [
    * many times it is researched again afterwards.
    */
   'firm.queued_for_call',
-  /** C (telephony). A call was dialled. Key: the call log id. */
+  /** Call-to-booking (Twilio). A call session was consumed and dialled. Key: the call session id. */
   'call.placed',
-  /** C. The call reached a person. Key: the call log id. */
+  /** Call-to-booking (Twilio). The call was answered. Key: the call session id. */
   'call.connected',
   /** C. The call reached the person Callie wanted. Key: the call log id. */
   'call.engaged',
-  /** M (calendar). A meeting was put in the calendar. Key: the calendar event id. */
+  /** Call-to-booking (Cal.com). A meeting was booked. Key: the original booking uid. */
   'meeting.booked',
-  /** M. The meeting happened. Key: the calendar event id. */
+  /** Call-to-booking (Cal.com). The meeting ended. Key: the original booking uid. */
   'meeting.held',
   /** W (warm mail). A warm message was sent. Key: the outbound message id. */
   'mail.warm_sent',

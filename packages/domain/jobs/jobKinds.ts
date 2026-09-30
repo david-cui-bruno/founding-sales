@@ -34,6 +34,7 @@ export const JOB_KINDS = [
   'route.validate',
   'research.firm',
   'research.sweep',
+  'telephony.sweep',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -102,6 +103,10 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // sweep's own effect is enqueueing, which is itself unique on the run's revision,
   // so a sweep that ran twice materializes the same jobs rather than twice as many.
   'research.sweep': 'business_uniqueness',
+  // Call-to-booking (slice W). The effect is `settleAttempt` on a reservation still
+  // `reserved` or `calling`, a compare-and-set on its state: a second run finds it
+  // `released` or `estimated` and settles nothing twice.
+  'telephony.sweep': 'business_uniqueness',
 });
 
 /**
@@ -173,6 +178,9 @@ export const jobIdempotencyKey = Object.freeze({
   /** One sweep per workspace business date, like the Today build's key rule. */
   researchSweep: (workspaceSlug: string, businessDate: string): string =>
     `research-sweep:${workspaceSlug}:${businessDate}`,
+  /** One call-session reservation sweep per workspace per quarter hour, when it owes one. */
+  telephonySweep: (workspaceSlug: string, quarterHourIso: string): string =>
+    `telephony-sweep:${workspaceSlug}:${quarterHourIso}`,
 });
 
 /** Fifteen minutes in milliseconds; the canary's period (13.3). */
@@ -221,6 +229,9 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'outbound.close_send_day': 'urgent',
   'today.build': 'urgent',
   canary: 'urgent',
+  // An abandoned call session holds budget until this releases it, and the next call
+  // may be refused for want of it: the salesperson is the one waiting.
+  'telephony.sweep': 'urgent',
   // Nobody is watching the clock on these, and there can be a great many of them.
   'sequence.action': 'bulk',
   'sequence.terminal_stop': 'bulk',

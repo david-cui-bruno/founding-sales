@@ -28,6 +28,7 @@ import { anthropicExtraction } from '../research/anthropicExtraction.ts';
 import { researchPageFetch } from '../research/companyPageFetch.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
+import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -153,6 +154,9 @@ export function registerHandlers(
   // closes a send day so 12.7's ramp can advance past five a day.
   registry.register(terminalStopJobHandler());
   registry.register(sendDayCloseJobHandler());
+  // Call-to-booking (slice W). The telephony reservations' backstop: PostgreSQL only,
+  // no provider call, so like `retention.batch` it is registered in every deployment.
+  registry.register(telephonySweepJobHandler());
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -322,6 +326,7 @@ export function workerDueWorkSources(): readonly DueWorkSource[] {
     sendDayCloseSource(),
     retentionSource(),
     researchSweepSource(),
+    telephonySweepSource(),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),

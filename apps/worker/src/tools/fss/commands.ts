@@ -86,6 +86,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'release idle-check': 'database',
   'release drain on': 'database',
   'release drain off': 'database',
+  // Call-to-booking (slice W): the 0028 remap's before-and-after counts, READ ONLY.
+  'pipeline stage-counts': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -304,6 +306,14 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'turn the release drain off',
+  },
+  {
+    path: ['admin', 'pipeline', 'stage-counts'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary:
+      'every workspace\'s stages with their open, won and lost opportunities, pins and 0028 remap moves, in one READ ONLY transaction',
   },
 ]);
 

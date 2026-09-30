@@ -120,7 +120,7 @@ describe('the dashboard', () => {
         seeded.alpha.workspaceId,
         crm.alpha.opportunityId,
         crm.alpha.firmId,
-        await stageIdByKey(database.session, seeded.alpha.workspaceId, 'contacting'),
+        await stageIdByKey(database.session, seeded.alpha.workspaceId, 'demo_booked'),
         seeded.alpha.salesperson.userId,
       ],
     );
@@ -154,7 +154,7 @@ describe('the dashboard', () => {
     // above. Every stage change writes an append-only event in the same transaction
     // (8.1), so "opened at New" is movement too.
     expect(theirs.stageMovement).toEqual([
-      { key: 'contacting', count: 1 },
+      { key: 'demo_booked', count: 1 },
       { key: 'new', count: 1 },
     ]);
     expect(theirs.replyHandling).toEqual({

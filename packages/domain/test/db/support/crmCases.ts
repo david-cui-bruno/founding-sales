@@ -1047,7 +1047,7 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
       return await f.session.query(
         `INSERT INTO opportunity_stage_events (workspace_id, id, opportunity_id, firm_id, to_stage_id, actor_kind)
          VALUES ($1, $2, $3, $4, $5, 'system')`,
-        [workspace(f), eventId, opportunityId, firmId, await aStage(f, 'contacting')],
+        [workspace(f), eventId, opportunityId, firmId, await aStage(f, 'demo_booked')],
       );
     },
   },
