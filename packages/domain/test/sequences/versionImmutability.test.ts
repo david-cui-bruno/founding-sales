@@ -3,7 +3,6 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   createDraftVersion,
-  createSequence,
   publishVersion,
   retireVersion,
   saveSteps,
@@ -16,8 +15,16 @@ import { listStepExecutions, readSequenceVersion } from '../../sequences/rows.ts
 import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
 import { createTemplateVersion, readTemplateVersion, updateTemplateVersion } from '../../templates/templates.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
-import { firstStageId } from '../db/support/crmFixtures.ts';
-import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences } from './support/sequenceFixtures.ts';
+import { fixtureBody, seedSequences } from './support/sequenceFixtures.ts';
+import {
+  approvedTemplate as makeTemplate,
+  callStep,
+  emailStep,
+  newFirm as makeFirm,
+  publishedPlan as makePlan,
+  templateText,
+  type VersionFirm,
+} from './support/versionFixtures.ts';
 
 /**
  * Edits create new versions; running enrollments keep theirs (send-path v2, S2;
@@ -53,81 +60,11 @@ const contextFor = (who: 'admin' | 'salesperson'): RepositoryContext =>
 const worker = (): RepositoryContext =>
   repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), database.session);
 
-interface Firm {
-  readonly firmId: string;
-  readonly contactId: string;
-  readonly opportunityId: string;
-}
-
-/** One more firm with one reachable contact and an open opportunity, in workspace alpha. */
-async function newFirm(label: string): Promise<Firm> {
-  const workspaceId = seeded.alpha.workspaceId;
-  const { rows: firm } = await database.session.query<{ id: string }>(
-    `INSERT INTO firms (workspace_id, name, assigned_user_id, website, locality, region_code, postal_code,
-                        time_zone, time_zone_confidence, time_zone_source, time_zone_rule_version)
-     VALUES ($1, $2, $3, $4, 'Providence', 'RI', '02903', 'America/New_York', 'medium', 'state_default', 'firm-zone.1')
-     RETURNING id`,
-    [workspaceId, `Immutable ${label}`, seeded.alpha.salesperson.userId, `https://${label}.example.test`],
-  );
-  const firmId = firm[0]?.id ?? '';
-  const { rows: contact } = await database.session.query<{ id: string }>(
-    `INSERT INTO contacts (workspace_id, firm_id, full_name, title, is_primary)
-     VALUES ($1, $2, 'Robin Example', 'Owner', true) RETURNING id`,
-    [workspaceId, firmId],
-  );
-  const contactId = contact[0]?.id ?? '';
-  await database.session.query(
-    `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
-                                  association_confidence, technical_validation, eligibility, eligibility_policy_version)
-     VALUES ($1, $2, $3, $4, 'research_provider', TIMESTAMPTZ '2026-09-01 12:00:00+00',
-             0.950, 'passed', 'usable', 'route-policy.1')`,
-    [workspaceId, firmId, contactId, `robin@${label}.example.test`],
-  );
-  const { rows: opportunity } = await database.session.query<{ id: string }>(
-    `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
-     VALUES ($1, $2, $3, TIMESTAMPTZ '2026-09-01 12:00:00+00') RETURNING id`,
-    [workspaceId, firmId, await firstStageId(database.session, workspaceId)],
-  );
-  return { firmId, contactId, opportunityId: opportunity[0]?.id ?? '' };
-}
-
-const text = (opening: string) => ({
-  name: 'Versioned',
-  subject: 'Hello {firm_name}',
-  body: fixtureBody(opening),
-  footer: { signOff: FIXTURE_SIGN_OFF },
-  requiredVariables: ['firm_name'],
-});
-
-async function approvedTemplate(opening: string): Promise<string> {
-  const created = await createTemplateVersion(contextFor('admin'), { ...text(opening), approve: true });
-  if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
-  return created.value.id;
-}
-
-const emailStep = (templateVersionId: string): DraftStepInput => ({
-  ordinal: 1,
-  channel: 'email',
-  delay: { unit: 'elapsed', hours: 0 },
-  templateVersionId,
-});
-const callStep = (ordinal: number, days: number): DraftStepInput => ({
-  ordinal,
-  channel: 'call_task',
-  delay: { unit: 'business_days', days },
-  onNoAnswer: 'advance',
-});
-
-/** A new sequence with one published version of `steps`. */
-async function publishedPlan(steps: readonly DraftStepInput[]): Promise<{ sequenceId: string; versionId: string }> {
-  const sequence = await createSequence(contextFor('admin'), { name: `Plan ${crypto.randomUUID()}` });
-  if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
-  const draft = await createDraftVersion(contextFor('admin'), { sequenceId: sequence.value.id, steps });
-  if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
-  const published = await publishVersion(contextFor('admin'), { sequenceVersionId: draft.value.sequenceVersionId });
-  if (!published.ok) throw new Error(`the publication was refused: ${published.reason}`);
-  return { sequenceId: sequence.value.id, versionId: draft.value.sequenceVersionId };
-}
+type Firm = VersionFirm;
+const newFirm = async (_label: string): Promise<Firm> => await makeFirm(database.session, seeded.alpha);
+const text = templateText;
+const approvedTemplate = async (opening: string): Promise<string> => await makeTemplate(contextFor('admin'), opening);
+const publishedPlan = async (steps: readonly DraftStepInput[]) => await makePlan(contextFor('admin'), steps);
 
 /** Every stored byte of a version and its steps, as the database has them. */
 async function versionBytes(versionId: string): Promise<readonly string[]> {
@@ -328,5 +265,88 @@ describe('(b) and (c): new enrollments run the new version; running ones keep th
     expect(freshSent.body).toBe(fixtureBody('The wording written afterwards.'));
     const [freshFirst] = await listStepExecutions(worker(), { enrollmentId: fresh });
     expect(freshFirst?.stepId).toBe(newSteps[0]?.id);
+  });
+});
+
+describe('(d) migration 0026’s triggers come back as refusals, never as a 500', () => {
+  /**
+   * The commands lock and read the state before they write, so no ordinary call reaches
+   * the triggers. To prove the backstop answers, the one read that decides — the locked
+   * state of the version, or the locked approval of the template — is made to lie: the
+   * command then takes the path for a draft (or an unapproved template) and writes to a
+   * row the database knows is frozen. The command runs inside a transaction, as every
+   * command does through `runCommand`, and the transaction is still usable afterwards:
+   * the refusal commits with its receipt.
+   */
+  function lyingContext(session: TestDatabase['session'], lie: (sql: string, row: Record<string, unknown>) => Record<string, unknown>): RepositoryContext {
+    const db = {
+      query: async (sql: string, values?: readonly unknown[]) => {
+        const result = await session.query<Record<string, unknown>>(sql, values as unknown[]);
+        return { ...result, rows: result.rows.map(row => lie(sql, row)) };
+      },
+    } as unknown as RepositoryContext['db'];
+    return repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      db,
+    );
+  }
+
+  it('answers version_not_draft when a save reaches a published version’s steps, and writes nothing', async () => {
+    const template = await approvedTemplate('Frozen steps.');
+    const plan = await publishedPlan([emailStep(template), callStep(2, 3)]);
+    const before = await versionBytes(plan.versionId);
+    const context = lyingContext(database.session, (sql, row) =>
+      sql.includes('FROM sequence_versions') && sql.includes('FOR UPDATE') ? { ...row, state: 'draft' } : row,
+    );
+
+    await database.session.query('BEGIN');
+    try {
+      const saved = await saveSteps(context, { sequenceVersionId: plan.versionId, steps: [callStep(1, 1)] });
+      expect(saved).toEqual({ ok: false, reason: 'version_not_draft' });
+      // The transaction survived the trigger: the receipt could still commit.
+      await database.session.query('SELECT 1');
+    } finally {
+      await database.session.query('COMMIT');
+    }
+    expect(await versionBytes(plan.versionId)).toEqual(before);
+  });
+
+  it('answers template_already_approved when an edit reaches an approved template’s bytes, and writes nothing', async () => {
+    const id = await approvedTemplate('Frozen text.');
+    const before = await templateBytes(id);
+    const context = lyingContext(database.session, (sql, row) =>
+      sql.includes('FROM template_versions') && sql.includes('FOR UPDATE') ? { ...row, approved_at: null } : row,
+    );
+
+    await database.session.query('BEGIN');
+    try {
+      const edited = await updateTemplateVersion(context, { ...text('Rewritten in place.'), templateVersionId: id });
+      expect(edited).toEqual({ ok: false, reason: 'template_already_approved' });
+      await database.session.query('SELECT 1');
+    } finally {
+      await database.session.query('COMMIT');
+    }
+    expect(await templateBytes(id)).toBe(before);
+  });
+
+  it('still throws any other restrict_violation, which would be a real bug', async () => {
+    const plan = await publishedPlan([callStep(1, 0)]);
+    const draft = await createDraftVersion(contextFor('admin'), { sequenceId: plan.sequenceId, steps: [callStep(1, 0)] });
+    if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
+    await database.session.query('BEGIN');
+    try {
+      // Another trigger raising the same SQLSTATE with another message, for this
+      // transaction only: the guard matches 0026's messages, not the code alone.
+      await database.session.query(
+        `CREATE FUNCTION pg_temp.boom() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'something else entirely' USING ERRCODE = 'restrict_violation'; END $$;
+         CREATE TRIGGER boom BEFORE INSERT ON sequence_steps FOR EACH ROW EXECUTE FUNCTION pg_temp.boom();`,
+      );
+      await expect(
+        saveSteps(contextFor('admin'), { sequenceVersionId: draft.value.sequenceVersionId, steps: [callStep(1, 2)] }),
+      ).rejects.toMatchObject({ code: '23001' });
+    } finally {
+      await database.session.query('ROLLBACK');
+    }
   });
 });

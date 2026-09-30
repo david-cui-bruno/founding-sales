@@ -76,6 +76,7 @@ describe('what the API mounts', () => {
       '/dial/check',
       '/enrollments',
       '/enrollments/enroll',
+      '/enrollments/migrate',
       '/enrollments/steps',
       '/enrollments/stop',
       '/follow-up-permissions',

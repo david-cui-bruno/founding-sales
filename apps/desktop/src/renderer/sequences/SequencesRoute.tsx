@@ -158,7 +158,14 @@ export function SequencesRoute({
   const state = sequences.state;
   const [name, setName] = useState('');
   const [nameMissing, setNameMissing] = useState(false);
-  const [editing, setEditing] = useState<{ readonly templateVersionId: string; readonly name: string; readonly subject: string; readonly body: string; readonly signOff: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    readonly templateVersionId: string;
+    readonly name: string;
+    readonly subject: string;
+    readonly body: string;
+    readonly signOff: string;
+    readonly note: string | null;
+  } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
 
   if (!sequences.available || state === null) {
@@ -396,6 +403,7 @@ export function SequencesRoute({
             subject: template.subject,
             body: typedBodyOf(template),
             signOff: template.footerSignOff,
+            note: screen.templates.find(panel => panel.id === template.id)?.editNote ?? null,
           });
           setFormOpen(true);
         }}

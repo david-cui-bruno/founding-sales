@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  enrollmentMigrateResultSchema,
   enrollmentsResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
@@ -123,6 +124,7 @@ describe('the sequence, template and enrollment routes', () => {
       '/sequences/versions/publish',
       '/templates/create',
       '/enrollments/enroll',
+      '/enrollments/migrate',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
@@ -409,6 +411,51 @@ describe('the sequence, template and enrollment routes', () => {
     const draft = versions.find(entry => entry.id === answer['sequenceVersionId']);
     expect(draft?.state).toBe('draft');
     expect(draft?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
+  });
+
+  it('migrates an enrollment to the newly published version by supersede, audited, and answers a replay from the receipt (send-path v2, S2)', async () => {
+    const versions = sequenceVersionsResponseSchema.parse(
+      (await post('/sequences/versions', adminToken, { sequenceId })).body,
+    ).versions;
+    const draft = versions.find(entry => entry.state === 'draft');
+    expect(draft).toBeDefined();
+    const published = await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: draft?.id }));
+    expect(published.status).toBe(200);
+    const enrolled = enrollmentsResponseSchema
+      .parse((await post('/enrollments', salespersonToken, { contactId, liveOnly: true })).body)
+      .enrollments.find(entry => entry.sequenceVersionId === sequenceVersionId);
+    expect(enrolled).toBeDefined();
+    const payload = { enrollmentId: enrolled?.id, targetSequenceVersionId: draft?.id, changeNote: 'Corrected cadence.' };
+
+    // Another workspace's administrator cannot see it; nobody without a session can ask.
+    const betaAdmin = (await issueSessionFor(fixture, fixture.beta, fixture.beta.admin)).accessToken;
+    const hidden = await post('/enrollments/migrate', betaAdmin, command(payload));
+    expect(hidden.status).toBe(409);
+    expect(hidden.body['reason']).toBe('enrollment_unknown');
+    expect((await post('/enrollments/migrate', null, command(payload))).status).toBe(401);
+    expect((await post('/enrollments/migrate', salespersonToken, command({ ...payload, extra: true }))).status).toBe(400);
+
+    const first = command(payload);
+    const migrated = await post('/enrollments/migrate', salespersonToken, first);
+    expect(migrated.status).toBe(200);
+    expect(wireDrift(enrollmentMigrateResultSchema, resultOf(migrated))).toEqual([]);
+    const result = enrollmentMigrateResultSchema.parse(resultOf(migrated));
+    expect(result).toMatchObject({ oldEnrollmentId: enrolled?.id, carriedOrdinals: [], nextOrdinal: 1 });
+
+    const replay = await post('/enrollments/migrate', salespersonToken, first);
+    expect(replay.status).toBe(200);
+    expect(resultOf(replay)).toEqual(resultOf(migrated));
+
+    const listed = enrollmentsResponseSchema.parse((await post('/enrollments', salespersonToken, { contactId, liveOnly: false })).body).enrollments;
+    expect(listed.find(entry => entry.id === result.oldEnrollmentId)).toMatchObject({ state: 'stopped', endReason: 'migration_superseded' });
+    expect(listed.find(entry => entry.id === result.newEnrollmentId)).toMatchObject({ state: 'active', sequenceVersionId: draft?.id });
+
+    const { rows } = await fixture.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM audit_events
+        WHERE workspace_id = $1 AND action = 'enrollment.migrated' AND subject_id = $2`,
+      [fixture.alpha.workspaceId, result.newEnrollmentId],
+    );
+    expect(rows[0]?.count).toBe('1');
   });
 
   it('leaves no draft behind when it refuses one (lane D1)', async () => {

@@ -60,6 +60,12 @@ export interface VersionPanel {
   readonly heading: string;
   readonly steps: readonly StepRow[];
   readonly editable: boolean;
+  /**
+   * What Save does to this version, when that is not simply "save it" (send-path v2,
+   * S2): a published version is never written to, so its editor says the edit becomes a
+   * new draft and that everybody enrolled keeps this one. Null on a draft.
+   */
+  readonly editNote: string | null;
   readonly canPublish: boolean;
   readonly publishRefusal: PublishRefusal | null;
   readonly canRetire: boolean;
@@ -78,6 +84,11 @@ export interface TemplatePanel {
   readonly approved: boolean;
   readonly retired: boolean;
   readonly editable: boolean;
+  /**
+   * What saving an edit of this version does, when it is not an edit in place (send-path
+   * v2, S2): an approved version is never rewritten, so the edit is the next version.
+   */
+  readonly editNote: string | null;
   readonly canApprove: boolean;
   /** The footer block the body must end with, and whether it does (12.6). */
   readonly footerPresent: boolean;
@@ -211,10 +222,14 @@ function versionPanel(
     state: version.state,
     heading: `Version ${String(version.version)} — ${version.state}`,
     steps,
-    // Edited in place since wave 2 (S3): `saveSteps` changes a published version's steps
-    // and the edit reaches its live enrollments, so "Edit as a new draft" is gone and a
-    // published version is simply editable. A retired one is not.
+    // A published version is editable in the sense that Save is offered, and Save writes
+    // the edit to the sequence's draft (send-path v2, S2): the published steps, and every
+    // enrollment on them, stay as they are. A retired one offers nothing.
     editable: version.state !== 'retired' && options.isAdmin && options.mayMutate,
+    editNote:
+      version.state === 'published'
+        ? `Saving makes a new draft version. Everybody already enrolled keeps version ${String(version.version)}.`
+        : null,
     canPublish: refusal === null,
     publishRefusal: refusal,
     canRetire: version.state === 'published' && options.isAdmin && options.mayMutate,
@@ -273,6 +288,9 @@ function templatePanel(
     approved,
     retired,
     editable: !approved && !retired && options.isAdmin && options.mayMutate,
+    editNote: approved
+      ? `Saving makes version ${String(template.version + 1)}. Version ${String(template.version)} stays approved as it is, and so does every sequence that sends it.`
+      : null,
     canApprove:
       !approved && !retired && options.isAdmin && options.mayMutate && footerPresent && !optOutLinkMentioned,
     footerPresent,
@@ -663,6 +681,8 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   sequence_created: 'Sequence created, with an empty version to fill in.',
   steps_saved: 'Saved.',
   template_saved: 'Template saved and approved.',
+  version_not_draft: 'That version is published and does not change. Save again to make a new draft.',
+  template_already_approved: 'That template version is approved and does not change. Save again to make a new version.',
   published: 'Published. It can be used for new enrolments now.',
   retired: 'Retired. Nobody new can be enrolled in this version.',
   admin_only: 'Only an administrator can change sequences and templates.',
@@ -687,6 +707,15 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
  * with no sentence is shown as it is.
  */
 export function sequenceNotice(code: string): string {
+  // Send-path v2 (S2): an edit of a published version or an approved template is a new
+  // version, and the notice names its number so nobody looks for the edit in the old one.
+  const newVersion = /^(steps|template)_saved_as_version:(\d{1,4})$/u.exec(code);
+  if (newVersion !== null) {
+    const number = newVersion[2] ?? '';
+    return newVersion[1] === 'steps'
+      ? `Saved as draft version ${number}. Publish it to use it for new enrollments; everybody already enrolled keeps the version they started on.`
+      : `Saved and approved as version ${number} of the template. The version you edited is unchanged; a sequence sends the new text once a version naming it is published.`;
+  }
   if (code.startsWith('template_unapproved:')) {
     const issues = code
       .slice('template_unapproved:'.length)

@@ -72,6 +72,20 @@ export const SEQUENCE_REFUSAL_CODES = [
   'still_held',
   'step_in_use',
   'calendar_version_taken',
+  /**
+   * `POST /enrollments/migrate` (send-path v2, S2). `version_other_sequence`: the target
+   * is a version of another sequence. `cold_legacy_never_revived`: a pre-0025 enrollment
+   * never moves, because moving it would be reviving it. `enrollment_dispatching`: a step
+   * of the enrollment is claimed, dispatching or has a fence not yet settled.
+   * `completed_prefix_required`: the completed steps are not exactly 1..k.
+   * `agreed_scope_bound`: an agreed-sequence run cannot move on its original agreement;
+   * a fresh permission for the target version is required.
+   */
+  'version_other_sequence',
+  'cold_legacy_never_revived',
+  'enrollment_dispatching',
+  'completed_prefix_required',
+  'agreed_scope_bound',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
 

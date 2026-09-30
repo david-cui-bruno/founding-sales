@@ -12,16 +12,19 @@ import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * Template versions: create, edit in place, approve (specification 11.1, 12.6, 14.1; wave 2, S3).
+ * Template versions: create, edit, approve (specification 11.1, 12.6, 14.1; wave 2, S3;
+ * send-path v2, S2).
  *
- *   * `POST /templates/update` edits a version in place: the content hash is recomputed
- *     and the refusal rules re-run, and an approved version stays approved only if they
- *     pass. `approve: true` is "Save and approve": approved in the same command, or
- *     refused with every issue and nothing written.
+ *   * `POST /templates/update` edits a version. An **approved** version is never
+ *     rewritten: the edit is the template's next version, with its own id, number and
+ *     content hash, and the answer is that new row. An unapproved version is edited in
+ *     place, the hash recomputed. `approve: true` is "Save and approve": the saved
+ *     version approved in the same command, or refused with every issue and nothing
+ *     written.
  *   * `POST /templates/create` writes a new template, and takes `approve: true` too. It
  *     no longer takes a `templateId`: a new *version* of an existing template was the
  *     1.0.11 shape, and the 0021 release (lane W3-C2) retired it along with
- *     `POST /templates/approve`, which approved a version as it stood. Editing in place
+ *     `POST /templates/approve`, which approved a version as it stood. `/templates/update`
  *     with `approve: true` is what replaced both.
  *
  * A refused approval carries *every* issue rather than the first, as

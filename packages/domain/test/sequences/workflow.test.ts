@@ -16,8 +16,6 @@ import {
   createDraftVersion,
   createSequence,
   publishVersion,
-  retireVersion,
-  saveSteps,
 } from '../../sequences/definitions.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';

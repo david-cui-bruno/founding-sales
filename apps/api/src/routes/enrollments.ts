@@ -1,7 +1,14 @@
 import { z } from 'zod';
-import { commandIdSchema, enrollableOriginKindSchema, semanticVersionSchema, uuid } from '@fss/contracts';
+import {
+  commandIdSchema,
+  enrollableOriginKindSchema,
+  enrollmentMigrateCommandSchema,
+  semanticVersionSchema,
+  uuid,
+} from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { enrollContact, stopEnrollments } from '@fss/domain/sequences/enrollments.ts';
+import { migrateEnrollment } from '@fss/domain/sequences/migrateEnrollment.ts';
 import { listEnrollments, listStepExecutions } from '@fss/domain/sequences/rows.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -14,7 +21,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * Every mutation is a command with a receipt. The LinkedIn task card's three paths
  * went with LinkedIn on 25 September 2026, and the audited migration's three
  * (`/enrollments/migrate/propose`, `/approve`, `/apply`) with wave 2's edit in place
- * (S3), which reaches live enrollments without moving them to a new version.
+ * (S3).
+ *
+ * `/enrollments/migrate` (send-path v2, S2) is the one way a running enrollment reaches
+ * a newer published version, now that an edit writes a new version and never touches a
+ * published one: one command, one transaction, by supersede — the old enrollment ends
+ * `migration_superseded`, a new one starts at the step after its completed prefix on the
+ * original cadence anchor, and a `follow_up` run moves only on a fresh permission for the
+ * target (`packages/domain/sequences/migrateEnrollment.ts`). An administrator or the
+ * firm's assigned salesperson may ask; the domain decides and audits.
  *
  * `/enrollments/resume` and `/enrollments/resume/preview` went with the 1.0.14 minimum
  * (lane W3-C2). They existed for the seven-day review, which wave 2 (S4.1) replaced
@@ -27,6 +42,7 @@ export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments/enroll',
   '/enrollments/stop',
   '/enrollments/steps',
+  '/enrollments/migrate',
 ];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
@@ -137,6 +153,22 @@ export async function routeEnrollments(
         reason: 'admin_stop',
       });
       return { ok: true, value: stopped };
+    });
+  }
+
+  if (request.path === '/enrollments/migrate') {
+    return await runPolicyCommand(deps, enrollmentMigrateCommandSchema, 'migrate_enrollment', async (context, body) => {
+      const migrated = await migrateEnrollment(context, {
+        enrollmentId: body.enrollmentId,
+        targetSequenceVersionId: body.targetSequenceVersionId,
+        ...(body.permissionId === undefined ? {} : { permissionId: body.permissionId }),
+        ...(body.changeNote === undefined ? {} : { changeNote: body.changeNote }),
+      });
+      if (!migrated.ok) return migrated;
+      // Exactly `enrollmentMigrateResultSchema`: whether the new enrollment completed at
+      // once is on the enrollment itself, which the Mac reads anyway.
+      const { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal } = migrated.value;
+      return { ok: true, value: { oldEnrollmentId, newEnrollmentId, carriedOrdinals, nextOrdinal } };
     });
   }
 

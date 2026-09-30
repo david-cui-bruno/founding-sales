@@ -281,6 +281,62 @@ real claim against a real `logCallOutcome`, with SQLSTATE `40P01` asserted absen
   and the zero-row consume case expires a live, unspent permission mid-claim (it sends if
   the abort is removed).
 
+## 6d. Edits create versions; migration by supersede (30 September 2026, send-path v2 S2)
+
+David, 30 September 2026: *"Existing enrollments keep their original steps, template
+versions, and cadence. Edits affect new enrollments by default. Explicitly migrating an
+enrollment must preserve completed steps and the agreed follow-up scope."* The plan review
+found the first sentence false: `saveSteps` updated a published version's steps in place
+and `updateTemplateVersion` rewrote an approved template's text in place, so a live
+`agreed_sequence` run could read steps and text its agreement never covered.
+
+* **An edit is a new version.** Steps saved against a published version become the
+  sequence's draft (copy + change; the one-draft rule means a second edit lands on the
+  same draft), and the answer names it. An approved template's edit is its next version,
+  pending approval unless the same command approves it. Nothing published or approved is
+  written to, and migration 0026's triggers (`sequence_steps_published_immutable`,
+  `template_versions_approved_immutable`) say so in the database; a command that reaches
+  one answers a refusal (`version_not_draft`, `template_already_approved`) through a
+  savepoint rather than a 500. Publishing does **not** retire the version before it.
+* **`POST /enrollments/migrate`** moves one live enrollment to a published version of the
+  same sequence by **supersede**: the old enrollment ends `migration_superseded` (its
+  unfinished step cancelled, its history kept) and a new one is inserted after it — never
+  before, so `sequence_enrollments_one_active_per_contact` and §4's one-prospecting rule
+  never see two live rows — with the same origin, contact, opportunity, assignee, the
+  **original** `started_at` (copied in SQL), zone and frozen calendar, and
+  `migrated_from_enrollment_id` naming the old row. The old enrollment's completed steps
+  must be exactly ordinals 1..k (none cancelled, none skipped, nothing unfinished but
+  k + 1), else `completed_prefix_required`; the new enrollment gets **one** execution,
+  ordinal k + 1 of the target, due at the target's delay for that step from the original
+  anchor, and completes at once (`sequence_complete`) when the target has no step k + 1.
+* **The agreed scope.** A `follow_up` run moves only on a **fresh** permission for the
+  target version, re-verified with `verifyFollowUpPermission` (the target version, its
+  step count, the template of step k + 1) and bound to the new enrollment with
+  `bindFollowUpPermission`, whose conditional write throws the whole transaction back if it
+  loses. The grant's own expiry is kept (the grant computed it for this version's plan); it
+  is not recomputed from the original anchor, which could put it in the past. An
+  `agreed_sequence` run offered no permission refuses `agreed_scope_bound`; the other
+  follow-up scopes refuse `follow_up_not_permitted`. **The old permission** stays bound to
+  the old, now ended, enrollment: bound means it can never buy another run (the bind
+  requires `enrollment_id IS NULL`, and verification refuses `another_enrollment`), and an
+  ended enrollment sends nothing. It is neither revoked (nobody withdrew it) nor consumed
+  (`consumed_reason` is about a message leaving, and none did). `cold_legacy` never moves
+  (`cold_legacy_never_revived`); `prospecting` moves without a permission.
+* **Lock order**, extending §6a: send gate EXCLUSIVE → the old enrollment → the fresh
+  permission → the firm → opportunity → contact. The gate first because ending an
+  enrollment is a stop fact: a dispatch claim holding the gate SHARED makes the migration
+  wait, and a migration in flight makes a claim wait and then find the enrollment ended.
+  The step runner does not take the gate; it locks the enrollment first
+  (`lockStepWithEnrollment`), as the migration does, so the two serialize on that row. After
+  the locks the migration refuses `enrollment_dispatching` when any execution of the old
+  enrollment is `dispatched`, has a fence while unfinished, or has a fence `dispatching` or
+  `reconciling`. `packages/domain/test/sequences/migrateEnrollment.test.ts` pins both
+  orders with a held transaction and races them six times: exactly one proceeds.
+* **Who may.** An administrator, or the firm's assigned salesperson, decided in the
+  domain under the firm's row lock; one audit event (`enrollment.migrated`) names both
+  enrollments, both versions, the carried ordinals, the permissions and the person's
+  `changeNote`.
+
 ## 7. Deviations from the brief, each with its reason
 
 1. **`granted_by` is two columns**, `granted_by_user_id` (FK onto

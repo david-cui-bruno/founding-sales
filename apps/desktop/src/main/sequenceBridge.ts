@@ -31,13 +31,17 @@ import type { AuthedClient } from './authedClient.ts';
  * operation of the registry (`src/shared/operations.ts`), so the argument checking that
  * was written out per channel is the operation's input schema.
  *
- * Three things went with wave 2 and are named here so nobody looks for them.
+ * **An edit of something frozen is a new version** (send-path v2, S2; David, 30 September
+ * 2026: "Existing enrollments keep their original steps, template versions, and cadence.
+ * Edits affect new enrollments by default."). Saving the steps of a published version
+ * writes them to the sequence's draft — the server answers which version, and the notice
+ * names it — and saving an approved template writes its next version. The published
+ * version and the approved template are exactly as they were, and so is everybody
+ * already enrolled; publishing the draft is what new enrollments pick up.
+ * `/sequences/versions/draft` is still called in one place — the first, empty version
+ * of a sequence that has just been created.
  *
- * **"Edit as a new draft" is gone.** `saveSteps` edits a published version in place and
- * the edit reaches its live enrollments (S3), which is what a person editing a sequence
- * means; a new version does not. `/sequences/versions/draft` is called in exactly one
- * place — the first, empty version of a sequence that has just been created, which is
- * the only way a sequence gets a version at all.
+ * Two things went with wave 2 and are named here so nobody looks for them.
  *
  * **Approval is not a separate press.** `/templates/create` and `/templates/update` take
  * `approve: true` and refuse the whole command with every issue when the text does not
@@ -76,6 +80,21 @@ export interface SequenceBridgeHost {
 /** What `/sequences/create` and `/sequences/versions/draft` answer, as far as the bridge reads them. */
 const createdSequenceSchema = z.object({ id: uuid });
 const createdDraftSchema = z.object({ sequenceVersionId: uuid });
+/**
+ * Where a steps save went (send-path v2, S2). Read leniently: a server from before S2
+ * answers `{ steps }` alone, which is a save in place, and says so.
+ */
+const savedStepsSchema = z.unknown().transform(value => {
+  const parsed = z
+    .object({ sequenceVersionId: uuid, version: z.number().int().min(1), newVersion: z.boolean() })
+    .safeParse(value);
+  return parsed.success ? parsed.data : null;
+});
+/** The id and number of the version a template save answered with. */
+const savedTemplateSchema = z.unknown().transform(value => {
+  const parsed = z.object({ id: uuid, version: z.number().int().min(1) }).safeParse(value);
+  return parsed.success ? parsed.data : null;
+});
 /** A refused save-and-approve: `template_unapproved:` and every issue it named. */
 const refusalReasonSchema = z.object({ reason: z.string().min(1) });
 /**
@@ -213,10 +232,11 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
     },
 
     /**
-     * Replace a version's steps. The renderer's steps are parsed here — the window's word
-     * is never taken for a shape — and numbered by their place, so the ordinals are 1..n
-     * however the person reordered them. A published version is edited in place, and the
-     * server holds that edit to what publication checks.
+     * Save a version's steps. The renderer's steps are parsed here — the window's word is
+     * never taken for a shape — and numbered by their place, so the ordinals are 1..n
+     * however the person reordered them. A draft is saved as it is; a published version
+     * is not written to, and the server answers the draft version the edit became, which
+     * the notice names (`steps_saved_as_version:<n>`).
      */
     saveSteps: async input => {
       const steps = draftStepsSchema.safeParse(input.steps);
@@ -224,15 +244,25 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
         notice = 'invalid_input';
         return await compose();
       }
-      return await run(
+      const answer = await deps.api.command(
         '/sequences/versions/steps',
         { sequenceVersionId: input.sequenceVersionId, steps: stepsForWire(steps.data as readonly DraftStep[]) },
-        'steps_saved',
+        value => savedStepsSchema.parse(value),
       );
+      notice = !answer.ok
+        ? answer.reason
+        : answer.value !== null && answer.value.newVersion
+          ? `steps_saved_as_version:${String(answer.value.version)}`
+          : 'steps_saved';
+      return await compose();
     },
 
     /**
      * Save a template version and approve it in the same command (wave 2, S3; D5).
+     *
+     * Saving an approved version writes the template's next version and leaves the
+     * approved one as it was (send-path v2, S2); the notice names the new number
+     * (`template_saved_as_version:<n>`).
      *
      * The footer 12.6 requires is appended here, and the variables the version declares
      * are the ones its text names, so "unknown variable" can only mean a name Callie
@@ -255,17 +285,21 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
         requiredVariables: templateVariablesIn(input.subject, body).known,
         approve: true,
       };
+      const parse = (value: unknown) => ({
+        ...templateWarningsSchema.parse(value),
+        saved: savedTemplateSchema.parse(value),
+      });
       const answer =
         input.templateVersionId === null
-          ? await deps.api.command('/templates/create', text, value => templateWarningsSchema.parse(value))
-          : await deps.api.command(
-              '/templates/update',
-              { templateVersionId: input.templateVersionId, ...text },
-              value => templateWarningsSchema.parse(value),
-            );
+          ? await deps.api.command('/templates/create', text, parse)
+          : await deps.api.command('/templates/update', { templateVersionId: input.templateVersionId, ...text }, parse);
       warnings = answer.ok ? answer.value.warnings : [];
       if (answer.ok) {
-        notice = 'template_saved';
+        const saved = answer.value.saved;
+        notice =
+          input.templateVersionId !== null && saved !== null && saved.id !== input.templateVersionId
+            ? `template_saved_as_version:${String(saved.version)}`
+            : 'template_saved';
       } else {
         const refusal = answer.offline ? null : refusalReasonSchema.safeParse(answer.refusal);
         notice = (refusal?.success === true ? refusal.data.reason : answer.reason).slice(0, NOTICE_LIMIT);

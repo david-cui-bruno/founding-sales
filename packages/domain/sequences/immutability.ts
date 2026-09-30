@@ -3,9 +3,10 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 /**
  * The database's immutability guards, answered as refusals (send-path v2, S2).
  *
- * Migration 0026 puts back the two triggers 0019 removed: a published version's steps
- * cannot be updated or deleted, and an approved template version's content cannot be
- * updated. The commands in `definitions.ts` and `templates/templates.ts` never ask for
+ * Migration 0026 puts back the two triggers 0019 removed: the steps of a version that
+ * has left `draft` cannot be updated or deleted (`sequence_steps_published_immutable`),
+ * and an approved template version cannot change anything but its name, `retired_at`
+ * and `updated_at` (`template_versions_approved_immutable`). The commands in `definitions.ts` and `templates/templates.ts` never ask for
  * either — an edit of something frozen writes a new version instead — and they lock the
  * row they decide about before they decide, so the trigger is the backstop for a path
  * nobody has thought of rather than a rule anybody relies on.
@@ -16,21 +17,25 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * Any other error propagates unchanged.
  */
 
+/** The two messages 0026's triggers raise, and nothing else raises. */
+const IMMUTABILITY_MESSAGES = [
+  'the steps of a published sequence version are immutable',
+  'an approved template version is immutable',
+] as const;
+
 /**
- * Whether `error` is one of 0026's immutability refusals. The triggers raise
- * `check_violation` (23514) naming themselves, so the match is the code and the name
- * together: a CHECK constraint elsewhere failing inside the same writes is a real bug
- * and must still be a 500.
+ * Whether `error` is one of 0026's immutability refusals. Both triggers raise
+ * `restrict_violation` (23001), which other constraint triggers in this schema raise
+ * too, so the match is the code and the message together: another trigger refusing
+ * inside the same writes is a real bug and must still be a 500.
  */
 export function isImmutabilityRefusal(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const { code, message } = error as { code?: unknown; message?: unknown };
-  if (typeof message !== 'string') return false;
   return (
-    (code === '23514' || code === 'P0001') &&
-    /(published sequence steps are immutable|approved template content is immutable|sequence_steps_published_immutable|template_versions_approved_immutable)/iu.test(
-      message,
-    )
+    code === '23001' &&
+    typeof message === 'string' &&
+    IMMUTABILITY_MESSAGES.some(prefix => message.startsWith(prefix))
   );
 }
 
