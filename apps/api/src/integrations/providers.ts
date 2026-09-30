@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CALL_RECORDING_MAX_BYTES, VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
+import { CALCOM_SECRET_VARIABLE, readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
 
 /**
  * The two provider integrations of the call-to-booking milestone, as the API holds them
@@ -14,7 +15,8 @@ import { CALL_RECORDING_MAX_BYTES, VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contr
  *
  *   * `fss-prod/twilio-voice`: `account_sid`, `api_key_sid`, `api_key_secret`,
  *     `twiml_app_sid`, `auth_token`, `caller_id_e164`;
- *   * `fss-prod/calcom`: `webhook_secret`, `api_key`.
+ *   * `fss-prod/calcom`: `webhook_secret`, and optionally `api_key` — the worker's, for
+ *     reconciliation (slice M1); the API reads only the webhook secret.
  *
  * The secret values are captured in closures and never stored on an object: what the
  * rest of the API holds is a set of functions (verify a signature, mint a token) and the
@@ -103,7 +105,7 @@ export interface IntegrationDeps {
 }
 
 export const TWILIO_SECRET_VARIABLE = 'twilio-voice';
-export const CALCOM_SECRET_VARIABLE = 'calcom';
+export { CALCOM_SECRET_VARIABLE } from '@fss/domain/meetings/calcomSecret.ts';
 
 function equalText(expected: string, actual: string | undefined): boolean {
   if (actual === undefined) return false;
@@ -242,6 +244,8 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   readonly twilioProblem: string | null;
   readonly calcomProblem: string | null;
   readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] };
+  /** Whether the optional reconciliation key is there: `configured`, `absent` or `field:api_key`. */
+  readonly calcomApiKey: string;
 } {
   let twilioMissing: readonly string[] = TWILIO_FIELD_NAMES;
   let calcomMissing: readonly string[] = CALCOM_FIELD_NAMES;
@@ -271,20 +275,21 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
     twilioProblem = 'not_json';
   }
 
+  // The shape is `meetings/calcomSecret.ts`'s, shared with the worker, which reads the
+  // optional `api_key` for reconciliation (slice M1). The API needs the webhook secret
+  // only; the key's absence is not a problem here.
   let calcomDeps: Calcom | null = null;
   let calcomProblem: string | null = 'absent';
-  const calcomBundle = jsonObject(environment[CALCOM_SECRET_VARIABLE]);
-  if (calcomBundle !== null) {
-    const webhookSecret = field(calcomBundle, 'webhook_secret', /^.{16,}$/u);
-    if (webhookSecret !== null) {
-      calcomMissing = [];
-      calcomDeps = calcom({ webhookSecret });
-      calcomProblem = null;
-    } else {
-      calcomProblem = 'field:webhook_secret';
-    }
-  } else if (environment[CALCOM_SECRET_VARIABLE] !== undefined) {
-    calcomProblem = 'not_json';
+  let calcomApiKey: string | null = 'absent';
+  const calcomReading = readCalcomSecret(environment[CALCOM_SECRET_VARIABLE]);
+  if (calcomReading.ok) {
+    // `api_key` is optional (the worker's, for reconciliation) and never listed missing.
+    calcomMissing = [];
+    calcomDeps = calcom({ webhookSecret: calcomReading.webhookSecret });
+    calcomProblem = null;
+    calcomApiKey = calcomReading.apiKeyProblem ?? 'configured';
+  } else {
+    calcomProblem = calcomReading.problem;
   }
   if (twilio !== null) twilioMissing = [];
   return {
@@ -293,5 +298,6 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
     twilioProblem,
     calcomProblem,
     missing: { twilioVoice: twilioMissing, calcom: calcomMissing },
+    calcomApiKey,
   };
 }

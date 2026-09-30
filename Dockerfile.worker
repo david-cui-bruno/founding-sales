@@ -91,6 +91,8 @@ COPY packages/domain/restore packages/domain/restore
 COPY packages/domain/release packages/domain/release
 # Call-to-booking (slice W): the telephony reservations' sweep.
 COPY packages/domain/calls packages/domain/calls
+# Slice M1: the Cal.com reconciliation.
+COPY packages/domain/meetings packages/domain/meetings
 COPY packages/contracts/src packages/contracts/src
 
 # The test harness is never in the image: it starts a PostgreSQL cluster.

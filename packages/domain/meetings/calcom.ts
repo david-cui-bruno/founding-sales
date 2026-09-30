@@ -51,7 +51,12 @@ export function calcomEventIdOf(rawBody: Buffer): string {
   return createHash('sha256').update(rawBody).digest('hex');
 }
 
-interface ParsedEvent {
+/**
+ * One event, in the shape `applyEvent` takes: a verified webhook delivery parsed by
+ * `parseCalcomEvent`, or one the reconciliation synthesized from Cal.com's API
+ * (`meetings/reconcile.ts`). Exported for that second producer only.
+ */
+export interface ParsedEvent {
   readonly trigger: string;
   readonly createdAt: string | null;
   readonly uid: string | null;
@@ -121,7 +126,7 @@ export function parseCalcomEvent(body: unknown): ParsedEvent {
   };
 }
 
-interface MeetingRow {
+export interface MeetingRow {
   readonly id: string;
   readonly firm_id: string | null;
   readonly contact_id: string | null;
@@ -136,7 +141,7 @@ interface MeetingRow {
   readonly [column: string]: unknown;
 }
 
-const MEETING_COLUMNS =
+export const MEETING_COLUMNS =
   'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at';
 
 async function meetingByUid(context: RepositoryContext, uid: string): Promise<MeetingRow | null> {
@@ -199,13 +204,38 @@ export async function receiveCalcomEvent(
 
   const eventId = calcomEventIdOf(input.rawBody);
   const parsed = parseCalcomEvent(input.body);
+  return await recordAndApply(context, eventId, parsed);
+}
+
+/**
+ * Receive one event the reconciliation synthesized from Cal.com's bookings API (slice
+ * M1, `meetings/reconcile.ts`). The same record-then-apply as a webhook delivery, under
+ * the same send-gate lock taken first: the delivery id is the caller's deterministic
+ * one (so a replayed run is a duplicate), and the event's `createdAt` is the booking's
+ * own `updatedAt`, so a webhook newer than what the API said stays authoritative through
+ * `applyEvent`'s ordering. The caller runs it in one transaction.
+ */
+export async function receiveSynthesizedCalcomEvent(
+  db: Queryable,
+  input: { readonly workspaceId: string; readonly eventId: string; readonly event: ParsedEvent },
+): Promise<CalcomReceipt> {
+  if (!/^[0-9a-f]{64}$/u.test(input.eventId)) throw new Error('a synthesized Cal.com event id is a sha256 in hex');
+  const context = repositoryContext(workspaceScope(input.workspaceId, { kind: 'system', component: 'worker' }), db);
+  await lockSendGateForStopFact(context);
+  return await recordAndApply(context, input.eventId, input.event);
+}
+
+/** Dedupe on the delivery id, apply, and record the outcome. The send gate is held. */
+async function recordAndApply(context: RepositoryContext, eventId: string, parsed: ParsedEvent): Promise<CalcomReceipt> {
+  const db = context.db;
+  const workspaceId = context.scope.workspaceId;
   const trigger = /^[A-Z][A-Z_]{1,63}$/u.test(parsed.trigger) ? parsed.trigger : 'UNKNOWN';
   const inserted = await db.query<{ id: string }>(
     `INSERT INTO calcom_events (workspace_id, event_id, trigger_event, booking_uid, payload_created_at, outcome)
      VALUES ($1, $2, $3, $4, $5::timestamptz, 'ignored')
      ON CONFLICT ON CONSTRAINT calcom_events_once DO NOTHING
      RETURNING id`,
-    [input.workspaceId, eventId, trigger, parsed.uid, parsed.createdAt],
+    [workspaceId, eventId, trigger, parsed.uid, parsed.createdAt],
   );
   const rowId = inserted.rows[0]?.id;
   if (rowId === undefined) {
@@ -214,7 +244,7 @@ export async function receiveCalcomEvent(
 
   const applied = await applyEvent(context, trigger, parsed);
   await db.query('UPDATE calcom_events SET outcome = $3, meeting_id = $4 WHERE workspace_id = $1 AND id = $2', [
-    input.workspaceId,
+    workspaceId,
     rowId,
     applied.outcome,
     applied.meetingId,
@@ -451,10 +481,16 @@ async function touch(context: RepositoryContext, meetingId: string, at: string):
 /** The enrollment origins a booked demo ends. A follow-up is not one of them. */
 export const BOOKING_STOPS_ORIGIN_KINDS: readonly string[] = Object.freeze(['prospecting', 'cold_legacy']);
 
+/** What `applyBooked` reads of a meeting. */
+export type BookedMeeting = Pick<MeetingRow, 'id' | 'firm_id' | 'booking_uid'>;
+
 /**
  * A booked meeting with a firm: the pipeline move, the stop, the funnel fact.
+ *
+ * Exported for the person's match of an unmatched booking (`meetings/match.ts`, slice
+ * M1), which owes exactly what a matched webhook does. The caller holds the send gate.
  */
-async function applyBooked(context: RepositoryContext, meeting: MeetingRow, occurredAt: string): Promise<StageEvidenceOutcome> {
+export async function applyBooked(context: RepositoryContext, meeting: BookedMeeting, occurredAt: string): Promise<StageEvidenceOutcome> {
   const firmId = meeting.firm_id ?? '';
   const stage = await applyStageEvidence(context, {
     firmId,

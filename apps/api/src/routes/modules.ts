@@ -24,6 +24,7 @@ import { CALL_PATHS, routeCalls } from './calls.ts';
 // The call-to-booking milestone: Twilio call sessions and the two provider webhooks.
 import { CALL_SESSION_PATHS, routeCallSessions } from './callSessions.ts';
 import { CALCOM_PATHS, routeCalcom } from './calcom.ts';
+import { MEETING_PATHS, routeMeetings } from './meetings.ts';
 import { TWILIO_PATHS, routeTwilio } from './twilio.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
 // The calling numbers: the identity a dial is placed from.
@@ -165,6 +166,9 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('call-sessions', { paths: CALL_SESSION_PATHS }, routeCallSessions, routing),
     moduleOf('twilio', { paths: TWILIO_PATHS }, routeTwilio, routing),
     moduleOf('calcom', { paths: CALCOM_PATHS }, routeCalcom, routing),
+    // Slice M1: the firm page's meetings, the bookings to match, and the match. Exact
+    // paths; none reaches Cal.com.
+    moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
     // The Gmail surface. Exact paths again, and two of them are not ours to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push

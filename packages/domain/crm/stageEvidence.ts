@@ -265,6 +265,12 @@ async function pinnedStage(context: RepositoryContext, opportunityId: string): P
 /**
  * One review item per evidence (`stage_review_items_once`): a redelivery of the same
  * evidence finds the item it already opened rather than a second.
+ *
+ * An item a person already **resolved** is reopened with the new reason instead (slice
+ * M1). A person matching an unmatched booking resolves its `firm_unmatched` item and
+ * then applies the booking's evidence; when that evidence still cannot apply — the
+ * firm's opportunity is closed, say — the answer must be an open item saying so, not the
+ * resolved one read back with its old reason.
  */
 export async function openReviewItem(
   context: RepositoryContext,
@@ -275,7 +281,10 @@ export async function openReviewItem(
   await context.db.query(
     `INSERT INTO stage_review_items (workspace_id, firm_id, opportunity_id, evidence_kind, evidence_id, reason, detail)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-     ON CONFLICT ON CONSTRAINT stage_review_items_once DO NOTHING`,
+     ON CONFLICT ON CONSTRAINT stage_review_items_once DO UPDATE
+        SET reason = EXCLUDED.reason, firm_id = EXCLUDED.firm_id, opportunity_id = EXCLUDED.opportunity_id,
+            detail = EXCLUDED.detail, created_at = now(), resolved_at = NULL, resolved_by_user_id = NULL
+      WHERE stage_review_items.resolved_at IS NOT NULL`,
     [
       context.scope.workspaceId,
       subject.firmId,

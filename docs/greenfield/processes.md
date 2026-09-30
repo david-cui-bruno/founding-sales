@@ -62,6 +62,7 @@ that talked to anything outside PostgreSQL would be a bug.
 | `route-validation` | One `route.validate` retry per unchecked email address per round: hourly for its first day, then daily (7.4, lane g90) |
 | `research-sweep` | One `research.sweep` per workspace per business date, in a workspace with research enabled (lane R) |
 | `telephony-sweep` | One `telephony.sweep` per quarter hour, in a workspace with a call-session reservation to finalise: an unused session past its minute, or a placed call with no final callback past its longest possible length plus fifteen minutes (call-to-booking) |
+| `calcom-reconcile` | One `calcom.reconcile` per hour for the one workspace with `calendar_integration = calcom`, only in a worker whose `calcom` secret carries an `api_key`: Cal.com's bookings compared with `meetings`, each difference fed to the webhook's own path ([meetings.md](meetings.md), slice M1) |
 
 That table is the contract, not a description: `apps/worker/test/sourceRegistry.test.ts`
 reads it and fails when the registered list and the documented one differ in either

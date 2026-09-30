@@ -33,6 +33,7 @@
 !packages/domain/restore
 !packages/domain/release
 !packages/domain/calls
+!packages/domain/meetings
 !packages/domain/funnel
 !packages/contracts/package.json
 !packages/contracts/src
