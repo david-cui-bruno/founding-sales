@@ -60,6 +60,15 @@ export function mailSyncHandler(deps: MailSyncDeps, options: MailHandlerOptions 
       const mailboxId = payloadMailboxId(input.job.payload);
       const context = repositoryContext(input.scope, input.session);
       const report = await runMailSync(context, deps, { mailboxId });
+      if (report.outcome === 'mailbox_unknown') {
+        throw new Error('a mail.sync payload named a mailbox in another workspace');
+      }
+      // A run a failed Gmail read stopped commits what it finished (send-path v2, S1
+      // review round 7) but has not proved the mailbox is being read, so it is no
+      // heartbeat — which is what a thrown read gave before, when the rollback took the
+      // heartbeat with it. A message Gmail keeps refusing stops every run at the same
+      // place, and three missed checks raise `mailbox_heartbeat_missed`.
+      if (report.outcome === 'read_stopped') return;
       // 13.3: "Heartbeats cover API, scheduler, worker, and every mailbox." The
       // mailbox proved it is being read, whatever the outcome was, which is what the
       // three-missed-checks alarm asks.
@@ -68,9 +77,6 @@ export function mailSyncHandler(deps: MailSyncDeps, options: MailHandlerOptions 
         mailboxId,
         detail: { outcome: report.outcome, messages: report.messagesSeen, more: report.moreToDo },
       });
-      if (report.outcome === 'mailbox_unknown') {
-        throw new Error('a mail.sync payload named a mailbox in another workspace');
-      }
     },
   };
 }
@@ -89,14 +95,16 @@ export function mailRecoveryHandler(deps: MailRecoveryDeps, options: MailHandler
       }
       const context = repositoryContext(input.scope, input.session);
       const report = await runMailRecovery(context, deps, { mailboxId, generation });
+      if (report.outcome === 'mailbox_unknown') {
+        throw new Error('a mail.recover payload named a mailbox in another workspace');
+      }
+      // As for `mail.sync`: a run a failed Gmail read stopped is no heartbeat.
+      if (report.outcome === 'read_stopped') return;
       await recordMailboxHeartbeat(input.session, {
         workspaceId: input.scope.workspaceId,
         mailboxId,
         detail: { outcome: report.outcome, pages: report.pagesCompleted },
       });
-      if (report.outcome === 'mailbox_unknown') {
-        throw new Error('a mail.recover payload named a mailbox in another workspace');
-      }
     },
   };
 }

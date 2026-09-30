@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
+import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
 import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
@@ -1013,6 +1014,145 @@ describe('deterministic classification effects (12.4)', () => {
 });
 
 describe('coverage, recovery and the grant', () => {
+  /** One provider id's stored row count and direct-send marker count. */
+  const storedAndMarked = async (w: MailWorld, providerMessageId: string): Promise<[number, number]> => {
+    const { rows } = await w.database.session.query<{ stored: string; marked: string }>(
+      `SELECT (SELECT count(*) FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2)::text AS stored,
+              (SELECT count(*) FROM mail_message_effects f
+                 JOIN mail_messages m ON m.workspace_id = f.workspace_id AND m.id = f.mail_message_id
+                WHERE f.workspace_id = $1 AND m.provider_message_id = $2
+                  AND f.effect_kind = 'direct_send_conversation')::text AS marked`,
+      [w.alpha.workspace.workspaceId, providerMessageId],
+    );
+    return [Number(rows[0]?.stored ?? 0), Number(rows[0]?.marked ?? 0)];
+  };
+
+  /** The fixture's client, with one read refused the way a Gmail 500 is. */
+  const refusing = (base: GmailClient, read: 'getMetadata' | 'getBody', messageId: string): GmailClient => ({
+    ...base,
+    getMetadata: async (access, id, headers) => {
+      if (read === 'getMetadata' && id === messageId) {
+        throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+      }
+      return await base.getMetadata(access, id, headers);
+    },
+    getBody: async (access, id) => {
+      if (read === 'getBody' && id === messageId) {
+        throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+      }
+      return await base.getBody(access, id);
+    },
+  });
+
+  it('S1 round-7: a recovery stopped by a failed read commits what came before and resumes at that page', async () => {
+    world = await createMailWorld({
+      alphaMessages: [
+        fixtureMessage({ id: 'rec-stop-1', historyId: '1081', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
+        fixtureMessage({ id: 'rec-stop-2', historyId: '1082', from: PROSPECT, to: 'sales.alpha@example.test' }),
+        fixtureMessage({ id: 'rec-stop-3', historyId: '1083', from: PROSPECT, to: 'sales.alpha@example.test' }),
+      ],
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const deps = { ...w.syncDeps(w.alpha), pageSize: 1, maxMessages: 3 };
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+
+    const first = await withTransaction(
+      session,
+      async () =>
+        await runMailRecovery(
+          context,
+          { ...deps, gmail: refusing(deps.gmail, 'getMetadata', 'rec-stop-2') },
+          { mailboxId: w.alpha.mailboxId, generation: 1 },
+        ),
+    );
+    expect(first.outcome).toBe('read_stopped');
+    expect(first.processedMessages).toBe(1);
+    expect(first.pagesCompleted).toBe(1);
+    expect(first.coverageProved).toBe(false);
+
+    // Committed: message 1's direct send, and a position of one page — just before message 2.
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
+    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([0, 0]);
+    const { rows: recovery } = await w.database.session.query<{ pages_completed: number; completed: boolean }>(
+      `SELECT pages_completed, completed_at IS NOT NULL AS completed FROM mailbox_recoveries
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1`,
+      [workspaceId, w.alpha.mailboxId],
+    );
+    expect(recovery).toEqual([{ pages_completed: 1, completed: false }]);
+    const stopped = await readMailbox(context, w.alpha.mailboxId);
+    expect(stopped?.syncState).not.toBe('ready');
+    expect(stopped?.lastSyncError).toMatch(/metadata read failed/u);
+    const holds = await listApplicableHolds(context, {
+      actionKind: 'email_send',
+      ownerUserId: w.alpha.workspace.salesperson.userId,
+    });
+    expect(holds.map(hold => hold.reasonCode)).toContain('coverage_incomplete');
+
+    // The next pass resumes at message 2's page, reads the rest, and proves coverage.
+    const second = await withTransaction(
+      session,
+      async () => await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(second.outcome).toBe('completed');
+    expect(second.messagesSeen).toBe(2);
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
+    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([1, 0]);
+    expect(await storedAndMarked(w, 'rec-stop-3')).toEqual([1, 0]);
+    expect((await readMailbox(context, w.alpha.mailboxId))?.syncState).toBe('ready');
+  });
+
+  it('S1 round-7: a failed body read undoes that message whole and stops the sync before it', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1200' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'body-stop-1', historyId: '1201', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'body-stop-2', historyId: '1202', from: PROSPECT, to: w.alpha.address, body: 'Thursday works.' }),
+    );
+    const base = w.syncDeps(w.alpha);
+
+    const first = await withTransaction(
+      session,
+      async () =>
+        await runMailSync(
+          context,
+          { ...base, gmail: refusing(base.gmail, 'getBody', 'body-stop-2') },
+          { mailboxId: w.alpha.mailboxId },
+        ),
+    );
+    expect(first.outcome).toBe('read_stopped');
+    expect(first.readFailure?.read).toBe('body');
+    expect(first.cursorTo).toBe('1201');
+    // Message 2 was recorded and matched before its body read failed; the savepoint
+    // undid both, and the report does not count it.
+    expect(first.messagesSeen).toBe(1);
+    expect(await storedAndMarked(w, 'body-stop-1')).toEqual([1, 1]);
+    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([0, 0]);
+    const { rows: matches } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_matches x
+         JOIN mail_messages m ON m.workspace_id = x.workspace_id AND m.id = x.mail_message_id
+        WHERE x.workspace_id = $1 AND m.provider_message_id = 'body-stop-2'`,
+      [w.alpha.workspace.workspaceId],
+    );
+    expect(matches[0]?.count).toBe('0');
+
+    const second = await withTransaction(
+      session,
+      async () => await runMailSync(context, base, { mailboxId: w.alpha.mailboxId }),
+    );
+    expect(second.outcome).toBe('synced');
+    expect(second.bodiesFetched).toBe(1);
+    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([1, 0]);
+  });
+
   it('Appendix G 4: a revoked grant marks the mailbox and holds every automated step kind', async () => {
     world = await createMailWorld();
     const w = world;

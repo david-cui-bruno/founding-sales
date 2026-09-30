@@ -247,7 +247,8 @@ export type MailRecoveryOutcome =
   | 'mailbox_inactive'
   | 'generation_superseded'
   | 'grant_revoked'
-  | 'rate_limited';
+  | 'rate_limited'
+  | 'read_stopped';
 
 export interface MailRecoveryReport extends MessagePipelineReport {
   readonly outcome: MailRecoveryOutcome;
@@ -329,6 +330,8 @@ export async function runMailRecovery(
   // and Gmail's own page tokens do not survive a process.
   let pageToken: string | undefined = recovery.pagesCompleted === 0 ? undefined : String(recovery.pagesCompleted * pageSize);
   const ids: string[] = [];
+  /** How many ids the run held after each page it read: where each page ends in `ids`. */
+  const pageEnds: number[] = [];
   let pagesThisRun = 0;
   let exhausted = false;
 
@@ -348,6 +351,7 @@ export async function runMailRecovery(
       return recoveryReport(mailbox.id, input.generation, 'rate_limited');
     }
     ids.push(...outcome.messageIds);
+    pageEnds.push(ids.length);
     pagesThisRun += 1;
     if (outcome.nextPageToken === null) {
       exhausted = true;
@@ -371,15 +375,40 @@ export async function runMailRecovery(
     messageIds: ids,
   });
 
-  const pagesCompleted = recovery.pagesCompleted + pagesThisRun;
+  // A Gmail read that failed stopped the pipeline at that message rather than throwing,
+  // so what came before it commits with this job (send-path v2, S1 review round 7). The
+  // position is a page count, so it moves only past the pages every one of whose ids
+  // was processed: the page holding the failed message is listed again next time, and
+  // what the run finished in it is read again, which the pipeline's markers and
+  // uniqueness make harmless. The recovery is not complete, however far it read.
+  const stopped = pipeline.readFailure !== null;
+  const pagesFinished = stopped
+    ? pageEnds.filter(end => end <= pipeline.processedMessages).length
+    : pagesThisRun;
+  const complete = exhausted && !stopped;
+  const pagesCompleted = recovery.pagesCompleted + pagesFinished;
   await context.db.query(
     `UPDATE mailbox_recoveries
         SET pages_completed = $3,
             messages_seen = messages_seen + $4,
             completed_at = CASE WHEN $5 THEN now() ELSE completed_at END
       WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, recovery.id, pagesCompleted, pipeline.messagesSeen, exhausted],
+    [context.scope.workspaceId, recovery.id, pagesCompleted, pipeline.messagesSeen, complete],
   );
+
+  if (pipeline.readFailure !== null) {
+    await recordSyncError(context, {
+      mailboxId: mailbox.id,
+      error: `the Gmail ${pipeline.readFailure.read} read failed (${pipeline.readFailure.detail}); the recovery stopped before that message`,
+    });
+    // `mailRecoverySource` re-arms the incomplete recovery on the next one-minute pass,
+    // as it does for a run that stopped at its page limit.
+    return recoveryReport(mailbox.id, input.generation, 'read_stopped', pipeline, {
+      fromAt: recovery.fromAt,
+      toAt: recovery.toAt,
+      pagesCompleted,
+    });
+  }
 
   if (!exhausted) {
     // Another pass is needed, and this run does not schedule it: the handler is

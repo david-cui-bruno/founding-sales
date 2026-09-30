@@ -218,17 +218,36 @@ control still pauses automation."* This supersedes the first bullet above.
   The desktop Firm page lists the firm's held outgoing messages
   (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
   same resolve command, and says the outcome or the refusal under the list.
-* **A residual, recorded (coordinator, round 6).** An import that takes the exclusive
-  send gate — the mail effects always did; S1 adds the outgoing marker path — holds it
-  until the job commits, because the runner keeps a mail job in one transaction. So a
-  slow Gmail call for a *later* message in the same job delays dispatch claims and stop
-  writers for that job's duration, bounded by the job timeout. The fix is per-message
-  committed transactions in the mail runner, a follow-up outside S1. (A two-phase
-  prefetch was tried and reverted: under READ COMMITTED an address added between its two
-  reads could commit an incoming message as matched with no body, and a fetch failure
-  before the gated loop would lose an earlier opt-out's durable journal append.) A
-  completed recovery does read the profile before the pipeline, so that call is never
-  made under the gate.
+* **A residual, recorded (coordinator, rounds 6 and 7).** An import that takes the
+  exclusive send gate — the mail effects always did; S1 adds the outgoing marker path —
+  holds it until the job commits, because the runner keeps a mail job in one transaction.
+  So a slow Gmail call for a *later* message in the same job delays dispatch claims and
+  stop writers until the job ends. Nothing bounds the whole job: the five-minute mail
+  setting (`MAIL_LEASE_SECONDS`) is a lease, not a handler deadline, and the runner awaits
+  the handler; the Gmail HTTP fetch has no explicit deadline. The database's
+  `idle_in_transaction_session_timeout` (five minutes) bounds each idle-in-transaction
+  gap — one Gmail call, while the transaction waits on it — and not the job. The fix is
+  per-message committed transactions in the mail runner, a follow-up outside S1. (A
+  two-phase prefetch was tried and reverted: under READ COMMITTED an address added
+  between its two reads could commit an incoming message as matched with no body, and a
+  fetch failure before the gated loop would lose an earlier opt-out's durable journal
+  append.) A completed recovery reads the profile before the pipeline, so that call is
+  never made under the gate.
+* **A failed Gmail read commits what came before it (round 7).** A metadata or body read
+  that fails for message N no longer throws: the pipeline stops at N and reports how many
+  leading messages it finished, `mail.sync` writes its cursor at the last history record
+  every one of whose messages was processed, and `mail.recover` counts only the pages
+  every one of whose ids was processed; the job commits messages 1 to N−1 — matches,
+  direct-send effects and consumed permissions, suppression journal entries — and N is
+  read again on the next one-minute pass. What N wrote before its body read failed is
+  undone by a savepoint, so N is retried whole; re-reading anything before N in the same
+  record or page is harmless (markers, uniqueness). Only a Gmail read is caught; a
+  database error still rolls the job back. The mailbox's `last_sync_error` names the
+  read, and a stopped run records no mailbox heartbeat, as a thrown one did not, so a
+  message Gmail keeps refusing raises `mailbox_heartbeat_missed`. Before this, a direct
+  send's consumed follow-up permission written early in a job was rolled back by a later
+  read failure, and the gate was released with the fulfilled follow-up claimable until
+  the retry.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.

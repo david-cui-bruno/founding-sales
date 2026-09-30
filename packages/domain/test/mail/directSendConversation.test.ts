@@ -1,8 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { takeOverOpportunity } from '../../crm/pipeline.ts';
+import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
+import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
+import { mailSyncHandler } from '../../mail/handlers.ts';
+import { readMailbox } from '../../mail/mailboxes.ts';
+import type { ClaimedJob } from '../../jobs/jobStore.ts';
 import type { MatchCandidate } from '../../mail/matching.ts';
 import {
   directSendTargetOf,
@@ -13,9 +18,11 @@ import {
 } from '../../mail/matching.ts';
 import type { NormalizedMetadata } from '../../mail/messages.ts';
 import { readMessage } from '../../mail/messages.ts';
+import { runMailSync } from '../../mail/sync.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld } from '../outbound/support/outboundWorld.ts';
+import { fixtureMessage } from './support/mailWorld.ts';
 import {
   openExtraSession,
   pausingAtTokenRefresh,
@@ -939,5 +946,110 @@ describe('S1 round-4: a replay and a resolution of the same direct send', () => 
       [workspaceId(), message.id],
     );
     expect(holds[0]?.count).toBe('0');
+  });
+});
+
+describe('S1 round-7: a Gmail read that fails later in the job does not undo an earlier direct send', () => {
+  it('commits message 1’s effect, stands the cursor before message 2, refuses the follow-up, and reads message 2 next run', async () => {
+    const firm = await seedFirm(world, world.alpha, 'read-stop');
+    const followUp = await fenceOfEnrollment(firm);
+    await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
+    await world.database.session.query("UPDATE mailboxes SET history_id = '1100' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    world.alpha.messages.push(
+      fixtureMessage({ id: 'read-stop-1', historyId: '1101', from: world.alpha.address, to: followUp.address, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'read-stop-2', historyId: '1102', from: followUp.address, to: world.alpha.address }),
+    );
+    const base = world.syncDeps(world.alpha);
+    const failing: GmailClient = {
+      ...base.gmail,
+      getMetadata: async (access, messageId, headers) => {
+        if (messageId === 'read-stop-2') throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+        return await base.gmail.getMetadata(access, messageId, headers);
+      },
+    };
+
+    // The job runner's shape: the whole run in one transaction, committed if it returns.
+    const first = await withTransaction(
+      world.database.session as Parameters<typeof withTransaction>[0],
+      async () => await runMailSync(worker(), { ...base, gmail: failing }, { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(first.outcome).toBe('read_stopped');
+    expect(first.directSendsRecorded).toBe(1);
+    expect(first.processedMessages).toBe(1);
+    expect(first.readFailure).toEqual({ providerMessageId: 'read-stop-2', read: 'metadata', detail: 'unexpected_status 500' });
+    expect(first.moreToDo).toBe(true);
+    expect(first.cursorTo).toBe('1101');
+
+    // Committed: the permission, the run, the marker, and the cursor just before message 2.
+    expect(await permissionState(followUp.permissionId ?? '')).toEqual({
+      consumed: true,
+      consumed_reason: 'fulfilled_by_direct_send',
+    });
+    expect(await enrollmentState(followUp.enrollmentId)).toEqual({ state: 'stopped', end_reason: 'direct_send' });
+    const { rows: markers } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects f
+         JOIN mail_messages m ON m.workspace_id = f.workspace_id AND m.id = f.mail_message_id
+        WHERE f.workspace_id = $1 AND m.provider_message_id = 'read-stop-1' AND f.effect_kind = 'direct_send_conversation'`,
+      [workspaceId()],
+    );
+    expect(markers[0]?.count).toBe('1');
+    const stopped = await readMailbox(worker(), world.alpha.mailboxId);
+    expect(stopped?.historyId).toBe('1101');
+    expect(stopped?.lastSyncError).toMatch(/metadata read failed/u);
+    const { rows: unread } = await world.database.session.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = 'read-stop-2'",
+      [workspaceId()],
+    );
+    expect(unread[0]?.count).toBe('0');
+
+    // The follow-up the salesperson fulfilled by hand is not sent in the gap before the retry.
+    const { report, sends } = await dispatch(followUp.fenceId);
+    expect(sends).toBe(0);
+    expect(report.outcome, JSON.stringify(report)).not.toBe('sent');
+
+    // Through the handler: a run the same refusal stops again records no mailbox
+    // heartbeat, so a message Gmail keeps refusing is seen by the missed-check alarm.
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const job = { payload: { mailboxId: world.alpha.mailboxId } } as unknown as ClaimedJob;
+    const scope = worker().scope;
+    const heartbeats = async (): Promise<readonly { outcome: string }[]> =>
+      (
+        await world.database.session.query<{ outcome: string }>(
+          `SELECT detail->>'outcome' AS outcome FROM heartbeats
+            WHERE workspace_id = $1 AND component = 'mailbox' AND instance_key = $2`,
+          [workspaceId(), world.alpha.mailboxId],
+        )
+      ).rows;
+    await world.database.session.query(
+      "DELETE FROM heartbeats WHERE workspace_id = $1 AND component = 'mailbox' AND instance_key = $2",
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    await withTransaction(session, async () => {
+      await mailSyncHandler({ ...base, gmail: failing }).handle({ session, scope, job });
+    });
+    expect(await heartbeats()).toEqual([]);
+    expect((await readMailbox(worker(), world.alpha.mailboxId))?.historyId).toBe('1101');
+
+    // The next run reads message 2, and message 1 is not read again.
+    const second = await withTransaction(
+      session,
+      async () => await runMailSync(worker(), base, { mailboxId: world.alpha.mailboxId }),
+    );
+    expect(second.outcome).toBe('synced');
+    expect(second.readFailure).toBeNull();
+    expect(second.messagesSeen).toBe(1);
+    await withTransaction(session, async () => {
+      await mailSyncHandler(base).handle({ session, scope, job });
+    });
+    expect(await heartbeats()).toEqual([{ outcome: 'synced' }]);
+    const { rows: read } = await world.database.session.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = 'read-stop-2'",
+      [workspaceId()],
+    );
+    expect(read[0]?.count).toBe('1');
+    expect((await readMailbox(worker(), world.alpha.mailboxId))?.lastSyncError).toBeNull();
   });
 });
