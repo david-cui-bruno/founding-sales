@@ -1,7 +1,8 @@
-import { logCallOutcomeCommandSchema } from '@fss/contracts';
+import { callFollowUpCommandSchema, followUpPreviewRequestSchema, logCallOutcomeCommandSchema } from '@fss/contracts';
 import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { readFirm } from '@fss/domain/crm/firms.ts';
-import { listCallLogs, logCallOutcome } from '@fss/domain/dial/calls.ts';
+import { listCallLogs, logCallOutcome, recordCallFollowUp } from '@fss/domain/dial/calls.ts';
+import { previewFollowUp } from '@fss/domain/dial/followUpPreview.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -18,6 +19,8 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 export const CALL_PATHS: readonly string[] = [
   '/calls',
   '/calls/log',
+  '/calls/follow-up-preview',
+  '/calls/follow-up',
 ];
 
 /**
@@ -64,6 +67,42 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
 
   if (request.method !== 'POST') {
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+  }
+  // Send-path v2 (slice S3): what an agreed sequence would send, and when, before the
+  // outcome is recorded. A read, so no receipt; a POST for the reason every read with a
+  // body is (`docs/decisions/g3b-reads-are-posts.md`). A firm this caller cannot see is
+  // `not_found`, the redacted sentence every unmounted path gets; every other refusal is
+  // a 409 carrying the code, which the card turns into a sentence.
+  if (request.path === '/calls/follow-up-preview') {
+    const parsed = followUpPreviewRequestSchema.safeParse(request.body);
+    if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    const preview = await previewFollowUp(scoped.context, {
+      firmId: parsed.data.firmId,
+      contactId: parsed.data.contactId,
+      sequenceVersionId: parsed.data.sequenceVersionId,
+      ...(parsed.data.previewAt === undefined ? {} : { previewAt: parsed.data.previewAt }),
+    });
+    if (!preview.ok) {
+      return preview.reason === 'firm_unknown'
+        ? { status: REFUSAL_STATUS.not_found, body: redactError('not_found') }
+        : { status: 409, body: { status: 'refused', reason: preview.reason } };
+    }
+    return { status: 200, body: preview.value };
+  }
+  // Review of S3, round 2 (P1-B): record the agreed follow-up of a call already recorded
+  // — the card's "Record the agreed dates" after a stale preview. An exact path with the
+  // call log in the body rather than `/calls/<id>/follow-up`: every new endpoint in this
+  // registry is an exact path (`bootstrap/routeRegistry.ts`).
+  if (request.path === '/calls/follow-up') {
+    return await runPolicyCommand(deps, callFollowUpCommandSchema, 'record_call_follow_up', async (repository, body) =>
+      await recordCallFollowUp(repository, {
+        callLogId: body.callLogId,
+        followUpPermission: body.followUpPermission,
+        commandId: body.commandId,
+      }),
+    );
   }
   if (request.path !== '/calls/log') {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

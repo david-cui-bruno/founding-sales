@@ -9,7 +9,7 @@ import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import { OPERATIONS, OPERATION_NAMES, type OperationName } from '../src/shared/operations.ts';
-import { BRIDGE_ANSWERS, FIXTURE_IDS } from './support/bridgeAnswers.ts';
+import { BRIDGE_ANSWERS, FIXTURE_IDS, STALE_CALL_LOG_ID } from './support/bridgeAnswers.ts';
 
 /**
  * Every request a bridge makes is declared in the registry (1.0.13, P1-5).
@@ -91,6 +91,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'today.expand': { firmId: UUID },
   'today.snooze': { itemId: UUID, reason: 'later', returnAt: '2026-09-28T09:00' },
   'today.recordOutcome': { itemId: UUID, outcome: 'no_answer', note: '', callback: null },
+  'today.previewFollowUp': { firmId: UUID, contactId: UUID, sequenceVersionId: UUID },
+  'today.recordAgreedDates': { firmId: UUID, callLogId: STALE_CALL_LOG_ID },
   'today.scheduleCallback': { callLogId: UUID, localDate: '2026-09-28', localTime: '09:00' },
   'today.releasePause': { holdId: UUID },
   'replies.open': { messageId: UUID },
@@ -162,6 +164,33 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
  * is still one operation's own requests.
  */
 const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]>>> = Object.freeze({
+  // "Record the agreed dates" exists only after an agreed sequence went stale on the
+  // call (review of S3, round 2, P1-B): the recorded call and its fresh preview first.
+  'today.recordAgreedDates': [
+    [
+      'recordOutcome',
+      {
+        firmId: UUID,
+        itemId: null,
+        contactId: UUID,
+        routeId: null,
+        outcome: 'interested',
+        note: '',
+        callback: null,
+        doNotCallCoversAllContact: false,
+        followUpPermission: {
+          scope: 'agreed_sequence',
+          sequenceVersionId: UUID,
+          previewBasis: {
+            anchorAt: '2026-09-21T13:00:00.000Z',
+            timeZone: 'America/New_York',
+            calendarVersionId: 'none.1',
+            steps: [{ ordinal: 1, sendAt: '2026-09-22T12:00:00.000Z' }],
+          },
+        },
+      },
+    ],
+  ],
   // The card has to be the one being resolved, and one of its own candidates chosen:
   // the bridge refuses anything else before it asks the server, which is right and
   // would make this check pass by asking nothing.

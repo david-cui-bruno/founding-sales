@@ -37,6 +37,14 @@ export interface TodayActions {
   collapse(firmId: string): void;
   snooze(input: OperationInput<'today.snooze'>): void;
   recordOutcome(input: OperationInput<'today.recordOutcome'>): void;
+  /**
+   * Ask the server what an agreed sequence would send, and when, for one person at the
+   * open firm (send-path v2, slice S3). The answer lands on the state as
+   * `followUpPreview`; the outcome form shows it before the call is recorded.
+   */
+  previewFollowUp(input: OperationInput<'today.previewFollowUp'>): void;
+  /** "Record the agreed dates" after a stale preview (review of S3, round 2, P1-B). */
+  recordAgreedDates(input: OperationInput<'today.recordAgreedDates'>): void;
   scheduleCallback(input: OperationInput<'today.scheduleCallback'>): void;
   releasePause(input: OperationInput<'today.releasePause'>): void;
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
@@ -68,6 +76,10 @@ export const todayForm = {
   card: (firmId: string): string => `card:${firmId}`,
   task: (itemId: string): string => `task:${itemId}`,
   outcome: (firmId: string): string => `outcome:${firmId}`,
+  /** The agreed sequence's preview under the outcome form. The form waits for it. */
+  preview: (firmId: string): string => `preview:${firmId}`,
+  /** "Record the agreed dates" for a call whose preview went stale. */
+  agreedDates: (callLogId: string): string => `agreed-dates:${callLogId}`,
   callback: (callLogId: string): string => `callback:${callLogId}`,
   research: (firmId: string): string => `research-run:${firmId}`,
   hold: (holdId: string): string => `hold:${holdId}`,
@@ -189,6 +201,12 @@ export function useToday(identity: string | null, generation: number, guard: Gen
         // The one form under the expanded card, so its own id is the firm's: `itemId`
         // is optional there — an outcome can be recorded with no task chosen.
         command(value.command('today.recordOutcome', input), todayForm.outcome(input.firmId));
+      },
+      previewFollowUp: input => {
+        command(value.read('today.previewFollowUp', input), todayForm.preview(input.firmId));
+      },
+      recordAgreedDates: input => {
+        command(value.command('today.recordAgreedDates', input), todayForm.agreedDates(input.callLogId));
       },
       scheduleCallback: input => {
         command(value.command('today.scheduleCallback', input), todayForm.callback(input.callLogId));

@@ -41,6 +41,23 @@ export const POLICY_REFUSAL_CODES = [
   'item_unknown',
   /** An entered `occurredAt` further ahead of database time than the tolerance (C15). */
   'occurred_at_in_future',
+  /**
+   * Send-path v2 (slice S3): the sequence version a call agreed to is not one of this
+   * workspace's (`version_unknown`), or is not published (`version_not_published`).
+   * Decided before the call log is written, like the two agreement rules beside it.
+   */
+  'version_unknown',
+  'version_not_published',
+  /**
+   * `POST /calls/follow-up` (review of S3, round 2, P1-B): the call already records an
+   * agreement (`agreement_exists`), or it was recorded more than an hour ago
+   * (`call_too_old`) — the recovery is for the minutes after a stale preview, not a way
+   * to attach an agreement to old history.
+   */
+  'agreement_exists',
+  'call_too_old',
+  /** Round 3, P1-F: only the person who made the call records what was agreed on it. */
+  'not_call_actor',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 

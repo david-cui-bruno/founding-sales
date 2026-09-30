@@ -31,9 +31,27 @@
  */
 const CLEAR_PASSES = 3;
 
+/**
+ * A bridge that keys its own state by an identity generation (send-path v2, S3, round 6).
+ *
+ * `current()` is the bridge's counter, which its own `forget` advances. A bridge that
+ * has one checks it before every write that follows an `await`, so a continuation that
+ * began before a clear stores nothing after it. That makes the guard's second clear
+ * wrong for such a bridge: when the bridge has been cleared since the method began, the
+ * state it holds now is the *next* person's, and clearing it would erase their work.
+ * `forgetIfCurrent(generation)` clears only when the bridge is still on the generation
+ * the method began under, and otherwise answers the empty state and touches nothing.
+ */
+export interface BridgeIdentity {
+  current(): number;
+  forgetIfCurrent(generation: number): Promise<unknown>;
+}
+
 /** Anything with a `forget` that clears it and answers its empty state. */
 export interface Forgettable {
   forget(): Promise<unknown>;
+  /** Present on a bridge that drops its own stale continuations; see `BridgeIdentity`. */
+  readonly identity?: BridgeIdentity;
 }
 
 /**
@@ -55,8 +73,20 @@ export function guardIdentity<H extends Forgettable>(host: H, generation: () => 
         ? method.bind(host)
         : async (...args: unknown[]): Promise<unknown> => {
             const mine = generation();
+            const bridgeMine = host.identity?.current();
             const answer = await method.apply(host, args);
             if (mine === generation()) return answer;
+            /*
+             * A bridge with its own generation stored nothing after a clear it did not
+             * begin under, so the reset is guarded by the generation this method began
+             * with: if the bridge has been cleared since, what it holds is the next
+             * person's and stays (review of S3, round 6, P0). If it has not, the
+             * transition's own reset has not reached it yet and the late answer is
+             * cleared exactly as below.
+             */
+            if (host.identity !== undefined && bridgeMine !== undefined) {
+              return await host.identity.forgetIfCurrent(bridgeMine);
+            }
             /*
              * Somebody else is signed in now, or nobody is. Whatever this stored goes
              * with the rest of the last person's state, and the caller gets nothing.

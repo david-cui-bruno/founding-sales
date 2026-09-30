@@ -9,7 +9,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { openOpportunity, readOpenOpportunity, reopenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -20,6 +20,11 @@ import {
   type PolicyResult,
 } from '../policy/types.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { enrollContact } from '../sequences/enrollments.ts';
+import { readSequenceVersion } from '../sequences/rows.ts';
+import { readTemplateVersion } from '../templates/templates.ts';
+import { currentHolidayCalendar } from '../sequences/calendars.ts';
+import { previewBasisHolds, type PreviewBasis } from './followUpPreview.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -106,7 +111,17 @@ export interface LogCallOutcomeInput {
    */
   readonly followUpPermission?:
     | { readonly scope: 'single_email'; readonly templateVersionId: string }
-    | { readonly scope: 'agreed_sequence'; readonly sequenceVersionId: string }
+    | {
+        readonly scope: 'agreed_sequence';
+        readonly sequenceVersionId: string;
+        /**
+         * The schedule the card showed (review of S3, P1-3). The route always passes it —
+         * the wire contract requires it — and a zone or calendar version that has changed
+         * since is `stale_preview`. Absent only for a direct domain caller (tests), which
+         * then enrols on the schedule as it is now.
+         */
+        readonly previewBasis?: PreviewBasis | undefined;
+      }
     | undefined;
   readonly commandId?: string | undefined;
   /** Required whenever the outcome may suppress. The journal write precedes the row. */
@@ -280,6 +295,17 @@ export async function logCallOutcome(
   if (input.followUpPermission !== undefined) {
     if (input.outcome !== 'interested') return refusePolicy('invalid_input');
     if (input.contactId === undefined && ticket?.contact_id == null) return refusePolicy('invalid_input');
+    // Send-path v2 (slice S3): an agreed sequence names one **published** version of this
+    // workspace's own sequences, checked here for the same reason as the two rules above —
+    // before the call log exists, so a stale or foreign id is a code on the answer and
+    // never a recorded conversation whose agreement could not be kept. The read is
+    // workspace-scoped, so another workspace's version is `version_unknown`, exactly as a
+    // version that never existed is.
+    if (input.followUpPermission.scope === 'agreed_sequence') {
+      const version = await readSequenceVersion(context, input.followUpPermission.sequenceVersionId);
+      if (version === null) return refusePolicy('version_unknown');
+      if (version.state !== 'published') return refusePolicy('version_not_published');
+    }
   }
 
   const engaged = effects.setsManual;
@@ -308,12 +334,17 @@ export async function logCallOutcome(
   const opportunity = await readOpenOpportunity(context, input.firmId);
 
   // ---- 2. Record ----------------------------------------------------------
+  //
+  // What was agreed is not in this INSERT. Since send-path v2 (slice S3) the agreement
+  // columns (`agreed_follow_up`, `agreed_template_version_id`,
+  // `agreed_sequence_version_id`, migration 0025) are written by an UPDATE of this row in
+  // a savepoint of its own after the effects (`recordAgreement` below), so nothing about
+  // the agreement can take the history or the engaged-call stop down with it.
   const logged = await context.db.query<{ id: string }>(
     `INSERT INTO call_logs
        (workspace_id, firm_id, contact_id, opportunity_id, phone_route_id, calling_identity_id,
-        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note,
-        agreed_follow_up, agreed_template_version_id, agreed_sequence_version_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14, $15, $16, $17)
+        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14)
      RETURNING id`,
     [
       context.scope.workspaceId,
@@ -330,15 +361,6 @@ export async function logCallOutcome(
       actor.userId,
       input.commandId ?? null,
       input.note ?? null,
-      // What the person on the call agreed to, on the call log itself (migration 0025,
-      // P0-1). The permission points at this row and re-reads these three columns on
-      // every step, so the log — not the permission — is where the agreement lives, and
-      // a log that agreed to nothing can never be turned into one through any API.
-      input.followUpPermission?.scope ?? null,
-      input.followUpPermission?.scope === 'single_email' ? input.followUpPermission.templateVersionId : null,
-      input.followUpPermission?.scope === 'agreed_sequence'
-        ? input.followUpPermission.sequenceVersionId
-        : null,
     ],
   );
   const callLogId = logged.rows[0]?.id;
@@ -459,36 +481,47 @@ export async function logCallOutcome(
     });
   });
 
-  // The follow-up the salesperson agreed to, in a savepoint of its **own** and after the
-  // effects above (the third review of PR 332). It was inside theirs, and a grant that
-  // refused took the engaged-call stop down with it — the one effect of an interested
-  // call that must never be lost, because a sequence still running after a conversation
-  // is exactly what invariant 3 forbids. A grant that fails now costs the permission and
-  // nothing else, and says so on the receipt.
+  // The follow-up the salesperson agreed to: three steps, in this order, each in a
+  // savepoint of its **own** and all after the effects above (the third review of PR 332;
+  // send-path v2, slice S3). The engaged-call stop is in the effects' savepoint and
+  // nothing below can roll it back — the one effect of an interested call that must never
+  // be lost, because a sequence still running after a conversation is exactly what
+  // invariant 3 forbids.
   //
-  // The evidence is this very call log — the row inserted above — and
-  // `verifyFollowUpPermission` re-reads it before every step: the log's firm must still
-  // be this firm, and, since it names a person, still this person.
+  //   1. **Record the agreement on the call log** (`recordAgreement`). The permission
+  //      re-reads these columns on every step, so the log — not the permission — is where
+  //      the agreement lives.
+  //   2. **Grant the permission**, whose evidence is this very log: the kind, the scope
+  //      and the bound version are the log's, never the caller's (P0-1). A failure costs
+  //      the permission and says so: `follow_up_not_granted`.
+  //   3. **Enrol** — `agreed_sequence` only — through `enrollContact`, with
+  //      `origin_kind = 'follow_up'` and the permission just granted, which the
+  //      enrollment binds. A refusal (or a throw) rolls back only this savepoint, so the
+  //      permission stands, unbound, and the answer carries `follow_up_not_enrolled` with
+  //      the refusal code; a person can still enrol from the firm page on it.
+  //
+  // Lock order: this command took the send gate EXCLUSIVE before the firm's row
+  // (`lockSendGateForStopFact` at the top), and `enrollContact` takes the same gate and
+  // then the firm, the opportunity and the contact — gate → firm → … in both, and both
+  // re-entrant inside one transaction, so the enrolment adds no new order.
+  //
+  // A *thrown* refusal is caught at each step, for the reason the grant always was:
+  // `grantFollowUpPermission` raises on evidence it cannot support and `enrollContact`
+  // on a permission already bound (`FollowUpReuseError`), and the savepoint has been
+  // rolled back by the time the error reaches here. Nothing about a follow-up is worth
+  // losing a recorded conversation and its stop over.
   let followUpPermissionId: string | null = null;
   if (input.followUpPermission !== undefined && contactId !== undefined) {
-    // A *thrown* refusal is caught too, and for the same reason: `grantFollowUpPermission`
-    // raises on evidence it cannot support, and the savepoint has already been rolled back
-    // by the time the error reaches here. Nothing about granting a permission is worth
-    // losing a recorded conversation and its stop over.
-    const granted = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
-      // The kind and the scope are not passed: the call log decides them, because a
-      // caller that could name them could name a sequence over a callback (P0-1).
-      const outcome = await grantFollowUpPermission(context, {
-        firmId: input.firmId,
-        contactId,
-        callLogId,
-        grantedByUserId: actor.userId,
-        note: 'agreed on the call',
-      });
-      return outcome.ok ? acceptPolicy(outcome.value.id) : refusePolicy('invalid_input');
-    }).catch(() => refusePolicy<string>('invalid_input'));
-    if (granted.ok) followUpPermissionId = granted.value;
-    else followUps.push({ kind: 'follow_up_not_granted', reason: granted.reason });
+    const agreed = await applyAgreedFollowUp(context, {
+      firmId: input.firmId,
+      contactId,
+      callLogId,
+      grantedByUserId: actor.userId,
+      agreement: input.followUpPermission,
+      opportunityId: opportunity?.id ?? null,
+    });
+    followUpPermissionId = agreed.permissionId;
+    followUps.push(...agreed.followUps);
   }
 
   const outcomes: AppliedEffects = applied.ok
@@ -563,6 +596,123 @@ export async function logCallOutcome(
   });
 }
 
+/** How long after a call its agreement may still be recorded by `recordCallFollowUp`. */
+export const CALL_FOLLOW_UP_WINDOW_MINUTES = 60;
+
+export interface RecordCallFollowUpInput {
+  readonly callLogId: string;
+  readonly followUpPermission: AgreedFollowUp;
+  readonly commandId?: string | undefined;
+}
+
+export interface RecordedCallFollowUp {
+  readonly callLogId: string;
+  readonly followUpPermissionId: string | null;
+  readonly followUps: readonly CallFollowUp[];
+}
+
+/**
+ * Record what an interested call agreed to, after the call itself was recorded
+ * (`POST /calls/follow-up`; review of S3, round 2, P1-B).
+ *
+ * The card's recovery from `stale_preview`: the schedule changed between the preview the
+ * person was read and the moment the call was recorded, so `logCallOutcome` wrote the
+ * call and its stop and nothing else. The card fetches a fresh preview, the salesperson
+ * reads the new dates, and "Record the agreed dates" sends this — the same payload and
+ * basis — so starting the agreed sequence still needs no command of anybody's own.
+ *
+ * The call must be this workspace's, made by this actor (`not_call_actor` otherwise), an
+ * `interested` call with a named person, that happened and was logged within the last
+ * hour by the database's wall clock (`call_too_old`), with no agreement on it yet
+ * (`agreement_exists`: one call, one agreement; two racing requests serialize on the
+ * call log's row lock, and the second reads the first's agreement). Then exactly what
+ * `logCallOutcome` does after its effects:
+ * the same standing checks before any write, the agreement, the grant, the enrolment.
+ * Lock order as there: the send gate, then the firm.
+ */
+export async function recordCallFollowUp(
+  context: RepositoryContext,
+  input: RecordCallFollowUpInput,
+): Promise<PolicyResult<RecordedCallFollowUp>> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refusePolicy('invalid_input');
+  await lockSendGateForStopFact(context);
+
+  // Where the call is, then the firm's lock, then the call log's own row lock — the
+  // order every command here keeps (gate → firm → the rows under it). Re-read under the
+  // lock, so the actor, the agreement and the firm are the ones this command decides on.
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_logs WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return refusePolicy('call_log_unknown');
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return refusePolicy('firm_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
+  }
+  const { rows } = await context.db.query<{
+    firm_id: string;
+    contact_id: string | null;
+    outcome: string;
+    agreed_follow_up: string | null;
+    actor_user_id: string;
+    occurred_at: Date;
+    recorded_at: Date;
+  }>(
+    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at, recorded_at
+       FROM call_logs WHERE workspace_id = $1 AND id = $2
+       FOR UPDATE`,
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const log = rows[0];
+  if (log === undefined || log.firm_id !== firmId) return refusePolicy('call_log_unknown');
+  // The person who made the call records what was agreed on it — not whoever holds the
+  // firm now, and not an administrator (review of S3, round 3, P1-F).
+  if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
+  if (log.outcome !== 'interested' || log.contact_id === null) return refusePolicy('invalid_input');
+  if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
+  // The wall clock, read in its own statement **after** the row lock was granted
+  // (review of S3, rounds 3 and 4, P1-G): the transaction's `now()` predates the waits for
+  // the gate, the firm and this row, and an expression projected inside the locking
+  // SELECT can be computed before the lock wait. Both instants count: an entered past
+  // `occurred_at` is a call that happened then, whenever it was logged.
+  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  const wallClock = (clock[0]?.now ?? new Date()).getTime();
+  const windowMs = CALL_FOLLOW_UP_WINDOW_MINUTES * 60_000;
+  if (wallClock - log.occurred_at.getTime() > windowMs || wallClock - log.recorded_at.getTime() > windowMs) {
+    return refusePolicy('call_too_old');
+  }
+  if (input.followUpPermission.scope === 'agreed_sequence') {
+    const version = await readSequenceVersion(context, input.followUpPermission.sequenceVersionId);
+    if (version === null) return refusePolicy('version_unknown');
+    if (version.state !== 'published') return refusePolicy('version_not_published');
+  }
+
+  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const agreed = await applyAgreedFollowUp(context, {
+    firmId: log.firm_id,
+    contactId: log.contact_id,
+    callLogId: input.callLogId,
+    grantedByUserId: actor.userId,
+    agreement: input.followUpPermission,
+    opportunityId: opportunity?.id ?? null,
+  });
+  await recordCrmAuditEvent(context, {
+    action: 'call.follow_up_recorded',
+    subjectKind: 'call_log',
+    subjectId: input.callLogId,
+    detail: {
+      firmId: log.firm_id,
+      scope: input.followUpPermission.scope,
+      followUps: agreed.followUps.map(entry => `${entry.kind}:${entry.reason}`),
+    },
+  });
+  return acceptPolicy({ callLogId: input.callLogId, followUpPermissionId: agreed.permissionId, followUps: agreed.followUps });
+}
+
 interface AppliedEffects {
   readonly stepApplication: CallStepApplication | null;
   readonly successorExecutionId: string | null;
@@ -577,6 +727,294 @@ interface AppliedEffects {
 /** A suppression refusal, in this command's vocabulary. The code itself is kept in the audit. */
 function asPolicyRefusal(reason: string): PolicyRefusalCode {
   return reason === 'not_assigned' || reason === 'firm_unknown' ? reason : 'invalid_input';
+}
+
+type AgreedFollowUp = NonNullable<LogCallOutcomeInput['followUpPermission']>;
+
+/**
+ * What an interested call agreed to, applied to its recorded call log — by
+ * `logCallOutcome` after the call's effects (the engaged-call stop), and by
+ * `recordCallFollowUp` when the card records the agreed dates again after a stale
+ * preview (review of S3, round 2, P1-B). In this order:
+ *
+ *   0. **Standing, before any write.** A single e-mail's template must still be this
+ *      workspace's, approved and not retired (P1-4). An agreed sequence's preview basis
+ *      must still be the schedule an enrolment started now would have (P1-A):
+ *      the firm's zone, the calendar version, and every step on the same local day and
+ *      within fifteen minutes of its shown instant (`previewBasisHolds`), recomputed
+ *      at the transaction's sampled `now()` — the instant `enrollContact` anchors at in
+ *      the same transaction. Either failing is `follow_up_not_granted` with the reason
+ *      (`template_*`, `stale_preview`) and **nothing** is written: no agreement on the
+ *      log, no permission — so no live permission is left for anything to start on a
+ *      schedule nobody heard (P1-B).
+ *   1. Record the agreement on the call log, in its own savepoint.
+ *   2. Grant the permission from that log, in its own savepoint.
+ *   3. For an agreed sequence, enrol (`enrolAgreedSequence`), in its own savepoint.
+ */
+async function applyAgreedFollowUp(
+  context: RepositoryContext,
+  input: {
+    readonly firmId: string;
+    readonly contactId: string;
+    readonly callLogId: string;
+    readonly grantedByUserId: string;
+    readonly agreement: AgreedFollowUp;
+    readonly opportunityId: string | null;
+  },
+): Promise<{ readonly permissionId: string | null; readonly followUps: readonly CallFollowUp[] }> {
+  const { agreement } = input;
+  const standing =
+    agreement.scope === 'single_email'
+      ? await templateStanding(context, agreement.templateVersionId)
+      : await scheduleStanding(context, input.firmId, agreement);
+  if (standing !== null) {
+    return { permissionId: null, followUps: [{ kind: 'follow_up_not_granted', reason: standing }] };
+  }
+
+  const recorded = await withinSavepoint(context, async (): Promise<PolicyResult<true>> =>
+    await recordAgreement(context, input.callLogId, agreement),
+  ).catch(() => refusePolicy<true>('invalid_input'));
+  if (!recorded.ok) {
+    return { permissionId: null, followUps: [{ kind: 'follow_up_not_granted', reason: 'agreement_not_recorded' }] };
+  }
+
+  // The evidence is this very call log and `verifyFollowUpPermission` re-reads it before
+  // every step: the log's firm must still be this firm, and, since it names a person,
+  // still this person. The kind and the scope are not passed: the call log decides them,
+  // because a caller that could name them could name a sequence over a callback (P0-1).
+  const granted = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
+    const outcome = await grantFollowUpPermission(context, {
+      firmId: input.firmId,
+      contactId: input.contactId,
+      callLogId: input.callLogId,
+      grantedByUserId: input.grantedByUserId,
+      note: 'agreed on the call',
+    });
+    return outcome.ok ? acceptPolicy(outcome.value.id) : refusePolicy('invalid_input');
+  }).catch(() => refusePolicy<string>('invalid_input'));
+  if (!granted.ok) {
+    return { permissionId: null, followUps: [{ kind: 'follow_up_not_granted', reason: granted.reason }] };
+  }
+  if (agreement.scope !== 'agreed_sequence') return { permissionId: granted.value, followUps: [] };
+  return {
+    permissionId: granted.value,
+    followUps: [
+      await enrolAgreedSequence(context, {
+        sequenceVersionId: agreement.sequenceVersionId,
+        opportunityId: input.opportunityId,
+        firmId: input.firmId,
+        contactId: input.contactId,
+        permissionId: granted.value,
+        callLogId: input.callLogId,
+      }),
+    ],
+  };
+}
+
+/**
+ * `stale_preview` when the schedule an enrolment would start now is not the one the
+ * card showed, or null. A direct domain caller with no basis is not checked.
+ */
+async function scheduleStanding(
+  context: RepositoryContext,
+  firmId: string,
+  agreement: Extract<AgreedFollowUp, { scope: 'agreed_sequence' }>,
+): Promise<string | null> {
+  if (agreement.previewBasis === undefined) return null;
+  const version = await readSequenceVersion(context, agreement.sequenceVersionId);
+  if (version === null) return 'version_unknown';
+  const { rows: firms } = await context.db.query<{ time_zone: string | null }>(
+    'SELECT time_zone FROM firms WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, firmId],
+  );
+  // `now()`, not `clock_timestamp()`: the transaction's own sampled start, which is the
+  // instant `enrollContact` anchors the enrollment at later in this transaction.
+  const holds = previewBasisHolds(agreement.previewBasis, {
+    steps: version.steps,
+    now: await databaseNow(context),
+    zone: firms[0]?.time_zone ?? null,
+    calendar: await currentHolidayCalendar(context),
+  });
+  return holds ? null : 'stale_preview';
+}
+
+/**
+ * Why a single e-mail's template cannot be promised, or null when it can: absent from
+ * this workspace (`template_unknown`), never approved (`template_unapproved`), or retired
+ * (`template_retired`).
+ */
+async function templateStanding(context: RepositoryContext, templateVersionId: string): Promise<string | null> {
+  const template = await readTemplateVersion(context, templateVersionId);
+  if (template === null) return 'template_unknown';
+  if (template.approvedAt === null) return 'template_unapproved';
+  if (template.retiredAt !== null) return 'template_retired';
+  return null;
+}
+
+/**
+ * Write what the person on the call agreed to onto the call log (migration 0025's three
+ * columns). Only a log that agreed to nothing yet is updated, so a replayed or confused
+ * caller can never turn one agreement into another; the CHECKs
+ * `call_logs_agreement_names_what_was_agreed` and `call_logs_agreement_needs_interest`
+ * stand behind it in the database.
+ */
+async function recordAgreement(
+  context: RepositoryContext,
+  callLogId: string,
+  agreement: NonNullable<LogCallOutcomeInput['followUpPermission']>,
+): Promise<PolicyResult<true>> {
+  const updated = await context.db.query(
+    `UPDATE call_logs
+        SET agreed_follow_up = $3, agreed_template_version_id = $4, agreed_sequence_version_id = $5
+      WHERE workspace_id = $1 AND id = $2 AND agreed_follow_up IS NULL`,
+    [
+      context.scope.workspaceId,
+      callLogId,
+      agreement.scope,
+      agreement.scope === 'single_email' ? agreement.templateVersionId : null,
+      agreement.scope === 'agreed_sequence' ? agreement.sequenceVersionId : null,
+    ],
+  );
+  return (updated.rowCount ?? 0) === 1 ? acceptPolicy(true) : refusePolicy('invalid_input');
+}
+
+/**
+ * Enrol the contact in the sequence they agreed to, on the permission the call just
+ * granted, in a savepoint of its own (send-path v2, slice S3).
+ *
+ * The answer is always a follow-up entry: `agreed_sequence_enrolled` naming the
+ * enrollment, or `follow_up_not_enrolled` whose reason is `enrollContact`'s refusal code
+ * (`enrollment_failed` for a throw). A firm with no open opportunity gets one first, at
+ * stage New, in the same savepoint. Either way the permission granted before it stands.
+ */
+async function enrolAgreedSequence(
+  context: RepositoryContext,
+  input: {
+    readonly sequenceVersionId: string;
+    readonly opportunityId: string | null;
+    readonly firmId: string;
+    readonly contactId: string;
+    readonly permissionId: string;
+    /** The interested call that agreed to it, named on an opportunity opened for it. */
+    readonly callLogId: string;
+  },
+): Promise<CallFollowUp> {
+  const refused: { reason: string } = { reason: 'enrollment_failed' };
+  const enrolled = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
+    // A firm with no open opportunity — one added through `/crm/firms/add` or an import,
+    // which open none — gets one here, at stage New, so starting what the person agreed
+    // to never needs a command of its own (the coordinator's decision, 30 September
+    // 2026). Inside this savepoint: a refused enrolment takes the new opportunity back
+    // with it, so a refusal leaves nothing behind but the permission.
+    let opportunityId = input.opportunityId;
+    if (opportunityId === null) {
+      const opened = await opportunityForAgreedSequence(context, input);
+      if (!opened.ok) {
+        refused.reason = opened.reason;
+        return refusePolicy('invalid_input');
+      }
+      opportunityId = opened.value;
+    }
+    const outcome = await enrollContact(context, {
+      originKind: 'follow_up',
+      permissionId: input.permissionId,
+      sequenceVersionId: input.sequenceVersionId,
+      opportunityId,
+      firmId: input.firmId,
+      contactId: input.contactId,
+    });
+    if (outcome.ok) return acceptPolicy(outcome.value.enrollmentId);
+    refused.reason = outcome.reason;
+    return refusePolicy('invalid_input');
+  }).catch(() => {
+    refused.reason = 'enrollment_failed';
+    return refusePolicy<string>('invalid_input');
+  });
+  if (enrolled.ok) return { kind: 'agreed_sequence_enrolled', reason: 'enrolled', enrollmentId: enrolled.value };
+  return { kind: 'follow_up_not_enrolled', reason: refused.reason };
+}
+
+/**
+ * The open opportunity an agreed sequence enrols against, for a firm that has none
+ * (coordinator's decisions and the review of S3, 30 September 2026). Always stage New
+ * (the first non-terminal stage), manual, origin `engaged_call` — exactly what the
+ * engaged call would have made of an opportunity that was open — and audited with the
+ * call named. Two ways, and never silently a third:
+ *
+ *   * **no history**: `openOpportunity` at stage New, then `setManualControlMode` with
+ *     origin `engaged_call`, the path the call's own effects take;
+ *   * **a closed history** (the last opportunity Won or Lost): the explicit reopen,
+ *     `reopenOpportunity` — a new row linked by `reopened_from_opportunity_id`, in
+ *     manual mode, with a reason naming the interested call — rather than an unlinked
+ *     row that would hide the history (review P1-2). The reopen records no manual-mode
+ *     origin (its NULL reads as a takeover, which would block the very follow-up this
+ *     is for), so the origin is recorded here as the call's: `engaged_call`, only on
+ *     the row just reopened and only while it is still unrecorded, and audited as
+ *     `opportunity.manual` the way every origin change is.
+ *
+ * Runs inside the enrolment's savepoint: a refused enrolment takes the row back.
+ */
+async function opportunityForAgreedSequence(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly callLogId: string; readonly sequenceVersionId: string },
+): Promise<{ readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: string }> {
+  const { rows: closed } = await context.db.query(
+    `SELECT 1 FROM opportunities WHERE workspace_id = $1 AND firm_id = $2 AND status <> 'open' LIMIT 1`,
+    [context.scope.workspaceId, input.firmId],
+  );
+  let opportunityId: string;
+  let reopened = false;
+  if (closed.length > 0) {
+    const reopen = await reopenOpportunity(context, {
+      firmId: input.firmId,
+      reason: `interested call ${input.callLogId} agreed to a sequence`,
+    });
+    if (!reopen.ok) return { ok: false, reason: reopen.reason };
+    opportunityId = reopen.value.opportunityId;
+    reopened = true;
+    const { rows: recorded } = await context.db.query<{ id: string }>(
+      `UPDATE opportunities SET control_mode_origin = 'engaged_call', updated_at = now()
+        WHERE workspace_id = $1 AND id = $2 AND control_mode = 'manual' AND control_mode_origin IS NULL
+        RETURNING id`,
+      [context.scope.workspaceId, opportunityId],
+    );
+    if (recorded[0] === undefined) return { ok: false, reason: 'invalid_input' };
+    await recordCrmAuditEvent(context, {
+      action: 'opportunity.manual',
+      subjectKind: 'opportunity',
+      subjectId: opportunityId,
+      detail: { firmId: input.firmId, origin: 'engaged_call', callLogId: input.callLogId, reopened: true },
+    });
+  } else {
+    const opened = await openOpportunity(context, { firmId: input.firmId, stageKey: 'new' });
+    if (!opened.ok) return { ok: false, reason: opened.reason };
+    opportunityId = opened.value.id;
+    // Marked manual exactly as the engaged call marks an open opportunity: the same
+    // `setManualControlMode`, origin `engaged_call`. That origin is a prospect signal, so
+    // the agreed follow-up still runs under it (PR 332's rule, `controlModeSource`); its
+    // stop event owes nothing, because the call's own stop already ended every live
+    // enrollment at the firm and this one does not exist yet.
+    const manual = await setManualControlMode(context, {
+      opportunityId,
+      reason: manualReasonFor('interested'),
+      origin: 'engaged_call',
+    });
+    if (!manual.ok) return { ok: false, reason: manual.reason };
+  }
+  // `openOpportunity` / `reopenOpportunity` audit themselves; this names why.
+  await recordCrmAuditEvent(context, {
+    action: 'opportunity.opened_for_agreed_sequence',
+    subjectKind: 'opportunity',
+    subjectId: opportunityId,
+    detail: {
+      firmId: input.firmId,
+      callLogId: input.callLogId,
+      outcome: 'interested',
+      sequenceVersionId: input.sequenceVersionId,
+      reopened,
+    },
+  });
+  return { ok: true, value: opportunityId };
 }
 
 const EFFECTS_SAVEPOINT = 'call_outcome_effects';

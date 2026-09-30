@@ -931,10 +931,12 @@ describe('the Today bridge', () => {
       'today.state',
       'today.refresh',
       'today.expand',
+      'today.previewFollowUp',
       'today.callsPlaced',
       'today.collapse',
       'today.snooze',
       'today.recordOutcome',
+      'today.recordAgreedDates',
       'today.scheduleCallback',
       'today.releasePause',
     ]);

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, instant, uuid } from './foundationRows.ts';
-import { STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
+import { STEP_CHANNELS, STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
 
 /**
  * The wire contract of policy, suppression and dialing
@@ -429,6 +429,60 @@ export const consumeDialTicketCommandSchema = z.strictObject({
 });
 
 /**
+ * What an interested call may agree to (migration 0025; send-path v2): one approved
+ * e-mail, or an agreed published sequence with the basis of the preview the person was
+ * read. Shared by `POST /calls/log` and `POST /calls/follow-up`.
+ */
+const agreedFollowUpSchema = z
+  .discriminatedUnion('scope', [
+    z.strictObject({
+      scope: z.literal('single_email'),
+      /**
+       * The approved bytes that were promised. `logCallOutcome` writes it onto the call
+       * log (`agreed_template_version_id`), which is where the agreement lives, and the
+       * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
+       * rather than whichever approved template somebody picks later (P0-2).
+       */
+      templateVersionId: uuid,
+    }),
+    z.strictObject({
+      /**
+       * Send-path v2 (slice S3): the person agreed on the call to a follow-up
+       * sequence — one immutable **published** version, written onto the call log as
+       * `agreed_sequence_version_id` and bound to the permission, and enrolled in the
+       * same command (`agreed_sequence_enrolled` below says which enrollment).
+       */
+      scope: z.literal('agreed_sequence'),
+      sequenceVersionId: uuid,
+      /**
+       * The schedule the person was shown (review of S3, P1-3 and round 2): the
+       * preview's anchor, the firm's zone, the holiday calendar version and each step's
+       * displayed instant, as `POST /calls/follow-up-preview` answered them. Before
+       * anything is written the command recomputes the schedule at its transaction's
+       * sampled `now()`; a changed zone or calendar version, or a step that moved to
+       * another local day or more than fifteen minutes from its shown instant, answers
+       * `follow_up_not_granted` with reason `stale_preview` and writes no agreement and
+       * no permission, so nobody is enrolled on dates they did not hear.
+       */
+      previewBasis: z.strictObject({
+        anchorAt: instant,
+        timeZone: z.string().min(1).max(64),
+        calendarVersionId: z.string().min(1).max(64),
+        /**
+         * The instant each step was displayed at — the preview's `estimatedAt` — which
+         * the command compares with the schedule it would start in its own transaction:
+         * the same local day in the firm's zone and within fifteen minutes (review of
+         * S3, round 2, P1-A; coordinator's tolerance rule).
+         */
+        steps: z
+          .array(z.strictObject({ ordinal: z.number().int().min(1).max(50), sendAt: instant }))
+          .min(1)
+          .max(50),
+      }),
+    }),
+  ]);
+
+/**
  * Log a call (specification 9.1, Appendix A "Log call outcome").
  *
  * Four changes from G4's shape, all additive or relaxing, so a desktop that sends the
@@ -485,29 +539,7 @@ export const logCallOutcomeCommandSchema = z.strictObject({
    * only for `interested`: "Call me Tuesday" is the `callback` above and grants no
    * e-mail permission, which is David's own distinction of 29 September 2026.
    */
-  followUpPermission: z
-    .discriminatedUnion('scope', [
-      z.strictObject({
-        scope: z.literal('single_email'),
-        /**
-         * The approved bytes that were promised. `logCallOutcome` writes it onto the call
-         * log (`agreed_template_version_id`), which is where the agreement lives, and the
-         * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
-         * rather than whichever approved template somebody picks later (P0-2).
-         */
-        templateVersionId: uuid,
-      }),
-      z.strictObject({
-        /**
-         * Send-path v2 (slice S3): the person agreed on the call to a follow-up
-         * sequence — one immutable **published** version, written onto the call log as
-         * `agreed_sequence_version_id` and bound to the permission, and enrolled in the
-         * same command (`agreed_sequence_enrolled` below says which enrollment).
-         */
-        scope: z.literal('agreed_sequence'),
-        sequenceVersionId: uuid,
-      }),
-    ])
+  followUpPermission: agreedFollowUpSchema
     .optional(),
 });
 
@@ -612,6 +644,83 @@ export const loggedCallResultSchema = z.object({
   followUps: z.array(callFollowUpSchema),
 });
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;
+
+/**
+ * `POST /calls/follow-up` (review of S3, round 2, P1-B): record what an interested call
+ * agreed to after the call itself was recorded — the card's "Record the agreed dates"
+ * after a `stale_preview`. The same follow-up payload as `POST /calls/log`, against that
+ * call log: this workspace's `interested` call with a named person, recorded within the
+ * last hour, with no agreement on it yet.
+ */
+export const callFollowUpCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  callLogId: uuid,
+  followUpPermission: agreedFollowUpSchema,
+});
+export type CallFollowUpCommand = z.infer<typeof callFollowUpCommandSchema>;
+
+export const callFollowUpResultSchema = z.object({
+  callLogId: uuid,
+  followUpPermissionId: uuid.nullable(),
+  followUps: z.array(callFollowUpSchema),
+});
+export type CallFollowUpResult = z.infer<typeof callFollowUpResultSchema>;
+
+/**
+ * `POST /calls/follow-up-preview` (send-path v2, slice S3): what an agreed sequence
+ * would send, and when, if the person on the call agreed to it now.
+ *
+ * David, 30 September 2026: *"Show the messages and timing and record the prospect's
+ * agreement."* So the Today card shows, before the outcome is recorded, every step of
+ * the published version in order — the approved template's name and subject for an
+ * e-mail, and the call tasks too, because they count toward the agreed scope — with the
+ * instant each is expected. The instants are the server's: the same `resolveStepDue` and
+ * `placeEmailSend` enrolment and the scheduler use, in the firm's zone, under the
+ * workspace's current holiday calendar, anchored at `previewAt` (default: the database's
+ * now). A read; it writes nothing.
+ */
+export const followUpPreviewRequestSchema = z.strictObject({
+  firmId: uuid,
+  contactId: uuid,
+  sequenceVersionId: uuid,
+  /** The instant the enrolment would start. Absent means the database's now. */
+  previewAt: instant.optional(),
+});
+export type FollowUpPreviewRequest = z.infer<typeof followUpPreviewRequestSchema>;
+
+const followUpPreviewStepSchema = z.object({
+  ordinal: z.number().int().min(1),
+  channel: z.enum(STEP_CHANNELS),
+  /** The template an e-mail step sends; null for a call task. */
+  templateVersionId: uuid.nullable(),
+  templateName: z.string().max(200).nullable(),
+  /** The approved subject as stored (placeholders unrendered). Null for a call task. */
+  subject: z.string().max(1000).nullable(),
+  /** Whether the template is approved. A published step should always be; false says so. */
+  templateApproved: z.boolean().nullable(),
+  /** When the step falls due: what enrolment stores as the execution's `due_at`. */
+  dueAt: instant,
+  /**
+   * When it is expected to happen: for an e-mail, `placeEmailSend(dueAt)` — the send
+   * window's next valid instant; for a call task, the due instant itself.
+   */
+  estimatedAt: instant,
+});
+export type FollowUpPreviewStep = z.infer<typeof followUpPreviewStepSchema>;
+
+export const followUpPreviewResponseSchema = z.object({
+  sequenceVersionId: uuid,
+  sequenceName: z.string().max(200),
+  version: z.number().int().min(1),
+  /** The firm's IANA zone, which the card formats every instant in. */
+  firmTimeZone: z.string().min(1).max(64),
+  /** The workspace holiday calendar version the instants were computed under. */
+  holidayCalendarVersion: z.string().max(64),
+  /** The anchor the delays were counted from. */
+  anchoredAt: instant,
+  steps: z.array(followUpPreviewStepSchema),
+});
+export type FollowUpPreviewResponse = z.infer<typeof followUpPreviewResponseSchema>;
 
 /**
  * Give a recorded "call me back" its time, later (audit item C13).

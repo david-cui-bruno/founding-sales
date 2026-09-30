@@ -1,5 +1,5 @@
 import { CALL_OUTCOMES } from '@fss/contracts';
-import type { JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { useClearDrafts, useDraft } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
 import {
@@ -20,6 +20,16 @@ import { Input } from '../ui/input.tsx';
 import { Label } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
+import {
+  FOLLOW_UP_CHOICES,
+  FOLLOW_UP_CHOICE_LABELS,
+  followUpChoiceOf,
+  followUpPermissionOf,
+  followUpProblem,
+  enrolRefusalSentence,
+  previewFor,
+  previewRows,
+} from './followUpView.ts';
 import { orDash } from './text.ts';
 import { todayForm, type TodayActions } from './useToday.ts';
 
@@ -60,10 +70,57 @@ export function OutcomeForm({
   // default, because a permission to write to somebody is not something a form should
   // grant by accident.
   const [followUp, setFollowUp] = useDraft(`${prefix}followUp`);
+  // Send-path v2 (slice S3): which of the three answers — none, one approved e-mail, an
+  // agreed sequence — and the sequence version chosen. `followUp` above stays the
+  // template version's id, which is what it has always held.
+  const [followUpKind, setFollowUpKind] = useDraft(`${prefix}followUpKind`);
+  const [followUpSequence, setFollowUpSequence] = useDraft(`${prefix}followUpSequence`);
   const clear = useClearDrafts();
   // The approved templates this call may promise. The value the select holds is the
   // template version's id, which is what the permission is bound to (P0-2).
   const templates = state.followUpTemplates;
+  const sequences = state.followUpSequences ?? [];
+
+  // Who this call was with, and whether a follow-up may be offered at all. Computed
+  // before the early return, because the preview below is asked for from an effect.
+  const lastCallHere =
+    expanded !== null && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
+  const chosenItemId =
+    chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
+  const chosenTaskRow = view.tasks.find(entry => entry.callable && entry.task.itemId === chosenItemId)?.task ?? null;
+  const calledContactId = lastCallHere?.contactId ?? chosenTaskRow?.contactId ?? null;
+  const pick = {
+    choice: followUpChoiceOf(followUpKind),
+    templateVersionId: followUp,
+    sequenceVersionId: followUpSequence,
+  };
+  const wantsPreview =
+    expanded !== null && outcome === 'interested' && calledContactId !== null && pick.choice === 'agreed_sequence' &&
+    pick.sequenceVersionId !== '';
+  const preview =
+    expanded === null
+      ? null
+      : previewFor(state.followUpPreview, {
+          firmId: expanded.firmId,
+          contactId: calledContactId,
+          sequenceVersionId: pick.sequenceVersionId,
+        });
+  // Ask the server once per firm, person and version: an answer that does not match (a
+  // refusal is kept, a lost answer clears it) is not a reason to ask again in a loop. A
+  // lost answer offers Retry instead, which forgets the key and asks again (review of
+  // S3, P2-b).
+  const [askedKey, setAskedKey] = useState<string | null>(null);
+  const previewKey = wantsPreview ? `${expanded.firmId}:${calledContactId}:${pick.sequenceVersionId}` : null;
+  useEffect(() => {
+    if (previewKey === null || !wantsPreview || preview !== null || askedKey === previewKey) return;
+    setAskedKey(previewKey);
+    actions.previewFollowUp({
+      firmId: expanded.firmId,
+      contactId: calledContactId,
+      sequenceVersionId: pick.sequenceVersionId,
+    });
+  }, [previewKey, wantsPreview, preview, askedKey, actions, expanded, calledContactId, pick.sequenceVersionId]);
+
   if (expanded === null) return null;
 
   const draft: OutcomeDraft = {
@@ -85,6 +142,9 @@ export function OutcomeForm({
   const stopper = outcomeProblem(draft);
   // This card's outcome form waits for its own command and for nothing else (P1-4).
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
+  // The agreed sequence's preview on the wire: the form waits for it before it can be
+  // recorded, because the preview is what the person agreed to.
+  const previewing = actions.busy(todayForm.preview(expanded.firmId));
   const suppression = outcomeSuppresses(draft);
   const wantsCallback = draft.outcome === 'callback_requested';
   // Who this call was with. A permission is granted to *a person*, so the form offers one
@@ -96,8 +156,81 @@ export function OutcomeForm({
   // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
   // grants no e-mail permission, which is David's own distinction of 29 September 2026.
   const offersFollowUp = draft.outcome === 'interested' && contactId !== null;
+  // The last request for this pick came back and left nothing: a lost answer, not a refusal.
+  const previewFailed = previewKey !== null && askedKey === previewKey && preview === null && !previewing;
+  const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
+
+  // Review of S3, round 2 (P1-B): the call was recorded but its agreed dates had changed
+  // after the preview, so nothing was granted. This call's agreement stays open here: the
+  // fresh preview, and "Record the agreed dates" once the person has heard them.
+  const pending = state.pendingAgreement != null && state.pendingAgreement.firmId === expanded.firmId ? state.pendingAgreement : null;
+  const pendingPreview =
+    pending === null
+      ? null
+      : previewFor(state.followUpPreview, {
+          firmId: pending.firmId,
+          contactId: pending.contactId,
+          sequenceVersionId: pending.sequenceVersionId,
+        });
+  const recordingDates = pending !== null && actions.busy(todayForm.agreedDates(pending.callLogId));
+  const recovery =
+    pending === null ? null : (
+      <section data-testid="agreed-dates" className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+        <p className="text-xs font-medium">{`The dates of “${pending.name}” changed after your preview. Read them the new dates:`}</p>
+        {pendingPreview !== null && pendingPreview.refusal === null ? (
+          <ol data-testid="agreed-dates-preview" className="flex flex-col gap-1 text-xs">
+            {previewRows(pendingPreview).map(row => (
+              <li key={row.ordinal} data-testid="agreed-dates-step" className="flex justify-between gap-3 border-b border-border py-1">
+                <span>{`${String(row.ordinal)}. ${row.what}`}</span>
+                <span className="shrink-0 text-muted-foreground">{row.when}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span data-testid="agreed-dates-problem">
+              {pendingPreview?.refusal == null
+                ? 'Callie is reading the new dates.'
+                : `Callie cannot start that sequence here: ${enrolRefusalSentence(pendingPreview.refusal)}.`}
+            </span>
+            {previewing ? null : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="agreed-dates-reload"
+                disabled={!enabled}
+                onClick={() => {
+                  actions.previewFollowUp({
+                    firmId: pending.firmId,
+                    contactId: pending.contactId,
+                    sequenceVersionId: pending.sequenceVersionId,
+                  });
+                }}
+              >
+                Preview again
+              </Button>
+            )}
+          </div>
+        )}
+        <div>
+          <Button
+            type="button"
+            data-testid="agreed-dates-record"
+            disabled={!enabled || recordingDates || previewing || pendingPreview === null || pendingPreview.refusal !== null}
+            onClick={() => {
+              actions.recordAgreedDates({ firmId: pending.firmId, callLogId: pending.callLogId });
+            }}
+          >
+            Record the agreed dates
+          </Button>
+        </div>
+      </section>
+    );
 
   return (
+    <>
+    {recovery}
     <form
       data-testid="outcome-form"
       className="mt-3 flex flex-col gap-2 border-t border-border pt-3"
@@ -131,8 +264,7 @@ export function OutcomeForm({
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
           // Never without a person: the select is hidden in that case, and a draft kept
           // from a moment when it was not is not a reason to send one.
-          followUpPermission:
-            offersFollowUp && followUp !== '' ? { scope: 'single_email', templateVersionId: followUp } : null,
+          followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
         });
         clear(prefix);
       }}
@@ -181,29 +313,111 @@ export function OutcomeForm({
         </Label>
       </div>
 
-      <Label data-testid="outcome-follow-up-label" hidden={!offersFollowUp} className="flex-col items-start gap-1">
-        Did they ask for an e-mail?
+      <fieldset
+        data-testid="outcome-follow-up-label"
+        hidden={!offersFollowUp}
+        className="flex flex-col gap-2 border-0 p-0"
+      >
+        <legend className="mb-1 w-full text-xs font-medium text-muted-foreground">
+          What did they agree to hear from us?
+        </legend>
         <Select
-          data-testid="outcome-follow-up"
+          data-testid="outcome-follow-up-kind"
+          aria-label="What did they agree to hear from us?"
           disabled={!enabled || busy}
-          value={followUp}
+          value={pick.choice}
           onChange={event => {
-            setFollowUp(event.target.value);
+            setFollowUpKind(event.target.value);
           }}
         >
-          <option value="">No follow-up e-mail</option>
-          {templates.map(template => (
-            <option key={template.id} value={template.id}>
-              {`Yes — ${template.name}`}
+          {FOLLOW_UP_CHOICES.map(choice => (
+            <option key={choice} value={choice}>
+              {FOLLOW_UP_CHOICE_LABELS[choice]}
             </option>
           ))}
         </Select>
-        <span className="text-xs text-muted-foreground">
-          {templates.length === 0
-            ? 'No approved template to promise yet. Approve one in Sequences first.'
-            : 'One e-mail, the approved one you name, for fourteen days. A sequence is agreed on the firm page.'}
-        </span>
-      </Label>
+
+        <Label hidden={pick.choice !== 'single_email'} className="flex-col items-start gap-1">
+          Which e-mail
+          <Select
+            data-testid="outcome-follow-up"
+            disabled={!enabled || busy}
+            value={followUp}
+            onChange={event => {
+              setFollowUp(event.target.value);
+            }}
+          >
+            <option value="">Choose the e-mail…</option>
+            {templates.map(template => (
+              <option key={template.id} value={template.id}>
+                {template.name}
+              </option>
+            ))}
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            {templates.length === 0
+              ? 'No approved template to promise yet. Approve one in Sequences first.'
+              : 'One e-mail, the approved one you name, for fourteen days.'}
+          </span>
+        </Label>
+
+        <Label hidden={pick.choice !== 'agreed_sequence'} className="flex-col items-start gap-1">
+          Which sequence
+          <Select
+            data-testid="outcome-follow-up-sequence"
+            disabled={!enabled || busy}
+            value={followUpSequence}
+            onChange={event => {
+              setFollowUpSequence(event.target.value);
+            }}
+          >
+            <option value="">Choose the sequence…</option>
+            {sequences.map(sequence => (
+              <option key={sequence.sequenceVersionId} value={sequence.sequenceVersionId}>
+                {sequence.name}
+              </option>
+            ))}
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            {sequences.length === 0
+              ? 'No published sequence to agree to yet. Publish one in Sequences first.'
+              : 'Read them the messages and the dates below. Recording the call starts it.'}
+          </span>
+        </Label>
+
+        {pick.choice === 'agreed_sequence' && preview !== null && preview.refusal === null ? (
+          <ol data-testid="outcome-follow-up-preview" className="flex flex-col gap-1 text-xs">
+            {previewRows(preview).map(row => (
+              <li key={row.ordinal} data-testid="preview-step" className="flex justify-between gap-3 border-b border-border py-1">
+                <span data-testid="preview-step-what">{`${String(row.ordinal)}. ${row.what}`}</span>
+                <span data-testid="preview-step-when" className="shrink-0 text-muted-foreground">
+                  {row.when}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+
+        <p data-testid="outcome-follow-up-problem" className="text-xs text-muted-foreground empty:hidden">
+          {followUpStopper ?? ''}
+        </p>
+        {offersFollowUp && previewFailed ? (
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="outcome-follow-up-retry"
+              disabled={!enabled || busy}
+              onClick={() => {
+                setAskedKey(null);
+              }}
+            >
+              Preview again
+            </Button>
+          </div>
+        ) : null}
+      </fieldset>
 
       <fieldset data-testid="outcome-callback" hidden={!wantsCallback} className="flex flex-wrap items-end gap-2 border-0 p-0">
         <legend className="mb-1 w-full text-xs font-medium text-muted-foreground">
@@ -275,12 +489,13 @@ export function OutcomeForm({
         <Button
           type="submit"
           data-testid="outcome-submit"
-          disabled={!enabled || stopper !== null || busy}
+          disabled={!enabled || stopper !== null || followUpStopper !== null || busy}
           {...(busy ? { 'aria-busy': true } : {})}
         >
           Record
         </Button>
       </div>
     </form>
+    </>
   );
 }

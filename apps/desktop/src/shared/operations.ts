@@ -100,14 +100,32 @@ const outcomeInput = z.strictObject({
    * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
    * "none", which is the default the form offers, and the only value the server accepts
    * for any outcome other than `interested`. It names the approved template version that
-   * was promised, because that is what the permission is bound to (P0-2). An agreed
-   * *sequence* is granted from the firm page; "Call me Tuesday" is `callback` above and
-   * grants no e-mail permission at all.
+   * was promised, because that is what the permission is bound to (P0-2), or the agreed
+   * sequence version (send-path v2). "Call me Tuesday" is `callback` above and grants no
+   * e-mail permission at all.
    */
   followUpPermission: z
-    .strictObject({ scope: z.literal('single_email'), templateVersionId: uuid })
+    .discriminatedUnion('scope', [
+      z.strictObject({ scope: z.literal('single_email'), templateVersionId: uuid }),
+      // Send-path v2 (slice S3): an agreed published sequence, enrolled by the server in
+      // the same command. The card shows its preview before this can be sent.
+      // `previewBasis` is the preview the person heard (review of S3, P1-3).
+      z.strictObject({
+        scope: z.literal('agreed_sequence'),
+        sequenceVersionId: uuid,
+        previewBasis: z.strictObject({
+          anchorAt: instant,
+          timeZone: z.string().min(1).max(64),
+          calendarVersionId: z.string().min(1).max(64),
+          steps: z.array(z.strictObject({ ordinal: z.number().int().min(1).max(50), sendAt: instant })).min(1).max(50),
+        }),
+      }),
+    ])
     .nullable(),
 });
+
+/** Send-path v2 (slice S3): which agreed sequence to preview, for whom, at the open firm. */
+const followUpPreviewInput = z.strictObject({ firmId: uuid, contactId: uuid, sequenceVersionId: uuid });
 
 /**
  * The research ceilings an admin may change. Every bound is also a CHECK in migration
@@ -301,10 +319,20 @@ export const OPERATIONS = {
       { method: 'POST', path: '/dial/check' },
       // The approved templates the outcome form may promise on a call (migration 0025).
       { method: 'POST', path: '/templates' },
+      // The published sequences a call may agree to (send-path v2, slice S3).
+      { method: 'GET', path: '/sequences' },
+      { method: 'POST', path: '/sequences/versions' },
     ],
     input: z.strictObject({ firmId: uuid }),
     output: todayStateSchema,
-    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, the dial advice per usable number, and the approved templates a call may promise',
+    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, the dial advice per usable number, the approved templates a call may promise and the published sequences it may agree to',
+  },
+  'today.previewFollowUp': {
+    kind: 'read',
+    calls: [{ method: 'POST', path: '/calls/follow-up-preview' }],
+    input: followUpPreviewInput,
+    output: todayStateSchema,
+    transform: 'the server’s preview of an agreed sequence for the open card: each step’s template, subject and expected instant',
   },
   'today.callsPlaced': {
     kind: 'read',
@@ -329,10 +357,21 @@ export const OPERATIONS = {
   },
   'today.recordOutcome': {
     kind: 'command',
-    calls: [{ method: 'POST', path: '/calls/log' }],
+    calls: [
+      { method: 'POST', path: '/calls/log' },
+      // After a stale preview, the fresh one for "Record the agreed dates" (P1-B).
+      { method: 'POST', path: '/calls/follow-up-preview' },
+    ],
     input: outcomeInput,
     output: todayStateSchema,
     transform: 'the call just handed off names the contact and number; the callback instant is the domain’s; no occurredAt',
+  },
+  'today.recordAgreedDates': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/follow-up' }],
+    input: z.strictObject({ firmId: uuid, callLogId: uuid }),
+    output: todayStateSchema,
+    transform: 'the pending agreement of a recorded call, sent on the fresh preview the person was read (its basis), after a stale preview',
   },
   'today.scheduleCallback': {
     kind: 'command',
