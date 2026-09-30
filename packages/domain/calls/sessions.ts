@@ -15,6 +15,7 @@ import { markCalling, settleAttempt, type SettleOutcome } from '../research/rese
 import { readTelephonyBudget } from '../settings/integrations.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
+import { sendGateLockName } from '../policy/sendGate.ts';
 
 /**
  * Call sessions: one Twilio call attempt, from authorization to its recording
@@ -30,11 +31,15 @@ import { databaseNow } from '../policy/clock.ts';
  *      command's one transaction. The answer is the session id and its expiry; **the
  *      number stays on the ticket**.
  *   2. `consumeCallSession` — the TwiML voice route, after the Twilio signature. Exactly
- *      once, inside the minute, for the identity the access token was minted for. The
- *      ticket is consumed through `consumeDialTicket`, which takes the whole decision
- *      again — so a suppression that lands between 1 and 2 refuses here. The
- *      reservation is marked `calling` in the same transaction: from this commit on, a
- *      call may have happened.
+ *      once, inside the minute, for the identity the access token was minted for. It
+ *      takes the send gate SHARED first, as a dispatch claim does, and holds it to the
+ *      commit: a suppression writer takes the gate EXCLUSIVE, so it either committed
+ *      before the re-check (which then refuses) or waits until this authorization has
+ *      committed — there is no window between the re-check and the `<Dial>`. Then the
+ *      firm row, which serialises the attempt limit across sessions created earlier.
+ *      The ticket is consumed through `consumeDialTicket`, which takes the whole
+ *      decision again. The reservation is marked `calling` in the same transaction:
+ *      from this commit on, a call may have happened.
  *   3. `recordCallStatus` / `recordCallRecording` — the callbacks, idempotent and
  *      retry-tolerant, by Call SID. The terminal status settles the reservation: at the
  *      billed price when Twilio reports one, otherwise at an estimate from the duration.
@@ -89,7 +94,9 @@ export async function createCallSession(
   if (actor.kind !== 'user') return refuse('identity_not_owned');
 
   // The attempt limit: calls actually placed (consumed sessions) at this firm in the
-  // last 24 hours. An authorized session nobody placed is not an attempt.
+  // last 24 hours. An authorized session nobody placed is not an attempt. This is the
+  // early refusal only: sessions created before any was placed are held to the same
+  // limit, atomically, at consumption (`consumeCallSession`).
   const { rows: attempts } = await context.db.query<{ count: string }>(
     `SELECT count(*) AS count FROM call_sessions
       WHERE workspace_id = $1 AND firm_id = $2 AND consumed_at > now() - INTERVAL '24 hours'`,
@@ -191,6 +198,7 @@ export async function createCallSession(
 // ---------------------------------------------------------------------------
 
 export type ConsumeRefusal =
+  | 'call_attempt_limit'
   | 'session_unknown'
   | 'already_consumed'
   | 'session_expired'
@@ -261,6 +269,28 @@ export async function consumeCallSession(
   const refused = (reason: ConsumeRefusal): { readonly ok: false; readonly reason: ConsumeRefusal } => ({ ok: false, reason });
   if (!/^CA[0-9a-f]{32}$/u.test(input.callSid)) return refused('session_unknown');
 
+  // 1. The send gate, SHARED, before any row lock, held until the caller commits
+  //    (`policy/sendGate.ts`). A suppression, a hold or a firm handover is written under
+  //    the gate EXCLUSIVE, so it is either visible to the re-check below or waits for
+  //    this authorization's commit.
+  //    `lockSendGateForDispatch`'s statement; that function takes a scoped context, and
+  //    the scope is built from the session row, which must not be read before the gate.
+  await db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [sendGateLockName(input.workspaceId)]);
+
+  // 2. The firm row, FOR NO KEY UPDATE: two consumptions at one firm serialise here, so
+  //    the attempt count read after it includes every placed call that committed.
+  const { rows: located } = await db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
+    [input.workspaceId, input.sessionId],
+  );
+  const locatedFirm = located[0]?.firm_id;
+  if (locatedFirm === undefined) return refused('session_unknown');
+  await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [
+    input.workspaceId,
+    locatedFirm,
+  ]);
+
+  // 3. The session row.
   const { rows } = await db.query<SessionRow>(
     `SELECT id, workspace_id, ticket_id, firm_id, contact_id, actor_user_id, reservation_id, consumed_at,
             (expires_at <= now()) AS expired
@@ -269,9 +299,20 @@ export async function consumeCallSession(
   );
   const session = rows[0];
   if (session === undefined) return refused('session_unknown');
+  // A merge moved the session between the two reads: the lock is on the wrong firm.
+  if (session.firm_id !== locatedFirm) return refused('session_unknown');
   if (session.consumed_at !== null) return refused('already_consumed');
   if (session.expired) return refused('session_expired');
   if (input.identity !== `client:${session.actor_user_id}`) return refused('identity_mismatch');
+
+  // 4. The attempt limit, under the firm lock: sessions created before any was placed
+  //    cannot all be placed.
+  const { rows: attempts } = await db.query<{ count: string }>(
+    `SELECT count(*) AS count FROM call_sessions
+      WHERE workspace_id = $1 AND firm_id = $2 AND consumed_at > now() - INTERVAL '24 hours'`,
+    [input.workspaceId, session.firm_id],
+  );
+  if (Number(attempts[0]?.count ?? 0) >= CALL_SESSION_DAILY_ATTEMPT_LIMIT) return refused('call_attempt_limit');
 
   const { rows: members } = await db.query<{ role: 'admin' | 'salesperson' }>(
     `SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
@@ -554,8 +595,9 @@ export async function recordCallRecording(
  *     minutes — `estimated` at the full reservation, because a call may have been billed
  *     and zero is the one answer that is certainly wrong.
  *
- * Not yet scheduled: a worker job calling this is a later slice's wiring (see the
- * report). It is safe to run at any time and any number of times.
+ * Scheduled by the worker's `telephony-sweep` source (`telephony.sweep`, every quarter
+ * hour for a workspace that owes one: `workspacesOwingCallSessionSweep`). It is safe to
+ * run at any time and any number of times.
  */
 export async function sweepCallSessionReservations(
   context: RepositoryContext,
@@ -586,4 +628,25 @@ export async function sweepCallSessionReservations(
     else released += 1;
   }
   return { released, estimated };
+}
+
+/**
+ * The workspaces with at least one call-session reservation the sweep would finalise
+ * now: the scheduler's question, asked with no scope because the pass has none. The
+ * same predicate as `sweepCallSessionReservations`, so a workspace is named only when
+ * the job will find work, whatever its calling switch says — a switch turned off does
+ * not strand a reservation.
+ */
+export async function workspacesOwingCallSessionSweep(db: Queryable): Promise<readonly string[]> {
+  const { rows } = await db.query<{ workspace_id: string }>(
+    `SELECT DISTINCT s.workspace_id
+       FROM call_sessions s
+       JOIN provider_reservations r ON r.workspace_id = s.workspace_id AND r.id = s.reservation_id
+      WHERE r.state IN ('reserved', 'calling')
+        AND ((s.consumed_at IS NULL AND s.expires_at <= now())
+             OR (s.consumed_at IS NOT NULL
+                 AND s.consumed_at + make_interval(mins => COALESCE(r.max_units, 0) + 15) <= now()))
+      ORDER BY s.workspace_id`,
+  );
+  return rows.map(row => row.workspace_id);
 }
