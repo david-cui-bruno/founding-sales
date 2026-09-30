@@ -3,9 +3,10 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { withTransaction } from '../../db/queryable.ts';
 import { receiveCalcomEvent } from '../../meetings/calcom.ts';
 import {
+  bookingChains,
   fetchCalcomBookings,
   parseCalcomBooking,
-  planBooking,
+  planChain,
   reconcileCalcomBookings,
   type CalcomBooking,
   type CalcomBookingsClient,
@@ -13,6 +14,9 @@ import {
   type ReconcileCounts,
 } from '../../meetings/reconcile.ts';
 import { readCalcomSecret } from '../../meetings/calcomSecret.ts';
+import { commitDeletion, previewDeletion } from '../../retention/deletion.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
@@ -88,6 +92,16 @@ describe('Cal.com reconciliation', () => {
     return rows[0];
   }
 
+  async function meetingsNamed(uids: readonly string[]): Promise<{ booking_uid: string; current_booking_uid: string; state: string }[]> {
+    const { rows } = await database.session.query<{ booking_uid: string; current_booking_uid: string; state: string }>(
+      `SELECT booking_uid, current_booking_uid, state FROM meetings
+        WHERE workspace_id = $1 AND (booking_uid = ANY($2::text[]) OR current_booking_uid = ANY($2::text[]))
+        ORDER BY booking_uid`,
+      [workspaceId(), [...uids]],
+    );
+    return rows;
+  }
+
   const eventCount = async (): Promise<number> => {
     const { rows } = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM calcom_events WHERE workspace_id = $1', [workspaceId()]);
     return Number(rows[0]?.count);
@@ -137,7 +151,7 @@ describe('Cal.com reconciliation', () => {
         updatedAt: '2026-09-30T14:00:00.000Z',
       }),
     ]);
-    expect(counts).toMatchObject({ synthesized: 1, applied: 1, unchanged: 1 });
+    expect(counts).toMatchObject({ chains: 1, synthesized: 1, applied: 1 });
     const repaired = await meeting(a);
     expect(repaired).toMatchObject({ state: 'rescheduled', current_booking_uid: b });
     expect(repaired?.starts_at.toISOString()).toBe('2026-10-09T13:00:00.000Z');
@@ -199,8 +213,14 @@ describe('Cal.com reconciliation', () => {
     expect((await meeting(held))?.state).toBe('held');
     expect((await meeting(absent))?.state).toBe('no_show');
     // The mark is taken back in Cal.com.
-    await reconcile([parsed(absent, { ...past, updatedAt: '2026-09-29T17:00:00.000Z' })]);
+    const reversed = [parsed(absent, { ...past, updatedAt: '2026-09-29T17:00:00.000Z' })];
+    await reconcile(reversed);
     expect((await meeting(absent))?.state).toBe('booked');
+    // The next run converges: the meeting is past its end, so it was held (fold 1,
+    // finding 5). Its end is dated just after the reversal, not behind it.
+    expect(await reconcile(reversed)).toMatchObject({ synthesized: 1, applied: 1 });
+    expect((await meeting(absent))?.state).toBe('held');
+    expect(await reconcile(reversed)).toMatchObject({ synthesized: 0 });
   });
 
   it('never deletes a meeting, and leaves alone a booking the API no longer lists', async () => {
@@ -213,41 +233,169 @@ describe('Cal.com reconciliation', () => {
     expect((await meeting(id))?.state).toBe('booked');
   });
 
-  it('records nothing for a pending, rejected or unknown cancelled booking', async () => {
+  it('records nothing for a pending or rejected booking', async () => {
     const pending = uid();
     const rejected = uid();
-    const cancelled = uid();
-    const counts = await reconcile([
-      parsed(pending, { status: 'pending' }),
-      parsed(rejected, { status: 'rejected' }),
-      parsed(cancelled, { status: 'cancelled' }),
+    const counts = await reconcile([parsed(pending, { status: 'pending' }), parsed(rejected, { status: 'rejected' })]);
+    expect(counts).toMatchObject({ synthesized: 0, skipped: 2 });
+    for (const id of [pending, rejected]) expect(await meeting(id)).toBeUndefined();
+  });
+
+  // ---- review fold 1, finding 1: reschedule identities through cancellations --------
+  it('folds a lost A→B and a lost cancellation of B into the one meeting', async () => {
+    const a = uid();
+    const b = uid();
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, {
+        status: 'cancelled',
+        rescheduledFromUid: a,
+        start: '2026-10-09T13:00:00.000Z',
+        end: '2026-10-09T13:30:00.000Z',
+        createdAt: '2026-09-30T13:00:00.000Z',
+        updatedAt: '2026-09-30T14:00:00.000Z',
+      }),
     ]);
-    expect(counts).toMatchObject({ synthesized: 0, skipped: 2, unchanged: 1 });
-    for (const id of [pending, rejected, cancelled]) expect(await meeting(id)).toBeUndefined();
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+  });
+
+  it('follows A→B→C through a cancelled intermediate B to C s time', async () => {
+    const [a, b, c] = [uid(), uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, rescheduledToUid: c, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+      parsed(c, {
+        rescheduledFromUid: b,
+        start: '2026-10-12T18:00:00.000Z',
+        end: '2026-10-12T18:30:00.000Z',
+        createdAt: '2026-09-30T14:00:00.000Z',
+        updatedAt: '2026-09-30T14:00:00.000Z',
+      }),
+    ]);
+    expect(await meetingsNamed([a, b, c])).toEqual([{ booking_uid: a, current_booking_uid: c, state: 'rescheduled' }]);
+    expect((await meeting(c))?.starts_at.toISOString()).toBe('2026-10-12T18:00:00.000Z');
+  });
+
+  it('records a cancellation it never saw, so an older create delivered later is stale', async () => {
+    const a = uid();
+    const b = uid();
+    const lone = uid();
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+      parsed(lone, { status: 'cancelled', updatedAt: '2026-09-30T13:00:00.000Z' }),
+    ]);
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    // The original's create, delivered late with new bytes: history, not a second meeting.
+    await webhook('BOOKING_CREATED', '2026-09-30T11:00:00.000Z', webhookBooking(a));
+    await webhook('BOOKING_CREATED', '2026-09-30T11:00:00.000Z', webhookBooking(lone));
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    expect(await meetingsNamed([lone])).toEqual([{ booking_uid: lone, current_booking_uid: lone, state: 'cancelled' }]);
+  });
+
+  // ---- review fold 1, finding 2: derived events respect freshness and identity -------
+  it('does not let an old snapshot s end mark a newer reschedule held', async () => {
+    const a = uid();
+    const b = uid();
+    // A for today 11:00–11:30, booked at 09:00; the 11:00 webhook moves it to B tomorrow.
+    await webhook('BOOKING_CREATED', '2026-10-01T09:00:00.000Z', webhookBooking(a, { startTime: '2026-10-01T11:00:00.000Z', endTime: '2026-10-01T11:30:00.000Z' }));
+    await webhook(
+      'BOOKING_RESCHEDULED',
+      '2026-10-01T11:00:00.000Z',
+      webhookBooking(b, { rescheduleUid: a, startTime: '2026-10-02T11:00:00.000Z', endTime: '2026-10-02T11:30:00.000Z' }),
+    );
+    // Noon: the API's page still has the 09:00 view of A.
+    const counts = await reconcile([
+      parsed(a, { start: '2026-10-01T11:00:00.000Z', end: '2026-10-01T11:30:00.000Z', createdAt: '2026-10-01T09:00:00.000Z', updatedAt: '2026-10-01T09:00:00.000Z' }),
+    ]);
+    expect(counts).toMatchObject({ synthesized: 0 });
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'rescheduled' }]);
+    const { rows } = await database.session.query<{ count: string }>(
+      "SELECT count(*) AS count FROM funnel_facts WHERE workspace_id = $1 AND kind = 'meeting.held' AND dedupe_key = $2",
+      [workspaceId(), a],
+    );
+    expect(Number(rows[0]?.count)).toBe(0);
+  });
+
+  // ---- review fold 1, finding 3: a deleted person is not read back -------------------
+  it('does not bring back a meeting or an address deletion removed', async () => {
+    const id = uid();
+    const attendee = 'deleted.person@tombstone-law.example';
+    const { rows: firmRows } = await database.session.query<{ id: string }>(
+      `INSERT INTO firms (workspace_id, name, website, assigned_user_id) VALUES ($1, 'Tombstone Law', 'https://tombstone-law.example', $2) RETURNING id`,
+      [workspaceId(), seeded.alpha.salesperson.userId],
+    );
+    const firmId = firmRows[0]?.id ?? '';
+    // Matched by domain: the attendee is on no route, so only the meeting holds the address.
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(id, { attendees: [{ email: attendee }] }));
+    expect((await meeting(id))?.state).toBe('booked');
+    const admin = repositoryContext(
+      workspaceScope(workspaceId(), { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    const preview = await withTransaction(database.session, async () => await previewDeletion(admin, { targetKind: 'firm', firmId }));
+    const committed = await withTransaction(database.session, async () =>
+      await commitDeletion(admin, {
+        requestId: preview.value?.requestId ?? '',
+        previewHash: preview.value?.previewHash ?? '',
+        commandId: `delete-${id}`,
+        journal: recordingSuppressionJournal(),
+      }),
+    );
+    expect(committed.ok, committed.ok ? '' : committed.reason).toBe(true);
+    expect(await meeting(id)).toBeUndefined();
+
+    expect(await reconcile([parsed(id, { attendees: [{ email: attendee, absent: false }] })])).toMatchObject({ tombstoned: 1, synthesized: 0 });
+    expect(await meeting(id)).toBeUndefined();
+    const { rows } = await database.session.query<{ count: string }>(
+      `SELECT (SELECT count(*) FROM meetings WHERE workspace_id = $1 AND attendee_email = $2)
+            + (SELECT count(*) FROM email_addresses WHERE workspace_id = $1 AND address = $2) AS count`,
+      [workspaceId(), attendee],
+    );
+    expect(Number(rows[0]?.count)).toBe(0);
   });
 });
 
-describe('planBooking', () => {
-  const stored = (state: string, extra: Partial<{ current_booking_uid: string; starts_at: Date; ends_at: Date }> = {}) => ({
+describe('planChain', () => {
+  const stored = (state: string, extra: Partial<{ current_booking_uid: string; starts_at: Date; ends_at: Date; last_event_at: Date }> = {}) => ({
+    id: 'm',
     state: state as 'booked',
     current_booking_uid: 'u1x',
     starts_at: new Date('2026-10-06T15:00:00.000Z'),
     ends_at: new Date('2026-10-06T15:30:00.000Z'),
+    last_event_at: new Date('2026-09-30T12:00:00.000Z'),
     ...extra,
   });
+  const only = (booking: CalcomBooking) => {
+    const chain = bookingChains([booking])[0];
+    if (chain === undefined) throw new Error('no chain');
+    return chain;
+  };
 
-  it('dates a state change by the booking s own updatedAt, and an end by its end', () => {
-    const booking = parsed('u1x', { status: 'cancelled', updatedAt: '2026-09-30T13:00:00.000Z' });
-    expect(planBooking(booking, stored('booked'), NOW)).toEqual([{ trigger: 'BOOKING_CANCELLED', instant: '2026-09-30T13:00:00.000Z', noShow: null }]);
-    const ended = parsed('u1x', { start: '2026-09-29T15:00:00.000Z', end: '2026-09-29T15:30:00.000Z' });
-    expect(planBooking(ended, stored('booked', { starts_at: new Date('2026-09-29T15:00:00.000Z'), ends_at: new Date('2026-09-29T15:30:00.000Z') }), NOW)).toEqual([
-      { trigger: 'MEETING_ENDED', instant: '2026-09-29T15:30:00.000Z', noShow: null },
+  it('dates a cancellation by the booking s own updatedAt, and an end by its end', () => {
+    const cancelled = parsed('u1x', { status: 'cancelled', updatedAt: '2026-09-30T13:00:00.000Z' });
+    expect(planChain(only(cancelled), stored('booked'), NOW).map(event => [event.trigger, event.instant])).toEqual([
+      ['BOOKING_CANCELLED', '2026-09-30T13:00:00.000Z'],
+    ]);
+    const past = { starts_at: new Date('2026-09-29T15:00:00.000Z'), ends_at: new Date('2026-09-29T15:30:00.000Z'), last_event_at: new Date('2026-09-28T12:00:00.000Z') };
+    const ended = parsed('u1x', { start: '2026-09-29T15:00:00.000Z', end: '2026-09-29T15:30:00.000Z', updatedAt: '2026-09-28T12:00:00.000Z' });
+    expect(planChain(only(ended), stored('booked', past), NOW).map(event => [event.trigger, event.instant])).toEqual([
+      ['MEETING_ENDED', '2026-09-29T15:30:00.000Z'],
     ]);
   });
 
-  it('plans nothing for a cancelled meeting (terminal) or an unchanged one', () => {
-    expect(planBooking(parsed('u1x'), stored('cancelled'), NOW)).toEqual([]);
-    expect(planBooking(parsed('u1x'), stored('booked'), NOW)).toEqual([]);
+  it('plans nothing for a cancelled meeting, an unchanged one, or one that moved past the snapshot', () => {
+    expect(planChain(only(parsed('u1x')), stored('cancelled'), NOW)).toEqual([]);
+    expect(planChain(only(parsed('u1x')), stored('booked'), NOW)).toEqual([]);
+    expect(planChain(only(parsed('u1x')), stored('rescheduled', { current_booking_uid: 'u2x' }), NOW)).toEqual([]);
+  });
+
+  it('plans no derived event from a snapshot older than the meeting s last event', () => {
+    const past = { starts_at: new Date('2026-09-29T15:00:00.000Z'), ends_at: new Date('2026-09-29T15:30:00.000Z'), last_event_at: new Date('2026-09-30T00:00:00.000Z') };
+    const old = parsed('u1x', { start: '2026-09-29T15:00:00.000Z', end: '2026-09-29T15:30:00.000Z', updatedAt: '2026-09-28T12:00:00.000Z' });
+    expect(planChain(only(old), stored('booked', past), NOW)).toEqual([]);
   });
 });
 
@@ -269,7 +417,8 @@ describe('fetchCalcomBookings', () => {
     const fetched = await fetchCalcomBookings(client, { now: NOW });
     expect(fetched).toMatchObject({ pages: 2, malformed: 1, truncated: false });
     expect(fetched.bookings.map(booking => booking.uid)).toEqual(['p1x', 'p2x']);
-    expect(client.queries[0]).toEqual({ afterStart: '2026-09-24T12:00:00.000Z', beforeEnd: '2026-11-30T12:00:00.000Z', limit: 100, cursor: null });
+    expect(client.queries[0]).toMatchObject({ afterStart: '2026-09-24T12:00:00.000Z', beforeEnd: '2026-11-30T12:00:00.000Z', limit: 100, cursor: null });
+    expect(client.queries[0]?.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(client.queries[1]?.cursor).toBe('1');
   });
 
@@ -282,6 +431,33 @@ describe('fetchCalcomBookings', () => {
       return tick;
     };
     expect(await fetchCalcomBookings(fakeClient(many), { now: NOW, deadlineMs: 30_000, clock })).toMatchObject({ pages: 1, truncated: true });
+  });
+
+  it('hands each request what is left of the budget, and a request the deadline cut short truncates the run (fold 1, finding 6)', async () => {
+    const budgets: number[] = [];
+    let clockMs = 0;
+    // A slow Cal.com on a fake clock: every page takes 40 ms, and a request gives up
+    // when the budget it was handed runs out.
+    const slow: CalcomBookingsClient = {
+      listBookings: async query => {
+        budgets.push(query.timeoutMs);
+        const index = query.cursor === null ? 0 : Number(query.cursor);
+        if (query.timeoutMs < 40) {
+          clockMs += query.timeoutMs;
+          throw new Error('aborted');
+        }
+        clockMs += 40;
+        return await Promise.resolve({ bookings: [apiBooking(`slow${String(index)}x`)], nextCursor: String(index + 1) });
+      },
+    };
+    const fetched = await fetchCalcomBookings(slow, { now: NOW, deadlineMs: 100, clock: () => clockMs });
+    expect(fetched).toMatchObject({ pages: 2, truncated: true });
+    expect(fetched.bookings.map(booking => booking.uid)).toEqual(['slow0x', 'slow1x']);
+    // The third request was handed the twenty milliseconds that were left, not a full timeout.
+    expect(budgets).toEqual([100, 60, 20]);
+    // A failure that is not the deadline still fails the run.
+    const broken: CalcomBookingsClient = { listBookings: async () => await Promise.reject(new Error('calcom_http_500')) };
+    await expect(fetchCalcomBookings(broken, { now: NOW })).rejects.toThrow('calcom_http_500');
   });
 });
 

@@ -207,7 +207,7 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
   assert {
     condition = (
       module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"])
-      && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "google-gmail-oauth-client"])
+      && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "calcom", "google-gmail-oauth-client"])
       && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
     )
     error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, and the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY."

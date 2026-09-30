@@ -56,7 +56,8 @@ export function calcomBookingsClient(options: { readonly apiKey: string; readonl
             'cal-api-version': CALCOM_BOOKINGS_API_VERSION,
             accept: 'application/json',
           },
-          signal: AbortSignal.timeout(CALCOM_REQUEST_TIMEOUT_MS),
+          // The request's own bound, or what is left of the run's budget if that is less.
+          signal: AbortSignal.timeout(Math.max(1, Math.min(CALCOM_REQUEST_TIMEOUT_MS, Math.floor(query.timeoutMs)))),
         });
       } catch {
         throw new Error('calcom_unreachable');

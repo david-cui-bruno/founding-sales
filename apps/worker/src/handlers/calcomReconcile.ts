@@ -55,6 +55,22 @@ export function calcomReconcileJobHandler(options: CalcomReconcileOptions): JobH
     maxAttempts: CALCOM_RECONCILE_MAX_ATTEMPTS,
     leaseSeconds: 90,
     handle: async input => {
+      const workspaceId = input.scope.workspaceId;
+      // The job was queued for the workspace that had the switch then. Cal.com's bookings
+      // are the deployment's, not a workspace's, so they may only land in the one
+      // workspace that has it on *now* — asked when the job runs and again just before
+      // the snapshot is applied (review fold 1, finding 4).
+      const stillRouted = async (): Promise<boolean> => {
+        const enabled = await workspacesWithIntegration(input.session, { key: 'calendar_integration', value: 'calcom' });
+        return enabled.length === 1 && enabled[0] === workspaceId;
+      };
+      const skipped = (stage: 'before_fetch' | 'before_apply'): void => {
+        options.log?.('calcom_reconcile_skipped', { workspace_id: workspaceId, reason: 'routing_changed', stage });
+      };
+      if (!(await stillRouted())) {
+        skipped('before_fetch');
+        return;
+      }
       const now = options.now?.() ?? new Date().toISOString();
       const fetched = await fetchCalcomBookings(options.client, {
         now,
@@ -62,14 +78,18 @@ export function calcomReconcileJobHandler(options: CalcomReconcileOptions): JobH
         ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       });
+      if (!(await stillRouted())) {
+        skipped('before_apply');
+        return;
+      }
       const counts: ReconcileCounts = await reconcileCalcomBookings(input.session, {
-        workspaceId: input.scope.workspaceId,
+        workspaceId,
         bookings: fetched.bookings,
         now,
         truncated: fetched.truncated,
       });
       options.log?.('calcom_reconcile', {
-        workspace_id: input.scope.workspaceId,
+        workspace_id: workspaceId,
         pages: fetched.pages,
         malformed: fetched.malformed,
         truncated: fetched.truncated,

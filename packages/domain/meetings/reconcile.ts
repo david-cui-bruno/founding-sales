@@ -4,6 +4,7 @@ import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
 import { receiveSynthesizedCalcomEvent, type ParsedEvent } from './calcom.ts';
 
 /**
@@ -39,40 +40,22 @@ import { receiveSynthesizedCalcomEvent, type ParsedEvent } from './calcom.ts';
  * ordering, the same matching, the same `applyBooked`. Nothing here writes a meeting
  * directly, and nothing here deletes one.
  *
- *   * its delivery id is sha256 of `reconcile:{uid}:{trigger}:{status}:{instant}` — the
- *     same booking in the same state is the same delivery, so a replayed run is a
- *     duplicate at `calcom_events_once` and applies nothing;
- *   * its `createdAt` is the booking's own `updatedAt` (its `createdAt` when Cal.com has
- *     no update), so `applyEvent`'s ordering keeps a webhook newer than the API's answer
- *     authoritative. Two events have an instant of their own: an end is dated at the
- *     booking's `end`, as `parseCalcomEvent` dates Cal.com's own `MEETING_ENDED`, and a
- *     no-show mark at the later of `updatedAt` and `end` (it cannot precede the end).
+ *   * its delivery id is `reconcileEventId`'s — the same booking in the same state is
+ *     the same delivery, so a replayed run is a duplicate at `calcom_events_once`;
+ *   * its `createdAt` is the booking's own `updatedAt`, so `applyEvent`'s ordering keeps
+ *     a webhook newer than the API's answer authoritative.
  *
- * The mapping, booking → what the meeting should be:
- *
- *   * `accepted` with `rescheduledFromUid` → `BOOKING_RESCHEDULED` (uid, rescheduleUid);
- *     `accepted` without → `BOOKING_CREATED`. Either is synthesized when there is no
- *     meeting, when the meeting's current uid is not this booking's, or when its times
- *     differ.
- *   * `cancelled` with `rescheduledToUid` → nothing: that is the old half of a
- *     reschedule, and the new booking carries it.
- *   * `cancelled` otherwise → `BOOKING_CANCELLED` for a meeting that is not cancelled. A
- *     cancelled booking Callie never saw is not recorded: there is nothing to undo and an
- *     unmatched one would only open a review item about a demo that is not happening.
- *   * `pending`, `rejected`, `awaiting_host` → nothing. The webhook path never creates a
- *     meeting for them either (`BOOKING_REQUESTED` and `BOOKING_REJECTED` are `ignored`).
- *   * an attendee marked `absent` → `BOOKING_NO_SHOW_UPDATED` (mark); none marked, on a
- *     meeting that is `no_show` → the unmark;
- *   * an accepted booking whose `end` has passed, on a meeting still booked or
- *     rescheduled → `MEETING_ENDED`.
- *
- * A cancelled meeting is terminal (`applyEvent`), so it is never compared.
+ * The bookings are joined into reschedule chains first, whatever their status
+ * (`bookingChains`), and each chain is planned against its one meeting (`planChain`,
+ * which says what each booking becomes). A chain with no meeting whose attendee's data
+ * was deleted is not recorded (`attendeeTombstoned`). `docs/greenfield/meetings.md`
+ * has the whole mapping.
  *
  * ## Bounded
  *
- * At most `maxPages` pages and `deadlineMs` of fetching; a run that hit either says so
- * (`truncated`) and applies what it read — every event is independent and the next run
- * reads again. The counts are returned for the handler's log line and recorded as one
+ * At most `maxPages` pages and `deadlineMs` of fetching, each request handed only what
+ * is left of the budget. A run that hit either says so (`truncated`) and applies what it
+ * read: every event is independent and the next run reads again. The counts are returned for the handler's log line and recorded as one
  * audit event when anything was synthesized.
  */
 
@@ -90,6 +73,8 @@ export interface CalcomBookingsQuery {
   readonly beforeEnd: string;
   readonly cursor: string | null;
   readonly limit: number;
+  /** What is left of the run's fetching budget: the request must give up by then. */
+  readonly timeoutMs: number;
 }
 
 export interface CalcomBookingsPage {
@@ -197,11 +182,25 @@ export async function fetchCalcomBookings(
   let cursor: string | null = null;
   let truncated = false;
   for (;;) {
-    if (pages >= maxPages || clock() - startedAt >= deadlineMs) {
+    const elapsed = clock() - startedAt;
+    if (pages >= maxPages || elapsed >= deadlineMs) {
       truncated = true;
       break;
     }
-    const page: CalcomBookingsPage = await client.listBookings({ ...query, cursor });
+    let page: CalcomBookingsPage;
+    try {
+      // The request is given what is left of the run's budget, not a fresh timeout of
+      // its own: a page that starts a moment before the deadline ends at it.
+      page = await client.listBookings({ ...query, cursor, timeoutMs: deadlineMs - elapsed });
+    } catch (error) {
+      // Cut short by the deadline: what was read is applied and the run says so. Any
+      // other failure is the job's to retry.
+      if (clock() - startedAt >= deadlineMs) {
+        truncated = true;
+        break;
+      }
+      throw error;
+    }
     pages += 1;
     for (const entry of page.bookings) {
       const booking = parseCalcomBooking(entry);
@@ -219,10 +218,14 @@ export async function fetchCalcomBookings(
   return { bookings, pages, malformed, truncated };
 }
 
+
 export interface ReconcileCounts {
   readonly bookings: number;
+  readonly chains: number;
   readonly unchanged: number;
   readonly skipped: number;
+  /** Chains not recorded because their attendee's data was deleted (a deletion tombstone). */
+  readonly tombstoned: number;
   readonly synthesized: number;
   readonly applied: number;
   readonly stale: number;
@@ -230,18 +233,20 @@ export interface ReconcileCounts {
   readonly unmatched: number;
 }
 
-interface StoredMeeting {
+/** What `planChain` reads of the meeting a chain resolves to. */
+export interface StoredMeeting {
   readonly id: string;
   readonly state: MeetingState;
   readonly current_booking_uid: string;
   readonly starts_at: Date;
   readonly ends_at: Date;
+  readonly last_event_at: Date;
   readonly [column: string]: unknown;
 }
 
 async function meetingOf(context: RepositoryContext, uid: string): Promise<StoredMeeting | null> {
   const { rows } = await context.db.query<StoredMeeting>(
-    `SELECT id, state, current_booking_uid, starts_at, ends_at FROM meetings
+    `SELECT id, state, current_booking_uid, starts_at, ends_at, last_event_at FROM meetings
       WHERE workspace_id = $1 AND (booking_uid = $2 OR current_booking_uid = $2)
       ORDER BY (current_booking_uid = $2) DESC LIMIT 1`,
     [context.scope.workspaceId, uid],
@@ -251,70 +256,212 @@ async function meetingOf(context: RepositoryContext, uid: string): Promise<Store
 
 type Trigger = 'BOOKING_CREATED' | 'BOOKING_RESCHEDULED' | 'BOOKING_CANCELLED' | 'MEETING_ENDED' | 'BOOKING_NO_SHOW_UPDATED';
 
-interface PlannedEvent {
+export interface PlannedEvent {
   readonly trigger: Trigger;
+  /** The booking the event is about (`uid`); for a reschedule, the new one. */
+  readonly booking: CalcomBooking;
+  /** For a reschedule: the uid it replaced. */
+  readonly rescheduleUid: string | null;
   readonly instant: string;
   readonly noShow: boolean | null;
 }
 
-const later = (left: string, right: string): string => (Date.parse(left) >= Date.parse(right) ? left : right);
+/**
+ * A reschedule chain: the uids from the oldest this read knows (possibly one Cal.com
+ * only names, as a `rescheduledFromUid`) to the newest, and the listed bookings by uid.
+ */
+export interface BookingChain {
+  readonly uids: readonly string[];
+  readonly bookings: ReadonlyMap<string, CalcomBooking>;
+}
 
-/** What the meeting should become, as the events `applyEvent` needs to get there. */
-export function planBooking(
-  booking: CalcomBooking,
-  meeting: Pick<StoredMeeting, 'state' | 'current_booking_uid' | 'starts_at' | 'ends_at'> | null,
-  now: string,
-): readonly PlannedEvent[] {
-  const instant = booking.updatedAt ?? booking.createdAt;
-  if (booking.status === 'cancelled') {
-    if (booking.rescheduledToUid !== null) return [];
-    if (meeting === null || meeting.state === 'cancelled') return [];
-    return [{ trigger: 'BOOKING_CANCELLED', instant, noShow: null }];
+const MAX_CHAIN = 50;
+
+/**
+ * Every listed booking in exactly one chain, joined by `rescheduledFromUid` and
+ * `rescheduledToUid` whatever each booking's status (review fold 1, finding 1): the old
+ * half of a reschedule is `cancelled` in Cal.com, and a chain read status by status
+ * loses who replaced whom.
+ */
+export function bookingChains(bookings: readonly CalcomBooking[]): readonly BookingChain[] {
+  const byUid = new Map(bookings.map(booking => [booking.uid, booking]));
+  const next = new Map<string, string>();
+  const prev = new Map<string, string>();
+  const link = (from: string, to: string): void => {
+    if (from === to || next.has(from) || prev.has(to)) return;
+    next.set(from, to);
+    prev.set(to, from);
+  };
+  for (const booking of bookings) {
+    if (booking.rescheduledToUid !== null) link(booking.uid, booking.rescheduledToUid);
+    if (booking.rescheduledFromUid !== null) link(booking.rescheduledFromUid, booking.uid);
   }
-  if (booking.status !== 'accepted') return [];
-  if (meeting !== null && meeting.state === 'cancelled') return [];
+  const covered = new Set<string>();
+  const chains: BookingChain[] = [];
+  for (const booking of bookings) {
+    if (covered.has(booking.uid)) continue;
+    // Forward to the newest listed booking, then back to the oldest uid named.
+    let tail = booking.uid;
+    for (let steps = 0; steps < MAX_CHAIN; steps += 1) {
+      const after = next.get(tail);
+      if (after === undefined || !byUid.has(after) || covered.has(after) || after === booking.uid) break;
+      tail = after;
+    }
+    const uids = [tail];
+    for (let steps = 0; steps < MAX_CHAIN; steps += 1) {
+      const before = prev.get(uids[0] ?? '');
+      if (before === undefined || uids.includes(before) || covered.has(before)) break;
+      uids.unshift(before);
+      if (!byUid.has(before)) break;
+    }
+    for (const uid of uids) covered.add(uid);
+    chains.push({ uids, bookings: byUid });
+  }
+  return chains;
+}
 
+const instantOfBooking = (booking: CalcomBooking): string => booking.updatedAt ?? booking.createdAt;
+const later = (left: string, right: string): string => (Date.parse(left) >= Date.parse(right) ? left : right);
+const plusOne = (instant: string): string => new Date(Date.parse(instant) + 1).toISOString();
+
+/**
+ * The events that take a chain's meeting — or no meeting — to what Cal.com says.
+ *
+ *   * **A known meeting**: the chain must contain the meeting's current uid, or the
+ *     meeting has moved past what this read knows (a newer webhook) and nothing is
+ *     planned. Each link after the current uid is a `BOOKING_RESCHEDULED` (old → new),
+ *     dated at the new booking's `createdAt`, before the newest booking's terminal
+ *     state, so `applyEvent`'s own folding joins them.
+ *   * **No meeting**: the newest booking's own event first — `BOOKING_CANCELLED` for a
+ *     cancellation (the terminal fact is recorded, so a late older create is `stale`),
+ *     `BOOKING_RESCHEDULED`/`BOOKING_CREATED` for an accepted booking — then every older
+ *     link, newest first, so `applyEvent` adopts each original uid onto the one row.
+ *   * **Derived events** (an end, a no-show mark or its reversal) only from a snapshot no
+ *     older than the meeting's last applied event, about the meeting's current booking
+ *     (review fold 1, finding 2). An end is dated at the later of the booking's `end` and
+ *     just after the meeting's last event, so a meeting whose no-show mark was reversed
+ *     after its end still converges to held (finding 5).
+ */
+export function planChain(chain: BookingChain, meeting: StoredMeeting | null, now: string): readonly PlannedEvent[] {
+  const tailUid = chain.uids[chain.uids.length - 1] ?? '';
+  const tail = chain.bookings.get(tailUid);
+  if (tail === undefined) return [];
+  if (tail.status !== 'accepted' && tail.status !== 'cancelled') return [];
+  // The newest booking was itself moved to one this read did not list (beyond the
+  // window): its state is not the meeting's.
+  const movedAway = tail.status === 'cancelled' && tail.rescheduledToUid !== null;
+  const linkAt = (index: number): PlannedEvent | null => {
+    const to = chain.bookings.get(chain.uids[index + 1] ?? '');
+    const from = chain.uids[index];
+    if (to === undefined || from === undefined) return null;
+    return { trigger: 'BOOKING_RESCHEDULED', booking: to, rescheduleUid: from, instant: to.createdAt, noShow: null };
+  };
   const events: PlannedEvent[] = [];
-  const identity: Trigger = booking.rescheduledFromUid === null ? 'BOOKING_CREATED' : 'BOOKING_RESCHEDULED';
+
   let state: MeetingState;
+  let lastEventAt: string;
+  let fresh: boolean;
   if (meeting === null) {
-    events.push({ trigger: identity, instant, noShow: null });
-    state = identity === 'BOOKING_RESCHEDULED' ? 'rescheduled' : 'booked';
+    if (movedAway) return [];
+    const before = chain.uids.length >= 2 ? (chain.uids[chain.uids.length - 2] ?? null) : null;
+    if (tail.status === 'cancelled') {
+      events.push({ trigger: 'BOOKING_CANCELLED', booking: tail, rescheduleUid: null, instant: instantOfBooking(tail), noShow: null });
+      state = 'cancelled';
+    } else if (before !== null) {
+      events.push({ trigger: 'BOOKING_RESCHEDULED', booking: tail, rescheduleUid: before, instant: instantOfBooking(tail), noShow: null });
+      state = 'rescheduled';
+    } else {
+      events.push({ trigger: 'BOOKING_CREATED', booking: tail, rescheduleUid: null, instant: instantOfBooking(tail), noShow: null });
+      state = 'booked';
+    }
+    // The older links, newest first: each adopts its original uid onto the one row.
+    const firstLink = tail.status === 'cancelled' ? chain.uids.length - 2 : chain.uids.length - 3;
+    for (let index = firstLink; index >= 0; index -= 1) {
+      const planned = linkAt(index);
+      if (planned !== null) events.push(planned);
+    }
+    lastEventAt = instantOfBooking(tail);
+    fresh = true;
   } else {
+    if (meeting.state === 'cancelled') return [];
+    const position = chain.uids.indexOf(meeting.current_booking_uid);
+    if (position === -1) return [];
     state = meeting.state;
-    const moved =
-      meeting.current_booking_uid !== booking.uid ||
-      meeting.starts_at.toISOString() !== booking.start ||
-      meeting.ends_at.toISOString() !== booking.end;
-    if (moved) {
-      events.push({ trigger: identity, instant, noShow: null });
-      if (identity === 'BOOKING_RESCHEDULED' && state !== 'no_show' && state !== 'held') state = 'rescheduled';
+    lastEventAt = meeting.last_event_at.toISOString();
+    // The snapshot's own freshness, against the meeting as it stands before this run.
+    fresh = Date.parse(instantOfBooking(tail)) >= meeting.last_event_at.getTime();
+    for (let index = position; index < chain.uids.length - 1; index += 1) {
+      const planned = linkAt(index);
+      if (planned === null) continue;
+      events.push(planned);
+      lastEventAt = later(lastEventAt, planned.instant);
+      if (state !== 'held' && state !== 'no_show') state = 'rescheduled';
+    }
+    if (movedAway) return events;
+    if (tail.status === 'cancelled') {
+      events.push({ trigger: 'BOOKING_CANCELLED', booking: tail, rescheduleUid: null, instant: instantOfBooking(tail), noShow: null });
+      return events;
+    }
+    const linked = events.length > 0;
+    const timesDiffer = meeting.starts_at.toISOString() !== tail.start || meeting.ends_at.toISOString() !== tail.end;
+    if (!linked && timesDiffer) {
+      const identity: Trigger = tail.rescheduledFromUid === null ? 'BOOKING_CREATED' : 'BOOKING_RESCHEDULED';
+      const rescheduleUid = identity === 'BOOKING_RESCHEDULED' ? (chain.uids[chain.uids.length - 2] ?? tail.rescheduledFromUid) : null;
+      events.push({ trigger: identity, booking: tail, rescheduleUid, instant: instantOfBooking(tail), noShow: null });
+      if (identity === 'BOOKING_RESCHEDULED' && state !== 'held' && state !== 'no_show') state = 'rescheduled';
+      if (fresh) lastEventAt = later(lastEventAt, instantOfBooking(tail));
     }
   }
-  if (booking.anyAttendeeAbsent && state !== 'no_show') {
-    events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', instant: later(instant, booking.end), noShow: true });
-  } else if (!booking.anyAttendeeAbsent && state === 'no_show') {
-    events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', instant: later(instant, booking.end), noShow: false });
-  } else if (!booking.anyAttendeeAbsent && (state === 'booked' || state === 'rescheduled') && Date.parse(booking.end) <= Date.parse(now)) {
-    events.push({ trigger: 'MEETING_ENDED', instant: booking.end, noShow: null });
+
+  if (tail.status !== 'accepted' || !fresh) return events;
+  if (tail.anyAttendeeAbsent && state !== 'no_show') {
+    events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: true });
+  } else if (!tail.anyAttendeeAbsent && state === 'no_show') {
+    events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: false });
+  } else if (!tail.anyAttendeeAbsent && (state === 'booked' || state === 'rescheduled') && Date.parse(tail.end) <= Date.parse(now)) {
+    events.push({ trigger: 'MEETING_ENDED', booking: tail, rescheduleUid: null, instant: later(tail.end, plusOne(lastEventAt)), noShow: null });
   }
   return events;
 }
 
 /** The deterministic delivery id of one synthesized event. */
-export function reconcileEventId(booking: Pick<CalcomBooking, 'uid' | 'status'>, event: PlannedEvent): string {
+export function reconcileEventId(event: PlannedEvent): string {
   const flag = event.noShow === null ? '' : `:${String(event.noShow)}`;
+  const from = event.rescheduleUid === null ? '' : `:${event.rescheduleUid}`;
   return createHash('sha256')
-    .update(`reconcile:${booking.uid}:${event.trigger}${flag}:${booking.status}:${event.instant}`)
+    .update(`reconcile:${event.booking.uid}${from}:${event.trigger}${flag}:${event.booking.status}:${event.instant}`)
     .digest('hex');
+}
+
+/**
+ * Whether a person's data was deleted under this address: a `deletion_tombstone`
+ * suppression of the handle (`retention/deletion.ts`), which a deletion records for
+ * every address it removes, a meeting attendee's included. Any tombstone, whatever
+ * else has been recorded for the handle since: the deletion is terminal.
+ */
+async function attendeeTombstoned(context: RepositoryContext, attendeeEmail: string | null): Promise<boolean> {
+  if (attendeeEmail === null) return false;
+  const canonical = canonicalizeHandle(attendeeEmail);
+  if (!canonical.ok) return false;
+  const { rows } = await context.db.query(
+    `SELECT 1 FROM suppression_events
+      WHERE workspace_id = $1 AND scope = 'handle' AND canonical_key = $2 AND source = 'deletion_tombstone'
+      LIMIT 1`,
+    [context.scope.workspaceId, canonical.handle.value],
+  );
+  return rows.length > 0;
 }
 
 /**
  * Apply one read of the window to `meetings`. The caller runs it in one transaction.
  *
  * The send gate is taken first, once, and held to the end of the transaction, so the
- * snapshot each booking is compared against cannot move under a webhook between the
+ * snapshot each chain is compared against cannot move under a webhook between the
  * comparison and the event (every synthesized event takes it again, which is a no-op).
+ *
+ * A chain with no meeting whose attendee's data was deleted is not recorded at all:
+ * deletion removed the meeting and its deliveries, and recording the booking again
+ * would bring the person's address back (review fold 1, finding 3).
  */
 export async function reconcileCalcomBookings(
   db: Queryable,
@@ -322,16 +469,40 @@ export async function reconcileCalcomBookings(
 ): Promise<ReconcileCounts> {
   const context = repositoryContext(workspaceScope(input.workspaceId, { kind: 'system', component: 'worker' }), db);
   await lockSendGateForStopFact(context);
-  const counts = { bookings: input.bookings.length, unchanged: 0, skipped: 0, synthesized: 0, applied: 0, stale: 0, duplicate: 0, unmatched: 0 };
-  for (const booking of input.bookings) {
-    if (booking.status !== 'accepted' && booking.status !== 'cancelled') {
+  const chains = bookingChains(input.bookings);
+  const counts = {
+    bookings: input.bookings.length,
+    chains: chains.length,
+    unchanged: 0,
+    skipped: 0,
+    tombstoned: 0,
+    synthesized: 0,
+    applied: 0,
+    stale: 0,
+    duplicate: 0,
+    unmatched: 0,
+  };
+  for (const chain of chains) {
+    const tail = chain.bookings.get(chain.uids[chain.uids.length - 1] ?? '');
+    if (tail === undefined || (tail.status !== 'accepted' && tail.status !== 'cancelled')) {
       counts.skipped += 1;
       continue;
     }
-    const meeting =
-      (await meetingOf(context, booking.uid)) ??
-      (booking.rescheduledFromUid === null ? null : await meetingOf(context, booking.rescheduledFromUid));
-    const planned = planBooking(booking, meeting, input.now);
+    let meeting: StoredMeeting | null = null;
+    for (const uid of [...chain.uids].reverse()) {
+      meeting = await meetingOf(context, uid);
+      if (meeting !== null) break;
+    }
+    if (meeting === null) {
+      const attendees = chain.uids.map(uid => chain.bookings.get(uid)?.attendeeEmail ?? null);
+      let tombstoned = false;
+      for (const attendee of new Set(attendees)) tombstoned ||= await attendeeTombstoned(context, attendee);
+      if (tombstoned) {
+        counts.tombstoned += 1;
+        continue;
+      }
+    }
+    const planned = planChain(chain, meeting, input.now);
     if (planned.length === 0) {
       counts.unchanged += 1;
       continue;
@@ -341,17 +512,17 @@ export async function reconcileCalcomBookings(
       const parsed: ParsedEvent = {
         trigger: event.trigger,
         createdAt: event.instant,
-        uid: booking.uid,
-        rescheduleUid: event.trigger === 'BOOKING_RESCHEDULED' ? booking.rescheduledFromUid : null,
-        startsAt: booking.start,
-        endsAt: booking.end,
-        organizerEmail: booking.hostEmail,
-        attendeeEmail: booking.attendeeEmail,
+        uid: event.booking.uid,
+        rescheduleUid: event.rescheduleUid,
+        startsAt: event.booking.start,
+        endsAt: event.booking.end,
+        organizerEmail: event.booking.hostEmail,
+        attendeeEmail: event.booking.attendeeEmail,
         noShow: event.noShow,
       };
       const receipt = await receiveSynthesizedCalcomEvent(db, {
         workspaceId: input.workspaceId,
-        eventId: reconcileEventId(booking, event),
+        eventId: reconcileEventId(event),
         event: parsed,
       });
       if (receipt.duplicate) counts.duplicate += 1;

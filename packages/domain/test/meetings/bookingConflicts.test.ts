@@ -5,7 +5,8 @@ import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { receiveCalcomEvent } from '../../meetings/calcom.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld } from '../outbound/support/outboundWorld.ts';
-import { prepareFor, seedFirm, type SeededFirm } from '../outbound/support/dispatchFixtures.ts';
+import { openExtraSession, pausingAtTokenRefresh, prepareFor, seedFirm, type SeededFirm } from '../outbound/support/dispatchFixtures.ts';
+import type { SessionQueryable } from '../../db/queryable.ts';
 
 /**
  * A demo booked while prospecting is in flight (slice M1, item 4): whatever state the
@@ -31,7 +32,7 @@ afterAll(async () => {
 const workspaceId = (): string => world.alpha.workspace.workspaceId;
 let bookings = 0;
 
-async function book(firm: SeededFirm): Promise<void> {
+async function book(firm: SeededFirm, session: SessionQueryable = world.database.session): Promise<void> {
   bookings += 1;
   const body = {
     triggerEvent: 'BOOKING_CREATED',
@@ -43,8 +44,8 @@ async function book(firm: SeededFirm): Promise<void> {
       attendees: [{ email: firm.address }],
     },
   };
-  const receipt = await withTransaction(world.database.session, async () =>
-    await receiveCalcomEvent(world.database.session, { workspaceId: workspaceId(), rawBody: Buffer.from(JSON.stringify(body)), body }),
+  const receipt = await withTransaction(session, async () =>
+    await receiveCalcomEvent(session, { workspaceId: workspaceId(), rawBody: Buffer.from(JSON.stringify(body)), body }),
   );
   expect(receipt).toMatchObject({ outcome: 'applied', meetingState: 'booked' });
 }
@@ -109,20 +110,53 @@ describe('a booking while a prospecting step is in flight', () => {
     expect(late.report.outcome).not.toBe('sent');
   });
 
-  it('sends nothing for a step the worker already claimed, and the agreed follow-up still sends', async () => {
-    const firm = await seedFirm(world, world.alpha, 'booked-claimed');
+  it('holds a prospecting fence prepared before the booking, and the agreed follow-up still sends', async () => {
+    // A prepared fence is what the worker holds between planning a send and claiming it.
+    // In this release a prospecting fence cannot leave through Gmail at all (the cold
+    // outreach rule), so "not sent" is guaranteed twice over; what this case adds is
+    // that the booking's own stop reached the claimed step, and that the follow-up's
+    // fence, prepared at the same moment, is untouched by it.
+    const firm = await seedFirm(world, world.alpha, 'booked-prepared');
     const step = await prospectingStep(firm);
-    const claimed = await prepareFor(world, world.alpha, firm, { stepExecutionId: step });
-    // The follow-up the prospect agreed to on the call (the fixture's default origin).
+    const prepared = await prepareFor(world, world.alpha, firm, { stepExecutionId: step });
     const followUp = await prepareFor(world, world.alpha, firm);
 
     await book(firm);
 
-    const prospecting = await dispatch(claimed);
+    expect(await executionState(step)).toEqual({ state: 'cancelled', enrollment_state: 'stopped' });
+    const prospecting = await dispatch(prepared);
     expect(prospecting.sends).toBe(0);
     expect(prospecting.report.outcome).not.toBe('sent');
     const agreed = await dispatch(followUp);
     expect(agreed.report.outcome, `${agreed.report.outcome} ${agreed.report.refusal ?? ''} ${agreed.report.detail ?? ''}`).toBe('sent');
     expect(agreed.sends).toBe(1);
+  });
+
+  it('lets a follow-up whose send is mid-claim finish when a booking commits between its check and its claim', async () => {
+    // Appendix G 3's window: the dispatch has read the world and found it sendable, and is
+    // refreshing its token before the claiming transaction. The booking commits from
+    // another connection in exactly that pause — the stop fact takes the send gate
+    // exclusively, the claim takes it shared and re-asks everything. The agreed
+    // follow-up is compatible with a booked demo, so the re-asked claim still sends it,
+    // once; the firm's prospecting step is cancelled by the same commit.
+    const firm = await seedFirm(world, world.alpha, 'booked-mid-claim');
+    const step = await prospectingStep(firm);
+    const followUp = await prepareFor(world, world.alpha, firm);
+    const other = await openExtraSession(world);
+    try {
+      const gmail = world.clientWith(world.alpha, {});
+      const paused = pausingAtTokenRefresh(gmail, async () => {
+        await book(firm, other.session);
+      });
+      const report = await dispatchOutboundMessage(world.systemContext(workspaceId()), world.sendDeps(world.alpha, { gmail: paused.client }), {
+        outboundMessageId: followUp,
+      });
+      expect(paused.refreshes()).toBe(1);
+      expect(report.outcome, `${report.outcome} ${report.refusal ?? ''} ${report.detail ?? ''}`).toBe('sent');
+      expect(gmail.sends).toHaveLength(1);
+      expect(await executionState(step)).toEqual({ state: 'cancelled', enrollment_state: 'stopped' });
+    } finally {
+      await other.close();
+    }
   });
 });

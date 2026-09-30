@@ -65,11 +65,12 @@ A problem is always reported as a field name, never a value. As with `twilio-voi
 put a value (`{}` is enough) in the entry **before** the apply that adds it to a task,
 because ECS refuses to start a task whose secret has no value.
 
-**The worker is not given the entry yet.** `infra/modules/cluster/main.tf` injects
-`calcom` into the API task only (`api_secret_names`); reconciliation runs once
-`worker_secret_names` names it too, which is an infrastructure change of its own (the
-same "value before apply" rule). Until then the worker's startup line says
-`calcom_reconcile: absent` and the webhook alone keeps meetings current.
+Both the API task and the worker task are given the entry
+(`infra/modules/cluster/main.tf`, `api_secret_names` and `worker_secret_names`). It
+already holds a value in production (`{}`), so both tasks start; the worker's startup
+line says `calcom_reconcile: absent` until an `api_key` is put in it. A rehearsal fills
+the entry with `{}` (`greenfield-release.yml`), so a rehearsal worker never calls
+Cal.com.
 
 Cal.com console: a webhook to `<public origin>/integrations/calcom/webhook` with the
 five triggers above and the same secret; and, for reconciliation, a Cal.com API key
@@ -83,40 +84,65 @@ bookings and repairs the difference.
 
 * **When.** Only in a worker with an `api_key`, and only for the one workspace with
   `calendar_integration = calcom` (the webhook's rule; with two, neither). One job an
-  hour (`calcom-reconcile:{workspace}:{hour}`), in the bulk lane.
+  hour (`calcom-reconcile:{workspace}:{hour}`), in the bulk lane. The job asks again when
+  it runs and once more just before it applies what it read: if its workspace is no
+  longer the one switched on, it does nothing and logs `calcom_reconcile_skipped`.
 * **What it reads.** Cal.com API v2 `GET https://api.cal.com/v2/bookings` with
   `Authorization: Bearer <api_key>` and `cal-api-version: 2026-05-01`, for bookings with
   `afterStart = now − 7 days` and `beforeEnd = now + 60 days`, every status, 100 a
   page, following `pagination.nextCursor` while `pagination.hasMore`
   ([get all bookings](https://cal.com/docs/api-reference/v2/bookings/get-all-bookings),
   [introduction](https://cal.com/docs/api-reference/v2/introduction)). At most ten
-  pages and thirty seconds of fetching; a run that hit either says `truncated` and
-  applies what it read. A failed request fails the job, which the runner retries; nothing
-  is applied until the read is complete.
-* **What it does.** Each booking whose state or times differ from its meeting, or that
-  has no meeting, becomes a **synthesized event fed to the webhook's own path**
-  (`receiveSynthesizedCalcomEvent` → `applyEvent`): the same `calcom_events` dedupe, the
-  same ordering, the same matching, the same `applyBooked`. Its delivery id is the
-  sha256 of `reconcile:{uid}:{trigger}:{status}:{instant}`, so a replayed run is a
-  duplicate and applies nothing; its `createdAt` is the booking's own `updatedAt`, so a
-  webhook newer than the API's answer stays authoritative (the older event is recorded
-  `stale`). An end is dated at the booking's `end`, as Cal.com's own `MEETING_ENDED` is;
-  a no-show mark at the later of `updatedAt` and `end`.
-* **The mapping.** `accepted` → `BOOKING_CREATED`, or `BOOKING_RESCHEDULED` when it has
-  a `rescheduledFromUid`; `cancelled` → `BOOKING_CANCELLED`, except the old half of a
-  reschedule (it names `rescheduledToUid`; the new booking carries the move) and a
-  cancelled booking Callie never saw (nothing to undo); an attendee marked `absent` →
-  the no-show mark, and none marked on a `no_show` meeting → its reversal; an accepted
-  booking whose end has passed on a meeting still booked or rescheduled →
-  `MEETING_ENDED`. `pending`, `rejected` and `awaiting_host` are skipped, as the webhook
-  ignores `BOOKING_REQUESTED` and `BOOKING_REJECTED`. A cancelled meeting is terminal and
-  never compared.
+  pages and thirty seconds of fetching, and each request is given only what is left of
+  the thirty seconds; a run cut short by either says `truncated` and applies what it
+  read. Any other failed request fails the job, which the runner retries; nothing is
+  applied until the read is over.
+* **Chains, whatever the status.** Cal.com marks the old half of a reschedule
+  `cancelled` and names the new one (`rescheduledToUid`; the new one names the old,
+  `rescheduledFromUid`). The bookings are first joined into reschedule chains through
+  those two fields regardless of status, and each chain is compared with its one
+  meeting — found by any uid in it.
+* **What it does.** Every difference becomes a **synthesized event fed to the webhook's
+  own path** (`receiveSynthesizedCalcomEvent` → `applyEvent`): the same `calcom_events`
+  dedupe, the same ordering, the same folding of reschedules, the same matching, the
+  same `applyBooked`.
+  * A chain whose meeting is known must contain the meeting's current uid; otherwise the
+    meeting has moved past what this read knows (a newer webhook) and nothing is done.
+    Each link after the current uid is a `BOOKING_RESCHEDULED` (old → new), dated at the
+    new booking's `createdAt`, then the newest booking's own state: `BOOKING_CANCELLED`,
+    or for an accepted booking a `BOOKING_CREATED`/`BOOKING_RESCHEDULED` if its times
+    differ.
+  * A chain with no meeting is recorded from its newest booking — accepted, or
+    **cancelled**: a cancellation Callie never saw is recorded as a cancelled meeting
+    (matched or not, exactly as a cancel-first webhook is), so a late, older create is
+    `stale` instead of booking a demo that is not happening — followed by each older
+    link, newest first, so every original uid lands on the one row.
+  * A chain whose newest booking was moved again to one this read does not list (beyond
+    the window) changes no state.
+  * Derived events — an end (`MEETING_ENDED`), a no-show mark (an attendee `absent`) or
+    its reversal — come only from a snapshot whose `updatedAt` is no older than the
+    meeting's last applied event, and only about the meeting's current booking. An end
+    is dated at the later of the booking's `end` and just after the meeting's last event,
+    so a meeting whose no-show mark was taken back after its end still becomes held on
+    the next run.
+  * `pending`, `rejected` and `awaiting_host` are skipped, as the webhook ignores
+    `BOOKING_REQUESTED` and `BOOKING_REJECTED`. A cancelled meeting is terminal.
+* **Deleted people stay deleted.** A deletion (`retention/deletion.ts`) records a
+  `deletion_tombstone` suppression for every address it removes, the attendee of every
+  meeting it removes included. A chain with no meeting whose attendee has such a
+  tombstone is not recorded (`tombstoned` in the counts), so the hourly read never
+  brings the person's booking or address back.
+* **Identity of a delivery.** sha256 of
+  `reconcile:{uid}[:{old uid}]:{trigger}[:{no-show flag}]:{status}:{instant}`, so a
+  replayed run is a duplicate and applies nothing; its `createdAt` is the booking's own
+  `updatedAt` (a link: the new booking's `createdAt`), so a webhook newer than the API's
+  answer stays authoritative and the older event is recorded `stale`.
 * **What it never does.** It never deletes a meeting, and a booking the API no longer
   lists leaves its meeting alone. It sends nothing to anybody.
 * **What it leaves behind.** A log line `calcom_reconcile` with the counts (bookings,
-  unchanged, skipped, synthesized, applied, stale, duplicate, unmatched, pages,
-  truncated) and, when anything was synthesized, one audit event `meeting.reconciled`
-  with the same counts. Never a booking's details.
+  chains, unchanged, skipped, tombstoned, synthesized, applied, stale, duplicate,
+  unmatched, pages, truncated) and, when anything was synthesized, one audit event
+  `meeting.reconciled` with the same counts. Never a booking's details.
 
 ## Matching a booking by hand (slice M1)
 

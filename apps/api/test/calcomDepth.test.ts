@@ -88,6 +88,7 @@ describe('Cal.com depth, over HTTP', () => {
     readonly followUpId: string;
     readonly prospectingId: string;
     readonly opportunityId: string;
+    readonly contactId: string;
   }
 
   /**
@@ -137,7 +138,7 @@ describe('Cal.com depth, over HTTP', () => {
        RETURNING id`,
       [followUpId, colleagueId],
     );
-    return { firmId, attendee, followUpId, prospectingId: rows[0]?.id ?? '', opportunityId };
+    return { firmId, attendee, followUpId, prospectingId: rows[0]?.id ?? '', opportunityId, contactId };
   }
 
   async function enrollmentStates(world: World): Promise<{ followUp: string; prospecting: string }> {
@@ -306,31 +307,42 @@ describe('Cal.com depth, over HTTP', () => {
   });
 
   // ---- no reminder of Callie's own ------------------------------------------------------
-  it('enqueues no e-mail and no step to the attendee on a booking or a reschedule', async () => {
+  it('enqueues no e-mail, no step and no job for the attendee on a booking or a reschedule', async () => {
     const world = await firmWithWork();
-    const counts = async (): Promise<{ outbound: number; steps: number; jobs: number }> => {
-      const { rows } = await fixture.db.query<{ outbound: string; steps: string; jobs: string }>(
-        `SELECT (SELECT count(*) FROM outbound_messages WHERE firm_id = $1) AS outbound,
-                (SELECT count(*) FROM step_executions WHERE firm_id = $1 AND state IN ('pending', 'held', 'dispatched')) AS steps,
-                (SELECT count(*) FROM jobs WHERE kind IN ('sequence.action', 'mail.sync') AND workspace_id = $2) AS jobs`,
-        [world.firmId, fixture.alpha.workspaceId],
-      );
-      const row = rows[0];
-      return { outbound: Number(row?.outbound), steps: Number(row?.steps), jobs: Number(row?.jobs) };
-    };
-    const before = await counts();
+    // As text: a JavaScript Date would drop the microseconds and let the rows made just
+    // before this instant count as made after it.
+    const { rows: clock } = await fixture.db.query<{ at: string }>('SELECT clock_timestamp()::text AS at');
+    const since = clock[0]?.at ?? '';
     const [a, b] = [uid(), uid()];
     await calcom(booking('BOOKING_CREATED', '2026-09-30T20:00:00.000Z', a, world.attendee));
     await calcom(booking('BOOKING_RESCHEDULED', '2026-09-30T20:10:00.000Z', b, world.attendee, { rescheduleUid: a, startTime: '2026-10-22T15:00:00.000Z', endTime: '2026-10-22T15:30:00.000Z' }));
-    const after = await counts();
-    expect(after.outbound).toBe(before.outbound);
-    expect(after.jobs).toBe(before.jobs);
-    // Only fewer: the stopped prospecting enrollment's steps are cancelled; nothing is added.
-    expect(after.steps).toBeLessThanOrEqual(before.steps);
-    const { rows } = await fixture.db.query<{ count: string }>(
-      "SELECT count(*) AS count FROM sequence_enrollments WHERE firm_id = $1 AND created_at > now() - interval '1 minute' AND id <> ALL($2::uuid[])",
-      [world.firmId, [world.followUpId, world.prospectingId]],
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: '2026-10-22T15:00:00.000Z' }]);
+
+    // By identity: nothing addressed to, about, or queued for the person who booked.
+    const { rows: outbound } = await fixture.db.query<{ id: string }>(
+      `SELECT id FROM outbound_messages
+        WHERE workspace_id = $1 AND created_at >= $2::timestamptz
+          AND (lower(recipient_address) = $3 OR contact_id = $4 OR subject ILIKE '%' || $3 || '%')`,
+      [fixture.alpha.workspaceId, since, world.attendee, world.contactId],
     );
-    expect(Number(rows[0]?.count)).toBe(0);
+    expect(outbound).toEqual([]);
+    const { rows: steps } = await fixture.db.query<{ id: string }>(
+      'SELECT id FROM step_executions WHERE workspace_id = $1 AND contact_id = $2 AND created_at >= $3::timestamptz',
+      [fixture.alpha.workspaceId, world.contactId, since],
+    );
+    expect(steps).toEqual([]);
+    const { rows: jobs } = await fixture.db.query<{ kind: string }>(
+      `SELECT kind FROM jobs
+        WHERE workspace_id = $1 AND created_at >= $2::timestamptz
+          AND (payload::text ILIKE '%' || $3 || '%' OR payload::text LIKE '%' || $4 || '%'
+               OR payload::text LIKE '%' || $5 || '%' OR payload::text LIKE '%' || $6 || '%')`,
+      [fixture.alpha.workspaceId, since, world.attendee, world.contactId, world.followUpId, world.firmId],
+    );
+    expect(jobs).toEqual([]);
+    const { rows: enrollments } = await fixture.db.query<{ id: string }>(
+      'SELECT id FROM sequence_enrollments WHERE firm_id = $1 AND created_at >= $2::timestamptz',
+      [world.firmId, since],
+    );
+    expect(enrollments).toEqual([]);
   });
 });

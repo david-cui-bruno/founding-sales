@@ -6,6 +6,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
+import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
 import { accept, refuse, type RetentionResult } from './result.ts';
 
@@ -437,7 +438,24 @@ async function measure(
     byContact,
   );
 
-  return { removes, redacts, stops, retains, handles: handleRows.map(row => row.handle) };
+  // Slice M1 (review fold 1, finding 3): the attendee of every meeting this deletion
+  // takes is tombstoned too. A domain-matched or unmatched booking's attendee is often
+  // on no route, and without a tombstone Cal.com's reconciliation would read the booking
+  // back an hour later and store the address again (`meetings/reconcile.ts`). Only an
+  // address the canonicaliser accepts: an unreadable one cannot be suppressed, and must
+  // not refuse the whole deletion.
+  const { rows: attendeeRows } = await context.db.query<{ handle: string }>(
+    `SELECT DISTINCT m.attendee_email AS handle FROM meetings m
+      WHERE m.workspace_id = $1 AND m.attendee_email IS NOT NULL AND ${MEETING_IN_SCOPE}`,
+    byContact,
+  );
+  const handles = new Set(handleRows.map(row => row.handle));
+  for (const row of attendeeRows) {
+    const canonical = canonicalizeHandle(row.handle);
+    if (canonical.ok) handles.add(canonical.handle.value);
+  }
+
+  return { removes, redacts, stops, retains, handles: [...handles].sort() };
 }
 
 function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): string {

@@ -33,6 +33,7 @@ describe('the Cal.com bookings client', () => {
       beforeEnd: '2026-11-30T12:00:00.000Z',
       cursor: 'prev1',
       limit: 100,
+      timeoutMs: 30_000,
     });
     expect(page).toEqual({ bookings: [{ uid: 'a1x' }], nextCursor: 'next1' });
     const url = new URL(seen[0]?.url ?? '');
@@ -48,7 +49,7 @@ describe('the Cal.com bookings client', () => {
 
   it('ends the walk when hasMore is false, and throws without the key on a refusal or a bad body', async () => {
     const answer = (status: number, body: unknown): CalcomHttp => async () => await Promise.resolve(new Response(JSON.stringify(body), { status }));
-    const query: CalcomBookingsQuery = { afterStart: 'a', beforeEnd: 'b', cursor: null, limit: 100 };
+    const query: CalcomBookingsQuery = { afterStart: 'a', beforeEnd: 'b', cursor: null, limit: 100, timeoutMs: 30_000 };
     expect(
       await calcomBookingsClient({ apiKey: KEY, http: answer(200, { status: 'success', data: [], pagination: { hasMore: false, nextCursor: null } }) }).listBookings(query),
     ).toEqual({ bookings: [], nextCursor: null });
@@ -178,5 +179,66 @@ describe('the calcom.reconcile job and its source', () => {
     expect(report.effectsAfter - report.effectsBefore).toBe(1);
     expect(lines.find(line => line['event'] === 'calcom_reconcile')).toMatchObject({ bookings: 1, synthesized: 1, unmatched: 1, pages: 1, truncated: false });
     expect(JSON.stringify(lines)).not.toContain('someone@elsewhere.example');
+  });
+
+  it('does nothing when the switch moved after the job was queued, before the fetch or before the apply (fold 1, finding 4)', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const booking = {
+      uid: 'routed1x',
+      status: 'accepted',
+      start: '2026-10-06T15:00:00.000Z',
+      end: '2026-10-06T15:30:00.000Z',
+      createdAt: '2026-09-30T12:00:00.000Z',
+      updatedAt: '2026-09-30T12:00:00.000Z',
+      attendees: [{ email: 'routed@elsewhere.example', absent: false }],
+    };
+    const meetingsIn = async (workspaceId: string): Promise<number> => {
+      const { rows } = await database.session.query<{ count: string }>("SELECT count(*) AS count FROM meetings WHERE workspace_id = $1 AND booking_uid = 'routed1x'", [
+        workspaceId,
+      ]);
+      return Number(rows[0]?.count);
+    };
+    const run = async (client: CalcomBookingsClient, hour: string): Promise<string | undefined> => {
+      const registry = new HandlerRegistry().register(
+        calcomReconcileJobHandler({ client, now: () => '2026-10-01T12:00:00.000Z', log: (event, fields) => lines.push({ event, ...fields }) }),
+      );
+      const report = await runTwiceUnderStolenLease({
+        session: database.session,
+        registry,
+        run: runClaimedJob,
+        workspaceId: seeded.alpha.workspaceId,
+        kind: 'calcom.reconcile',
+        idempotencyKey: jobIdempotencyKey.calcomReconcile('alpha', hour),
+        payload: {},
+        countEffects: async () => await meetingsIn(seeded.alpha.workspaceId),
+      });
+      return report.freshOutcome;
+    };
+
+    // Queued for alpha, but by the time it runs alpha's switch is off and beta's is on.
+    await database.session.query("DELETE FROM workspace_settings WHERE workspace_id = $1 AND setting_key = 'calendar_integration'", [
+      seeded.alpha.workspaceId,
+    ]);
+    await switchOn(seeded.beta.workspaceId, seeded.beta.admin.userId);
+    const untouched = fake([booking]);
+    expect(await run(untouched, '2026-10-01T10:00:00.000Z')).toBe('completed');
+    expect(untouched.calls).toBe(0);
+    expect(lines.at(-1)).toMatchObject({ event: 'calcom_reconcile_skipped', stage: 'before_fetch' });
+
+    // Routed to alpha when it starts, moved while the page was on the wire.
+    await database.session.query("DELETE FROM workspace_settings WHERE workspace_id = $1 AND setting_key = 'calendar_integration'", [seeded.beta.workspaceId]);
+    await switchOn(seeded.alpha.workspaceId, seeded.alpha.admin.userId);
+    const moving: CalcomBookingsClient = {
+      listBookings: async () => {
+        await switchOn(seeded.beta.workspaceId, seeded.beta.admin.userId);
+        return { bookings: [booking], nextCursor: null };
+      },
+    };
+    expect(await run(moving, '2026-10-01T11:00:00.000Z')).toBe('completed');
+    // The stolen-lease rerun then finds the switch moved already and stops before fetching.
+    expect(lines.filter(line => line['event'] === 'calcom_reconcile_skipped').map(line => line['stage'])).toContain('before_apply');
+    expect(lines.some(line => line['event'] === 'calcom_reconcile')).toBe(false);
+    expect(await meetingsIn(seeded.alpha.workspaceId)).toBe(0);
+    expect(await meetingsIn(seeded.beta.workspaceId)).toBe(0);
   });
 });

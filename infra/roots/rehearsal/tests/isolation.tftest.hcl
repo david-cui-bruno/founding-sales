@@ -269,9 +269,12 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
   # Lane g81. Live dependencies, and still no classifier: the rehearsal fills the
   # classifier entry with a fixture and the classifier has no recorded seam, so a
   # rehearsal worker holding the key would send fixture replies to the provider.
+  # Slice M1: the `calcom` entry reaches the worker too; the rehearsal fills it with
+  # `{}` (greenfield-release.yml), which has no `api_key`, so a rehearsal worker
+  # reconciles nothing and never calls Cal.com.
   assert {
-    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
-    error_message = "A rehearsal worker is handed the Gmail client and its database entry, and never the classifier key."
+    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client"])
+    error_message = "A rehearsal worker is handed the Gmail client, the Cal.com entry and its database entry, and never the classifier key."
   }
 }
 
