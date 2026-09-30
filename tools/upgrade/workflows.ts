@@ -86,26 +86,49 @@ export const MINIMUM_TODAY_CARDS = 5;
  *
  * **`scoped_pause` again since the deployed base is schema 25** (send-path v2, 25 → 26,
  * 30 September 2026). The paragraph above describes a base that predates 0025. A
- * schema-25 base *does* write an origin: its fixture enrols through `enrollContact` with
- * `originKind: 'prospecting'` (`fixture.ts`), so the legacy refusal no longer applies to
- * that row, and the first source that refuses it is the workspace pause — the same
- * answer `EXPECTED_PROSPECTING_DECISION` requires of the post-upgrade probe. The
- * property under test is unchanged: the upgrade must not change the gate's decision
- * about the deployed code's rows. A run from a base older than 25 would see
- * `cold_legacy` here and fail loudly, which is the intended reading of an unexpected
- * base.
+ * schema-25 base *does* write an origin, so the legacy refusal no longer applies, and
+ * the first source that refuses the candidate row is the workspace pause. The property
+ * under test is unchanged: the upgrade must not change the gate's decision about this
+ * row. A run from a base older than 25 would see `cold_legacy` here and fail loudly,
+ * which is the intended reading of an unexpected base.
+ *
+ * **Which row that is, observed on the 25 → 26 run of slice S4 (30 September 2026).**
+ * The candidate query below prefers the fixture's `activeEnrollmentId`, but that
+ * enrollment (a `prospecting` one, written by `enrollContact`) has no `pending` or `held`
+ * step left by the time this runs, so the query takes another active enrollment: a
+ * **`follow_up`** one written by the base checkout's step-execution fixture, whose next
+ * step is a pending e-mail. That is why send-path v2's cold-outreach rule does not move
+ * this constant — a follow-up is not prospecting — while it does move
+ * `EXPECTED_PROSPECTING_DECISION` below. If a later fixture makes a prospecting e-mail
+ * step the candidate, this answer becomes `cold_outreach_mailbox_required` and fails
+ * loudly, which is the intended reading.
  */
 export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
 
 /**
- * The decision a *post-upgrade* enrollment must reach: the workspace pause.
+ * The decision a *post-upgrade* prospecting enrollment must reach.
  *
  * The legacy enrollment above is refused for being legacy, which is the property 0025
  * adds and also the reason it can no longer show that the pause still holds. So the same
- * step writes one enrollment of its own with a real origin, asks the gate about it, and
- * requires the switch that keeps production silent (P2-2 of the GPT-6 review of PR 332).
+ * step writes one enrollment of its own with a real origin, `prospecting`, asks the gate
+ * about it, and names the answer (P2-2 of the GPT-6 review of PR 332).
+ *
+ * **`cold_outreach_mailbox_required` since send-path v2, slice S4 (30 September 2026).**
+ * Until then the answer was the workspace pause (`scoped_pause`). David, 30 September
+ * 2026: "creating an enrollment must not enable cold Gmail outreach" — so
+ * `coldOutreachTransportSource` now refuses a prospecting e-mail step before the holds
+ * source, and the gate's decision about a prospecting row changes **on purpose**. That
+ * change is exactly what this probe must witness: an upgrade to this code that still
+ * answered `scoped_pause` here would mean a prospecting e-mail was one switch away from
+ * leaving through Gmail. The pause itself is still witnessed, by the follow-up row
+ * `EXPECTED_ELIGIBILITY_DECISION` asks about.
+ *
+ * **Assumption: the probe's step is an e-mail step.** It copies the first step of the
+ * candidate's sequence version, which in the fixture is an e-mail (`fixture.ts`, ordinal
+ * 1). A call-task first step would pass the cold-outreach source and reach
+ * `scoped_pause` instead, and this would fail loudly.
  */
-export const EXPECTED_PROSPECTING_DECISION = 'scoped_pause';
+export const EXPECTED_PROSPECTING_DECISION = 'cold_outreach_mailbox_required';
 
 /**
  * The lane the fixture's primary firm's card must be in.
@@ -356,8 +379,9 @@ export async function runWorkflows(
             `expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, got ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`,
           );
         }
-        // And the pause this case used to observe, on a row that can reach it (P2-2 of
-        // the GPT-6 review of PR 332). `cold_legacy` is refused before every other
+        // And a row with a real origin written after the upgrade (P2-2 of the GPT-6 review
+        // of PR 332). Since send-path v2 (slice S4) its answer is the cold-outreach rule,
+        // not the pause: see `EXPECTED_PROSPECTING_DECISION`. `cold_legacy` is refused before every other
         // source, so the legacy enrollment above no longer proves that the workspace
         // switch still holds an otherwise-sendable step. This fixture is written *after*
         // the upgrade, by the new code, with an origin the deployed checkout could not
