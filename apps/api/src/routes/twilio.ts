@@ -65,7 +65,10 @@ export function dialTwiml(input: {
   return (
     '<?xml version="1.0" encoding="UTF-8"?><Response>' +
     `<Dial callerId="${xmlAttribute(input.callerIdE164)}" record="record-from-answer-dual" timeLimit="${String(Math.trunc(input.maxSeconds))}"` +
-    ` action="${status}" recordingStatusCallback="${recording}" recordingStatusCallbackEvent="completed">` +
+    ` action="${status}" recordingStatusCallback="${recording}" recordingStatusCallbackEvent="completed"` +
+    // Slice C1: the Mac's call stays "ringing" until the prospect answers, so the call
+    // view's connected state and timer start at the answer, not when TwiML runs.
+    ' answerOnBridge="true">' +
     `<Number statusCallback="${status}" statusCallbackEvent="initiated ringing answered completed">${xmlAttribute(input.e164)}</Number>` +
     '</Dial></Response>'
   );

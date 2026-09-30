@@ -29,6 +29,7 @@ vi.mock('electron', () => ({
         electron.sent.push([channel, argument]);
       },
       setWindowOpenHandler: () => undefined,
+      session: { setPermissionRequestHandler: () => undefined, setPermissionCheckHandler: () => undefined },
     };
     constructor() {
       electron.windows += 1;

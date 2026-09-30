@@ -593,6 +593,12 @@ export interface UpdaterOptions {
   /** The page's one line: installing, ready, or nothing. */
   readonly publish: (status: UpdateStatus) => void;
   readonly log?: (line: string) => void;
+  /**
+   * Whether a call placed from Callie is live (slice C1). An install relaunches the app,
+   * which would hang up on the prospect, so while this answers true nothing is swapped in:
+   * the update waits, staged, and `callEnded` installs it. Absent means never.
+   */
+  readonly callActive?: () => boolean;
 }
 
 export type UpdateOutcome =
@@ -600,6 +606,8 @@ export type UpdateOutcome =
   | { readonly kind: 'nothing'; readonly decision: UpdateDecision | null }
   | { readonly kind: 'held'; readonly version: string }
   | { readonly kind: 'ready'; readonly version: string }
+  /** Staged and verified, and waiting for the live call to end (slice C1). */
+  | { readonly kind: 'deferred'; readonly version: string }
   | { readonly kind: 'relaunching'; readonly version: string }
   | { readonly kind: 'refused'; readonly version: string; readonly reason: UpdateInstallRefusal }
   | { readonly kind: 'fell_back'; readonly version: string; readonly step: InstallFailure; readonly restored: boolean };
@@ -611,6 +619,11 @@ export interface Updater {
   periodic(): Promise<UpdateOutcome>;
   /** The sidebar's Restart to update. */
   restartToUpdate(): Promise<UpdateOutcome>;
+  /**
+   * The call just ended (slice C1): install the update an in-call install deferred, if
+   * any. Nothing otherwise — a plain "Restart to update" still waits for its press.
+   */
+  callEnded(): Promise<UpdateOutcome>;
   status(): UpdateStatus;
 }
 
@@ -637,6 +650,9 @@ export function createUpdater(options: UpdaterOptions): Updater {
   /** Versions that were refused or fell back in this run: not tried again until the next launch. */
   const spent = new Set<string>();
   let inFlight: Promise<UpdateOutcome> | null = null;
+  /** An install that was due while a call was live, owed once the call ends. */
+  let installAfterCall = false;
+  const onCall = (): boolean => options.callActive?.() === true;
 
   const setStatus = (next: UpdateStatus): void => {
     status = next;
@@ -729,6 +745,16 @@ export function createUpdater(options: UpdaterOptions): Updater {
   };
 
   const swapAndRelaunch = async (manifest: UpdateManifest, bytes: Uint8Array | null): Promise<UpdateOutcome> => {
+    // Every install path ends here, the launch install included: a call that went live
+    // while the channel was read, the bundle downloaded or proved again is never hung up
+    // on by a relaunch (slice C1, review fold 1). The bundle is staged and verified; it
+    // is installed when the call ends (`callEnded`).
+    if (onCall()) {
+      installAfterCall = true;
+      setStatus({ kind: 'ready', version: manifest.releaseVersion });
+      log(`update: ${manifest.releaseVersion} deferred until the call ends`);
+      return { kind: 'deferred', version: manifest.releaseVersion };
+    }
     const swapped = await swapInto(manifest, currentVersion, host);
     if (swapped.kind === 'failed') {
       return await fallBack(manifest, bytes, swapped.step, swapped.restored, swapped.previousPath, swapped.runningPath);
@@ -822,7 +848,14 @@ export function createUpdater(options: UpdaterOptions): Updater {
         }
 
         if (await options.blocked()) {
-          // 5.3: this build may not change anything, so a restart loses nothing.
+          // 5.3: this build may not change anything, so a restart loses nothing — except
+          // a live call, which waits for its end (slice C1).
+          if (onCall()) {
+            installAfterCall = true;
+            setStatus({ kind: 'ready', version });
+            log(`update: ${version} deferred until the call ends`);
+            return { kind: 'deferred', version };
+          }
           if (bytes === null) return await installStaged(manifest);
           setStatus({ kind: 'installing', version });
           return await swapAndRelaunch(manifest, bytes);
@@ -835,6 +868,27 @@ export function createUpdater(options: UpdaterOptions): Updater {
       // A click while the periodic check is reading the channel waits for it.
       while (inFlight !== null) await inFlight;
       return await exclusive(async () => {
+        if (status.kind !== 'ready') return { kind: 'nothing', decision: null };
+        const staged = await readStaged(host, currentVersion);
+        if (staged === null || staged.releaseVersion !== status.version) {
+          setStatus(NO_UPDATE);
+          return { kind: 'nothing', decision: null };
+        }
+        if (onCall()) {
+          // Pressed during a call: installed the moment the call ends, not now.
+          installAfterCall = true;
+          log(`update: ${staged.releaseVersion} deferred until the call ends`);
+          return { kind: 'deferred', version: staged.releaseVersion };
+        }
+        return await installStaged(staged);
+      });
+    },
+
+    callEnded: async () => {
+      if (!installAfterCall || onCall()) return { kind: 'nothing', decision: null };
+      while (inFlight !== null) await inFlight;
+      return await exclusive(async () => {
+        installAfterCall = false;
         if (status.kind !== 'ready') return { kind: 'nothing', decision: null };
         const staged = await readStaged(host, currentVersion);
         if (staged === null || staged.releaseVersion !== status.version) {

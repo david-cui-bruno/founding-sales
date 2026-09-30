@@ -8,6 +8,7 @@ import {
   BUNDLE_SCHEME,
 } from './bundleScheme.ts';
 import { startUpdateWatch } from './updater.ts';
+import { processCallActivity } from './callActivity.ts';
 import { deepLinkRoute } from './windowMenu.ts';
 
 /**
@@ -101,11 +102,16 @@ function main(): void {
       // Lane g83: the update check runs now, at launch, as well as every six hours. It is
       // after `start` so that this build has opened its window — the start that lets an
       // updated build's predecessor be deleted — and it installs without asking.
-      startUpdateWatch({
+      const watch = startUpdateWatch({
         currentVersion: appVersion,
         channelBaseUrl: updateChannelUrl,
         publicKey: updatePublicKey,
         blocked: async () => (await manager.state()).screen === 'upgrade_required',
+        // Slice C1: never relaunch under a live call; install what waited once it ends.
+        callActive: () => processCallActivity.active(),
+      });
+      processCallActivity.onEnded(() => {
+        void watch.callEnded();
       });
     })
     .catch((error: unknown) => {

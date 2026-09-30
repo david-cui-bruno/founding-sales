@@ -1,5 +1,6 @@
 import {
   DEFAULT_INTEGRATION_SETTING_VALUES,
+  DEFAULT_VOICEMAIL_SCRIPT,
   calendarIntegrationSettingSchema,
   callingProviderSettingSchema,
   telephonyBudgetSettingSchema,
@@ -35,6 +36,20 @@ const DISABLED_BUDGET = telephonyBudgetSettingSchema.parse(DEFAULT_INTEGRATION_S
 export async function readTelephonyBudget(context: RepositoryContext): Promise<TelephonyBudgetSetting> {
   const parsed = telephonyBudgetSettingSchema.safeParse((await readSetting(context, 'telephony_budget')).value);
   return parsed.success ? parsed.data : { ...DISABLED_BUDGET, dailyCeilingCents: 0 };
+}
+
+/**
+ * The voicemail script's template (slice C1): `{contactFirstName}`, `{firmName}`,
+ * `{callerName}` and `{callbackNumber}`, rendered by `renderVoicemailScript`.
+ *
+ * **Always the default for now.** A `voicemail_script` setting needs its key admitted by
+ * `workspace_settings_key_known`, which only a migration can widen (0028 is slice W's and
+ * closed), and `packages/domain/test/settings/settings.test.ts` holds the contract's key
+ * list to that CHECK. Until that migration lands this reader is the one place the value
+ * comes from, so the setting replaces it here and nowhere else.
+ */
+export async function readVoicemailScript(_context: RepositoryContext): Promise<string> {
+  return await Promise.resolve(DEFAULT_VOICEMAIL_SCRIPT);
 }
 
 /**

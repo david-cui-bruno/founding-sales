@@ -148,6 +148,9 @@ async function pack(staging: string, outDirectory: string, stamp: ReleaseStamp):
       // deleted below, because a string promising a reason to use the camera is a
       // capability the app is asking for and does not need.
       NSDownloadsFolderUsageDescription: 'Callie saves a verified update here so you can install it.',
+      // Calls placed from Callie (slice C1) use the Mac's microphone. Set here so the
+      // text macOS shows is ours, not Electron's stock sentence.
+      NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
       NSHumanReadableCopyright: 'Callie',
     },
   });
@@ -159,18 +162,30 @@ async function pack(staging: string, outDirectory: string, stamp: ReleaseStamp):
   return join(directory, `${APP_PRODUCT_NAME}.app`);
 }
 
-export const ALLOWED_USAGE_DESCRIPTIONS = Object.freeze(['NSDownloadsFolderUsageDescription']);
+/** What macOS shows when Callie first asks for the microphone (slice C1). */
+export const MICROPHONE_USAGE_DESCRIPTION = 'Callie uses the microphone for calls you place from Callie.';
+
+export const ALLOWED_USAGE_DESCRIPTIONS = Object.freeze([
+  'NSDownloadsFolderUsageDescription',
+  // Calls placed from Callie (slice C1). The camera, Bluetooth and the rest stay deleted.
+  'NSMicrophoneUsageDescription',
+]);
+
+/** The usage descriptions `trimInfoPlist` deletes from a plist that has `keys`. */
+export function usageDescriptionsToRemove(keys: readonly string[]): readonly string[] {
+  return keys.filter(key => key.endsWith('UsageDescription') && !ALLOWED_USAGE_DESCRIPTIONS.includes(key));
+}
 
 /**
  * Electron's stock `Info.plist` promises a reason for the camera, the microphone,
- * Bluetooth, contacts, reminders and a dozen other things. None of them is true of
- * this app, and each one is a capability macOS will offer to grant. They are
- * deleted here, before the signature covers the file.
+ * Bluetooth, contacts, reminders and a dozen other things. Only the microphone is true
+ * of this app (calls placed from Callie, slice C1), and each of the others is a
+ * capability macOS will offer to grant. They are deleted here, before the signature
+ * covers the file.
  */
 export function trimInfoPlist(appPath: string): void {
   const plistPath = join(appPath, 'Contents', 'Info.plist');
-  for (const key of usageDescriptionKeys(plistPath)) {
-    if (ALLOWED_USAGE_DESCRIPTIONS.includes(key)) continue;
+  for (const key of usageDescriptionsToRemove(usageDescriptionKeys(plistPath))) {
     runOrThrow('/usr/bin/plutil', ['-remove', key, plistPath]);
   }
 }

@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { CALL_OUTCOMES, callsPlacedTodayResponseSchema, instant, uuid } from '@fss/contracts';
+import {
+  CALL_OUTCOMES,
+  callCadenceSchema,
+  callRecordingResponseSchema,
+  callSessionDtoSchema,
+  callsPlacedTodayResponseSchema,
+  instant,
+  uuid,
+} from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyStateSchema, REPLY_DISPOSITIONS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -272,6 +280,59 @@ const templateDraftInput = z.strictObject({
 const versionInput = z.strictObject({ sequenceVersionId: uuid });
 
 // ---------------------------------------------------------------------------
+// Calling from Callie (slice C1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a firm's Call button places the call in Callie or hands the number to the phone
+ * app. `tel` **only** when the server said calling is off (`not_found`); `unavailable`
+ * when it could not say — no answer, a 503, a refusal — and the Call button waits rather
+ * than placing an untracked call through the phone app (review of C1, fold 1).
+ */
+export const callingViewSchema = z.strictObject({
+  provider: z.enum(['tel', 'twilio', 'unavailable']),
+  /** "Attempt N of 4", parked; null with `tel`. */
+  cadence: callCadenceSchema.nullable(),
+});
+export type CallingView = z.infer<typeof callingViewSchema>;
+
+/**
+ * What the page needs to place one call: the session id — the only thing the Voice SDK
+ * sends — and the Twilio Voice access token its Device connects with. **The token crosses
+ * the bridge on purpose**: WebRTC runs in the page, so the Device does, and the token is
+ * Twilio's (outgoing through our TwiML app only, an hour), not Callie's API credential.
+ * The number never does. `attempt` and the rendered voicemail script are for the call view.
+ */
+export const callStartSchema = z.discriminatedUnion('ok', [
+  z.strictObject({
+    ok: z.literal(true),
+    sessionId: uuid,
+    token: z.string().min(1).max(8192),
+    attempt: z.number().int().min(1).nullable(),
+    voicemailScript: z.string().max(2000).nullable(),
+  }),
+  z.strictObject({ ok: z.literal(false), reason: z.string().min(1).max(80) }),
+]);
+export type CallStart = z.infer<typeof callStartSchema>;
+
+/**
+ * `requestId` names one press of Call (review of C1, fold 3): the page makes it, and the
+ * cancel for that press carries it, so a cancel that arrives after a newer start is
+ * about the old press and leaves the newer one alone.
+ */
+const callStartInput = z.strictObject({ firmId: uuid, contactId: uuid.nullable(), routeId: uuid, requestId: uuid });
+const callCancelInput = z.strictObject({ requestId: uuid });
+
+/** The firm page's call history; null when it could not be read. */
+export const callHistoryViewSchema = z.strictObject({ calls: z.array(callSessionDtoSchema).nullable() });
+
+/** One recording's audio for the page to play; `reason` when it could not be read. */
+export const callRecordingViewSchema = z.strictObject({
+  recording: callRecordingResponseSchema.nullable(),
+  reason: z.string().max(80).nullable(),
+});
+
+// ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
 
@@ -284,7 +345,8 @@ export interface Operation {
   /** A read never mints a command id; a command always does, unless `envelope` says otherwise. */
   readonly kind: 'read' | 'command';
   /**
-   * Every API path the main process may reach for this operation, and nothing else.
+   * Every API path the main process may reach for this operation, and nothing else. A
+   * query value that is an identifier is written `{uuid}` (the call reads of slice C1).
    *
    * Empty for the operations answered from the main process's own state. Several for the
    * ones whose transform reads more than one route — a firm page also reads the sequences
@@ -395,6 +457,66 @@ export const OPERATIONS = {
     input: z.strictObject({ holdId: uuid }),
     output: todayStateSchema,
     transform: 're-reads the list and the open card, keeping the command’s notice',
+  },
+
+  // --- Calling from Callie (slice C1) -----------------------------------------
+  'calling.status': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/calling?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: callingViewSchema,
+    transform: 'tel only on the server’s calling-off answer (not_found); no answer or any other refusal is unavailable, never tel',
+  },
+  'calling.start': {
+    kind: 'command',
+    calls: [
+      { method: 'GET', path: '/calls/calling?firmId={uuid}' },
+      { method: 'POST', path: '/calls/session' },
+      { method: 'POST', path: '/calls/access-token' },
+    ],
+    input: callStartInput,
+    output: callStartSchema,
+    transform: 'the route version and calling identity from the open card; session, then token; the voicemail script rendered for attempts 1 and 4; the session remembered for the outcome',
+  },
+  'calling.cancel': {
+    kind: 'command',
+    calls: [],
+    input: callCancelInput,
+    output: z.strictObject({ cancelled: z.boolean() }),
+    transform: 'the start with this request id, if it is still the current one, is given up: a late session or token binds nothing, and a bound session is unbound; a cancel for an older start changes nothing (cancelled false)',
+  },
+  'calling.setActive': {
+    kind: 'command',
+    calls: [],
+    input: z.strictObject({ active: z.boolean() }),
+    output: z.strictObject({ active: z.boolean() }),
+    transform: 'the live-call flag the updater waits on; ending it installs a deferred update',
+  },
+  'calling.resume': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/calls/cadence/resume' },
+      { method: 'GET', path: '/calls/calling?firmId={uuid}' },
+      // The open card's advice again: the parking hold had made its numbers not callable.
+      { method: 'POST', path: '/dial/check' },
+    ],
+    input: z.strictObject({ firmId: uuid }),
+    output: callingViewSchema,
+    transform: 'the review of a parked firm, then its cadence and the open card’s dial advice read again',
+  },
+  'calling.history': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: callHistoryViewSchema,
+    transform: 'none: the firm’s placed calls, or null when the read did not answer',
+  },
+  'calling.recording': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/recording?sessionId={uuid}' }],
+    input: z.strictObject({ sessionId: uuid }),
+    output: callRecordingViewSchema,
+    transform: 'none: the audio the API proxied from Twilio, never a URL',
   },
 
   // --- Research (lane R) --------------------------------------------------

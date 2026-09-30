@@ -116,7 +116,17 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox']);
+    expect(families).toEqual(['today', 'calling', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox']);
+    // Slice C1: placing a call from Callie, when `calling_provider = twilio`.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('calling.'))).toEqual([
+      'calling.status',
+      'calling.start',
+      'calling.cancel',
+      'calling.setActive',
+      'calling.resume',
+      'calling.history',
+      'calling.recording',
+    ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
       'today.state',
       'today.refresh',

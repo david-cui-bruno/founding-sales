@@ -51,11 +51,18 @@ export function OutcomeForm({
   view,
   enabled,
   actions,
+  callSessionId = null,
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
   readonly enabled: boolean;
   readonly actions: TodayActions;
+  /**
+   * The call placed from Callie that this form records (slice C1). The main process names
+   * the session on `/calls/log`; the form says so, so the person knows the outcome is
+   * filed with the recording.
+   */
+  readonly callSessionId?: string | null;
 }): JSX.Element | null {
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
@@ -272,6 +279,11 @@ export function OutcomeForm({
       <p data-testid="outcome-call" className="text-xs text-muted-foreground">
         {lastCall === null ? 'Not after a call from Callie: this records the call as history.' : `The call to ${lastCall.e164}.`}
       </p>
+      {callSessionId === null ? null : (
+        <p data-testid="outcome-call-session" data-session={callSessionId} className="text-xs text-muted-foreground">
+          Placed from Callie and recorded: this outcome is filed with the recording.
+        </p>
+      )}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <Label className="flex-col items-start gap-1">

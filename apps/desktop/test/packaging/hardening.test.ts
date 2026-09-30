@@ -16,12 +16,16 @@ import { RELEASE_STAMP_FILE, validateReleaseStamp } from '../../scripts/releaseS
  * verifier cannot drift, and so that adding an entitlement is a diff somebody reads.
  */
 
-describe('the app asks for one entitlement and no more', () => {
-  it('asks only for the JIT the renderer needs', () => {
+describe('the app asks for two entitlements and no more', () => {
+  it('asks only for the JIT the renderer needs and the microphone calls use', () => {
     // A Developer ID app is not sandboxed, so the sandbox entitlements would be
     // decoration; hardened runtime is what it is signed with, and V8 is the only
     // part of it that needs an exception.
-    expect(DESKTOP_ENTITLEMENTS).toEqual({ 'com.apple.security.cs.allow-jit': true });
+    expect(DESKTOP_ENTITLEMENTS).toEqual({
+      'com.apple.security.cs.allow-jit': true,
+      // Slice C1: calls placed from Callie use the Mac's microphone.
+      'com.apple.security.device.audio-input': true,
+    });
   });
 
   it('names the exceptions that would undo the hardened runtime', () => {
@@ -67,13 +71,15 @@ describe('the app asks for one entitlement and no more', () => {
     expect(compareEntitlements({})).toEqual({
       ok: false,
       unexpected: [],
-      missing: ['com.apple.security.cs.allow-jit'],
+      missing: ['com.apple.security.cs.allow-jit', 'com.apple.security.device.audio-input'],
       forbidden: [],
     });
   });
 
   it('treats an entitlement present but false as absent', () => {
-    expect(compareEntitlements({ 'com.apple.security.cs.allow-jit': false })).toEqual({
+    expect(
+      compareEntitlements({ 'com.apple.security.cs.allow-jit': false, 'com.apple.security.device.audio-input': true }),
+    ).toEqual({
       ok: false,
       unexpected: [],
       missing: ['com.apple.security.cs.allow-jit'],

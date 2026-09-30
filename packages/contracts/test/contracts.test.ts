@@ -268,3 +268,35 @@ describe('the announcement said when a call connects', () => {
     expect(CALL_ANNOUNCEMENT).not.toContain('$');
   });
 });
+
+describe('the call-session refusal sentences (slice C1)', () => {
+  it('reasonText has a sentence for every call-session code, W’s retired attempt limit and reservation_closed, never the code', async () => {
+    const { CALL_SESSION_REFUSAL_CODES } = await import('../src/callSessions.ts');
+    const { hasReasonSentence, reasonSentence } = await import('../src/reasonText.ts');
+    for (const code of [...CALL_SESSION_REFUSAL_CODES, 'call_attempt_limit', 'reservation_closed']) {
+      expect(hasReasonSentence(code), code).toBe(true);
+      const sentence = reasonSentence(code);
+      expect(sentence, code).toMatch(/\.$/u);
+      expect(sentence).not.toContain(code);
+    }
+    expect(reasonSentence('telephony_budget_exhausted')).toBe('Calling paused: today’s calling budget is used.');
+    expect(reasonSentence('reservation_closed')).toBe("The call couldn't be authorised because today's calling budget changed. Try again.");
+  });
+
+  it('renders the voicemail script with its four values', async () => {
+    const { DEFAULT_VOICEMAIL_SCRIPT, renderVoicemailScript, firstNameOf } = await import('../src/callSessions.ts');
+    expect(
+      renderVoicemailScript(DEFAULT_VOICEMAIL_SCRIPT, {
+        contactFirstName: firstNameOf('Dana Q. Example'),
+        firmName: 'Northwind Test Holdings',
+        callerName: 'Sam Example',
+        callbackNumber: '+14015550100',
+      }),
+    ).toBe(
+      "Hi Dana, this is Sam Example from Callie. I'm calling about how Northwind Test Holdings handles maintenance requests after hours. I'll try you again, or you can reach me at +14015550100. Thanks.",
+    );
+    expect(renderVoicemailScript('Hi {contactFirstName}.', { contactFirstName: null, firmName: '', callerName: '', callbackNumber: null })).toBe(
+      'Hi there.',
+    );
+  });
+});

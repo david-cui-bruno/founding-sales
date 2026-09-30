@@ -1,3 +1,4 @@
+import { reasonSentence } from '@fss/contracts';
 import { dueLabel } from '../homeView.ts';
 import { previewBasisOf, type AgreementView, type FollowUpPreviewView, type OutcomeRequest } from '../todayContract.ts';
 
@@ -151,7 +152,7 @@ const ENROL_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 export function enrolRefusalSentence(code: string): string {
-  return ENROL_REFUSALS[code] ?? code;
+  return ENROL_REFUSALS[code] ?? reasonSentence(code);
 }
 
 /**
