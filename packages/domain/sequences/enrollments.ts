@@ -338,6 +338,12 @@ export interface StopEnrollmentsInput {
   readonly firmId?: string | undefined;
   readonly opportunityId?: string | undefined;
   readonly enrollmentId?: string | undefined;
+  /**
+   * Exactly these enrollments, and only those still live: the set a terminal-stop event
+   * recorded at emission (`crm_domain_events.owed_enrollment_ids`, migration 0026). An
+   * empty list stops nothing.
+   */
+  readonly enrollmentIds?: readonly string[] | undefined;
   readonly reason: EnrollmentEndReason;
   /** What a cancelled execution records. Defaults to the reason. */
   readonly cancelReason?: string | undefined;
@@ -371,9 +377,13 @@ export async function stopEnrollments(
   if (
     input.firmId === undefined &&
     input.opportunityId === undefined &&
-    input.enrollmentId === undefined
+    input.enrollmentId === undefined &&
+    input.enrollmentIds === undefined
   ) {
     throw new TypeError('a terminal stop names a firm, an opportunity or an enrollment');
+  }
+  if (input.enrollmentIds?.length === 0) {
+    return { enrollmentsStopped: 0, executionsCancelled: 0, enrollmentIds: [] };
   }
 
   // An ended enrollment is a stop fact: the send gate before the enrollment rows
@@ -388,6 +398,7 @@ export async function stopEnrollments(
         AND ($2::uuid IS NULL OR firm_id = $2)
         AND ($3::uuid IS NULL OR opportunity_id = $3)
         AND ($4::uuid IS NULL OR id = $4)
+        AND ($5::uuid[] IS NULL OR id = ANY($5::uuid[]))
       ORDER BY id
       FOR UPDATE`,
     [
@@ -395,6 +406,7 @@ export async function stopEnrollments(
       input.firmId ?? null,
       input.opportunityId ?? null,
       input.enrollmentId ?? null,
+      input.enrollmentIds === undefined ? null : [...input.enrollmentIds],
     ],
   );
   const enrollmentIds = locked.map(row => row.id);

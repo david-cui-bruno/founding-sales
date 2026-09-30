@@ -96,6 +96,8 @@ interface EventDbRow {
   readonly opportunity_id: string | null;
   /** `detail->>'origin'` for a manual-mode event; null for every other kind. */
   readonly origin: string | null;
+  /** What the event owed at emission (migration 0026); null on every older event. */
+  readonly owed_enrollment_ids: string[] | null;
   readonly [column: string]: unknown;
 }
 
@@ -150,7 +152,8 @@ export async function consumeTerminalStops(
   const cursor = cursors[0] ?? { last_event_at: null, last_event_id: null };
 
   const { rows: events } = await context.db.query<EventDbRow>(
-    `SELECT id, occurred_at, event_kind, firm_id, opportunity_id, detail->>'origin' AS origin
+    `SELECT id, occurred_at, event_kind, firm_id, opportunity_id, detail->>'origin' AS origin,
+            owed_enrollment_ids
        FROM crm_domain_events
       WHERE workspace_id = $1
         AND event_kind = ANY($5::text[])
@@ -182,10 +185,21 @@ export async function consumeTerminalStops(
     const reason = manual
       ? manualModeEndReason(event.origin)
       : await endReasonFor(context, event.opportunity_id);
+    //
+    // Scoped since migration 0026 (P0-2 of the send-path v2 plan review): an event
+    // written with `owed_enrollment_ids` stops exactly those enrollments, the ones live
+    // at the firm or opportunity when it was emitted, and nothing created after it — in
+    // the same command or later. An event written before 0026 has no marker and keeps
+    // the old reading, every live enrollment of the scope at drain time, because a stop
+    // that was owed must not be dropped for predating the marker.
+    const scope =
+      event.owed_enrollment_ids !== null
+        ? { enrollmentIds: event.owed_enrollment_ids }
+        : manual || event.opportunity_id === null
+          ? { firmId: event.firm_id }
+          : { opportunityId: event.opportunity_id ?? undefined };
     const stopped = await stopEnrollments(context, {
-      ...(manual || event.opportunity_id === null
-        ? { firmId: event.firm_id }
-        : { opportunityId: event.opportunity_id }),
+      ...scope,
       reason,
       cancelReason: 'terminal_stop',
     });

@@ -100,6 +100,15 @@ export interface CrmDomainEventInput {
  * Write one signal. Idempotent: a second call with the same kind and dedupe key is a
  * no-op rather than a unique violation, because a command replay must not abort the
  * transaction it is replaying inside.
+ *
+ * A terminal-stop signal also records **which enrollments it owes a stop to**, in the
+ * same statement (`owed_enrollment_ids`, migration 0026; P0-2 of the send-path v2 plan
+ * review): the live enrollments of the firm for `opportunity.manual_mode` (7.3 is
+ * firm-wide) and of the opportunity for `opportunity.terminal_stop` (8.1), as this
+ * transaction sees them now. The drain stops those and no others, so an enrollment the
+ * same command creates *after* the signal — an agreed sequence enrolled right after an
+ * interested call — is not killed by a stop that was never about it. A set, not a
+ * timestamp: every row this transaction writes carries the same `now()`.
  */
 export async function emitCrmDomainEvent(
   context: RepositoryContext,
@@ -108,8 +117,18 @@ export async function emitCrmDomainEvent(
   await context.db.query(
     `INSERT INTO crm_domain_events
        (workspace_id, event_kind, firm_id, opportunity_id, contact_id, dedupe_key,
-        reason_code, actor_kind, actor_user_id, command_id, detail)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+        reason_code, actor_kind, actor_user_id, command_id, detail, owed_enrollment_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
+             CASE
+               WHEN $2 = 'opportunity.manual_mode' THEN (
+                 SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
+                   FROM sequence_enrollments n
+                  WHERE n.workspace_id = $1 AND n.firm_id = $3 AND n.ended_at IS NULL)
+               WHEN $2 = 'opportunity.terminal_stop' THEN (
+                 SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
+                   FROM sequence_enrollments n
+                  WHERE n.workspace_id = $1 AND n.opportunity_id = $4 AND n.ended_at IS NULL)
+             END)
      ON CONFLICT ON CONSTRAINT crm_domain_events_dedupe DO NOTHING`,
     [
       context.scope.workspaceId,
