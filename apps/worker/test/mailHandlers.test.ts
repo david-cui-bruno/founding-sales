@@ -556,6 +556,23 @@ describe('the mail handlers and scheduler sources', () => {
     expect(rows.map(row => row.state)).toEqual(['dead']);
   });
 
+  it('C2B-A1: a dead sync of generation g does not stop the sweep asking for generation g+1', async () => {
+    await settleJobs('mail.sync', 'dead');
+    await session.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [mailboxId]);
+    await mailSyncReconciliationSource().find(session, NOW);
+    const { rows } = await session.query<{ idempotency_key: string; state: string }>(
+      "SELECT idempotency_key, state FROM jobs WHERE workspace_id = $1 AND kind = 'mail.sync' AND idempotency_key LIKE 'mail-sync:%' ORDER BY idempotency_key",
+      [workspaceId],
+    );
+    expect(rows).toEqual([
+      { idempotency_key: `mail-sync:${mailboxId}:1`, state: 'dead' },
+      { idempotency_key: `mail-sync:${mailboxId}:2`, state: 'queued' },
+    ]);
+    // Put the shared world back for the tests after this one.
+    await session.query('DELETE FROM jobs WHERE workspace_id = $1 AND idempotency_key = $2', [workspaceId, `mail-sync:${mailboxId}:2`]);
+    await session.query('UPDATE mailboxes SET generation = generation - 1 WHERE id = $1', [mailboxId]);
+  });
+
   it('the recovery source re-arms an incomplete recovery and stops when it completes', async () => {
     await settleJobs('mail.recover', 'done');
     await session.query('UPDATE mailbox_recoveries SET completed_at = NULL WHERE workspace_id = $1', [workspaceId]);
