@@ -146,6 +146,14 @@ export interface RecordSuppressionInput {
   readonly source: Exclude<SuppressionSource, 'mistaken_entry_correction' | 'admin_supersession'>;
   readonly commandId?: string | undefined;
   readonly journal: SuppressionJournal;
+  /**
+   * A deletion tombstone's key for a meeting attendee the canonicalizer refuses (Cal.com
+   * slice M1, `meetings/attendee.ts`): the address in the canonicalizer's own
+   * normalization, without its validation. Accepted for a `deletion_tombstone` handle
+   * suppression only, so no send-path suppression is ever written under a key the
+   * canonicalizer did not produce.
+   */
+  readonly fallbackKey?: string | undefined;
 }
 
 export interface RecordedSuppression {
@@ -189,6 +197,11 @@ export async function recordSuppression(
     const decision = decideFirmMutation(context, firm);
     if (!decision.permitted) return refuse(decision.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
     canonicalKey = firm.id.toLowerCase();
+  } else if (input.fallbackKey !== undefined) {
+    if (input.source !== 'deletion_tombstone') return refuse('invalid_input');
+    const key = input.fallbackKey;
+    if (key.trim().length === 0 || key !== key.toLowerCase() || key.length > 320) return refuse('handle_uncanonical');
+    canonicalKey = key;
   } else {
     if (input.value === undefined) return refuse('invalid_input');
     const canonical = canonicalizeHandle(input.value);

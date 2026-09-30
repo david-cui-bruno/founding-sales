@@ -13,6 +13,7 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { bindReleaseAttestation } from '../release/records.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 
 /**
  * Versioned administrative configuration with a change history
@@ -284,6 +285,13 @@ export async function updateSetting(
       if (!binding.ok) return { ok: false, reason: binding.reason };
     }
   }
+
+  // The Cal.com switch decides which workspace a deployment's bookings land in, and the
+  // reconciliation re-checks it under this workspace's send gate just before it applies
+  // (`apps/worker/src/handlers/calcomReconcile.ts`, slice M1 review fold 2). So a write of
+  // it takes the same gate — first, before the setting's own lock, as every stop-fact
+  // writer takes it — and turning A off waits for an in-flight reconcile of A to finish.
+  if (input.settingKey === 'calendar_integration') await lockSendGateForStopFact(context);
 
   // The same name a reader may hold SHARED (`lockSettingForRead`), so a send's claim and
   // an admin's save of the slice it is about to use are serialised.

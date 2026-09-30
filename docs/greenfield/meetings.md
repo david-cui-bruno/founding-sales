@@ -48,6 +48,14 @@ answers 503 rather than guess.
 A reschedule updates the times and the current booking uid; a no-show mark remembers
 the state it replaced so an unmark restores it.
 
+**Every uid a meeting has been** is kept in `meeting_booking_uids` (migration 0029:
+workspace, uid, meeting; unique per workspace; removed with the meeting). A delivery
+finds its meeting through that table, so a late event about an intermediate booking of
+A → B → C still reaches the one meeting (and a late, older create of B is `stale`).
+`meetings.booking_uid` and `current_booking_uid` stay as they were: the original and
+the current uid. An alias is never dropped; when two meetings turn out to be one
+booking they are folded and the loser's aliases move to the survivor.
+
 ## The secret
 
 Secrets Manager entry `<prefix>/calcom`, a JSON object:
@@ -86,7 +94,11 @@ bookings and repairs the difference.
   `calendar_integration = calcom` (the webhook's rule; with two, neither). One job an
   hour (`calcom-reconcile:{workspace}:{hour}`), in the bulk lane. The job asks again when
   it runs and once more just before it applies what it read: if its workspace is no
-  longer the one switched on, it does nothing and logs `calcom_reconcile_skipped`.
+  longer the one switched on, it does nothing and logs `calcom_reconcile_skipped`. The
+  last check is made in the applying transaction **after** it takes the workspace's
+  send gate, and a write of `calendar_integration` takes that workspace's send gate
+  too, so switching a workspace off either lands before the check (and nothing is
+  applied) or waits until the run has committed.
 * **What it reads.** Cal.com API v2 `GET https://api.cal.com/v2/bookings` with
   `Authorization: Bearer <api_key>` and `cal-api-version: 2026-05-01`, for bookings with
   `afterStart = now − 7 days` and `beforeEnd = now + 60 days`, every status, 100 a
@@ -101,7 +113,13 @@ bookings and repairs the difference.
   `cancelled` and names the new one (`rescheduledToUid`; the new one names the old,
   `rescheduledFromUid`). The bookings are first joined into reschedule chains through
   those two fields regardless of status, and each chain is compared with its one
-  meeting — found by any uid in it.
+  meeting — found by any uid in it. If the chain's uids resolve to two or more meetings
+  (a lost reschedule A → B, then B's cancellation webhook made a row of its own, say)
+  they are **folded first**, even when the newest row is already cancelled: the
+  meeting of the chain's oldest uid survives, takes the newest state, times, current
+  uid and last event, the others' events and aliases, and a firm link if it had none;
+  the others and their unresolved booking review items go (audit `meeting.folded`).
+  Every uid of the chain is then an alias of the survivor.
 * **What it does.** Every difference becomes a **synthesized event fed to the webhook's
   own path** (`receiveSynthesizedCalcomEvent` → `applyEvent`): the same `calcom_events`
   dedupe, the same ordering, the same folding of reschedules, the same matching, the
@@ -132,6 +150,15 @@ bookings and repairs the difference.
   meeting it removes included. A chain with no meeting whose attendee has such a
   tombstone is not recorded (`tombstoned` in the counts), so the hourly read never
   brings the person's booking or address back.
+  * One canonical form of an attendee address (`meetings/attendee.ts`): NFKC, trimmed,
+    lower-cased. The webhook and the hourly read parse with it. An attendee the
+    suppression canonicalizer refuses (`josé@law.example`) is tombstoned under that
+    same form as a fallback key, and the hourly read looks the attendee up by it, so
+    such an address cannot come back either.
+  * The deletion takes the workspace's send gate **before** it measures and validates
+    its preview. A booking committing meanwhile either commits first — the measure
+    sees its meeting, the preview is `preview_stale`, and the next preview tombstones
+    the attendee — or waits until the deletion has committed.
 * **Identity of a delivery.** sha256 of
   `reconcile:{uid}[:{old uid}]:{trigger}[:{no-show flag}]:{status}:{instant}`, so a
   replayed run is a duplicate and applies nothing; its `createdAt` is the booking's own

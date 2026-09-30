@@ -1,4 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '@fss/domain/policy/sendGate.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { hourOf, jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -78,6 +80,11 @@ export function calcomReconcileJobHandler(options: CalcomReconcileOptions): JobH
         ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       });
+      // The workspace's send gate first, then the switch, in the transaction that applies
+      // (review fold 2, finding 4): a write of `calendar_integration` takes the same gate
+      // (`settings/store.ts`), so turning this workspace off either committed before this
+      // read — and nothing is applied — or waits until this transaction ends.
+      await lockSendGateForStopFact(repositoryContext(input.scope, input.session));
       if (!(await stillRouted())) {
         skipped('before_apply');
         return;

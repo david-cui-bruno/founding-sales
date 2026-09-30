@@ -295,6 +295,96 @@ describe('Cal.com reconciliation', () => {
     expect(await meetingsNamed([lone])).toEqual([{ booking_uid: lone, current_booking_uid: lone, state: 'cancelled' }]);
   });
 
+  // ---- review fold 2: one meeting per chain, through the uid aliases (0029) -----------
+  async function resolvedMeetings(uids: readonly string[]): Promise<string[]> {
+    const { rows } = await database.session.query<{ booking_uid: string; meeting_id: string }>(
+      'SELECT booking_uid, meeting_id FROM meeting_booking_uids WHERE workspace_id = $1 AND booking_uid = ANY($2::text[]) ORDER BY booking_uid',
+      [workspaceId(), [...uids]],
+    );
+    expect(rows.map(row => row.booking_uid).sort()).toEqual([...uids].sort());
+    return [...new Set(rows.map(row => row.meeting_id))];
+  }
+
+  it('folds A into B s row when B s cancellation webhook already made one (fold 2, B)', async () => {
+    const a = uid();
+    const b = uid();
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    // A→B is lost; B's cancellation arrives and, knowing nothing of A, records B alone.
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b, { startTime: '2026-10-09T13:00:00.000Z', endTime: '2026-10-09T13:30:00.000Z' }));
+    expect(await meetingsNamed([a, b])).toHaveLength(2);
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+    ]);
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    expect(await resolvedMeetings([a, b])).toHaveLength(1);
+  });
+
+  it('folds the two rows even when the link it would synthesize is older than the original s last event (fold 2, B)', async () => {
+    const a = uid();
+    const b = uid();
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    // A redelivery of A's create with new bytes, later than the reschedule it predates.
+    await webhook('BOOKING_CREATED', '2026-09-30T15:00:00.000Z', webhookBooking(a, { title: 'redelivered' }));
+    // A→B at 13:00 is lost; B's cancellation at 16:00 records B on a row of its own.
+    await webhook('BOOKING_CANCELLED', '2026-09-30T16:00:00.000Z', webhookBooking(b));
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T16:00:00.000Z' }),
+    ]);
+    // The A→B link is stale against A's 15:00 event, so W's own fold never runs; the
+    // chain's fold does, and the newest row (B, cancelled) wins.
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    expect(await resolvedMeetings([a, b])).toHaveLength(1);
+  });
+
+  it('keeps B of an unknown A→B→C, so a delayed create of B is stale (fold 2, C)', async () => {
+    const [a, b, c] = [uid(), uid(), uid()];
+    await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, rescheduledToUid: c, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+      parsed(c, { rescheduledFromUid: b, createdAt: '2026-09-30T14:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+    ]);
+    expect(await resolvedMeetings([a, b, c])).toHaveLength(1);
+    await webhook('BOOKING_CREATED', '2026-09-30T13:00:00.000Z', webhookBooking(b));
+    expect(await meetingsNamed([a, b, c])).toEqual([{ booking_uid: a, current_booking_uid: c, state: 'rescheduled' }]);
+    expect(await resolvedMeetings([a, b, c])).toHaveLength(1);
+  });
+
+  it('leaves one meeting for A→B→C whatever the order of the webhooks, mixed with reconciliation (fold 2, C)', async () => {
+    const orders = [
+      [0, 1, 2],
+      [0, 2, 1],
+      [1, 0, 2],
+      [1, 2, 0],
+      [2, 0, 1],
+      [2, 1, 0],
+    ] as const;
+    for (const [index, order] of orders.entries()) {
+      const [a, b, c] = [uid(), uid(), uid()];
+      const events = [
+        () => webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a)),
+        () => webhook('BOOKING_RESCHEDULED', '2026-09-30T13:00:00.000Z', webhookBooking(b, { rescheduleUid: a, startTime: '2026-10-08T15:00:00.000Z', endTime: '2026-10-08T15:30:00.000Z' })),
+        () => webhook('BOOKING_RESCHEDULED', '2026-09-30T14:00:00.000Z', webhookBooking(c, { rescheduleUid: b, startTime: '2026-10-09T15:00:00.000Z', endTime: '2026-10-09T15:30:00.000Z' })),
+      ];
+      const snapshot = [
+        parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+        parsed(b, { status: 'cancelled', rescheduledFromUid: a, rescheduledToUid: c, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+        parsed(c, { rescheduledFromUid: b, start: '2026-10-09T15:00:00.000Z', end: '2026-10-09T15:30:00.000Z', createdAt: '2026-09-30T14:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z' }),
+      ];
+      // The reconciliation runs at a different point of each order: after the first,
+      // second or third delivery.
+      for (const [step, which] of order.entries()) {
+        await events[which]?.();
+        if (step === index % 3) await reconcile(snapshot);
+      }
+      await reconcile(snapshot);
+      expect(await meetingsNamed([a, b, c]), `order ${order.join('')}`).toEqual([{ booking_uid: a, current_booking_uid: c, state: 'rescheduled' }]);
+      expect(await resolvedMeetings([a, b, c]), `order ${order.join('')}`).toHaveLength(1);
+      expect((await meeting(c))?.starts_at.toISOString()).toBe('2026-10-09T15:00:00.000Z');
+    }
+  });
+
   // ---- review fold 1, finding 2: derived events respect freshness and identity -------
   it('does not let an old snapshot s end mark a newer reschedule held', async () => {
     const a = uid();
@@ -320,6 +410,48 @@ describe('Cal.com reconciliation', () => {
   });
 
   // ---- review fold 1, finding 3: a deleted person is not read back -------------------
+  it('tombstones an attendee the suppression canonicalizer refuses, and does not bring it back (fold 2, D i)', async () => {
+    const id = uid();
+    const attendee = 'josé@unicode-law.example';
+    const { rows: firmRows } = await database.session.query<{ id: string }>(
+      `INSERT INTO firms (workspace_id, name, website, assigned_user_id) VALUES ($1, 'Unicode Law', 'https://unicode-law.example', $2) RETURNING id`,
+      [workspaceId(), seeded.alpha.salesperson.userId],
+    );
+    const firmId = firmRows[0]?.id ?? '';
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(id, { attendees: [{ email: 'JOSÉ@Unicode-Law.example' }] }));
+    const { rows: stored } = await database.session.query<{ attendee_email: string; firm_id: string }>(
+      'SELECT attendee_email, firm_id FROM meetings WHERE workspace_id = $1 AND booking_uid = $2',
+      [workspaceId(), id],
+    );
+    expect(stored).toEqual([{ attendee_email: attendee, firm_id: firmId }]);
+    const admin = repositoryContext(
+      workspaceScope(workspaceId(), { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    const preview = await withTransaction(database.session, async () => await previewDeletion(admin, { targetKind: 'firm', firmId }));
+    expect(preview.value?.tombstoneHandles).toContain(attendee);
+    const committed = await withTransaction(database.session, async () =>
+      await commitDeletion(admin, {
+        requestId: preview.value?.requestId ?? '',
+        previewHash: preview.value?.previewHash ?? '',
+        commandId: `delete-${id}`,
+        journal: recordingSuppressionJournal(),
+      }),
+    );
+    expect(committed.ok, committed.ok ? '' : committed.reason).toBe(true);
+    const { rows: tombstones } = await database.session.query<{ count: string }>(
+      "SELECT count(*) AS count FROM suppression_events WHERE workspace_id = $1 AND scope = 'handle' AND canonical_key = $2 AND source = 'deletion_tombstone'",
+      [workspaceId(), attendee],
+    );
+    expect(Number(tombstones[0]?.count)).toBe(1);
+    expect(await reconcile([parsed(id, { attendees: [{ email: 'josé@unicode-law.example', absent: false }] })])).toMatchObject({ tombstoned: 1, synthesized: 0 });
+    const { rows } = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM meetings WHERE workspace_id = $1 AND attendee_email = $2', [
+      workspaceId(),
+      attendee,
+    ]);
+    expect(Number(rows[0]?.count)).toBe(0);
+  });
+
   it('does not bring back a meeting or an address deletion removed', async () => {
     const id = uid();
     const attendee = 'deleted.person@tombstone-law.example';

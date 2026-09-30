@@ -4,8 +4,8 @@ import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
-import { receiveSynthesizedCalcomEvent, type ParsedEvent } from './calcom.ts';
+import { aliasMeeting, foldMeetings, MEETING_COLUMNS, receiveSynthesizedCalcomEvent, type MeetingRow, type ParsedEvent } from './calcom.ts';
+import { attendeeAddressOf, deletionTombstoneKeyOf } from './attendee.ts';
 
 /**
  * Cal.com reconciliation (slice M1): the bookings Cal.com's API reports, compared with
@@ -104,7 +104,6 @@ export interface CalcomBooking {
 }
 
 const UID = /^[A-Za-z0-9_-]{1,128}$/u;
-const EMAIL = /^[^@\s]+@[^@\s]+$/u;
 const STATUSES: readonly string[] = ['accepted', 'cancelled', 'rejected', 'pending', 'awaiting_host'];
 
 const record = (value: unknown): Readonly<Record<string, unknown>> =>
@@ -115,11 +114,8 @@ const instantOf = (value: unknown): string | null => {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
-const emailOf = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const candidate = value.trim().toLowerCase();
-  return EMAIL.test(candidate) && candidate.length <= 320 ? candidate : null;
-};
+/** The webhook's spelling (`meetings/attendee.ts`), so both paths store the same address. */
+const emailOf = (value: unknown): string | null => attendeeAddressOf(value);
 
 /** One entry of the list's `data`, or null when it is not a booking this can use. */
 export function parseCalcomBooking(value: unknown): CalcomBooking | null {
@@ -244,14 +240,35 @@ export interface StoredMeeting {
   readonly [column: string]: unknown;
 }
 
-async function meetingOf(context: RepositoryContext, uid: string): Promise<StoredMeeting | null> {
-  const { rows } = await context.db.query<StoredMeeting>(
-    `SELECT id, state, current_booking_uid, starts_at, ends_at, last_event_at FROM meetings
-      WHERE workspace_id = $1 AND (booking_uid = $2 OR current_booking_uid = $2)
-      ORDER BY (current_booking_uid = $2) DESC LIMIT 1`,
-    [context.scope.workspaceId, uid],
+/**
+ * The one meeting a chain is, through `meeting_booking_uids` (0029): every uid of the
+ * chain is looked up, and when they resolve to two or more meetings those are folded
+ * into the one holding the oldest uid (`foldMeetings`, W's rules), keeping the newest
+ * state, times and current uid — even when the newest row is already cancelled (review
+ * fold 2, finding 1). Null when no uid is known.
+ */
+async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | null> {
+  const { rows: found } = await context.db.query<{ id: string; position: string }>(
+    `SELECT m.id, min(u.position) AS position
+       FROM unnest($2::text[]) WITH ORDINALITY AS u(uid, position)
+       JOIN meetings m ON m.workspace_id = $1
+        AND (m.id IN (SELECT a.meeting_id FROM meeting_booking_uids a WHERE a.workspace_id = $1 AND a.booking_uid = u.uid)
+             OR m.booking_uid = u.uid OR m.current_booking_uid = u.uid)
+      GROUP BY m.id`,
+    [context.scope.workspaceId, [...uids]],
   );
-  return rows[0] ?? null;
+  if (found.length === 0) return null;
+  const { rows } = await context.db.query<MeetingRow>(
+    `SELECT ${MEETING_COLUMNS} FROM meetings WHERE workspace_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE`,
+    [context.scope.workspaceId, found.map(row => row.id)],
+  );
+  // The survivor holds the chain's oldest uid.
+  const survivorId = [...found].sort((left, right) => Number(left.position) - Number(right.position))[0]?.id;
+  const survivor = rows.find(row => row.id === survivorId) ?? rows[0];
+  if (survivor === undefined) return null;
+  const meeting = rows.length === 1 ? survivor : await foldMeetings(context, rows, survivor.id);
+  await aliasMeeting(context, meeting.id, uids);
+  return meeting;
 }
 
 type Trigger = 'BOOKING_CREATED' | 'BOOKING_RESCHEDULED' | 'BOOKING_CANCELLED' | 'MEETING_ENDED' | 'BOOKING_NO_SHOW_UPDATED';
@@ -441,13 +458,16 @@ export function reconcileEventId(event: PlannedEvent): string {
  */
 async function attendeeTombstoned(context: RepositoryContext, attendeeEmail: string | null): Promise<boolean> {
   if (attendeeEmail === null) return false;
-  const canonical = canonicalizeHandle(attendeeEmail);
-  if (!canonical.ok) return false;
+  // The key the deletion wrote (`meetings/attendee.ts`): the canonical handle, or for an
+  // address the canonicalizer refuses, its fallback key. Never "not suppressed" for want
+  // of a canonical form (review fold 2, finding 3 (i)).
+  const key = deletionTombstoneKeyOf(attendeeEmail);
+  if (key === null) return false;
   const { rows } = await context.db.query(
     `SELECT 1 FROM suppression_events
       WHERE workspace_id = $1 AND scope = 'handle' AND canonical_key = $2 AND source = 'deletion_tombstone'
       LIMIT 1`,
-    [context.scope.workspaceId, canonical.handle.value],
+    [context.scope.workspaceId, key],
   );
   return rows.length > 0;
 }
@@ -488,11 +508,7 @@ export async function reconcileCalcomBookings(
       counts.skipped += 1;
       continue;
     }
-    let meeting: StoredMeeting | null = null;
-    for (const uid of [...chain.uids].reverse()) {
-      meeting = await meetingOf(context, uid);
-      if (meeting !== null) break;
-    }
+    const meeting = await unifyChain(context, chain.uids);
     if (meeting === null) {
       const attendees = chain.uids.map(uid => chain.bookings.get(uid)?.attendeeEmail ?? null);
       let tombstoned = false;
@@ -530,6 +546,9 @@ export async function reconcileCalcomBookings(
       else if (receipt.outcome === 'unmatched') counts.unmatched += 1;
       else if (receipt.outcome === 'applied') counts.applied += 1;
     }
+    // Every uid of the chain is this meeting's from now on, intermediates included, and
+    // anything the events left as a second row is folded in (0029).
+    await unifyChain(context, chain.uids);
   }
   if (counts.synthesized > 0) {
     await recordCrmAuditEvent(context, {

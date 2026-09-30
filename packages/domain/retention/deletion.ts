@@ -7,6 +7,8 @@ import { finaliseSubjectReservations, settleAttempt } from '../research/reservat
 import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
+import { deletionTombstoneKeyOf } from '../meetings/attendee.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
 import { accept, refuse, type RetentionResult } from './result.ts';
 
@@ -191,6 +193,8 @@ async function measure(
   readonly stops: Record<string, number>;
   readonly retains: Record<string, number>;
   readonly handles: string[];
+  /** Meeting attendees the canonicalizer refuses, tombstoned under their fallback key. */
+  readonly attendeeKeys: string[];
 }> {
   const workspace = context.scope.workspaceId;
   const firm = scope.firmId;
@@ -438,24 +442,38 @@ async function measure(
     byContact,
   );
 
-  // Slice M1 (review fold 1, finding 3): the attendee of every meeting this deletion
-  // takes is tombstoned too. A domain-matched or unmatched booking's attendee is often
-  // on no route, and without a tombstone Cal.com's reconciliation would read the booking
-  // back an hour later and store the address again (`meetings/reconcile.ts`). Only an
-  // address the canonicaliser accepts: an unreadable one cannot be suppressed, and must
-  // not refuse the whole deletion.
+  // Slice M1 (review folds 1 and 2, finding 3): the attendee of every meeting this
+  // deletion takes is tombstoned too. A domain-matched or unmatched booking's attendee
+  // is often on no route, and without a tombstone Cal.com's reconciliation would read the
+  // booking back an hour later and store the address again (`meetings/reconcile.ts`).
+  // An address the suppression canonicalizer accepts is a handle like any other; one it
+  // refuses (a non-ASCII local part) is tombstoned under its fallback key
+  // (`meetings/attendee.ts`), which the reconciliation reads the same way. None is skipped.
   const { rows: attendeeRows } = await context.db.query<{ handle: string }>(
     `SELECT DISTINCT m.attendee_email AS handle FROM meetings m
       WHERE m.workspace_id = $1 AND m.attendee_email IS NOT NULL AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
   const handles = new Set(handleRows.map(row => row.handle));
+  const attendeeKeys = new Set<string>();
   for (const row of attendeeRows) {
     const canonical = canonicalizeHandle(row.handle);
-    if (canonical.ok) handles.add(canonical.handle.value);
+    if (canonical.ok) {
+      handles.add(canonical.handle.value);
+      continue;
+    }
+    const key = deletionTombstoneKeyOf(row.handle);
+    if (key !== null && !handles.has(key)) attendeeKeys.add(key);
   }
 
-  return { removes, redacts, stops, retains, handles: [...handles].sort() };
+  return {
+    removes,
+    redacts,
+    stops,
+    retains,
+    handles: [...handles].sort(),
+    attendeeKeys: [...attendeeKeys].filter(key => !handles.has(key)).sort(),
+  };
 }
 
 function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): string {
@@ -468,6 +486,7 @@ function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): st
         redacts: measured.redacts,
         stops: measured.stops,
         handles: measured.handles,
+        attendeeKeys: measured.attendeeKeys,
       }),
     )
     .digest('hex');
@@ -560,7 +579,7 @@ export async function previewDeletion(
     redacts: measured.redacts,
     stops: measured.stops,
     retains: measured.retains,
-    tombstoneHandles: measured.handles,
+    tombstoneHandles: [...measured.handles, ...measured.attendeeKeys],
   });
 }
 
@@ -578,6 +597,12 @@ export async function commitDeletion(
   if (!isAdminScope(context.scope)) return refuse('admin_only');
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('admin_only');
+
+  // The send gate first, before the request row and before anything is measured (Cal.com
+  // slice M1, review fold 2, finding 3 (ii)). Every stop-fact writer takes it first —
+  // the tombstones below do too — and so does a Cal.com booking: a booking that commits
+  // while this deletion runs is either measured (and tombstoned) or waits for it.
+  await lockSendGateForStopFact(context);
 
   const request = await context.db.query<{
     id: string;
@@ -613,6 +638,17 @@ export async function commitDeletion(
       value: handle,
       source: 'deletion_tombstone',
       commandId: `${input.commandId}:${handle}`,
+      journal: input.journal,
+    });
+    if (!recorded.ok) return refuse('handle_uncanonical');
+    tombstoneEventIds.push(recorded.value.eventId);
+  }
+  for (const key of measured.attendeeKeys) {
+    const recorded = await recordSuppression(context, {
+      scope: 'handle',
+      fallbackKey: key,
+      source: 'deletion_tombstone',
+      commandId: `${input.commandId}:${key}`,
       journal: input.journal,
     });
     if (!recorded.ok) return refuse('handle_uncanonical');

@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { updateSetting } from '@fss/domain/settings/store.ts';
 import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS, hourOf, jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
@@ -240,5 +243,50 @@ describe('the calcom.reconcile job and its source', () => {
     expect(lines.some(line => line['event'] === 'calcom_reconcile')).toBe(false);
     expect(await meetingsIn(seeded.alpha.workspaceId)).toBe(0);
     expect(await meetingsIn(seeded.beta.workspaceId)).toBe(0);
+  });
+
+  it('re-checks the switch under the send gate: a disable in flight either lands first or waits (fold 2, finding 4)', async () => {
+    await database.session.query("DELETE FROM workspace_settings WHERE setting_key = 'calendar_integration'");
+    await switchOn(seeded.alpha.workspaceId, seeded.alpha.admin.userId);
+    const lines: Record<string, unknown>[] = [];
+    const booking = {
+      uid: 'gated1x',
+      status: 'accepted',
+      start: '2026-10-06T15:00:00.000Z',
+      end: '2026-10-06T15:30:00.000Z',
+      createdAt: '2026-09-30T12:00:00.000Z',
+      updatedAt: '2026-09-30T12:00:00.000Z',
+      attendees: [{ email: 'gated@elsewhere.example', absent: false }],
+    };
+    // An administrator turning alpha off, on another connection, not yet committed: the
+    // write holds alpha's send gate.
+    const other = await database.appRuntimeSession();
+    await other.query('BEGIN');
+    const disabled = await updateSetting(
+      repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }), other),
+      { settingKey: 'calendar_integration', value: { integration: 'off' } },
+    );
+    expect(disabled.ok).toBe(true);
+
+    const handler = calcomReconcileJobHandler({ client: fake([booking]), now: () => '2026-10-01T12:00:00.000Z', log: (event, fields) => lines.push({ event, ...fields }) });
+    const run = withTransaction(database.session, async () => {
+      await handler.handle({
+        session: database.session,
+        scope: workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
+        job: {} as Parameters<typeof handler.handle>[0]['job'],
+      });
+    });
+    let finished = false;
+    void run.then(() => {
+      finished = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    // It read the switch on before fetching, and now waits at the gate.
+    expect(finished).toBe(false);
+    await other.query('COMMIT');
+    await run;
+    expect(lines.at(-1)).toMatchObject({ event: 'calcom_reconcile_skipped', stage: 'before_apply' });
+    const { rows } = await database.session.query<{ count: string }>("SELECT count(*) AS count FROM meetings WHERE booking_uid = 'gated1x'");
+    expect(Number(rows[0]?.count)).toBe(0);
   });
 });

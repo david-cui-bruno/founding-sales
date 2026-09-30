@@ -8,6 +8,7 @@ import { applyStageEvidence, openReviewItem, type StageEvidenceOutcome } from '.
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
+import { attendeeAddressOf } from './attendee.ts';
 import { manualModeEndReason } from '../sequences/terminalStops.ts';
 
 /**
@@ -70,7 +71,6 @@ export interface ParsedEvent {
 }
 
 const UID = /^[A-Za-z0-9_-]{1,128}$/u;
-const EMAIL = /^[^@\s]+@[^@\s]+$/u;
 
 const record = (value: unknown): Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -85,10 +85,8 @@ const instantOf = (value: unknown): string | null => {
   const parsed = Date.parse(candidate);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
-const emailOf = (value: unknown): string | null => {
-  const candidate = text(value)?.trim().toLowerCase() ?? null;
-  return candidate !== null && EMAIL.test(candidate) && candidate.length <= 320 ? candidate : null;
-};
+/** `meetings/attendee.ts`: the spelling the suppression canonicalizer normalizes to. */
+const emailOf = (value: unknown): string | null => attendeeAddressOf(value);
 
 /**
  * Cal.com's two shapes. Booking events nest the booking under `payload` and date the
@@ -144,7 +142,22 @@ export interface MeetingRow {
 export const MEETING_COLUMNS =
   'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at';
 
+/**
+ * The meeting a booking uid belongs to, locked. Through `meeting_booking_uids` (0029,
+ * slice M1): every uid a meeting has been — the original, every intermediate of a
+ * reschedule chain, the current one — resolves to it. The two uid columns are the
+ * fallback for a row written before its aliases (none, after 0029's backfill).
+ */
 async function meetingByUid(context: RepositoryContext, uid: string): Promise<MeetingRow | null> {
+  const { rows: aliased } = await context.db.query<MeetingRow>(
+    `SELECT ${MEETING_COLUMNS.split(', ').map(column => `m.${column}`).join(', ')}
+       FROM meeting_booking_uids a
+       JOIN meetings m ON m.workspace_id = a.workspace_id AND m.id = a.meeting_id
+      WHERE a.workspace_id = $1 AND a.booking_uid = $2
+      FOR UPDATE OF m`,
+    [context.scope.workspaceId, uid],
+  );
+  if (aliased[0] !== undefined) return aliased[0];
   const { rows } = await context.db.query<MeetingRow>(
     `SELECT ${MEETING_COLUMNS} FROM meetings
       WHERE workspace_id = $1 AND (booking_uid = $2 OR current_booking_uid = $2)
@@ -152,6 +165,22 @@ async function meetingByUid(context: RepositoryContext, uid: string): Promise<Me
     [context.scope.workspaceId, uid],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Record uids as the meeting's (0029). A uid that is already some meeting's is left
+ * where it is: the fold that joins two meetings moves aliases explicitly
+ * (`foldMeetings`), and nothing else may take one from a meeting.
+ */
+export async function aliasMeeting(context: RepositoryContext, meetingId: string, uids: readonly (string | null)[]): Promise<void> {
+  const known = [...new Set(uids.filter((uid): uid is string => uid !== null))];
+  if (known.length === 0) return;
+  await context.db.query(
+    `INSERT INTO meeting_booking_uids (workspace_id, booking_uid, meeting_id)
+     SELECT $1, uid, $2 FROM unnest($3::text[]) AS uid
+     ON CONFLICT (workspace_id, booking_uid) DO NOTHING`,
+    [context.scope.workspaceId, meetingId, known],
+  );
 }
 
 /**
@@ -311,6 +340,9 @@ async function applyEvent(
       );
       existing = adopted[0] ?? existing;
     }
+    // Whatever the order of delivery, the uids a reschedule names belong to this
+    // meeting from now on (0029): a late event about either finds it.
+    if (kind === 'BOOKING_RESCHEDULED') await aliasMeeting(context, existing.id, [lookupUid, event.uid]);
     if (stale) return none('stale', existing);
   }
 
@@ -344,6 +376,7 @@ async function applyEvent(
     );
     const meeting = rows[0];
     if (meeting === undefined) throw new Error('the meeting insert returned no row');
+    await aliasMeeting(context, meeting.id, [lookupUid, event.uid]);
     if (firmId === null) {
       await openReviewItem(
         context,
@@ -432,6 +465,7 @@ async function applyEvent(
     ],
   );
   const updated = rows[0] ?? existing;
+  await aliasMeeting(context, updated.id, [updated.booking_uid, updated.current_booking_uid, event.uid]);
   if (next.state === 'held' && existing.state !== 'held' && updated.firm_id !== null) {
     await recordFunnelFact(context, {
       kind: 'meeting.held',
@@ -456,6 +490,12 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
     replacement.id,
     survivor.id,
   ]);
+  // Every uid the replacement had, before the row (and its cascade) goes (0029).
+  await context.db.query('UPDATE meeting_booking_uids SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [
+    workspaceId,
+    replacement.id,
+    survivor.id,
+  ]);
   await context.db.query(
     `DELETE FROM stage_review_items
       WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
@@ -468,6 +508,82 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
     subjectId: survivor.id,
     detail: { replacementBookingUid: replacement.booking_uid, replacementState: replacement.state },
   });
+}
+
+/**
+ * Join several rows that turned out to be one meeting (Cal.com slice M1, review fold 2):
+ * the reconciliation found a chain's uids resolving to more than one meeting — A booked,
+ * the A→B webhook lost, B's cancellation webhook recorded B on a row of its own.
+ *
+ * W's fold rules, generalized: the survivor is the row the caller names (the one holding
+ * the chain's oldest uid); every other row's deliveries **and aliases** move to it before
+ * the row is removed, and its unresolved review item goes with it. The survivor takes the
+ * newest row's state, times and current uid (the greatest `last_event_at`), and the
+ * links of a matched row when it has none of its own. No alias is lost: they move first.
+ * The caller holds the send gate and has the rows locked.
+ */
+export async function foldMeetings(context: RepositoryContext, rows: readonly MeetingRow[], survivorId: string): Promise<MeetingRow> {
+  const workspaceId = context.scope.workspaceId;
+  const survivor = rows.find(row => row.id === survivorId);
+  if (survivor === undefined) throw new Error('the fold names a survivor that is not one of its rows');
+  const others = rows.filter(row => row.id !== survivorId);
+  if (others.length === 0) return survivor;
+  const newest = [...rows].sort((left, right) => right.last_event_at.getTime() - left.last_event_at.getTime())[0] ?? survivor;
+  const linked = survivor.firm_id === null ? (others.find(row => row.firm_id !== null) ?? null) : null;
+  for (const other of others) {
+    await context.db.query('UPDATE calcom_events SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [workspaceId, other.id, survivor.id]);
+    await context.db.query('UPDATE meeting_booking_uids SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [
+      workspaceId,
+      other.id,
+      survivor.id,
+    ]);
+    await context.db.query(
+      `DELETE FROM stage_review_items
+        WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
+      [workspaceId, other.id],
+    );
+    await context.db.query('DELETE FROM meetings WHERE workspace_id = $1 AND id = $2', [workspaceId, other.id]);
+  }
+  const { rows: folded } = await context.db.query<MeetingRow>(
+    `UPDATE meetings
+        SET state = $3, state_before_no_show = $4, starts_at = $5::timestamptz, ends_at = $6::timestamptz,
+            current_booking_uid = $7, last_event_at = GREATEST(last_event_at, $8::timestamptz),
+            firm_id = COALESCE(firm_id, $9::uuid), contact_id = CASE WHEN firm_id IS NULL THEN $10::uuid ELSE contact_id END,
+            opportunity_id = CASE WHEN firm_id IS NULL THEN $11::uuid ELSE opportunity_id END,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING ${MEETING_COLUMNS}`,
+    [
+      workspaceId,
+      survivor.id,
+      newest.state,
+      newest.state_before_no_show,
+      newest.starts_at.toISOString(),
+      newest.ends_at.toISOString(),
+      newest.current_booking_uid,
+      newest.last_event_at.toISOString(),
+      linked?.firm_id ?? null,
+      linked?.contact_id ?? null,
+      linked?.opportunity_id ?? null,
+    ],
+  );
+  const result = folded[0] ?? survivor;
+  if (linked !== null) {
+    await context.db.query(
+      `DELETE FROM stage_review_items
+        WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL
+          AND reason IN ('firm_unmatched', 'firm_ambiguous')`,
+      [workspaceId, survivor.id],
+    );
+  }
+  await aliasMeeting(context, survivor.id, others.flatMap(other => [other.booking_uid, other.current_booking_uid]));
+  await recordCrmAuditEvent(context, {
+    action: 'meeting.folded',
+    subjectKind: 'meeting',
+    subjectId: survivor.id,
+    detail: { folded: others.length, state: result.state },
+  });
+  return result;
 }
 
 async function touch(context: RepositoryContext, meetingId: string, at: string): Promise<void> {

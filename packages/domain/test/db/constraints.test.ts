@@ -18,6 +18,7 @@ import { FOLLOW_UP_CONSTRAINT_CASES } from './support/followUpCases.ts';
 import { SEND_PATH_V2_CONSTRAINT_CASES } from './support/sendPathV2Cases.ts';
 import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from './support/mailboxAccountsCases.ts';
 import { CALL_TO_BOOKING_CONSTRAINT_CASES } from './support/callToBookingCases.ts';
+import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from './support/meetingBookingUidsCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1363,6 +1364,7 @@ const cases: readonly Case[] = [
   ...SEND_PATH_V2_CONSTRAINT_CASES,
   ...MAILBOX_ACCOUNTS_CONSTRAINT_CASES,
   ...CALL_TO_BOOKING_CONSTRAINT_CASES,
+  ...MEETING_BOOKING_UIDS_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {
