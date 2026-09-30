@@ -241,7 +241,7 @@ export const MAIL_REFUSAL_SENTENCES: Readonly<Record<GrantRefusalCode | 'mailbox
     mailbox_switch_same_address: 'That is the mailbox that is already connected. Enter the other address to switch.',
     mailbox_switch_wrong_domain: 'That address is outside your workspace’s domain. Switch to an address on your own domain.',
     mailbox_switch_pending_sends: 'A message is still being sent from the current mailbox. Try again in a few minutes.',
-    grant_refused: 'Google did not give Callie access. Your mailbox did not change. Try again and allow the requested access.',
+    grant_refused: 'Callie couldn’t finish connecting that account. Your mailbox did not change. Try again in a minute.',
     mailbox_address_taken: 'That Google account is already connected to another workspace. Use a different account.',
     authorization_request_unknown: 'That Google sign-in expired or was not started by Callie. Start again from Settings.',
     mailbox_already_connected: 'A mailbox is already connected. To change it, use Switch mailbox in Settings.',
@@ -283,6 +283,68 @@ export const CALL_START_REFUSAL_SENTENCES = Object.freeze({
   calling_off: 'Calling from Callie is turned off. Close and reopen the firm to call from your phone instead.',
 } as const);
 
+// ---------------------------------------------------------------------------
+// Stage review and the mailbox lock (call-to-booking W, R2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a piece of evidence (a call outcome, a booking) waits for a person instead of moving
+ * a deal. `STAGE_REVIEW_REASONS` is the migration 0028 list; the test compares it to the
+ * domain's `StageReviewReason` by reading the source.
+ */
+export const STAGE_REVIEW_REASONS = [
+  'opportunity_closed',
+  'no_opportunity',
+  'stage_missing',
+  'rule_missing',
+  'firm_unmatched',
+  'firm_ambiguous',
+] as const;
+export type StageReviewReasonCode = (typeof STAGE_REVIEW_REASONS)[number];
+
+export const STAGE_REVIEW_SENTENCES: Readonly<Record<StageReviewReasonCode | 'stage_review', string>> = Object.freeze({
+  stage_review: 'Callie needs you to look at this before it moves the deal. Open it from the firm’s page.',
+  opportunity_closed: 'The deal was already closed, so Callie did not move it. Reopen it if this changes things.',
+  no_opportunity: 'This firm has no open deal for Callie to move. Add the firm to the pipeline first.',
+  stage_missing: 'The stage this would move the deal to no longer exists. Choose a stage by hand.',
+  rule_missing: 'Callie has no rule for what this should do to the deal. Move the deal by hand.',
+  firm_unmatched: 'Callie could not tell which firm this belongs to. Choose the firm.',
+  firm_ambiguous: 'This could belong to more than one firm. Choose the right one.',
+});
+
+/** Details that ride on a refusal (not codes of their own). */
+export const MAILBOX_DETAIL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  mailbox_busy: 'Callie is busy with the mailbox right now. Try again in a minute.',
+});
+
+/**
+ * The `live_work_present` sentence with the enrollments named. `liveEnrollments` is what the
+ * refusal carries; an empty or missing list falls back to the plain sentence.
+ */
+export function liveWorkPresentSentence(
+  liveEnrollments: readonly { readonly sequenceName: string; readonly stepNumber?: number | null }[] | undefined,
+): string {
+  if (liveEnrollments === undefined || liveEnrollments.length === 0) return CRM_REFUSAL_SENTENCES.live_work_present;
+  const named = liveEnrollments.map(item =>
+    item.stepNumber === undefined || item.stepNumber === null ? item.sequenceName : `${item.sequenceName}, step ${String(item.stepNumber)}`,
+  );
+  const noun = named.length === 1 ? 'this sequence is' : 'these sequences are';
+  return `This firm can’t go back to automatic while ${noun} still live: ${named.join('; ')}. Ask an administrator to end or finish ${named.length === 1 ? 'it' : 'them'}, then try again.`;
+}
+
+/**
+ * "Sequence: <name>, step N" for a hold that concerns an enrollment, or null when it does
+ * not (no line is shown for it). The step is left out when it is not known.
+ */
+export function holdEnrollmentLine(
+  enrollment: { readonly sequenceName: string; readonly stepNumber: number | null } | null | undefined,
+): string | null {
+  if (enrollment === null || enrollment === undefined) return null;
+  return enrollment.stepNumber === null
+    ? `Sequence: ${enrollment.sequenceName}`
+    : `Sequence: ${enrollment.sequenceName}, step ${String(enrollment.stepNumber)}`;
+}
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...HOLD_REASON_SENTENCES,
@@ -296,6 +358,8 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...CALL_SESSION_REFUSAL_SENTENCES,
   ...CALL_CONSUMPTION_REFUSAL_SENTENCES,
   ...CALL_START_REFUSAL_SENTENCES,
+  ...STAGE_REVIEW_SENTENCES,
+  ...MAILBOX_DETAIL_SENTENCES,
 });
 
 /** Whether `code` has a sentence of its own (not the generic one). */

@@ -29,6 +29,8 @@ export type CrmResult<T> =
       readonly conflicts?: readonly MergeConflict[];
       /** Present only for `live_work_present`: the enrollments still live at the opportunity. */
       readonly liveEnrollmentIds?: readonly string[];
+      /** Present with `liveEnrollmentIds`: the same enrollments by sequence name and step, for the sentence (R2). */
+      readonly liveEnrollments?: readonly { readonly id: string; readonly sequenceName: string; readonly stepNumber: number | null }[];
     };
 
 export function accept<T>(value: T): CrmResult<T> {

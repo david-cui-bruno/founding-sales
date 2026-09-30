@@ -1,4 +1,4 @@
-import { reasonSentence, type ContactDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
+import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
 import { useState, type JSX } from 'react';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
 import type {
@@ -602,6 +602,12 @@ function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility
                       <>
                         {' · clears with '}
                         <span data-testid="hold-recovery">{inWords(hold.recoveryAction)}</span>
+                      </>
+                    )}
+                    {holdEnrollmentLine(hold.enrollment) === null ? null : (
+                      <>
+                        {' · '}
+                        <span data-testid="hold-enrollment">{holdEnrollmentLine(hold.enrollment)}</span>
                       </>
                     )}
                   </>

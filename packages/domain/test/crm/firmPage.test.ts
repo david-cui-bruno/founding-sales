@@ -113,6 +113,8 @@ describe('the Firm page read', () => {
     expect(page.value.holds[0]?.reasonCode).toBe('reassignment');
     expect(page.value.holds[0]?.blockedActionKinds).toEqual(['email_send', 'call_task']);
     expect(page.value.holds[0]?.recoveryAction).toBe('resume_after_review');
+    // R2: a hold that concerns no enrollment carries none.
+    expect(page.value.holds[0]?.enrollment).toBeNull();
   });
 
   it('gives a colleague the narrow read and no history keys at all', async () => {

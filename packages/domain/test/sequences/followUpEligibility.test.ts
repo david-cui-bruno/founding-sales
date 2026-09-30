@@ -16,6 +16,7 @@ import {
   type StepEligibilityInput,
 } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
+import { holdEnrollments } from '../../sequences/holdEnrollments.ts';
 import {
   agreedSequenceExpiry,
   consumeFollowUpPermission,
@@ -1207,7 +1208,53 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
       origin: 'direct_send',
       reason: 'it was a hand-written e-mail',
     });
-    expect(refused).toEqual({ ok: false, reason: 'live_work_present', liveEnrollmentIds: [enrollmentId] });
+    const { rows: named } = await database.session.query<{ name: string }>(
+      `SELECT s.name FROM sequence_enrollments n
+         JOIN sequence_versions v ON v.workspace_id = n.workspace_id AND v.id = n.sequence_version_id
+         JOIN sequences s ON s.workspace_id = v.workspace_id AND s.id = v.sequence_id
+        WHERE n.workspace_id = $1 AND n.id = $2`,
+      [seeded.alpha.workspaceId, enrollmentId],
+    );
+    // R2: the refusal names the enrollment by its sequence and step, beside the ids.
+    expect(refused).toEqual({
+      ok: false,
+      reason: 'live_work_present',
+      liveEnrollmentIds: [enrollmentId],
+      liveEnrollments: [{ id: enrollmentId, sequenceName: named[0]?.name, stepNumber: 1 }],
+    });
+
+    // The same enrollment, as the hold DTOs carry it: by its scope, by a step execution it
+    // opened, and by the opportunity it is the only live enrollment of.
+    const { rows: execution } = await database.session.query<{ id: string }>(
+      'SELECT id FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2 ORDER BY ordinal LIMIT 1',
+      [seeded.alpha.workspaceId, enrollmentId],
+    );
+    const hold = async (scopeKind: string, scopeKey: string, sourceKind: string, sourceId: string | null): Promise<string> => {
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds,
+                                   source_event_kind, source_event_id, recovery_action)
+         VALUES ($1, $2, $3, 'reassignment', ARRAY['email_send']::text[], $4, $5, 'resume_after_review')
+         RETURNING id`,
+        [seeded.alpha.workspaceId, scopeKind, scopeKey, sourceKind, sourceId],
+      );
+      return rows[0]?.id ?? '';
+    };
+    const byScope = await hold('enrollment', enrollmentId, 'test', null);
+    const byExecution = await hold('firm', crm.alpha.firmId, 'sequence.step_execution', execution[0]?.id ?? '');
+    const byOpportunity = await hold('opportunity', crm.alpha.opportunityId, 'mail_message', randomUUID());
+    const none = await hold('firm', crm.alpha.firmId, 'test', null);
+    const found = await holdEnrollments(admin(), [byScope, byExecution, byOpportunity, none]);
+    const expected = { id: enrollmentId, sequenceName: named[0]?.name, stepNumber: 1 };
+    expect(found.get(byScope)).toEqual(expected);
+    expect(found.get(byExecution)).toEqual(expected);
+    expect(found.get(byOpportunity)).toEqual(expected);
+    // A hold that concerns no enrollment maps to nothing, so the window shows no line.
+    expect(found.has(none)).toBe(false);
+    expect((await holdEnrollments(admin(), [])).size).toBe(0);
+    await database.session.query('DELETE FROM active_holds WHERE workspace_id = $1 AND id = ANY($2::uuid[])', [
+      seeded.alpha.workspaceId,
+      [byScope, byExecution, byOpportunity, none],
+    ]);
     // Still manual, and the live step is still refused.
     expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
       ok: false,

@@ -74,6 +74,8 @@ describe('what a reply card contains (8.3)', () => {
     expect(card.impact.holds.map(hold => hold.reasonCode)).toEqual(['uncertain_reply']);
     expect(card.impact.holds[0]?.recoveryAction).toBe('confirm_reply');
     expect(card.impact.holds[0]?.recoverable).toBe(true);
+    // R2: no live enrollment at this opportunity, so the hold names none.
+    expect(card.impact.holds[0]?.enrollment).toBeNull();
     expect(card.impact.holds[0]?.blockedActionKinds).toEqual([
       'email_send',
       'call_task',

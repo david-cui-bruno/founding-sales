@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
-import { blockedActionKindSchema, holdReasonCodeSchema, holdRecoveryActionSchema } from './reasonCodes.ts';
+import { blockedActionKindSchema, holdEnrollmentDtoSchema, holdReasonCodeSchema, holdRecoveryActionSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the reply cards and the classifier settings (specification 8.3,
@@ -75,6 +75,7 @@ const replyHoldDtoSchema = z.object({
   recoveryAction: holdRecoveryActionSchema.nullable(),
   recoverable: z.boolean(),
   startedAt: instant,
+  enrollment: holdEnrollmentDtoSchema.nullable().optional(),
 });
 export type ReplyHoldDto = z.infer<typeof replyHoldDtoSchema>;
 

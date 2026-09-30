@@ -7,6 +7,7 @@ import type {
   ImportPreviewRowDto,
   ImportRowOutcomeDto,
 } from '@fss/contracts';
+import { reasonSentence } from '@fss/contracts';
 import type { AddFirmView, ImportFileRefusalView } from './firmWorkspaceContract.ts';
 
 /**
@@ -208,7 +209,7 @@ export function commitLine(result: ImportCommitResult): string {
   const reason = result.reason ?? 'refused';
   const column = result.column ?? null;
   if (column !== null) return `${row} · ${columnLabel(column)}: ${issueSentence(reason)}`;
-  const sentence = COMMIT_REASONS[reason] ?? (reason in ISSUE_SENTENCES ? issueSentence(reason) : `Refused (${reason}).`);
+  const sentence = COMMIT_REASONS[reason] ?? (reason in ISSUE_SENTENCES ? issueSentence(reason) : reasonSentence(reason));
   return `${row} · ${sentence}`;
 }
 

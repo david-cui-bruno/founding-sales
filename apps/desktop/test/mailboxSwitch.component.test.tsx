@@ -205,6 +205,48 @@ describe('the places that printed a code now print a sentence', () => {
     expect(text).not.toContain('cold_outreach');
   });
 
+  it('names the enrollment on a firm hold, and shows no line for a hold with none (R2)', () => {
+    const base = assigneeFirmPage() as Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+    const page = {
+      ...base,
+      holds: [
+        {
+          id: '99999999-9999-4999-8999-999999999999',
+          reasonCode: 'follow_up_expired' as const,
+          blockedActionKinds: ['email_send'],
+          startedAt: '2026-09-30T12:00:00.000Z',
+          recoveryAction: null,
+          enrollment: { id: '33333333-3333-4333-8333-333333333333', sequenceName: 'Spring follow-up', stepNumber: 2 },
+        },
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          reasonCode: 'scoped_pause' as const,
+          blockedActionKinds: ['email_send'],
+          startedAt: '2026-09-30T13:00:00.000Z',
+          recoveryAction: null,
+          enrollment: null,
+        },
+      ],
+    };
+    render(
+      <FirmPage
+        page={page}
+        sequences={null}
+        actionsEnabled
+        busy={() => false}
+        redactionNotice={null}
+        onSaveContact={() => undefined}
+        onCheckRoute={() => undefined}
+        onOpenOpportunity={() => undefined}
+        onEnroll={() => undefined}
+        onTakeOver={() => undefined}
+      />,
+    );
+    const lines = screen.getAllByTestId('hold-enrollment').map(node => node.textContent);
+    expect(lines).toEqual(['Sequence: Spring follow-up, step 2']);
+    expect(screen.getAllByTestId('firm-hold')).toHaveLength(2);
+  });
+
   it('gives Today’s fallback a sentence for a code it has no table entry for', () => {
     expect(noticeSentence('coverage_incomplete')).toBe(reasonSentence('coverage_incomplete'));
     expect(noticeSentence('something_new')).toContain('(something_new)');

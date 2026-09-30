@@ -1,4 +1,4 @@
-import { IMPORT_ISSUE_CODES, type RouteDto } from '@fss/contracts';
+import { IMPORT_ISSUE_CODES, hasReasonSentence, liveWorkPresentSentence, reasonSentence, type RouteDto } from '@fss/contracts';
 import { OFFLINE_BANNER } from './readError.ts';
 import type { CrmScreen, CrmState, MergeView } from './firmWorkspaceContract.ts';
 
@@ -107,11 +107,23 @@ export const CHECK_FIELDS = 'Check the fields marked below.';
 
 export const GENERIC_NOTICE = 'That could not be done. Try again, or ask an administrator.';
 
+/**
+ * The `live_work_present` refusal, with the live enrollments named by sequence and step
+ * (R2). `liveEnrollments` is the refusal body's own list.
+ */
+export function liveWorkNotice(
+  liveEnrollments: readonly { readonly sequenceName: string; readonly stepNumber?: number | null }[] | undefined,
+): string {
+  return liveWorkPresentSentence(liveEnrollments);
+}
+
 export function noticeText(code: string): string {
   const known = CRM_NOTICES[code];
   if (known !== undefined) return known;
   // A field's code (lane g84): the sentence is under the field, and the line points there.
   if ((IMPORT_ISSUE_CODES as readonly string[]).includes(code)) return CHECK_FIELDS;
+  // A server code with words of its own (reasonText); the generic line for the rest.
+  if (hasReasonSentence(code)) return reasonSentence(code);
   return GENERIC_NOTICE;
 }
 

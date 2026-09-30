@@ -38,7 +38,7 @@ export interface RouteDeps {
  */
 export type CommandResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly liveEnrollments?: readonly unknown[] };
 
 /** Authenticate, or the refusal to return. Reads and writes both need a principal. */
 export async function requirePrincipal(
@@ -83,13 +83,20 @@ export function commandReply(outcome: {
   readonly replayed: boolean;
   readonly result?: unknown;
   readonly reason?: string;
+  readonly details?: Readonly<Record<string, unknown>>;
 }): RouteResult {
   if (outcome.status === 'accepted') {
     return { status: 200, body: { status: 'accepted', replayed: outcome.replayed, result: outcome.result ?? null } };
   }
   return {
     status: outcome.reason === 'client_upgrade_required' ? 426 : 409,
-    body: { status: 'refused', replayed: outcome.replayed, reason: outcome.reason ?? 'refused' },
+    body: {
+      status: 'refused',
+      replayed: outcome.replayed,
+      reason: outcome.reason ?? 'refused',
+      // `live_work_present` names the enrollments still live (R2); a replay answers the same.
+      ...(outcome.details?.['liveEnrollments'] === undefined ? {} : { liveEnrollments: outcome.details['liveEnrollments'] }),
+    },
   };
 }
 
@@ -114,7 +121,9 @@ export async function runRouteCommand<Schema extends z.ZodType<{ commandId: stri
   const outcome = await runCommand(deps.auth, deps.principal, { commandId, kind, payload, clientVersion }, async context => {
     const result = await work(context, body);
     if (result.ok) return { status: 'accepted', result: result.value ?? null };
-    return { status: 'refused', reason: result.reason };
+    return result.liveEnrollments === undefined
+      ? { status: 'refused', reason: result.reason }
+      : { status: 'refused', reason: result.reason, details: { liveEnrollments: result.liveEnrollments } };
   });
   return commandReply(outcome);
 }
