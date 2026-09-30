@@ -158,6 +158,12 @@ Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessio
   `callback_requested`, `not_interested` or `do_not_call` (any call log, placed from
   Callie or not), and after a parked firm is resumed. A `callback_requested` outcome's
   callback is the next action, as it always was (the callback task on Today);
+* a placed call with no outcome that is still `authorized` or `ringing` counts as
+  unanswered for 240 minutes, and while one exists another is refused
+  `call_attempt_today`: one attempt at a time;
+* the same cadence is read again at consumption, after slice W's shared send gate and
+  the firm row lock (`consumeCallSession`), so sessions created together cannot all be
+  placed; a refusal there is heard as the generic TwiML sentence;
 * the fifth attempt is refused `call_attempts_exhausted` and **parks the firm**: a
   firm-scoped `scoped_pause` hold on `dial_authorization`, source
   `call_cadence_parked`, recovery `resume_after_review`. While it is open every dial of
