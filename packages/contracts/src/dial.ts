@@ -486,18 +486,28 @@ export const logCallOutcomeCommandSchema = z.strictObject({
    * e-mail permission, which is David's own distinction of 29 September 2026.
    */
   followUpPermission: z
-    .strictObject({
-      scope: z.literal('single_email'),
-      /**
-       * The approved bytes that were promised. `logCallOutcome` writes it onto the call
-       * log (`agreed_template_version_id`), which is where the agreement lives, and the
-       * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
-       * rather than whichever approved template somebody picks later (P0-2). An
-       * `agreed_sequence` is granted through `POST /follow-up-permissions`, because it
-       * needs a version picker this command has no screen for (deviation 5).
-       */
-      templateVersionId: uuid,
-    })
+    .discriminatedUnion('scope', [
+      z.strictObject({
+        scope: z.literal('single_email'),
+        /**
+         * The approved bytes that were promised. `logCallOutcome` writes it onto the call
+         * log (`agreed_template_version_id`), which is where the agreement lives, and the
+         * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
+         * rather than whichever approved template somebody picks later (P0-2).
+         */
+        templateVersionId: uuid,
+      }),
+      z.strictObject({
+        /**
+         * Send-path v2 (slice S3): the person agreed on the call to a follow-up
+         * sequence — one immutable **published** version, written onto the call log as
+         * `agreed_sequence_version_id` and bound to the permission, and enrolled in the
+         * same command (`agreed_sequence_enrolled` below says which enrollment).
+         */
+        scope: z.literal('agreed_sequence'),
+        sequenceVersionId: uuid,
+      }),
+    ])
     .optional(),
 });
 
@@ -533,12 +543,23 @@ const CALL_FOLLOW_UP_KINDS = [
   'route_not_named',
   'effects_not_applied',
   'follow_up_not_granted',
+  /**
+   * Send-path v2 (slice S3). `follow_up_not_enrolled`: the agreed sequence's permission
+   * was granted but the enrollment was refused (the reason is the refusal code), so a
+   * person enrolls from the firm page or the agreement simply has none.
+   * `agreed_sequence_enrolled`: the agreed sequence was enrolled in the same command,
+   * and `enrollmentId` names the enrollment.
+   */
+  'follow_up_not_enrolled',
+  'agreed_sequence_enrolled',
 ] as const;
 
 const callFollowUpSchema = z.object({
   kind: z.enum(CALL_FOLLOW_UP_KINDS),
   /** A stable code: `no_instant`, `instant_mismatch`, `instant_invalid`, or the refusal. */
   reason: z.string().max(80),
+  /** Present on `agreed_sequence_enrolled`: the enrollment the command created. */
+  enrollmentId: uuid.optional(),
 });
 export type CallFollowUp = z.infer<typeof callFollowUpSchema>;
 

@@ -83,6 +83,16 @@ export const ENROLLABLE_ORIGIN_KINDS = ['prospecting', 'follow_up'] as const;
 export const enrollableOriginKindSchema = z.enum(ENROLLABLE_ORIGIN_KINDS);
 export type EnrollableOriginKind = (typeof ENROLLABLE_ORIGIN_KINDS)[number];
 
+/**
+ * Why a permission's one message was spent (`follow_up_permissions.consumed_reason`,
+ * migration 0026). `sent`: the dispatch claim spent it. `fulfilled_by_direct_send`: the
+ * salesperson sent the promised e-mail by hand, so the automated one must not follow.
+ * Present exactly when `consumedAt` is.
+ */
+export const FOLLOW_UP_CONSUMED_REASONS = ['sent', 'fulfilled_by_direct_send'] as const;
+export const followUpConsumedReasonSchema = z.enum(FOLLOW_UP_CONSUMED_REASONS);
+export type FollowUpConsumedReason = (typeof FOLLOW_UP_CONSUMED_REASONS)[number];
+
 /** What a call may agree to. A callback is not one of them (`call_logs_agreement_needs_interest`). */
 export const CALL_AGREED_FOLLOW_UPS = ['single_email', 'agreed_sequence'] as const;
 export const callAgreedFollowUpSchema = z.enum(CALL_AGREED_FOLLOW_UPS);

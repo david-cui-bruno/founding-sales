@@ -72,6 +72,12 @@ export const HOLD_REASON_CODES = [
   'follow_up_expired',
   'follow_up_scope_exhausted',
   'firm_already_enrolled',
+  /**
+   * Migration 0026, send-path v2 (30 September 2026): a prospecting e-mail may not
+   * leave through a conversation mailbox. Recoverable: connecting a cold-outreach
+   * mailbox clears it.
+   */
+  'cold_outreach_mailbox_required',
 ] as const;
 
 export const holdReasonCodeSchema = z.enum(HOLD_REASON_CODES);
@@ -101,6 +107,7 @@ const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Set([
   'follow_up_not_permitted',
   'follow_up_expired',
   'firm_already_enrolled',
+  'cold_outreach_mailbox_required',
 ]);
 
 export function isRecoverableHoldReason(code: HoldReasonCode): boolean {

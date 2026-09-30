@@ -756,13 +756,17 @@ export async function bindFollowUpPermission(
  * consuming after the provider answered could let a second e-mail leave on a permission
  * that buys one. `docs/greenfield/decisions/follow-up-eligibility-20260929.md` records
  * the choice.
+ *
+ * `consumed_reason = 'sent'` since migration 0026, whose CHECK pairs a reason with every
+ * `consumed_at`: this is the spend by the dispatch claim, as opposed to a promised
+ * e-mail the salesperson sent by hand (`fulfilled_by_direct_send`).
  */
 export async function consumeFollowUpPermission(
   context: RepositoryContext,
   permissionId: string,
 ): Promise<boolean> {
   const consumed = await context.db.query(
-    `UPDATE follow_up_permissions SET consumed_at = now()
+    `UPDATE follow_up_permissions SET consumed_at = now(), consumed_reason = 'sent'
       WHERE workspace_id = $1 AND id = $2
         AND scope IN ('single_email', 'contextual_reply')
         AND consumed_at IS NULL

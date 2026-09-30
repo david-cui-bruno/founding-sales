@@ -104,7 +104,14 @@ export const MAIL_EFFECT_KINDS = [
   'handle_suppressed',
   'firm_suppressed',
   'reply_lane_entry',
+  /**
+   * History since send-path v2: what a direct Gmail send recorded while it was a
+   * takeover. Kept so every stored row stays readable; nothing new writes it once
+   * slice S1 records `direct_send_conversation` instead.
+   */
   'direct_send_manual',
+  /** A direct send recorded as an update to the conversation (migration 0026). */
+  'direct_send_conversation',
   'no_effect',
 ] as const;
 export type MailEffectKind = (typeof MAIL_EFFECT_KINDS)[number];
