@@ -1271,8 +1271,8 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
       const otherFirmId = await aFirm(f);
       const opportunityId = await anOpportunity(f, firmId);
       return await f.session.query(
-        `INSERT INTO crm_domain_events (workspace_id, event_kind, firm_id, opportunity_id, dedupe_key, actor_kind)
-         VALUES ($1, 'opportunity.terminal_stop', $2, $3, 'crossed', 'system')`,
+        `INSERT INTO crm_domain_events (workspace_id, event_kind, firm_id, opportunity_id, dedupe_key, actor_kind, owed_enrollment_ids)
+         VALUES ($1, 'opportunity.terminal_stop', $2, $3, 'crossed', 'system', '{}')`,
         [workspace(f), otherFirmId, opportunityId],
       );
     },

@@ -29,10 +29,14 @@
 --   (g) `crm_domain_events` — `owed_enrollment_ids`, the durable marker of a scoped
 --       terminal stop (below).
 --
--- There is no UPDATE and no DELETE of any existing row in this file. Every new CHECK is
--- satisfied by construction on existing rows (the new columns are NULL on all of them;
--- every stored mailbox is `personal`; no stored effect kind is removed), so each is
--- written VALID, as 0025's were.
+-- There is no DELETE in this file, and exactly two UPDATEs, each of which fills a
+-- column this file adds and changes nothing a row already said (review of PR 335):
+-- `follow_up_permissions.consumed_reason = 'sent'` on every spent permission, and
+-- `crm_domain_events.owed_enrollment_ids` on every undrained stop event. Every new
+-- CHECK is then satisfied by existing rows (every stored mailbox is `personal`; no
+-- stored effect kind is removed), so each is written VALID, as 0025's were — except
+-- `crm_domain_events_stop_carries_marker`, NOT VALID because consumed stop events keep
+-- NULL as history.
 --
 -- ## (e) Why the immutability triggers come back
 --
@@ -65,7 +69,11 @@
 --     forgotten. An **unapproved** row may change in every way, which is what lets the
 --     approval transition itself (`approved_at`/`approved_by_user_id` from NULL to a
 --     value, together with the bytes approved) through. Un-approving an approved row is
---     a change to the approval columns and is refused: a new version is the way.
+--     a change to the approval columns and is refused: a new version is the way. A
+--     DELETE of an approved row is refused too (retire it instead); an unapproved row
+--     may be deleted (review of PR 335, P2).
+--
+-- `template_versions` is named in `-- changes:` for the trigger, not for its rows.
 --
 -- ## (g) Scoped terminal stops: the durable marker
 --
@@ -82,11 +90,13 @@
 -- that writes the event (a sub-select over `sequence_enrollments`), under the exclusive
 -- send gate `enrollContact` also takes first — so the set holds every enrollment
 -- committed before the emission and none created after it (decision document 6a, point
--- 5). Every other kind leaves it NULL, and a CHECK says so. The rows written before this file are NULL, and
--- the drain reads NULL the way it always did — the firm or opportunity's live
--- enrollments at drain time — because a stop that was owed must not be dropped
--- because it predates the marker. An array rather than a side table: the set is
--- written once, with the event, and never updated (UPDATE is revoked on the table);
+-- 5). Every other kind leaves it NULL, and a CHECK says so. Stop events still
+-- undrained when this file runs get the live set at migration time (the one UPDATE of
+-- this table, below); consumed ones keep NULL. The drain reads only a recorded set, and
+-- an unmarked stop event — which a NOT VALID CHECK makes impossible to write from now
+-- on — is flagged, never widened into a firm-wide stop (review of PR 335, P1-2). An
+-- array rather than a side table: the set is written once, with the event, and never
+-- updated by the application (UPDATE is revoked on the table);
 -- a side table would be a second write that could be forgotten. There is no foreign key
 -- per element, and none is needed: the drain stops only live ids it finds.
 --
@@ -99,7 +109,8 @@
 --
 -- Read-only, before the release; all must be 0:
 --
---   SELECT count(*) FROM follow_up_permissions WHERE consumed_at IS NOT NULL;  -- the pairing CHECK
+--   (spent permissions and undrained stop events are backfilled, so neither is a count
+--   that must be 0; `fss admin` can print both for the release log)
 --   SELECT count(*) FROM mailboxes WHERE kind NOT IN ('personal', 'cold_outreach');
 --   SELECT count(*) FROM mail_message_effects WHERE effect_kind NOT IN
 --     ('hold_opened', 'opportunity_manual', 'route_invalidated', 'handle_suppressed',
@@ -124,6 +135,15 @@ ALTER TABLE mail_message_effects
 -- the salesperson sent the promised e-mail by hand, so the automated one must not follow.
 ALTER TABLE follow_up_permissions
   ADD COLUMN consumed_reason text;
+
+-- A permission spent at schema 25 was spent by the one path that existed then, the
+-- dispatch claim (`consumeFollowUpPermission`), so its reason is `sent`. This is a
+-- backfill of the column this file just added, not a rewrite of anything a row said
+-- before (review of PR 335, P1-1): without it the pairing CHECK below would refuse a
+-- database that holds a spent permission, which schema 25 allows.
+UPDATE follow_up_permissions
+   SET consumed_reason = 'sent'
+ WHERE consumed_at IS NOT NULL AND consumed_reason IS NULL;
 
 ALTER TABLE follow_up_permissions
   ADD CONSTRAINT follow_up_permissions_consumed_reason_known
@@ -214,6 +234,13 @@ CREATE TRIGGER sequence_steps_published_immutable
 CREATE FUNCTION assert_approved_template_immutable() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.approved_at IS NOT NULL THEN
+      RAISE EXCEPTION 'an approved template version is never deleted; retire it'
+        USING ERRCODE = 'restrict_violation';
+    END IF;
+    RETURN OLD;
+  END IF;
   IF OLD.approved_at IS NULL THEN
     RETURN NEW;
   END IF;
@@ -227,7 +254,7 @@ END;
 $$;
 
 CREATE TRIGGER template_versions_approved_immutable
-  BEFORE UPDATE ON template_versions
+  BEFORE UPDATE OR DELETE ON template_versions
   FOR EACH ROW EXECUTE FUNCTION assert_approved_template_immutable();
 
 -- ---------------------------------------------------------------------------
@@ -249,10 +276,54 @@ ALTER TABLE mailboxes
 ALTER TABLE crm_domain_events
   ADD COLUMN owed_enrollment_ids uuid[];
 
+-- Every stop-owing event the terminal-stop drain has not consumed yet gets its set now
+-- (review of PR 335, P1-2): the firm's live enrollments for a manual-mode event, the
+-- opportunity's for a close — what the drain would have stopped had it run the moment
+-- before this release. The schema release stops both services before it migrates, so
+-- nothing enrols between that moment and this statement, and the snapshot is exact.
+-- Without it the drain would read a queued schema-25 event after cutover and stop
+-- enrollments created after cutover, which is the P0-2 bug again by another door.
+-- "Not consumed" is the drain's own keyset: `(occurred_at, id)` after the workspace's
+-- `sequences.terminal_stop` cursor, or every event when there is no cursor. The cursor's
+-- instant is taken from its own event row, because a cursor the schema-25 drain wrote
+-- went through a JavaScript Date and lost its microseconds: compared as stored, the last
+-- consumed event would count as unconsumed and be stopped again at the release's live
+-- set. The drain reads the cursor the same way from now on. Events
+-- already consumed keep NULL: their stops happened, and nothing reads them again.
+UPDATE crm_domain_events e
+   SET owed_enrollment_ids = (
+         SELECT coalesce(array_agg(n.id ORDER BY n.id), '{}'::uuid[])
+           FROM sequence_enrollments n
+          WHERE n.workspace_id = e.workspace_id
+            AND n.ended_at IS NULL
+            AND CASE WHEN e.event_kind = 'opportunity.manual_mode' THEN n.firm_id = e.firm_id
+                     ELSE n.opportunity_id = e.opportunity_id END)
+ WHERE e.event_kind IN ('opportunity.terminal_stop', 'opportunity.manual_mode')
+   AND e.owed_enrollment_ids IS NULL
+   AND NOT EXISTS (
+         SELECT 1 FROM sequence_event_cursors c
+          WHERE c.workspace_id = e.workspace_id
+            AND c.subscriber = 'sequences.terminal_stop'
+            AND c.last_event_at IS NOT NULL
+            AND (e.occurred_at, e.id) <= (coalesce((SELECT x.occurred_at FROM crm_domain_events x
+                                                     WHERE x.workspace_id = c.workspace_id
+                                                       AND x.id = c.last_event_id),
+                                                    c.last_event_at),
+                                           c.last_event_id));
+
 ALTER TABLE crm_domain_events
   ADD CONSTRAINT crm_domain_events_owed_only_on_stops
     CHECK (owed_enrollment_ids IS NULL
            OR event_kind IN ('opportunity.terminal_stop', 'opportunity.manual_mode'));
 
+-- And from now on a stop-owing event carries its set. NOT VALID on purpose: the
+-- consumed events above keep NULL as history, and a NOT VALID CHECK still refuses
+-- every new row and every update — which is the whole of what is needed, because the
+-- drain now reads only the recorded set and flags an event without one.
+ALTER TABLE crm_domain_events
+  ADD CONSTRAINT crm_domain_events_stop_carries_marker
+    CHECK (event_kind NOT IN ('opportunity.terminal_stop', 'opportunity.manual_mode')
+           OR owed_enrollment_ids IS NOT NULL) NOT VALID;
+
 COMMENT ON COLUMN crm_domain_events.owed_enrollment_ids IS
-  'For opportunity.terminal_stop and opportunity.manual_mode: the enrollments live at emission that this event stops (send-path v2). NULL on every other kind and on every event written before migration 0026, which the drain reads as the old firm- or opportunity-wide stop.';
+  'For opportunity.terminal_stop and opportunity.manual_mode: the enrollments live at emission that this event stops (send-path v2); for events still undrained when 0026 ran, the live set at migration time. NULL on every other kind and on stop events the drain had already consumed before 0026.';

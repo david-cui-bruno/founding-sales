@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { emitCrmDomainEvent } from '../../crm/events.ts';
 import { changeStage, setManualControlMode } from '../../crm/pipeline.ts';
 import { logCallOutcome } from '../../dial/calls.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
@@ -309,18 +310,65 @@ describe('a terminal stop stops what it owed when it was emitted, and nothing cr
     expect(await enrollment(later)).toEqual({ state: 'active', end_reason: null });
   });
 
-  it('reads an event written before 0026 (no marker) the old way: every live enrollment of the firm', async () => {
+  it('refuses a new stop event that records no set (the NOT VALID CHECK)', async () => {
+    const firm = await makeFirm();
+    await expect(
+      database.session.query(
+        `INSERT INTO crm_domain_events (workspace_id, event_kind, firm_id, opportunity_id, dedupe_key, actor_kind)
+         VALUES ($1, 'opportunity.manual_mode', $2, $3, $4, 'system')`,
+        [seeded.alpha.workspaceId, firm.firmId, firm.opportunityId, `unmarked-${randomUUID()}`],
+      ),
+    ).rejects.toMatchObject({ constraint: 'crm_domain_events_stop_carries_marker' });
+  });
+
+  it('a direct emitter waits on the gate: an enrollment racing emitCrmDomainEvent is owed', async () => {
+    // No caller-side lock at all: `emitCrmDomainEvent` called on its own, in a
+    // transaction that holds nothing, while another transaction has enrolled and still
+    // holds the exclusive send gate. Only the gate `emitCrmDomainEvent` takes itself makes
+    // the emission wait for that enrollment to commit (review of PR 335, P2-b).
     const firm = await makeFirm();
     const version = await publishedVersion();
     await drain();
-    await database.session.query(
-      `INSERT INTO crm_domain_events (workspace_id, event_kind, firm_id, opportunity_id, dedupe_key, actor_kind)
-       VALUES ($1, 'opportunity.manual_mode', $2, $3, $4, 'system')`,
-      [seeded.alpha.workspaceId, firm.firmId, firm.opportunityId, `legacy-${randomUUID()}`],
+    const first = await database.appRuntimeSession();
+    const second = await database.appRuntimeSession();
+    await first.query('BEGIN');
+    const racing = await enrolFollowUp(contextFor(first), firm, firm.contactId, version);
+    await second.query('BEGIN');
+    const { rows: pid } = await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const dedupeKey = `direct-${randomUUID()}`;
+    const emitted = emitCrmDomainEvent(contextFor(second), {
+      kind: 'opportunity.manual_mode',
+      firmId: firm.firmId,
+      opportunityId: firm.opportunityId,
+      dedupeKey,
+      detail: { origin: 'human_reply' },
+    });
+    try {
+      let waiting = false;
+      for (let attempt = 0; attempt < 50 && !waiting; attempt += 1) {
+        const { rows } = await database.session.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted`,
+          [pid[0]?.pid],
+        );
+        waiting = rows[0]?.count === '1';
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      await first.query('COMMIT');
+      await emitted;
+      await second.query('COMMIT');
+      expect(waiting).toBe(true);
+    } finally {
+      await first.query('ROLLBACK').catch(() => undefined);
+      await emitted.catch(() => undefined);
+      await second.query('ROLLBACK').catch(() => undefined);
+    }
+    const event = await one<{ owed_enrollment_ids: string[] | null }>(
+      'SELECT owed_enrollment_ids FROM crm_domain_events WHERE workspace_id = $1 AND dedupe_key = $2',
+      [seeded.alpha.workspaceId, dedupeKey],
     );
-    const live = await inTransaction(async context => await enrolFollowUp(context, firm, firm.contactId, version));
+    expect(event.owed_enrollment_ids).toEqual([racing]);
     await drain();
-    expect(await enrollment(live)).toEqual({ state: 'stopped', end_reason: 'human_reply' });
+    expect(await enrollment(racing)).toEqual({ state: 'stopped', end_reason: 'human_reply' });
   });
 
   it('a close owes the opportunity’s live enrollments at emission', async () => {

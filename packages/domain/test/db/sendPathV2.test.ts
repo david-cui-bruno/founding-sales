@@ -178,6 +178,30 @@ describe('an approved template version’s content does not move (0026)', () => 
     ).toBeNull();
   });
 
+  it('refuses deleting an approved version: retire it instead', async () => {
+    const error = await refusal('DELETE FROM template_versions WHERE workspace_id = $1 AND id = $2', [
+      workspace(),
+      approvedId(),
+    ]);
+    expect(error).toMatchObject({ code: '23001' });
+    expect(error?.message).toMatch(/never deleted/);
+  });
+
+  it('lets an unapproved version be deleted', async () => {
+    const deleted = await rolledBack(async () => {
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO template_versions
+           (workspace_id, template_id, version, name, subject, body, content_hash, footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Unapproved', 'Hello', 'Hello there.', repeat('b', 64), 'Sam Example')
+         RETURNING id`,
+        [workspace()],
+      );
+      const result = await database.session.query('DELETE FROM template_versions WHERE id = $1', [rows[0]?.id]);
+      return result.rowCount;
+    });
+    expect(deleted).toBe(1);
+  });
+
   it('lets an unapproved version change, and lets the approval transition itself through', async () => {
     const outcome = await rolledBack(async () => {
       const { rows } = await database.session.query<{ id: string }>(

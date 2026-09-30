@@ -102,6 +102,17 @@ export const SEND_PATH_V2_CONSTRAINT_CASES: readonly Case[] = [
 
   // ---------------------------------------------------- crm_domain_events (0026)
   {
+    constraint: 'crm_domain_events_stop_carries_marker',
+    // A stop-owing event that records nothing it owes: the drain would have nothing to
+    // stop, and before 0026 it would have widened into a firm-wide stop.
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO crm_domain_events (workspace_id, event_kind, firm_id, opportunity_id, dedupe_key, actor_kind)
+         VALUES ($1, 'opportunity.manual_mode', $2, $3, '0026-unmarked-case', 'system')`,
+        [workspace(f), f.crm.alpha.firmId, f.crm.alpha.opportunityId],
+      ),
+  },
+  {
     constraint: 'crm_domain_events_owed_only_on_stops',
     // A marker on a kind that stops nothing would be a stop nobody drains.
     run: async f =>
