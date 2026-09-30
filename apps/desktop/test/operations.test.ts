@@ -107,7 +107,7 @@ const hosts = () => {
       ['state', 'open', 'run', 'addLink', 'saveSettings'],
       () => ({}) as never,
     ),
-    mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect'], () => ({}) as never),
+    mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect', 'switch'], () => ({}) as never),
     spies: { today, replies, api },
   };
 };

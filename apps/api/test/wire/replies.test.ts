@@ -9,6 +9,7 @@ import {
   wireDrift,
 } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { reasonSentence } from '@fss/contracts';
 import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createReplyBridge } from '../../../desktop/src/main/replyBridge.ts';
@@ -154,7 +155,7 @@ describe('8.0aj: the reply window reads the classifier at max', () => {
     expect(opened.notice).toBeNull();
     expect(opened.open?.messageId).toBe(messageId);
     const view = buildReplyView(opened, null);
-    expect(view.card?.impactLines).toContain('On hold: uncertain_reply — email_send paused.');
+    expect(view.card?.impactLines).toContain(`On hold: ${reasonSentence('uncertain_reply')} Paused: email send.`);
     expect(view.card?.nextAction).toBe('confirm_disposition');
   });
 

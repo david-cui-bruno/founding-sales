@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { gmailConnectResultSchema, gmailStatusSchema, type GmailStatus } from '@fss/contracts';
 import { mailboxStateSchema, type MailboxState } from '../shared/contract.ts';
 import type { ApiOutcome } from './apiClient.ts';
@@ -38,6 +39,7 @@ export const MAILBOX_IPC_CHANNELS = {
   state: 'callie:mailbox:state',
   refresh: 'callie:mailbox:refresh',
   connect: 'callie:mailbox:connect',
+  switch: 'callie:mailbox:switch',
 } as const;
 export type MailboxIpcChannel = (typeof MAILBOX_IPC_CHANNELS)[keyof typeof MAILBOX_IPC_CHANNELS];
 
@@ -84,6 +86,8 @@ export interface MailboxBridgeHost {
   state(): Promise<MailboxState>;
   refresh(): Promise<MailboxState>;
   connect(): Promise<MailboxState>;
+  /** Replaces the connected mailbox with another account (call-to-booking A3). */
+  switch(input: { readonly switchTo: string }): Promise<MailboxState>;
 }
 
 /**
@@ -115,8 +119,20 @@ function rowOf(value: GmailStatus): NonNullable<MailboxState['status']> {
             emailAddress: value.mailbox.emailAddress,
             status: value.mailbox.status,
             syncState: value.mailbox.syncState,
+            lastSyncedAt: value.mailbox.lastSyncedAt,
+            baseline:
+              value.mailbox.baseline == null
+                ? null
+                : { messagesSeen: value.mailbox.baseline.messagesSeen, completed: value.mailbox.baseline.completedAt !== null },
           },
+    lastGrantRefusal:
+      value.lastGrantRefusal == null ? null : { reason: value.lastGrantRefusal.reason, at: value.lastGrantRefusal.at },
   };
+}
+
+/** Two addresses are the same mailbox when they differ only by case and surrounding space. */
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost {
@@ -130,6 +146,8 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
 
   let status: MailboxState['status'] = null;
   let connecting = false;
+  // The address a switch is waiting for, while it waits.
+  let switchingTo: string | null = null;
   // Two notices, because they clear differently: a failed read is forgotten by the next
   // read that answers, while a refused connection stays on the row until the person
   // presses Refresh or starts again — a window regaining focus must not erase it.
@@ -143,6 +161,7 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
     const session = await deps.session.state();
     return mailboxStateSchema.parse({
       status,
+      switchingTo,
       connecting,
       mayConnect: session.device !== null && session.mayMutate && !connecting,
       notice: connectNotice ?? readNotice,
@@ -167,8 +186,98 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
   /** Stop waiting, with this code on the row (or none), and say where things stand. */
   const finish = async (code: string | null): Promise<MailboxState> => {
     connecting = false;
+    switchingTo = null;
     connectNotice = code;
     return await snapshot();
+  };
+
+  /**
+   * One grant: plain Connect when `switchTo` is null, otherwise a switch of the connected
+   * mailbox to that address. A switch cannot use "the mailbox is connected" as its
+   * success, because the old mailbox already is: it waits for this attempt's own outcome.
+   */
+  const grant = async (switchTo: string | null): Promise<MailboxState> => {
+    // A second press while the browser is open is the first press, not a second grant.
+    // The flag is claimed before the first `await`, so two presses in the same tick
+    // cannot both get past it.
+    if (connecting) return await snapshot();
+    attempt += 1;
+    const mine = attempt;
+    connecting = true;
+    connectNotice = null;
+
+    const session = await deps.session.state();
+    if (attempt !== mine) return await snapshot();
+    if (session.device === null) return await finish('not_signed_in');
+    // Not refused for offline (wave 1): the command below finds out, and says `offline`
+    // itself when the server cannot be reached.
+    // The API checks the version itself and is the authority; this only stops the Mac
+    // offering a person a command it already knows will be refused (5.3).
+    if (!session.mayMutate) return await finish('client_upgrade_required');
+    if (switchTo === null) {
+      if (status?.connected === true) return await finish('mailbox_already_connected');
+    } else {
+      // A switch replaces a mailbox, so there has to be one, and it has to be another
+      // address. Both are said here rather than after a round trip and a consent screen.
+      if (!z.email().max(320).safeParse(switchTo).success) return await finish('invalid_input');
+      if (status === null) await read();
+      if (attempt !== mine) return await snapshot();
+      if (status?.connected !== true || status.mailbox === null) return await finish('mailbox_not_connected');
+      if (sameAddress(status.mailbox.emailAddress, switchTo)) return await finish('mailbox_switch_same_address');
+      switchingTo = switchTo;
+    }
+
+    const started = await deps.api.command(
+      MAILBOX_API_PATHS.connect,
+      switchTo === null ? {} : { switchTo },
+      value => gmailConnectResultSchema.parse(value),
+    );
+    if (attempt !== mine) return await snapshot();
+    if (!started.ok) return await finish(started.reason);
+    const attemptId = started.value.attemptId ?? null;
+    const url = consentUrlOf(started.value.authorizationUrl);
+    if (url === null) return await finish('consent_url_refused');
+
+    try {
+      // The system browser, never a window inside the app: the person must see the
+      // address bar that says accounts.google.com (5.1).
+      await deps.openExternally(url);
+    } catch {
+      return await finish('browser_unavailable');
+    }
+
+    const remaining = Date.parse(started.value.expiresAt) - now().getTime();
+    // A Mac clock ahead of the API's would put the expiry in the past before the
+    // person has seen the consent screen; the ten-minute bound still holds then.
+    const deadline =
+      now().getTime() + (remaining > 0 ? Math.min(remaining, MAXIMUM_MAILBOX_WAIT_MS) : MAXIMUM_MAILBOX_WAIT_MS);
+
+    for (;;) {
+      await sleep(interval);
+      // Refresh overtook this wait: it already read the status and cleared the flag.
+      if (attempt !== mine) return await snapshot();
+      const answer = await read();
+      if (attempt !== mine) return await snapshot();
+      if (switchTo === null) {
+        if (answer.ok && answer.value.connected) return await finish(null);
+      } else if (answer.ok) {
+        // The old mailbox is connected the whole time, so "connected" says nothing. The
+        // outcome of this attempt is one of two things the status can say about it: the
+        // expected address is now the connected one, or a refusal carries this attempt's
+        // id. A refusal of an earlier attempt is not this attempt's (plan review 12).
+        if (answer.value.mailbox?.emailAddress !== undefined && sameAddress(answer.value.mailbox.emailAddress, switchTo)) {
+          return await finish(null);
+        }
+        const refusal = answer.value.lastGrantRefusal;
+        if (refusal != null && attemptId !== null && refusal.attemptId === attemptId) return await finish(refusal.reason);
+      }
+      // Offline is worth waiting through: the browser half does not need this Mac.
+      // Any refusal is not — a revoked device will not become a connected mailbox.
+      if (!answer.ok && !answer.offline) return await finish(answer.reason);
+      if (now().getTime() >= deadline) {
+        return await finish(switchTo === null ? 'mailbox_connect_timed_out' : 'mailbox_switch_timed_out');
+      }
+    }
   };
 
   return {
@@ -182,6 +291,7 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
     async forget() {
       status = null;
       connecting = false;
+      switchingTo = null;
       readNotice = null;
       connectNotice = null;
       attempt += 1;
@@ -196,65 +306,14 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
     async refresh() {
       attempt += 1;
       connecting = false;
+      switchingTo = null;
       connectNotice = null;
       await read();
       return await snapshot();
     },
 
-    async connect() {
-      // A second press while the browser is open is the first press, not a second grant.
-      // The flag is claimed before the first `await`, so two presses in the same tick
-      // cannot both get past it.
-      if (connecting) return await snapshot();
-      attempt += 1;
-      const mine = attempt;
-      connecting = true;
-      connectNotice = null;
+    connect: async () => await grant(null),
 
-      const session = await deps.session.state();
-      if (attempt !== mine) return await snapshot();
-      if (session.device === null) return await finish('not_signed_in');
-      // Not refused for offline (wave 1): the command below finds out, and says `offline`
-      // itself when the server cannot be reached.
-      // The API checks the version itself and is the authority; this only stops the Mac
-      // offering a person a command it already knows will be refused (5.3).
-      if (!session.mayMutate) return await finish('client_upgrade_required');
-      if (status?.connected === true) return await finish('mailbox_already_connected');
-
-      const started = await deps.api.command(MAILBOX_API_PATHS.connect, {}, value =>
-        gmailConnectResultSchema.parse(value),
-      );
-      if (attempt !== mine) return await snapshot();
-      if (!started.ok) return await finish(started.reason);
-      const url = consentUrlOf(started.value.authorizationUrl);
-      if (url === null) return await finish('consent_url_refused');
-
-      try {
-        // The system browser, never a window inside the app: the person must see the
-        // address bar that says accounts.google.com (5.1).
-        await deps.openExternally(url);
-      } catch {
-        return await finish('browser_unavailable');
-      }
-
-      const remaining = Date.parse(started.value.expiresAt) - now().getTime();
-      // A Mac clock ahead of the API's would put the expiry in the past before the
-      // person has seen the consent screen; the ten-minute bound still holds then.
-      const deadline =
-        now().getTime() + (remaining > 0 ? Math.min(remaining, MAXIMUM_MAILBOX_WAIT_MS) : MAXIMUM_MAILBOX_WAIT_MS);
-
-      for (;;) {
-        await sleep(interval);
-        // Refresh overtook this wait: it already read the status and cleared the flag.
-        if (attempt !== mine) return await snapshot();
-        const answer = await read();
-        if (attempt !== mine) return await snapshot();
-        if (answer.ok && answer.value.connected) return await finish(null);
-        // Offline is worth waiting through: the browser half does not need this Mac.
-        // Any refusal is not — a revoked device will not become a connected mailbox.
-        if (!answer.ok && !answer.offline) return await finish(answer.reason);
-        if (now().getTime() >= deadline) return await finish('mailbox_connect_timed_out');
-      }
-    },
+    switch: async input => await grant(input.switchTo),
   };
 }

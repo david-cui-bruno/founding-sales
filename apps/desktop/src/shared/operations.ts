@@ -1021,6 +1021,17 @@ export const OPERATIONS = {
     output: mailboxStateSchema,
     transform: 'the consent screen is opened by the system browser from the main process, and the status is polled until the grant lands or expires',
   },
+  'mailbox.switch': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/gmail/connect' },
+      { method: 'GET', path: '/gmail/status' },
+    ],
+    input: z.strictObject({ switchTo: z.email().max(320) }),
+    output: mailboxStateSchema,
+    transform:
+      'the same consent flow as connect, asking Google for the named account; the status is polled until that address is the connected one, this attempt is refused, or its grant expires',
+  },
 } as const satisfies Readonly<Record<string, Operation>>;
 
 export type OperationName = keyof typeof OPERATIONS;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { reasonSentence } from '@fss/contracts';
 import { replyCardSchema, replyStateSchema, replySummaryOf, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
 import {
   CONFIRM_LABELS,
@@ -201,7 +202,7 @@ describe('the reply card view model', () => {
     expect(view.confirmEnabled).toBe(false);
     expect(view.banners.map(banner => banner.text)).toContain(replyNotice('not_assigned'));
     // The impact is still there: that is the point of showing them anything.
-    expect(view.impactLines.some(line => line.includes('uncertain_reply'))).toBe(true);
+    expect(view.impactLines.some(line => line.includes(reasonSentence('uncertain_reply')))).toBe(true);
   });
 
   it('sends an unresolved ambiguity to G7’s command instead of offering a disposition', () => {

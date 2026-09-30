@@ -6,6 +6,8 @@ import {
   type ReplyState,
   type ReplySummary,
 } from './replyContract.ts';
+import { reasonSentence } from '@fss/contracts';
+import { inWords } from './dates.ts';
 import { OFFLINE_SENTENCE } from './readError.ts';
 
 /**
@@ -178,7 +180,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
 
 /** The one place a refusal code becomes English. Unknown codes are shown as-is. */
 export function replyNotice(code: string): string {
-  return NOTICES[code] ?? code;
+  return NOTICES[code] ?? reasonSentence(code);
 }
 
 interface DispositionChoiceView {
@@ -263,10 +265,11 @@ function impactLines(card: ReplyCard): readonly string[] {
       : 'This firm is already yours to work by hand.',
   );
   for (const hold of card.impact.holds) {
+    // A sentence, not the code: what is blocked and what to do next (reasonText).
     lines.push(
       hold.blockedActionKinds.length === 0
-        ? `On hold: ${hold.reasonCode}.`
-        : `On hold: ${hold.reasonCode} — ${hold.blockedActionKinds.join(', ')} paused.`,
+        ? `On hold: ${reasonSentence(hold.reasonCode)}`
+        : `On hold: ${reasonSentence(hold.reasonCode)} Paused: ${hold.blockedActionKinds.map(inWords).join(', ')}.`,
     );
   }
   if (card.impact.contactsAtFirm > 1) {

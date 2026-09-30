@@ -1,4 +1,6 @@
 import type { DesktopState, MailboxState } from '../shared/contract.ts';
+import { reasonSentence } from '@fss/contracts';
+import { shortDayTime } from './dates.ts';
 import { OFFLINE_SENTENCE } from './readError.ts';
 
 /**
@@ -144,9 +146,18 @@ const MAILBOX_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   refused: 'The server refused that.',
 });
 
-/** The one place a mailbox code becomes English. Unknown codes are shown as they came. */
-export function mailboxNoticeSentence(code: string): string {
-  return MAILBOX_NOTICES[code] ?? NOTICES[code] ?? code;
+/**
+ * The one place a mailbox code becomes English. A code neither table knows goes to
+ * `reasonSentence`, which has the switch and grant refusals and, for anything else, a
+ * generic sentence that names the code in parentheses.
+ */
+export function mailboxNoticeSentence(code: string, options: { readonly address?: string | null } = {}): string {
+  if (code === 'mailbox_switch_timed_out') {
+    return options.address == null
+      ? 'Google didn’t confirm the switch. Your mailbox did not change.'
+      : `Google didn’t confirm the switch. Your mailbox is still ${options.address}.`;
+  }
+  return MAILBOX_NOTICES[code] ?? NOTICES[code] ?? reasonSentence(code);
 }
 
 /** "callie@usecallie.com · connected · baseline pending". */
@@ -169,7 +180,10 @@ function mailboxStatusLine(
  * connected, and Refresh is one click away.
  */
 export function buildMailboxView(state: MailboxState | null, options: { readonly waiting?: boolean } = {}): MailboxView {
-  const notice = state?.notice == null ? null : mailboxNoticeSentence(state.notice);
+  const notice =
+    state?.notice == null
+      ? null
+      : mailboxNoticeSentence(state.notice, { address: state.status?.mailbox?.emailAddress ?? null });
   if ((options.waiting ?? false) || state?.connecting === true) {
     const mailbox = state?.status?.mailbox ?? null;
     return {
@@ -185,4 +199,97 @@ export function buildMailboxView(state: MailboxState | null, options: { readonly
   const text = mailbox === null ? 'Not connected' : mailboxStatusLine(mailbox);
   if (state.status.connected) return { text, action: null, hint: null, notice };
   return { text, action: { label: CONNECT_GMAIL_LABEL, enabled: state.mayConnect }, hint: null, notice };
+}
+
+// ---------------------------------------------------------------------------
+// Settings › Mailbox (call-to-booking A3)
+// ---------------------------------------------------------------------------
+
+export const SWITCH_MAILBOX_LABEL = 'Switch mailbox…';
+export const DEFAULT_SWITCH_TARGET = 'david@usecallie.com';
+
+export interface MailboxSectionView {
+  /** The connected (or last connected) address, or null when there is none. */
+  readonly address: string | null;
+  /** "Connected · ready", "Not connected", … — what the server last said. */
+  readonly stateLine: string;
+  /** "Last synced 25 Sep 2026, 14:00" or "Not synced yet"; null when there is no mailbox. */
+  readonly syncedLine: string | null;
+  /** While the mailbox is reading its first 30 days; null otherwise. */
+  readonly baselineLine: string | null;
+  /** The outcome of the last connect or switch, as a sentence. */
+  readonly notice: string | null;
+  /** The latest refused grant the server remembers, when it is not the notice above. */
+  readonly lastRefusal: string | null;
+  /** True while the consent screen is open. */
+  readonly waiting: boolean;
+  /** "Waiting for your browser… (david@usecallie.com)" while switching. */
+  readonly waitingLine: string | null;
+  /** Whether "Switch mailbox…" may be pressed: connected, signed in, online, not already waiting. */
+  readonly canSwitch: boolean;
+}
+
+const SECTION_SYNC_LABELS = Object.freeze({
+  baseline_pending: 'reading the last 30 days',
+  ready: 'up to date',
+  recovering: 'catching up',
+} as const);
+
+/** The Settings › Mailbox section, as a pure function of what the main process sent. */
+export function buildMailboxSection(
+  state: MailboxState | null,
+  options: { readonly waiting?: boolean } = {},
+): MailboxSectionView {
+  const empty: MailboxSectionView = {
+    address: null,
+    stateLine: 'Checking…',
+    syncedLine: null,
+    baselineLine: null,
+    notice: null,
+    lastRefusal: null,
+    waiting: options.waiting ?? false,
+    waitingLine: null,
+    canSwitch: false,
+  };
+  if (state === null) return empty;
+  const mailbox = state.status?.mailbox ?? null;
+  const address = mailbox?.emailAddress ?? null;
+  const waiting = (options.waiting ?? false) || state.connecting;
+  const notice = state.notice === null ? null : mailboxNoticeSentence(state.notice, { address });
+  const refusal = state.status?.lastGrantRefusal ?? null;
+  const lastRefusal =
+    waiting || refusal === null || refusal.reason === state.notice ? null : reasonSentence(refusal.reason);
+  const base = { address, notice, lastRefusal, waiting };
+  const waitingLine =
+    waiting ? (state.switchingTo == null ? MAILBOX_WAITING_LABEL : `${MAILBOX_WAITING_LABEL} (${state.switchingTo})`) : null;
+  if (state.status === null) return { ...empty, ...base, stateLine: 'Unknown', waitingLine };
+  if (mailbox === null) return { ...empty, ...base, stateLine: 'Not connected', waitingLine };
+
+  const connected = state.status.connected && mailbox.status === 'connected';
+  const baselineLine =
+    connected && mailbox.syncState === 'baseline_pending'
+      ? mailbox.baseline == null || mailbox.baseline.messagesSeen === 0
+        ? 'Reading the last 30 days…'
+        : `Reading the last 30 days: ${String(mailbox.baseline.messagesSeen)} ${mailbox.baseline.messagesSeen === 1 ? 'message' : 'messages'} so far`
+      : null;
+  return {
+    ...base,
+    stateLine: connected ? `Connected · ${SECTION_SYNC_LABELS[mailbox.syncState]}` : `Not connected (${mailbox.status})`,
+    syncedLine: connected
+      ? mailbox.lastSyncedAt == null
+        ? 'Not synced yet'
+        : `Last synced ${shortDayTime(mailbox.lastSyncedAt)}`
+      : null,
+    baselineLine,
+    waitingLine,
+    canSwitch: connected && state.mayConnect,
+  };
+}
+
+/** What a typed target address is worth: a sentence when it cannot be used, else null. */
+export function switchTargetIssue(target: string, current: string | null): string | null {
+  const trimmed = target.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(trimmed)) return 'Enter a valid e-mail address.';
+  if (current !== null && trimmed.toLowerCase() === current.toLowerCase()) return reasonSentence('mailbox_switch_same_address');
+  return null;
 }
