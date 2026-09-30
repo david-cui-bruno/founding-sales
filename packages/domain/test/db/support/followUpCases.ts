@@ -39,7 +39,7 @@ const ABSENT = '00000000-0000-4000-8000-0000000000fe';
 
 const COLUMNS = `workspace_id, firm_id, contact_id, kind, scope, call_log_id, mail_message_id,
   booking_reference, template_version_id, sequence_version_id, enrollment_id, max_steps,
-  granted_at, expires_at, granted_by_user_id, granted_by_rule, consumed_at, revoked_at, note`;
+  granted_at, expires_at, granted_by_user_id, granted_by_rule, consumed_at, consumed_reason, revoked_at, note`;
 
 /**
  * A permission row that satisfies everything, for a case to break one column of.
@@ -69,6 +69,7 @@ async function permission(f: Fixture, overrides: Readonly<Record<string, unknown
     granted_by_user_id: admin(f),
     granted_by_rule: null,
     consumed_at: null,
+    consumed_reason: null,
     revoked_at: null,
     note: null,
     ...overrides,
@@ -398,6 +399,9 @@ export const FOLLOW_UP_CONSTRAINT_CASES: readonly Case[] = [
         sequence_version_id: await seedVersion(f),
         max_steps: 2,
         consumed_at: new Date().toISOString(),
+        // Migration 0026 pairs a reason with every consumption; the pair is given so this
+        // row breaks the one-message rule and nothing else.
+        consumed_reason: 'sent',
       }),
   },
   {
