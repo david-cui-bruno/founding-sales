@@ -5,7 +5,8 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import type { EnvelopeCipher } from '../../mail/envelope.ts';
 import type { GmailClient } from '../../mail/gmailClient.ts';
 import type { RecordedGmailClient } from '../../mail/gmailClientFake.ts';
-import { openMailboxHold, readMailboxHold } from '../../mail/mailboxes.ts';
+import { lockMailboxAtFence, openMailboxHold, readMailbox, readMailboxHold, StaleMailboxGeneration } from '../../mail/mailboxes.ts';
+import { readAttachmentReferences } from '../../retention/attachments.ts';
 import {
   beginGmailGrant,
   completeGmailGrant,
@@ -327,8 +328,44 @@ describe('completing a switch', () => {
       [workspaceId(), world.alpha.mailboxId],
     );
     expect(audit.map(row => row.detail)).toEqual([
-      { from: world.alpha.address, to: NEW_ADDRESS, attemptId: started.attemptId, oldWatchStopped: true },
+      { from: world.alpha.address, to: NEW_ADDRESS, attemptId: started.attemptId, switchedAt: expect.any(String) as string },
     ]);
+    // The stop, after the commit, recorded on its own row.
+    const { rows: stopped } = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'mailbox.switch_old_watch' AND subject_id = $2`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    expect(stopped.map(row => row.detail)).toEqual([{ attemptId: started.attemptId, oldWatchStopped: true }]);
+  });
+
+  it('stops the old watch with the OLD token, after the commit', async () => {
+    const oldToken = await readRefreshToken(owner(), { mailboxId: world.alpha.mailboxId, cipher: world.cipher });
+    const started = await begin(NEW_ADDRESS);
+    const gmail = account(NEW_ADDRESS);
+    const refreshedWith: string[] = [];
+    let committedAtStop: string | null = null;
+    const watching: GmailClient = {
+      ...gmail,
+      refreshAccessToken: async (...args: Parameters<GmailClient['refreshAccessToken']>) => {
+        refreshedWith.push(args[1]);
+        return await gmail.refreshAccessToken(...args);
+      },
+      stopWatch: async (...args: Parameters<GmailClient['stopWatch']>) => {
+        // Read on another connection: only a committed switch is visible there.
+        const probe = await openExtraSession(world);
+        extras.push(probe);
+        const { rows } = await probe.session.query<{ email_address: string }>(
+          'SELECT email_address FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+          [workspaceId(), world.alpha.mailboxId],
+        );
+        committedAtStop = rows[0]?.email_address ?? null;
+        await gmail.stopWatch(...args);
+      },
+    };
+    const done = await completeGmailGrant(owner(), grantDeps(watching), { state: started.state, code: 'switch-code' });
+    expect(done).toMatchObject({ ok: true, value: { switched: true, oldWatchStopped: true } });
+    expect(refreshedWith).toEqual([oldToken]);
+    expect(committedAtStop).toBe(NEW_ADDRESS);
   });
 
   it('switches when users.stop fails, and records that it did', async () => {
@@ -345,7 +382,7 @@ describe('completing a switch', () => {
     expect(done).toMatchObject({ ok: true, value: { switched: true, oldWatchStopped: false } });
     const { rows } = await world.database.session.query<{ stopped: boolean }>(
       `SELECT (detail->>'oldWatchStopped')::boolean AS stopped FROM audit_events
-        WHERE workspace_id = $1 AND action = 'mailbox.switched'`,
+        WHERE workspace_id = $1 AND action = 'mailbox.switch_old_watch'`,
       [workspaceId()],
     );
     expect(rows).toEqual([{ stopped: false }]);
@@ -383,10 +420,29 @@ describe('completing a switch', () => {
     const gmail = account(NEW_ADDRESS);
     const done = await completeGmailGrant(owner(), grantDeps(gmail), { state: started.state, code: 'late-fence' });
     expect(done).toEqual({ ok: false, reason: 'mailbox_switch_pending_sends' });
-    // The best-effort stop ran before the lock (it cannot know about the fence yet); the
-    // rows did not move.
+    // Nothing moved here, and nothing at Google either: the old watch is stopped only
+    // after a switch commits (review finding 6).
     expect(await snapshot()).toEqual(before);
+    expect(gmail.calls.map(call => call.method)).not.toContain('stopWatch');
     expect(await refusals()).toEqual([{ reason: 'mailbox_switch_pending_sends', attemptId: started.attemptId }]);
+  });
+
+  it('refuses the second of two switch attempts to the same account: mailbox_switch_same_address, nothing changes', async () => {
+    const first = await begin(NEW_ADDRESS);
+    const second = await begin(NEW_ADDRESS);
+    expect((await completeGmailGrant(owner(), grantDeps(account(NEW_ADDRESS)), { state: first.state, code: 'first' })).ok).toBe(true);
+    const before = await snapshot();
+    const gmail = account(NEW_ADDRESS);
+    const done = await completeGmailGrant(owner(), grantDeps(gmail), { state: second.state, code: 'second' });
+    expect(done).toEqual({ ok: false, reason: 'mailbox_switch_same_address' });
+    expect(await snapshot()).toEqual(before);
+    expect(gmail.calls.map(call => call.method)).not.toContain('stopWatch');
+    expect(await refusals()).toEqual([{ reason: 'mailbox_switch_same_address', attemptId: second.attemptId }]);
+    // A plain re-consent of the same account, without intent, is still accepted.
+    const plain = await begin(undefined);
+    expect(
+      (await completeGmailGrant(owner(), grantDeps(account(NEW_ADDRESS)), { state: plain.state, code: 'plain' })).ok,
+    ).toBe(true);
   });
 
   it('commits nothing when token storage fails: the old address, token and cursor stay', async () => {
@@ -491,37 +547,147 @@ describe('the switch transaction takes the send gate, then the mailbox row', () 
     expect((await pending).ok).toBe(true);
   });
 
-  it('holds the gate while it waits on the mailbox row', async () => {
+  it('does not deadlock with an import holding KEY SHARE on the row that then waits for the gate', async () => {
+    const importer = await extra();
+    const grantSession = await extra();
+    const started = await begin(NEW_ADDRESS);
+    const importContext = importer.context(workspaceId());
+    const fenceBefore = await readMailbox(importContext, world.alpha.mailboxId);
+    if (fenceBefore === null) throw new Error('no mailbox');
+    // The import's shape: a message row first (the foreign key takes KEY SHARE on the
+    // mailbox), then the send gate for a direct send's effects.
+    await importer.session.query('BEGIN');
+    await importer.session.query(
+      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+                                  internal_date, matched)
+       VALUES ($1, $2, 'import-in-flight', 'import-in-flight', 'outgoing', now(), false)`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    let grantError: unknown = null;
+    const grant = completeGmailGrant(userOn(grantSession.session), grantDeps(account(NEW_ADDRESS)), {
+      state: started.state,
+      code: 'deadlock-probe',
+    }).catch((error: unknown) => {
+      grantError = error;
+      return null;
+    });
+    // The callback is running: give it the gate first, the ordering that deadlocked.
+    await new Promise(resolve => setTimeout(resolve, 150));
+    // The import now takes the gate and makes its fenced write, then commits.
+    await lockSendGateForStopFact(importContext);
+    await lockMailboxAtFence(importContext, {
+      mailboxId: world.alpha.mailboxId,
+      fence: { generation: fenceBefore.generation, emailAddress: fenceBefore.emailAddress },
+      write: 'direct send',
+    });
+    await importer.session.query('COMMIT');
+    const outcome = await grant;
+    // No deadlock: nobody was aborted with 40P01. The import, which held its row lock
+    // first, committed against the old account; the callback then switched.
+    expect((grantError as { code?: string } | null)?.code).toBeUndefined();
+    expect(outcome?.ok).toBe(true);
+    const { rows } = await world.database.session.query<{ link: string | null }>(
+      "SELECT id AS link FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = 'import-in-flight'",
+      [workspaceId()],
+    );
+    const link = await readAttachmentReferences(owner(), { mailMessageId: rows[0]?.link ?? '' });
+    expect(link.value?.openInGmailUrl).toContain(encodeURIComponent(world.alpha.address));
+    // And an import that read the old account and writes after the switch fails stale.
+    const late = await extra();
+    await late.session.query('BEGIN');
+    await expect(
+      lockMailboxAtFence(late.context(workspaceId()), {
+        mailboxId: world.alpha.mailboxId,
+        fence: { generation: fenceBefore.generation, emailAddress: fenceBefore.emailAddress },
+        write: 'direct send',
+      }),
+    ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    await late.session.query('ROLLBACK');
+  });
+
+  it('dates the switch from when it holds its locks: a sync committed during the wait stays the old account’s', async () => {
+    const holder = await extra();
+    const grantSession = await extra();
+    const started = await begin(NEW_ADDRESS);
+    await holder.session.query('BEGIN');
+    await lockSendGateForStopFact(holder.context(workspaceId()));
+    const pending = completeGmailGrant(userOn(grantSession.session), grantDeps(account(NEW_ADDRESS)), {
+      state: started.state,
+      code: 'waited',
+    });
+    await waitUntilBlocked(world.database.session, grantSession.pid, 'advisory');
+    // While the callback waits: the old account's sync records a message and commits,
+    // and the new account's Gmail dates a Sent item.
+    const { rows: recorded } = await world.database.session.query<{ id: string; at: string }>(
+      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+                                  internal_date, matched)
+       VALUES ($1, $2, 'old-during-wait', 'old-during-wait', 'incoming', now(), false)
+       RETURNING id, clock_timestamp()::text AS at`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    const duringWait = recorded[0]?.at ?? '';
+    await holder.session.query('ROLLBACK');
+    expect((await pending).ok).toBe(true);
+
+    const link = await readAttachmentReferences(owner(), { mailMessageId: recorded[0]?.id ?? '' });
+    expect(link.value?.openInGmailUrl).toContain(encodeURIComponent(world.alpha.address));
+
+    const firm = await seedFirm(world, world.alpha, 'wait-sent');
+    const { rows: sentRows } = await world.database.session.query<{ id: string }>(
+      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+                                  internal_date, header_from, header_to, matched)
+       VALUES ($1, $2, 'new-sent-during-wait', 'new-sent-during-wait', 'outgoing', $3::timestamptz, $4, $5::text[], true)
+       RETURNING id`,
+      [workspaceId(), world.alpha.mailboxId, duringWait, NEW_ADDRESS, [firm.address]],
+    );
+    const message = await readMessage(world.systemContext(workspaceId()), sentRows[0]?.id ?? '');
+    if (message === null) throw new Error('not stored');
+    const effect = await applyDirectSendEffects(world.systemContext(workspaceId()), {
+      message,
+      candidate: { firmId: firm.firmId, opportunityId: firm.opportunityId, contactId: firm.contactId, rule: 'participant', viaClosedOpportunity: false },
+    });
+    expect(effect.recorded).toBe(false);
+  });
+
+  it('never holds the gate while it waits for the row: it retries until the row is free', async () => {
     const holder = await extra();
     const grantSession = await extra();
     const probe = await extra();
     const started = await begin(NEW_ADDRESS);
     await holder.session.query('BEGIN');
-    await holder.session.query('SELECT id FROM mailboxes WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+    await holder.session.query('SELECT id FROM mailboxes WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE', [
       workspaceId(),
       world.alpha.mailboxId,
     ]);
-
+    let settled = false;
     const pending = completeGmailGrant(userOn(grantSession.session), grantDeps(account(NEW_ADDRESS)), {
       state: started.state,
-      code: 'row-second',
+      code: 'row-busy',
+    }).finally(() => {
+      settled = true;
     });
-    await waitUntilBlocked(world.database.session, grantSession.pid, 'transactionid');
-    const { rows: blockers } = await world.database.session.query<{ blocked: boolean }>(
-      'SELECT $1::int = ANY (pg_blocking_pids($2)) AS blocked',
-      [holder.pid, grantSession.pid],
-    );
-    expect(blockers).toEqual([{ blocked: true }]);
-    // The gate is already the grant's: a stop fact cannot take it.
-    const { rows: gate } = await probe.session.query<{ taken: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtextextended('fss.send-gate:' || $1, 0)) AS taken",
-      [workspaceId()],
-    );
-    expect(gate).toEqual([{ taken: false }]);
+    // While the row is held, the gate is repeatedly free: a stop fact can take it.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    // (A retry holds it for a few milliseconds each time, so a probe that lands in one of
+    // those is asked again.)
+    let taken = false;
+    for (let attempt = 0; attempt < 20 && !taken; attempt += 1) {
+      await probe.session.query('BEGIN');
+      const { rows: gate } = await probe.session.query<{ taken: boolean }>(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended('fss.send-gate:' || $1, 0)) AS taken",
+        [workspaceId()],
+      );
+      await probe.session.query('ROLLBACK');
+      taken = gate[0]?.taken === true;
+      if (!taken) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(taken).toBe(true);
+    expect(settled).toBe(false);
 
     await holder.session.query('ROLLBACK');
     expect((await pending).ok).toBe(true);
   });
+
 });
 
 /**
@@ -701,6 +867,38 @@ describe('direct-send boundaries', () => {
       followUp: 'direct_send',
       permission: 'fulfilled_by_direct_send',
     });
+  });
+
+  it('compares every boundary exactly: a message at .123 is before a creation at .123900', async () => {
+    const target = await work('exact-boundary');
+    const session = world.database.session;
+    const created = '2026-09-30T12:00:00.123900Z';
+    // (b) the permission, and (c) both enrollments, created a fraction of a millisecond
+    // after the message's Gmail date.
+    await session.query('UPDATE follow_up_permissions SET created_at = $3 WHERE workspace_id = $1 AND id = $2', [
+      workspaceId(),
+      target.followUp.permissionId,
+      created,
+    ]);
+    await session.query(
+      'UPDATE sequence_enrollments SET created_at = $3, started_at = $3 WHERE workspace_id = $1 AND id = ANY ($2::uuid[])',
+      [workspaceId(), [target.prospecting.enrollmentId, target.followUp.enrollmentId], created],
+    );
+    const early = await sentAt(target, '2026-09-30T12:00:00.123Z');
+    expect(early.consumedPermissionIds).toEqual([]);
+    expect(early.endedEnrollmentIds).toEqual([]);
+    expect(await state(target)).toEqual({ prospecting: null, followUp: null, permission: null });
+
+    // (a) the account: a current account that began at .123900 does not own a .123 Sent item.
+    await session.query(
+      `INSERT INTO mailbox_accounts (workspace_id, mailbox_id, email_address, active_from, generation_from)
+       VALUES ($1, $2, $3, $4, 1)`,
+      [workspaceId(), world.alpha.mailboxId, world.alpha.address, '2026-09-30T13:00:00.123900Z'],
+    );
+    const beforeAccount = await sentAt(target, '2026-09-30T13:00:00.123Z');
+    expect(beforeAccount.recorded).toBe(false);
+    const atAccount = await sentAt(target, '2026-09-30T13:00:00.124Z');
+    expect(atAccount.recorded).toBe(true);
   });
 
   it('a same-address re-consent sets no bound: a message from before it is still a direct send', async () => {

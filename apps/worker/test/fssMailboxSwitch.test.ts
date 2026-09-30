@@ -4,7 +4,10 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
 import { asSession, CLUSTER_URL_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDatabase.ts';
 import { createOutboundWorld, type OutboundWorld } from '../../../packages/domain/test/outbound/support/outboundWorld.ts';
+import { SEND_REFUSAL_CODES } from '@fss/domain/outbound/types.ts';
 import {
+  PREVIEW_CONDITION_FOR_REFUSAL,
+  SEND_PATH_PREVIEW_CONDITIONS,
   mailboxSwitchPreflightCommand,
   sendPathPreviewCommand,
   type AdminInvocation,
@@ -172,17 +175,7 @@ describe('fss admin mailbox switch-preflight', () => {
 });
 
 describe('fss admin send-path preview', () => {
-  const CONDITIONS = [
-    'cap',
-    'coldOutreach',
-    'domainSwitch',
-    'holds',
-    'mailboxCoverage',
-    'permission',
-    'sendingWindow',
-    'suppression',
-    'workspaceAttestation',
-  ];
+  const CONDITIONS = [...SEND_PATH_PREVIEW_CONDITIONS].sort();
 
   it('evaluates every condition for the prepared fence and the due step, and names the sender', async () => {
     const report = reportOf(await sendPathPreviewCommand(invocation(world.database.session, { '--workspace': workspaceId() })));
@@ -203,6 +196,46 @@ describe('fss admin send-path preview', () => {
     const stepConditions = step?.['conditions'] as Record<string, { pass: boolean; reason: string | null }>;
     expect(Object.keys(stepConditions).sort()).toEqual(CONDITIONS);
     expect(stepConditions['coldOutreach']).toEqual({ pass: false, reason: 'cold_outreach_mailbox_required' });
+  });
+
+  it('names a preview condition for every refusal the claim can return, and reports each one', async () => {
+    const report = reportOf(await sendPathPreviewCommand(invocation(world.database.session, { '--workspace': workspaceId() })));
+    const fence = (report['fences'] as readonly Record<string, unknown>[])[0] ?? {};
+    const reported = new Set(Object.keys(fence['conditions'] as Record<string, unknown>));
+    for (const code of SEND_REFUSAL_CODES) {
+      const condition = PREVIEW_CONDITION_FOR_REFUSAL[code];
+      expect(condition, `${code} has no preview condition`).toBeDefined();
+      if (typeof condition === 'string') expect(reported.has(condition), `${code} -> ${condition} is not reported`).toBe(true);
+      else expect(condition.notClaimDecided.length, `${code} is exempted without a reason`).toBeGreaterThan(0);
+    }
+    // Only Gmail's own answers and the preparation-time refusal are exempt.
+    expect(
+      SEND_REFUSAL_CODES.filter(code => typeof PREVIEW_CONDITION_FOR_REFUSAL[code] !== 'string').sort(),
+    ).toEqual(['provider_refusal', 'rate_limited', 'recipient_rejected', 'template_mismatch']);
+  });
+
+  it('reports a frozen route whose version changed as failing route, where dispatch refuses route_invalid', async () => {
+    const { rows } = await world.database.session.query<{ recipient_route_id: string }>(
+      'SELECT recipient_route_id FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId],
+    );
+    const routeId = rows[0]?.recipient_route_id ?? '';
+    // A bounce invalidates the route and a person restores it: the version moves on, and
+    // the fence froze the old one. Committed; the fence's later cases ask other questions.
+    await world.database.session.query(
+      "UPDATE email_addresses SET eligibility = 'invalid', version = version + 1 WHERE workspace_id = $1 AND id = $2",
+      [workspaceId(), routeId],
+    );
+    await world.database.session.query(
+      "UPDATE email_addresses SET eligibility = 'usable', version = version + 1 WHERE workspace_id = $1 AND id = $2",
+      [workspaceId(), routeId],
+    );
+    const report = reportOf(await sendPathPreviewCommand(invocation(world.database.session, { '--workspace': workspaceId() })));
+    const fence = (report['fences'] as readonly Record<string, unknown>[])[0] ?? {};
+    const conditions = fence['conditions'] as Record<string, { pass: boolean; reason: string | null }>;
+    expect(conditions['route']?.pass).toBe(false);
+    expect(conditions['route']?.reason).toMatch(/^route_invalid:version:/u);
+    expect(conditions['stepPermission']?.pass).toBe(false);
   });
 
   it('keeps evaluating the rest when the domain switch is off, which is where the gate stops', async () => {

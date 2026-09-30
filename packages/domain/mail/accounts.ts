@@ -68,9 +68,8 @@ export async function currentAccountSince(context: RepositoryContext, mailboxId:
 }
 
 /**
- * Record a switch: close the old account's interval and open the new one's, at the
- * transaction's own `now()` so both rows and the revived mailbox row agree to the
- * microsecond.
+ * Record a switch: close the old account's interval and open the new one's, both at the
+ * switch's instant `at`, so the two intervals meet exactly.
  *
  * The old account's interval is the open row when there is one (a mailbox switched
  * before), and otherwise a closed row from the mailbox's **creation**: with no rows the
@@ -88,24 +87,29 @@ export async function recordAccountSwitch(
     readonly toAddress: string;
     /** The generation the new account begins at: the revived row's. */
     readonly toGeneration: number;
+    /**
+     * The switch's instant: `clock_timestamp()` read after the gate and the row lock are
+     * held (review of 5015abd8, finding 3), never the transaction's `now()`.
+     */
+    readonly at: string;
   },
 ): Promise<void> {
   const closed = await context.db.query(
-    `UPDATE mailbox_accounts SET active_until = now()
+    `UPDATE mailbox_accounts SET active_until = $3::timestamptz
       WHERE workspace_id = $1 AND mailbox_id = $2 AND active_until IS NULL`,
-    [context.scope.workspaceId, input.mailboxId],
+    [context.scope.workspaceId, input.mailboxId, input.at],
   );
   if ((closed.rowCount ?? 0) === 0) {
     await context.db.query(
       `INSERT INTO mailbox_accounts (workspace_id, mailbox_id, email_address, active_from, active_until, generation_from)
-       SELECT workspace_id, id, $3, least(created_at, now()), now(), 1
+       SELECT workspace_id, id, $3, least(created_at, $4::timestamptz), $4::timestamptz, 1
          FROM mailboxes WHERE workspace_id = $1 AND id = $2`,
-      [context.scope.workspaceId, input.mailboxId, input.fromAddress.trim().toLowerCase()],
+      [context.scope.workspaceId, input.mailboxId, input.fromAddress.trim().toLowerCase(), input.at],
     );
   }
   await context.db.query(
     `INSERT INTO mailbox_accounts (workspace_id, mailbox_id, email_address, active_from, generation_from)
-     VALUES ($1, $2, $3, now(), $4)`,
-    [context.scope.workspaceId, input.mailboxId, input.toAddress.trim().toLowerCase(), input.toGeneration],
+     VALUES ($1, $2, $3, $5::timestamptz, $4)`,
+    [context.scope.workspaceId, input.mailboxId, input.toAddress.trim().toLowerCase(), input.toGeneration, input.at],
   );
 }

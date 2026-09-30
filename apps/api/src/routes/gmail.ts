@@ -5,6 +5,7 @@ import {
   disconnectMailbox,
   readGrantState,
   readOwnMailbox,
+  recordGrantRefusal,
 } from '@fss/domain/mail/oauth.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
@@ -47,6 +48,9 @@ const CALLBACK_PAGE = (heading: string, body: string): string =>
 const CONNECTED_PAGE = CALLBACK_PAGE('Gmail connected', 'You can close this tab and return to Callie.');
 const REFUSED_PAGE = CALLBACK_PAGE('Gmail not connected', 'Return to Callie; it will tell you what to do next.');
 
+const verifiedStateOrNull = (key: Buffer, state: string): ReturnType<typeof readGrantState> =>
+  state.length === 0 ? null : readGrantState(key, state, Math.floor(Date.now() / 1000));
+
 const html = (page: string, status: number): RouteResult => ({
   status,
   body: page,
@@ -69,7 +73,21 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     }
     const state = request.query.get('state') ?? '';
     const code = request.query.get('code');
-    if (code === null || code.length === 0) return html(REFUSED_PAGE, 400);
+    if (code === null || code.length === 0) {
+      // Google's own refusal — the owner pressed Cancel (`error=access_denied`) or Google
+      // declined — comes back with a state and no code. A state whose MAC holds names its
+      // user and attempt, so the refusal is audited for that attempt and `/gmail/status`
+      // reports it (review of 5015abd8, finding 5). An unverifiable state is not.
+      const cancelled = request.query.get('error');
+      const read = verifiedStateOrNull(mail.stateSigningKey, state);
+      if (cancelled !== null && read !== null) {
+        const scoped = await membershipScope(auth, read.claims);
+        if (scoped !== null) {
+          await recordGrantRefusal(scoped.context, { reason: 'grant_refused', attemptId: read.claims.attemptId ?? null });
+        }
+      }
+      return html(REFUSED_PAGE, 400);
+    }
 
     // A state whose MAC holds names its user even once it has expired, so an expired
     // attempt reaches `completeGmailGrant`, which audits the refusal for that user

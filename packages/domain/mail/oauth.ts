@@ -15,7 +15,6 @@ import {
   openMailboxHold,
   readMailbox,
   readMailboxForOwner,
-  readMailboxForUpdate,
   releaseMailboxHold,
   resetAccountState,
 } from './mailboxes.ts';
@@ -432,14 +431,15 @@ export async function completeGmailGrant(
   const decided = switchDecision(before, address, intent);
   if (!decided.ok) return await refuse(decided.reason);
 
-  // A switch stops the old account's watch with the old account's token, best effort,
-  // before any lock. Never blocks: a watch nobody stops expires within seven days, and
-  // the old token is replaced in the transaction below either way.
-  let oldWatchStopped: boolean | null = null;
-  if (decided.switching && before !== null) {
-    oldWatchStopped = await stopOldWatch(context, deps, oauth, before.id);
-  }
-  // The interval's end is read now, after the profile read (and after the stop), so it
+  // The old account's refresh token, decrypted now and held in memory: the transaction
+  // below replaces it, and the old watch is stopped with it only after the switch has
+  // committed (review of 5015abd8, finding 6). A refused or rolled-back switch changes
+  // nothing at Google.
+  const oldRefreshToken =
+    decided.switching && before !== null
+      ? await readRefreshToken(context, { mailboxId: before.id, cipher: deps.cipher })
+      : null;
+  // The interval's end is read now, after the profile read, so it
   // is never earlier than the instant `profile.historyId` was captured: a message that
   // arrived before the capture is in the listing up to `toAt`, and one after it is in
   // history from `startHistoryId` (A1's continuous handoff).
@@ -449,13 +449,19 @@ export async function completeGmailGrant(
   ).toISOString();
 
   try {
-    const outcome = await withTransaction(context.db, async () => {
+    const outcome = await withRowLockRetry(async () => await withTransaction(context.db, async () => {
       // 1. The exclusive send gate, before any row.
       await lockSendGateForStopFact(context);
       // 2. The mailbox row, and the decision again on what the lock shows: a concurrent
-      // grant may have moved it since the read above.
-      const owned = await readMailboxForOwner(context, actor.userId);
-      const locked = owned === null ? null : await readMailboxForUpdate(context, owned.id);
+      // grant may have moved it since the read above. See `lockOwnMailbox` for the lock
+      // strength and why it is taken the way it is.
+      const locked = await lockOwnMailbox(context, actor.userId);
+      // The switch's instant: the clock *now that the gate and the row are held*, never
+      // `now()`, which is this transaction's start (review finding 3). A sync that
+      // committed against the old account while this waited is before it, so its rows
+      // stay the old account's; the new account's Sent items from that wait are too.
+      const { rows: clock } = await context.db.query<{ at: string }>('SELECT clock_timestamp()::text AS at');
+      const switchedAt = clock[0]?.at ?? '';
       const lockedOwner = await addressOwner();
       if (lockedOwner !== undefined && lockedOwner !== actor.userId) {
         throw new GrantRefusedInTransaction('mailbox_address_taken');
@@ -488,6 +494,7 @@ export async function completeGmailGrant(
           fromAddress: locked.emailAddress,
           toAddress: address,
           toGeneration: mailbox.generation,
+          at: switchedAt,
         });
       }
       // 8. 12.3 and 4.2: nothing automated for this owner may run until coverage is proved.
@@ -521,7 +528,7 @@ export async function completeGmailGrant(
           action: 'mailbox.switched',
           subjectKind: 'mailbox',
           subjectId: mailbox.id,
-          detail: { from: locked.emailAddress, to: address, attemptId, oldWatchStopped },
+          detail: { from: locked.emailAddress, to: address, attemptId, switchedAt: new Date(switchedAt).toISOString() },
         });
       } else {
         await recordCrmAuditEvent(context, {
@@ -532,7 +539,19 @@ export async function completeGmailGrant(
         });
       }
       return { mailbox, switching };
-    });
+    }));
+    // After the commit, and only for a switch: stop the old account's watch with its own
+    // token, best effort. The answer is recorded, never acted on.
+    let oldWatchStopped: boolean | null = null;
+    if (outcome.switching) {
+      oldWatchStopped = await stopOldWatch(deps, oauth, oldRefreshToken);
+      await recordCrmAuditEvent(context, {
+        action: 'mailbox.switch_old_watch',
+        subjectKind: 'mailbox',
+        subjectId: outcome.mailbox.id,
+        detail: { attemptId, oldWatchStopped },
+      });
+    }
     return acceptMail({
       mailboxId: outcome.mailbox.id,
       emailAddress: address,
@@ -557,6 +576,12 @@ function switchDecision(
 ): { readonly ok: true; readonly switching: boolean } | { readonly ok: false; readonly reason: MailRefusalCode } {
   // An intent names one account, and only that one may complete it.
   if (intent !== null && intent !== address) return { ok: false, reason: 'mailbox_switch_address_mismatch' };
+  // An intent to switch to the address the mailbox already is: a second attempt after
+  // the first one completed. Refused, audited, and nothing changes (review finding 4).
+  // A re-consent without intent is still accepted below.
+  if (intent !== null && current !== null && current.emailAddress === address) {
+    return { ok: false, reason: 'mailbox_switch_same_address' };
+  }
   if (current === null || current.emailAddress === address) return { ok: true, switching: false };
   // Another account, and nobody asked for one: the silent switch.
   if (intent === null) return { ok: false, reason: 'mailbox_switch_not_requested' };
@@ -564,25 +589,78 @@ function switchDecision(
 }
 
 /**
- * `users.stop` on the old account's watch, with the old account's refresh token, before
- * the switch's transaction. Best effort, and the answer is recorded rather than acted
- * on: true only when Gmail acknowledged the stop.
+ * `users.stop` on the old account's watch, with the old account's refresh token, after
+ * the switch has committed. Best effort: true only when Gmail acknowledged the stop.
  */
 async function stopOldWatch(
-  context: RepositoryContext,
   deps: MailGrantDeps,
   oauth: Awaited<ReturnType<typeof resolveGmailOAuthConfig>>,
-  mailboxId: string,
+  refreshToken: string | null,
 ): Promise<boolean> {
+  if (refreshToken === null) return false;
   try {
-    const refreshToken = await readRefreshToken(context, { mailboxId, cipher: deps.cipher });
-    if (refreshToken === null) return false;
     const access = await deps.gmail.refreshAccessToken(oauth, refreshToken);
     if (!access.ok) return false;
     await deps.gmail.stopWatch(access.grant);
     return true;
   } catch {
     return false;
+  }
+}
+
+/** The row lock was not available at once: roll back, release the gate, and retry. */
+class MailboxRowBusy extends Error {
+  constructor() {
+    super('the mailbox row is locked by another transaction');
+  }
+}
+
+/** How often, and how far apart, the switch retries a busy mailbox row: about five seconds in all. */
+export const MAILBOX_ROW_LOCK_ATTEMPTS = 50;
+const MAILBOX_ROW_LOCK_PAUSE_MILLISECONDS = 100;
+
+/**
+ * The owner's mailbox row, locked `FOR UPDATE NOWAIT`, or null when there is none.
+ *
+ * Review of 5015abd8, finding 2. A mail import holds `KEY SHARE` on the row — the
+ * foreign key of every message it inserts — and then takes the send gate for a direct
+ * send's effects. This transaction holds the gate, and it changes `email_address`,
+ * which is a column of a unique index (`mailboxes_one_per_address`), so its UPDATE needs
+ * the row lock that conflicts with `KEY SHARE`. `FOR NO KEY UPDATE` alone does not avoid
+ * the cycle: the revive's UPDATE then waits on the import's `KEY SHARE` while holding the
+ * gate, and PostgreSQL aborts one of the two (40P01; `mailboxSwitch.test.ts` shows it).
+ *
+ * So the strong lock is taken up front, with `NOWAIT`, right after the gate. If an
+ * import holds `KEY SHARE`, the lock is refused at once, the transaction rolls back —
+ * releasing the gate the import is about to wait for — and the switch retries
+ * (`withRowLockRetry`). Once the lock is held, the gate and the row are both this
+ * transaction's: an importer can only wait on the row holding nothing this needs, and a
+ * dispatch claim cannot hold the gate at all. The provider calls are all before the
+ * transaction, so a retry repeats no Google call.
+ */
+async function lockOwnMailbox(context: RepositoryContext, ownerUserId: string): Promise<MailboxRow | null> {
+  let rows: readonly { id: string }[];
+  try {
+    ({ rows } = await context.db.query<{ id: string }>(
+      'SELECT id FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2 FOR UPDATE NOWAIT',
+      [context.scope.workspaceId, ownerUserId],
+    ));
+  } catch (error) {
+    if ((error as { code?: unknown }).code === '55P03') throw new MailboxRowBusy();
+    throw error;
+  }
+  const id = rows[0]?.id;
+  return id === undefined ? null : await readMailbox(context, id);
+}
+
+async function withRowLockRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!(error instanceof MailboxRowBusy) || tries >= MAILBOX_ROW_LOCK_ATTEMPTS) throw error;
+      await new Promise(resolve => setTimeout(resolve, MAILBOX_ROW_LOCK_PAUSE_MILLISECONDS));
+    }
   }
 }
 

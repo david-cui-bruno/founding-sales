@@ -117,6 +117,7 @@ describe('after a mailbox switch (call-to-booking A2)', () => {
         fromAddress: oldAddress,
         toAddress: newAddress,
         toGeneration: 2,
+        at: (await database.session.query<{ at: string }>('SELECT now()::text AS at')).rows[0]?.at ?? '',
       });
       await database.session.query(
         'UPDATE mailboxes SET email_address = $3, generation = 2 WHERE workspace_id = $1 AND id = $2',

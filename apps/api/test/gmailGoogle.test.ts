@@ -274,6 +274,22 @@ describe("the Gmail grant against Google's real endpoints", () => {
     expect(status.lastGrantRefusal).toMatchObject({ reason: 'mailbox_switch_not_requested', attemptId });
   });
 
+  it('audits a cancelled consent (error=access_denied, no code) for its attempt, and not a forged one', async () => {
+    const state = (await connect()).searchParams.get('state') ?? '';
+    const attemptId = lastAttemptId;
+    const page = await call('GET', '/oauth/gmail/callback', null, { query: { state, error: 'access_denied' } });
+    expect(page.status).toBe(400);
+    expect(String(page.body)).toContain('Gmail not connected');
+    const status = gmailStatusSchema.parse((await call('GET', '/gmail/status', accessToken)).body);
+    expect(status.lastGrantRefusal).toMatchObject({ reason: 'grant_refused', attemptId });
+
+    // A state this process did not sign is not attributed to anybody.
+    const forged = `${Buffer.from('g2.x.y.1.z.', 'utf8').toString('base64url')}.${randomBytes(32).toString('base64url')}`;
+    await call('GET', '/oauth/gmail/callback', null, { query: { state: forged, error: 'access_denied' } });
+    const after = gmailStatusSchema.parse((await call('GET', '/gmail/status', accessToken)).body);
+    expect(after.lastGrantRefusal).toMatchObject({ attemptId });
+  });
+
   it('refuses a switch to another domain before any consent screen', async () => {
     const started = await call('POST', '/gmail/connect', accessToken, {
       body: { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, switchTo: 'david@elsewhere.example' },

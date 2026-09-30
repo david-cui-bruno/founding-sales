@@ -529,7 +529,8 @@ export async function applyDirectSendEffects(
   // is before the current account's `active_from` is never a direct send. A mailbox never
   // switched has no `mailbox_accounts` row and no bound. Nothing is recorded, so nothing
   // about the message is frozen either; inbound processing is not bounded at all.
-  if (await sentBeforeCurrentAccount(context, message)) return NOT_RECORDED;
+  const sentAt = await exactInternalDate(context, message);
+  if (await sentBeforeCurrentAccount(context, message.mailboxId, sentAt)) return NOT_RECORDED;
 
   const recipientContactIds = await verifiedRecipientContacts(context, {
     firmId: candidate.firmId,
@@ -541,9 +542,9 @@ export async function applyDirectSendEffects(
     `SELECT id FROM sequence_enrollments
       WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind = 'prospecting'
         -- A2 boundary (c): a message ends only an enrollment that existed when it was sent.
-        AND date_trunc('milliseconds', created_at) <= $3::timestamptz
+        AND created_at <= $3::timestamptz
       ORDER BY id`,
-    [context.scope.workspaceId, candidate.firmId, message.internalDate],
+    [context.scope.workspaceId, candidate.firmId, sentAt],
   );
   for (const enrollment of prospecting) {
     const stopped = await stopEnrollments(context, {
@@ -557,7 +558,7 @@ export async function applyDirectSendEffects(
   const consumed = await consumeFulfilledByDirectSend(context, {
     firmId: candidate.firmId,
     contactIds: recipientContactIds,
-    sentAt: message.internalDate,
+    sentAt,
   });
   const consumedPermissionIds = consumed.map(permission => permission.permissionId);
   if (consumedPermissionIds.length > 0) {
@@ -566,13 +567,13 @@ export async function applyDirectSendEffects(
         WHERE workspace_id = $1 AND ended_at IS NULL
           AND (permission_id = ANY ($2::uuid[]) OR id = ANY ($3::uuid[]))
           -- A2 boundary (c), as above.
-          AND date_trunc('milliseconds', created_at) <= $4::timestamptz
+          AND created_at <= $4::timestamptz
         ORDER BY id`,
       [
         context.scope.workspaceId,
         consumedPermissionIds,
         consumed.flatMap(permission => (permission.enrollmentId === null ? [] : [permission.enrollmentId])),
-        message.internalDate,
+        sentAt,
       ],
     );
     for (const enrollment of bound) {
@@ -659,21 +660,33 @@ export async function applyDirectSendEffects(
 }
 
 /**
+ * The message's Gmail internal date exactly as stored, as text PostgreSQL reads back to
+ * the same microsecond. Every boundary below compares against it without flooring
+ * either side (review of 5015abd8, finding 7): "sent at or after X" is
+ * `internal_date >= X`, so a message dated 12:00:00.123 is before a permission created
+ * at 12:00:00.123900.
+ */
+async function exactInternalDate(context: RepositoryContext, message: MailMessageRow): Promise<string> {
+  const { rows } = await context.db.query<{ at: string }>(
+    'SELECT internal_date::text AS at FROM mail_messages WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, message.id],
+  );
+  return rows[0]?.at ?? message.internalDate;
+}
+
+/**
  * Whether an outgoing message predates the mailbox's current account (call-to-booking
  * A2): its Gmail internal date is before the open `mailbox_accounts` interval's
- * `active_from`. False when the mailbox has never been switched (no open row). Gmail's
- * internal date has millisecond precision, so every boundary here compares at the
- * millisecond (`date_trunc`): a message in the same millisecond as the instant counts as
- * at-or-after it.
+ * `active_from`. False when the mailbox has never been switched (no open row).
  */
-async function sentBeforeCurrentAccount(context: RepositoryContext, message: MailMessageRow): Promise<boolean> {
+async function sentBeforeCurrentAccount(context: RepositoryContext, mailboxId: string, sentAt: string): Promise<boolean> {
   const { rows } = await context.db.query<{ before: boolean }>(
     `SELECT EXISTS (
        SELECT 1 FROM mailbox_accounts
         WHERE workspace_id = $1 AND mailbox_id = $2 AND active_until IS NULL
-          AND $3::timestamptz < date_trunc('milliseconds', active_from)
+          AND $3::timestamptz < active_from
      ) AS before`,
-    [context.scope.workspaceId, message.mailboxId, message.internalDate],
+    [context.scope.workspaceId, mailboxId, sentAt],
   );
   return rows[0]?.before === true;
 }

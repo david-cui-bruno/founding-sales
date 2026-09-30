@@ -927,7 +927,7 @@ export async function consumeFulfilledByDirectSend(
         AND consumed_at IS NULL
         AND revoked_at IS NULL
         AND expires_at > clock_timestamp()
-        AND date_trunc('milliseconds', created_at) <= $4::timestamptz
+        AND created_at <= $4::timestamptz
       RETURNING id, enrollment_id`,
     [context.scope.workspaceId, input.firmId, [...input.contactIds], input.sentAt],
   );
