@@ -500,25 +500,29 @@ export async function resolveAmbiguity(
   const selected = candidates.find(candidate => candidate.opportunityId === input.selectedOpportunityId);
   if (selected === undefined) return refuseMail('match_unknown');
 
-  // An outgoing message is decided here, before any selection is written or any hold
-  // released (S1 review P1-D, P1-E).
+  // Who may resolve, decided here, before any selection is written or any hold released
+  // (S1 review P1-E for outgoing; round 4 for incoming, human and not). The mailbox's
+  // owner — or an administrator — and only for a firm the PR 332 assignment rule lets
+  // them change: resolving releases the other candidates' holds, and for an outgoing
+  // message applies the direct send to the chosen firm. Refused `not_assigned` with
+  // nothing written. The `human` path's later `setManualControlMode` asks the same rule
+  // of the same firm again, which now always agrees.
   const message = await readMessage(context, input.messageId);
-  if (message !== null && message.direction === 'outgoing') {
-    // Who may say which firm the salesperson's own e-mail was about: the mailbox's owner
-    // (or an administrator), and only for a firm the PR 332 assignment rule lets them
-    // change — the resolution ends that firm's prospecting and spends its permissions.
-    if (actor.kind === 'user' && actor.role !== 'admin') {
-      const { rows: owner } = await context.db.query<{ owner_user_id: string }>(
-        'SELECT owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
-        [context.scope.workspaceId, message.mailboxId],
-      );
-      if (owner[0]?.owner_user_id !== actor.userId) return refuseMail('not_assigned');
-    }
-    const firm = await loadFirmForUpdate(context, selected.firmId);
-    if (firm === null) return refuseMail('match_unknown');
-    const permitted = decideFirmMutation(context, firm);
-    if (!permitted.permitted) return refuseMail(permitted.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
-    // A direct-send effect already applied fixes the firm: the marker is once per
+  if (message === null) return refuseMail('message_unknown');
+  if (actor.kind === 'user' && actor.role !== 'admin') {
+    const { rows: owner } = await context.db.query<{ owner_user_id: string }>(
+      'SELECT owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, message.mailboxId],
+    );
+    const ownerUserId = owner[0]?.owner_user_id;
+    if (ownerUserId !== undefined && ownerUserId !== actor.userId) return refuseMail('not_assigned');
+  }
+  const firm = await loadFirmForUpdate(context, selected.firmId);
+  if (firm === null) return refuseMail('match_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) return refuseMail(permitted.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
+  if (message.direction === 'outgoing') {
+    // A direct-send effect already applied fixes the firm (P1-D): the marker is once per
     // message, so a resolution to another firm would select it and change nothing.
     const applied = await directSendAppliedFirms(context, input.messageId);
     if (applied.length > 0 && !applied.includes(selected.firmId)) return refuseMail('already_applied');
@@ -542,7 +546,7 @@ export async function resolveAmbiguity(
   // message's ambiguity holds and applies the direct-send effect to the one opportunity
   // the person named — once, by the effect's own marker. An FSS send is recognised by its
   // fence and has no direct-send effect either.
-  if (message !== null && message.direction === 'outgoing') {
+  if (message.direction === 'outgoing') {
     const releasedOutgoing = await releaseHoldsOfEvent(context, {
       sourceEventId: input.messageId,
       reasonCode: 'ambiguous_match',

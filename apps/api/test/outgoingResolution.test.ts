@@ -16,7 +16,7 @@ import { seedContact, seedFirm } from './support/crmSeed.ts';
  * change. Single-user today; the rule holds anyway. Every name and address is invented
  * (`example.test`, RFC 6761).
  */
-describe('resolving a held outgoing message across two assignees', () => {
+describe('resolving a held message across two assignees', () => {
   let fixture: AuthFixture;
   let ownerToken: string;
 
@@ -145,5 +145,114 @@ describe('resolving a held outgoing message across two assignees', () => {
       [fixture.alpha.workspaceId, messageId],
     );
     expect(applied).toEqual([{ firm_id: firmA }]);
+  });
+
+  it('round 4: an incoming reply is resolved only by its mailbox owner, and only to a firm they may change', async () => {
+    const otherSub = `sub-${randomUUID()}`;
+    const otherEmail = `incoming-other@${fixture.hostedDomain}`;
+    const { rows: other } = await fixture.db.query<{ id: string }>(
+      "INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, 'Incoming Other') RETURNING id",
+      [otherSub, otherEmail],
+    );
+    const otherUserId = other[0]?.id ?? '';
+    await fixture.db.query(
+      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'salesperson')",
+      [fixture.alpha.workspaceId, otherUserId],
+    );
+    const otherToken = (
+      await issueSessionFor(fixture, fixture.alpha, { googleSub: otherSub, email: otherEmail }, { deviceLabel: 'The other Mac' })
+    ).accessToken;
+    const firmA = await seedFirm(fixture, { name: 'Northwind Reply Holdings', assignedUserId: fixture.alpha.salesperson.userId });
+    const firmB = await seedFirm(fixture, { name: 'Southwind Reply Partners', assignedUserId: otherUserId });
+    const contactA = await seedContact(fixture, { firmId: firmA, fullName: 'Robin Example', isPrimary: true });
+    const contactB = await seedContact(fixture, { firmId: firmB, fullName: 'Sam Example', isPrimary: true });
+    const opportunityA = await openOpportunity(firmA);
+    const opportunityB = await openOpportunity(firmB);
+
+    // The owner's mailbox — the first case's, or one of its own when run alone.
+    const { rows: mailbox } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, provider_account_id, status)
+       VALUES ($1, $2, 'seller@example.test', 'seller-account', 'connected')
+       ON CONFLICT (workspace_id, owner_user_id) DO UPDATE SET status = 'connected'
+       RETURNING id`,
+      [fixture.alpha.workspaceId, fixture.alpha.salesperson.userId],
+    );
+    const { rows: message } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO mail_messages
+         (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+          internal_date, header_from, header_to, matched)
+       VALUES ($1, $2, 'held-in-1', 'held-in-thread-1', 'incoming', now(), 'shared-reply@example.test',
+               ARRAY['seller@example.test'], true)
+       RETURNING id`,
+      [fixture.alpha.workspaceId, mailbox[0]?.id ?? ''],
+    );
+    const messageId = message[0]?.id ?? '';
+    const system = repositoryContext(
+      workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'worker' }),
+      fixture.db,
+    );
+    const held = await recordMatches(system, {
+      messageId,
+      candidates: [
+        { firmId: firmA, opportunityId: opportunityA, contactId: contactA, rule: 'participant', viaClosedOpportunity: false },
+        { firmId: firmB, opportunityId: opportunityB, contactId: contactB, rule: 'participant', viaClosedOpportunity: false },
+      ],
+    });
+    expect(held.holdIds).toHaveLength(2);
+
+    const resolve = async (token: string, opportunityId: string) =>
+      await post('/messages/resolve-ambiguity', token, {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+        messageId,
+        selectedOpportunityId: opportunityId,
+        human: false,
+      });
+    const unchanged = async (): Promise<void> => {
+      const { rows: matches } = await fixture.db.query<{ selected: boolean | null }>(
+        'SELECT selected FROM mail_message_matches WHERE workspace_id = $1 AND mail_message_id = $2',
+        [fixture.alpha.workspaceId, messageId],
+      );
+      expect(matches.map(row => row.selected)).toEqual([null, null]);
+      const { rows: holds } = await fixture.db.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM active_holds WHERE workspace_id = $1 AND id = ANY ($2::uuid[]) AND released_at IS NULL',
+        [fixture.alpha.workspaceId, [...held.holdIds]],
+      );
+      expect(holds[0]?.count).toBe('2');
+      const { rows: extra } = await fixture.db.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM active_holds
+          WHERE workspace_id = $1 AND source_event_kind = 'mail_message_resolution' AND source_event_id = $2`,
+        [fixture.alpha.workspaceId, messageId],
+      );
+      expect(extra[0]?.count).toBe('0');
+      const { rows: effects } = await fixture.db.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM mail_message_effects WHERE workspace_id = $1 AND mail_message_id = $2',
+        [fixture.alpha.workspaceId, messageId],
+      );
+      expect(effects[0]?.count).toBe('0');
+    };
+
+    // B's owner, who does not own the mailbox the reply arrived in, choosing A.
+    const byOther = await resolve(otherToken, opportunityA);
+    expect(byOther.body['reason'], JSON.stringify(byOther.body)).toBe('not_assigned');
+    await unchanged();
+    // B's owner choosing their own firm B: still refused — the reply is in somebody
+    // else's mailbox.
+    const ownFirmOtherMailbox = await resolve(otherToken, opportunityB);
+    expect(ownFirmOtherMailbox.body['reason'], JSON.stringify(ownFirmOtherMailbox.body)).toBe('not_assigned');
+    await unchanged();
+    // The mailbox's owner choosing B, a firm they are not assigned to.
+    const toOtherFirm = await resolve(ownerToken, opportunityB);
+    expect(toOtherFirm.body['reason'], JSON.stringify(toOtherFirm.body)).toBe('not_assigned');
+    await unchanged();
+
+    // A's owner, who owns the mailbox, choosing A.
+    const chosen = await resolve(ownerToken, opportunityA);
+    expect(chosen.status, JSON.stringify(chosen.body)).toBe(200);
+    const { rows: selection } = await fixture.db.query<{ opportunity_id: string }>(
+      'SELECT opportunity_id FROM mail_message_matches WHERE workspace_id = $1 AND mail_message_id = $2 AND selected',
+      [fixture.alpha.workspaceId, messageId],
+    );
+    expect(selection).toEqual([{ opportunity_id: opportunityA }]);
   });
 });
