@@ -5,6 +5,7 @@ import type { MailGrantDeps } from '@fss/domain/mail/oauth.ts';
 import type { PushTokenVerifier } from '@fss/domain/mail/pushToken.ts';
 import type { AuthDeps } from '../auth/config.ts';
 import type { Logger } from '../bootstrap/log.ts';
+import type { IntegrationDeps } from '../integrations/providers.ts';
 
 /**
  * What a route is given and what it hands back.
@@ -23,6 +24,20 @@ export interface ApiRequest {
   readonly headers: Readonly<Record<string, string | undefined>>;
   /** Already parsed from JSON, or undefined for a bodyless request. */
   readonly body: unknown;
+  /**
+   * Present on the provider integration paths only (`/integrations/twilio/*`,
+   * `/integrations/calcom/*`): the bytes the provider signed and the external URL it
+   * signed them at, reconstructed from `FSS_PUBLIC_ORIGIN`, never from the Host header.
+   */
+  readonly integration?: IntegrationRequest | undefined;
+}
+
+export interface IntegrationRequest {
+  readonly rawBody: Buffer;
+  /** The pinned public origin plus the request's own path and query, or null when unset. */
+  readonly externalUrl: string | null;
+  /** A form body's parameters (Twilio), or null. */
+  readonly form: Readonly<Record<string, string>> | null;
 }
 
 export interface RouteResult {
@@ -77,6 +92,8 @@ export interface RoutingOptions {
    * means production, the direction that refuses.
    */
   readonly production?: boolean | undefined;
+  /** Twilio and Cal.com (call-to-booking slice W). Absent: every integration route is 404. */
+  readonly integrations?: IntegrationDeps | undefined;
 }
 
 export interface MailRoutingDeps extends MailGrantDeps {

@@ -205,6 +205,8 @@ export interface ConsumedCallSession {
   readonly e164: string;
   /** The actor's verified identity, for `<Dial callerId>`. */
   readonly callerIdE164: string;
+  /** `<Dial timeLimit>`: the minutes the reservation holds, so a call cannot outrun its money. */
+  readonly maxSeconds: number;
 }
 
 interface SessionRow {
@@ -310,6 +312,11 @@ export async function consumeCallSession(
   );
   // From this commit on, a call may have happened: the reservation says so.
   await markCalling(context, session.reservation_id);
+  const { rows: limits } = await db.query<{ max_units: number | null }>(
+    'SELECT max_units FROM provider_reservations WHERE workspace_id = $1 AND id = $2',
+    [input.workspaceId, session.reservation_id],
+  );
+  const maxSeconds = Math.max(60, Number(limits[0]?.max_units ?? 1) * 60);
   await recordFunnelFact(context, {
     kind: 'call.placed',
     source: 'telephony',
@@ -325,7 +332,7 @@ export async function consumeCallSession(
   });
   return {
     ok: true,
-    value: { sessionId: session.id, workspaceId: input.workspaceId, e164: consumed.value.e164, callerIdE164 },
+    value: { sessionId: session.id, workspaceId: input.workspaceId, e164: consumed.value.e164, callerIdE164, maxSeconds },
   };
 }
 

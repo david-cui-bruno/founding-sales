@@ -1,3 +1,4 @@
+import type { IntegrationRequest } from '../routes/types.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { VerifiedPrincipal } from '../scope.ts';
 
@@ -31,6 +32,8 @@ export interface BootstrapRequest {
   /** Null for an unauthenticated request. Produced by G2's verification, never here. */
   readonly principal: VerifiedPrincipal | null;
   readonly body?: Readonly<Record<string, unknown>> | undefined;
+  /** The provider integration paths' raw bytes and external URL (`routes/types.ts`). */
+  readonly integration?: IntegrationRequest | undefined;
   /**
    * The parsed query string, for the two endpoints that have one: Google's OAuth
    * redirect arrives as `GET /auth/google/callback?state=…&code=…` and there is no

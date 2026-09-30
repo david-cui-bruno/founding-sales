@@ -76,6 +76,8 @@ export interface LogCallOutcomeInput {
   readonly contactId?: string | undefined;
   readonly routeId?: string | undefined;
   readonly ticketId?: string | undefined;
+  /** The call session it was placed through (0028): its ticket is the call's ticket. */
+  readonly callSessionId?: string | undefined;
   readonly callingIdentityId?: string | undefined;
   /** The Today task the call was placed from. Binds the call to its step or callback. */
   readonly itemId?: string | undefined;
@@ -209,6 +211,19 @@ export async function logCallOutcome(
     const serverNow = Date.parse(now);
     if (entered > serverNow + CALL_OCCURRED_AT_TOLERANCE_SECONDS * 1000) return refusePolicy('occurred_at_in_future');
     occurredAt = entered > serverNow ? now : new Date(entered).toISOString();
+  }
+
+  // A call placed through a Twilio call session names the session; its ticket is the
+  // call's ticket, and a session that is not this workspace's is the same mismatch.
+  if (input.callSessionId !== undefined) {
+    const { rows: sessions } = await context.db.query<{ ticket_id: string }>(
+      'SELECT ticket_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, input.callSessionId],
+    );
+    const sessionTicket = sessions[0]?.ticket_id;
+    if (sessionTicket === undefined) return refusePolicy('ticket_mismatch');
+    if (input.ticketId !== undefined && input.ticketId !== sessionTicket) return refusePolicy('ticket_mismatch');
+    input = { ...input, ticketId: sessionTicket };
   }
 
   // C16 and S15: the ticket the call was placed with, and everything it binds.

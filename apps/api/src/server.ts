@@ -2,7 +2,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
+import {
+  MAX_INTEGRATION_REQUEST_BYTES,
+  MAX_REQUEST_BYTES,
+  REFUSAL_STATUS,
+  checkEnvelope,
+  checkIntegrationEnvelope,
+  integrationContentTypeOf,
+  redactError,
+  type RefusalCode,
+} from './limits.ts';
 import type { AuthDeps } from './auth/config.ts';
 import { authenticate } from './auth/sessions.ts';
 import type { VerifiedPrincipal } from './scope.ts';
@@ -15,14 +24,16 @@ import {
 import { dispatch as dispatchMounted } from './bootstrap/dispatch.ts';
 import { errorFields, type Logger } from './bootstrap/log.ts';
 import { createReadinessGate, type ReadinessGate } from './bootstrap/readinessGate.ts';
-import { readBody } from './bootstrap/requestBody.ts';
+import { readBody, readIntegrationBody } from './bootstrap/requestBody.ts';
 import { createRouteRegistry, type RouteModule, type RouteRegistry } from './bootstrap/routeRegistry.ts';
 import { mountedRoutes } from './bootstrap/routes.ts';
 import { apiRouteModules } from './routes/modules.ts';
 import { localNoopSuppressionJournal } from './journal/index.ts';
+import type { IntegrationDeps } from './integrations/providers.ts';
 import {
   DEFAULT_UPGRADE_URL,
   type ApiRequest,
+  type IntegrationRequest,
   type MailRoutingDeps,
   type RouteResult,
   type RoutingOptions,
@@ -110,6 +121,11 @@ export interface ApiOptions {
    * Production binds only the CI gate's release records. Absent means production.
    */
   readonly production?: boolean | undefined;
+  /**
+   * Twilio Voice and Cal.com (call-to-booking slice W). Absent: the integration routes
+   * and the call-session routes answer 404.
+   */
+  readonly integrations?: IntegrationDeps | undefined;
 }
 
 /**
@@ -145,6 +161,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
     ...(options.production === undefined ? {} : { production: options.production }),
+    ...(options.integrations === undefined ? {} : { integrations: options.integrations }),
   };
 }
 
@@ -199,6 +216,7 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     query: request.query,
     principal,
     body: request.body as Readonly<Record<string, unknown>> | undefined,
+    ...(request.integration === undefined ? {} : { integration: request.integration }),
     db: options.session,
     readiness: { session: options.session },
   });
@@ -287,6 +305,20 @@ function refuse(response: ServerResponse, log: Logger | undefined, code: Refusal
   send(response, REFUSAL_STATUS[code], redactError(code), undefined, { connection: 'close' });
 }
 
+/**
+ * The URL a provider signed, behind TLS termination: the pinned public origin
+ * (`FSS_PUBLIC_ORIGIN`) and the request's own path and query. The Host and forwarded
+ * headers are never trusted for the host — a request that names another host would
+ * otherwise choose the URL its own signature is checked against. Null when no origin
+ * is configured, and the route then refuses.
+ */
+export function externalUrlOf(integrations: IntegrationDeps | undefined, requestUrl: string): string | null {
+  const origin = integrations?.publicOrigin ?? null;
+  if (origin === null) return null;
+  const pathAndQuery = requestUrl.startsWith('/') ? requestUrl : `/${requestUrl}`;
+  return `${origin.replace(/\/+$/u, '')}${pathAndQuery}`;
+}
+
 /** A stable refusal code: lower-case words joined by underscores. Nothing else is logged. */
 const REFUSAL_CODE_SHAPE = /^[a-z][a-z0-9_]{0,79}$/u;
 
@@ -322,11 +354,16 @@ async function handle(
     const url = new URL(request.url ?? '/', 'http://localhost');
     path = url.pathname;
 
-    const envelope = checkEnvelope({
+    // The provider integration paths (call-to-booking slice W) take their own content
+    // type and size limit, and keep their raw bytes for the signature. Every other path
+    // is unchanged: JSON only, parsed and the bytes discarded.
+    const integrationType = integrationContentTypeOf(path);
+    const envelopeInput = {
       method,
       contentType: request.headers['content-type'],
       contentLength: request.headers['content-length'],
-    });
+    };
+    const envelope = integrationType === null ? checkEnvelope(envelopeInput) : checkIntegrationEnvelope({ ...envelopeInput, path });
     if (!envelope.accepted) {
       // Refused before a byte of body is read: reading a body this process has
       // already refused is the attack.
@@ -335,7 +372,20 @@ async function handle(
     }
 
     let body: Readonly<Record<string, unknown>> | undefined;
-    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    let integration: IntegrationRequest | undefined;
+    if (integrationType !== null) {
+      const read = await readIntegrationBody(
+        request,
+        MAX_INTEGRATION_REQUEST_BYTES,
+        integrationType as 'application/x-www-form-urlencoded' | 'application/json',
+      );
+      if (!read.accepted) {
+        refuse(response, options.log, read.code, path);
+        return;
+      }
+      body = read.body;
+      integration = { rawBody: read.raw, externalUrl: externalUrlOf(options.integrations, request.url ?? '/'), form: read.form };
+    } else if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
       const read = await readBody(request, MAX_REQUEST_BYTES);
       if (!read.accepted) {
         refuse(response, options.log, read.code, path);
@@ -366,6 +416,7 @@ async function handle(
         query: url.searchParams,
         headers: request.headers as Readonly<Record<string, string | undefined>>,
         body,
+        ...(integration === undefined ? {} : { integration }),
       },
       optionsForRequest(options, connection.session),
     );

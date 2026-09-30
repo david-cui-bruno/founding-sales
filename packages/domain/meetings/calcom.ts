@@ -7,7 +7,8 @@ import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { applyStageEvidence, openReviewItem, type StageEvidenceOutcome } from '../crm/stageEvidence.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { applyManualModeStop } from '../sequences/terminalStops.ts';
+import { stopEnrollments } from '../sequences/enrollments.ts';
+import { manualModeEndReason } from '../sequences/terminalStops.ts';
 
 /**
  * Cal.com webhook deliveries → meetings → the pipeline (call-to-booking slice W, 0028).
@@ -25,9 +26,10 @@ import { applyManualModeStop } from '../sequences/terminalStops.ts';
  *     attendee's domain → the one firm whose website has it; otherwise a review item.
  *   * **A booking** applies `meeting.booked` through `applyStageEvidence` (the pipeline
  *     move to Demo booked), stops conflicting prospecting at the firm through the
- *     existing stop writers — manual mode on the opportunity and the manual-mode stop of
- *     every live enrollment, origin `engaged_call` (a booked demo is a conversation) —
- *     and records the funnel fact. The CRM sends no reminder: Cal.com owns those.
+ *     existing stop writers — manual mode on the opportunity (`setManualControlMode`,
+ *     origin `engaged_call`: a booked demo is a conversation) and `stopEnrollments` for
+ *     every live **prospecting** enrollment there; an evidenced follow-up is compatible
+ *     with a booking and keeps running — and records the funnel fact. The CRM sends no reminder: Cal.com owns those.
  *
  * Lock order: the send gate first, before any row, as every stop-fact writer takes it
  * (`policy/sendGate.ts`); then the meeting; then what `applyStageEvidence` locks.
@@ -369,7 +371,27 @@ async function applyBooked(context: RepositoryContext, meeting: MeetingRow, occu
       origin: 'engaged_call',
     });
   }
-  await applyManualModeStop(context, { firmId, origin: 'engaged_call', cause: 'meeting.booked' });
+  // Only prospecting stops. An evidenced follow-up — the overview promised on the call —
+  // is compatible with a booked demo and keeps running within its permission.
+  const { rows: prospecting } = await context.db.query<{ id: string }>(
+    `SELECT id FROM sequence_enrollments
+      WHERE workspace_id = $1 AND firm_id = $2 AND ended_at IS NULL AND origin_kind IN ('prospecting', 'cold_legacy')
+      ORDER BY id`,
+    [context.scope.workspaceId, firmId],
+  );
+  if (prospecting.length > 0) {
+    const stopped = await stopEnrollments(context, {
+      enrollmentIds: prospecting.map(row => row.id),
+      reason: manualModeEndReason('engaged_call'),
+      cancelReason: 'terminal_stop',
+    });
+    await recordCrmAuditEvent(context, {
+      action: 'enrollments.stopped_by_meeting',
+      subjectKind: 'meeting',
+      subjectId: meeting.id,
+      detail: { firmId, enrollmentsStopped: stopped.enrollmentsStopped, executionsCancelled: stopped.executionsCancelled },
+    });
+  }
   await recordFunnelFact(context, {
     kind: 'meeting.booked',
     source: 'calendar',

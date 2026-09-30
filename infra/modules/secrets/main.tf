@@ -22,6 +22,12 @@ locals {
     "session-signing-key",
     "device-credential-pepper",
     "llm-classifier-api-key",
+    # Call-to-booking (slice W): Twilio Voice (account, API key, TwiML app, auth token,
+    # caller id) and Cal.com (webhook secret, API key), each a JSON object the API reads
+    # (`apps/api/src/integrations/providers.ts`). Only read once a workspace turns its
+    # switch on; see the note in `infra/modules/cluster` about entering a value first.
+    "twilio-voice",
+    "calcom",
     # The two database identities (G12h, David's condition of 21 September).
     # Separate entries because the point is that the identity which may read one
     # may not read the other: `infra/modules/cluster` gives the first to the
