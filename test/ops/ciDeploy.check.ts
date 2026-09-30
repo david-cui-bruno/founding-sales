@@ -1742,6 +1742,41 @@ describe('the protected-path guard reads every commit since production’s, befo
     expect(split.outputs['decision'], split.output).toBe('manual');
   });
 
+  it('passes an app-only branch that was updated from main after main changed a workflow (PR 346, 30 Sep 2026)', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fss-guard-update-branch-'));
+    git(directory, 'init', '-q', '-b', 'main');
+    git(directory, 'config', 'user.email', 'ci@example.invalid');
+    git(directory, 'config', 'user.name', 'CI');
+    git(directory, 'config', 'commit.gpgsign', 'false');
+    const base = commitFiles(directory, 'base', ['README.md', '.github/workflows/release.yml']);
+    // A pull request branch, off base: application code only.
+    git(directory, 'checkout', '-q', '-b', 'kanban');
+    commitFiles(directory, 'k1', ['apps/desktop/src/renderer/board.tsx']);
+    // Main moves on: a workflow change merged through its own pull request. Production is then released at it.
+    git(directory, 'checkout', '-q', '-b', 'skeleton', base);
+    commitFiles(directory, 'w1', ['.github/workflows/release.yml', 'infra/roots/production/tests/isolation.tftest.hcl']);
+    git(directory, 'checkout', '-q', 'main');
+    git(directory, 'merge', '-q', '--no-ff', '-m', 'merge skeleton', 'skeleton');
+    const released = git(directory, 'rev-parse', 'HEAD');
+    // "Update branch": main merged into the pull request branch, then the pull request merged into main.
+    git(directory, 'checkout', '-q', 'kanban');
+    git(directory, 'merge', '-q', '--no-ff', '-m', 'update branch', 'main');
+    git(directory, 'checkout', '-q', 'main');
+    git(directory, 'merge', '-q', '--no-ff', '-m', 'merge kanban', 'kanban');
+    const merged = git(directory, 'rev-parse', 'HEAD');
+    const run = guard(world(at(released)), merged, directory);
+    expect(run.code, run.output).toBe(0);
+    expect(run.outputs['decision'], run.output).toBe('pass');
+    // The same shape with a workflow edited on the branch itself still goes to the manual path.
+    git(directory, 'checkout', '-q', 'kanban');
+    commitFiles(directory, 'k2', ['.github/workflows/release.yml']);
+    git(directory, 'checkout', '-q', 'main');
+    git(directory, 'merge', '-q', '--no-ff', '-m', 'merge kanban again', 'kanban');
+    const edited = guard(world(at(merged)), git(directory, 'rev-parse', 'HEAD'), directory);
+    expect(edited.outputs['decision'], edited.output).toBe('manual');
+    expect(edited.outputs['reason']).toContain('.github/workflows/release.yml (a workflow)');
+  });
+
   it('classifies application code as app-only and everything else as manual, one path at a time', () => {
     const directory = mkdtempSync(join(tmpdir(), 'fss-guard-paths-'));
     git(directory, 'init', '-q', '-b', 'main');
