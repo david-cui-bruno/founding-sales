@@ -116,9 +116,12 @@ The call ledger is `provider_reservations` (`provider_key = 'twilio.voice'`) wit
 With `calling_provider = twilio` the Today card's Call button places the call from
 Callie: David talks through the Mac's microphone and headphones, and the prospect sees
 his verified personal number (the calling identity) as the caller ID. No number is
-bought and nothing bridges through his cellphone. With any other value — and whenever
-the Mac cannot read the setting — the Call button is the `tel:` handoff exactly as
-before.
+bought and nothing bridges through his cellphone. With the switch off (`/calls/calling`
+answers `not_found`) the Call button is the `tel:` handoff exactly as before. **Only that
+answer selects `tel:`**: while the read is pending the button is disabled with "Checking
+how to place calls…", and on a 503, no answer or another refusal with "Calling is
+unavailable right now." — an untracked phone-app call would bypass the session, the
+cadence and the budget.
 
 1. Opening a card reads **`GET /calls/calling?firmId=`** (404 while the switch is off,
    which the Mac reads as `tel`): the cadence ("Attempt N of 4", or parked), the
@@ -148,28 +151,32 @@ Callie keeps no voicemail box.
 
 Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessions.ts`):
 
-* an **unanswered attempt** is a placed session that ended no-answer or busy, or whose
-  recorded outcome is `no_answer`, `busy` or `voicemail_left` (the recorded outcome wins:
-  an answering machine is `in-progress` to Twilio);
+* **every placed (consumed) session is an attempt from the moment it is consumed**, and
+  stays an unanswered attempt in the 14-day history until an outcome that says somebody
+  was reached (below) is recorded; a call that rang out, reached a machine, failed or was
+  never classified counts, and nothing expires it but the window;
 * at most **4** in **14 days**; at most **one per business day** on the firm's clock, and
-  the next at least **2 hours** of the clock from the previous one's time of day (the
-  calling window itself is `authorizeDial`'s);
+  the next at least **2 hours** of the clock from the previous attempt's time of day,
+  measured from every counted session (the calling window itself is `authorizeDial`'s);
 * the count starts again after a recorded `interested`, `referral_or_wrong_person`,
   `callback_requested`, `not_interested` or `do_not_call` (any call log, placed from
   Callie or not), and after a parked firm is resumed. A `callback_requested` outcome's
   callback is the next action, as it always was (the callback task on Today);
-* a placed call with no outcome that is still `authorized` or `ringing` counts as
-  unanswered for 240 minutes, and while one exists another is refused
-  `call_attempt_today`: one attempt at a time;
 * the same cadence is read again at consumption, after slice W's shared send gate and
   the firm row lock (`consumeCallSession`), so sessions created together cannot all be
   placed; a refusal there is heard as the generic TwiML sentence;
-* the fifth attempt is refused `call_attempts_exhausted` and **parks the firm**: a
-  firm-scoped `scoped_pause` hold on `dial_authorization`, source
-  `call_cadence_parked`, recovery `resume_after_review`. While it is open every dial of
+* the firm is **parked when its fourth attempt is recorded unanswered** — an outcome of
+  `no_answer`, `busy` or `voicemail_left` (`logCallOutcome`), or Twilio's final
+  no-answer/busy with no outcome yet (`recordCallStatus`) — through `parkIfCadenceSpent`,
+  which takes the send gate before it looks for an open hold. A call request that finds
+  the limit reached and no hold parks it only after `authorizeDial` accepts the caller,
+  firm, route and identity; a refused request writes nothing. The hold is firm-scoped
+  `scoped_pause` on `dial_authorization`, source `call_cadence_parked`, recovery
+  `resume_after_review`. While it is open every dial of
   the firm, `tel:` included, is refused `scoped_pause` ("Calling is paused for this firm.
   Resume it when you are ready."). **`POST /calls/cadence/resume`** `{firmId}` ("Resume
-  calling" on the card) releases it, and its release instant starts the count again.
+  calling" on the card) releases it, and its release instant starts the count again; the
+  Mac then reads the card's dial advice again.
 
 ### Recordings
 
@@ -181,9 +188,10 @@ secret's API key) and answers `{ sessionId, contentType, audioBase64 }`. Only pa
 this account's recordings are fetched, at most 40 MiB. Both are the assigned
 salesperson's or an admin's; another firm's or workspace's session is 404 and Twilio is
 not asked. The bytes travel as base64 in JSON because every route of this API and every
-read of the Mac's client is JSON; the Mac plays them through the Web Audio API, so the
-renderer's CSP needs no `blob:` or `data:` source. The call history on the firm page is
-`apps/desktop/src/renderer/calling/CallHistory.tsx`.
+read of the Mac's client is JSON; the Mac plays them from a `blob:` URL through an
+`<audio>` element (memory about the compressed size) and revokes the URL when playback
+stops, ends or leaves the screen. The call history is on the firm page
+(`apps/desktop/src/renderer/calling/CallHistory.tsx`, placed in `FirmPage.tsx`).
 
 ### The voicemail script
 
@@ -203,8 +211,11 @@ widened, which is a migration; until then `readVoicemailScript` answers the defa
 * The renderer's CSP adds exactly Twilio's documented entries for the Voice JS SDK:
   `connect-src https://eventgw.twilio.com wss://voice-js.roaming.twilio.com
   https://media.twiliocdn.com https://sdk.twilio.com` and `media-src mediastream:
-  https://media.twiliocdn.com https://sdk.twilio.com`. `default-src 'none'` stays; the
-  SDK is bundled, so no `script-src` entry.
-* While a call is live an update is not installed: a due install (a blocked build's, or
-  Restart to update pressed during the call) waits and runs when the call ends
-  (`callActivity.ts`, `Updater.callEnded`).
+  https://media.twiliocdn.com https://sdk.twilio.com`, plus `blob:` in `media-src` only,
+  for recording playback. `default-src 'none'` stays; the SDK is bundled, so no
+  `script-src` entry.
+* While a call is live an update is not installed: every install path — at launch,
+  a blocked build's, or Restart to update — stops before the swap, and the staged,
+  verified bundle is installed when the call ends (`callActivity.ts`, `Updater.callEnded`).
+* Closing the card or pressing Hang up while a call is being set up cancels it; a Device
+  or Call created afterwards is disconnected and destroyed at once.
