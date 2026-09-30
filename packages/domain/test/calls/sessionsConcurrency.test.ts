@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
-import { consumeCallSession, createCallSession } from '../../calls/sessions.ts';
+import { consumeCallSession, createCallSession, sweepCallSessionReservations } from '../../calls/sessions.ts';
 import { sendGateLockName } from '../../policy/sendGate.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -165,6 +165,47 @@ describe('call-session consumption under concurrency', () => {
       expect(blocked).toBe(true);
       // The call linearised before the suppression, the ordering the gate allows.
       expect(consumed.ok).toBe(true);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+  });
+
+  it('refuses a consumption that waited on the gate past the minute while the sweep released its reservation (fold 2)', async () => {
+    const sessionId = await create('alpha');
+    // The minute ends a moment from now, after this consumption's transaction began.
+    await database.session.query(
+      "UPDATE call_sessions SET expires_at = clock_timestamp() + INTERVAL '1500 milliseconds' WHERE id = $1",
+      [sessionId],
+    );
+    const other = await otherConnection();
+    const sweeper = await database.appRuntimeSession();
+    try {
+      const writerPid = await pidOf(async sql => await other.query<{ pid: number }>(sql));
+      await other.query('BEGIN');
+      await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(seeded.alpha.workspaceId)]);
+      const consuming = withTransaction(database.session, async () =>
+        await consumeCallSession(database.session, consumeInput('alpha', sessionId)),
+      );
+      expect(await waitsOn(other as never, writerPid)).toBe(true);
+      // The minute passes while the consumption waits; the sweep, which takes no gate,
+      // finds the unconsumed expired session and releases its reservation.
+      await new Promise(resolve => setTimeout(resolve, 1_800));
+      await sweeper.query('BEGIN');
+      const swept = await sweepCallSessionReservations(
+        repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), sweeper),
+      );
+      await sweeper.query('COMMIT');
+      expect(swept.released).toBe(1);
+      await other.query('ROLLBACK');
+
+      expect(await consuming).toEqual({ ok: false, reason: 'session_expired' });
+      const { rows } = await database.session.query<{ state: string; consumed_at: Date | null }>(
+        `SELECT r.state, s.consumed_at FROM call_sessions s
+           JOIN provider_reservations r ON r.workspace_id = s.workspace_id AND r.id = s.reservation_id
+          WHERE s.id = $1`,
+        [sessionId],
+      );
+      expect(rows[0]).toEqual({ state: 'released', consumed_at: null });
     } finally {
       await other.end().catch(() => undefined);
     }

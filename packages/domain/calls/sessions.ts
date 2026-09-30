@@ -199,6 +199,7 @@ export async function createCallSession(
 
 export type ConsumeRefusal =
   | 'call_attempt_limit'
+  | 'reservation_closed'
   | 'session_unknown'
   | 'already_consumed'
   | 'session_expired'
@@ -290,10 +291,13 @@ export async function consumeCallSession(
     locatedFirm,
   ]);
 
-  // 3. The session row.
+  // 3. The session row. Its expiry is read against `clock_timestamp()`, the instant of
+  //    this statement, not `now()`: a transaction that began inside the minute and then
+  //    waited on the gate or the firm past it must see the minute as over (review fold
+  //    2) — the sweep may have released the reservation in that wait.
   const { rows } = await db.query<SessionRow>(
     `SELECT id, workspace_id, ticket_id, firm_id, contact_id, actor_user_id, reservation_id, consumed_at,
-            (expires_at <= now()) AS expired
+            (expires_at <= clock_timestamp()) AS expired
        FROM call_sessions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
     [input.workspaceId, input.sessionId],
   );
@@ -314,6 +318,16 @@ export async function consumeCallSession(
   );
   if (Number(attempts[0]?.count ?? 0) >= CALL_SESSION_DAILY_ATTEMPT_LIMIT) return refused('call_attempt_limit');
 
+  // 5. The reservation, still `reserved`. The sweep locks the session before it settles
+  //    anything, and this transaction holds that lock now, so the state read here is the
+  //    state `markCalling` will find — unless something outside the sweep closed it,
+  //    which the savepoint below turns into a refusal rather than an unpaid call.
+  const { rows: reservations } = await db.query<{ state: string }>(
+    'SELECT state FROM provider_reservations WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+    [input.workspaceId, session.reservation_id],
+  );
+  if (reservations[0]?.state !== 'reserved') return refused('reservation_closed');
+
   const { rows: members } = await db.query<{ role: 'admin' | 'salesperson' }>(
     `SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
     [input.workspaceId, session.actor_user_id],
@@ -331,6 +345,14 @@ export async function consumeCallSession(
   );
   const ticket = tickets[0];
   if (ticket === undefined) return refused('ticket_unknown');
+
+  // Every write from here on is undone together if the reservation cannot move to
+  // `calling`: a call is authorized only with its money marked as possibly spent.
+  await db.query('SAVEPOINT consume_call_session');
+  const undo = async (reason: ConsumeRefusal): Promise<{ readonly ok: false; readonly reason: ConsumeRefusal }> => {
+    await db.query('ROLLBACK TO SAVEPOINT consume_call_session');
+    return refused(reason);
+  };
   // The whole decision again, at the last moment before the number leaves the server.
   const consumed = await consumeDialTicket(context, {
     ticketId: session.ticket_id,
@@ -344,15 +366,16 @@ export async function consumeCallSession(
     [input.workspaceId, ticket.calling_identity_id],
   );
   const callerIdE164 = identities[0]?.e164;
-  if (callerIdE164 === undefined) return refused('identity_missing');
+  if (callerIdE164 === undefined) return await undo('identity_missing');
 
   await db.query(
     `UPDATE call_sessions SET consumed_at = now(), twilio_call_sid = $3, updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND consumed_at IS NULL`,
     [input.workspaceId, input.sessionId, input.callSid],
   );
-  // From this commit on, a call may have happened: the reservation says so.
-  await markCalling(context, session.reservation_id);
+  // From this commit on, a call may have happened: the reservation says so. Required:
+  // a reservation that did not move is a call nobody would pay for.
+  if (!(await markCalling(context, session.reservation_id))) return await undo('reservation_closed');
   const { rows: limits } = await db.query<{ max_units: number | null }>(
     'SELECT max_units FROM provider_reservations WHERE workspace_id = $1 AND id = $2',
     [input.workspaceId, session.reservation_id],
