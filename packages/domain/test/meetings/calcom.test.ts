@@ -123,6 +123,73 @@ describe('Cal.com deliveries', () => {
     expect((await meetingOf(id))?.state).toBe('cancelled');
   });
 
+  it('folds a replacement whose cancellation arrived before the reschedule naming it (review fold 1, finding 7)', async () => {
+    const original = uid();
+    const replacement = uid();
+    // A is booked; A is rescheduled to B at 14:40; B is cancelled at 14:50. Cal.com
+    // delivers the cancellation of B first, then the reschedule.
+    await send(delivery('BOOKING_CREATED', '2026-09-30T14:30:00.000Z', booking(original)));
+    const earlyCancel = await send(
+      delivery(
+        'BOOKING_CANCELLED',
+        '2026-09-30T14:50:00.000Z',
+        booking(replacement, { startTime: '2026-10-09T17:00:00.000Z', endTime: '2026-10-09T17:30:00.000Z' }),
+      ),
+    );
+    const lateReschedule = await send(
+      delivery(
+        'BOOKING_RESCHEDULED',
+        '2026-09-30T14:40:00.000Z',
+        booking(replacement, { rescheduleUid: original, startTime: '2026-10-09T17:00:00.000Z', endTime: '2026-10-09T17:30:00.000Z' }),
+      ),
+    );
+    expect(lateReschedule).toMatchObject({ outcome: 'applied', meetingState: 'cancelled' });
+    const { rows } = await database.session.query<{ id: string; booking_uid: string; current_booking_uid: string; state: string }>(
+      `SELECT id, booking_uid, current_booking_uid, state FROM meetings
+        WHERE workspace_id = $1 AND (booking_uid IN ($2, $3) OR current_booking_uid IN ($2, $3))`,
+      [workspaceId(), original, replacement],
+    );
+    expect(rows.map(row => ({ booking_uid: row.booking_uid, current_booking_uid: row.current_booking_uid, state: row.state }))).toEqual([
+      { booking_uid: original, current_booking_uid: replacement, state: 'cancelled' },
+    ]);
+    // The early cancellation's delivery now names the surviving meeting.
+    const events = await database.session.query<{ meeting_id: string }>(
+      'SELECT meeting_id FROM calcom_events WHERE workspace_id = $1 AND booking_uid = $2',
+      [workspaceId(), replacement],
+    );
+    expect(new Set(events.rows.map(row => row.meeting_id))).toEqual(new Set([rows[0]?.id]));
+    expect(earlyCancel.meetingId).not.toBe(rows[0]?.id);
+  });
+
+  it('marks a meeting held from Cal.com s flat MEETING_ENDED body (review fold 1, finding 8)', async () => {
+    const id = uid();
+    await send(delivery('BOOKING_CREATED', '2026-09-30T15:10:00.000Z', booking(id)));
+    // The documented shape: booking fields at the top level, no `payload`, and
+    // `createdAt` the booking's own creation — earlier than the booking delivery above.
+    const body = {
+      triggerEvent: 'MEETING_ENDED',
+      id: 100,
+      uid: id,
+      idempotencyKey: '00000000-0000-0000-0000-000000000000',
+      userPrimaryEmail: 'david@usecallie.example',
+      title: 'Callie demo',
+      startTime: '2026-10-06T15:00:00.000Z',
+      endTime: '2026-10-06T15:30:00.000Z',
+      createdAt: '2026-09-30T15:09:00.000Z',
+      updatedAt: '2026-10-06T15:31:00.000Z',
+      status: 'ACCEPTED',
+      user: { email: 'david@usecallie.example', name: 'David', timeZone: 'UTC' },
+      attendees: [{ id: 101, email: 'partner@northwind-law.example', name: 'A Partner', timeZone: 'UTC', noShow: false }],
+    };
+    const receipt = await send({ raw: Buffer.from(JSON.stringify(body)), body });
+    expect(receipt).toMatchObject({ outcome: 'applied', meetingState: 'held' });
+    const facts = await database.session.query<{ kind: string }>(
+      "SELECT kind FROM funnel_facts WHERE workspace_id = $1 AND dedupe_key = $2 AND kind = 'meeting.held'",
+      [workspaceId(), id],
+    );
+    expect(facts.rows).toHaveLength(1);
+  });
+
   it('applies a no-show mark and unmark in order, back to booked', async () => {
     const id = uid();
     await send(delivery('BOOKING_CREATED', '2026-09-30T15:00:00.000Z', booking(id)));

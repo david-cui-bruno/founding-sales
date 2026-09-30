@@ -85,20 +85,37 @@ const emailOf = (value: unknown): string | null => {
   return candidate !== null && EMAIL.test(candidate) && candidate.length <= 320 ? candidate : null;
 };
 
+/**
+ * Cal.com's two shapes. Booking events nest the booking under `payload` and date the
+ * delivery with the top-level `createdAt`. `MEETING_STARTED` and `MEETING_ENDED` are
+ * **flat** — the booking's fields are at the top level (Cal.com's webhook reference,
+ * "Unlike other events, MEETING_ENDED uses a flat payload structure") — and their
+ * `createdAt` is the *booking's* creation, not the event's. Their instant is the one
+ * they fire at, the scheduled `endTime` (`startTime` for a start), falling back to
+ * `updatedAt`; ordering a meeting's end by when it was booked would make every end
+ * stale behind the booking's own events.
+ */
+const FLAT_TRIGGERS: readonly string[] = ['MEETING_ENDED', 'MEETING_STARTED'];
+
 export function parseCalcomEvent(body: unknown): ParsedEvent {
   const top = record(body);
-  const payload = record(top['payload']);
+  const trigger = text(top['triggerEvent']) ?? 'UNKNOWN';
+  const flat = FLAT_TRIGGERS.includes(trigger) && typeof top['payload'] !== 'object';
+  const payload = flat ? top : record(top['payload']);
+  const createdAt = flat
+    ? (instantOf(trigger === 'MEETING_STARTED' ? top['startTime'] : top['endTime']) ?? instantOf(top['updatedAt']))
+    : instantOf(top['createdAt']);
   const attendees = Array.isArray(payload['attendees']) ? (payload['attendees'] as unknown[]) : [];
   const firstAttendee = record(attendees[0]);
   const noShowFlags = attendees.map(entry => record(entry)['noShow']).filter(flag => typeof flag === 'boolean');
   return {
-    trigger: text(top['triggerEvent']) ?? 'UNKNOWN',
-    createdAt: instantOf(top['createdAt']),
+    trigger,
+    createdAt,
     uid: uidOf(payload['uid']) ?? uidOf(payload['bookingUid']),
     rescheduleUid: uidOf(payload['rescheduleUid']),
     startsAt: instantOf(payload['startTime']),
     endsAt: instantOf(payload['endTime']),
-    organizerEmail: emailOf(record(payload['organizer'])['email']),
+    organizerEmail: emailOf(record(payload['organizer'])['email']) ?? (flat ? emailOf(record(payload['user'])['email']) : null),
     attendeeEmail: emailOf(firstAttendee['email']),
     noShow: noShowFlags.length === 0 ? null : noShowFlags.some(flag => flag === true),
   };
@@ -302,6 +319,21 @@ async function applyEvent(
     await touch(context, existing.id, event.createdAt);
     return none('applied', existing);
   }
+  // A reschedule whose replacement uid already has a row of its own: an event about the
+  // new booking (its cancellation, say) arrived before the reschedule that names it.
+  // Both uids are resolved before the ordering is applied (review fold 1, finding 7):
+  // the replacement row is folded into this meeting, and its later state wins.
+  let lastEventAt = event.createdAt;
+  if (kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
+    const replacement = await meetingByUid(context, event.uid);
+    if (replacement !== null && replacement.id !== existing.id) {
+      await foldReplacement(context, existing, replacement);
+      if (replacement.last_event_at.getTime() > Date.parse(event.createdAt)) {
+        next = { state: replacement.state, before: replacement.state_before_no_show };
+        lastEventAt = replacement.last_event_at.toISOString();
+      }
+    }
+  }
   const timesChange = kind === 'BOOKING_RESCHEDULED' || kind === 'BOOKING_CREATED';
   const { rows } = await context.db.query<MeetingRow>(
     `UPDATE meetings
@@ -321,7 +353,7 @@ async function applyEvent(
       event.startsAt,
       event.endsAt,
       kind === 'BOOKING_RESCHEDULED' ? event.uid : null,
-      event.createdAt,
+      lastEventAt,
     ],
   );
   const updated = rows[0] ?? existing;
@@ -334,6 +366,33 @@ async function applyEvent(
     });
   }
   return { outcome: 'applied', meetingId: updated.id, meetingState: updated.state, stage: null };
+}
+
+/**
+ * Fold a replacement booking's early row into the meeting it replaces: its deliveries
+ * point at the surviving meeting, its unresolved review item goes (the surviving meeting
+ * is the one a person should see), and the row itself is removed so the surviving
+ * meeting can take its uid as `current_booking_uid`.
+ */
+async function foldReplacement(context: RepositoryContext, survivor: MeetingRow, replacement: MeetingRow): Promise<void> {
+  const workspaceId = context.scope.workspaceId;
+  await context.db.query('UPDATE calcom_events SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [
+    workspaceId,
+    replacement.id,
+    survivor.id,
+  ]);
+  await context.db.query(
+    `DELETE FROM stage_review_items
+      WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
+    [workspaceId, replacement.id],
+  );
+  await context.db.query('DELETE FROM meetings WHERE workspace_id = $1 AND id = $2', [workspaceId, replacement.id]);
+  await recordCrmAuditEvent(context, {
+    action: 'meeting.replacement_folded',
+    subjectKind: 'meeting',
+    subjectId: survivor.id,
+    detail: { replacementBookingUid: replacement.booking_uid, replacementState: replacement.state },
+  });
 }
 
 async function touch(context: RepositoryContext, meetingId: string, at: string): Promise<void> {
