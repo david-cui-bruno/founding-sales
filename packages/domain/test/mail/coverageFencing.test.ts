@@ -6,6 +6,8 @@ import { coalesceMailSync } from '../../mail/coalesce.ts';
 import type { GmailClient } from '../../mail/gmailClient.ts';
 import { recordingMailLog } from '../../mail/log.ts';
 import {
+  fenceOf,
+  lockForFencedStopFact,
   readMailbox,
   readMailboxForUpdate,
   readMailboxHold,
@@ -202,7 +204,13 @@ describe('generation fencing', () => {
   it('an in-flight recovery that read generation g writes no progress when the mailbox moves on', async () => {
     world = await createMailWorld({
       alphaMessages: [1, 2, 3].map(index =>
-        fixtureMessage({ id: `progress${String(index)}`, historyId: String(1000 + index), from: STRANGER, to: 'sales.alpha@example.test' }),
+        fixtureMessage({
+          id: `progress${String(index)}`,
+          historyId: String(1000 + index),
+          from: STRANGER,
+          to: 'sales.alpha@example.test',
+          internalDateEpochMilliseconds: Date.parse('2026-09-10T10:00:00Z') + index * 60_000,
+        }),
       ),
     });
     const w = world;
@@ -235,6 +243,200 @@ describe('generation fencing', () => {
     );
     expect(retry.outcome).toBe('generation_superseded');
     expect(await countRows(w, w.alpha.mailboxId)).toBe(0);
+  });
+});
+
+describe('fenced refusal paths (fold 2)', () => {
+  const holdsOf = async (w: MailWorld) =>
+    (
+      await w.database.session.query<{ reason_code: string }>(
+        `SELECT reason_code FROM active_holds
+          WHERE source_event_id = $1 AND released_at IS NULL ORDER BY reason_code`,
+        [w.alpha.mailboxId],
+      )
+    ).rows.map(row => row.reason_code);
+
+  it('a sync that read g gets grant_revoked after the switch commits g+1: the mailbox is not revoked and no hold opens', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const holdsBefore = await holdsOf(w);
+    const other = await otherConnection(w);
+    try {
+      const base = w.alpha.gmail;
+      const gmail: GmailClient = {
+        ...base,
+        refreshAccessToken: async () => {
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return { ok: false, reason: 'grant_revoked' };
+        },
+      };
+      await expect(
+        asJob(w, async () => await runMailSync(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect((await readMailbox(context, w.alpha.mailboxId))?.status).toBe('connected');
+    expect(await holdsOf(w)).toEqual(holdsBefore);
+    expect(await holdsOf(w)).not.toContain('mailbox_disconnected');
+  });
+
+  it('a sync that read g is rate limited after the switch commits g+1: no sync error lands on the new account', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    try {
+      const base = w.alpha.gmail;
+      const gmail: GmailClient = {
+        ...base,
+        listHistory: async () => {
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return { ok: false, reason: 'rate_limited' };
+        },
+      };
+      await expect(
+        asJob(w, async () => await runMailSync(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect((await readMailbox(context, w.alpha.mailboxId))?.lastSyncError).toBeNull();
+  });
+
+  it('a watch renewal that read g gets grant_revoked after g+1 commits: nothing is revoked or held', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const holdsBefore = await holdsOf(w);
+    const other = await otherConnection(w);
+    try {
+      const gmail: GmailClient = {
+        ...w.alpha.gmail,
+        watch: async () => {
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return { ok: false, reason: 'grant_revoked' };
+        },
+      };
+      await expect(
+        asJob(w, async () =>
+          await renewWatch(
+            context,
+            { gmail, oauth: w.syncDeps(w.alpha).oauth, cipher: w.cipher, topicName: TEST_TOPIC_NAME, log: recordingMailLog() },
+            { mailboxId: w.alpha.mailboxId, generation: 1 },
+          ),
+        ),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect((await readMailbox(context, w.alpha.mailboxId))?.status).toBe('connected');
+    expect(await holdsOf(w)).toEqual(holdsBefore);
+  });
+
+  it('a recovery that read g is rate limited after g+1 commits: no sync error is written', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    try {
+      const gmail: GmailClient = {
+        ...w.alpha.gmail,
+        listMessageIds: async () => {
+          await other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+          return { ok: false, reason: 'rate_limited' };
+        },
+      };
+      await expect(
+        asJob(w, async () => await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 })),
+      ).rejects.toBeInstanceOf(StaleMailboxGeneration);
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect((await readMailbox(context, w.alpha.mailboxId))?.lastSyncError).toBeNull();
+  });
+});
+
+describe('recovery progress holds the mailbox row to commit (fold 2)', () => {
+  it('a concurrent generation bump waits for the progress commit', async () => {
+    world = await createMailWorld({
+      alphaMessages: [1, 2, 3].map(index =>
+        fixtureMessage({
+          id: `held${String(index)}`,
+          historyId: String(1000 + index),
+          from: STRANGER,
+          to: 'sales.alpha@example.test',
+          internalDateEpochMilliseconds: Date.parse('2026-09-10T10:00:00Z') + index * 60_000,
+        }),
+      ),
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await otherConnection(w);
+    let bump: Promise<unknown> | null = null;
+    let blocked = false;
+    try {
+      const report = await asJob(w, async () => {
+        const run = await runMailRecovery(
+          context,
+          { ...w.syncDeps(w.alpha), pageSize: 5, maxMessages: 1 },
+          { mailboxId: w.alpha.mailboxId, generation: 1 },
+        );
+        // The progress is written and not yet committed. A switch now must wait.
+        bump = other.query('UPDATE mailboxes SET generation = generation + 1 WHERE id = $1', [w.alpha.mailboxId]);
+        for (let attempt = 0; attempt < 50 && !blocked; attempt += 1) {
+          const { rows } = await w.database.session.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM pg_stat_activity
+              WHERE pid <> pg_backend_pid() AND pg_backend_pid() = ANY(pg_blocking_pids(pid))`,
+          );
+          blocked = Number(rows[0]?.count ?? 0) > 0;
+          if (!blocked) await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return run;
+      });
+      expect(report.outcome).toBe('continued');
+      await bump;
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(blocked).toBe(true);
+    expect((await readMailbox(context, w.alpha.mailboxId))?.generation).toBe(2);
+  });
+});
+
+describe('the fenced row lock does not conflict with a message insert (fold 2, A2 review)', () => {
+  it('a job holding the gate takes the fenced lock while another holds KEY SHARE from an uncommitted insert: no block, no deadlock', async () => {
+    world = await createMailWorld();
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const mailbox = await readMailbox(context, w.alpha.mailboxId);
+    if (mailbox === null) throw new Error('the mailbox is gone');
+    const other = await otherConnection(w);
+    try {
+      // Job X: a message inserted, so its transaction holds KEY SHARE on the mailbox row.
+      await other.query('BEGIN');
+      await other.query(
+        `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction, internal_date)
+         VALUES ($1, $2, 'keyshare1', 'thread-keyshare1', 'incoming', now())`,
+        [w.alpha.workspace.workspaceId, w.alpha.mailboxId],
+      );
+      // Job Y: the gate, then the fenced lock. A `FOR UPDATE` here would wait on X.
+      await asJob(w, async () => {
+        await w.database.session.query("SET LOCAL lock_timeout = '2s'");
+        await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'test' });
+        const { rows } = await w.database.session.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM pg_stat_activity
+            WHERE pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0 AND datname = current_database()`,
+        );
+        expect(rows[0]?.count).toBe('0');
+      });
+      await other.query('ROLLBACK');
+    } finally {
+      await other.end().catch(() => undefined);
+    }
   });
 });
 
@@ -361,7 +563,7 @@ describe('resume by recorded ids', () => {
       internalDateEpochMilliseconds: Date.parse('2026-09-10T10:00:00Z') + index * 60_000,
     });
 
-  it('five messages, pages of two, two per run: each processed exactly once, coverage proved, only issued tokens sent', async () => {
+  it('five messages, pages of two, two per run: each processed exactly once, coverage proved, no page token ever sent', async () => {
     const ids = ['walk1', 'walk2', 'walk3', 'walk4', 'walk5'];
     world = await createMailWorld({ alphaMessages: ids.map((id, index) => stranger(id, index + 1)) });
     const w = world;
@@ -373,17 +575,53 @@ describe('resume by recorded ids', () => {
     for (const id of ids) expect(w.alpha.gmail.metadataReads.filter(read => read === id), id).toHaveLength(1);
     expect(await countRows(w, w.alpha.mailboxId)).toBe(5);
 
-    const sent = w.alpha.gmail.calls
-      .filter(call => call.method === 'listMessageIds')
-      .map(call => call.detail['pageToken'])
-      .filter((token): token is string => typeof token === 'string');
-    expect(sent.length).toBeGreaterThan(0);
-    for (const token of sent) expect(w.alpha.gmail.listPageTokensIssued).toContain(token);
+    // Single-page time slices: the recovery never follows a page token (fold 2).
+    const listings = w.alpha.gmail.calls.filter(call => call.method === 'listMessageIds');
+    expect(listings.length).toBeGreaterThan(0);
+    expect(listings.map(call => call.detail['pageToken'])).toEqual(listings.map(() => null));
 
     const mailbox = await readMailbox(context, w.alpha.mailboxId);
     expect(mailbox?.syncState).toBe('ready');
     expect(await readMailboxHold(context, w.alpha.mailboxId, 'coverage_incomplete')).toBeNull();
     expect((await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 }))?.completedAt).not.toBeNull();
+  });
+
+  it('fold 2: a message deleted between two listing calls of one run cannot shift a survivor out of the walk', async () => {
+    world = await createMailWorld({
+      alphaMessages: [stranger('shiftA', 1), stranger('shiftB', 2), stranger('shiftC', 3)],
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const base = w.alpha.gmail;
+    let deleted = false;
+    const gmail: GmailClient = {
+      ...base,
+      listMessageIds: async (...args) => {
+        const outcome = await base.listMessageIds(...args);
+        // A is deleted right after the first answer that listed it.
+        if (!deleted && outcome.ok && outcome.messageIds.includes('shiftA')) {
+          deleted = true;
+          const index = w.alpha.messages.findIndex(message => message.id === 'shiftA');
+          w.alpha.messages.splice(index, 1);
+        }
+        return outcome;
+      },
+    };
+    const reports: MailRecoveryReport[] = [];
+    for (let run = 0; run < 5; run += 1) {
+      const report = await asJob(w, async () =>
+        await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+      );
+      reports.push(report);
+      if (report.outcome !== 'continued') break;
+    }
+    expect(deleted).toBe(true);
+    expect(reports.at(-1)?.outcome).toBe('completed');
+    const { rows } = await w.database.session.query<{ provider_message_id: string }>(
+      'SELECT provider_message_id FROM mail_messages WHERE mailbox_id = $1 ORDER BY provider_message_id',
+      [w.alpha.mailboxId],
+    );
+    expect(rows.map(row => row.provider_message_id)).toEqual(['shiftB', 'shiftC']);
   });
 
   it('a message deleted between runs shifts nothing: the one after it is processed, and completion waits for it', async () => {
@@ -472,7 +710,13 @@ describe('recovery budgets (fold 1)', () => {
   it('a run reads at most three times maxMessages ids, and does not complete when the cap stops it', async () => {
     world = await createMailWorld({
       alphaMessages: Array.from({ length: 8 }, (_, index) =>
-        fixtureMessage({ id: `gone${String(index)}`, historyId: String(1001 + index), from: STRANGER, to: 'sales.alpha@example.test' }),
+        fixtureMessage({
+          id: `gone${String(index)}`,
+          historyId: String(1001 + index),
+          from: STRANGER,
+          to: 'sales.alpha@example.test',
+          internalDateEpochMilliseconds: Date.parse('2026-09-10T10:00:00Z') + index * 60_000,
+        }),
       ),
     });
     const w = world;

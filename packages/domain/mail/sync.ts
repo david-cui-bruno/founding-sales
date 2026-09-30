@@ -6,6 +6,7 @@ import {
   advanceCursor,
   advanceGeneration,
   fenceOf,
+  lockForFencedStopFact,
   markMailboxDisconnected,
   openMailboxHold,
   readMailbox,
@@ -208,8 +209,16 @@ export async function accessForMailbox(
   return { ok: true, access: outcome.grant };
 }
 
-/** 12.6 and 4.2: the grant is gone, so everything automated for that owner holds. */
+/**
+ * 12.6 and 4.2: the grant is gone, so everything automated for that owner holds.
+ *
+ * `mailbox` is the row the job read at its start, and the writes are fenced on it (fold
+ * 2): the gate, then the row at that generation and address. A refusal Gmail gave for
+ * an account the mailbox no longer reads throws `StaleMailboxGeneration`, and the
+ * replacement mailbox is neither revoked nor held.
+ */
 export async function holdForRevokedGrant(context: RepositoryContext, mailbox: MailboxRow): Promise<void> {
+  await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'grant revocation' });
   await markMailboxDisconnected(context, {
     mailboxId: mailbox.id,
     status: 'revoked',
@@ -230,6 +239,7 @@ export async function runMailSync(
   const mailbox = await readMailbox(context, input.mailboxId);
   if (mailbox === null) return report(input.mailboxId, 'mailbox_unknown', null);
   if (mailbox.status !== 'connected') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'disconnected hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
@@ -253,6 +263,7 @@ export async function runMailSync(
   // history and writes nothing but the hold; it starts the recovery only when its
   // generation has none.
   if (mailbox.historyId === null || mailbox.syncState !== 'ready') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'coverage hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
@@ -296,7 +307,11 @@ export async function runMailSync(
         await holdForRevokedGrant(context, mailbox);
         return report(mailbox.id, 'grant_revoked', mailbox.historyId);
       }
-      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail history read was rate limited' });
+      await recordSyncError(context, {
+        mailboxId: mailbox.id,
+        error: 'the Gmail history read was rate limited',
+        fence: fenceOf(mailbox),
+      });
       return report(mailbox.id, 'rate_limited', mailbox.historyId);
     }
 

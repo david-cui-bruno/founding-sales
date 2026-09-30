@@ -13,6 +13,8 @@ import {
   releaseMailboxHold,
   setSyncState,
   fenceOf,
+  lockForFencedStopFact,
+  lockMailboxAtFence,
   StaleMailboxGeneration,
 } from './mailboxes.ts';
 import { recordedProviderMessageIds } from './messages.ts';
@@ -79,6 +81,25 @@ import {
  * which is the truth today — FSS has sent nothing and enrolled nobody — and becomes
  * a two-line query in each of those lanes without changing this file.
  */
+/**
+ * A recovery lists its interval in slices of this width (fold 2): one day. A slice
+ * holding more than a page is bisected, so the width only sets how many listing calls
+ * a quiet mailbox costs — thirty for a thirty-day baseline.
+ */
+export const RECOVERY_SLICE_SECONDS = 24 * 60 * 60;
+
+/**
+ * One second of a mailbox held more messages than one listing page (500 by default).
+ * Gmail does not deliver mail that fast into one mailbox; this is the named refusal
+ * rather than a silent truncation.
+ */
+export class RecoverySliceOverflow extends Error {
+  override readonly name = 'RecoverySliceOverflow';
+  constructor(readonly mailboxId: string, readonly atEpochSeconds: number, readonly pageSize: number) {
+    super(`one second of the recovery interval holds more than ${String(pageSize)} messages`);
+  }
+}
+
 /** A recovery run reads at most this many times `maxMessages` ids (fold 1). */
 export const RECOVERY_READ_CAP_FACTOR = 3;
 
@@ -343,6 +364,7 @@ export async function runMailRecovery(
     return recoveryReport(input.mailboxId, input.generation, 'generation_superseded');
   }
   if (mailbox.status !== 'connected') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'disconnected hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
@@ -388,11 +410,6 @@ export async function runMailRecovery(
   const pageSize = deps.pageSize ?? RECOVERY_PAGE_SIZE;
   const maxMessages = deps.maxMessages ?? pageSize;
 
-  // Resume by recorded ids. Every run walks the listing from its first page with
-  // Gmail's own page tokens — opaque, and never kept past the run — and takes the ids
-  // this mailbox has no `mail_messages` row for, up to `maxMessages`. The rows are the
-  // position: a message that vanished between runs shifts nothing, and one that is
-  // still listed and not recorded is taken again.
   // Two budgets. `maxMessages` counts only messages this run newly records: a proven
   // duplicate or a vanished id writes no row and costs nothing against it. The read cap
   // bounds the run's duration whatever the ids turn out to be: at most
@@ -400,31 +417,57 @@ export async function runMailRecovery(
   // collision adds one more read of the other message).
   const readCap = RECOVERY_READ_CAP_FACTOR * maxMessages;
 
-  // The walk: listing first, then the pipeline, so no Gmail listing call waits behind
-  // the send gate the pipeline takes. It stops early once it holds more unrecorded ids
-  // than the read cap lets this run read, because this run then cannot complete.
+  // The walk (fold 2): the interval in time slices, each listed by ONE
+  // `users.messages.list` call with no page token. Gmail documents nothing about how a
+  // page token behaves when the mailbox changes between pages — a message deleted
+  // before the second page can shift a surviving one off both — so a recovery never
+  // follows one. A single response is one answer. A slice whose answer says there is
+  // more (`nextPageToken`) holds more than a page: the answer is discarded and the
+  // slice bisected, down to one second. Every run re-walks every slice in order and
+  // skips the ids already recorded; the walk comes before the pipeline, so no listing
+  // call waits behind the send gate, and it stops early once it holds more unrecorded
+  // ids than the read cap lets this run read, because this run then cannot complete.
   const unrecorded: string[] = [];
   const seen = new Set<string>();
-  let pageToken: string | undefined;
-  let pagesWalked = 0;
+  let slicesListed = 0;
   let listingEnded = false;
+  // Pending slices, earliest last so `pop` takes the earliest.
+  const pending: { readonly from: number; readonly to: number }[] = [];
+  for (let from = afterEpochSeconds; from < beforeEpochSeconds; from += RECOVERY_SLICE_SECONDS) {
+    pending.push({ from, to: Math.min(beforeEpochSeconds, from + RECOVERY_SLICE_SECONDS) });
+  }
+  pending.reverse();
 
   for (;;) {
+    const slice = pending.pop();
+    if (slice === undefined) {
+      listingEnded = true;
+      break;
+    }
     const outcome = await deps.gmail.listMessageIds(access.access, {
-      afterEpochSeconds,
-      beforeEpochSeconds,
+      // One second of overlap below every slice but the first, so a message at a
+      // boundary second is in a slice whichever way Gmail treats `after:` and `before:`.
+      afterEpochSeconds: slice.from === afterEpochSeconds ? slice.from : slice.from - 1,
+      beforeEpochSeconds: slice.to,
       maxResults: pageSize,
-      ...(pageToken === undefined ? {} : { pageToken }),
     });
     if (!outcome.ok) {
       if (outcome.reason === 'grant_revoked') {
         await holdForRevokedGrant(context, mailbox);
         return recoveryReport(mailbox.id, input.generation, 'grant_revoked');
       }
-      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited' });
+      await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited', fence });
       return recoveryReport(mailbox.id, input.generation, 'rate_limited');
     }
-    pagesWalked += 1;
+    slicesListed += 1;
+    if (outcome.nextPageToken !== null) {
+      if (slice.to - slice.from <= 1) {
+        throw new RecoverySliceOverflow(mailbox.id, slice.from, pageSize);
+      }
+      const middle = slice.from + Math.floor((slice.to - slice.from) / 2);
+      pending.push({ from: middle, to: slice.to }, { from: slice.from, to: middle });
+      continue;
+    }
     const recorded = await recordedProviderMessageIds(context, {
       mailboxId: mailbox.id,
       providerMessageIds: outcome.messageIds,
@@ -435,12 +478,8 @@ export async function runMailRecovery(
       unrecorded.push(id);
     }
     if (unrecorded.length > readCap) break;
-    if (outcome.nextPageToken === null) {
-      listingEnded = true;
-      break;
-    }
-    pageToken = outcome.nextPageToken;
   }
+  const pagesWalked = slicesListed;
 
   // The pipeline, in slices no larger than either budget has left. Each id costs at
   // least one read and at most one new row, so a slice can overrun neither.
@@ -477,6 +516,11 @@ export async function runMailRecovery(
   const complete = listingEnded && processed === unrecorded.length;
 
   if (!complete) {
+    // The mailbox row at this run's fence, locked to commit (fold 2): the UPDATE below
+    // joins the mailbox but locks only the recovery row, so without this a generation
+    // bump could commit between its predicate and this job's commit. The pipeline may
+    // already hold the send gate, so the order is gate, then row.
+    await lockMailboxAtFence(context, { mailboxId: mailbox.id, fence, write: 'recovery progress' });
     const progress = await context.db.query(
       `UPDATE mailbox_recoveries AS r
           SET pages_completed = $3,

@@ -3,6 +3,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordHeartbeat } from '../jobs/heartbeats.ts';
 import { listApplicableHolds, openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { MailboxRow, MailboxStatus, MailboxSyncState } from './types.ts';
 
 /**
@@ -291,7 +292,19 @@ export async function lockMailboxAtFence(
   context: RepositoryContext,
   input: { readonly mailboxId: string; readonly fence: MailboxFence; readonly write: string },
 ): Promise<MailboxRow> {
-  const mailbox = await readMailboxForUpdate(context, input.mailboxId);
+  // `FOR NO KEY UPDATE`, not `FOR UPDATE` (fold 2, from the A2 review): every
+  // `mail_messages` insert takes an implicit KEY SHARE on its mailbox row, and a job
+  // that has inserted messages and then waits for the send gate would deadlock with a
+  // job that holds the gate and asks for `FOR UPDATE` here. NO KEY UPDATE does not
+  // conflict with KEY SHARE, and it still conflicts with itself and with every UPDATE of
+  // the row — a generation bump included — so the fence is held just as firmly. The
+  // writes after it change only non-key columns.
+  const { rows } = await context.db.query<MailboxDbRow>(
+    `SELECT ${MAILBOX_COLUMNS} FROM mailboxes WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  const found = rows[0];
+  const mailbox = found === undefined ? null : toMailbox(found);
   if (
     mailbox === null ||
     mailbox.generation !== input.fence.generation ||
@@ -303,13 +316,27 @@ export async function lockMailboxAtFence(
 }
 
 /**
+ * The lock order for a job's refusal path that writes a stop fact — a revoked grant, a
+ * disconnected hold, a coverage hold (fold 2): the send gate EXCLUSIVE first, because
+ * `openHold` takes it and a claim takes it before any row, then the mailbox row at the
+ * job's fence, held to commit. Never the row and then the gate.
+ */
+export async function lockForFencedStopFact(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly fence: MailboxFence; readonly write: string },
+): Promise<MailboxRow> {
+  await lockSendGateForStopFact(context);
+  return await lockMailboxAtFence(context, input);
+}
+
+/**
  * Forget everything the mailbox knows about the account it was reading: the history
  * cursor, its instant, the coverage watermark and the last sync's outcome, in one
  * statement, so `mailboxes_history_cursor_consistent` and
  * `mailboxes_coverage_needs_cursor` hold on either side of it.
  *
- * The caller must hold the mailbox row lock (`readMailboxForUpdate`) in the same
- * transaction, and is the one that advances the generation and starts the new
+ * The caller must hold the mailbox row lock in the same transaction (`FOR NO KEY
+ * UPDATE` is enough, and is what the fenced paths take: the columns are non-key), and is the one that advances the generation and starts the new
  * baseline: this is the account-switch half that only clears.
  */
 export async function resetAccountState(
@@ -404,8 +431,20 @@ export async function advanceCursor(
 /** Record a sync failure without pretending the cursor moved. */
 export async function recordSyncError(
   context: RepositoryContext,
-  input: { readonly mailboxId: string; readonly error: string },
+  input: {
+    readonly mailboxId: string;
+    readonly error: string;
+    /**
+     * The generation and address the job read at its start (fold 2). With it, the row is
+     * locked at that fence first, and a mailbox that has moved on throws
+     * `StaleMailboxGeneration` instead of taking an older account's error.
+     */
+    readonly fence?: MailboxFence | undefined;
+  },
 ): Promise<void> {
+  if (input.fence !== undefined) {
+    await lockMailboxAtFence(context, { mailboxId: input.mailboxId, fence: input.fence, write: 'sync error' });
+  }
   await context.db.query(
     `UPDATE mailboxes SET last_sync_error = $3, last_synced_at = now(), updated_at = now()
       WHERE workspace_id = $1 AND id = $2`,

@@ -1036,11 +1036,12 @@ describe('coverage, recovery and the grant', () => {
     const w = world;
     const context = w.systemContext(w.alpha.workspace.workspaceId);
     const workspaceId = w.alpha.workspace.workspaceId;
-    const deps = { ...w.syncDeps(w.alpha), pageSize: 1, maxMessages: 3 };
+    // The three share one second, so one listing page must hold them (fold 2 lists in
+    // single-page time slices and refuses a second holding more than a page).
+    const deps = { ...w.syncDeps(w.alpha), pageSize: 3, maxMessages: 3 };
     const session = w.database.session as Parameters<typeof withTransaction>[0];
 
-    // A page-count position over a listing that can change is not a safe prefix, so the
-    // recovery keeps its whole-job retry: the read failure throws and nothing commits.
+    // The recovery keeps its whole-job retry: the read failure throws and nothing commits.
     await expect(
       withTransaction(
         session,

@@ -2,7 +2,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailClient, GmailOAuthConfig } from './gmailClient.ts';
-import { fenceOf, lockMailboxAtFence, openMailboxHold, readMailbox } from './mailboxes.ts';
+import { fenceOf, lockForFencedStopFact, lockMailboxAtFence, openMailboxHold, readMailbox } from './mailboxes.ts';
 import { stdoutMailLog, type MailLog } from './log.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import { WATCH_EXPIRY_ALARM_HOURS, WATCH_RENEWAL_INTERVAL_HOURS } from './types.ts';
@@ -129,6 +129,7 @@ export async function renewWatch(
     return { outcome: 'mailbox_unknown', mailboxId: input.mailboxId, generation: input.generation, expiresAt: null };
   }
   if (mailbox.status !== 'connected') {
+    await lockForFencedStopFact(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'disconnected hold' });
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
