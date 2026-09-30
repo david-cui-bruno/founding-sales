@@ -455,7 +455,10 @@ HAVING count(DISTINCT n.contact_id) > 1
  ORDER BY live_contacts DESC;
 ```
 
-*Expect:* empty. Any row is two people at one firm who would both be written to.
+*Expect:* the prospecting-only list is empty — the firm-exclusivity rule (0025) refuses a second
+live prospecting contact at enrollment and again at the claim. The any-origin list may have rows:
+several people at one customer firm may each hold a follow-up permission, which David's rule allows
+("it must not prevent ordinary customer conversations involving multiple people").
 
 **6. Suppression is present and readable** (a sanity check on the view the gate uses).
 (Report section `suppression`.)
