@@ -35,9 +35,11 @@ migration `0025_follow_up_permissions.sql`, and
 
 **The manual-mode wall of section 1 is resolved for follow-ups only.**
 `opportunities.control_mode_origin` records which of `MANUAL_MODE_ORIGINS` set manual
-mode; a prospect *signal* (`human_reply`, `engaged_call`, `direct_send`) no longer blocks
-an evidenced follow-up step, while a person's `salesperson_command` takeover — and an
-unrecorded origin, which is every opportunity that went manual before 0025 — still does.
+mode; a prospect *signal* (`human_reply`, `engaged_call`) no longer blocks an evidenced
+follow-up step, while a person's `salesperson_command` takeover — and an unrecorded
+origin, which is every opportunity that went manual before 0025 — still does. (Since
+send-path v2, 30 September 2026, a direct Gmail send sets no manual mode at all: it is
+an update to the conversation; a stored `direct_send` origin is history and still blocks.)
 Nothing reverses manual mode, and prospecting and legacy steps are unchanged.
 
 **What did not change.** The three switches of section 0 are untouched: nothing here
@@ -128,7 +130,8 @@ narrow — one authenticated human command — but it is unconditioned.
 **A surprising consequence, and it points the other way.** `controlModeSource`
 (`eligibility.ts:165`) refuses any step whose opportunity is not `control_mode =
 'automated'`. A confirmed human reply, an engaged call outcome and a direct Gmail send
-all set the opportunity `manual` (`crm/pipeline.ts:238` `setManualControlMode`), and
+all set the opportunity `manual` (`crm/pipeline.ts:238` `setManualControlMode`; a direct
+send no longer does since send-path v2, 30 September 2026), and
 **there is no `manual → automated` path in the codebase** — `pipeline.ts:229` says so
 outright, and a grep for a write of `control_mode = 'automated'` finds only the table
 default. A reopened opportunity also starts manual (`pipeline.ts:308`).

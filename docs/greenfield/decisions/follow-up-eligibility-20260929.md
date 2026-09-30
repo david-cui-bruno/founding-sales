@@ -186,14 +186,22 @@ control still pauses automation."* This supersedes the first bullet above.
   enrollments keep running.
 * **Ambiguous matches wait.** The import applies the effect only to a match with one
   candidate; several candidates stay held by their `ambiguous_match` holds, and
-  `resolveAmbiguity` applies it to the opportunity the person selects.
+  `resolveAmbiguity` applies it to the opportunity the person selects. An outgoing
+  message is not a prospect's reply, so its resolution releases the ambiguity holds and
+  applies only the direct-send effect: no `uncertain_reply` keeper and no `human_reply`
+  manual mode, whatever the `human` flag says.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.
 * **Retired.** `POST /opportunities/keep-following-up` and `keepFollowingUpAfterDirectSend`
-  are gone; `setManualControlMode` and `classifyControlModeOrigin` accept only
-  `human_reply`, `engaged_call` and `salesperson_command`, by type and at run time, and the
-  contract's classification enum is the same three. `direct_send` and
+  are gone; `setManualControlMode` accepts only `human_reply`, `engaged_call` and
+  `salesperson_command`, by type and at run time. `classifyControlModeOrigin` stores only
+  those three too, and also accepts `direct_send` as an **evidence label**: an
+  administrator saying an old NULL-origin manual mode was a direct send returns the
+  opportunity to **automated** (origin NULL, `control_mode_reason` naming the label and the
+  30 September rule, an `opportunity.automated` audit row with the rule, the reason and
+  the evidence facts). It restarts nothing: the enrollments the old stop ended stay
+  ended. `direct_send_keep_automation` is refused. `direct_send` and
   `direct_send_keep_automation` stay in `MANUAL_MODE_ORIGINS` as **history**: stored
   opportunities and events keep the reading in the table above (a stored `direct_send`
   still blocks a follow-up; a stored `direct_send_keep_automation` does not; the drain

@@ -356,6 +356,11 @@ export async function takeOverOpportunity(
   return await setManualControlMode(context, { ...input, origin: 'salesperson_command' });
 }
 
+/** The rule a direct-send classification cites in its audit row (send-path v2). */
+export const DIRECT_SEND_RELEASE_RULE = 'send-path-v2-20260930';
+const DIRECT_SEND_RELEASE_REASON =
+  'released to automated: classified as a direct Gmail send, which is not a takeover since 30 September 2026';
+
 /**
  * An administrator classifies one opportunity whose manual mode predates
  * `control_mode_origin` (P1-1).
@@ -372,29 +377,73 @@ export async function takeOverOpportunity(
  * reviewing an old row actually reads. The UPDATE is conditional on the origin still
  * being NULL, so a recorded origin, takeover or signal, is never overwritten by this
  * command.
+ *
+ * **`direct_send` is an evidence label, not an origin** (send-path v2; the coordinator's
+ * decision of 30 September 2026). An administrator may still say "this old manual mode
+ * was a direct Gmail send", but a direct send no longer takes a conversation over, so
+ * that classification does not store `direct_send`: it **returns the opportunity to
+ * automated**, with `control_mode_origin` NULL, and says so in `control_mode_reason` and
+ * in the audit row (the label, the rule, the administrator's reason and the evidence
+ * facts). It is a person's explicit, audited decision, not automation reversing manual
+ * mode; it starts nothing — every enrollment the old stop ended stays ended.
  */
 export async function classifyControlModeOrigin(
   context: RepositoryContext,
   input: {
     readonly opportunityId: string;
     /**
-     * Never `direct_send` or `direct_send_keep_automation` (send-path v2): a direct send
-     * is not a cause of manual mode, so it is not a classification of one either.
+     * A writable origin, or `direct_send` as the evidence label that releases the
+     * opportunity to automated. Never `direct_send_keep_automation`.
      */
-    readonly origin: WritableManualModeOrigin;
+    readonly origin: WritableManualModeOrigin | 'direct_send';
     readonly reason: string;
     readonly commandId?: string | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
   const permitted = decideAdminOnly(context);
   if (!permitted.permitted) return refuse(permitted.reason);
-  if (!isWritableManualModeOrigin(input.origin)) return refuse('invalid_input');
+  const releasesToAutomated = input.origin === 'direct_send';
+  if (!releasesToAutomated && !isWritableManualModeOrigin(input.origin)) return refuse('invalid_input');
   await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
   const firm = await loadFirmForUpdate(context, opportunity.firm_id);
   if (firm === null) return refuse('firm_unknown');
   if (input.reason.trim().length === 0) return refuse('invalid_input');
+
+  const evidence = {
+    controlModeChangedAt: instantLabel(opportunity['control_mode_changed_at']),
+    controlModeReasonRecorded: opportunity.control_mode_reason !== null,
+  };
+
+  if (releasesToAutomated) {
+    const { rows: releasedRows } = await context.db.query<OpportunityRow>(
+      `UPDATE opportunities
+          SET control_mode = 'automated', control_mode_origin = NULL, control_mode_reason = $3,
+              control_mode_changed_at = now(), updated_at = now()
+        WHERE workspace_id = $1 AND id = $2
+          AND control_mode = 'manual' AND control_mode_origin IS NULL
+        RETURNING ${OPPORTUNITY_COLUMNS}`,
+      [context.scope.workspaceId, input.opportunityId, DIRECT_SEND_RELEASE_REASON],
+    );
+    const released = releasedRows[0];
+    if (released === undefined) return refuse('invalid_input');
+    await recordCrmAuditEvent(context, {
+      action: 'opportunity.automated',
+      subjectKind: 'opportunity',
+      subjectId: released.id,
+      detail: {
+        firmId: released.firm_id,
+        classifiedAs: 'direct_send',
+        classified: true,
+        releasedToAutomated: true,
+        rule: DIRECT_SEND_RELEASE_RULE,
+        reason: input.reason.trim(),
+        evidence,
+      },
+    });
+    return accept(released);
+  }
 
   const { rows } = await context.db.query<OpportunityRow>(
     `UPDATE opportunities
@@ -419,10 +468,7 @@ export async function classifyControlModeOrigin(
       // rather than as text: `audit.ts` keeps notes and message content out of a
       // `detail`, and the sentence itself stays where it already is, on the
       // opportunity, unchanged by this command.
-      evidence: {
-        controlModeChangedAt: instantLabel(opportunity['control_mode_changed_at']),
-        controlModeReasonRecorded: opportunity.control_mode_reason !== null,
-      },
+      evidence,
     },
   });
   return accept(classified);

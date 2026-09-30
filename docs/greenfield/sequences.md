@@ -306,8 +306,10 @@ A's "Confirm human reply" row repeats as "all firm enrollments". Lane G22 widene
 manual arm to the firm accordingly.
 
 The end reason for a manual-mode stop is the event's own `detail.origin`, through
-`manualModeEndReason`: an engaged call ends its enrollments `engaged_call`, a direct
-Gmail send `direct_send`, an explicit `POST /opportunities/manual` `admin_stop`. The
+`manualModeEndReason`: an engaged call ends its enrollments `engaged_call`, a stored
+direct-send event from before send-path v2 `direct_send` (a direct Gmail send no longer
+makes an opportunity manual; it ends prospecting and fulfilled one-message follow-ups
+itself, also `direct_send`), an explicit `POST /opportunities/manual` `admin_stop`. The
 table is in `docs/greenfield/crm.md`. An event with no origin — every one written
 before lane G22 — still reads as `human_reply`, which is what lane G15 recorded, so the
 drain never refuses an old row and no reader changes its answer.

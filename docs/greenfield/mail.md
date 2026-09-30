@@ -128,9 +128,12 @@ already closed, which can take the ramp back. A report that names no fence still
 where it landed. `docs/greenfield/sending.md` rule 6 has the arithmetic, and
 `docs/archive/decisions/g22-a-late-bounce-belongs-to-its-send.md` the reasoning.
 
-`applyDirectSendEffects` switches the firm to manual with `origin: 'direct_send'`, so
-the enrollment the switch stops records `direct_send` rather than `human_reply`
-(`docs/greenfield/crm.md`, "The manual-mode origin").
+Since send-path v2 (30 September 2026) `applyDirectSendEffects` does not switch the firm
+to manual: a direct Gmail send is an update to the conversation. Under the send gate it
+ends the firm's live prospecting enrollments `direct_send` and spends the one-message
+follow-up permissions of its verified To/Cc recipients (`fulfilled_by_direct_send`),
+ending their runs `direct_send`; an agreed sequence keeps running
+(`docs/greenfield/decisions/follow-up-eligibility-20260929.md` §5).
 
 ### 6. There is no visible opt-out link, anywhere — and no mandatory stop line
 

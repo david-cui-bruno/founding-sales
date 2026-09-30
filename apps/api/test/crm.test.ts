@@ -263,7 +263,7 @@ describe('CRM routes', () => {
     expect((resolved.body['result'] as { sourceId: string }).sourceId).toBe(duplicateId);
   });
 
-  it('send-path v2: the keep-following-up command is gone, and no origin command records a direct send', async () => {
+  it('send-path v2: the keep-following-up command is gone, and no origin command stores a direct send', async () => {
     const opened = await post('/opportunities/open', assigneeToken, command({ firmId: await seedFirm(fixture, {
       name: 'Southwind Test Holdings',
       assignedUserId: assigneeUserId,
@@ -279,14 +279,21 @@ describe('CRM routes', () => {
     expect(retired.status).toBe(404);
     expect(retired.body['error']).toBe('not_found');
 
-    for (const origin of ['direct_send', 'direct_send_keep_automation']) {
-      const refused = await post(
-        '/opportunities/control-mode-origin',
-        adminToken,
-        command({ opportunityId, origin, reason: 'it was a hand-written e-mail' }),
-      );
-      expect(refused.status, origin).toBe(400);
-    }
+    const keep = await post(
+      '/opportunities/control-mode-origin',
+      adminToken,
+      command({ opportunityId, origin: 'direct_send_keep_automation', reason: 'it was a hand-written e-mail' }),
+    );
+    expect(keep.status).toBe(400);
+    // `direct_send` is an evidence label the route accepts; on an automated opportunity
+    // there is no NULL-origin manual mode to release, so the domain refuses it.
+    const label = await post(
+      '/opportunities/control-mode-origin',
+      adminToken,
+      command({ opportunityId, origin: 'direct_send', reason: 'it was a hand-written e-mail' }),
+    );
+    expect(label.status).toBe(409);
+    expect(label.body['reason']).toBe('invalid_input');
   });
 
   it('never lets a session from the other workspace see this one, even with the same ids', async () => {

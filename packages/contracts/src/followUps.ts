@@ -168,8 +168,18 @@ export const takeOverOpportunityCommandSchema = z.strictObject({
   reason: z.string().min(1).max(2000),
 });
 
-/** The origins an administrator may classify a NULL origin as. */
-export const CLASSIFIABLE_MANUAL_MODE_ORIGINS = ['human_reply', 'engaged_call', 'salesperson_command'] as const;
+/**
+ * What an administrator may classify a NULL origin as. The first three are stored as the
+ * origin. `direct_send` is an evidence label: a direct send is not a takeover since
+ * send-path v2, so classifying one returns the opportunity to automated rather than
+ * storing it. `direct_send_keep_automation` is history and is not offered.
+ */
+export const CLASSIFIABLE_MANUAL_MODE_ORIGINS = [
+  'human_reply',
+  'engaged_call',
+  'salesperson_command',
+  'direct_send',
+] as const;
 
 /**
  * An administrator classifies an opportunity whose manual mode predates
@@ -180,9 +190,8 @@ export const CLASSIFIABLE_MANUAL_MODE_ORIGINS = ['human_reply', 'engaged_call', 
 export const classifyControlModeOriginCommandSchema = z.strictObject({
   ...command,
   opportunityId: uuid,
-  // Never `direct_send` (send-path v2, slice S1): a direct Gmail send is an update to the
-  // conversation, not a cause of manual mode, so no command may record one. Stored
-  // `direct_send` origins are history and stay readable (`crmSurface.ts`).
+  // `direct_send` releases to automated and is never stored (send-path v2, slice S1).
+  // Stored `direct_send` origins are history and stay readable (`crmSurface.ts`).
   origin: z.enum(CLASSIFIABLE_MANUAL_MODE_ORIGINS),
   reason: z.string().min(1).max(2000),
 });

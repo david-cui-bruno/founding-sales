@@ -4,8 +4,9 @@ import { CLASSIFIABLE_MANUAL_MODE_ORIGINS, classifyControlModeOriginCommandSchem
 
 /**
  * Send-path v2, slice S1: a direct Gmail send is an update to the conversation, not a
- * cause of manual mode. So no command may record a direct-send origin, and the command
- * that undid a direct-send takeover is gone.
+ * cause of manual mode. So no command stores a direct-send origin — `direct_send` is only
+ * an evidence label that releases an old manual mode to automated — and the command that
+ * undid a direct-send takeover is gone.
  */
 
 const command = {
@@ -16,17 +17,22 @@ const command = {
 };
 
 describe('the classification of a NULL manual-mode origin', () => {
-  it('accepts the three origins a writer may record', () => {
-    expect([...CLASSIFIABLE_MANUAL_MODE_ORIGINS]).toEqual(['human_reply', 'engaged_call', 'salesperson_command']);
+  it('accepts the three stored origins and the direct-send evidence label', () => {
+    expect([...CLASSIFIABLE_MANUAL_MODE_ORIGINS]).toEqual([
+      'human_reply',
+      'engaged_call',
+      'salesperson_command',
+      'direct_send',
+    ]);
     for (const origin of CLASSIFIABLE_MANUAL_MODE_ORIGINS) {
       expect(classifyControlModeOriginCommandSchema.safeParse({ ...command, origin }).success, origin).toBe(true);
     }
   });
 
-  it('refuses a direct-send origin, historical or chosen', () => {
-    for (const origin of ['direct_send', 'direct_send_keep_automation']) {
-      expect(classifyControlModeOriginCommandSchema.safeParse({ ...command, origin }).success, origin).toBe(false);
-    }
+  it('refuses the historical keep-following-up choice', () => {
+    expect(
+      classifyControlModeOriginCommandSchema.safeParse({ ...command, origin: 'direct_send_keep_automation' }).success,
+    ).toBe(false);
   });
 });
 

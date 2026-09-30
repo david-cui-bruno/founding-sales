@@ -1129,7 +1129,71 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
     expect(again).toEqual({ ok: false, reason: 'invalid_input' });
   });
 
-  it('an administrator cannot classify a NULL origin as a direct send (send-path v2)', async () => {
+  it('an administrator classifying a NULL origin as a direct send returns it to automated, audited (send-path v2)', async () => {
+    const contactId = await addContact('Classified As A Direct Send');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await database.session.query(
+      `UPDATE opportunities
+          SET control_mode = 'manual', control_mode_reason = 'set before 0025',
+              control_mode_changed_at = now() - interval '3 days', control_mode_origin = NULL
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+
+    // The historical choice is not a label anybody may record.
+    const refused = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'direct_send_keep_automation' as 'direct_send',
+      reason: 'it was a hand-written e-mail',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'invalid_input' });
+
+    const released = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'direct_send',
+      reason: 'the message of 3 September was written from Gmail by hand',
+    });
+    expect(released.ok).toBe(true);
+    const { rows } = await database.session.query<{
+      control_mode: string;
+      control_mode_origin: string | null;
+      control_mode_reason: string | null;
+    }>(
+      'SELECT control_mode, control_mode_origin, control_mode_reason FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    // Automated, with no stored origin — `direct_send` is the evidence, not the state.
+    expect(rows[0]?.control_mode).toBe('automated');
+    expect(rows[0]?.control_mode_origin).toBeNull();
+    expect(rows[0]?.control_mode_reason).toContain('direct Gmail send');
+    expect(rows[0]?.control_mode_reason).toContain('30 September 2026');
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
+
+    const { rows: audited } = await database.session.query<{ action: string; detail: Record<string, unknown> }>(
+      `SELECT action, detail FROM audit_events
+        WHERE workspace_id = $1 AND subject_id = $2 AND detail->>'classifiedAs' = 'direct_send'`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    expect(audited).toHaveLength(1);
+    expect(audited[0]?.action).toBe('opportunity.automated');
+    expect(audited[0]?.detail).toMatchObject({
+      releasedToAutomated: true,
+      rule: 'send-path-v2-20260930',
+      reason: 'the message of 3 September was written from Gmail by hand',
+      evidence: { controlModeReasonRecorded: true },
+    });
+
+    // Once released there is no NULL-origin manual mode left to classify.
+    const again = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'direct_send',
+      reason: 'again',
+    });
+    expect(again).toEqual({ ok: false, reason: 'invalid_input' });
+  });
+
+  it('a salesperson cannot release one: the direct-send classification is administrator-only', async () => {
     await database.session.query(
       `UPDATE opportunities
           SET control_mode = 'manual', control_mode_reason = 'set before 0025',
@@ -1137,19 +1201,17 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
         WHERE workspace_id = $1 AND id = $2`,
       [seeded.alpha.workspaceId, crm.alpha.opportunityId],
     );
-    for (const origin of ['direct_send', 'direct_send_keep_automation']) {
-      const refused = await classifyControlModeOrigin(admin(), {
-        opportunityId: crm.alpha.opportunityId,
-        origin: origin as 'human_reply',
-        reason: 'it was a hand-written e-mail',
-      });
-      expect(refused, origin).toEqual({ ok: false, reason: 'invalid_input' });
-    }
-    const { rows } = await database.session.query<{ control_mode_origin: string | null }>(
-      'SELECT control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+    const refused = await classifyControlModeOrigin(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'direct_send',
+      reason: 'I wrote it by hand',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'admin_only' });
+    const { rows } = await database.session.query<{ control_mode: string }>(
+      'SELECT control_mode FROM opportunities WHERE workspace_id = $1 AND id = $2',
       [seeded.alpha.workspaceId, crm.alpha.opportunityId],
     );
-    expect(rows[0]?.control_mode_origin).toBeNull();
+    expect(rows[0]?.control_mode).toBe('manual');
   });
 
   it('a prospecting step is blocked by manual mode whatever set it', async () => {

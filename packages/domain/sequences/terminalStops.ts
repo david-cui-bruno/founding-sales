@@ -41,7 +41,9 @@ import type { EnrollmentEndReason } from '@fss/contracts';
  * ## Two kinds, not one
  *
  * 8.1's close is `opportunity.terminal_stop`. 7.3's other half — manual is entered by
- * a confirmed human email reply, an engaged call outcome or a direct Gmail send, and
+ * a confirmed human email reply or an engaged call outcome (a direct Gmail send did
+ * until send-path v2, 30 September 2026; it is now an update to the conversation and
+ * writes no manual-mode event), and
  * "current active enrollments end terminally" — is
  * `opportunity.manual_mode`. Invariant 3 says a confirmed reply must not leave the
  * sequence running, so this consumer reads both kinds.
@@ -49,7 +51,7 @@ import type { EnrollmentEndReason } from '@fss/contracts';
  * The end reason for a manual-mode stop is the event's own origin.
  * `setManualControlMode` writes one of `MANUAL_MODE_ORIGINS` into
  * `crm_domain_events.detail.origin`, so an engaged call ends its enrollments
- * `engaged_call` and a direct Gmail send ends them `direct_send`, which is what 7.3's
+ * `engaged_call` and a stored direct-send event ends them `direct_send`, which is what 7.3's
  * ways in and `ENROLLMENT_END_REASONS`' first members have always meant.
  * `manualModeEndReason` is the map, and an event with no origin — every one written
  * before this lane — still reads as `human_reply`, which is exactly what G15 recorded,
@@ -111,9 +113,9 @@ const MANUAL_MODE_END_REASONS: Readonly<Record<ManualModeOrigin, EnrollmentEndRe
   // A person inside the workspace deciding, which is not one of 7.3's prospect
   // signals: the vocabulary reserves its first four members for those.
   salesperson_command: 'admin_stop',
-  // The salesperson sent by hand and asked for the follow-up automation to continue;
-  // the enrollments this manual mode stops are stopped for the same reason as any other
-  // direct send (P1-1).
+  // History since send-path v2: the salesperson sent by hand and asked for the
+  // follow-up automation to continue; a stored event with this origin stops its
+  // enrollments for the same reason as any other direct send (P1-1). Nothing writes it.
   direct_send_keep_automation: 'direct_send',
 });
 

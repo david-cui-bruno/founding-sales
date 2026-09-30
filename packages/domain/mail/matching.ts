@@ -385,6 +385,31 @@ export async function resolveAmbiguity(
     [context.scope.workspaceId, input.messageId, input.selectedOpportunityId, now, resolvedBy],
   );
 
+  // Send-path v2 (slice S1; the coordinator's decision of 30 September 2026): an
+  // OUTGOING message is not a prospect's reply. It gets no `uncertain_reply` keeper and
+  // no `human_reply` manual mode, whatever `human` says; resolving it releases this
+  // message's ambiguity holds and applies the direct-send effect to the one opportunity
+  // the person named — once, by the effect's own marker. An FSS send is recognised by its
+  // fence and has no direct-send effect either.
+  const message = await readMessage(context, input.messageId);
+  if (message !== null && message.direction === 'outgoing') {
+    const releasedOutgoing = await releaseHoldsOfEvent(context, {
+      sourceEventId: input.messageId,
+      reasonCode: 'ambiguous_match',
+    });
+    const fenceId = await fenceForOutgoingMessage(context, {
+      mailboxId: message.mailboxId,
+      rfcMessageId: message.rfcMessageId,
+      providerMessageId: message.providerMessageId,
+    });
+    if (fenceId === null) await applyDirectSendEffects(context, { message, candidate: selected });
+    return acceptMail({
+      selectedOpportunityId: input.selectedOpportunityId,
+      releasedHoldIds: releasedOutgoing.map(hold => hold.id),
+      manualOpportunityId: null,
+    });
+  }
+
   // The selected candidate keeps a hold of its own until the message's own
   // classification is dealt with, so it is opened *before* the release: at no instant
   // inside this transaction is the selected opportunity unheld, which is what Appendix
@@ -413,21 +438,6 @@ export async function resolveAmbiguity(
   );
 
   const releasedIds = released.map(hold => hold.id).filter(id => id !== selected.holdId);
-
-  // Send-path v2 (slice S1): the salesperson's own outgoing message, matched to several
-  // firms, waited for this resolution rather than updating a conversation it might not
-  // belong to. Now that a person has named the opportunity, the direct send is applied
-  // to it — once, by the effect's own marker. An FSS send is recognised by its fence and
-  // has no direct-send effect.
-  const message = await readMessage(context, input.messageId);
-  if (message !== null && message.direction === 'outgoing') {
-    const fenceId = await fenceForOutgoingMessage(context, {
-      mailboxId: message.mailboxId,
-      rfcMessageId: message.rfcMessageId,
-      providerMessageId: message.providerMessageId,
-    });
-    if (fenceId === null) await applyDirectSendEffects(context, { message, candidate: selected });
-  }
 
   let manualOpportunityId: string | null = null;
   if (input.human) {

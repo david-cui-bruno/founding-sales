@@ -582,13 +582,32 @@ describe('matching and its consequences', () => {
       expect(holds.map(hold => hold.reasonCode)).toContain('ambiguous_match');
     }
 
+    // `human: true` on purpose: an outgoing message is not a prospect's reply, so the
+    // resolution applies the direct send and nothing else — no `uncertain_reply` keeper,
+    // no `human_reply` manual mode.
     const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
       messageId,
       selectedOpportunityId: other.opportunityId,
-      human: false,
+      human: true,
     });
     expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.manualOpportunityId).toBeNull();
     expect(await markers()).toEqual([{ firm_id: other.firmId }]);
+
+    for (const opportunityId of [w.crm.alpha.opportunityId, other.opportunityId]) {
+      const holds = await listApplicableHolds(context, { actionKind: 'email_send', opportunityId });
+      const reasons = holds.map(hold => hold.reasonCode);
+      expect(reasons, opportunityId).not.toContain('ambiguous_match');
+      expect(reasons, opportunityId).not.toContain('uncertain_reply');
+    }
+    const { rows: control } = await w.database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = ANY ($2::uuid[])',
+      [context.scope.workspaceId, [w.crm.alpha.opportunityId, other.opportunityId]],
+    );
+    expect(control).toEqual([
+      { control_mode: 'automated', control_mode_origin: null },
+      { control_mode: 'automated', control_mode_origin: null },
+    ]);
   });
 });
 
