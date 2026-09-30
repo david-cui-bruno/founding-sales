@@ -1,6 +1,7 @@
 import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/templates.ts';
@@ -189,6 +190,14 @@ export async function runDueStepExecution(
   context: RepositoryContext,
   input: RunDueStepInput,
 ): Promise<StepRunOutcome> {
+  // The send gate is the first lock, before any enrollment or step row: every other stop
+  // writer takes gate, then cursor, then enrollments (`policy/sendGate.ts`), and this run
+  // can stop an enrollment itself (a skipped `unknown_terminal` fence) or open a hold
+  // (missing variables), both of which take the gate exclusive. Reaching it with the
+  // enrollment already locked deadlocked with a concurrent stop. Nothing below takes the
+  // shared gate (only the dispatch claim does, after this transaction commits) or calls
+  // out over the network, so holding it for this short database work only delays claims.
+  await lockSendGateForStopFact(context);
   // The enrollment is locked before the step, the order the resume command takes too
   // (`lockStepWithEnrollment`): the scheduler resumes a held enrollment itself since
   // wave 2, and two orders on one enrollment could deadlock.
