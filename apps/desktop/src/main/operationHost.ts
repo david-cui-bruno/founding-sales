@@ -110,6 +110,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'crm.resolveMerge': async (input: Parameters<CrmBridgeHost['resolveMerge']>[0]) => await deps.crm.resolveMerge(input),
     'crm.openOpportunity': async () => await deps.crm.openOpportunity(),
     'crm.takeOver': async input => await deps.crm.takeOver(input),
+    'crm.resolveOutgoing': async (input: Parameters<CrmBridgeHost['resolveOutgoing']>[0]) =>
+      await deps.crm.resolveOutgoing(input),
     'crm.enroll': async (input: Parameters<CrmBridgeHost['enroll']>[0]) => await deps.crm.enroll(input),
     'crm.checkRoute': async (input: Parameters<CrmBridgeHost['checkRoute']>[0]) => await deps.crm.checkRoute(input),
 

@@ -189,18 +189,29 @@ control still pauses automation."* This supersedes the first bullet above.
   `step_executions` and no hold code is added), and the dispatch claim refuses
   `not_ready` (`step_ineligible:direct_send_quiet_window`), under the gate, for an
   agreed-sequence e-mail whose recipient has a `direct_send_conversation` marker younger
-  than 24 h, which also stops a fence prepared before the send.
+  than 24 h, which also stops a fence prepared before the send. The claim also refuses
+  `not_ready` (`step_ineligible:not_yet_due`) while the step's own `not_before` is still
+  ahead (the database clock, or a later instant a test pins), so the later schedule kept
+  by `greatest` is honoured by a fence that already exists.
 * **Ambiguous matches wait.** For an unfenced outgoing message the To/Cc recipients are
   checked against the rule that matched it: a recipient at a firm the thread or reference
   rule did not name (including an address associated with two firms) adds that firm as a
-  candidate, so the match is ambiguous and held. The import applies the effect only to a
-  match with one candidate; several candidates stay held by their `ambiguous_match` holds, and
+  candidate, so the match is ambiguous and held. The **stored** match set decides, on
+  every import and replay: a stored selection is the target, one stored unambiguous
+  match is the target, and anything else waits — so a replay that finds fewer
+  candidates (an address retired since) cannot apply an unresolved ambiguity to the one
+  left, and `recordMatches` counts the stored unresolved rows when it decides whether a
+  new candidate is ambiguous. The import applies the effect only to a match with one
+  candidate; several candidates stay held by their `ambiguous_match` holds, and
   `resolveAmbiguity` applies it to the opportunity the person selects. An outgoing
   message is not a prospect's reply, so its resolution releases the ambiguity holds and
   applies only the direct-send effect: no `uncertain_reply` keeper and no `human_reply`
   manual mode, whatever the `human` flag says (an FSS-fenced one gets no effect at all).
   `resolveAmbiguity` takes the gate before it reads, locks the match rows, and resolves
   only unresolved rows, so a second concurrent resolution is refused `already_resolved`.
+  The desktop Firm page lists the firm's held outgoing messages
+  (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
+  same resolve command, and says the outcome or the refusal under the list.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.

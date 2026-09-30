@@ -273,7 +273,23 @@ export async function recordMatches(
   context: RepositoryContext,
   input: { readonly messageId: string; readonly candidates: readonly MatchCandidate[] },
 ): Promise<RecordedMatches> {
-  const ambiguous = input.candidates.length > 1;
+  // The stored, unresolved matches count too (S1 review P1-A): a replay that finds one
+  // candidate for a message whose first import found two is still the same unresolved
+  // ambiguity, and a candidate new on the replay joins it held rather than unheld.
+  const { rows: unresolved } = await context.db.query<{ opportunity_id: string }>(
+    `SELECT opportunity_id FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
+    [context.scope.workspaceId, input.messageId],
+  );
+  const resolvedAlready = await context.db.query(
+    `SELECT 1 FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NOT NULL LIMIT 1`,
+    [context.scope.workspaceId, input.messageId],
+  );
+  const ambiguous =
+    (resolvedAlready.rowCount ?? 0) === 0 &&
+    new Set([...unresolved.map(row => row.opportunity_id), ...input.candidates.map(candidate => candidate.opportunityId)])
+      .size > 1;
   const holdIds: string[] = [];
 
   for (const candidate of input.candidates) {
@@ -323,6 +339,25 @@ export async function recordMatches(
   return { candidates: input.candidates, ambiguous, holdIds };
 }
 
+/**
+ * The one opportunity a direct send's effect may be applied to at import, from the
+ * stored match set (S1 review P1-A), or undefined while a person still has to choose.
+ *
+ * A stored selection wins. Otherwise exactly one stored match, not marked ambiguous, is
+ * the target. Two or more unresolved matches — or one left marked ambiguous — wait.
+ */
+export async function directSendTargetOf(
+  context: RepositoryContext,
+  messageId: string,
+): Promise<RecordedMatch | undefined> {
+  const stored = await listMatches(context, messageId);
+  const chosen = stored.find(match => match.selected === true);
+  if (chosen !== undefined) return chosen;
+  if (stored.some(match => match.selected !== null)) return undefined;
+  const only = stored.length === 1 ? stored[0] : undefined;
+  return only !== undefined && !only.ambiguous ? only : undefined;
+}
+
 export interface RecordedMatch extends MatchCandidate {
   readonly id: string;
   readonly ambiguous: boolean;
@@ -361,6 +396,49 @@ export async function listMatches(
     selected: row.selected,
     viaClosedOpportunity: false,
   }));
+}
+
+export interface HeldOutgoingMessageRow {
+  readonly messageId: string;
+  readonly internalDate: string;
+  readonly candidates: readonly { readonly opportunityId: string; readonly firmId: string; readonly firmName: string }[];
+}
+
+/**
+ * The outgoing messages with an unresolved ambiguous match at this firm, and every
+ * candidate of each (send-path v2, S1 review P1-C). The caller decides who may read it;
+ * this answers ids, the instant and the candidate firms' names.
+ */
+export async function listHeldOutgoingForFirm(
+  context: RepositoryContext,
+  firmId: string,
+): Promise<readonly HeldOutgoingMessageRow[]> {
+  const { rows } = await context.db.query<{
+    message_id: string;
+    internal_date: Date;
+    opportunity_id: string;
+    firm_id: string;
+    firm_name: string;
+  }>(
+    `SELECT m.id AS message_id, m.internal_date, x.opportunity_id, x.firm_id, f.name AS firm_name
+       FROM mail_messages AS m
+       JOIN mail_message_matches AS x ON x.workspace_id = m.workspace_id AND x.mail_message_id = m.id
+       JOIN firms AS f ON f.workspace_id = x.workspace_id AND f.id = x.firm_id
+      WHERE m.workspace_id = $1
+        AND m.direction = 'outgoing'
+        AND EXISTS (SELECT 1 FROM mail_message_matches AS mine
+                     WHERE mine.workspace_id = m.workspace_id AND mine.mail_message_id = m.id
+                       AND mine.firm_id = $2 AND mine.ambiguous AND mine.selected IS NULL)
+      ORDER BY m.internal_date DESC, m.id, f.name, x.opportunity_id`,
+    [context.scope.workspaceId, firmId],
+  );
+  const byMessage = new Map<string, { internalDate: string; candidates: HeldOutgoingMessageRow['candidates'][number][] }>();
+  for (const row of rows) {
+    const entry = byMessage.get(row.message_id) ?? { internalDate: row.internal_date.toISOString(), candidates: [] };
+    entry.candidates.push({ opportunityId: row.opportunity_id, firmId: row.firm_id, firmName: row.firm_name });
+    byMessage.set(row.message_id, entry);
+  }
+  return [...byMessage].map(([messageId, entry]) => ({ messageId, ...entry }));
 }
 
 export interface AmbiguityResolution {

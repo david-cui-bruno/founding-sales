@@ -369,6 +369,23 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'direct_send_quiet_window' };
     }
+    // A later schedule (S1 review P1-B): the step's own `not_before`, under the gate. A
+    // fence prepared before its step was pushed back — by the direct send's quiet day,
+    // kept by `greatest` — does not leave early. The clock is the database's; the
+    // gate's decision instant (`deps.now`, which only a test pins; the worker sets
+    // none) counts only when it is later, so a suite that runs the send at a pinned
+    // future instant is judged at that instant.
+    if (fence.stepExecutionId !== null) {
+      const { rows: due } = await context.db.query<{ early: boolean }>(
+        `SELECT not_before > greatest(clock_timestamp(), coalesce($3::timestamptz, clock_timestamp())) AS early
+           FROM step_executions WHERE workspace_id = $1 AND id = $2`,
+        [context.scope.workspaceId, fence.stepExecutionId, deps.now?.().toISOString() ?? null],
+      );
+      if (due[0]?.early === true) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'not_yet_due' };
+      }
+    }
 
     const gate = await decideSend(context, fence, deps);
     if (!gate.ok) {

@@ -9,7 +9,7 @@ import {
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
-import { findMatchCandidates, recordMatches, withOutgoingRecipientConflicts } from './matching.ts';
+import { directSendTargetOf, findMatchCandidates, recordMatches, withOutgoingRecipientConflicts } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
 import { METADATA_HEADERS, type MailboxRow } from './types.ts';
@@ -134,10 +134,14 @@ export async function processMessageIds(
       // A *direct* Gmail send is an update to the conversation (send-path v2); a
       // sequence step FSS sent itself is not one, and is recognised by its fence.
       if (fenceId === null) {
-        // Only a match resolved to one opportunity. Several candidates are held by
-        // `recordMatches` for the person's resolution, and `resolveAmbiguity` applies
-        // the direct send to the one they select.
-        const only = matches.ambiguous ? undefined : candidates[0];
+        // Only a match resolved to one opportunity, and the *stored* match set decides
+        // (S1 review P1-A): a replay may find fewer candidates than the first import did
+        // — an address retired since — but an ambiguity a person has not resolved is
+        // still unresolved, and applying the effect to the one candidate left would
+        // spend the message's once-only marker on a firm nobody chose. So: a stored
+        // selection is the firm; one stored, unambiguous match is the firm; anything
+        // else waits for `resolveAmbiguity`, which applies it to the one selected.
+        const only = await directSendTargetOf(context, stored.message.id);
         if (only !== undefined) {
           const outcome = await applyDirectSendEffects(context, { message: stored.message, candidate: only });
           if (outcome.recorded) directSendsRecorded += 1;

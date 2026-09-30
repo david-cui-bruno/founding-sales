@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  heldOutgoingMessageSchema,
   enrollmentDtoSchema,
   firmIdentityDtoSchema,
   firmPageResponseSchema,
@@ -183,8 +184,19 @@ export const crmStateSchema = z.strictObject({
   import: importViewSchema.nullable(),
   /** The Firm page's Sequences section (lane g88). */
   sequences: firmSequencesViewSchema.nullable(),
+  /**
+   * The open Firm page's outgoing messages waiting for a person to name their firm
+   * (send-path v2, S1 review P1-C). Empty off the Firm page and for a narrow read.
+   */
+  heldOutgoing: z.array(heldOutgoingMessageSchema),
 });
 export type CrmState = z.infer<typeof crmStateSchema>;
+
+/** Name the firm one held outgoing message belongs to (send-path v2, S1 review P1-C). */
+export interface ResolveOutgoingRequest {
+  readonly messageId: string;
+  readonly opportunityId: string;
+}
 
 /** Enrol one contact of the open Firm page in one published version (lane g88). */
 export interface EnrollRequest {

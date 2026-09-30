@@ -218,6 +218,9 @@ const enrollInput = z.strictObject({ sequenceVersionId: uuid, contactId: uuid })
  */
 const takeOverInput = z.strictObject({ reason: z.string().min(1).max(2000) });
 
+/** One held outgoing message of the open Firm page, and the firm a person named (S1 review P1-C). */
+const resolveOutgoingInput = z.strictObject({ messageId: uuid, opportunityId: uuid });
+
 const checkRouteInput = z.strictObject({ routeId: uuid, routeVersion: z.number().int().min(1) });
 
 const saveStepsInput = z.strictObject({
@@ -499,6 +502,7 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
@@ -537,6 +541,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/crm/firms/add' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
     ],
     input: addFirmDraftSchema,
     output: crmStateSchema,
@@ -554,6 +559,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/contacts/update' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
     ],
     input: contactEditInput,
     output: crmStateSchema,
@@ -576,6 +582,7 @@ export const OPERATIONS = {
       { method: 'POST', path: '/merges/firms' },
       { method: 'GET', path: '/firms' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/enrollments' },
       { method: 'POST', path: '/sequences/versions' },
@@ -589,6 +596,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/opportunities/open' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
@@ -602,6 +610,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/opportunities/manual' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
@@ -610,11 +619,26 @@ export const OPERATIONS = {
     output: crmStateSchema,
     transform: 'the open firm page\u2019s own opportunity, and a reason the person typed',
   },
+  'crm.resolveOutgoing': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/messages/resolve-ambiguity' },
+      { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
+      { method: 'GET', path: '/sequences' },
+      { method: 'POST', path: '/sequences/versions' },
+      { method: 'POST', path: '/enrollments' },
+    ],
+    input: resolveOutgoingInput,
+    output: crmStateSchema,
+    transform: 'refuses a message or a firm the open page did not show before it asks the server; human is always false',
+  },
   'crm.enroll': {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/enrollments/enroll' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
       { method: 'GET', path: '/sequences' },
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
@@ -628,6 +652,7 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/contacts/routes/check' },
       { method: 'POST', path: '/crm/firm-page' },
+      { method: 'POST', path: '/messages/held-outgoing' },
     ],
     input: checkRouteInput,
     output: crmStateSchema,

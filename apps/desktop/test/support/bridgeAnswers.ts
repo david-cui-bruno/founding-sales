@@ -201,6 +201,16 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   '/today/firm': todayFirmBody,
   '/replies': { businessDate: '2026-09-21', cards: [replyCardBody] },
   '/crm/firm-page': firmPageBody,
+  // One held outgoing message, so `crm.resolveOutgoing` reaches the server (S1 review P1-C).
+  '/messages/held-outgoing': {
+    messages: [
+      {
+        messageId: FIXTURE_IDS.message,
+        internalDate: '2026-09-21T14:00:00.000Z',
+        candidates: [{ opportunityId: FIXTURE_IDS.opportunity, firmId: FIXTURE_IDS.firm, firmName: FIRM_NAME }],
+      },
+    ],
+  },
   // The board as the server sends it for somebody else: no opportunity of this firm's,
   // because this caller may not change its stage.
   '/pipeline/board': { columns: [], opportunityIdByFirmId: {}, unplacedFirms: [firmIdentity] },

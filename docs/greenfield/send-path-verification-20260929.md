@@ -128,19 +128,20 @@ contact has no live enrollment. It never asks why.
 narrow — one authenticated human command — but it is unconditioned.
 
 **A surprising consequence, and it points the other way.** `controlModeSource`
-(`eligibility.ts:165`) refuses any step whose opportunity is not `control_mode =
-'automated'`. A confirmed human reply, an engaged call outcome and a direct Gmail send
-all set the opportunity `manual` (`crm/pipeline.ts:238` `setManualControlMode`; a direct
-send no longer does since send-path v2, 30 September 2026), and
-**there is no `manual → automated` path in the codebase** — `pipeline.ts:229` says so
-outright, and a grep for a write of `control_mode = 'automated'` finds only the table
-default. A reopened opportunity also starts manual (`pipeline.ts:308`). (Since send-path
-v2, 30 September 2026, there is exactly one: an administrator classifying an old
-NULL-origin manual mode as a direct send returns it to automated — never a reopen, and
-only once nothing is live at the opportunity; `classifyControlModeOrigin`.)
+(`eligibility.ts`) refuses a prospecting or legacy step whose opportunity is not
+`control_mode = 'automated'`. As of send-path v2 (30 September 2026) a confirmed human
+reply, an engaged call outcome and an explicit takeover set the opportunity `manual`
+(`crm/pipeline.ts` `setManualControlMode`); a direct Gmail send does not — it is an
+update to the conversation (`mail/effects.ts` `applyDirectSendEffects`). A reopened
+opportunity starts manual (`reopenOpportunity`). There is one `manual → automated` path:
+an administrator classifying an old NULL-origin manual mode as a direct send
+(`classifyControlModeOrigin`), which is refused for a reopen and while anything is live
+at the opportunity. When this document was written (29 September) neither the direct-send
+change nor that path existed, and the paragraph below describes that state.
 
-So today the set of enrollments that can send automatically is precisely the set whose
-firm has *not* had a recorded conversation or reply — the opposite of the property.
+So on 29 September the set of enrollments that could send automatically was precisely
+the set whose firm had *not* had a recorded conversation or reply — the opposite of the
+property.
 Enforcing follow-up eligibility is not a matter of adding one check; it needs the
 manual/automated model settled first.
 

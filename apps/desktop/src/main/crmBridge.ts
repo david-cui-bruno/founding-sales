@@ -7,6 +7,7 @@ import {
   enrollmentsResponseSchema,
   firmListResponseSchema,
   firmPageResponseSchema,
+  heldOutgoingResponseSchema,
   importCommitResponseSchema,
   importFileRefusalResponseSchema,
   importPreviewResponseSchema,
@@ -17,6 +18,7 @@ import {
   sequencesResponseSchema,
   type FirmIdentityDto,
   type FirmPageResponse,
+  type HeldOutgoingMessage,
   type MergeConflict,
   type PipelineStageDto,
 } from '@fss/contracts';
@@ -34,6 +36,7 @@ import type {
   ImportView,
   MergeResolution,
   PipelineView,
+  ResolveOutgoingRequest,
   StageChange,
 } from '../renderer/firmWorkspaceContract.ts';
 import type { AuthedClient } from './authedClient.ts';
@@ -113,6 +116,8 @@ export interface CrmBridgeHost {
   commitImport(): Promise<CrmState>;
   openOpportunity(): Promise<CrmState>;
   takeOver(input: { readonly reason: string }): Promise<CrmState>;
+  /** Name the firm of one held outgoing message on the open Firm page (S1 review P1-C). */
+  resolveOutgoing(input: ResolveOutgoingRequest): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
   checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
@@ -236,6 +241,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   let importCommandIds = new Map<number, string>();
   /** The open Firm page's Sequences section (lane g88). */
   let sequences: FirmSequencesView | null = null;
+  /** The open Firm page's held outgoing messages (send-path v2, S1 review P1-C). */
+  let heldOutgoing: readonly HeldOutgoingMessage[] = [];
   /** Every opportunity id a Firm page has told this window about. */
   const opportunityIdByFirmId: Record<string, string> = {};
 
@@ -269,6 +276,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       addFirm: addFirmView,
       import: importView,
       sequences: screen === 'firm' ? sequences : null,
+      heldOutgoing: screen === 'firm' ? [...heldOutgoing] : [],
     };
   };
 
@@ -357,7 +365,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     }
     screen = 'firm';
     sequences = null;
-    if (page.value.visibility === 'assigned_or_admin') await loadSequences(page.value.read.firm.id);
+    heldOutgoing = [];
+    if (page.value.visibility === 'assigned_or_admin') {
+      await loadSequences(page.value.read.firm.id);
+      // Send-path v2 (S1 review P1-C): the salesperson's own messages this firm is one
+      // candidate of, waiting for a person to name the firm. A failed read shows none
+      // rather than refusing the page: the messages stay held either way.
+      const held = await deps.api.read('/messages/held-outgoing', value => heldOutgoingResponseSchema.parse(value), {
+        firmId: page.value.read.firm.id,
+      });
+      if (held.ok) heldOutgoing = held.value.messages;
+    }
   };
 
   const loadPipeline = async (): Promise<void> => {
@@ -583,6 +601,37 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         () => null,
       );
       notice = answer.ok ? 'taken_over' : answer.reason;
+      await loadFirm(page.read.firm.id);
+      return await snapshot();
+    },
+
+    /**
+     * Name the firm one held outgoing message belongs to (send-path v2, S1 review P1-C).
+     *
+     * The salesperson's own Gmail send, matched to more than one firm, waits for this;
+     * the existing `/messages/resolve-ambiguity` resolves it and applies the direct-send
+     * effect to the chosen firm. `human` is false and the server ignores it for an
+     * outgoing message anyway. The message and the candidate must be ones this page
+     * showed; the server's refusal — `already_resolved` when somebody got there first —
+     * is the notice.
+     */
+    async resolveOutgoing(input) {
+      const page = firm;
+      const message = heldOutgoing.find(entry => entry.messageId === input.messageId);
+      if (page === null || page.visibility !== 'assigned_or_admin' || message === undefined) {
+        notice = 'message_unknown';
+        return await snapshot();
+      }
+      if (!message.candidates.some(candidate => candidate.opportunityId === input.opportunityId)) {
+        notice = 'match_unknown';
+        return await snapshot();
+      }
+      const answer = await deps.api.command(
+        '/messages/resolve-ambiguity',
+        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
+        () => null,
+      );
+      notice = answer.ok ? 'outgoing_resolved' : answer.reason;
       await loadFirm(page.read.firm.id);
       return await snapshot();
     },

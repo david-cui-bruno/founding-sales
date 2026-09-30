@@ -638,6 +638,49 @@ describe('matching and its consequences', () => {
     return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
   };
 
+  it('S1 review P1-A: a replay that finds only one candidate does not apply an unresolved ambiguity', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Southwind Test Partners', address: PROSPECT });
+
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'replay-out', historyId: '1040', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect((await outgoingState(w, 'replay-out')).markers).toBe(0);
+
+    // B's address goes; the same message is imported again and now matches only A.
+    await w.database.session.query(
+      `UPDATE email_addresses SET eligibility = 'retired', retired_at = now(), version = version + 1
+        WHERE workspace_id = $1 AND firm_id = $2`,
+      [w.alpha.workspace.workspaceId, other.firmId],
+    );
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1039' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    const replay = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(replay.directSendsRecorded).toBe(0);
+    const held = await outgoingState(w, 'replay-out');
+    expect(held.markers).toBe(0);
+
+    // The person names B; B's effect applies, and A is untouched.
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId: held.messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    const { rows: markers } = await w.database.session.query<{ firm_id: string }>(
+      `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [w.alpha.workspace.workspaceId, held.messageId],
+    );
+    expect(markers).toEqual([{ firm_id: other.firmId }]);
+  });
+
   it('S1 review P1-1: a direct send in firm A’s thread to a contact at firm B is held for the person, not applied to A', async () => {
     world = await createMailWorld();
     const w = world;

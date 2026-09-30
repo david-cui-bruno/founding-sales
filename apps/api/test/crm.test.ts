@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { firmListResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/contracts';
+import { firmListResponseSchema, heldOutgoingResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, OUTDATED_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -294,6 +294,19 @@ describe('CRM routes', () => {
     );
     expect(label.status).toBe(409);
     expect(label.body['reason']).toBe('invalid_input');
+  });
+
+  it('send-path v2 (S1 review P1-C): lists a firm page’s held outgoing messages to its assignee only', async () => {
+    const heldFirm = await seedFirm(fixture, { name: 'Held Outgoing Holdings', assignedUserId: assigneeUserId });
+    const mine = await post('/messages/held-outgoing', assigneeToken, { firmId: heldFirm });
+    expect(mine.status).toBe(200);
+    expect(heldOutgoingResponseSchema.parse(mine.body)).toEqual({ messages: [] });
+    // A colleague who may not see this firm's detail is told nothing, not refused.
+    const theirs = await post('/messages/held-outgoing', strangerToken, { firmId: heldFirm });
+    expect(theirs.status).toBe(200);
+    expect(theirs.body).toEqual({ messages: [] });
+    const malformed = await post('/messages/held-outgoing', assigneeToken, { firmId: 'not-a-uuid' });
+    expect(malformed.status).toBe(400);
   });
 
   it('never lets a session from the other workspace see this one, even with the same ids', async () => {

@@ -85,6 +85,7 @@ function state(overrides: Partial<CrmState> = {}): CrmState {
     addFirm: null,
     import: null,
     sequences: null,
+    heldOutgoing: [],
     ...overrides,
   };
 }

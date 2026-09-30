@@ -4,7 +4,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import type { MatchCandidate } from '../../mail/matching.ts';
-import { recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { listHeldOutgoingForFirm, recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { readMessage } from '../../mail/messages.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
@@ -614,10 +614,21 @@ describe('S1 review P1-4: an agreed sequence waits a day after the salesperson�
     expect(first.report.outcome, JSON.stringify(first.report)).toBe('not_ready');
     expect(first.report.detail).toBe('direct_send_quiet_window');
 
-    // A day later — the direct send's own instant moved back 25 hours — the same fence sends.
+    // Backdating the direct send alone does not make the step ready: its own
+    // `not_before` is still a day away, and the claim reads it (S1 review P1-B).
     await world.database.session.query(
       "UPDATE mail_messages SET internal_date = internal_date - interval '25 hours' WHERE workspace_id = $1 AND id = $2",
       [workspaceId(), message.id],
+    );
+    const early = await dispatch(agreed.fenceId);
+    expect(early.sends).toBe(0);
+    expect(early.report.outcome, JSON.stringify(early.report)).toBe('not_ready');
+    expect(early.report.detail).toBe('not_yet_due');
+
+    // A day later — both the send and the step's schedule moved back — the same fence sends.
+    await world.database.session.query(
+      "UPDATE step_executions SET not_before = not_before - interval '25 hours' WHERE workspace_id = $1 AND id = $2",
+      [workspaceId(), executionId],
     );
     const later = await dispatch(agreed.fenceId);
     expect(later.report.outcome, JSON.stringify(later.report)).toBe('sent');
@@ -663,6 +674,27 @@ describe('resolving an ambiguous outgoing message', () => {
     );
     return rows.map(row => row.reason_code);
   }
+
+  it('S1 review P1-C: is listed on each candidate firm with every candidate, until it is resolved', async () => {
+    const left = await seedFirm(world, world.alpha, 'listed-left');
+    const right = await seedFirm(world, world.alpha, 'listed-right');
+    const message = await ambiguousOutgoing(left, right);
+    for (const firm of [left, right]) {
+      const listed = await listHeldOutgoingForFirm(worker(), firm.firmId);
+      expect(listed.map(entry => entry.messageId)).toEqual([message.id]);
+      expect(new Set(listed[0]?.candidates.map(candidate => candidate.opportunityId))).toEqual(
+        new Set([left.opportunityId, right.opportunityId]),
+      );
+    }
+    const resolved = await resolveAmbiguity(salesperson(), {
+      messageId: message.id,
+      selectedOpportunityId: left.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    expect(await listHeldOutgoingForFirm(worker(), left.firmId)).toEqual([]);
+    expect(await listHeldOutgoingForFirm(worker(), right.firmId)).toEqual([]);
+  });
 
   it('S1 review P2: an FSS-fenced one releases its holds and does nothing else, even when called human', async () => {
     const left = await seedFirm(world, world.alpha, 'fenced-left');

@@ -91,6 +91,7 @@ describe('what the API mounts', () => {
       '/import/preview',
       '/integrations/gmail/push',
       '/messages',
+      '/messages/held-outgoing',
       '/messages/resolve-ambiguity',
       '/oauth/gmail/callback',
       '/outbound/authentication',
