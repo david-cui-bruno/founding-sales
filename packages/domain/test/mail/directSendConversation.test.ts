@@ -18,6 +18,7 @@ import {
 } from '../../mail/matching.ts';
 import type { NormalizedMetadata } from '../../mail/messages.ts';
 import { readMessage } from '../../mail/messages.ts';
+import { runMailRecovery } from '../../mail/recover.ts';
 import { runMailSync } from '../../mail/sync.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
@@ -1150,5 +1151,59 @@ describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
     });
     // The cursor stands just before the copy's record.
     expect((await readMailbox(worker(), world.alpha.mailboxId))?.historyId).toBe('1402');
+  });
+});
+
+describe('C2B-A1 fold 3: a recovery adopting its cursor takes the gate before the row', () => {
+  it('a recovery adopting its cursor and a sync taking the gate do not deadlock', async () => {
+    const firm = await seedFirm(world, world.alpha, 'adopt-gate');
+    // A legacy recovery: the mailbox is recovering with no cursor of its own.
+    const { rows: bumped } = await world.database.session.query<{ generation: number }>(
+      `UPDATE mailboxes SET generation = generation + 1, sync_state = 'recovering', history_id = NULL,
+              history_id_updated_at = NULL, coverage_watermark_at = NULL
+        WHERE workspace_id = $1 AND id = $2 RETURNING generation`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    const generation = bumped[0]?.generation ?? 0;
+    await world.database.session.query(
+      `INSERT INTO mailbox_recoveries (workspace_id, mailbox_id, generation, reason, from_at, to_at)
+       VALUES ($1, $2, $3, 'history_expired', now() - interval '1 day', now())`,
+      [workspaceId(), world.alpha.mailboxId, generation],
+    );
+    world.alpha.messages.push(
+      fixtureMessage({
+        id: 'adopt-direct',
+        historyId: '1501',
+        from: world.alpha.address,
+        to: firm.address,
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: Date.now() - 3600_000,
+      }),
+    );
+
+    const base = world.syncDeps(world.alpha);
+    let syncRun: Promise<unknown> | null = null;
+    const gmail: GmailClient = {
+      ...base.gmail,
+      listMessageIds: async (...args) => {
+        if (syncRun === null) {
+          // Between the recovery's cursor adoption and its gated pipeline, a sync of the
+          // recovering mailbox takes the gate for its coverage hold.
+          await second.session.query('BEGIN');
+          syncRun = runMailSync(second.context(workspaceId()), base, { mailboxId: world.alpha.mailboxId });
+          await waitUntilBlocked(barrier.session, second.pid);
+        }
+        return await base.gmail.listMessageIds(...args);
+      },
+    };
+    const session = world.database.session as Parameters<typeof withTransaction>[0];
+    const report = await withTransaction(session, async () =>
+      await runMailRecovery(worker(), { ...base, gmail }, { mailboxId: world.alpha.mailboxId, generation }),
+    );
+    expect(report.outcome).toBe('completed');
+    expect(report.directSendsRecorded).toBe(1);
+    const synced = (await syncRun) as { outcome: string } | null;
+    await second.session.query('COMMIT');
+    expect(synced?.outcome).toBe('recovery_underway');
   });
 });

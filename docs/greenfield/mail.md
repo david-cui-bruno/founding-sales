@@ -280,8 +280,13 @@ its progress and its completion, and a watch registration (`lockMailboxAtFence` 
 `users.watch`, before the insert), and every refusal path's write — a revoked grant
 (`holdForRevokedGrant`), a disconnected or coverage hold, a rate-limited sync error. A
 path that writes a stop fact takes the send gate first and then the mailbox row
-(`lockForFencedStopFact`), never the row and then the gate; a continued recovery locks
-the row at its fence to commit before it writes progress. The fenced row lock is `FOR NO
+(`lockForFencedStopFact`), never the row and then the gate — and so does every
+transaction that updates the mailbox row before it may take the gate: a recovery
+adopting a legacy cursor (which then holds the gate through that one run's Gmail reads),
+the expired-cursor recovery start and the restore recovery start. A continued recovery
+locks the row at its fence to commit before it writes progress, and a sync whose
+compare-and-set finds the cursor moved takes the fenced lock before it answers
+`cursor_moved`, so its committed prefix is fenced to commit too. The fenced row lock is `FOR NO
 KEY UPDATE`: every `mail_messages` insert holds KEY SHARE on its mailbox row, which `FOR
 UPDATE` would wait on and NO KEY UPDATE does not, while a generation bump still waits
 for it. A mismatch throws `StaleMailboxGeneration` rather
@@ -313,9 +318,19 @@ of its next run, moving `to_at` to after that read.
 token when the mailbox changes between pages — a message deleted before the second page
 can shift a survivor off both — so a recovery never follows one. A slice whose answer
 has a `nextPageToken` holds more than a page: the answer is discarded and the slice
-bisected, down to one second (`RecoverySliceOverflow` if one second still overflows).
-Every slice but the first is listed with one second of overlap below it, so a boundary
-second is covered whichever way Gmail treats the bounds. Each slice's ids are checked
+bisected, down to one logical second. Every slice's `after:` is one second below it and
+the last slice's `before:` one second above the window, so the closed interval
+`[fromAt, toAt]` and every internal boundary second are listed whichever way Gmail
+treats an exact-second bound (a message just outside the window is listed too, and
+recording by Gmail id makes that harmless). If the smallest queryable window — one
+logical second, queried over two or three — still holds more than a page, the recovery
+follows Gmail's page tokens within that one query only, and logs
+`mail.recovery_slice_paginated`; the residual there is that a deletion within those
+same seconds, during that one listing, could shift a message across a page (the next
+run lists the slice again). A run makes at most `RECOVERY_LISTING_CALL_CAP` (400)
+listing calls; one that reaches it continues next run, and a window that needs more in
+one run (about 50,000 messages at the default page size) cannot complete without a
+durable slice checkpoint (a migration). Each slice's ids are checked
 once against `mail_messages` (`provider_message_id = ANY(...)`), and the rest are
 processed under two budgets: `maxMessages` counts only messages the run newly records
 (a proven duplicate or a vanished id writes no row and costs nothing against it), and a
