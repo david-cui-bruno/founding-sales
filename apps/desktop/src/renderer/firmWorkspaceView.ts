@@ -67,6 +67,12 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   merge_cross_firm: 'Those two people are at different firms. Merge the firms first.',
   merge_same_record: 'That is the same record twice.',
   merge_already_performed: 'That merge has already happened.',
+  // Send-path v2 (S1 review P1-C): a held outgoing message.
+  outgoing_resolved: 'Recorded against the firm you chose.',
+  already_resolved: 'Somebody already chose the firm for that message.',
+  already_applied: 'That e-mail was already recorded against another firm.',
+  match_unknown: 'That firm is not one of this message’s candidates.',
+  message_unknown: 'That message is no longer waiting for a firm.',
   saved: 'Saved.',
   merged: 'Merged.',
   stage_changed: 'Stage changed.',
@@ -118,6 +124,7 @@ const INFO_NOTICES: ReadonlySet<string> = new Set([
   'opportunity_opened',
   'enrolled',
   'route_check_queued',
+  'outgoing_resolved',
 ]);
 
 /** The tone a notice is shown in. A refusal warns; an outcome informs. */

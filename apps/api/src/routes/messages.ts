@@ -1,4 +1,5 @@
-import { listMatches, resolveAmbiguity } from '@fss/domain/mail/matching.ts';
+import { heldOutgoingRequestSchema } from '@fss/contracts';
+import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '@fss/domain/mail/matching.ts';
 import { listMessagesForOpportunity, readMessageBody } from '@fss/domain/mail/messages.ts';
 import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { readFirm } from '@fss/domain/crm/firms.ts';
@@ -25,7 +26,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * decided by `decideFirmRead` from the firm, not from a flag on the request.
  */
 
-export const MESSAGE_PATHS: readonly string[] = ['/messages', '/messages/resolve-ambiguity'];
+export const MESSAGE_PATHS: readonly string[] = ['/messages', '/messages/resolve-ambiguity', '/messages/held-outgoing'];
 
 export async function routeMessages(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!MESSAGE_PATHS.includes(request.path)) return null;
@@ -49,6 +50,20 @@ export async function routeMessages(request: ApiRequest, options: RoutingOptions
           human: body.human,
         }),
     );
+  }
+
+  if (request.path === '/messages/held-outgoing') {
+    // Send-path v2 (S1 review P1-C): the held outgoing messages of one firm page. The
+    // same read decision as the page's: a caller who may not see this firm's detail gets
+    // an empty list, not a refusal that would say there is something to hide.
+    const held = heldOutgoingRequestSchema.safeParse(request.body);
+    if (!held.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const heldScope = contextForPrincipal(deps.auth, deps.principal);
+    if (!heldScope.ok) return heldScope.result;
+    const firm = await readFirm(heldScope.context, held.data.firmId);
+    if (firm === null) return { status: 404, body: redactError('not_found') };
+    if (decideFirmRead(heldScope.context, firm) !== 'assigned_or_admin') return { status: 200, body: { messages: [] } };
+    return { status: 200, body: { messages: await listHeldOutgoingForFirm(heldScope.context, held.data.firmId) } };
   }
 
   const parsed = listMessagesRequestSchema.safeParse(request.body);

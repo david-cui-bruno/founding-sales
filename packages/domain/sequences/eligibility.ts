@@ -175,14 +175,17 @@ export function holdSource(): StepEligibilitySource {
  * describes — exactly the kind of event that *grants* a follow-up permission. A
  * permitted follow-up must therefore not be blocked by the signal that permitted it.
  *
- * The third, `direct_send_keep_automation`, is not an event at all: it is the person's
- * own choice, recorded by `keepFollowingUpAfterDirectSend`, to let the follow-up
- * automation continue after they wrote from Gmail themselves.
+ * The third, `direct_send_keep_automation`, is **history** (send-path v2, slice S1): the
+ * person's choice, recorded by the retired `POST /opportunities/keep-following-up`, to
+ * let the follow-up automation continue after they wrote from Gmail themselves. Nothing
+ * writes it any more; a stored one keeps the reading it was given.
  *
- * `direct_send` is **not** in this set, and that is P1-1 of the GPT-6 review of PR 332:
- * a salesperson writing to the prospect by hand is that salesperson taking the
- * conversation over, not a prospect signal, so it blocks until the person says
- * otherwise. Neither is `salesperson_command`, the explicit takeover
+ * `direct_send` is **not** in this set (P1-1 of the GPT-6 review of PR 332), and it is
+ * history as well: since send-path v2 a direct Gmail send is an update to the
+ * conversation and never makes an opportunity manual (`applyDirectSendEffects`), so only
+ * an opportunity that went manual on a direct send *before* that change carries it, and
+ * it keeps blocking as it did — the reading of stored values does not change. Neither is
+ * `salesperson_command`, the explicit takeover
  * (`POST /opportunities/manual`). And neither is an unrecorded origin — a NULL, which is
  * every opportunity that went manual before 0025 — because an unrecorded reason is not
  * evidence of a signal; an administrator classifies those one at a time
@@ -198,8 +201,9 @@ const SIGNAL_MANUAL_MODE_ORIGINS: ReadonlySet<string> = new Set([
  * The opportunity's control mode (7.3), and — since migration 0025 — which of the four
  * ways in it took.
  *
- * `manual` is entered by a confirmed human email reply, an engaged call outcome, a
- * direct Gmail send or a salesperson's explicit command, and "automation never reverses
+ * `manual` is entered by a confirmed human email reply, an engaged call outcome or a
+ * salesperson's explicit command (a direct Gmail send did, before send-path v2; its
+ * stored origin is still read), and "automation never reverses
  * manual mode". A manual opportunity is not a hold — there is no interval to shift by
  * and no control that clears it — so it is a refusal with its own reason code.
  *

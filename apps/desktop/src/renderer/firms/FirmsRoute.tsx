@@ -135,6 +135,9 @@ export function FirmsRoute({
           onOpenOpportunity={crm.actions.openOpportunity}
           onEnroll={crm.actions.enroll}
           onTakeOver={crm.actions.takeOver}
+          heldOutgoing={state.heldOutgoing}
+          notice={state.notice}
+          onResolveOutgoing={crm.actions.resolveOutgoing}
         />
         {/* Its own read, because the firm page's contract is strict behind
             `pageVersion` and a key added to it is a wire break (lane R). */}

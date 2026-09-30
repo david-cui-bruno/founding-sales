@@ -1,8 +1,14 @@
-import type { ContactDto, FirmPageResponse, RouteDto } from '@fss/contracts';
+import type { ContactDto, FirmPageResponse, HeldOutgoingMessage, RouteDto } from '@fss/contracts';
 import { useState, type JSX } from 'react';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
-import type { CheckRouteRequest, ContactEdit, EnrollRequest, FirmSequencesView } from '../firmWorkspaceContract.ts';
-import { EMAIL_VALIDATION_TEXT, emailValidationStateOf } from '../firmWorkspaceView.ts';
+import type {
+  CheckRouteRequest,
+  ContactEdit,
+  EnrollRequest,
+  FirmSequencesView,
+  ResolveOutgoingRequest,
+} from '../firmWorkspaceContract.ts';
+import { EMAIL_VALIDATION_TEXT, emailValidationStateOf, noticeText } from '../firmWorkspaceView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Section, Tag } from '../ui/layout.tsx';
@@ -386,6 +392,79 @@ function Sequences({
   );
 }
 
+/** The notices a held outgoing message's resolution can leave (S1 review P1-C). */
+export const OUTGOING_NOTICES: ReadonlySet<string> = new Set([
+  'outgoing_resolved',
+  'already_resolved',
+  'already_applied',
+  'not_assigned',
+  'match_unknown',
+  'message_unknown',
+]);
+
+/**
+ * Your own e-mails waiting for a firm (send-path v2, S1 review P1-C).
+ *
+ * A direct Gmail send matched to more than one firm is held: nothing about it is applied
+ * until a person says which conversation it belongs to. This lists them, one row each,
+ * with a hover action per candidate firm that sends the existing resolve command. The
+ * outcome, or the refusal — `already_resolved` when somebody got there first — is said
+ * under the list.
+ */
+export function HeldOutgoing({
+  messages,
+  notice,
+  actionsEnabled,
+  busy,
+  onResolve,
+}: {
+  readonly messages: readonly HeldOutgoingMessage[];
+  readonly notice: string | null;
+  readonly actionsEnabled: boolean;
+  busy(form: string): boolean;
+  onResolve(request: ResolveOutgoingRequest): void;
+}): JSX.Element | null {
+  const said = notice !== null && OUTGOING_NOTICES.has(notice) ? noticeText(notice) : null;
+  if (messages.length === 0 && said === null) return null;
+  return (
+    <Section data-testid="held-outgoing" title="Your e-mails waiting for a firm" count={messages.length}>
+      {messages.length === 0 ? null : (
+        <Rows data-testid="held-outgoing-list">
+          {messages.map(message => (
+            <Row key={message.messageId} data-testid="held-outgoing-row">
+              <RowMain
+                line={`Sent ${shortDayTime(message.internalDate)}`}
+                detail={`Which firm is this about? ${message.candidates.map(candidate => candidate.firmName).join(' or ')}`}
+              />
+              <RowActions>
+                {message.candidates.map(candidate => (
+                  <Button
+                    key={candidate.opportunityId}
+                    size="sm"
+                    variant="outline"
+                    data-testid="held-outgoing-choose"
+                    disabled={!actionsEnabled || busy(`outgoing:${message.messageId}`)}
+                    onClick={() => {
+                      onResolve({ messageId: message.messageId, opportunityId: candidate.opportunityId });
+                    }}
+                  >
+                    {candidate.firmName}
+                  </Button>
+                ))}
+              </RowActions>
+            </Row>
+          ))}
+        </Rows>
+      )}
+      {said === null ? null : (
+        <p data-testid="held-outgoing-notice" className="py-2 text-sm text-muted-foreground">
+          {said}
+        </p>
+      )}
+    </Section>
+  );
+}
+
 /**
  * "I will handle this myself" (P1-1 of the GPT-6 review of PR 332).
  *
@@ -432,9 +511,10 @@ function TakeOver({
  * of PR 332).
  *
  * It used to be offered only while the opportunity was automated, which hid it in exactly
- * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or a
- * direct send they said to keep following up after — is the state in which an evidenced
- * follow-up still runs beside them. So the control is offered for every open opportunity
+ * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or
+ * (history since send-path v2, when a direct send stopped being a takeover) a direct send
+ * they said to keep following up after — is the state in which an evidenced follow-up
+ * still runs beside them. So the control is offered for every open opportunity
  * except one already taken over by hand, where pressing it would change nothing.
  */
 function takeoverOffered(
@@ -613,6 +693,9 @@ export function FirmPage({
   onOpenOpportunity,
   onEnroll,
   onTakeOver,
+  heldOutgoing = [],
+  notice = null,
+  onResolveOutgoing = () => undefined,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -625,6 +708,11 @@ export function FirmPage({
   onOpenOpportunity(): void;
   onEnroll(request: EnrollRequest): void;
   onTakeOver(reason: string): void;
+  /** The page's held outgoing messages (S1 review P1-C). */
+  readonly heldOutgoing?: readonly HeldOutgoingMessage[];
+  /** The window's notice, shown under the held messages when it is about one of them. */
+  readonly notice?: string | null;
+  onResolveOutgoing?(request: ResolveOutgoingRequest): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -671,6 +759,13 @@ export function FirmPage({
               onEnroll={onEnroll}
             />
           )}
+          <HeldOutgoing
+            messages={heldOutgoing}
+            notice={notice}
+            actionsEnabled={actionsEnabled}
+            busy={busy}
+            onResolve={onResolveOutgoing}
+          />
           <Opportunity page={page} actionsEnabled={actionsEnabled} busy={busy} onTakeOver={onTakeOver} />
           <FollowUpPermissions page={page} />
           <Holds page={page} />

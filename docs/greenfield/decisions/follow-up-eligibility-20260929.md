@@ -165,6 +165,124 @@ coordinator took on 29 September 2026 and flagged to David:
   facts the administrator was shown. There is no blanket backfill and there will not be
   one.
 
+**Send-path v2, slice S1 (30 September 2026): a direct send is an update to the
+conversation, not a takeover.** David: *"My email should update the conversation,
+complete any fulfilled request, and prevent duplicate follow-ups. It should not
+automatically impose permanent manual takeover. The explicit 'I will handle this myself'
+control still pauses automation."* This supersedes the first bullet above.
+
+* **No control-mode write.** `applyDirectSendEffects` (`packages/domain/mail/effects.ts`)
+  no longer calls `setManualControlMode`; a direct send writes no `control_mode`, no
+  `control_mode_origin` and no `opportunity.manual_mode` event. A stored
+  `salesperson_command` is untouched and still blocks.
+* **Under the exclusive send gate, taken first** (as `logCallOutcome` does), for the one
+  opportunity the message is resolved to: every live `prospecting` enrollment at the firm
+  ends `direct_send`; every unspent, unrevoked, unexpired `single_email` or
+  `contextual_reply` permission whose contact is a **verified To/Cc recipient** of the
+  message — resolved through the message's addresses to `email_addresses` at that firm,
+  never a match candidate's `contact_id` — is consumed with
+  `consumed_reason = 'fulfilled_by_direct_send'` (`consumeFulfilledByDirectSend`), and the
+  enrollment bound to it ends `direct_send`. `agreed_sequence` permissions and their
+  enrollments keep running — a day later: the next pending e-mail of each live
+  agreed-sequence enrollment to a recipient gets `not_before = max(not_before, send +
+  24 h)`, recorded in the marker and the audit row (no note field exists on
+  `step_executions` and no hold code is added), and the dispatch claim refuses
+  `not_ready` (`step_ineligible:direct_send_quiet_window`), under the gate, for an
+  agreed-sequence e-mail whose recipient has a `direct_send_conversation` marker younger
+  than 24 h, which also stops a fence prepared before the send. The claim also refuses
+  `not_ready` (`step_ineligible:not_yet_due`) while the step's own `not_before` is still
+  ahead (the database clock, or a later instant a test pins), so the later schedule kept
+  by `greatest` is honoured by a fence that already exists.
+* **Ambiguous matches wait.** For an unfenced outgoing message the To/Cc recipients are
+  checked against the rule that matched it: a recipient at a firm the thread or reference
+  rule did not name (including an address associated with two firms) adds that firm as a
+  candidate, so the match is ambiguous and held. The **stored** match set decides, on
+  every import and replay: a stored selection is the target, one stored unambiguous
+  match is the target, and anything else waits — so a replay that finds fewer
+  candidates (an address retired since) cannot apply an unresolved ambiguity to the one
+  left, and `recordMatches` counts the stored unresolved rows when it decides whether a
+  new candidate is ambiguous. The import applies the effect only to a match with one
+  candidate; several candidates stay held by their `ambiguous_match` holds, and
+  `resolveAmbiguity` applies it to the opportunity the person selects. An outgoing
+  message is not a prospect's reply, so its resolution releases the ambiguity holds and
+  applies only the direct-send effect: no `uncertain_reply` keeper and no `human_reply`
+  manual mode, whatever the `human` flag says (an FSS-fenced one gets no effect at all).
+  `resolveAmbiguity` takes the gate before it reads, locks the match rows, and resolves
+  only unresolved rows, so a second concurrent resolution is refused `already_resolved`.
+  Once either direct-send marker (`direct_send_conversation` or the historical
+  `direct_send_manual`) exists for a message, its candidate set is frozen: a replay
+  records no new match and opens no hold, and a resolution to a firm other than the
+  marker's is refused `already_applied`. Resolving an outgoing message is authorized
+  before anything is written: the mailbox's owner (or an administrator), and only for a
+  firm the assignment rule lets them change (`not_assigned` otherwise).
+  The desktop Firm page lists the firm's held outgoing messages
+  (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
+  same resolve command, and says the outcome or the refusal under the list.
+* **A residual, recorded (coordinator, rounds 6 and 7).** An import that takes the
+  exclusive send gate — the mail effects always did; S1 adds the outgoing marker path —
+  holds it until the job commits, because the runner keeps a mail job in one transaction.
+  So a slow Gmail call for a *later* message in the same job delays dispatch claims and
+  stop writers until the job ends. Nothing bounds the whole job: the five-minute mail
+  setting (`MAIL_LEASE_SECONDS`) is a lease, not a handler deadline, and the runner awaits
+  the handler; the Gmail HTTP fetch has no explicit deadline. The database's
+  `idle_in_transaction_session_timeout` (five minutes) bounds each idle-in-transaction
+  gap — one Gmail call, while the transaction waits on it — and not the job. The fix is
+  per-message committed transactions in the mail runner, a follow-up outside S1. (A
+  two-phase prefetch was tried and reverted: under READ COMMITTED an address added
+  between its two reads could commit an incoming message as matched with no body, and a
+  fetch failure before the gated loop would lose an earlier opt-out's durable journal
+  append.) A completed recovery reads the profile before the pipeline, so that call is
+  never made under the gate.
+* **A failed Gmail read: sync commits the processed prefix, recovery does not (rounds 7
+  and 8).** A metadata or body read that fails for message N no longer throws out of the
+  pipeline: it stops at N and reports how many leading messages it finished. `mail.sync`
+  writes its cursor at the last history record every one of whose messages was
+  processed, so the job commits messages 1 to N−1 — matches, direct-send effects and
+  consumed permissions, suppression journal entries — and N is read again on the next
+  one-minute pass. Before this, a direct send's consumed follow-up permission written
+  early in a sync was rolled back by a later read failure, and the gate was released with
+  the fulfilled follow-up claimable until the retry. A history id is a stable position:
+  a record's id does not change when another message vanishes. What N wrote before its
+  body read failed is undone by a savepoint, so N is retried whole; re-reading anything
+  before N in the same record is harmless (markers, uniqueness). Only a Gmail read is
+  caught; a database error still rolls the job back. The mailbox's `last_sync_error`
+  names the read, and a stopped sync records no mailbox heartbeat, as a thrown one did
+  not, so a message Gmail keeps refusing raises `mailbox_heartbeat_missed`.
+  `mail.recover` keeps its whole-job retry: a failed read throws, the recovery job rolls
+  back and is re-armed as before. Its position is a page count over a listing that can
+  change between runs — a message that vanishes moves every later one forward a place —
+  so a committed prefix could resume past the failed message, prove coverage and release
+  the hold without having read it (a lost opt-out). The duplicate follow-up the sync
+  change closes does not arise there: while a recovery runs, the `coverage_incomplete`
+  hold blocks the owner's automated sends. A `410 Gone` from the import's metadata read is
+  read as a `404`: the message is gone, processed with no effect, and the cursor moves
+  past it rather than stopping on it every run.
+* **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
+  message that already carries a historical `direct_send_manual` marker is treated as
+  processed. One `mail.direct_send_conversation` audit row of ids only.
+* **Retired.** `POST /opportunities/keep-following-up` and `keepFollowingUpAfterDirectSend`
+  are gone; `setManualControlMode` accepts only `human_reply`, `engaged_call` and
+  `salesperson_command`, by type and at run time. `classifyControlModeOrigin` stores only
+  those three too, and also accepts `direct_send` as an **evidence label**: an
+  administrator saying an old NULL-origin manual mode was a direct send returns the
+  opportunity to **automated** (origin NULL, `control_mode_reason` naming the label and the
+  30 September rule, an `opportunity.automated` audit row with the rule, the reason and
+  the evidence facts). It restarts nothing: the enrollments the old stop ended stay
+  ended. It is refused for a reopened opportunity (a reopen is not a direct send), and
+  refused `live_work_present`, naming the enrollments, while any enrollment or pending
+  step is live at the opportunity. `direct_send_keep_automation` is refused. `direct_send` and
+  `direct_send_keep_automation` stay in `MANUAL_MODE_ORIGINS` as **history**: stored
+  opportunities and events keep the reading in the table above (a stored `direct_send`
+  still blocks a follow-up; a stored `direct_send_keep_automation` does not; the drain
+  still ends their enrollments `direct_send`), and nothing writes either.
+* **The boundary.** A dispatch claim that **commits** before the direct send's import
+  observes the message is not prevented: the import cannot act on a message Gmail has not
+  reported, and a dispatched fence is irreversible (Appendix B). A claim **racing** the
+  effect is serialized by the send gate — the claim holds it shared from its recheck to
+  its commit, the effect exclusive — so whichever takes the gate first wins, and the
+  other sees the consumed permission or the ended enrollment
+  (`packages/domain/test/mail/directSendConversation.test.ts`, section g).
+
 ## 6. Where a permission comes from
 
 * **A confirmed reply** with disposition `interested` or `follow_up_later` →

@@ -186,6 +186,15 @@ describe('the Gmail HTTP client', () => {
     expect(await client.getBody(access, 'm-gone')).toBeNull();
   });
 
+  it('S1 round-8: reads a 410 from the import metadata read as gone, as a 404; the strict Sent read still refuses it', async () => {
+    answer('/gmail/v1/users/me/messages/m-410', 410, { error: { code: 410 } });
+    expect(await client.getMetadata(access, 'm-410', METADATA_HEADERS)).toBeNull();
+    await expect(client.getSentMetadata(access, 'm-410', ['Message-ID'])).rejects.toMatchObject({
+      name: 'GmailClientError',
+      status: 410,
+    });
+  });
+
   it('prefers the text/plain part and reports a truncated body as truncated', async () => {
     const long = 'Thanks, and please take me off your list. '.repeat(4);
     answer('/gmail/v1/users/me/messages/m-2', 200, {

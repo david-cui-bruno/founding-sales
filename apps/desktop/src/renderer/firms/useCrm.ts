@@ -10,6 +10,7 @@ import type {
   CrmState,
   EnrollRequest,
   MergeResolution,
+  ResolveOutgoingRequest,
   StageChange,
 } from '../firmWorkspaceContract.ts';
 import { routeShown, type Route } from '../routes.ts';
@@ -54,6 +55,8 @@ export interface CrmActions {
   openOpportunity(): void;
   /** The explicit takeover (P1-1): manual mode with the origin only a person writes. */
   takeOver(reason: string): void;
+  /** Name the firm of one held outgoing message (send-path v2, S1 review P1-C). */
+  resolveOutgoing(request: ResolveOutgoingRequest): void;
   enroll(request: EnrollRequest): void;
   checkRoute(request: CheckRouteRequest): void;
 }
@@ -142,6 +145,9 @@ export function useCrm(
       },
       takeOver: reason => {
         command('take-over', api => api.command('crm.takeOver', { reason }));
+      },
+      resolveOutgoing: request => {
+        command(`outgoing:${request.messageId}`, api => api.command('crm.resolveOutgoing', request));
       },
       enroll: request => {
         command('enroll', api => api.command('crm.enroll', request));

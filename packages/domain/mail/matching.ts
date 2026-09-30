@@ -3,7 +3,11 @@ import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { markMessageMatched } from './messages.ts';
+import { fenceForOutgoingMessage } from '../outbound/fence.ts';
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
+import { applyDirectSendEffects, directSendAppliedFirms } from './effects.ts';
+import { markMessageMatched, readMessage } from './messages.ts';
 import type { NormalizedMetadata } from './messages.ts';
 import { acceptMail, refuseMail, type MailMatchRule, type MailResult } from './types.ts';
 
@@ -217,6 +221,39 @@ export async function findMatchCandidates(
   return await resolveAll(await byParticipant(context, participants), 'participant');
 }
 
+/**
+ * An unfenced outgoing message's recipients, checked against the rule that matched it
+ * (send-path v2, S1 review P1-1).
+ *
+ * Matching stops at the first rule that finds anything, so a message in a thread FSS
+ * matched to firm A is firm A's even when its To/Cc names a known contact at firm B — or
+ * an address associated with both firms. For a prospect's reply that is the point; for
+ * the salesperson's own send it would update the wrong conversation: end A's
+ * prospecting, and leave B's untouched. So for an unfenced outgoing message the To/Cc
+ * participants are looked up too, and every firm they name that the match did not is
+ * added as a candidate. More than one candidate is an ambiguity: `recordMatches` holds
+ * each, and the direct-send effect waits for the person's resolution.
+ *
+ * A match that is already the participant rule has nothing to add (it read To/Cc), and
+ * recipients that name no known firm add nothing.
+ */
+export async function withOutgoingRecipientConflicts(
+  context: RepositoryContext,
+  input: { readonly candidates: readonly MatchCandidate[]; readonly metadata: NormalizedMetadata },
+): Promise<readonly MatchCandidate[]> {
+  if (input.candidates.length === 0 || input.candidates.every(candidate => candidate.rule === 'participant')) {
+    return input.candidates;
+  }
+  const recipients = [...new Set([...input.metadata.headerTo, ...input.metadata.headerCc])];
+  const rows = await byParticipant(context, recipients);
+  const named: MatchCandidate[] = [];
+  for (const row of rows) {
+    const candidate = await resolveToOpenOpportunity(context, row, 'participant');
+    if (candidate !== null) named.push(candidate);
+  }
+  return distinct([...input.candidates, ...named]);
+}
+
 export interface RecordedMatches {
   readonly candidates: readonly MatchCandidate[];
   readonly ambiguous: boolean;
@@ -238,7 +275,23 @@ export async function recordMatches(
   context: RepositoryContext,
   input: { readonly messageId: string; readonly candidates: readonly MatchCandidate[] },
 ): Promise<RecordedMatches> {
-  const ambiguous = input.candidates.length > 1;
+  // The stored, unresolved matches count too (S1 review P1-A): a replay that finds one
+  // candidate for a message whose first import found two is still the same unresolved
+  // ambiguity, and a candidate new on the replay joins it held rather than unheld.
+  const { rows: unresolved } = await context.db.query<{ opportunity_id: string }>(
+    `SELECT opportunity_id FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
+    [context.scope.workspaceId, input.messageId],
+  );
+  const resolvedAlready = await context.db.query(
+    `SELECT 1 FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NOT NULL LIMIT 1`,
+    [context.scope.workspaceId, input.messageId],
+  );
+  const ambiguous =
+    (resolvedAlready.rowCount ?? 0) === 0 &&
+    new Set([...unresolved.map(row => row.opportunity_id), ...input.candidates.map(candidate => candidate.opportunityId)])
+      .size > 1;
   const holdIds: string[] = [];
 
   for (const candidate of input.candidates) {
@@ -288,6 +341,56 @@ export async function recordMatches(
   return { candidates: input.candidates, ambiguous, holdIds };
 }
 
+/**
+ * Record one imported message's matches, with the salesperson's own direct send frozen
+ * once its effect is applied (S1 review P1-D, round 4 P1-H).
+ *
+ * For an unfenced outgoing message the order is the send gate, then the marker read,
+ * then the match writes — one transaction, the import's. A resolution applies the
+ * direct-send effect under the same exclusive gate, so a replay that reads "no marker"
+ * cannot then write a newly known firm's match and hold after a resolution committed the
+ * marker in between: it waits for the gate and reads the marker. An applied marker
+ * (either kind) freezes the candidate set — no new match, no hold. Otherwise the To/Cc
+ * recipients are checked against the rule that matched (P1-1) and the matches recorded.
+ */
+export async function recordMatchesForImport(
+  context: RepositoryContext,
+  input: {
+    readonly messageId: string;
+    readonly candidates: readonly MatchCandidate[];
+    readonly metadata: NormalizedMetadata;
+    /** True for an outgoing message no FSS fence names: the salesperson's direct send. */
+    readonly directSend: boolean;
+  },
+): Promise<{ readonly frozen: true } | ({ readonly frozen: false } & RecordedMatches)> {
+  let candidates = input.candidates;
+  if (input.directSend) {
+    await lockSendGateForStopFact(context);
+    if ((await directSendAppliedFirms(context, input.messageId)).length > 0) return { frozen: true };
+    candidates = await withOutgoingRecipientConflicts(context, { candidates, metadata: input.metadata });
+  }
+  return { frozen: false, ...(await recordMatches(context, { messageId: input.messageId, candidates })) };
+}
+
+/**
+ * The one opportunity a direct send's effect may be applied to at import, from the
+ * stored match set (S1 review P1-A), or undefined while a person still has to choose.
+ *
+ * A stored selection wins. Otherwise exactly one stored match, not marked ambiguous, is
+ * the target. Two or more unresolved matches — or one left marked ambiguous — wait.
+ */
+export async function directSendTargetOf(
+  context: RepositoryContext,
+  messageId: string,
+): Promise<RecordedMatch | undefined> {
+  const stored = await listMatches(context, messageId);
+  const chosen = stored.find(match => match.selected === true);
+  if (chosen !== undefined) return chosen;
+  if (stored.some(match => match.selected !== null)) return undefined;
+  const only = stored.length === 1 ? stored[0] : undefined;
+  return only !== undefined && !only.ambiguous ? only : undefined;
+}
+
 export interface RecordedMatch extends MatchCandidate {
   readonly id: string;
   readonly ambiguous: boolean;
@@ -328,6 +431,49 @@ export async function listMatches(
   }));
 }
 
+export interface HeldOutgoingMessageRow {
+  readonly messageId: string;
+  readonly internalDate: string;
+  readonly candidates: readonly { readonly opportunityId: string; readonly firmId: string; readonly firmName: string }[];
+}
+
+/**
+ * The outgoing messages with an unresolved ambiguous match at this firm, and every
+ * candidate of each (send-path v2, S1 review P1-C). The caller decides who may read it;
+ * this answers ids, the instant and the candidate firms' names.
+ */
+export async function listHeldOutgoingForFirm(
+  context: RepositoryContext,
+  firmId: string,
+): Promise<readonly HeldOutgoingMessageRow[]> {
+  const { rows } = await context.db.query<{
+    message_id: string;
+    internal_date: Date;
+    opportunity_id: string;
+    firm_id: string;
+    firm_name: string;
+  }>(
+    `SELECT m.id AS message_id, m.internal_date, x.opportunity_id, x.firm_id, f.name AS firm_name
+       FROM mail_messages AS m
+       JOIN mail_message_matches AS x ON x.workspace_id = m.workspace_id AND x.mail_message_id = m.id
+       JOIN firms AS f ON f.workspace_id = x.workspace_id AND f.id = x.firm_id
+      WHERE m.workspace_id = $1
+        AND m.direction = 'outgoing'
+        AND EXISTS (SELECT 1 FROM mail_message_matches AS mine
+                     WHERE mine.workspace_id = m.workspace_id AND mine.mail_message_id = m.id
+                       AND mine.firm_id = $2 AND mine.ambiguous AND mine.selected IS NULL)
+      ORDER BY m.internal_date DESC, m.id, f.name, x.opportunity_id`,
+    [context.scope.workspaceId, firmId],
+  );
+  const byMessage = new Map<string, { internalDate: string; candidates: HeldOutgoingMessageRow['candidates'][number][] }>();
+  for (const row of rows) {
+    const entry = byMessage.get(row.message_id) ?? { internalDate: row.internal_date.toISOString(), candidates: [] };
+    entry.candidates.push({ opportunityId: row.opportunity_id, firmId: row.firm_id, firmName: row.firm_name });
+    byMessage.set(row.message_id, entry);
+  }
+  return [...byMessage].map(([messageId, entry]) => ({ messageId, ...entry }));
+}
+
 export interface AmbiguityResolution {
   readonly selectedOpportunityId: string;
   readonly releasedHoldIds: readonly string[];
@@ -364,24 +510,90 @@ export async function resolveAmbiguity(
   },
 ): Promise<MailResult<AmbiguityResolution>> {
   const actor = context.scope.actor;
+  // The send gate before the first row this command reads or writes (decision document
+  // 6a): a human resolution sets manual mode below, whose event records the enrollments
+  // it owes (migration 0026), and the hold opened first is a stop fact of its own. Taken
+  // before the read as well (S1 review, P1-2): two resolutions of one message serialize
+  // here, and the second reads the first's selection and is refused, instead of both
+  // reading "unresolved" and the second re-pointing the selection after the first's
+  // once-per-message direct-send effect.
+  await lockSendGateForStopFact(context);
+  await context.db.query(
+    `SELECT id FROM mail_message_matches
+      WHERE workspace_id = $1 AND mail_message_id = $2
+      ORDER BY id
+      FOR UPDATE`,
+    [context.scope.workspaceId, input.messageId],
+  );
   const candidates = await listMatches(context, input.messageId);
   if (candidates.length === 0) return refuseMail('match_unknown');
   if (candidates.some(candidate => candidate.selected !== null)) return refuseMail('already_resolved');
   const selected = candidates.find(candidate => candidate.opportunityId === input.selectedOpportunityId);
   if (selected === undefined) return refuseMail('match_unknown');
 
-  // The send gate before the first row this command writes (decision document 6a): a
-  // human resolution sets manual mode below, whose event records the enrollments it owes
-  // (migration 0026), and the hold opened first is a stop fact of its own.
-  await lockSendGateForStopFact(context);
+  // Who may resolve, decided here, before any selection is written or any hold released
+  // (S1 review P1-E for outgoing; round 4 for incoming, human and not). The mailbox's
+  // owner — or an administrator — and only for a firm the PR 332 assignment rule lets
+  // them change: resolving releases the other candidates' holds, and for an outgoing
+  // message applies the direct send to the chosen firm. Refused `not_assigned` with
+  // nothing written. The `human` path's later `setManualControlMode` asks the same rule
+  // of the same firm again, which now always agrees.
+  const message = await readMessage(context, input.messageId);
+  if (message === null) return refuseMail('message_unknown');
+  if (actor.kind === 'user' && actor.role !== 'admin') {
+    const { rows: owner } = await context.db.query<{ owner_user_id: string }>(
+      'SELECT owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, message.mailboxId],
+    );
+    const ownerUserId = owner[0]?.owner_user_id;
+    if (ownerUserId !== undefined && ownerUserId !== actor.userId) return refuseMail('not_assigned');
+  }
+  const firm = await loadFirmForUpdate(context, selected.firmId);
+  if (firm === null) return refuseMail('match_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) return refuseMail(permitted.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
+  if (message.direction === 'outgoing') {
+    // A direct-send effect already applied fixes the firm (P1-D): the marker is once per
+    // message, so a resolution to another firm would select it and change nothing.
+    const applied = await directSendAppliedFirms(context, input.messageId);
+    if (applied.length > 0 && !applied.includes(selected.firmId)) return refuseMail('already_applied');
+  }
+
   const now = await databaseNow(context);
   const resolvedBy = actor.kind === 'user' ? actor.userId : null;
-  await context.db.query(
+  // Unresolved → resolved only: a row somebody else resolved is not re-pointed, and the
+  // count says whether every candidate was still unresolved.
+  const resolution = await context.db.query(
     `UPDATE mail_message_matches
         SET selected = (opportunity_id = $3), resolved_at = $4, resolved_by_user_id = $5
-      WHERE workspace_id = $1 AND mail_message_id = $2`,
+      WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
     [context.scope.workspaceId, input.messageId, input.selectedOpportunityId, now, resolvedBy],
   );
+  if ((resolution.rowCount ?? 0) !== candidates.length) return refuseMail('already_resolved');
+
+  // Send-path v2 (slice S1; the coordinator's decision of 30 September 2026): an
+  // OUTGOING message is not a prospect's reply. It gets no `uncertain_reply` keeper and
+  // no `human_reply` manual mode, whatever `human` says; resolving it releases this
+  // message's ambiguity holds and applies the direct-send effect to the one opportunity
+  // the person named — once, by the effect's own marker. An FSS send is recognised by its
+  // fence and has no direct-send effect either.
+  if (message.direction === 'outgoing') {
+    const releasedOutgoing = await releaseHoldsOfEvent(context, {
+      sourceEventId: input.messageId,
+      reasonCode: 'ambiguous_match',
+    });
+    const fenceId = await fenceForOutgoingMessage(context, {
+      mailboxId: message.mailboxId,
+      rfcMessageId: message.rfcMessageId,
+      providerMessageId: message.providerMessageId,
+    });
+    if (fenceId === null) await applyDirectSendEffects(context, { message, candidate: selected });
+    return acceptMail({
+      selectedOpportunityId: input.selectedOpportunityId,
+      releasedHoldIds: releasedOutgoing.map(hold => hold.id),
+      manualOpportunityId: null,
+    });
+  }
 
   // The selected candidate keeps a hold of its own until the message's own
   // classification is dealt with, so it is opened *before* the release: at no instant

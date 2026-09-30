@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { firmListResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/contracts';
+import { firmListResponseSchema, heldOutgoingResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, OUTDATED_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -261,6 +261,52 @@ describe('CRM routes', () => {
     );
     expect(resolved.status).toBe(200);
     expect((resolved.body['result'] as { sourceId: string }).sourceId).toBe(duplicateId);
+  });
+
+  it('send-path v2: the keep-following-up command is gone, and no origin command stores a direct send', async () => {
+    const opened = await post('/opportunities/open', assigneeToken, command({ firmId: await seedFirm(fixture, {
+      name: 'Southwind Test Holdings',
+      assignedUserId: assigneeUserId,
+    }) }));
+    expect(opened.status).toBe(200);
+    const opportunityId = (opened.body['result'] as { id: string }).id;
+
+    const retired = await post(
+      '/opportunities/keep-following-up',
+      assigneeToken,
+      command({ opportunityId, reason: 'Callie keeps the agreed sequence' }),
+    );
+    expect(retired.status).toBe(404);
+    expect(retired.body['error']).toBe('not_found');
+
+    const keep = await post(
+      '/opportunities/control-mode-origin',
+      adminToken,
+      command({ opportunityId, origin: 'direct_send_keep_automation', reason: 'it was a hand-written e-mail' }),
+    );
+    expect(keep.status).toBe(400);
+    // `direct_send` is an evidence label the route accepts; on an automated opportunity
+    // there is no NULL-origin manual mode to release, so the domain refuses it.
+    const label = await post(
+      '/opportunities/control-mode-origin',
+      adminToken,
+      command({ opportunityId, origin: 'direct_send', reason: 'it was a hand-written e-mail' }),
+    );
+    expect(label.status).toBe(409);
+    expect(label.body['reason']).toBe('invalid_input');
+  });
+
+  it('send-path v2 (S1 review P1-C): lists a firm page’s held outgoing messages to its assignee only', async () => {
+    const heldFirm = await seedFirm(fixture, { name: 'Held Outgoing Holdings', assignedUserId: assigneeUserId });
+    const mine = await post('/messages/held-outgoing', assigneeToken, { firmId: heldFirm });
+    expect(mine.status).toBe(200);
+    expect(heldOutgoingResponseSchema.parse(mine.body)).toEqual({ messages: [] });
+    // A colleague who may not see this firm's detail is told nothing, not refused.
+    const theirs = await post('/messages/held-outgoing', strangerToken, { firmId: heldFirm });
+    expect(theirs.status).toBe(200);
+    expect(theirs.body).toEqual({ messages: [] });
+    const malformed = await post('/messages/held-outgoing', assigneeToken, { firmId: 'not-a-uuid' });
+    expect(malformed.status).toBe(400);
   });
 
   it('never lets a session from the other workspace see this one, even with the same ids', async () => {

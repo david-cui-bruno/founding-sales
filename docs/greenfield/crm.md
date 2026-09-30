@@ -297,7 +297,7 @@ of 7.3's ways in it is.
 |---|---|---|
 | `human_reply` | `confirmReplyDisposition`, `resolveAmbiguity` when the reply is human | `human_reply` |
 | `engaged_call` | `logCallOutcome` | `engaged_call` |
-| `direct_send` | `applyDirectSendEffects` | `direct_send` |
+| `direct_send` | nothing since send-path v2 (30 September 2026): a direct Gmail send is an update to the conversation, not a takeover; stored values are history and still read | `direct_send` |
 | `salesperson_command` | `POST /opportunities/manual` | `admin_stop` |
 
 `salesperson_command` is a member 7.3 does not list, because an explicit switch is a

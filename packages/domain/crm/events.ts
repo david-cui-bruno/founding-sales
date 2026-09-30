@@ -73,16 +73,33 @@ export type CrmDomainEventKind = (typeof CRM_DOMAIN_EVENT_KINDS)[number];
 export const MANUAL_MODE_ORIGINS = [
   'human_reply',
   'engaged_call',
+  // History since send-path v2 (slice S1, 30 September 2026): a direct Gmail send is an
+  // update to the conversation and no longer makes an opportunity manual. The value stays
+  // here because stored opportunities and `opportunity.manual_mode` events carry it, and
+  // every reader of them must keep reading it. Nothing writes it.
   'direct_send',
   'salesperson_command',
-  // The fifth is neither an event nor a takeover: it is the person's *choice* to keep
-  // the evidenced follow-up automation running after their own direct Gmail send
-  // (`keepFollowingUpAfterDirectSend`, P1-1 of the GPT-6 review of PR 332). A direct
-  // send is a salesperson taking the conversation over, so `direct_send` blocks a
-  // follow-up; this value is the one exception, and only a person can write it.
+  // History too: the person's choice to keep the follow-up automation running after
+  // their own direct send, written by the retired `POST /opportunities/keep-following-up`
+  // (P1-1 of the GPT-6 review of PR 332). With no direct-send takeover there is nothing to
+  // choose; stored rows keep their reading. Nothing writes it.
   'direct_send_keep_automation',
 ] as const;
 export type ManualModeOrigin = (typeof MANUAL_MODE_ORIGINS)[number];
+
+/**
+ * The origins a writer may still record (send-path v2): every member of
+ * `MANUAL_MODE_ORIGINS` except the two historical direct-send values.
+ * `setManualControlMode` and `classifyControlModeOrigin` accept only these, by type and
+ * again at run time.
+ */
+export const WRITABLE_MANUAL_MODE_ORIGINS = ['human_reply', 'engaged_call', 'salesperson_command'] as const;
+export type WritableManualModeOrigin = (typeof WRITABLE_MANUAL_MODE_ORIGINS)[number];
+
+/** Whether an origin is one a writer may record. */
+export function isWritableManualModeOrigin(origin: string): origin is WritableManualModeOrigin {
+  return (WRITABLE_MANUAL_MODE_ORIGINS as readonly string[]).includes(origin);
+}
 
 export interface CrmDomainEventInput {
   readonly kind: CrmDomainEventKind;

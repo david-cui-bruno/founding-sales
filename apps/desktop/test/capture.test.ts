@@ -137,7 +137,14 @@ describe('the CRM bridge: Add firm', () => {
     await bridge.openAddFirm();
     const state = await bridge.addFirm({ ...EMPTY_ADD_FIRM, name: 'Aspen Test Wealth', website: 'aspen.example.test' });
     // The page, then its Sequences section's two reads (lane g88).
-    expect(calls.map(call => call.path)).toEqual(['/crm/firms/add', '/crm/firm-page', '/sequences', '/enrollments']);
+    expect(calls.map(call => call.path)).toEqual([
+      '/crm/firms/add',
+      '/crm/firm-page',
+      '/sequences',
+      '/enrollments',
+      // Send-path v2 (S1 review P1-C): the page's held outgoing messages.
+      '/messages/held-outgoing',
+    ]);
     expect(calls[0]?.body).toMatchObject({ clientVersion: '1.0.5', firm: { name: 'Aspen Test Wealth', website: 'aspen.example.test' } });
     expect(typeof calls[0]?.body?.['commandId']).toBe('string');
     expect(state.screen).toBe('firm');

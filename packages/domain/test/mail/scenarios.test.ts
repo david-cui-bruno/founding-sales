@@ -1,8 +1,13 @@
+import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { withTransaction } from '../../db/queryable.ts';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
+import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
+import { createGmailHttpClient } from '../../mail/gmailClientHttp.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
-import { listMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
 import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts';
 import { runMailRecovery } from '../../mail/recover.ts';
@@ -483,7 +488,7 @@ describe('matching and its consequences', () => {
     expect(holds.map(hold => hold.reasonCode)).toContain('uncertain_reply');
   });
 
-  it('Appendix G 19: a direct Gmail send switches an automated firm to manual, once', async () => {
+  it('Appendix G 19, send-path v2: a direct Gmail send updates the conversation once, and never makes the firm manual', async () => {
     world = await createMailWorld();
     const w = world;
     await completeBaseline(w, w.alpha);
@@ -501,7 +506,7 @@ describe('matching and its consequences', () => {
     );
 
     const first = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(first.directSendsSwitchedToManual).toBe(1);
+    expect(first.directSendsRecorded).toBe(1);
 
     // Import the same message again — a duplicate push, a reconciliation pass.
     await w.database.session.query(
@@ -509,24 +514,362 @@ describe('matching and its consequences', () => {
       [context.scope.workspaceId, w.alpha.mailboxId],
     );
     const second = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(second.directSendsSwitchedToManual).toBe(0);
+    expect(second.directSendsRecorded).toBe(0);
 
-    const { rows } = await w.database.session.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM mail_message_effects
-        WHERE workspace_id = $1 AND effect_kind = 'direct_send_manual'`,
+    const { rows } = await w.database.session.query<{ effect_kind: string; count: string }>(
+      `SELECT effect_kind, count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND effect_kind IN ('direct_send_conversation', 'direct_send_manual')
+        GROUP BY effect_kind`,
       [context.scope.workspaceId],
     );
-    expect(rows[0]?.count).toBe('1');
+    expect(rows).toEqual([{ effect_kind: 'direct_send_conversation', count: '1' }]);
 
+    // No takeover: the opportunity stays automated, with no origin, and no manual-mode
+    // signal was written for the drain to act on.
     const events = await w.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM crm_domain_events
         WHERE workspace_id = $1 AND event_kind = 'opportunity.manual_mode'`,
       [context.scope.workspaceId],
     );
-    expect(events.rows[0]?.count).toBe('1');
+    expect(events.rows[0]?.count).toBe('0');
+    const control = await w.database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, w.crm.alpha.opportunityId],
+    );
+    expect(control.rows[0]).toEqual({ control_mode: 'automated', control_mode_origin: null });
 
     // No body was fetched for an outgoing message: 12.3 matches it, it does not read it.
     expect(w.alpha.gmail.bodyReads).not.toContain('direct1');
+  });
+
+  it('send-path v2: a direct send matched to two firms waits for the person, then updates only the one they select', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, {
+      name: 'Southwind Test Partners',
+      address: PROSPECT,
+    });
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'directshared1',
+        historyId: '1013',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+        body: 'Following up directly.',
+      }),
+    );
+    const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(report.ambiguous).toBe(1);
+    expect(report.directSendsRecorded).toBe(0);
+
+    const { rows: message } = await w.database.session.query<{ id: string }>(
+      'SELECT id FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2',
+      [context.scope.workspaceId, 'directshared1'],
+    );
+    const messageId = message[0]?.id ?? '';
+    const markers = async (): Promise<readonly { firm_id: string }[]> =>
+      (
+        await w.database.session.query<{ firm_id: string }>(
+          `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+            WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+          [context.scope.workspaceId, messageId],
+        )
+      ).rows;
+    // Held, not guessed: both candidates carry an ambiguity hold, and no conversation was
+    // updated.
+    expect(await markers()).toEqual([]);
+    for (const opportunityId of [w.crm.alpha.opportunityId, other.opportunityId]) {
+      const holds = await listApplicableHolds(context, { actionKind: 'email_send', opportunityId });
+      expect(holds.map(hold => hold.reasonCode)).toContain('ambiguous_match');
+    }
+
+    // `human: true` on purpose: an outgoing message is not a prospect's reply, so the
+    // resolution applies the direct send and nothing else — no `uncertain_reply` keeper,
+    // no `human_reply` manual mode.
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: true,
+    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.manualOpportunityId).toBeNull();
+    expect(await markers()).toEqual([{ firm_id: other.firmId }]);
+
+    for (const opportunityId of [w.crm.alpha.opportunityId, other.opportunityId]) {
+      const holds = await listApplicableHolds(context, { actionKind: 'email_send', opportunityId });
+      const reasons = holds.map(hold => hold.reasonCode);
+      expect(reasons, opportunityId).not.toContain('ambiguous_match');
+      expect(reasons, opportunityId).not.toContain('uncertain_reply');
+    }
+    const { rows: control } = await w.database.session.query<{ control_mode: string; control_mode_origin: string | null }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = ANY ($2::uuid[])',
+      [context.scope.workspaceId, [w.crm.alpha.opportunityId, other.opportunityId]],
+    );
+    expect(control).toEqual([
+      { control_mode: 'automated', control_mode_origin: null },
+      { control_mode: 'automated', control_mode_origin: null },
+    ]);
+  });
+
+  /** The matches, holds and direct-send markers of one stored message, by provider id. */
+  const outgoingState = async (
+    w: MailWorld,
+    providerMessageId: string,
+  ): Promise<{
+    readonly messageId: string;
+    readonly matches: readonly { firm_id: string; ambiguous: boolean; held: boolean }[];
+    readonly markers: number;
+  }> => {
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const { rows: message } = await w.database.session.query<{ id: string }>(
+      'SELECT id FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2',
+      [workspaceId, providerMessageId],
+    );
+    const messageId = message[0]?.id ?? '';
+    const { rows: matches } = await w.database.session.query<{ firm_id: string; ambiguous: boolean; held: boolean }>(
+      `SELECT firm_id, ambiguous, hold_id IS NOT NULL AS held FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 ORDER BY firm_id`,
+      [workspaceId, messageId],
+    );
+    const { rows: markers } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId, messageId],
+    );
+    return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
+  };
+
+  it('S1 round-5: a completed recovery reads the profile before its gated section, not after', async () => {
+    world = await createMailWorld({
+      alphaMessages: [
+        fixtureMessage({ id: 'recover-out', historyId: '1080', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
+      ],
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const clusterUrl = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
+    clusterUrl.pathname = `/${w.database.name}`;
+    const other = new pg.Client({ connectionString: clusterUrl.toString() });
+    other.on('error', () => undefined);
+    await other.connect();
+    let gateTaken: boolean | null = null;
+    let outcome = '';
+    try {
+      const base = w.syncDeps(w.alpha);
+      const gmail = {
+        ...base.gmail,
+        getProfile: async (...args: Parameters<typeof base.gmail.getProfile>) => {
+          await other.query('BEGIN');
+          await other.query("SET LOCAL lock_timeout = '1s'");
+          try {
+            await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`fss.send-gate:${workspaceId}`]);
+            gateTaken = true;
+          } catch {
+            gateTaken = false;
+          }
+          await other.query('ROLLBACK');
+          return await base.gmail.getProfile(...args);
+        },
+      };
+      const report = await withTransaction(
+        w.database.session as Parameters<typeof withTransaction>[0],
+        async () => await runMailRecovery(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+      );
+      outcome = report.outcome;
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(outcome).toBe('completed');
+    // The recovered direct send took the gate in this transaction; the profile was read
+    // before that, so the other connection was not kept waiting on Gmail.
+    const { rows } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId],
+    );
+    expect(rows[0]?.count).toBe('1');
+    expect(gateTaken).toBe(true);
+  });
+
+  it('S1 round-3 P1-D: once the effect is applied, a newly known recipient firm is not a held choice', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'applied-out', historyId: '1050', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    expect((await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId })).directSendsRecorded).toBe(1);
+
+    // Later, the same address is associated with a second firm; the message is replayed.
+    const later = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Eastwind Test Group', address: PROSPECT });
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1049' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    const state = await outgoingState(w, 'applied-out');
+    expect(state.matches).toEqual([{ firm_id: w.crm.alpha.firmId, ambiguous: false, held: false }]);
+    expect(await listHeldOutgoingForFirm(context, later.firmId)).toEqual([]);
+    const { rows: markers } = await w.database.session.query<{ firm_id: string }>(
+      `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId, state.messageId],
+    );
+    expect(markers).toEqual([{ firm_id: w.crm.alpha.firmId }]);
+
+    // A candidate row for the later firm, as an earlier build could have left it: a
+    // resolution to it contradicts the applied effect and is refused.
+    await w.database.session.query(
+      `INSERT INTO mail_message_matches (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule, ambiguous)
+       VALUES ($1, $2, $3, $4, $5, 'participant', false)`,
+      [workspaceId, state.messageId, later.firmId, later.opportunityId, later.contactId],
+    );
+    const refused = await resolveAmbiguity(w.userContext(workspaceId), {
+      messageId: state.messageId,
+      selectedOpportunityId: later.opportunityId,
+      human: false,
+    });
+    expect(refused).toEqual({ ok: false, reason: 'already_applied' });
+    const { rows: selections } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NOT NULL`,
+      [workspaceId, state.messageId],
+    );
+    expect(selections[0]?.count).toBe('0');
+  });
+
+  it('S1 review P1-A: a replay that finds only one candidate does not apply an unresolved ambiguity', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Southwind Test Partners', address: PROSPECT });
+
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'replay-out', historyId: '1040', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect((await outgoingState(w, 'replay-out')).markers).toBe(0);
+
+    // B's address goes; the same message is imported again and now matches only A.
+    await w.database.session.query(
+      `UPDATE email_addresses SET eligibility = 'retired', retired_at = now(), version = version + 1
+        WHERE workspace_id = $1 AND firm_id = $2`,
+      [w.alpha.workspace.workspaceId, other.firmId],
+    );
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1039' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    const replay = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(replay.directSendsRecorded).toBe(0);
+    const held = await outgoingState(w, 'replay-out');
+    expect(held.markers).toBe(0);
+
+    // The person names B; B's effect applies, and A is untouched.
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId: held.messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    const { rows: markers } = await w.database.session.query<{ firm_id: string }>(
+      `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [w.alpha.workspace.workspaceId, held.messageId],
+    );
+    expect(markers).toEqual([{ firm_id: other.firmId }]);
+  });
+
+  it('S1 review P1-1: a direct send in firm A’s thread to a contact at firm B is held for the person, not applied to A', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const other = await seedAnotherFirm(w, w.alpha.workspace, {
+      name: 'Southwind Test Partners',
+      address: 'partner@southwind.example.test',
+    });
+
+    // The thread is firm A's: a prospect at A wrote in it first.
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'conflict-in', threadId: 'thread-conflict', historyId: '1020', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({
+        id: 'conflict-out',
+        threadId: 'thread-conflict',
+        historyId: '1021',
+        from: w.alpha.address,
+        to: 'partner@southwind.example.test',
+        labelIds: ['SENT'],
+      }),
+    );
+    const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(report.directSendsRecorded).toBe(0);
+
+    const state = await outgoingState(w, 'conflict-out');
+    expect(state.markers).toBe(0);
+    expect(state.matches).toEqual(
+      [w.crm.alpha.firmId, other.firmId].sort().map(firm_id => ({ firm_id, ambiguous: true, held: true })),
+    );
+
+    const resolved = await resolveAmbiguity(w.userContext(w.alpha.workspace.workspaceId), {
+      messageId: state.messageId,
+      selectedOpportunityId: other.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+    expect((await outgoingState(w, 'conflict-out')).markers).toBe(1);
+  });
+
+  it('S1 review P1-1: a direct send in A’s thread to an address A and B share is held too', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    // A second address of A's contact, which only A has, starts the thread.
+    await w.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility, eligibility_policy_version)
+       VALUES ($1, $2, $3, 'only-a@northwind.example.test', 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')`,
+      [w.alpha.workspace.workspaceId, w.crm.alpha.firmId, w.crm.alpha.contactId],
+    );
+    const other = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Southwind Test Partners', address: PROSPECT });
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'shared-in',
+        threadId: 'thread-shared',
+        historyId: '1030',
+        from: 'only-a@northwind.example.test',
+        to: w.alpha.address,
+      }),
+      fixtureMessage({
+        id: 'shared-out',
+        threadId: 'thread-shared',
+        historyId: '1031',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+      }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    const inbound = await outgoingState(w, 'shared-in');
+    expect(inbound.matches.map(match => match.firm_id)).toEqual([w.crm.alpha.firmId]);
+    const state = await outgoingState(w, 'shared-out');
+    expect(state.markers).toBe(0);
+    expect(state.matches).toEqual(
+      [w.crm.alpha.firmId, other.firmId].sort().map(firm_id => ({ firm_id, ambiguous: true, held: true })),
+    );
   });
 });
 
@@ -672,6 +1015,178 @@ describe('deterministic classification effects (12.4)', () => {
 });
 
 describe('coverage, recovery and the grant', () => {
+  /** One provider id's stored row count and direct-send marker count. */
+  const storedAndMarked = async (w: MailWorld, providerMessageId: string): Promise<[number, number]> => {
+    const { rows } = await w.database.session.query<{ stored: string; marked: string }>(
+      `SELECT (SELECT count(*) FROM mail_messages WHERE workspace_id = $1 AND provider_message_id = $2)::text AS stored,
+              (SELECT count(*) FROM mail_message_effects f
+                 JOIN mail_messages m ON m.workspace_id = f.workspace_id AND m.id = f.mail_message_id
+                WHERE f.workspace_id = $1 AND m.provider_message_id = $2
+                  AND f.effect_kind = 'direct_send_conversation')::text AS marked`,
+      [w.alpha.workspace.workspaceId, providerMessageId],
+    );
+    return [Number(rows[0]?.stored ?? 0), Number(rows[0]?.marked ?? 0)];
+  };
+
+  /** The fixture's client, with one read refused the way a Gmail 500 is. */
+  const refusing = (base: GmailClient, read: 'getMetadata' | 'getBody', messageId: string): GmailClient => ({
+    ...base,
+    getMetadata: async (access, id, headers) => {
+      if (read === 'getMetadata' && id === messageId) {
+        throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+      }
+      return await base.getMetadata(access, id, headers);
+    },
+    getBody: async (access, id) => {
+      if (read === 'getBody' && id === messageId) {
+        throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+      }
+      return await base.getBody(access, id);
+    },
+  });
+
+  it('S1 round-8: a recovery a failed read interrupts rolls back whole and is retried from where it was', async () => {
+    world = await createMailWorld({
+      alphaMessages: [
+        fixtureMessage({ id: 'rec-stop-1', historyId: '1081', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
+        fixtureMessage({ id: 'rec-stop-2', historyId: '1082', from: PROSPECT, to: 'sales.alpha@example.test' }),
+        fixtureMessage({ id: 'rec-stop-3', historyId: '1083', from: PROSPECT, to: 'sales.alpha@example.test' }),
+      ],
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const deps = { ...w.syncDeps(w.alpha), pageSize: 1, maxMessages: 3 };
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+
+    // A page-count position over a listing that can change is not a safe prefix, so the
+    // recovery keeps its whole-job retry: the read failure throws and nothing commits.
+    await expect(
+      withTransaction(
+        session,
+        async () =>
+          await runMailRecovery(
+            context,
+            { ...deps, gmail: refusing(deps.gmail, 'getMetadata', 'rec-stop-2') },
+            { mailboxId: w.alpha.mailboxId, generation: 1 },
+          ),
+      ),
+    ).rejects.toThrow(/metadata read failed during recovery/u);
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([0, 0]);
+    const { rows: recovery } = await w.database.session.query<{ pages_completed: number; completed: boolean }>(
+      `SELECT pages_completed, completed_at IS NOT NULL AS completed FROM mailbox_recoveries
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1`,
+      [workspaceId, w.alpha.mailboxId],
+    );
+    expect(recovery).toEqual([{ pages_completed: 0, completed: false }]);
+    expect((await readMailbox(context, w.alpha.mailboxId))?.syncState).not.toBe('ready');
+
+    const second = await withTransaction(
+      session,
+      async () => await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(second.outcome).toBe('completed');
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
+    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([1, 0]);
+    expect(await storedAndMarked(w, 'rec-stop-3')).toEqual([1, 0]);
+  });
+
+  it('S1 round-8: the sync reads past a message Gmail answers 410 or 404 for, and moves its cursor', async () => {
+    world = await createMailWorld({ alphaHistoryId: '1400' });
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1300' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gone-410', historyId: '1301', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({ id: 'gone-404', historyId: '1302', from: PROSPECT, to: w.alpha.address }),
+      fixtureMessage({ id: 'after-gone', historyId: '1303', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    // The real HTTP client's reading of each status, over a stub transport.
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async url => {
+        await Promise.resolve();
+        const status = url.includes('/messages/gone-410') ? 410 : 404;
+        return { status, headers: {}, body: JSON.stringify({ error: { code: status } }) };
+      },
+    });
+    const base = w.syncDeps(w.alpha);
+    const gmail: GmailClient = {
+      ...base.gmail,
+      getMetadata: async (access, id, headers) =>
+        id.startsWith('gone-') ? await http.getMetadata(access, id, headers) : await base.gmail.getMetadata(access, id, headers),
+    };
+
+    const report = await withTransaction(
+      session,
+      async () => await runMailSync(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId }),
+    );
+    expect(report.outcome).toBe('synced');
+    expect(report.readFailure).toBeNull();
+    expect(report.processedMessages).toBe(3);
+    expect(report.directSendsRecorded).toBe(1);
+    expect(report.cursorTo).toBe('1400');
+    expect((await readMailbox(context, w.alpha.mailboxId))?.historyId).toBe('1400');
+    expect(await storedAndMarked(w, 'gone-410')).toEqual([0, 0]);
+    expect(await storedAndMarked(w, 'gone-404')).toEqual([0, 0]);
+    expect(await storedAndMarked(w, 'after-gone')).toEqual([1, 1]);
+  });
+
+  it('S1 round-7: a failed body read undoes that message whole and stops the sync before it', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const session = w.database.session as Parameters<typeof withTransaction>[0];
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1200' WHERE workspace_id = $1 AND id = $2", [
+      w.alpha.workspace.workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'body-stop-1', historyId: '1201', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+      fixtureMessage({ id: 'body-stop-2', historyId: '1202', from: PROSPECT, to: w.alpha.address, body: 'Thursday works.' }),
+    );
+    const base = w.syncDeps(w.alpha);
+
+    const first = await withTransaction(
+      session,
+      async () =>
+        await runMailSync(
+          context,
+          { ...base, gmail: refusing(base.gmail, 'getBody', 'body-stop-2') },
+          { mailboxId: w.alpha.mailboxId },
+        ),
+    );
+    expect(first.outcome).toBe('read_stopped');
+    expect(first.readFailure?.read).toBe('body');
+    expect(first.cursorTo).toBe('1201');
+    // Message 2 was recorded and matched before its body read failed; the savepoint
+    // undid both, and the report does not count it.
+    expect(first.messagesSeen).toBe(1);
+    expect(await storedAndMarked(w, 'body-stop-1')).toEqual([1, 1]);
+    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([0, 0]);
+    const { rows: matches } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_matches x
+         JOIN mail_messages m ON m.workspace_id = x.workspace_id AND m.id = x.mail_message_id
+        WHERE x.workspace_id = $1 AND m.provider_message_id = 'body-stop-2'`,
+      [w.alpha.workspace.workspaceId],
+    );
+    expect(matches[0]?.count).toBe('0');
+
+    const second = await withTransaction(
+      session,
+      async () => await runMailSync(context, base, { mailboxId: w.alpha.mailboxId }),
+    );
+    expect(second.outcome).toBe('synced');
+    expect(second.bodiesFetched).toBe(1);
+    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([1, 0]);
+  });
+
   it('Appendix G 4: a revoked grant marks the mailbox and holds every automated step kind', async () => {
     world = await createMailWorld();
     const w = world;
@@ -907,7 +1422,7 @@ describe('the import feeds the reputation ramp (12.7)', () => {
     expect(report.automatedSendsRecognised).toBe(1);
     // 7.3 reserves manual mode for a *direct* send. Switching here would terminally
     // stop the enrollment that had just sent step one.
-    expect(report.directSendsSwitchedToManual).toBe(0);
+    expect(report.directSendsRecorded).toBe(0);
 
     const events = await w.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM crm_domain_events

@@ -27,6 +27,8 @@ export type CrmResult<T> =
       readonly reason: CrmRefusalCode;
       /** Present only for `merge_conflicts`: the fields a person has to decide. */
       readonly conflicts?: readonly MergeConflict[];
+      /** Present only for `live_work_present`: the enrollments still live at the opportunity. */
+      readonly liveEnrollmentIds?: readonly string[];
     };
 
 export function accept<T>(value: T): CrmResult<T> {

@@ -104,6 +104,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
   'crm.changeStage': { opportunityId: UUID, toStageKey: 'new', reason: null },
   'crm.takeOver': { reason: 'I am writing to them myself.' },
+  'crm.resolveOutgoing': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
   'crm.resolveMerge': { sourceFirmId: UUID, targetFirmId: UUID, resolutions: [] },
   'crm.addFirm': {
     name: 'Aspen Test Wealth',
@@ -169,6 +170,7 @@ const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]
   'crm.enroll': [['openFirm', { firmId: UUID }]],
   // The takeover needs the same open page: the bridge takes the opportunity from it.
   'crm.takeOver': [['openFirm', { firmId: UUID }]],
+  'crm.resolveOutgoing': [['openFirm', { firmId: UUID }]],
   'crm.commitImport': [['previewImport', { fileName: 'firms.csv', csv: 'name\nAspen Test Wealth\n' }]],
 });
 

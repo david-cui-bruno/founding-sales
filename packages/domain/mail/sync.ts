@@ -75,7 +75,8 @@ export type MailSyncOutcome =
   | 'baseline_started'
   | 'recovery_started'
   | 'cursor_moved'
-  | 'rate_limited';
+  | 'rate_limited'
+  | 'read_stopped';
 
 export interface MailSyncReport extends MessagePipelineReport {
   readonly outcome: MailSyncOutcome;
@@ -83,7 +84,10 @@ export interface MailSyncReport extends MessagePipelineReport {
   readonly cursorFrom: string | null;
   readonly cursorTo: string | null;
   readonly coverageWatermarkAt: string | null;
-  /** True when the cap was reached: the next reconciliation pass continues. */
+  /**
+   * True when the cap was reached or a Gmail read stopped the run (`read_stopped`): the
+   * next reconciliation pass continues.
+   */
   readonly moreToDo: boolean;
 }
 
@@ -134,6 +138,31 @@ export function takeWholeRecords(
     recordsTaken += 1;
   }
   return { messageIds, recordsTaken, recordsLeft: ordered.length - recordsTaken, through };
+}
+
+/**
+ * The cursor a run may write when the pipeline stopped at a failed Gmail read (send-path
+ * v2, S1 review round 7): the latest id of the whole records, oldest first, every one of
+ * whose messages was processed. The first record holding an unprocessed message stops
+ * the walk, so the cursor is never past a message this run did not finish, and the
+ * record holding the failed message — with anything the run finished in it — is read
+ * again next time, which the pipeline's markers and uniqueness make harmless.
+ */
+export function throughProcessedRecords(
+  startHistoryId: string,
+  records: readonly GmailHistoryRecord[],
+  processedMessageIds: ReadonlySet<string>,
+): string {
+  const ordered = [...records].sort((left, right) => compareHistoryIds(left.id, right.id));
+  let through = startHistoryId;
+  for (const record of ordered) {
+    const finished = record.changes.every(
+      change => change.kind === 'message_deleted' || processedMessageIds.has(change.messageId),
+    );
+    if (!finished) break;
+    through = laterHistoryId(through, record.id);
+  }
+  return through;
 }
 
 function report(
@@ -279,8 +308,6 @@ export async function runMailSync(
   // `users.history.list` documents: with no `nextPageToken`, "store the returned
   // historyId for future requests".
   const take = takeWholeRecords(mailbox.historyId, records, maxMessages);
-  const moreToDo = !historyExhausted || take.recordsLeft > 0;
-  const cursorTo = moreToDo ? take.through : latestHistoryId;
 
   // ---- Step 3: the shared pipeline. -----------------------------------------
   const pipeline = await processMessageIds(context, deps, {
@@ -288,6 +315,22 @@ export async function runMailSync(
     access: access.access,
     messageIds: take.messageIds,
   });
+
+  // A Gmail read that failed stopped the pipeline at that message rather than throwing,
+  // so what came before it commits with this job (send-path v2, S1 review round 7). The
+  // cursor stands just before the record holding it, the run is not finished, and the
+  // one-minute reconciliation reads the rest — the failed message first.
+  const stopped = pipeline.readFailure !== null;
+  const moreToDo = stopped || !historyExhausted || take.recordsLeft > 0;
+  const cursorTo = stopped
+    ? throughProcessedRecords(
+        mailbox.historyId,
+        [...records].sort((left, right) => compareHistoryIds(left.id, right.id)).slice(0, take.recordsTaken),
+        new Set(take.messageIds.slice(0, pipeline.processedMessages)),
+      )
+    : moreToDo
+      ? take.through
+      : latestHistoryId;
 
   // ---- Step 4: cursor and watermark, together, by compare-and-set. ----------
   //
@@ -300,7 +343,10 @@ export async function runMailSync(
     expectedHistoryId: mailbox.historyId,
     historyId: cursorTo,
     ...(watermark === undefined ? {} : { coverageWatermarkAt: watermark }),
-    syncError: null,
+    syncError:
+      pipeline.readFailure === null
+        ? null
+        : `the Gmail ${pipeline.readFailure.read} read failed (${pipeline.readFailure.detail}); the sync stopped before that message`,
   });
   if (!advanced.advanced) return report(mailbox.id, 'cursor_moved', mailbox.historyId, pipeline);
 
@@ -319,7 +365,7 @@ export async function runMailSync(
   // with a backlog, and the alternative is a job that re-arms itself into a loop no
   // operator can stop.
 
-  return report(mailbox.id, 'synced', mailbox.historyId, pipeline, {
+  return report(mailbox.id, stopped ? 'read_stopped' : 'synced', mailbox.historyId, pipeline, {
     cursorTo: advanced.historyId,
     coverageWatermarkAt: advanced.coverageWatermarkAt,
     moreToDo,

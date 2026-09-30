@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
+import { directSendWithinQuietWindow } from '../mail/directSendRecency.ts';
 import { lockSendGateForDispatch } from '../policy/sendGate.ts';
 import type { EnvelopeCipher } from '../mail/envelope.ts';
 import type { GmailClient, GmailOAuthConfig } from '../mail/gmailClient.ts';
@@ -367,6 +368,37 @@ async function recheckAndClaim(
       return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
     }
     const plan = gate.value;
+    // An agreed-sequence e-mail to somebody the salesperson wrote to by hand within the
+    // quiet window waits (send-path v2, S1 review P1-4). Asked here, under the gate, so a
+    // direct send whose effect committed after this fence was prepared still stops it;
+    // `not_ready` rolls back and leaves the fence prepared for later. After the recheck,
+    // so its refusals — S4's cold-mailbox rule among them — hold visibly first.
+    if (
+      permission !== null &&
+      permission.scope === 'agreed_sequence' &&
+      (await directSendWithinQuietWindow(context, { firmId: fence.firmId, contactId: permission.contactId }))
+    ) {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'direct_send_quiet_window' };
+    }
+    // A later schedule (S1 review P1-B): the step's own `not_before`, under the gate. A
+    // fence prepared before its step was pushed back — by the direct send's quiet day,
+    // kept by `greatest` — does not leave early. The clock is the database's; the
+    // gate's decision instant (`deps.now`, which only a test pins; the worker sets
+    // none) counts only when it is later, so a suite that runs the send at a pinned
+    // future instant is judged at that instant.
+    if (fence.stepExecutionId !== null) {
+      const { rows: due } = await context.db.query<{ early: boolean }>(
+        `SELECT not_before > greatest(clock_timestamp(), coalesce($3::timestamptz, clock_timestamp())) AS early
+           FROM step_executions WHERE workspace_id = $1 AND id = $2`,
+        [context.scope.workspaceId, fence.stepExecutionId, deps.now?.().toISOString() ?? null],
+      );
+      if (due[0]?.early === true) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'not_yet_due' };
+      }
+    }
+
     if (plan.mailbox.id !== precheck.mailbox.id) {
       // A `prepared` fence's envelope is still mutable, its mailbox included, and the
       // token in hand belongs to the mailbox the precheck named. Sending another
