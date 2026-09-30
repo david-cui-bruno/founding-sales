@@ -38,6 +38,7 @@ import type {
   PipelineView,
   ResolveOutgoingRequest,
   StageChange,
+  ValueChange,
 } from '../renderer/firmWorkspaceContract.ts';
 import type { AuthedClient } from './authedClient.ts';
 
@@ -105,9 +106,12 @@ export interface CrmBridgeHost {
   forget(): Promise<CrmState>;
   state(): Promise<CrmState>;
   openFirm(input: { readonly firmId: string }): Promise<CrmState>;
-  openPipeline(): Promise<CrmState>;
+  /** The board. `includeLost` is remembered until the next one that says otherwise. */
+  openPipeline(input?: { readonly includeLost?: boolean }): Promise<CrmState>;
   saveContact(input: ContactEdit): Promise<CrmState>;
   changeStage(input: StageChange): Promise<CrmState>;
+  /** A person records the opportunity's monthly value (slice K). */
+  setValue(input: ValueChange): Promise<CrmState>;
   resolveMerge(input: MergeResolution): Promise<CrmState>;
   openAddFirm(): Promise<CrmState>;
   addFirm(input: AddFirmDraft): Promise<CrmState>;
@@ -243,6 +247,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   let sequences: FirmSequencesView | null = null;
   /** The open Firm page's held outgoing messages (send-path v2, S1 review P1-C). */
   let heldOutgoing: readonly HeldOutgoingMessage[] = [];
+  /** Whether the board asks for Lost (slice K); a screen change does not reset it. */
+  let includeLost = false;
   /** Every opportunity id a Firm page has told this window about. */
   const opportunityIdByFirmId: Record<string, string> = {};
 
@@ -381,7 +387,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   const loadPipeline = async (): Promise<void> => {
     // One read. The API decides which firms are in it, which columns exist and which
     // ids this caller may act on; nothing here adds to any of the three.
-    const board = await deps.api.read('/pipeline/board', value => pipelineBoardResponseSchema.parse(value), {});
+    const board = await deps.api.read(
+      '/pipeline/board',
+      value => pipelineBoardResponseSchema.parse(value),
+      includeLost ? { includeLost: true } : {},
+    );
     if (board.ok) {
       pipeline = {
         columns: board.value.columns.map(column => ({ stage: column.stage, firms: column.firms })),
@@ -391,6 +401,9 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         // to see the opportunity of.
         opportunityIdByFirmId: { ...opportunityIdByFirmId, ...board.value.opportunityIdByFirmId },
         unplacedFirms: board.value.unplacedFirms,
+        ...(board.value.cards === undefined ? {} : { cards: board.value.cards }),
+        ...(board.value.stages === undefined ? {} : { stages: board.value.stages }),
+        includeLost,
       };
       screen = 'pipeline';
       return;
@@ -418,6 +431,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
      * work shown to somebody else.
      */
     async forget() {
+      includeLost = false;
       screen = 'pipeline';
       firm = null;
       pipeline = null;
@@ -448,7 +462,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return await snapshot();
     },
 
-    async openPipeline() {
+    async openPipeline(input) {
+      if (input?.includeLost !== undefined) includeLost = input.includeLost;
       notice = null;
       leaveCapture();
       await loadPipeline();
@@ -707,6 +722,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         () => null,
       );
       notice = answer.ok ? 'stage_changed' : answer.reason;
+      if (answer.ok) await loadPipeline();
+      return await snapshot();
+    },
+
+    async setValue(input) {
+      const answer = await deps.api.command(
+        '/opportunities/value',
+        { opportunityId: input.opportunityId, monthlyCents: input.monthlyCents, kind: input.kind },
+        () => null,
+      );
+      notice = answer.ok ? 'value_recorded' : answer.reason;
       if (answer.ok) await loadPipeline();
       return await snapshot();
     },

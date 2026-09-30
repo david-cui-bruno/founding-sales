@@ -257,6 +257,17 @@ export const changeStageCommandSchema = z.strictObject({
   reason: reasonSchema.optional(),
 });
 
+/**
+ * `POST /opportunities/value` (Kanban slice K): a person records the monthly value of an
+ * opportunity. Whole cents, at most $1,000,000 a month, the bound the table enforces.
+ */
+export const recordOpportunityValueCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  opportunityId: uuid,
+  monthlyCents: z.number().int().min(0).max(100_000_000),
+  kind: z.enum(['estimated', 'agreed']),
+});
+
 export const mergeFirmsCommandSchema = z.strictObject({
   ...commandEnvelope,
   sourceFirmId: uuid,
@@ -306,8 +317,13 @@ export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoS
 export const boardCardSchema = z.object({
   value: z.object({ monthlyCents: z.number().int().min(0), kind: z.enum(['estimated', 'agreed']) }).nullable(),
   meeting: z.object({ meetingId: uuid, state: z.enum(MEETING_STATES), startsAt: instant }).nullable(),
-  evidence: z.object({ kind: z.string(), evidenceId: z.string(), occurredAt: instant }).nullable(),
+  /** The latest move's evidence, only while that move is the opportunity's latest (slice K). */
+  evidence: z
+    .object({ kind: z.string(), evidenceId: z.string(), occurredAt: instant, fromStageKey: z.string().nullable().optional() })
+    .nullable(),
   pinned: z.boolean(),
+  /** Why a Lost opportunity was lost (slice K). Optional so older answers parse. */
+  closeReason: z.string().nullable().optional(),
 });
 export type BoardCard = z.infer<typeof boardCardSchema>;
 
@@ -322,6 +338,8 @@ export const pipelineBoardResponseSchema = z.object({
   unplacedFirms: z.array(firmIdentityDtoSchema),
   /** Firm id to its card detail, for every placed firm. Optional so older answers parse. */
   cards: z.record(uuid, boardCardSchema).optional(),
+  /** Every stage, Lost and retired included, so "Move to…" can name Lost behind the filter. */
+  stages: z.array(pipelineStageDtoSchema).optional(),
 });
 
 /**

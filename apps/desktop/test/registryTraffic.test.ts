@@ -105,6 +105,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'crm.openFirm': { firmId: UUID },
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
   'crm.changeStage': { opportunityId: UUID, toStageKey: 'new', reason: null },
+  'crm.setValue': { opportunityId: UUID, monthlyCents: 120_000, kind: 'estimated' },
   'crm.takeOver': { reason: 'I am writing to them myself.' },
   'crm.resolveOutgoing': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
   'crm.resolveMerge': { sourceFirmId: UUID, targetFirmId: UUID, resolutions: [] },

@@ -45,8 +45,20 @@ export interface PipelineBoardColumn {
 export interface PipelineBoardCard {
   readonly value: { readonly monthlyCents: number; readonly kind: 'estimated' | 'agreed' } | null;
   readonly meeting: { readonly meetingId: string; readonly state: MeetingState; readonly startsAt: string } | null;
-  readonly evidence: { readonly kind: string; readonly evidenceId: string; readonly occurredAt: string } | null;
+  /**
+   * The evidence of the opportunity's **latest** stage move, when that move was automatic
+   * (Kanban slice K). A later manual move or close hides an earlier automatic move's
+   * evidence: the card must not say "moved by a booking" about a stage a person chose.
+   */
+  readonly evidence: {
+    readonly kind: string;
+    readonly evidenceId: string;
+    readonly occurredAt: string;
+    readonly fromStageKey: string | null;
+  } | null;
   readonly pinned: boolean;
+  /** Why the opportunity was lost, for a Lost card; null otherwise. */
+  readonly closeReason: string | null;
 }
 
 export interface PipelineBoardDto {
@@ -58,6 +70,11 @@ export interface PipelineBoardDto {
   readonly opportunityIdByFirmId: Readonly<Record<string, string>>;
   /** Firms in no column: no opportunity, or a Lost one while the Lost filter is off. */
   readonly unplacedFirms: readonly FirmIdentityDto[];
+  /**
+   * Every stage of the workspace, in order, with Lost and retired ones: the destinations a
+   * card's "Move to…" may name even while the Lost column is behind its filter.
+   */
+  readonly stages: readonly PipelineBoardColumn['stage'][];
   /** Card detail for every placed firm. */
   readonly cards: Readonly<Record<string, PipelineBoardCard>>;
 }
@@ -88,6 +105,8 @@ type BoardRow = FirmRow & {
   readonly meeting_state: MeetingState | null;
   readonly meeting_starts_at: Date | null;
   readonly evidence_kind: string | null;
+  readonly evidence_from_stage_key: string | null;
+  readonly close_reason: string | null;
   readonly evidence_id: string | null;
   readonly evidence_occurred_at: Date | null;
   readonly pinned: boolean;
@@ -136,6 +155,8 @@ export async function readPipelineBoardForActor(
             v.monthly_cents AS value_cents, v.kind AS value_kind,
             m.id AS meeting_id, m.state AS meeting_state, m.starts_at AS meeting_starts_at,
             ev.evidence_kind, ev.evidence_id, ev.occurred_at AS evidence_occurred_at,
+            ev.from_stage_key AS evidence_from_stage_key,
+            CASE WHEN o.status = 'lost' THEN o.close_reason END AS close_reason,
             (p.opportunity_id IS NOT NULL) AS pinned
        FROM firms f
        LEFT JOIN LATERAL (
@@ -156,8 +177,15 @@ export async function readPipelineBoardForActor(
           ORDER BY z.updated_at DESC, z.id DESC LIMIT 1
        ) m ON true
        LEFT JOIN LATERAL (
-         SELECT evidence_kind, evidence_id, occurred_at FROM opportunity_stage_evidence e
+         SELECT e.evidence_kind, e.evidence_id, e.occurred_at, fs.key AS from_stage_key
+           FROM opportunity_stage_evidence e
+           JOIN opportunity_stage_events se ON se.workspace_id = e.workspace_id AND se.id = e.stage_event_id
+           LEFT JOIN pipeline_stages fs ON fs.workspace_id = se.workspace_id AND fs.id = se.from_stage_id
           WHERE e.workspace_id = o.workspace_id AND e.opportunity_id = o.id
+            AND NOT EXISTS (
+              SELECT 1 FROM opportunity_stage_events later
+               WHERE later.workspace_id = se.workspace_id AND later.opportunity_id = se.opportunity_id
+                 AND (later.occurred_at, later.id) > (se.occurred_at, se.id))
           ORDER BY e.recorded_at DESC, e.id DESC LIMIT 1
        ) ev ON true
        LEFT JOIN opportunity_stage_pins p ON p.workspace_id = o.workspace_id AND p.opportunity_id = o.id
@@ -198,8 +226,14 @@ export async function readPipelineBoardForActor(
       evidence:
         row.evidence_kind === null || row.evidence_id === null || row.evidence_occurred_at === null
           ? null
-          : { kind: row.evidence_kind, evidenceId: row.evidence_id, occurredAt: row.evidence_occurred_at.toISOString() },
+          : {
+              kind: row.evidence_kind,
+              evidenceId: row.evidence_id,
+              occurredAt: row.evidence_occurred_at.toISOString(),
+              fromStageKey: row.evidence_from_stage_key,
+            },
       pinned: row.pinned,
+      closeReason: row.close_reason,
     };
     if (row.opportunity_status === 'open' && row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {
       opportunityIdByFirmId[row.id] = row.opportunity_id;
@@ -211,5 +245,5 @@ export async function readPipelineBoardForActor(
     .filter(stage => (stage.terminal_kind === 'lost' ? includeLost : !stage.retired || occupied.has(stage.key)))
     .map(stage => columnOf(stage, placed));
 
-  return { columns, opportunityIdByFirmId, unplacedFirms, cards };
+  return { columns, opportunityIdByFirmId, unplacedFirms, cards, stages: stages.map(stage => columnOf(stage, []).stage) };
 }
