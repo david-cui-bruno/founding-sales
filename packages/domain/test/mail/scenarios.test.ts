@@ -1,4 +1,7 @@
+import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { withTransaction } from '../../db/queryable.ts';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
@@ -637,6 +640,177 @@ describe('matching and its consequences', () => {
     );
     return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
   };
+
+  it('S1 round-5: no Gmail call is made while the import holds the send gate', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+
+    // A direct send, applied once, so that its replay below is frozen under the gate.
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gate-out', historyId: '1070', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gate-next', historyId: '1071', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1069' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId,
+      w.alpha.mailboxId,
+    ]);
+
+    // Another connection, standing for a dispatch claim or a stop writer.
+    const clusterUrl = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
+    clusterUrl.pathname = `/${w.database.name}`;
+    const other = new pg.Client({ connectionString: clusterUrl.toString() });
+    other.on('error', () => undefined);
+    await other.connect();
+    let gateTaken: boolean | null = null;
+    try {
+      // The Gmail call after the frozen replay: the next message's metadata. While it
+      // is in flight, the other connection must get the exclusive gate within a second.
+      const base = w.syncDeps(w.alpha);
+      const gmail = {
+        ...base.gmail,
+        getMetadata: async (...args: Parameters<typeof base.gmail.getMetadata>) => {
+          if (args[1] === 'gate-next') {
+            await other.query('BEGIN');
+            await other.query("SET LOCAL lock_timeout = '1s'");
+            try {
+              await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`fss.send-gate:${workspaceId}`]);
+              gateTaken = true;
+            } catch {
+              gateTaken = false;
+            }
+            await other.query('ROLLBACK');
+          }
+          return await base.gmail.getMetadata(...args);
+        },
+      };
+      // The runner's shape: the whole job in one transaction.
+      await withTransaction(
+        w.database.session as Parameters<typeof withTransaction>[0],
+        async () => await runMailSync(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId }),
+      );
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(gateTaken).toBe(true);
+  });
+
+  it('S1 round-5: a matched reply’s body is fetched before the import takes the send gate', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+
+    // A direct send, applied once, so that its replay below is frozen under the gate.
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gate-out', historyId: '1070', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'gate-next', historyId: '1071', from: PROSPECT, to: w.alpha.address, body: 'Thanks, tell me more.' }),
+    );
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1069' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId,
+      w.alpha.mailboxId,
+    ]);
+
+    // Another connection, standing for a dispatch claim or a stop writer.
+    const clusterUrl = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
+    clusterUrl.pathname = `/${w.database.name}`;
+    const other = new pg.Client({ connectionString: clusterUrl.toString() });
+    other.on('error', () => undefined);
+    await other.connect();
+    let gateTaken: boolean | null = null;
+    try {
+      // The Gmail call after the frozen replay: the matched reply's body. While it is in
+      // flight, the other connection must get the exclusive gate within a second.
+      const base = w.syncDeps(w.alpha);
+      const gmail = {
+        ...base.gmail,
+        getBody: async (...args: Parameters<typeof base.gmail.getBody>) => {
+          if (args[1] === 'gate-next') {
+            await other.query('BEGIN');
+            await other.query("SET LOCAL lock_timeout = '1s'");
+            try {
+              await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`fss.send-gate:${workspaceId}`]);
+              gateTaken = true;
+            } catch {
+              gateTaken = false;
+            }
+            await other.query('ROLLBACK');
+          }
+          return await base.gmail.getBody(...args);
+        },
+      };
+      // The runner's shape: the whole job in one transaction.
+      await withTransaction(
+        w.database.session as Parameters<typeof withTransaction>[0],
+        async () => await runMailSync(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId }),
+      );
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(gateTaken).toBe(true);
+  });
+
+  it('S1 round-5: a completed recovery reads the profile before its gated section, not after', async () => {
+    world = await createMailWorld({
+      alphaMessages: [
+        fixtureMessage({ id: 'recover-out', historyId: '1080', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
+      ],
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+    const clusterUrl = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
+    clusterUrl.pathname = `/${w.database.name}`;
+    const other = new pg.Client({ connectionString: clusterUrl.toString() });
+    other.on('error', () => undefined);
+    await other.connect();
+    let gateTaken: boolean | null = null;
+    let outcome = '';
+    try {
+      const base = w.syncDeps(w.alpha);
+      const gmail = {
+        ...base.gmail,
+        getProfile: async (...args: Parameters<typeof base.gmail.getProfile>) => {
+          await other.query('BEGIN');
+          await other.query("SET LOCAL lock_timeout = '1s'");
+          try {
+            await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`fss.send-gate:${workspaceId}`]);
+            gateTaken = true;
+          } catch {
+            gateTaken = false;
+          }
+          await other.query('ROLLBACK');
+          return await base.gmail.getProfile(...args);
+        },
+      };
+      const report = await withTransaction(
+        w.database.session as Parameters<typeof withTransaction>[0],
+        async () => await runMailRecovery(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+      );
+      outcome = report.outcome;
+    } finally {
+      await other.end().catch(() => undefined);
+    }
+    expect(outcome).toBe('completed');
+    // The recovered direct send took the gate in this transaction; the profile was read
+    // before that, so the other connection was not kept waiting on Gmail.
+    const { rows } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_effects
+        WHERE workspace_id = $1 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId],
+    );
+    expect(rows[0]?.count).toBe('1');
+    expect(gateTaken).toBe(true);
+  });
 
   it('S1 round-3 P1-D: once the effect is applied, a newly known recipient firm is not a held choice', async () => {
     world = await createMailWorld();

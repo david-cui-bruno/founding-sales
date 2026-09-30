@@ -12,7 +12,7 @@ import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailCli
 import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
-import { METADATA_HEADERS, type MailboxRow } from './types.ts';
+import { METADATA_HEADERS, type MailboxRow, type MailMessageRow } from './types.ts';
 
 /**
  * What happens to one batch of Gmail message ids, whichever job found them
@@ -86,6 +86,30 @@ export async function processMessageIds(
   let automatedSendsRecognised = 0;
   let newestInternalDate: string | null = null;
 
+  // ---- The network phase: every Gmail call this batch makes, before any send gate. --
+  //
+  // Send-path v2, S1 review round 5: the runner keeps the whole job in one transaction,
+  // and the gated section below takes the workspace's EXCLUSIVE send gate (a direct
+  // send's freeze and effect, an ambiguity hold, a classification effect). A Gmail call
+  // made after that — the next message's metadata, a body — would hold every dispatch
+  // claim and every stop writer in the workspace for as long as Gmail took to answer.
+  // So the calls happen first, in the same order and number as before: metadata for
+  // each message, then its body exactly when a match is plausible. Nothing in this
+  // phase takes the gate — recording the message and reading its candidates do not.
+  //
+  // "Plausible" is judged here before the gated phase records any match, so a message
+  // whose only match would come from an earlier message *of this batch* — the same
+  // thread, or a reference to one of its outgoing messages — is counted as plausible
+  // from the batch itself. That is a superset of what the gated phase will find, so
+  // every body it needs is already fetched; a body fetched for a message the gated
+  // phase then does not match is not stored.
+  const fetched: {
+    readonly normalized: ReturnType<typeof normalizeMetadata>;
+    readonly message: MailMessageRow;
+    readonly body: Awaited<ReturnType<GmailClient['getBody']>>;
+  }[] = [];
+  const plausibleThreads = new Set<string>();
+  const plausibleOutgoingIds = new Set<string>();
   for (const providerMessageId of input.messageIds) {
     // Step 1: metadata only, and only the allowlist (12.3).
     const metadata = await deps.gmail.getMetadata(input.access, providerMessageId, METADATA_HEADERS);
@@ -101,6 +125,33 @@ export async function processMessageIds(
       newestInternalDate = stored.message.internalDate;
     }
 
+    const known = await findMatchCandidates(context, {
+      mailboxId: input.mailbox.id,
+      messageId: stored.message.id,
+      metadata: normalized,
+    });
+    const plausible =
+      known.length > 0 ||
+      plausibleThreads.has(stored.message.providerThreadId) ||
+      stored.message.referenceMessageIds.some(reference => plausibleOutgoingIds.has(reference));
+    if (plausible) {
+      plausibleThreads.add(stored.message.providerThreadId);
+      if (stored.message.direction === 'outgoing' && stored.message.rfcMessageId !== null) {
+        plausibleOutgoingIds.add(stored.message.rfcMessageId);
+      }
+    }
+    // Step 3's fetch, done here: a body only after a plausible match, and never for an
+    // outgoing message (12.3 matches it, it does not read it).
+    const body =
+      plausible && stored.message.direction === 'incoming'
+        ? await deps.gmail.getBody(input.access, providerMessageId)
+        : null;
+    fetched.push({ normalized, message: stored.message, body });
+  }
+
+  // ---- The gated phase: matching, effects, classification. No Gmail call below. ---
+  for (const { normalized, message: storedMessage, body } of fetched) {
+    const stored = { message: storedMessage };
     // Step 2: match, in 12.3's order, first rule that finds anything winning.
     const candidates = await findMatchCandidates(context, {
       mailboxId: input.mailbox.id,
@@ -160,8 +211,7 @@ export async function processMessageIds(
       continue;
     }
 
-    // Step 3: now, and only now, a body.
-    const body = await deps.gmail.getBody(input.access, providerMessageId);
+    // Step 3: the body the network phase fetched, stored now that the match is recorded.
     if (body !== null) {
       bodiesFetched += 1;
       await storeMessageBody(context, {

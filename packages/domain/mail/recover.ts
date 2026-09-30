@@ -356,6 +356,15 @@ export async function runMailRecovery(
     pageToken = outcome.nextPageToken;
   }
 
+  // A recovery that has read the whole interval re-establishes the cursor from the
+  // mailbox's current history id. Asked before the pipeline (send-path v2, S1 review
+  // round 5): the pipeline's gated phase takes the workspace's exclusive send gate, the
+  // runner holds it until the job commits, and a Gmail call after it would block every
+  // dispatch claim and stop writer for as long as Gmail took. Earlier is also the safe
+  // side of the cursor: a message that arrives while this run processes is after the
+  // id read here, so the next `mail.sync` reads it again rather than skipping it.
+  const profile = exhausted ? await deps.gmail.getProfile(access.access) : null;
+
   const pipeline = await processMessageIds(context, deps, {
     mailbox,
     access: access.access,
@@ -395,7 +404,7 @@ export async function runMailRecovery(
   // A recovery re-establishes the cursor too: the mailbox's current history id is the
   // one every later `mail.sync` reads from, and it is unconditional here because the
   // recovery is the authority on this generation's coverage.
-  const profile = await deps.gmail.getProfile(access.access);
+  if (profile === null) throw new Error('a completed recovery has no profile: it was read before the pipeline');
   await advanceCursor(context, {
     mailboxId: mailbox.id,
     expectedHistoryId: mailbox.historyId,

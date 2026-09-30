@@ -218,6 +218,13 @@ control still pauses automation."* This supersedes the first bullet above.
   The desktop Firm page lists the firm's held outgoing messages
   (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
   same resolve command, and says the outcome or the refusal under the list.
+* **No Gmail call under the gate.** The runner keeps a mail job in one transaction and
+  the import's gated section holds the exclusive send gate until it commits, so the
+  pipeline makes every Gmail call first — each message's metadata, then its body when a
+  match is plausible (judged with this batch's own earlier messages counted, a superset
+  of what the gated section finds; a body it then does not match is not stored) — and a
+  completed recovery reads the profile before the pipeline. The gated section calls no
+  provider.
 * **Once per message.** One `direct_send_conversation` marker (`message:<id>`), and a
   message that already carries a historical `direct_send_manual` marker is treated as
   processed. One `mail.direct_send_conversation` audit row of ids only.
