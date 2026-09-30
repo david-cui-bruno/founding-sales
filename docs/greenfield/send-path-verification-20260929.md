@@ -40,7 +40,7 @@ follow-up step, while a person's `salesperson_command` takeover — and an unrec
 origin, which is every opportunity that went manual before 0025 — still does. (Since
 send-path v2, 30 September 2026, a direct Gmail send sets no manual mode at all: it is
 an update to the conversation; a stored `direct_send` origin is history and still blocks.)
-Nothing reverses manual mode, and prospecting and legacy steps are unchanged.
+Automation does not reverse manual mode; the audited legacy classification can. Prospecting and legacy steps are unchanged.
 
 **What did not change.** The three switches of section 0 are untouched: nothing here
 lifts the pause, and `sending_enabled` is still `{"enabled": false}`. The read list at

@@ -22,6 +22,9 @@ export const MAIL_REFUSAL_CODES = [
   'message_unknown',
   'match_unknown',
   'already_resolved',
+  // Send-path v2 (S1 review P1-D): the message's direct-send effect was already applied
+  // to another firm, so a resolution to this one would contradict it.
+  'already_applied',
 ] as const;
 export type MailRefusalCode = (typeof MAIL_REFUSAL_CODES)[number];
 

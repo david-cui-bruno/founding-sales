@@ -4,13 +4,14 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import type { MatchCandidate } from '../../mail/matching.ts';
-import { listHeldOutgoingForFirm, recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { directSendTargetOf, listHeldOutgoingForFirm, recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { readMessage } from '../../mail/messages.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld } from '../outbound/support/outboundWorld.ts';
 import {
   openExtraSession,
+  pausingAtTokenRefresh,
   prepareFor,
   seedFirm,
   waitUntilBlocked,
@@ -773,5 +774,69 @@ describe('resolving an ambiguous outgoing message', () => {
       [workspaceId(), message.id],
     );
     expect(markers).toEqual([{ firm_id: left.firmId }]);
+  });
+});
+
+describe('S1 round-3 P2: each replay guard on its own case', () => {
+  it('recordMatches: a candidate new on a replay joins the stored unresolved ambiguity, held', async () => {
+    const left = await seedFirm(world, world.alpha, 'guard-left');
+    const right = await seedFirm(world, world.alpha, 'guard-right');
+    const late = await seedFirm(world, world.alpha, 'guard-late');
+    const message = await storeDirectSend({ to: [left.address, right.address] });
+    await recordMatches(worker(), { messageId: message.id, candidates: [candidateOf(left), candidateOf(right)] });
+
+    // Today's candidates alone would say "one, certain"; the stored two say otherwise.
+    const replay = await recordMatches(worker(), { messageId: message.id, candidates: [candidateOf(late)] });
+    expect(replay.ambiguous).toBe(true);
+    const { rows } = await world.database.session.query<{ ambiguous: boolean; held: boolean }>(
+      `SELECT ambiguous, hold_id IS NOT NULL AS held FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND opportunity_id = $3`,
+      [workspaceId(), message.id, late.opportunityId],
+    );
+    expect(rows).toEqual([{ ambiguous: true, held: true }]);
+  });
+
+  it('directSendTargetOf: a stored selection is the target, whatever else is stored', async () => {
+    const left = await seedFirm(world, world.alpha, 'target-left');
+    const right = await seedFirm(world, world.alpha, 'target-right');
+    const message = await storeDirectSend({ to: [left.address, right.address] });
+    await recordMatches(worker(), { messageId: message.id, candidates: [candidateOf(left), candidateOf(right)] });
+    expect(await directSendTargetOf(worker(), message.id)).toBeUndefined();
+    await world.database.session.query(
+      `UPDATE mail_message_matches SET selected = (opportunity_id = $3), resolved_at = now()
+        WHERE workspace_id = $1 AND mail_message_id = $2`,
+      [workspaceId(), message.id, right.opportunityId],
+    );
+    expect((await directSendTargetOf(worker(), message.id))?.opportunityId).toBe(right.opportunityId);
+  });
+});
+
+describe('S1 round-3 P2: the cold-mailbox hold comes before the not-yet-due refusal', () => {
+  it('a fence prospecting by the claim, with a future not_before, is held visibly for the cold mailbox', async () => {
+    const firm = await seedFirm(world, world.alpha, 'cold-before-due');
+    const followUp = await fenceOfEnrollment(firm);
+    const gmail = world.clientWith(world.alpha, {});
+    // As S4's own claim test does: a follow-up at the precheck, prospecting by the claim
+    // — and here also not due until tomorrow. The claim's recheck must hold it for the
+    // cold mailbox, visibly, rather than roll back as `not_yet_due`.
+    const paused = pausingAtTokenRefresh(gmail, async () => {
+      await world.database.session.query(
+        `UPDATE sequence_enrollments SET origin_kind = 'prospecting'
+          WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId(), followUp.enrollmentId],
+      );
+      await world.database.session.query(
+        `UPDATE step_executions SET not_before = now() + interval '1 day'
+          WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held')`,
+        [workspaceId(), followUp.enrollmentId],
+      );
+    });
+    const report = await dispatchOutboundMessage(worker(), world.sendDeps(world.alpha, { gmail: paused.client }), {
+      outboundMessageId: followUp.fenceId,
+    });
+    expect(paused.refreshes()).toBe(1);
+    expect(report.outcome, JSON.stringify(report)).toBe('held');
+    expect(report.detail).toBe('cold_outreach_mailbox_required:gmail_dispatch:personal');
+    expect(gmail.sends).toHaveLength(0);
   });
 });

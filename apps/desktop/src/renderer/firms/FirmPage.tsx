@@ -396,6 +396,8 @@ function Sequences({
 export const OUTGOING_NOTICES: ReadonlySet<string> = new Set([
   'outgoing_resolved',
   'already_resolved',
+  'already_applied',
+  'not_assigned',
   'match_unknown',
   'message_unknown',
 ]);

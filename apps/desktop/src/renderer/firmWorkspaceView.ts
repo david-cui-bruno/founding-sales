@@ -70,6 +70,7 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   // Send-path v2 (S1 review P1-C): a held outgoing message.
   outgoing_resolved: 'Recorded against the firm you chose.',
   already_resolved: 'Somebody already chose the firm for that message.',
+  already_applied: 'That e-mail was already recorded against another firm.',
   match_unknown: 'That firm is not one of this message’s candidates.',
   message_unknown: 'That message is no longer waiting for a firm.',
   saved: 'Saved.',

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
 import { pushTokenPolicyOf } from '../../mail/config.ts';
 import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
-import { listMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { listHeldOutgoingForFirm, listMatches, resolveAmbiguity } from '../../mail/matching.ts';
 import { listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
 import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts';
 import { runMailRecovery } from '../../mail/recover.ts';
@@ -637,6 +637,57 @@ describe('matching and its consequences', () => {
     );
     return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
   };
+
+  it('S1 round-3 P1-D: once the effect is applied, a newly known recipient firm is not a held choice', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = w.alpha.workspace.workspaceId;
+
+    w.alpha.messages.push(
+      fixtureMessage({ id: 'applied-out', historyId: '1050', from: w.alpha.address, to: PROSPECT, labelIds: ['SENT'] }),
+    );
+    expect((await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId })).directSendsRecorded).toBe(1);
+
+    // Later, the same address is associated with a second firm; the message is replayed.
+    const later = await seedAnotherFirm(w, w.alpha.workspace, { name: 'Eastwind Test Group', address: PROSPECT });
+    await w.database.session.query("UPDATE mailboxes SET history_id = '1049' WHERE workspace_id = $1 AND id = $2", [
+      workspaceId,
+      w.alpha.mailboxId,
+    ]);
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    const state = await outgoingState(w, 'applied-out');
+    expect(state.matches).toEqual([{ firm_id: w.crm.alpha.firmId, ambiguous: false, held: false }]);
+    expect(await listHeldOutgoingForFirm(context, later.firmId)).toEqual([]);
+    const { rows: markers } = await w.database.session.query<{ firm_id: string }>(
+      `SELECT detail->>'firmId' AS firm_id FROM mail_message_effects
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND effect_kind = 'direct_send_conversation'`,
+      [workspaceId, state.messageId],
+    );
+    expect(markers).toEqual([{ firm_id: w.crm.alpha.firmId }]);
+
+    // A candidate row for the later firm, as an earlier build could have left it: a
+    // resolution to it contradicts the applied effect and is refused.
+    await w.database.session.query(
+      `INSERT INTO mail_message_matches (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule, ambiguous)
+       VALUES ($1, $2, $3, $4, $5, 'participant', false)`,
+      [workspaceId, state.messageId, later.firmId, later.opportunityId, later.contactId],
+    );
+    const refused = await resolveAmbiguity(w.userContext(workspaceId), {
+      messageId: state.messageId,
+      selectedOpportunityId: later.opportunityId,
+      human: false,
+    });
+    expect(refused).toEqual({ ok: false, reason: 'already_applied' });
+    const { rows: selections } = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM mail_message_matches
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NOT NULL`,
+      [workspaceId, state.messageId],
+    );
+    expect(selections[0]?.count).toBe('0');
+  });
 
   it('S1 review P1-A: a replay that finds only one candidate does not apply an unresolved ambiguity', async () => {
     world = await createMailWorld();

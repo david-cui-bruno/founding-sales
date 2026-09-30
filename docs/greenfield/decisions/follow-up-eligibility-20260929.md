@@ -209,6 +209,12 @@ control still pauses automation."* This supersedes the first bullet above.
   manual mode, whatever the `human` flag says (an FSS-fenced one gets no effect at all).
   `resolveAmbiguity` takes the gate before it reads, locks the match rows, and resolves
   only unresolved rows, so a second concurrent resolution is refused `already_resolved`.
+  Once either direct-send marker (`direct_send_conversation` or the historical
+  `direct_send_manual`) exists for a message, its candidate set is frozen: a replay
+  records no new match and opens no hold, and a resolution to a firm other than the
+  marker's is refused `already_applied`. Resolving an outgoing message is authorized
+  before anything is written: the mailbox's owner (or an administrator), and only for a
+  firm the assignment rule lets them change (`not_assigned` otherwise).
   The desktop Firm page lists the firm's held outgoing messages
   (`POST /messages/held-outgoing`) with a hover action per candidate firm that sends the
   same resolve command, and says the outcome or the refusal under the list.

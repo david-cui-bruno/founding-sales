@@ -645,6 +645,28 @@ export async function applyDirectSendEffects(
 }
 
 /**
+ * The firms a message's direct-send effect was already applied to, from either marker —
+ * `direct_send_conversation`, or the historical `direct_send_manual` (S1 review P1-D).
+ * Empty while no effect has been applied. Once it is not empty the message's candidate
+ * set is frozen: a replay records no new match, and a resolution to any other firm is
+ * refused.
+ */
+export async function directSendAppliedFirms(
+  context: RepositoryContext,
+  messageId: string,
+): Promise<readonly string[]> {
+  const { rows } = await context.db.query<{ firm_id: string | null }>(
+    `SELECT DISTINCT detail->>'firmId' AS firm_id FROM mail_message_effects
+      WHERE workspace_id = $1 AND mail_message_id = $2
+        AND effect_kind IN ('direct_send_conversation', 'direct_send_manual')`,
+    [context.scope.workspaceId, messageId],
+  );
+  // A marker whose detail names no firm still says "applied": it is kept as the empty
+  // string, which matches no firm, so nothing may be re-pointed on the strength of it.
+  return rows.map(row => row.firm_id ?? '');
+}
+
+/**
  * The contacts at this firm a message was addressed to, To and Cc, by their stored
  * addresses. A retired address is no longer the contact's, and an address that is one of
  * this workspace's own mailboxes is never a prospect's (`byParticipant`'s rule).

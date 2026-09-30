@@ -5,6 +5,7 @@ import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,
   applyDirectSendEffects,
+  directSendAppliedFirms,
   recordDeterministicClassification,
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
@@ -121,6 +122,14 @@ export async function processMessageIds(
         providerMessageId: stored.message.providerMessageId,
       });
       if (fenceId === null) {
+        // Once the direct-send effect has been applied — either marker, the current or
+        // the historical one — the message's candidate set is frozen (S1 review P1-D).
+        // A replay after a new address association would otherwise add the new firm as
+        // a held, ambiguous choice whose resolution could not move the effect.
+        if ((await directSendAppliedFirms(context, stored.message.id)).length > 0) {
+          matched += 1;
+          continue;
+        }
         candidates = await withOutgoingRecipientConflicts(context, { candidates, metadata: normalized });
       }
     }
