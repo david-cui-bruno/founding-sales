@@ -677,11 +677,11 @@ export async function consumeCallSession(
     db,
   );
 
-  // 4. The cadence (slice C1), under the firm lock: sessions created together cannot all
-  //    be placed. A call placed a moment ago and still ringing counts as an unanswered
-  //    attempt here (`readCallCadence`), so the second of two sessions is refused as the
-  //    same day's attempt, or as the one past the limit. Nothing is parked from here:
-  //    the next `createCallSession` does that, outside the gate this holds shared.
+  // 6. The cadence (slice C1), under the firm lock: sessions created together cannot all
+  //    be placed. Every placed call is an attempt from its consumption
+  //    (`readCallCadence`), so the second of two sessions is refused as the same day's
+  //    attempt, or as the one past the limit. Nothing is parked from here: recording the
+  //    fourth unanswered attempt does that (`parkIfCadenceSpent`).
   const cadence = await readCallCadence(context, session.firm_id, input.at ?? (await databaseNow(context)));
   if (cadence.refusal !== null) return refused(cadence.refusal);
 

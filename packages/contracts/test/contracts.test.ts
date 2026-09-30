@@ -272,12 +272,13 @@ describe('the announcement said when a call connects', () => {
 describe('the call-session refusal sentences (slice C1)', () => {
   it('has a sentence for every call-session code and for W’s retired attempt limit, never the code', async () => {
     const { CALL_SESSION_REFUSAL_CODES, callSessionRefusalSentence } = await import('../src/callSessions.ts');
-    for (const code of [...CALL_SESSION_REFUSAL_CODES, 'call_attempt_limit']) {
+    for (const code of [...CALL_SESSION_REFUSAL_CODES, 'call_attempt_limit', 'reservation_closed']) {
       const sentence = callSessionRefusalSentence(code);
       expect(sentence, code).toMatch(/\.$/u);
       expect(sentence).not.toContain(code);
     }
     expect(callSessionRefusalSentence('telephony_budget_exhausted')).toBe('Calling paused: today’s calling budget is used.');
+    expect(callSessionRefusalSentence('reservation_closed')).toBe("The call couldn't be authorised because today's calling budget changed. Try again.");
     expect(callSessionRefusalSentence('firm_suppressed')).toBeNull();
   });
 

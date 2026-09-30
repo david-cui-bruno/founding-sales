@@ -200,9 +200,13 @@ export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalC
  */
 export const CALL_ATTEMPT_LIMIT_SENTENCE = 'This firm has had as many calls as Callie allows for now. Try again on another day.';
 
+/** Slice W's consumption refusal when the call's reservation was no longer open. */
+export const RESERVATION_CLOSED_SENTENCE = "The call couldn't be authorised because today's calling budget changed. Try again.";
+
 /** The sentence for a call-session refusal, or null for a code this map does not own. */
 export function callSessionRefusalSentence(code: string): string | null {
   if (code === 'call_attempt_limit') return CALL_ATTEMPT_LIMIT_SENTENCE;
+  if (code === 'reservation_closed') return RESERVATION_CLOSED_SENTENCE;
   return Object.hasOwn(CALL_SESSION_REFUSAL_SENTENCES, code)
     ? (CALL_SESSION_REFUSAL_SENTENCES[code as CallSessionRefusalCode] ?? null)
     : null;
