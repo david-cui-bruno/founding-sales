@@ -835,6 +835,63 @@ describe('the listing walk (fold 3)', () => {
   });
 });
 
+describe('the listing-call cap holds inside a token chain (fold 4)', () => {
+  it('a run the cap interrupts mid-chain continues, and completes only on a run the cap lets finish', async () => {
+    // The last second of the baseline window (toAt is 2026-09-11T12:00:00Z), so the
+    // terminal slice is the walk's last and nothing is pending after its chain.
+    const second = Date.parse('2026-09-11T11:59:59Z');
+    world = await createMailWorld({
+      alphaMessages: [0, 1, 2, 3, 4, 5, 6, 7].map(index =>
+        fixtureMessage({
+          id: `chain${String(index)}`,
+          historyId: String(1001 + index),
+          from: STRANGER,
+          to: 'sales.alpha@example.test',
+          internalDateEpochMilliseconds: second,
+        }),
+      ),
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const run = async (listingCallCap: number): Promise<MailRecoveryReport> =>
+      await asJob(w, async () =>
+        await runMailRecovery(
+          context,
+          { ...w.syncDeps(w.alpha), pageSize: 2, maxMessages: 8, listingCallCap },
+          { mailboxId: w.alpha.mailboxId, generation: 1 },
+        ),
+      );
+    const listings = (): number => w.alpha.gmail.calls.filter(call => call.method === 'listMessageIds').length;
+
+    // Eight messages in one second, two a page: the terminal slice's chain is four pages.
+    // A probe (rolled back) finds where the chain's first token request falls, and the
+    // capped run is allowed exactly the calls before it.
+    const before = listings();
+    const probe = await asJob(w, async () => {
+      const report = await runMailRecovery(
+        context,
+        { ...w.syncDeps(w.alpha), pageSize: 2, maxMessages: 8 },
+        { mailboxId: w.alpha.mailboxId, generation: 1 },
+      );
+      throw Object.assign(new Error('roll back the probe'), { report });
+    }).catch((error: unknown) => (error as { report: MailRecoveryReport }).report);
+    expect(probe.outcome).toBe('completed');
+    const probeCalls = w.alpha.gmail.calls.filter(call => call.method === 'listMessageIds').slice(before);
+    const whole = probeCalls.length;
+    const firstToken = probeCalls.findIndex(call => call.detail['pageToken'] !== null);
+    expect(firstToken).toBeGreaterThan(0);
+    expect(whole - firstToken).toBe(3);
+
+    const capped = await run(firstToken);
+    expect(capped.outcome).toBe('continued');
+    expect(listings() - before - whole).toBe(firstToken);
+    expect((await readRecovery(context, { mailboxId: w.alpha.mailboxId, generation: 1 }))?.completedAt).toBeNull();
+
+    const finished = await run(whole);
+    expect(finished.outcome).toBe('completed');
+  });
+});
+
 describe('cursor_moved is fenced to commit (fold 3)', () => {
   it('a sync whose CAS finds the cursor moved holds the row at its generation until it commits', async () => {
     world = await createMailWorld();

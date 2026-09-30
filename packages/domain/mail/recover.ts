@@ -306,6 +306,8 @@ export interface MailRecoveryDeps extends MessagePipelineDeps {
   readonly cipher: EnvelopeCipher;
   readonly maxMessages?: number | undefined;
   readonly pageSize?: number | undefined;
+  /** Listing calls per run; `RECOVERY_LISTING_CALL_CAP` unless a test lowers it. */
+  readonly listingCallCap?: number | undefined;
 }
 
 export type MailRecoveryOutcome =
@@ -422,6 +424,7 @@ export async function runMailRecovery(
   // `RECOVERY_READ_CAP_FACTOR × maxMessages` ids are read (one metadata read each; a
   // collision adds one more read of the other message).
   const readCap = RECOVERY_READ_CAP_FACTOR * maxMessages;
+  const listingCallCap = deps.listingCallCap ?? RECOVERY_LISTING_CALL_CAP;
 
   // The walk (fold 2): the interval in time slices, each listed by ONE
   // `users.messages.list` call with no page token. Gmail documents nothing about how a
@@ -474,7 +477,7 @@ export async function runMailRecovery(
     // A bounded walk (fold 3): at most `RECOVERY_LISTING_CALL_CAP` listing calls per run.
     // A run that reaches it has not listed the whole window, so it cannot complete, and
     // the next run walks again.
-    if (listingCalls >= RECOVERY_LISTING_CALL_CAP) break;
+    if (listingCalls >= listingCallCap) break;
     const slice = pending.pop();
     if (slice === undefined) continue;
     // Every slice's `after:` is one second below it and the last slice's `before:` one
@@ -502,13 +505,21 @@ export async function runMailRecovery(
       const all = [...listed.ids];
       let next = listed.next ?? null;
       let pages = 1;
+      let capped = false;
       while (next !== null) {
+        // The cap holds inside a token chain too (fold 4): an interrupted chain leaves
+        // the walk unfinished, so the run continues rather than completes.
+        if (listingCalls >= listingCallCap) {
+          capped = true;
+          break;
+        }
         const page = await listOnce(query, next);
         if (!page.ok) return page.report;
         all.push(...page.ids);
         next = page.next ?? null;
         pages += 1;
       }
+      if (capped) break;
       (deps.log ?? stdoutMailLog)('warn', 'mail.recovery_slice_paginated', {
         mailboxId: mailbox.id,
         generation: input.generation,
