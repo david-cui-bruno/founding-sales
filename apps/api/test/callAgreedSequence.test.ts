@@ -54,7 +54,10 @@ describe('an agreed sequence recorded on the call card', () => {
    * A published two-step version: an e-mail two business days out and a call task four
    * business days out. Business days, so the workspace's holiday calendar moves them.
    */
-  async function publishedVersion(token: string, options: { readonly publish?: boolean } = {}): Promise<string> {
+  async function publishedVersion(
+    token: string,
+    options: { readonly publish?: boolean; readonly callFirst?: boolean } = {},
+  ): Promise<string> {
     const template = await post(
       '/templates/create',
       token,
@@ -76,10 +79,16 @@ describe('an agreed sequence recorded on the call card', () => {
       token,
       command({
         sequenceId: String(result(sequence)['id']),
-        steps: [
-          { ordinal: 1, channel: 'email', delay: { unit: 'business_days', days: 2 }, templateVersionId },
-          { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 4 }, onNoAnswer: 'advance' },
-        ],
+        steps:
+          options.callFirst === true
+            ? [
+                { ordinal: 1, channel: 'call_task', delay: { unit: 'business_days', days: 1 }, onNoAnswer: 'advance' },
+                { ordinal: 2, channel: 'email', delay: { unit: 'business_days', days: 3 }, templateVersionId },
+              ]
+            : [
+                { ordinal: 1, channel: 'email', delay: { unit: 'business_days', days: 2 }, templateVersionId },
+                { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 4 }, onNoAnswer: 'advance' },
+              ],
       }),
     );
     expect(draft.status, JSON.stringify(draft.body)).toBe(200);
@@ -268,6 +277,24 @@ describe('an agreed sequence recorded on the call card', () => {
       [fixture.alpha.workspaceId, enrollmentId],
     );
     expect(steps).toEqual([{ ordinal: 1, state: 'pending' }]);
+  });
+
+  it('starts an agreed sequence whose first step is a call', async () => {
+    // PR 335 gave `verifyFollowUpPermission` a `nextStep`: a one-message permission needs
+    // an e-mail next. An agreed sequence is the whole plan the person heard, calls
+    // included, so a call-first plan must still start from the card.
+    const sequenceVersionId = await publishedVersion(adminToken, { callFirst: true });
+    const at = await scene('Sycamore Test Advisers');
+    const logged = await logInterested(at, { scope: 'agreed_sequence', sequenceVersionId });
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const answer = loggedCallResultSchema.parse(result(logged));
+    const enrolled = answer.followUps.find(entry => entry.kind === 'agreed_sequence_enrolled');
+    expect(answer.followUps.map(entry => entry.kind), JSON.stringify(answer.followUps)).toEqual(['agreed_sequence_enrolled']);
+    const { rows: steps } = await fixture.db.query<{ ordinal: number; channel: string; state: string }>(
+      'SELECT ordinal, channel, state FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2 ORDER BY ordinal',
+      [fixture.alpha.workspaceId, enrolled?.enrollmentId],
+    );
+    expect(steps).toEqual([{ ordinal: 1, channel: 'call_task', state: 'pending' }]);
   });
 
   it('previews each step at the instant the enrolment then schedules it', async () => {
