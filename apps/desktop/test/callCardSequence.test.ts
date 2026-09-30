@@ -579,8 +579,11 @@ describe('the Today bridge and an agreed sequence', () => {
     /*
      * Identity A records a call whose answer is held inside the server. A signs out and
      * B signs in; B records a call of their own that keeps an agreement pending. Then
-     * A's answer lands, and A's continuation is held again in the list refresh that
-     * follows it. B's state is read before A's answer, during A's held refresh, and
+     * A's answer lands. The list refresh that would follow it is set to hold: on the
+     * fixed path the check after /calls/log returns before that refresh starts, so it
+     * never holds, and it holds only when the check is missing (which is when A's
+     * pending agreement would be sitting in the shared fields). B's state is read
+     * before A's answer, once A's call has either finished or reached that refresh, and
      * after A's call has finished: none of A's ids appears, and B's pending agreement
      * is B's throughout — the guard's late clear must not erase it.
      */
@@ -690,13 +693,13 @@ describe('the Today bridge and an agreed sequence', () => {
     expectB(recorded, 'B’s own answer');
     expectB(await bridge.state(), 'before A’s answer lands');
 
-    // A's answer lands; its continuation is held in the refresh that would follow it.
+    // A's answer lands. Its refresh would hold here, but the fixed path never starts it.
     holdRefresh = true;
     (releaseLog as (() => void) | null)?.();
     for (let tick = 0; tick < 200 && !aSettled && releaseRefresh === null; tick += 1) {
       await new Promise(resolve => setTimeout(resolve, 1));
     }
-    expectB(await bridge.state(), 'while A’s call is still finishing');
+    expectB(await bridge.state(), 'once A’s answer has landed');
 
     (releaseRefresh as (() => void) | null)?.();
     const lateAnswer = await late;
@@ -704,6 +707,57 @@ describe('the Today bridge and an agreed sequence', () => {
     expect(lateAnswer.pendingAgreement ?? null).toBeNull();
     expect(JSON.stringify(lateAnswer)).not.toContain(B_CALL);
     expectB(await bridge.state(), 'after A’s call finished');
+  });
+
+  it('decides a late answer is blank after its session read, not before it (round 7, P2)', async () => {
+    // An unwrapped bridge: A asks for a preview, and the session read of the answer's
+    // snapshot is held. The identity changes during that read and B previews a person of
+    // their own. A's answer must not carry B's preview.
+    const B_CONTACT = 'dededede-dede-4ede-8ede-dededededede';
+    const { api } = scriptedApi(
+      baseAnswers({
+        '/calls/follow-up-preview': {
+          status: 200,
+          body: {
+            sequenceVersionId: PUBLISHED,
+            sequenceName: 'After a good call',
+            version: 3,
+            firmTimeZone: 'America/New_York',
+            holidayCalendarVersion: 'none.1',
+            anchoredAt: '2026-09-30T15:00:00.000Z',
+            steps: [],
+          },
+        },
+      }),
+    );
+    let holdNextState = false;
+    let releaseState: (() => void) | null = null;
+    const heldSession = {
+      state: async () => {
+        if (holdNextState) {
+          holdNextState = false;
+          await new Promise<void>(resolve => {
+            releaseState = resolve;
+          });
+        }
+        return await session.state();
+      },
+      refreshToday: session.refreshToday,
+    };
+    const bridge = createTodayBridge({ api, handoff, session: heldSession });
+    holdNextState = true;
+    const late = bridge.previewFollowUp({ firmId: FIRM_ID, contactId: CONTACT_ID, sequenceVersionId: PUBLISHED });
+    for (let tick = 0; tick < 200 && releaseState === null; tick += 1) await new Promise(resolve => setTimeout(resolve, 1));
+    expect(releaseState, 'A’s answer reached its session read').not.toBeNull();
+
+    await bridge.forget();
+    const b = await bridge.previewFollowUp({ firmId: FIRM_ID, contactId: B_CONTACT, sequenceVersionId: PUBLISHED });
+    expect(b.followUpPreview?.contactId).toBe(B_CONTACT);
+
+    (releaseState as (() => void) | null)?.();
+    const answer = await late;
+    expect(answer.followUpPreview ?? null).toBeNull();
+    expect(JSON.stringify(answer)).not.toContain(B_CONTACT);
   });
 
   it('forgets a preview still on the wire when the card is closed (round 2, P2)', async () => {

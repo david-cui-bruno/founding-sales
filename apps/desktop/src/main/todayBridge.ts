@@ -326,11 +326,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     };
   };
 
-  const snapshot = async (options: { readonly blank?: boolean } = {}): Promise<TodayState> => {
+  const snapshot = async (options: { readonly generation?: number } = {}): Promise<TodayState> => {
     const session = await deps.session.state();
     // The empty state a late method answers with when a newer generation owns the
-    // fields: the session's facts, and nothing this bridge holds.
-    if (options.blank === true) {
+    // fields: the session's facts, and nothing this bridge holds. Decided after the
+    // session read, not before it: a `forget` that runs while that read is on the wire
+    // would otherwise let the fields of the newer generation through (round 7, P2).
+    if (options.generation !== undefined && stale(options.generation)) {
       return todayStateSchema.parse({
         snapshotDate: session.today?.snapshotDate ?? null,
         businessTimeZone: session.today?.businessTimeZone ?? null,
@@ -378,7 +380,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   /** A method's answer: the empty state when a newer generation owns the fields. */
-  const answerFor = async (mine: number): Promise<TodayState> => await snapshot({ blank: stale(mine) });
+  const answerFor = async (mine: number): Promise<TodayState> => await snapshot({ generation: mine });
 
   /** Record what a call answered, and forget any expansion it invalidated. */
   const note = (outcome: ApiOutcome<unknown>, accepted: string | null): boolean => {
@@ -645,7 +647,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       current: () => generation,
       async forgetIfCurrent(since: number): Promise<TodayState> {
         if (!stale(since)) return await host.forget();
-        return await snapshot({ blank: true });
+        return await snapshot({ generation: since });
       },
     },
 
