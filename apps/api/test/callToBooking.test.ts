@@ -99,6 +99,14 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
   });
 
   async function newSession(): Promise<string> {
+    // Every placed call is a cadence attempt (slice C1), dated by the database's clock
+    // while these decisions are taken at the next weekday morning: each test's call
+    // starts after a resetting outcome, so the cadence is not what they are about.
+    await fixture.db.query(
+      `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+       VALUES ($1, $2, 'interested', 'none', clock_timestamp(), clock_timestamp(), $3)`,
+      [fixture.alpha.workspaceId, firmId, fixture.alpha.salesperson.userId],
+    );
     const created = await api(
       '/calls/session',
       salespersonToken,

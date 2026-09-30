@@ -12,6 +12,8 @@ import {
   recordCallStatus,
   sweepCallSessionReservations,
 } from '../../calls/sessions.ts';
+import { logCallOutcome } from '../../dial/calls.ts';
+import { authorizeDial } from '../../dial/authorize.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
@@ -70,7 +72,7 @@ describe('call sessions', () => {
   }
 
   async function consume(workspace: 'alpha' | 'beta', sessionId: string, sid: string, identity?: string) {
-    return await withTransaction(database.session, async () =>
+    const consumed = await withTransaction(database.session, async () =>
       await consumeCallSession(database.session, {
         workspaceId: seeded[workspace].workspaceId,
         sessionId,
@@ -79,6 +81,15 @@ describe('call sessions', () => {
         at: policy.insideWindow,
       }),
     );
+    // Every placed call is a cadence attempt (slice C1). These tests are about the session
+    // itself, so the call is dated weeks before the decisions they take, outside the window.
+    if (consumed.ok) {
+      await database.session.query(
+        "UPDATE call_sessions SET consumed_at = '2026-08-03T14:00:00Z', expires_at = GREATEST(expires_at, '2026-08-03T14:00:00Z') WHERE id = $1",
+        [sessionId],
+      );
+    }
+    return consumed;
   }
 
   async function reservationOf(sessionId: string): Promise<{ state: string; cents: number; settled_cents: number }> {
@@ -239,10 +250,12 @@ describe('call sessions', () => {
     const TUE_12 = '2026-09-22T16:00:00.000Z';
     const WED_NEXT_15 = '2026-09-30T19:00:00.000Z';
 
-    async function createAt(at: string) {
+    const beta = (): RepositoryContext => salesperson('beta');
+
+    async function createAt(at: string, context: RepositoryContext = beta()) {
       counter += 1;
       return await withTransaction(database.session, async () =>
-        await createCallSession(salesperson('beta'), {
+        await createCallSession(context, {
           firmId: crm.beta.firmId,
           routeId: policy.beta.phoneRouteId,
           routeVersion: policy.beta.phoneRouteVersion,
@@ -255,47 +268,63 @@ describe('call sessions', () => {
       );
     }
 
-    /** Place a call at `at` and end it as `ending`: Twilio's status, or a recorded outcome. */
-    async function attempt(at: string, ending: { provider?: string; outcome?: string }): Promise<string> {
-      const created = await createAt(at);
-      if (!created.ok) throw new Error(`refused at ${at}: ${created.reason}`);
+    /** Consume a created session at `at` and date the call there. Returns its Call SID. */
+    async function place(sessionId: string, at: string): Promise<{ ok: boolean; reason?: string; sid: string }> {
       const sid = callSid();
       const consumed = await withTransaction(database.session, async () =>
         await consumeCallSession(database.session, {
           workspaceId: seeded.beta.workspaceId,
-          sessionId: created.value.sessionId,
+          sessionId,
           callSid: sid,
           identity: `client:${seeded.beta.salesperson.userId}`,
           at,
         }),
       );
-      if (!consumed.ok) throw new Error(consumed.reason);
-      await withTransaction(database.session, async () =>
-        await recordCallStatus(database.session, { callSid: sid, providerStatus: ending.provider ?? 'completed' }),
-      );
+      if (!consumed.ok) return { ok: false, reason: consumed.reason, sid };
       // The call happened at `at` on the firm's clock, not at the test's wall clock.
       await database.session.query(
         `UPDATE call_sessions SET consumed_at = $2::timestamptz, expires_at = GREATEST(expires_at, $2::timestamptz)
           WHERE id = $1`,
-        [created.value.sessionId, at],
+        [sessionId, at],
       );
-      if (ending.outcome !== undefined) await logOutcome(at, ending.outcome, created.value.sessionId);
+      return { ok: true, sid };
+    }
+
+    const status = async (sid: string, providerStatus: string) =>
+      await withTransaction(database.session, async () => await recordCallStatus(database.session, { callSid: sid, providerStatus }));
+
+    /** An outcome recorded through the real command, linked to the session. */
+    // "Just now" on the database's clock: an unanswered outcome's instant resets nothing.
+    const record = async (sessionId: string, outcome: 'voicemail_left' | 'no_answer' | 'not_interested', _at: string) =>
+      await withTransaction(database.session, async () =>
+        await logCallOutcome(beta(), { firmId: crm.beta.firmId, callSessionId: sessionId, outcome }),
+      );
+
+    /** Create, place and end a call at `at`: Twilio's final status, and an outcome if given. */
+    async function attempt(at: string, ending: { provider?: string; outcome?: 'voicemail_left' | 'no_answer' } = {}): Promise<string> {
+      const created = await createAt(at);
+      if (!created.ok) throw new Error(`refused at ${at}: ${created.reason}`);
+      const placed = await place(created.value.sessionId, at);
+      if (!placed.ok) throw new Error(`not placed at ${at}: ${placed.reason ?? ''}`);
+      if (ending.provider !== undefined) await status(placed.sid, ending.provider);
+      if (ending.outcome !== undefined) {
+        const logged = await record(created.value.sessionId, ending.outcome, at);
+        if (!logged.ok) throw new Error(logged.reason);
+      }
       return created.value.sessionId;
     }
 
-    async function logOutcome(at: string, outcome: string, sessionId?: string): Promise<void> {
-      const { rows } = await database.session.query<{ id: string }>(
+    /** A resetting outcome for the firm at `at`: everything before it is out of the count. */
+    async function reset(at: string): Promise<void> {
+      await database.session.query(
         `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
-         VALUES ($1, $2, $3, 'none', $4::timestamptz, $4::timestamptz, $5) RETURNING id`,
-        [seeded.beta.workspaceId, crm.beta.firmId, outcome, at, seeded.beta.salesperson.userId],
+         VALUES ($1, $2, 'interested', 'none', $3::timestamptz, $3::timestamptz, $4)`,
+        [seeded.beta.workspaceId, crm.beta.firmId, at, seeded.beta.salesperson.userId],
       );
-      if (sessionId !== undefined) {
-        await database.session.query('UPDATE call_sessions SET call_log_id = $2 WHERE id = $1', [sessionId, rows[0]?.id]);
-      }
     }
 
     const cadenceAt = async (at: string) =>
-      await withTransaction(database.session, async () => await readCallCadence(salesperson('beta'), crm.beta.firmId, at));
+      await withTransaction(database.session, async () => await readCallCadence(beta(), crm.beta.firmId, at));
 
     async function openParkingHolds(): Promise<number> {
       const { rows } = await database.session.query<{ count: string }>(
@@ -306,25 +335,28 @@ describe('call sessions', () => {
       return Number(rows[0]?.count ?? 0);
     }
 
+    const resume = async () =>
+      await withTransaction(database.session, async () => await resumeCallCadence(beta(), { firmId: crm.beta.firmId }));
+
     beforeAll(async () => {
       await budget('beta', 5000);
     });
 
-    it('spaces unanswered attempts: one a business day, two hours of the clock apart, and parks after the fourth', async () => {
+    it('counts every placed call, spaces them on the firm’s clock, and parks when the fourth is recorded unanswered', async () => {
       expect(await cadenceAt(WED_10)).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, parked: false, refusal: null });
       await attempt(WED_10, { provider: 'no-answer' });
-      // Same local day: refused, whatever the hour.
       expect(await createAt(WED_15)).toEqual({ ok: false, reason: 'call_attempt_today' });
-      // Next day, but within two hours of 10:00 on their clock.
       expect(await createAt(THU_11)).toEqual({ ok: false, reason: 'call_attempt_too_soon' });
-      await attempt(THU_13, { provider: 'busy' });
-      await attempt(FRI_16, { outcome: 'voicemail_left', provider: 'completed' });
-      expect(await cadenceAt(MON_09)).toMatchObject({ unansweredAttempts: 3, nextAttempt: 4, parked: false });
-      await attempt(MON_09, { provider: 'no-answer' });
-      expect(await cadenceAt(TUE_12)).toMatchObject({ unansweredAttempts: 4, nextAttempt: null, parked: true });
+      // Answered, and no outcome recorded: still an attempt until one says somebody was reached.
+      await attempt(THU_13, { provider: 'completed' });
+      expect(await cadenceAt(FRI_16)).toMatchObject({ unansweredAttempts: 2, nextAttempt: 3 });
+      // A machine answered (in progress to Twilio) and David recorded the voicemail.
+      await attempt(FRI_16, { provider: 'in-progress', outcome: 'voicemail_left' });
+      expect(await openParkingHolds()).toBe(0);
 
-      // The fifth: refused, and the firm is parked with one firm-scoped hold.
-      expect(await createAt(TUE_12)).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      // The fourth, recorded unanswered by Twilio's final status: parked at once, without
+      // waiting for a fifth request that a disabled Call button would never send.
+      await attempt(MON_09, { provider: 'no-answer' });
       expect(await openParkingHolds()).toBe(1);
       const { rows: holds } = await database.session.query<{ reason_code: string; blocked_action_kinds: string[] }>(
         `SELECT reason_code, blocked_action_kinds FROM active_holds
@@ -332,40 +364,110 @@ describe('call sessions', () => {
         [seeded.beta.workspaceId, crm.beta.firmId],
       );
       expect(holds[0]).toMatchObject({ reason_code: 'scoped_pause', blocked_action_kinds: ['dial_authorization'] });
-      // A second try does not open a second hold.
+      // The tel: path's decision is held too, and after the window the firm is still parked.
+      const held = await withTransaction(database.session, async () =>
+        await authorizeDial(beta(), {
+          firmId: crm.beta.firmId,
+          routeId: policy.beta.phoneRouteId,
+          routeVersion: policy.beta.phoneRouteVersion,
+          callingIdentityId: policy.beta.callingIdentityId,
+          at: TUE_12,
+        }),
+      );
+      expect(held).toMatchObject({ allowed: false, reason: 'scoped_pause' });
       expect(await createAt(TUE_12)).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      expect(await cadenceAt(WED_NEXT_15)).toMatchObject({ parked: true, refusal: 'call_attempts_exhausted' });
       expect(await openParkingHolds()).toBe(1);
 
-      // Fourteen days after the first, still parked: the hold is the review, not the clock.
-      expect(await cadenceAt(WED_NEXT_15)).toMatchObject({ parked: true, refusal: 'call_attempts_exhausted' });
-
       // Resume calling: the review releases the hold and starts the count again.
-      const resumed = await withTransaction(database.session, async () =>
-        await resumeCallCadence(salesperson('beta'), { firmId: crm.beta.firmId }),
-      );
-      expect(resumed.ok).toBe(true);
+      expect((await resume()).ok).toBe(true);
       expect(await openParkingHolds()).toBe(0);
-      const after = await cadenceAt(new Date(Date.now() + 60_000).toISOString());
-      expect(after).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, parked: false });
+      expect(await cadenceAt(new Date(Date.now() + 60_000).toISOString())).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1 });
     });
 
-    it('counts neither a conversation nor a call that failed, and a conversation or a callback request resets the count', async () => {
-      // Move this firm's history out of the way: everything above is before the reset.
-      await logOutcome('2026-10-01T14:00:00.000Z', 'interested');
+    it('parks when the fourth is recorded as a voicemail left, once however often it is recorded', async () => {
+      await reset('2026-10-01T14:00:00.000Z');
       const base = Date.parse('2026-10-05T14:00:00.000Z'); // Monday 10:00 in New York
       const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
-
       await attempt(day(0), { provider: 'no-answer' });
-      await attempt(day(1, 3), { provider: 'failed' }); // a failed call is not an attempt
-      await attempt(day(2, 3), { provider: 'completed', outcome: 'not_interested' }); // a conversation resets
-      expect(await cadenceAt(day(3))).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1 });
+      await attempt(day(1, 3), { provider: 'busy' });
+      await attempt(day(2), { provider: 'no-answer' });
+      const fourth = await attempt(day(3, 3), { provider: 'in-progress', outcome: 'voicemail_left' });
+      expect(await openParkingHolds()).toBe(1);
+      // The same attempt's final status arriving late parks nothing more.
+      const { rows } = await database.session.query<{ twilio_call_sid: string }>('SELECT twilio_call_sid FROM call_sessions WHERE id = $1', [
+        fourth,
+      ]);
+      await status(rows[0]?.twilio_call_sid ?? '', 'completed');
+      expect(await openParkingHolds()).toBe(1);
+      expect((await resume()).ok).toBe(true);
+    });
 
-      await attempt(day(3), { provider: 'no-answer' });
-      await attempt(day(4, 3), { provider: 'no-answer' });
-      expect(await cadenceAt(day(7))).toMatchObject({ unansweredAttempts: 2, nextAttempt: 3 });
-      // "Call me back": recorded on any call log, placed from Callie or not.
-      await logOutcome(day(7), 'callback_requested');
-      expect(await cadenceAt(day(7, 1))).toMatchObject({ unansweredAttempts: 0, nextAttempt: 1, refusal: null });
+    it('keeps a placed call with no status and no outcome in the history: no expiry, and it spaces the next', async () => {
+      await reset('2026-10-12T12:00:00.000Z');
+      const MON = '2026-10-19T14:00:00.000Z'; // 10:00 in New York
+      const created = await createAt(MON);
+      if (!created.ok) throw new Error(created.reason);
+      expect((await place(created.value.sessionId, MON)).ok).toBe(true);
+      // Six hours later, the same day: still that day's attempt (nothing expired it).
+      expect(await createAt('2026-10-19T20:00:00.000Z')).toEqual({ ok: false, reason: 'call_attempt_today' });
+      // The next day at nearly the same time: spaced from its time.
+      expect(await createAt('2026-10-20T15:00:00.000Z')).toEqual({ ok: false, reason: 'call_attempt_too_soon' });
+      expect(await cadenceAt('2026-10-26T14:00:00.000Z')).toMatchObject({ unansweredAttempts: 1, nextAttempt: 2 });
+    });
+
+    it('refuses the second of two sessions when the first reached a machine and has no outcome yet (the review’s case)', async () => {
+      await reset('2026-10-27T12:00:00.000Z');
+      const base = Date.parse('2026-11-02T15:00:00.000Z'); // Monday 10:00 in New York (EST)
+      const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
+      await attempt(day(0), { provider: 'no-answer' });
+      await attempt(day(1, 3), { provider: 'no-answer' });
+      await attempt(day(2), { provider: 'no-answer' });
+      // Two sessions for the fourth; the first is answered by a machine (in progress).
+      const first = await createAt(day(3, 3));
+      const second = await createAt(day(3, 3));
+      if (!first.ok || !second.ok) throw new Error('not created');
+      const placed = await place(first.value.sessionId, day(3, 3));
+      await status(placed.sid, 'in-progress');
+      expect(await place(second.value.sessionId, day(3, 3))).toMatchObject({ ok: false, reason: 'call_attempts_exhausted' });
+      // David records the voicemail: the fourth unanswered attempt, and the firm is parked.
+      expect((await record(first.value.sessionId, 'voicemail_left', day(3, 3))).ok).toBe(true);
+      expect(await openParkingHolds()).toBe(1);
+      expect((await resume()).ok).toBe(true);
+    });
+
+    it('parks from a call request only after the dial decision accepts the caller; another assignee’s firm writes nothing', async () => {
+      await reset('2026-11-09T12:00:00.000Z');
+      const base = Date.parse('2026-11-16T15:00:00.000Z'); // Monday 10:00 in New York
+      const day = (days: number, hour = 0): string => new Date(base + days * 86_400_000 + hour * 3_600_000).toISOString();
+      await attempt(day(0), { provider: 'no-answer' });
+      await attempt(day(1, 3), { provider: 'no-answer' });
+      await attempt(day(2), { provider: 'no-answer' });
+      // The fourth reached somebody who was not asked what happened: an attempt, no hold yet.
+      await attempt(day(3, 3), { provider: 'completed' });
+      expect(await openParkingHolds()).toBe(0);
+
+      await database.session.query('UPDATE firms SET assigned_user_id = $2 WHERE workspace_id = $1 AND id = $3', [
+        seeded.beta.workspaceId,
+        seeded.beta.admin.userId,
+        crm.beta.firmId,
+      ]);
+      try {
+        const refused = await createAt(day(4));
+        expect(refused.ok).toBe(false);
+        expect(refused).not.toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+        expect(await openParkingHolds()).toBe(0);
+      } finally {
+        await database.session.query('UPDATE firms SET assigned_user_id = $2 WHERE workspace_id = $1 AND id = $3', [
+          seeded.beta.workspaceId,
+          seeded.beta.salesperson.userId,
+          crm.beta.firmId,
+        ]);
+      }
+      // The assignee's own request is accepted by the decision, and parks the firm once.
+      expect(await createAt(day(4))).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      expect(await createAt(day(4))).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+      expect(await openParkingHolds()).toBe(1);
     });
   });
 });

@@ -109,18 +109,23 @@ describe('call-session consumption under concurrency', () => {
     at,
   });
 
-  /** The call ends with Twilio's `status`, and it happened at `at` on the firm's clock. */
+  /** Date a placed call at `at` on the firm's clock (not the test's wall clock). */
+  async function dateCall(sessionId: string, at: string): Promise<void> {
+    await database.session.query(
+      'UPDATE call_sessions SET consumed_at = $2::timestamptz, expires_at = GREATEST(expires_at, $2::timestamptz) WHERE id = $1',
+      [sessionId, at],
+    );
+  }
+
+  /** The call happened at `at`, and ends with Twilio's `status`. */
   async function endCall(sessionId: string, status: string, at: string): Promise<void> {
+    await dateCall(sessionId, at);
     const { rows } = await database.session.query<{ twilio_call_sid: string }>(
       'SELECT twilio_call_sid FROM call_sessions WHERE id = $1',
       [sessionId],
     );
     await withTransaction(database.session, async () =>
       await recordCallStatus(database.session, { callSid: rows[0]?.twilio_call_sid ?? '', providerStatus: status }),
-    );
-    await database.session.query(
-      'UPDATE call_sessions SET consumed_at = $2::timestamptz, expires_at = GREATEST(expires_at, $2::timestamptz) WHERE id = $1',
-      [sessionId, at],
     );
   }
 
@@ -153,13 +158,14 @@ describe('call-session consumption under concurrency', () => {
         await consumeCallSession(database.session, consumeInput('beta', sessionId)),
       );
       outcomes.push(consumed.ok ? 'placed' : consumed.reason);
+      if (consumed.ok) await dateCall(sessionId, policy.insideWindow);
     }
     expect(outcomes).toEqual(['placed', 'call_attempt_today', 'call_attempt_today', 'call_attempt_today']);
     // The placed one ends unanswered; the firm's day is spent either way.
     await endCall(sessions[0] ?? '', 'no-answer', policy.insideWindow);
   });
 
-  it('refuses at TwiML the attempt past the fourth, when the fourth was placed after this session was created', async () => {
+  it('refuses at TwiML the attempt past the fourth, placed after this session was created, and parks the firm', async () => {
     // Beta already has Wednesday's unanswered attempt (above). Two more on Thursday and Friday.
     const THU = '2026-09-17T17:00:00.000Z';
     const FRI = '2026-09-18T20:00:00.000Z';
@@ -172,6 +178,7 @@ describe('call-session consumption under concurrency', () => {
       expect(consumed.ok).toBe(true);
       await endCall(sessionId, 'no-answer', at);
     }
+    // (Wednesday, Thursday and Friday: three attempts.)
     // Monday: two sessions pass creation as the fourth attempt; one is placed and goes unanswered.
     const early = await create('beta', MON);
     const late = await create('beta', MON);
@@ -184,6 +191,12 @@ describe('call-session consumption under concurrency', () => {
       await consumeCallSession(database.session, consumeInput('beta', early, MON)),
     );
     expect(refused).toEqual({ ok: false, reason: 'call_attempts_exhausted' });
+    const { rows } = await database.session.query<{ count: string }>(
+      `SELECT count(*) AS count FROM active_holds
+        WHERE workspace_id = $1 AND source_event_kind = 'call_cadence_parked' AND released_at IS NULL`,
+      [seeded.beta.workspaceId],
+    );
+    expect(Number(rows[0]?.count)).toBe(1);
   });
 
   it('holds a suppression writer until the authorization commits, when the consumption took the gate first', async () => {
@@ -211,7 +224,7 @@ describe('call-session consumption under concurrency', () => {
       // The call linearised before the suppression, the ordering the gate allows.
       expect(consumed.ok).toBe(true);
       // It ended having reached somebody: not an attempt the next test's cadence counts.
-      await endCall(sessionId, 'completed', '2026-09-15T14:00:00.000Z');
+      await endCall(sessionId, 'completed', '2026-09-14T17:00:00.000Z');
     } finally {
       await other.end().catch(() => undefined);
     }

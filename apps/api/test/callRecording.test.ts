@@ -162,12 +162,12 @@ describe('calling status, history and recordings (slice C1)', () => {
     expect(voiceTwiml).toContain(`>${PHONE}</Number>`);
   });
 
-  it('answers the calling status: attempt 1 of 4, the voicemail template, the caller and their own number', async () => {
+  it('answers the calling status: attempt 2 of 4 after the placed call, the voicemail template, the caller and their own number', async () => {
     const status = await get(`/calls/calling?firmId=${firmId}`, salespersonToken);
     expect(status.status, status.text).toBe(200);
     expect(status.body).toMatchObject({
       provider: 'twilio',
-      cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null },
+      cadence: { unansweredAttempts: 1, nextAttempt: 2, limit: 4, parked: false },
       callbackNumber: CALLER_ID,
     });
     expect(String(status.body['voicemailTemplate'])).toContain('{callbackNumber}');

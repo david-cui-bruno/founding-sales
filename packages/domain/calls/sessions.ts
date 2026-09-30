@@ -16,6 +16,8 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { readFirm } from '../crm/firms.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { openHold, releaseHold } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { authorizeDial } from '../dial/authorize.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
 import { markCalling, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
 import { readTelephonyBudget, readVoicemailScript } from '../settings/integrations.ts';
@@ -107,9 +109,20 @@ export async function createCallSession(
   // is the early refusal: the same cadence is held atomically at consumption, under the
   // firm lock (`consumeCallSession`), so sessions created together cannot all be placed.
   const cadence = await readCallCadence(context, input.firmId, now);
-  if (cadence.refusal === 'call_attempts_exhausted') {
+  if (cadence.refusal === 'call_attempts_exhausted' && cadence.parkingHoldId === null) {
+    // Parked only by somebody the dial decision accepts for this firm, route and identity
+    // (review of C1, fold 1, finding 4): another assignee's firm is refused as such, and a
+    // refused command writes nothing.
+    const decision = await authorizeDial(context, {
+      firmId: input.firmId,
+      ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
+      routeId: input.routeId,
+      routeVersion: input.routeVersion,
+      callingIdentityId: input.callingIdentityId,
+      at: now,
+    });
+    if (!decision.allowed) return refuse(decision.reason);
     await parkFirmForReview(context, input.firmId, cadence.lastAttemptSessionId);
-    return refuse('call_attempts_exhausted');
   }
   if (cadence.refusal !== null) return refuse(cadence.refusal);
 
@@ -208,15 +221,8 @@ export async function createCallSession(
 /** `active_holds.source_event_kind` of the hold that parks a firm after its last unanswered attempt. */
 export const CALL_CADENCE_PARKED_SOURCE = 'call_cadence_parked';
 
-/** Outcomes recorded for a placed call that say nobody answered. */
-const UNANSWERED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>(['no_answer', 'busy', 'voicemail_left']);
-/**
- * A placed call nobody has answered yet — still `authorized` or `ringing`, no outcome —
- * counts as an unanswered attempt for this long after it was placed (the longest call a
- * reservation allows), so two sessions created together cannot both be placed. A call
- * whose final callback never came stops counting after it.
- */
-const PENDING_ATTEMPT_MINUTES = 240;
+/** Outcomes recorded for a placed call that say nobody answered: recording one may park the firm. */
+export const UNANSWERED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>(['no_answer', 'busy', 'voicemail_left']);
 /** Twilio's final status of the dialled leg when nobody answered, before an outcome is recorded. */
 const UNANSWERED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['no-answer', 'busy']);
 /**
@@ -240,22 +246,22 @@ export interface CallCadenceState extends CallCadence {
 }
 
 /**
- * The firm's calling cadence at `at` (`CALL_CADENCE`): how many unanswered attempts count,
- * which attempt the next call would be, and why the cadence would refuse one now.
+ * The firm's calling cadence at `at` (`CALL_CADENCE`): how many attempts count, which
+ * attempt the next call would be, and why the cadence would refuse one now.
  *
- * A call placed and still ringing, with no outcome, counts as unanswered for
- * `PENDING_ATTEMPT_MINUTES`: that is what makes the re-check at consumption atomic.
+ * **Every placed (consumed) session is an attempt from the moment it is consumed**, and
+ * stays an unanswered attempt in the window's history until an outcome that says
+ * somebody was reached — a resetting outcome — is recorded for the firm. A call that
+ * rang out, reached a machine, failed, or was never classified is an attempt; nothing
+ * expires one but the window itself (review of C1, fold 1, finding 2).
  *
  * Counted since the latest of: `at` minus the window, the last resetting outcome recorded
- * for the firm, and the last release of a parking hold (the review). An attempt is a
- * *placed* session (consumed); a session nobody placed, a failed or cancelled one, and a
- * call that reached somebody are not attempts. The recorded outcome wins over Twilio's
- * status: a machine that answered is `in_progress` to Twilio and `voicemail_left` here.
+ * for the firm, and the last release of a parking hold (the review).
  *
- * Spacing is on the firm's own clock: at most one unanswered attempt a local date, and
- * the next at least `spacingMinutes` of the clock away from the previous one's time of
- * day. The calling window itself is `authorizeDial`'s. A firm with no zone is not spaced
- * here; `authorizeDial` refuses it (`zone_unresolved`).
+ * Spacing is on the firm's own clock, from every counted session's time: at most one
+ * attempt a local date, and the next at least `spacingMinutes` of the clock away from the
+ * previous one's time of day. The calling window itself is `authorizeDial`'s. A firm with
+ * no zone is not spaced here; `authorizeDial` refuses it (`zone_unresolved`).
  */
 export async function readCallCadence(
   context: RepositoryContext,
@@ -276,29 +282,18 @@ export async function readCallCadence(
   );
   const resetAt = resets[0]?.reset_at ?? null;
 
-  const { rows: sessions } = await context.db.query<{
-    id: string;
-    consumed_at: Date;
-    provider_status: string | null;
-    outcome: CallOutcome | null;
-    pending: boolean;
-  }>(
-    `SELECT s.id, s.consumed_at, s.provider_status, l.outcome,
-            (s.status IN ('authorized', 'ringing') AND s.consumed_at > $3::timestamptz - make_interval(mins => $6)) AS pending
+  const { rows: sessions } = await context.db.query<{ id: string; consumed_at: Date; outcome: CallOutcome | null }>(
+    `SELECT s.id, s.consumed_at, l.outcome
        FROM call_sessions s
        LEFT JOIN call_logs l ON l.workspace_id = s.workspace_id AND l.id = s.call_log_id
       WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.consumed_at IS NOT NULL
         AND s.consumed_at > $3::timestamptz - make_interval(days => $4)
         AND ($5::timestamptz IS NULL OR s.consumed_at > $5::timestamptz)
       ORDER BY s.consumed_at, s.id`,
-    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt, PENDING_ATTEMPT_MINUTES],
+    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt],
   );
-  const unanswered = sessions.filter(row =>
-    row.outcome !== null
-      ? UNANSWERED_OUTCOMES.has(row.outcome)
-      : (row.provider_status !== null && UNANSWERED_PROVIDER_STATUSES.has(row.provider_status)) || row.pending,
-  );
-  const last = unanswered.at(-1) ?? null;
+  const attempts = sessions.filter(row => row.outcome === null || !RESETTING_OUTCOMES.includes(row.outcome));
+  const last = attempts.at(-1) ?? null;
 
   const { rows: holds } = await context.db.query<{ id: string }>(
     `SELECT id FROM active_holds
@@ -309,11 +304,9 @@ export async function readCallCadence(
   );
   const parkingHoldId = holds[0]?.id ?? null;
 
-  const count = unanswered.length;
+  const count = attempts.length;
   const parked = count >= CALL_CADENCE.unansweredLimit || parkingHoldId !== null;
   let refusal: CallCadence['refusal'] = parked ? 'call_attempts_exhausted' : null;
-  // A call to this firm is still ringing: one attempt at a time, whatever the clock says.
-  if (refusal === null && unanswered.some(row => row.outcome === null && row.pending)) refusal = 'call_attempt_today';
   if (refusal === null && last !== null) {
     const { rows: firms } = await context.db.query<{ time_zone: string | null }>(
       'SELECT time_zone FROM firms WHERE workspace_id = $1 AND id = $2',
@@ -341,11 +334,38 @@ export async function readCallCadence(
 }
 
 /**
+ * A placed session was just recorded as unanswered — an outcome of no answer, busy or a
+ * voicemail left, or Twilio's final no-answer/busy with no outcome yet. If that brings
+ * the firm's attempts to the limit, park it now (review of C1, fold 1, finding 3), so the
+ * `tel:` path is held too and nothing reopens calling without a review. Idempotent.
+ */
+export async function parkIfCadenceSpent(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly sessionId: string },
+): Promise<string | null> {
+  // The gate before anything is read: two recordings cannot both find no hold.
+  await lockSendGateForStopFact(context);
+  // Counted as of the recorded attempt itself: the window is the one it was placed in.
+  const { rows } = await context.db.query<{ consumed_at: Date | null }>(
+    'SELECT consumed_at FROM call_sessions WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.sessionId],
+  );
+  const placedAt = rows[0]?.consumed_at;
+  if (placedAt == null) return null;
+  const cadence = await readCallCadence(context, input.firmId, placedAt.toISOString());
+  if (cadence.unansweredAttempts < CALL_CADENCE.unansweredLimit) return cadence.parkingHoldId;
+  return await parkFirmForReview(context, input.firmId, input.sessionId);
+}
+
+/**
  * Park a firm for review: a firm-scoped `scoped_pause` hold on dial authorisation, the
  * existing mechanism for "calling is paused for this firm". Written once: a second
  * refused attempt finds the open hold. Released by `resumeCallCadence`, which is the review.
  */
 async function parkFirmForReview(context: RepositoryContext, firmId: string, lastSessionId: string | null): Promise<string> {
+  // The gate first, then the check: concurrent parkers serialise here, and the second
+  // finds the first one's hold (review of C1, fold 1, finding 7).
+  await lockSendGateForStopFact(context);
   const existing = await readParkingHold(context, firmId);
   if (existing !== null) return existing;
   const holdId = await openHold(context, {
@@ -864,6 +884,16 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
       firmId: session.firm_id,
       ...(session.contact_id === null ? {} : { contactId: session.contact_id }),
     });
+  }
+
+  // Twilio's final no-answer or busy, before any outcome: the attempt is established as
+  // unanswered, and may be the one that parks the firm.
+  if (forward && terminal && UNANSWERED_PROVIDER_STATUSES.has(input.providerStatus)) {
+    const { rows: logged } = await db.query<{ call_log_id: string | null }>(
+      'SELECT call_log_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
+      [session.workspace_id, session.id],
+    );
+    if (logged[0]?.call_log_id == null) await parkIfCadenceSpent(context, { firmId: session.firm_id, sessionId: session.id });
   }
 
   let settlement: 'settled' | 'estimated' | null = null;

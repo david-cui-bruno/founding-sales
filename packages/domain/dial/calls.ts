@@ -32,6 +32,7 @@ import { businessDateOf, completeTodayItemsByKey, readTodayItem, upsertTodayItem
 import { callLogIdOfItemKey, callbackTimeNeededItemKey } from '../today/types.ts';
 import { completeCallback, createCallback, resolveConfirmedInstant } from './callbacks.ts';
 import { manualReasonFor } from './outcomes.ts';
+import { UNANSWERED_OUTCOMES, parkIfCadenceSpent } from '../calls/sessions.ts';
 import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep } from './stepEffects.ts';
 
 /**
@@ -383,11 +384,18 @@ export async function logCallOutcome(
   // A call placed through a Twilio call session (0028) is linked to the outcome David
   // recorded for it: the session's ticket is the call log's ticket. First log wins.
   if (input.ticketId !== undefined) {
-    await context.db.query(
+    const { rows: linkedSessions } = await context.db.query<{ id: string }>(
       `UPDATE call_sessions SET call_log_id = $3, updated_at = now()
-        WHERE workspace_id = $1 AND ticket_id = $2 AND call_log_id IS NULL`,
+        WHERE workspace_id = $1 AND ticket_id = $2 AND call_log_id IS NULL
+        RETURNING id`,
       [context.scope.workspaceId, input.ticketId, callLogId],
     );
+    // Slice C1: an unanswered outcome may be the attempt that spends the cadence, and the
+    // firm is parked for review now rather than at the next call request.
+    const linkedSession = linkedSessions[0]?.id;
+    if (linkedSession !== undefined && UNANSWERED_OUTCOMES.has(input.outcome)) {
+      await parkIfCadenceSpent(context, { firmId: input.firmId, sessionId: linkedSession });
+    }
   }
 
   // ---- 3. Apply -----------------------------------------------------------
