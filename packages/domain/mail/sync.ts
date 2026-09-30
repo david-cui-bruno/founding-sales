@@ -5,6 +5,7 @@ import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
   advanceGeneration,
+  fenceOf,
   markMailboxDisconnected,
   openMailboxHold,
   readMailbox,
@@ -73,6 +74,7 @@ export type MailSyncOutcome =
   | 'mailbox_inactive'
   | 'grant_revoked'
   | 'baseline_started'
+  | 'recovery_underway'
   | 'recovery_started'
   | 'cursor_moved'
   | 'rate_limited'
@@ -242,24 +244,30 @@ export async function runMailSync(
 
   // 12.3: "A newly connected mailbox completes a bounded baseline ... before
   // automation begins." No cursor is the same situation as a baseline that has not
-  // finished, and both are a recovery rather than a history read.
-  if (mailbox.historyId === null || mailbox.syncState === 'baseline_pending') {
+  // finished, and both are a recovery rather than a history read. So is `recovering`:
+  // its cursor is the recovery's handoff id, which only the recovery's completion may
+  // stand on, and a history read from it now would move the cursor under the
+  // recovery's conditional completion. A sync of a mailbox that is not `ready` reads no
+  // history and writes nothing but the hold; it starts the recovery only when its
+  // generation has none.
+  if (mailbox.historyId === null || mailbox.syncState !== 'ready') {
     await openMailboxHold(context, {
       mailboxId: mailbox.id,
       ownerUserId: mailbox.ownerUserId,
       reasonCode: 'coverage_incomplete',
     });
-    if ((await readRecovery(context, { mailboxId: mailbox.id, generation: mailbox.generation })) === null) {
-      // The continuous handoff: the profile's history id is read before the recovery
-      // fixes the end of its interval.
-      const profile = await deps.gmail.getProfile(access.access);
-      await startRecovery(context, {
-        mailbox,
-        reason: 'baseline',
-        startHistoryId: profile.historyId,
-        ...(deps.recoveryFloor === undefined ? {} : { floor: deps.recoveryFloor }),
-      });
+    if ((await readRecovery(context, { mailboxId: mailbox.id, generation: mailbox.generation })) !== null) {
+      return report(mailbox.id, 'recovery_underway', mailbox.historyId);
     }
+    // The continuous handoff: the profile's history id is read before the recovery
+    // fixes the end of its interval.
+    const profile = await deps.gmail.getProfile(access.access);
+    await startRecovery(context, {
+      mailbox,
+      reason: mailbox.syncState === 'recovering' ? 'history_expired' : 'baseline',
+      startHistoryId: profile.historyId,
+      ...(deps.recoveryFloor === undefined ? {} : { floor: deps.recoveryFloor }),
+    });
     return report(mailbox.id, 'baseline_started', mailbox.historyId);
   }
 
@@ -344,8 +352,11 @@ export async function runMailSync(
   // capped run has read every message it took, but it has not read the mailbox, and a
   // watermark is a claim about the mailbox.
   const watermark = moreToDo ? undefined : (pipeline.newestInternalDate ?? new Date().toISOString());
+  // Generation fencing: the CAS is predicated on the generation and address read at
+  // this run's start, and a mismatch throws, so the effects above roll back with it.
   const advanced = await advanceCursor(context, {
     mailboxId: mailbox.id,
+    fence: fenceOf(mailbox),
     expectedHistoryId: mailbox.historyId,
     historyId: cursorTo,
     ...(watermark === undefined ? {} : { coverageWatermarkAt: watermark }),
@@ -397,7 +408,7 @@ async function beginRecoveryForExpiredCursor(
   // The continuous handoff: the profile's history id is read first, before the
   // recovery fixes the end of its interval, and becomes the cursor completion adopts.
   const profile = await deps.gmail.getProfile(access);
-  const generation = await advanceGeneration(context, mailbox.id);
+  const generation = await advanceGeneration(context, mailbox.id, fenceOf(mailbox));
   await setSyncState(context, { mailboxId: mailbox.id, syncState: 'recovering' });
   await openMailboxHold(context, {
     mailboxId: mailbox.id,

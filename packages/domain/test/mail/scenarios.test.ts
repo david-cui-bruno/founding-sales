@@ -1,7 +1,5 @@
-import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
-import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../db/testing/testDatabase.ts';
 import { coalesceMailSync } from '../../mail/coalesce.ts';
 import { GmailClientError, type GmailClient } from '../../mail/gmailClient.ts';
 import { createGmailHttpClient } from '../../mail/gmailClientHttp.ts';
@@ -643,7 +641,7 @@ describe('matching and its consequences', () => {
     return { messageId, matches, markers: Number(markers[0]?.count ?? 0) };
   };
 
-  it('S1 round-5: a completed recovery reads the profile before its gated section, not after', async () => {
+  it('S1 round-5, C2B-A1: a completed recovery asks Gmail for no profile, so nothing waits on Gmail behind its gate', async () => {
     world = await createMailWorld({
       alphaMessages: [
         fixtureMessage({ id: 'recover-out', historyId: '1080', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
@@ -652,48 +650,30 @@ describe('matching and its consequences', () => {
     const w = world;
     const context = w.systemContext(w.alpha.workspace.workspaceId);
     const workspaceId = w.alpha.workspace.workspaceId;
-    const clusterUrl = new URL((process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE] ?? '').trim());
-    clusterUrl.pathname = `/${w.database.name}`;
-    const other = new pg.Client({ connectionString: clusterUrl.toString() });
-    other.on('error', () => undefined);
-    await other.connect();
-    let gateTaken: boolean | null = null;
-    let outcome = '';
-    try {
-      const base = w.syncDeps(w.alpha);
-      const gmail = {
-        ...base.gmail,
-        getProfile: async (...args: Parameters<typeof base.gmail.getProfile>) => {
-          await other.query('BEGIN');
-          await other.query("SET LOCAL lock_timeout = '1s'");
-          try {
-            await other.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`fss.send-gate:${workspaceId}`]);
-            gateTaken = true;
-          } catch {
-            gateTaken = false;
-          }
-          await other.query('ROLLBACK');
-          return await base.gmail.getProfile(...args);
-        },
-      };
-      const report = await withTransaction(
-        w.database.session as Parameters<typeof withTransaction>[0],
-        async () => await runMailRecovery(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
-      );
-      outcome = report.outcome;
-    } finally {
-      await other.end().catch(() => undefined);
-    }
-    expect(outcome).toBe('completed');
-    // The recovered direct send took the gate in this transaction; the profile was read
-    // before that, so the other connection was not kept waiting on Gmail.
+    const base = w.syncDeps(w.alpha);
+    let profileReads = 0;
+    const gmail = {
+      ...base.gmail,
+      getProfile: async (...args: Parameters<typeof base.gmail.getProfile>) => {
+        profileReads += 1;
+        return await base.gmail.getProfile(...args);
+      },
+    };
+    const report = await withTransaction(
+      w.database.session as Parameters<typeof withTransaction>[0],
+      async () => await runMailRecovery(context, { ...base, gmail }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(report.outcome).toBe('completed');
+    // The continuous handoff: the cursor was captured when the recovery started, and
+    // completion adopts it. The old post-listing profile read — the one that had to be
+    // placed before the gated section — no longer exists.
+    expect(profileReads).toBe(0);
     const { rows } = await w.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM mail_message_effects
         WHERE workspace_id = $1 AND effect_kind = 'direct_send_conversation'`,
       [workspaceId],
     );
     expect(rows[0]?.count).toBe('1');
-    expect(gateTaken).toBe(true);
   });
 
   it('S1 round-3 P1-D: once the effect is applied, a newly known recipient firm is not a held choice', async () => {
@@ -1293,13 +1273,16 @@ describe('coverage, recovery and the grant', () => {
     // Another run moved the cursor while this one was reading.
     const mailbox = await readMailbox(context, w.alpha.mailboxId);
     const stale = mailbox?.historyId ?? null;
+    const fence = { generation: mailbox?.generation ?? 0, emailAddress: mailbox?.emailAddress ?? '' };
     await advanceCursor(context, {
       mailboxId: w.alpha.mailboxId,
+      fence,
       expectedHistoryId: stale,
       historyId: '9999',
     });
     const outcome = await advanceCursor(context, {
       mailboxId: w.alpha.mailboxId,
+      fence,
       expectedHistoryId: stale,
       historyId: '8888',
     });

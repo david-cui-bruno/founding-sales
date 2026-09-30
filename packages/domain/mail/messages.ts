@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { directionOfLabels, headerValue, type GmailMessageMetadata } from './gmailClient.ts';
+import { stdoutMailLog, type MailLog } from './log.ts';
 import {
   normalizeAddress,
   normalizeAddressList,
@@ -135,33 +136,79 @@ export function normalizeMetadata(metadata: GmailMessageMetadata): NormalizedMet
   };
 }
 
+export type RecordOutcome =
+  /** This call wrote the row. */
+  | 'inserted'
+  /** The row for this Gmail id was already there: a replayed page, not a second message. */
+  | 'replayed'
+  /**
+   * Another Gmail message in this mailbox already holds this RFC Message-ID and is
+   * proven to be the same message — same direction, From, Subject and `Date` — so this
+   * copy is treated as already recorded: the existing row is returned and no effect runs
+   * again.
+   */
+  | 'duplicate_rfc_id'
+  /**
+   * Another Gmail message holds this RFC Message-ID and is *not* proven the same. This
+   * one is recorded with no RFC Message-ID and processed as the new message it is.
+   */
+  | 'rfc_id_conflict';
+
 export interface RecordedMessage {
+  /** The row the caller processes. For `duplicate_rfc_id`, the existing message's. */
   readonly message: MailMessageRow;
-  /** False when the row was already there: a replayed page, not a second message. */
+  /** True when this call wrote a row (`inserted` and `rfc_id_conflict`). */
   readonly inserted: boolean;
+  readonly outcome: RecordOutcome;
 }
+
+export interface RecordMessageInput {
+  readonly mailboxId: string;
+  readonly metadata: NormalizedMetadata;
+  /**
+   * Whether the message already holding this RFC Message-ID carries the same `Date`
+   * header as this one. `mail_messages` does not keep the header, so the pipeline reads
+   * the existing message's metadata again to answer; without an answer nothing is
+   * proven and the collision is a conflict.
+   */
+  readonly sameDateAs?: ((existing: MailMessageRow) => Promise<boolean>) | undefined;
+  readonly log?: MailLog | undefined;
+}
+
+const INSERT_MESSAGE = `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id,
+                                rfc_message_id, direction, internal_date, header_from, header_to, header_cc,
+                                subject, reference_message_ids, in_reply_to, auto_submitted, list_id,
+                                label_ids, attachment_references)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::text[], $11, $12::text[], $13, $14, $15,
+             $16::text[], $17::jsonb)
+     ON CONFLICT DO NOTHING
+     RETURNING ${MESSAGE_COLUMNS}`;
 
 /**
  * Write one message, or find the one already written.
  *
- * `ON CONFLICT DO NOTHING` on `(workspace_id, mailbox_id, provider_message_id)` is
- * the "message uniqueness" half of Appendix C's protection for `mail.sync`. The
- * conflict target deliberately does not include the RFC Message-ID: two messages in
- * one mailbox may not share one, but the reason that is refused is a partial unique
- * index, and a mailbox that somehow received two is a fact worth failing on rather
- * than silently collapsing.
+ * `ON CONFLICT DO NOTHING` absorbs both of the table's uniqueness rules, and which one
+ * held is then read back:
+ *
+ * * `mail_messages_one_per_provider_id` is the "message uniqueness" half of Appendix
+ *   C's protection for `mail.sync`: the same Gmail message again is a replay.
+ * * `mail_messages_one_per_rfc_id` is a *different* Gmail message with the same RFC
+ *   Message-ID. A proven duplicate is treated as already recorded. Anything else is a
+ *   conflict: this message is recorded with no RFC Message-ID, so neither row is lost
+ *   and neither can wedge the sync or the recovery, and the caller processes it with
+ *   its own metadata — an opt-out that reuses an outgoing message's id is still read.
  */
 export async function recordMessage(
   context: RepositoryContext,
-  input: { readonly mailboxId: string; readonly metadata: NormalizedMetadata },
+  input: RecordMessageInput,
 ): Promise<RecordedMessage> {
   const m = input.metadata;
-  const parameters = [
+  const parameters = (rfcMessageId: string | null): unknown[] => [
     context.scope.workspaceId,
     input.mailboxId,
     m.providerMessageId,
     m.providerThreadId,
-    m.rfcMessageId,
+    rfcMessageId,
     m.direction,
     m.internalDate,
     m.headerFrom,
@@ -175,28 +222,86 @@ export async function recordMessage(
     [...m.labelIds],
     JSON.stringify(m.attachments),
   ];
-  const inserted = await context.db.query<MessageDbRow>(
-    `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id,
-                                rfc_message_id, direction, internal_date, header_from, header_to, header_cc,
-                                subject, reference_message_ids, in_reply_to, auto_submitted, list_id,
-                                label_ids, attachment_references)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::text[], $11, $12::text[], $13, $14, $15,
-             $16::text[], $17::jsonb)
-     ON CONFLICT ON CONSTRAINT mail_messages_one_per_provider_id DO NOTHING
-     RETURNING ${MESSAGE_COLUMNS}`,
-    parameters,
-  );
+  const inserted = await context.db.query<MessageDbRow>(INSERT_MESSAGE, parameters(m.rfcMessageId));
   const row = inserted.rows[0];
-  if (row !== undefined) return { message: toMessage(row), inserted: true };
+  if (row !== undefined) return { message: toMessage(row), inserted: true, outcome: 'inserted' };
 
-  const existing = await context.db.query<MessageDbRow>(
+  const replayed = await messageByProviderId(context, input.mailboxId, m.providerMessageId);
+  if (replayed !== null) return { message: replayed, inserted: false, outcome: 'replayed' };
+
+  const existing =
+    m.rfcMessageId === null ? null : await messageByRfcId(context, input.mailboxId, m.rfcMessageId);
+  if (existing === null) throw new Error('a message insert conflicted with a row that is not there');
+
+  const proven =
+    existing.direction === m.direction &&
+    existing.headerFrom === m.headerFrom &&
+    existing.subject === m.subject &&
+    (input.sameDateAs === undefined ? false : await input.sameDateAs(existing));
+  if (proven) return { message: existing, inserted: false, outcome: 'duplicate_rfc_id' };
+
+  const conflicted = await context.db.query<MessageDbRow>(INSERT_MESSAGE, parameters(null));
+  const conflictRow = conflicted.rows[0];
+  if (conflictRow === undefined) {
+    // Another run recorded this Gmail message in the meantime: a replay after all.
+    const now = await messageByProviderId(context, input.mailboxId, m.providerMessageId);
+    if (now === null) throw new Error('a message insert conflicted with a row that is not there');
+    return { message: now, inserted: false, outcome: 'replayed' };
+  }
+  // Identifiers only: no body, no address, no subject.
+  (input.log ?? stdoutMailLog)('warn', 'mail.rfc_id_conflict', {
+    mailboxId: input.mailboxId,
+    providerMessageId: m.providerMessageId,
+    existingProviderMessageId: existing.providerMessageId,
+    rfcMessageId: m.rfcMessageId,
+  });
+  return { message: toMessage(conflictRow), inserted: true, outcome: 'rfc_id_conflict' };
+}
+
+async function messageByProviderId(
+  context: RepositoryContext,
+  mailboxId: string,
+  providerMessageId: string,
+): Promise<MailMessageRow | null> {
+  const { rows } = await context.db.query<MessageDbRow>(
     `SELECT ${MESSAGE_COLUMNS} FROM mail_messages
       WHERE workspace_id = $1 AND mailbox_id = $2 AND provider_message_id = $3`,
-    [context.scope.workspaceId, input.mailboxId, m.providerMessageId],
+    [context.scope.workspaceId, mailboxId, providerMessageId],
   );
-  const found = existing.rows[0];
-  if (found === undefined) throw new Error('a message insert conflicted with a row that is not there');
-  return { message: toMessage(found), inserted: false };
+  const row = rows[0];
+  return row === undefined ? null : toMessage(row);
+}
+
+async function messageByRfcId(
+  context: RepositoryContext,
+  mailboxId: string,
+  rfcMessageId: string,
+): Promise<MailMessageRow | null> {
+  const { rows } = await context.db.query<MessageDbRow>(
+    `SELECT ${MESSAGE_COLUMNS} FROM mail_messages
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND rfc_message_id = $3`,
+    [context.scope.workspaceId, mailboxId, rfcMessageId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toMessage(row);
+}
+
+/**
+ * Which of these Gmail ids this mailbox already has a row for: one query per recovery
+ * listing page, which is how a recovery resumes by recorded ids rather than by a page
+ * position that shifts when a message is deleted.
+ */
+export async function recordedProviderMessageIds(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly providerMessageIds: readonly string[] },
+): Promise<ReadonlySet<string>> {
+  if (input.providerMessageIds.length === 0) return new Set();
+  const { rows } = await context.db.query<{ provider_message_id: string }>(
+    `SELECT provider_message_id FROM mail_messages
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND provider_message_id = ANY($3::text[])`,
+    [context.scope.workspaceId, input.mailboxId, [...input.providerMessageIds]],
+  );
+  return new Set(rows.map(row => row.provider_message_id));
 }
 
 export async function readMessage(context: RepositoryContext, messageId: string): Promise<MailMessageRow | null> {

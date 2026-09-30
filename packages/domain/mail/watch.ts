@@ -2,7 +2,8 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailClient, GmailOAuthConfig } from './gmailClient.ts';
-import { openMailboxHold, readMailbox } from './mailboxes.ts';
+import { fenceOf, lockMailboxAtFence, openMailboxHold, readMailbox } from './mailboxes.ts';
+import { stdoutMailLog, type MailLog } from './log.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import { WATCH_EXPIRY_ALARM_HOURS, WATCH_RENEWAL_INTERVAL_HOURS } from './types.ts';
 
@@ -90,6 +91,8 @@ export interface WatchRenewalDeps {
   readonly cipher: EnvelopeCipher;
   /** The fully qualified Pub/Sub topic `infra/modules/pubsub` outputs. */
   readonly topicName: string;
+  /** Where the registration line goes. Stdout unless a test records it. */
+  readonly log?: MailLog | undefined;
 }
 
 export type WatchRenewalOutcome =
@@ -110,7 +113,16 @@ export interface WatchRenewalReport {
 export async function renewWatch(
   context: RepositoryContext,
   deps: WatchRenewalDeps,
-  input: { readonly mailboxId: string; readonly generation: number },
+  input: {
+    readonly mailboxId: string;
+    readonly generation: number;
+    /**
+     * The mailbox generation the renewal was scheduled for (C2B-A1). A renewal queued
+     * for an account the mailbox no longer reads answers `generation_superseded`; the
+     * scheduler composes the current generation's renewal on its next pass.
+     */
+    readonly mailboxGeneration?: number | undefined;
+  },
 ): Promise<WatchRenewalReport> {
   const mailbox = await readMailbox(context, input.mailboxId);
   if (mailbox === null) {
@@ -128,7 +140,10 @@ export async function renewWatch(
   // The generation is the fence. A renewal that was queued two renewals ago must not
   // register a watch and then record an expiry that is older than the live one.
   const expected = await nextWatchGeneration(context, mailbox.id);
-  if (input.generation !== expected) {
+  if (
+    input.generation !== expected ||
+    (input.mailboxGeneration !== undefined && input.mailboxGeneration !== mailbox.generation)
+  ) {
     return {
       outcome: 'generation_superseded',
       mailboxId: mailbox.id,
@@ -152,6 +167,12 @@ export async function renewWatch(
     return { outcome: 'provider_refusal', mailboxId: mailbox.id, generation: input.generation, expiresAt: null };
   }
 
+  // Watch fencing: the registration commits only while the mailbox is still the
+  // generation and address this job read before it called `users.watch`. The row lock
+  // holds to the job's commit, so nothing moves the mailbox between this check and the
+  // insert; a mismatch throws and the runner rolls the job back, so the old account's
+  // watch is never recorded as current and `listWatchesDue` keeps the mailbox due.
+  await lockMailboxAtFence(context, { mailboxId: mailbox.id, fence: fenceOf(mailbox), write: 'watch registration' });
   const expiresAt = new Date(registered.watch.expiresAtEpochMilliseconds).toISOString();
   await context.db.query(
     `UPDATE mailbox_watches
@@ -172,6 +193,14 @@ export async function renewWatch(
     ],
   );
 
+  (deps.log ?? stdoutMailLog)('info', 'mail.watch_registered', {
+    mailboxId: mailbox.id,
+    watchedAddress: mailbox.emailAddress,
+    mailboxGeneration: mailbox.generation,
+    watchGeneration: input.generation,
+    expiresAt,
+  });
+
   return { outcome: 'renewed', mailboxId: mailbox.id, generation: input.generation, expiresAt };
 }
 
@@ -191,7 +220,10 @@ export async function cancelWatch(
 export interface WatchDueRow {
   readonly workspaceId: string;
   readonly mailboxId: string;
+  /** The next renewal number (`mailbox_watches.generation`). */
   readonly generation: number;
+  /** The mailbox's own generation, which the renewal's key and payload carry. */
+  readonly mailboxGeneration: number;
   readonly expiresAt: string | null;
 }
 
@@ -214,17 +246,19 @@ export async function listWatchesDue(db: Queryable, nowIso: string): Promise<rea
   const { rows } = await db.query<{
     workspace_id: string;
     mailbox_id: string;
+    mailbox_generation: number;
     next_generation: number;
     expires_at: Date | null;
   }>(
     `SELECT m.workspace_id,
             m.id AS mailbox_id,
+            m.generation AS mailbox_generation,
             coalesce(max(w.generation), 0) + 1 AS next_generation,
             max(w.expires_at) FILTER (WHERE w.cancelled_at IS NULL) AS expires_at
        FROM mailboxes AS m
        LEFT JOIN mailbox_watches AS w ON w.workspace_id = m.workspace_id AND w.mailbox_id = m.id
       WHERE m.status = 'connected'
-      GROUP BY m.workspace_id, m.id
+      GROUP BY m.workspace_id, m.id, m.generation
      HAVING max(w.expires_at) FILTER (WHERE w.cancelled_at IS NULL) IS NULL
          OR max(w.registered_at) FILTER (WHERE w.cancelled_at IS NULL)
             <= $1::timestamptz - make_interval(hours => $2::integer)
@@ -237,6 +271,7 @@ export async function listWatchesDue(db: Queryable, nowIso: string): Promise<rea
     workspaceId: row.workspace_id,
     mailboxId: row.mailbox_id,
     generation: row.next_generation,
+    mailboxGeneration: row.mailbox_generation,
     expiresAt: row.expires_at?.toISOString() ?? null,
   }));
 }

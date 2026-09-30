@@ -22,6 +22,11 @@ import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
  * **Re-arm a finished job.** `done` goes back to `queued` with a fresh attempt
  * budget. That is what makes the single-flight row reusable.
  *
+ * **The key carries the mailbox generation** (C2B-A1): `mail-sync:{mailbox}:{generation}`.
+ * Appendix C's key has none, and with none a dead sync of an account the mailbox no
+ * longer reads would absorb every sync of the one it reads now. Within a generation the
+ * row is still single-flight, so the scheduler's one-per-pass property is unchanged.
+ *
  * **Never re-arm a dead job.** 13.2: an exhausted job is "requeueable only by an
  * audited admin command". A notification is not an admin, so a dead sync stays dead,
  * the notification is still recorded, and the dead-job alarm is what gets somebody's
@@ -45,6 +50,11 @@ export interface CoalesceResult {
 export interface CoalesceMailSyncInput {
   readonly workspaceId: string;
   readonly mailboxId: string;
+  /**
+   * The mailbox generation the key is for. Read from the mailbox when the caller does
+   * not have it; the scheduler passes the one its listing read.
+   */
+  readonly generation?: number | undefined;
   /** The notification's history id, or null when the caller has no hint (reconciliation). */
   readonly historyId?: string | null | undefined;
   readonly maxAttempts?: number | undefined;
@@ -54,9 +64,10 @@ export async function coalesceMailSync(
   db: Queryable,
   input: CoalesceMailSyncInput,
 ): Promise<CoalesceResult> {
-  const key = jobIdempotencyKey.mailSync(input.mailboxId);
+  const generation = input.generation ?? (await currentGeneration(db, input));
+  const key = jobIdempotencyKey.mailSync(input.mailboxId, generation);
   const historyId = input.historyId ?? null;
-  const payload = JSON.stringify({ mailboxId: input.mailboxId, historyId });
+  const payload = JSON.stringify({ mailboxId: input.mailboxId, generation, historyId });
 
   const { rows } = await db.query<{
     id: string;
@@ -119,6 +130,19 @@ export async function coalesceMailSync(
         : 'merged';
 
   return { jobId: row.id, outcome, historyId: row.history_id };
+}
+
+async function currentGeneration(
+  db: Queryable,
+  input: { readonly workspaceId: string; readonly mailboxId: string },
+): Promise<number> {
+  const { rows } = await db.query<{ generation: number }>(
+    'SELECT generation FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    [input.workspaceId, input.mailboxId],
+  );
+  const generation = rows[0]?.generation;
+  if (generation === undefined) throw new Error('a mail.sync was asked for a mailbox that is not there');
+  return generation;
 }
 
 /** The history id a claimed `mail.sync` payload names, or null. */

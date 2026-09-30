@@ -142,6 +142,7 @@ export const MAILBOX_CHECK_INTERVAL_SECONDS = 60;
 export interface MailboxDueRow {
   readonly workspaceId: string;
   readonly mailboxId: string;
+  readonly generation: number;
   readonly historyId: string | null;
 }
 
@@ -165,14 +166,19 @@ export interface MailboxDueRow {
  * baseline would only re-open the recovery it is already in.
  */
 export async function listMailboxesDueForSync(db: Queryable): Promise<readonly MailboxDueRow[]> {
-  const { rows } = await db.query<{ workspace_id: string; id: string; history_id: string | null }>(
-    `SELECT workspace_id, id, history_id
+  const { rows } = await db.query<{ workspace_id: string; id: string; generation: number; history_id: string | null }>(
+    `SELECT workspace_id, id, generation, history_id
        FROM mailboxes
       WHERE status = 'connected'
         AND sync_state = 'ready'
       ORDER BY id`,
   );
-  return rows.map(row => ({ workspaceId: row.workspace_id, mailboxId: row.id, historyId: row.history_id }));
+  return rows.map(row => ({
+    workspaceId: row.workspace_id,
+    mailboxId: row.id,
+    generation: row.generation,
+    historyId: row.history_id,
+  }));
 }
 
 export interface InsertMailboxInput {
@@ -339,6 +345,14 @@ export async function advanceCursor(
   context: RepositoryContext,
   input: {
     readonly mailboxId: string;
+    /**
+     * The generation and address the job read at its start. A cursor that is still
+     * where the caller left it on a mailbox that has since moved on — an account switch,
+     * a new baseline — is not the caller's to move: that throws
+     * `StaleMailboxGeneration` rather than answering `cursor_moved`, so the job's
+     * message effects roll back with it.
+     */
+    readonly fence: MailboxFence;
     readonly expectedHistoryId: string | null;
     readonly historyId: string;
     readonly coverageWatermarkAt?: string | undefined;
@@ -356,6 +370,8 @@ export async function advanceCursor(
       WHERE workspace_id = $1
         AND id = $2
         AND history_id IS NOT DISTINCT FROM $3
+        AND generation = $7
+        AND email_address = $8
       RETURNING history_id, coverage_watermark_at`,
     [
       context.scope.workspaceId,
@@ -364,10 +380,20 @@ export async function advanceCursor(
       input.historyId,
       input.coverageWatermarkAt ?? null,
       input.syncError ?? null,
+      input.fence.generation,
+      input.fence.emailAddress,
     ],
   );
   const row = rows[0];
-  if (row === undefined) return { advanced: false, reason: 'cursor_moved' };
+  if (row === undefined) {
+    // Which predicate failed decides the answer. Read after the UPDATE, in the same
+    // transaction, so it sees what the UPDATE saw.
+    const now = await readMailbox(context, input.mailboxId);
+    if (now === null || now.generation !== input.fence.generation || now.emailAddress !== input.fence.emailAddress) {
+      throw new StaleMailboxGeneration(input.mailboxId, 'cursor compare-and-set', input.fence);
+    }
+    return { advanced: false, reason: 'cursor_moved' };
+  }
   return {
     advanced: true,
     historyId: row.history_id,
@@ -405,15 +431,31 @@ export async function setSyncState(
   );
 }
 
-/** Advance the generation. A watch or recovery for an older one can no longer write. */
-export async function advanceGeneration(context: RepositoryContext, mailboxId: string): Promise<number> {
+/**
+ * Advance the generation. A watch or recovery for an older one can no longer write.
+ *
+ * With a fence, only from the generation and address the caller read: a job that
+ * decided to start a recovery for generation g must not start one for whatever the
+ * mailbox became while it was deciding.
+ */
+export async function advanceGeneration(
+  context: RepositoryContext,
+  mailboxId: string,
+  fence?: MailboxFence,
+): Promise<number> {
   const { rows } = await context.db.query<{ generation: number }>(
     `UPDATE mailboxes SET generation = generation + 1, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 RETURNING generation`,
-    [context.scope.workspaceId, mailboxId],
+      WHERE workspace_id = $1 AND id = $2
+        AND ($3::integer IS NULL OR generation = $3)
+        AND ($4::text IS NULL OR email_address = $4)
+      RETURNING generation`,
+    [context.scope.workspaceId, mailboxId, fence?.generation ?? null, fence?.emailAddress ?? null],
   );
   const generation = rows[0]?.generation;
-  if (generation === undefined) throw new Error('a generation advance found no mailbox');
+  if (generation === undefined) {
+    if (fence !== undefined) throw new StaleMailboxGeneration(mailboxId, 'generation advance', fence);
+    throw new Error('a generation advance found no mailbox');
+  }
   return generation;
 }
 

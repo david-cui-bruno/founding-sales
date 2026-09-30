@@ -316,7 +316,7 @@ describe('the mail handlers and scheduler sources', () => {
       run: runClaimedJob,
       workspaceId,
       kind: 'mail.sync',
-      idempotencyKey: `mail-sync:${mailboxId}`,
+      idempotencyKey: `mail-sync:${mailboxId}:1`,
       payload: { mailboxId, historyId: '1010' },
       countEffects: countMessages,
     });
@@ -463,13 +463,13 @@ describe('the mail handlers and scheduler sources', () => {
     );
 
     const specifications = await mailSyncReconciliationSource().find(session, NOW);
-    // The source does its own upsert, because `mail-sync:{mailbox}` carries no
+    // The source does its own upsert, because `mail-sync:{mailbox}:{generation}` carries no
     // instant and `ON CONFLICT DO NOTHING` cannot re-arm a finished row.
     expect(specifications).toEqual([]);
 
     const { rows } = await session.query<{ state: string }>(
       "SELECT state FROM jobs WHERE workspace_id = $1 AND idempotency_key = $2",
-      [workspaceId, `mail-sync:${mailboxId}`],
+      [workspaceId, `mail-sync:${mailboxId}:1`],
     );
     expect(rows.map(row => row.state)).toEqual(['queued']);
   });
@@ -524,7 +524,7 @@ describe('the mail handlers and scheduler sources', () => {
         limit: 5,
         leaseSeconds: 60,
       });
-      expect(claims.map(job => job.idempotencyKey), `minute ${String(minute)}`).toEqual([`mail-sync:${mailboxId}`]);
+      expect(claims.map(job => job.idempotencyKey), `minute ${String(minute)}`).toEqual([`mail-sync:${mailboxId}:1`]);
       const claim = claims[0];
       if (claim === undefined) throw new Error('the pass asked for no check');
       expect(await runClaimedJob(session, { registry, job: claim })).toBe('completed');
@@ -551,7 +551,7 @@ describe('the mail handlers and scheduler sources', () => {
     await mailSyncReconciliationSource().find(session, NOW);
     const { rows } = await session.query<{ state: string }>(
       "SELECT state FROM jobs WHERE workspace_id = $1 AND idempotency_key = $2",
-      [workspaceId, `mail-sync:${mailboxId}`],
+      [workspaceId, `mail-sync:${mailboxId}:1`],
     );
     expect(rows.map(row => row.state)).toEqual(['dead']);
   });
@@ -592,7 +592,7 @@ describe('the mail handlers and scheduler sources', () => {
     expect(specification.kind).toBe('mail.watch_renew');
     // `mailbox_watches.generation` counts renewals and is independent of
     // `mailboxes.generation`, so the key is new every time round.
-    expect(specification.idempotencyKey).toBe(`watch:${mailboxId}:2`);
+    expect(specification.idempotencyKey).toBe(`watch:${mailboxId}:1:2`);
 
     const second = await watchRenewalSource().find(session, NOW);
     expect(second[0]?.idempotencyKey).toBe(specification.idempotencyKey);

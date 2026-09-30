@@ -8,7 +8,8 @@ import {
   recordDeterministicClassification,
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
+import { headerValue, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
+import type { MailLog } from './log.ts';
 import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
@@ -46,6 +47,8 @@ export interface MessagePipelineDeps {
   readonly cipher: EnvelopeCipher;
   readonly journal: SuppressionJournal;
   readonly replyPromoter: ReplyPromoter;
+  /** Where an RFC Message-ID conflict is logged. Stdout unless a test records it. */
+  readonly log?: MailLog | undefined;
 }
 
 export interface MessagePipelineReport {
@@ -63,6 +66,17 @@ export interface MessagePipelineReport {
   readonly directSendsRecorded: number;
   /** Outgoing messages this import matched to a fence FSS had already counted. */
   readonly automatedSendsRecognised: number;
+  /**
+   * Second copies of a message already recorded under the same RFC Message-ID, proven
+   * the same message (direction, From, Subject, `Date`): treated as recorded, no effect
+   * re-run.
+   */
+  readonly duplicateRfcId: number;
+  /**
+   * Messages whose RFC Message-ID another, different message in the mailbox already
+   * holds: recorded without it and processed as new, with their own metadata.
+   */
+  readonly rfcIdConflicts: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
   readonly newestInternalDate: string | null;
   /**
@@ -92,6 +106,8 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   suppressionsRecorded: 0,
   directSendsRecorded: 0,
   automatedSendsRecognised: 0,
+  duplicateRfcId: 0,
+  rfcIdConflicts: 0,
   newestInternalDate: null,
   processedMessages: 0,
   readFailure: null,
@@ -147,6 +163,8 @@ export async function processMessageIds(
   let suppressionsRecorded = 0;
   let directSendsRecorded = 0;
   let automatedSendsRecognised = 0;
+  let duplicateRfcId = 0;
+  let rfcIdConflicts = 0;
   let newestInternalDate: string | null = null;
 
   let processedMessages = 0;
@@ -182,6 +200,8 @@ export async function processMessageIds(
       suppressionsRecorded,
       directSendsRecorded,
       automatedSendsRecognised,
+      duplicateRfcId,
+      rfcIdConflicts,
       newestInternalDate,
     };
     const nested = await openMessageSavepoint(context);
@@ -189,14 +209,38 @@ export async function processMessageIds(
       messagesSeen += 1;
 
       const normalized = normalizeMetadata(metadata);
-      const stored = await recordMessage(context, { mailboxId: input.mailbox.id, metadata: normalized });
+      const stored = await recordMessage(context, {
+        mailboxId: input.mailbox.id,
+        metadata: normalized,
+        // An RFC Message-ID collision is a proven duplicate only if the other message's
+        // `Date` header is this one's too. The table keeps no `Date`, so the other
+        // message's metadata is read again, with the same allowlist; a message Gmail no
+        // longer has proves nothing, and a failed read throws and retries the job.
+        sameDateAs: async existing => {
+          const other = await deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS);
+          const mine = headerValue(metadata.headers, 'Date')?.trim();
+          const theirs = other === null ? undefined : headerValue(other.headers, 'Date')?.trim();
+          return mine !== undefined && mine !== '' && mine === theirs;
+        },
+        ...(deps.log === undefined ? {} : { log: deps.log }),
+      });
       if (stored.inserted) messagesRecorded += 1;
       // Read through a local: the closure's view of the outer `let` is narrowed to its
       // initialiser, and a comparison against it would not type-check.
       const newestSoFar = newestInternalDate as string | null;
-      if (newestSoFar === null || stored.message.internalDate > newestSoFar) {
-        newestInternalDate = stored.message.internalDate;
+      if (newestSoFar === null || normalized.internalDate > newestSoFar) {
+        newestInternalDate = normalized.internalDate;
       }
+      // A proven second copy of a recorded message is that message: nothing is matched,
+      // classified or applied again.
+      if (stored.outcome === 'duplicate_rfc_id') {
+        duplicateRfcId += 1;
+        return 'done';
+      }
+      // A conflict was recorded as its own row, without the RFC Message-ID another
+      // message holds; from here on it is processed as the new message it is, on its own
+      // metadata: `stored.message` is its row, and its own RFC Message-ID is below.
+      if (stored.outcome === 'rfc_id_conflict') rfcIdConflicts += 1;
 
       // Step 2: match, in 12.3's order, first rule that finds anything winning.
       const candidates = await findMatchCandidates(context, {
@@ -214,7 +258,8 @@ export async function processMessageIds(
       if (stored.message.direction === 'outgoing') {
         fenceId = await fenceForOutgoingMessage(context, {
           mailboxId: input.mailbox.id,
-          rfcMessageId: stored.message.rfcMessageId,
+          // The message's own Message-ID, from its headers: a conflict's row holds none.
+          rfcMessageId: normalized.rfcMessageId,
           providerMessageId: stored.message.providerMessageId,
         });
       }
@@ -311,6 +356,8 @@ export async function processMessageIds(
         suppressionsRecorded,
         directSendsRecorded,
         automatedSendsRecognised,
+        duplicateRfcId,
+        rfcIdConflicts,
         newestInternalDate,
       } = before);
       readFailure = { providerMessageId, read: 'body', detail: step.detail };
@@ -330,6 +377,8 @@ export async function processMessageIds(
     suppressionsRecorded,
     directSendsRecorded,
     automatedSendsRecognised,
+    duplicateRfcId,
+    rfcIdConflicts,
     newestInternalDate,
     processedMessages,
     readFailure,
