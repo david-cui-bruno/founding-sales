@@ -1324,7 +1324,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     expect(workerScaled).toBeGreaterThan(apiWaited);
     expect(run.counts).toEqual(STOPPED);
     expect(run.report).toBe(
-      `prefix=${ORDER_PREFIX} environment=rehearsal idle=idle ${ORDER_PREFIX}-api=stopped_from_2 ${ORDER_PREFIX}-worker=stopped_from_1`,
+      `prefix=${ORDER_PREFIX} environment=rehearsal idle=idle drain=not_used ${ORDER_PREFIX}-api=stopped_from_2 ${ORDER_PREFIX}-worker=stopped_from_1`,
     );
     // And the deploy that follows it is the one that reaches the migration: the only task
     // the stop launched is the idle check, before anything was scaled.
@@ -1572,7 +1572,7 @@ describe('release-timings: preparation, automated checks, operator, downtime, id
     expect(json.timings['preparationSeconds']).toBe(340);
     expect(json.timings['idleWaitSeconds']).toBe(30);
     expect(json.nulls).toEqual({});
-    expect(json.idle).toEqual({ result: 'idle', forced: false });
+    expect(json.idle).toEqual({ result: 'idle', forced: false, drain: null });
   });
 
   it('says a forced stop was forced, in the line and in the JSON', () => {
@@ -1582,7 +1582,7 @@ describe('release-timings: preparation, automated checks, operator, downtime, id
     });
     expect(run.code, run.output).toBe(0);
     expect(run.output).toContain('FORCED (the idle check was skipped)');
-    expect(read(run.reports).idle).toEqual({ result: 'forced', forced: true });
+    expect(read(run.reports).idle).toEqual({ result: 'forced', forced: true, drain: null });
   });
 
   it('records null, and says why, for every number no script could see', () => {
