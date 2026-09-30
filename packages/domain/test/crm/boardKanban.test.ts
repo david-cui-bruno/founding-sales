@@ -64,7 +64,7 @@ describe('Kanban board read and value command', () => {
   it('carries the close reason of a Lost card, every stage, and nothing else about Lost while filtered', async () => {
     const { firmId, opportunityId } = await opportunity();
     expect((await changeStage(assignee, { opportunityId, toStageKey: 'lost', reason: 'chose a competitor' })).ok).toBe(true);
-    const hidden = await readPipelineBoardForActor(assignee);
+    const hidden = await readPipelineBoardForActor(assignee, { includeLost: false });
     expect(hidden.cards[firmId]).toBeUndefined();
     expect(hidden.stages.map(stage => stage.key)).toContain('lost');
     expect(hidden.columns.map(column => column.stage.key)).not.toContain('lost');
