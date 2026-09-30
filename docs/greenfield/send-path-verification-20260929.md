@@ -312,11 +312,41 @@ display does not lie about the pause.
 
 ## What the operator should read on production before lifting the pause
 
-Run these as the read-only reporting role against the production database. Do not run
-them from a lane. They are ordered so that a bad answer to an early one makes the later
-ones unnecessary.
+**These eight reads are now sections 1–8 of one command**, `fss admin send-path report`
+(`apps/worker/src/tools/fss/admin.ts`), and it adds a ninth on `follow_up_permissions`,
+which did not exist when this document was written. Run it on the **operations task**
+(`release_run_task` in `infra/scripts/lib.sh`; the coordinator's wrapper around it lives
+outside the repository). Do not run it from a lane.
 
-**1. The three switches, as they actually stand.**
+```
+fss admin send-path report [--workspace <id>] [--sample <n>]
+```
+
+`--workspace` is optional while the database holds exactly one workspace, which is
+production's shape; with more than one it refuses `workspace_ambiguous` and says the
+count rather than pick. `--sample` (default 50, maximum 500) caps the per-row sections
+only; the counting sections are never sampled.
+
+**There is no "read-only reporting role", and there never was.** The sentence this
+paragraph replaces asked for something that does not exist and could not be used if it
+did: production's database is private — no bastion, no NAT — and the only sanctioned
+in-VPC execution is a one-off run of the OPERATIONS task definition, whose command
+override runs `fss <words>` and nothing else. The command is read-only by construction
+instead: `BEGIN TRANSACTION READ ONLY` is its first statement and `ROLLBACK` its last,
+so a write attempted by any section is refused by PostgreSQL (`25006`) and fails the
+whole command, and every section reads one snapshot, which `readAt` names.
+
+**The command decides nothing.** There is no "safe to lift" boolean and no exit code
+that means go. The SQL below stays as the reference definition of each section — if a
+section's answer and this SQL ever disagree, this SQL is what was meant — and the
+report's own `deviations` array states, one sentence each, every place its SQL is not
+the SQL below, because this document is a read of the code at `23ec4338` and the command
+runs on schema 25. "How to read the answer" is at the end of this section.
+
+The reads are ordered so that a bad answer to an early one makes the later ones
+unnecessary.
+
+**1. The three switches, as they actually stand.** (Report section `switches`.)
 
 ```sql
 SELECT setting_key, value
@@ -334,6 +364,7 @@ SELECT domain, is_primary, automated_sending_enabled,
 match that record.
 
 **2. How much would leave on the first tick.** This is the number that matters most.
+(Report section `dueNow`, grouped by `origin_kind`.)
 
 ```sql
 SELECT count(*) AS due_now,
@@ -351,7 +382,8 @@ SELECT count(*) AS due_now,
 *Expect:* if this is not zero, every one of those rows is a message that leaves within
 a minute of the switch. Read list 3 before deciding.
 
-**3. What those enrollments are, and how old.**
+**3. What those enrollments are, and how old.** (Report section `liveEnrollments`,
+grouped by `origin_kind` as well.)
 
 ```sql
 SELECT s.name AS sequence_name,
@@ -374,7 +406,9 @@ candidate for stopping. If any row predates the CRM redesign, **do not lift the
 pause** until David names the rule.
 
 **4. The origin each live enrollment does or does not have** (section 1's proxy, read
-only — it is not enforced anywhere).
+only — it is not enforced anywhere). (Report section `liveEnrollmentRows`, which reads
+0025's `permission_id` and `control_mode_origin` **beside** the two proxies below, and
+prints no e-mail address and no person's name.)
 
 ```sql
 SELECT n.id AS enrollment_id,
@@ -403,7 +437,8 @@ with no permitted origin under any reading of David's rule. Rows with
 origin is manual and every automated row has none, that is the wall described above,
 in the live data.
 
-**5. Parallel threads at one firm** (section 3's open clause).
+**5. Parallel threads at one firm** (section 3's open clause). (Report section
+`firmsWithParallelThreads`, run twice: `anyOrigin` and `prospectingOnly`.)
 
 ```sql
 SELECT n.firm_id, f.name, count(DISTINCT n.contact_id) AS live_contacts
@@ -418,6 +453,7 @@ HAVING count(DISTINCT n.contact_id) > 1
 *Expect:* empty. Any row is two people at one firm who would both be written to.
 
 **6. Suppression is present and readable** (a sanity check on the view the gate uses).
+(Report section `suppression`.)
 
 ```sql
 SELECT scope, count(*) FROM effective_suppressions GROUP BY scope;
@@ -438,7 +474,9 @@ SELECT count(*) AS live_enrollments_of_suppressed_people
 *Expect:* the second number may be non-zero and that is safe — those steps hold. It is
 the count of enrollments that should be stopped for tidiness, not a sending risk.
 
-**7. The mailbox's cap and ramp, so the first day's volume is known.**
+**7. The mailbox's cap and ramp, so the first day's volume is known.** (Report section
+`mailboxRamp`. Migration 0019 dropped `mailbox_send_days.direct_sent`, so the report
+does not read it and the SQL below would fail as written on schema 25.)
 
 ```sql
 SELECT m.email_address, r.healthy_sending_days, r.admin_daily_cap, r.raised_daily_cap,
@@ -455,7 +493,8 @@ SELECT business_date, automated_sent, direct_sent, cap_granted, closed_at, healt
 *Expect:* `healthy_sending_days` near zero and a cap of five a day, which bounds the
 blast radius of a mistake on the first day to five messages.
 
-**8. Any fence already prepared and waiting.** These do not go through `listStepWakes`
+**8. Any fence already prepared and waiting.** (Report section `preparedFences`, which
+also splits the fences by their enrollment's `origin_kind`.) These do not go through `listStepWakes`
 again; they are re-decided by the dispatch path and can go out as soon as the switches
 allow.
 
@@ -467,3 +506,57 @@ SELECT state, count(*), min(created_at) AS oldest
 ```
 
 *Expect:* whatever is here is immediate volume on top of read 2.
+
+**9. The permissions themselves, and the one number that is a defect.** This read has no
+counterpart above: `follow_up_permissions` did not exist at `23ec4338`. (Report section
+`followUpPermissions`.)
+
+```sql
+SELECT scope,
+       CASE WHEN revoked_at IS NOT NULL THEN 'revoked'
+            WHEN consumed_at IS NOT NULL THEN 'consumed'
+            WHEN expires_at <= now() THEN 'expired'
+            ELSE 'live' END AS state,
+       count(*)
+  FROM follow_up_permissions
+ GROUP BY 1, 2
+ ORDER BY 1, 2;   -- and the same by `kind`
+
+SELECT count(*) AS live_follow_ups_without_live_permission
+  FROM sequence_enrollments n
+  LEFT JOIN follow_up_permissions p
+    ON p.workspace_id = n.workspace_id AND p.id = n.permission_id
+ WHERE n.ended_at IS NULL
+   AND n.origin_kind = 'follow_up'
+   AND (n.permission_id IS NULL OR p.id IS NULL
+        OR p.revoked_at IS NOT NULL OR p.expires_at <= now());
+```
+
+*Expect:* the second number **0**. `sequence_enrollments_follow_up_has_permission`
+allows a null `permission_id` only on an ended row, so a non-zero count is a defect —
+the constraint was dropped, or a permission was deleted out from under a live run — and
+not a state to interpret. A *consumed* permission is not counted: consumption is what
+`single_email` means.
+
+---
+
+### How to read the answer
+
+Each line is the *Expect* of the read above it, adapted to migration 0025. None of it is
+in the command: the command prints numbers, and this is where the numbers are judged.
+
+| Section | What it should say before the first lift |
+|---|---|
+| 1 `switches` | `sending_enabled` is `{"enabled": false}` until the moment of the lift. When it is turned on, note the `releaseGateReference` it carries: the worker's image digest must match that release record. `automated_sending_enabled` and all three of SPF/DKIM/DMARC must be true on the primary domain before anything can leave at all. |
+| 2 `dueNow` | **`wouldLeaveOnFirstTick` must be 0 before the first lift.** `total` may be non-zero and that is expected: every live enrollment is `cold_legacy`, which `listStepWakes` does not wake and `followUpPermissionSource` refuses, so `byOriginKind.cold_legacy` is listed for completeness. Any `prospecting` or `follow_up` row here is a message that leaves within a minute of the switch; read section 4 for each before deciding. |
+| 3 `liveEnrollments` | The whole of section 4's evidence, now with `origin_kind` in the grouping, so "what predates the CRM redesign" is answered by the column rather than by a date somebody chose. A `cold_legacy` group of any size is fine and expected; it is history. |
+| 4 `liveEnrollmentRows` | Every `follow_up` row must have `permissionLive: true`. A `follow_up` row with `permissionLive: false` is a run whose permission is spent, revoked or expired — it will refuse at the step, which is correct, but it should be stopped for tidiness. `controlMode: 'manual'` with `controlModeOrigin: null` never sends (an unrecorded origin reads as a person's takeover); `hadConversation`/`hadInbound` are the old proxies, kept for continuity and enforced by nothing. |
+| 5 `firmsWithParallelThreads` | **`prospectingOnly` must be empty** — that is the firm-exclusivity rule David's directive asked for, enforced in `enrollContact` under the firm lock and again by `firmExclusivitySource` at the step. `anyOrigin` may have rows: several people at one customer firm may each hold a follow-up permission, which is the exception written into the same sentence. |
+| 6 `suppression` | `byScope` non-empty is the sanity check that the view the gate reads is readable at all. `liveEnrollmentsOfSuppressedPeople` may be non-zero and that is safe: those steps hold. It is a count of enrollments to stop for tidiness, not a sending risk. |
+| 7 `mailboxRamp` | `healthySendingDays` near zero and a cap of five a day, which bounds the blast radius of a mistake on the first day to five messages. |
+| 8 `preparedFences` | Whatever is here is immediate volume **on top of** section 2: prepared fences do not go through `listStepWakes` again, they are re-decided by the dispatch path. Read `byEnrollmentOriginKind`: a `cold_legacy` fence is still refused inside the claim, a `prospecting` or `follow_up` one is not. |
+| 9 `followUpPermissions` | `liveFollowUpsWithoutLivePermission` **must be 0**. The counts by scope and kind are a fact, not a threshold. |
+
+A bad answer in 2, 5 or 9 stops the lift. A bad answer in 1 or 7 means the switches or
+the ramp are not where the plan says. 3, 4, 6 and 8 are context for the three that
+decide.

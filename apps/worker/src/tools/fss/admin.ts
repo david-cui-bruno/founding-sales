@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
@@ -1066,4 +1067,560 @@ export async function releaseRecordShowCommand(invocation: AdminInvocation): Pro
     return refuse('release_record_unknown', 'no release record is stored under that reference; put it first with fss admin release-record put');
   }
   return accept({ ...describeRecord(record), record: record.record });
+}
+
+// ---------------------------------------------------------------------------
+// The send path, read before the pause is lifted.
+// ---------------------------------------------------------------------------
+
+/**
+ * `fss admin send-path report` (lane RB).
+ *
+ * `docs/greenfield/send-path-verification-20260929.md` ends with eight SQL reads an
+ * operator is told to make on production before the sending pause is lifted, "as the
+ * read-only reporting role". **There is no such role and no way to reach the database
+ * to use one:** production's instance is private — no bastion, no NAT — and the only
+ * sanctioned in-VPC execution is a one-off run of the OPERATIONS task definition, whose
+ * command override runs `fss <words>` and nothing else. So the reads are this command:
+ * the same SQL, scoped to one workspace, run inside one `READ ONLY` transaction that is
+ * rolled back, printed as one JSON object.
+ *
+ * **It decides nothing.** There is no "safe to lift" boolean, no refusal on a bad
+ * number and no exit code that means "go". Every expectation lives in the document's
+ * "How to read the answer" list, where a person reads it. The command's whole job is to
+ * make the nine reads possible at all, identically each time.
+ *
+ * ## Read-only, and how
+ *
+ * `BEGIN TRANSACTION READ ONLY` is the first statement, so a write attempted by any
+ * section — a typo in a CTE, a function with a side effect — is refused by PostgreSQL
+ * itself with `25006`, which fails the command rather than being reported as a number.
+ * `ROLLBACK` in a `finally`. Every section reads the transaction's one snapshot, so the
+ * nine answers are the same instant's answers and `readAt` is that instant.
+ *
+ * ## What it does not print
+ *
+ * No e-mail address of a prospect and no person's name. `liveEnrollmentRows` carries
+ * firm names (the operator has to recognise the firm) and contact **ids**, and the test
+ * asserts the section's JSON contains no `@` at all. The mailbox section prints the
+ * owner's own mailbox address, exactly as `fss admin mailbox list` already does.
+ *
+ * ## Schema 25, not the schema the document was written against
+ *
+ * The document is a read of `23ec4338`, before migration 0025. Where 0025 replaced a
+ * proxy with a real column the section reads the real column and keeps the proxy beside
+ * it, and where the document's SQL no longer matches the schema at all the difference
+ * is stated in the report's own `deviations` array rather than left for a reader to
+ * notice. Nothing is silently adjusted.
+ */
+
+/** The three origins 0025 gave an enrollment (`sequence_enrollments_origin_kind_known`). */
+type OriginKind = 'cold_legacy' | 'prospecting' | 'follow_up';
+
+/** The settings keys the document's read 1 names (schema 20 narrowed the vocabulary to these three). */
+const SWITCH_SETTING_KEYS = ['sending_enabled', 'business_time_zone', 'postal_address'] as const;
+
+/** `--sample`'s default and ceiling. A report is a log line; the per-row sections are bounded. */
+export const SEND_PATH_SAMPLE_DEFAULT = 50;
+export const SEND_PATH_SAMPLE_MAX = 500;
+
+/**
+ * How the report describes each place its SQL is not the document's SQL, one sentence
+ * each. They are constants rather than prose written at the call site so that the test
+ * can name them and a reviewer can diff them against the document.
+ */
+export const SEND_PATH_DEVIATIONS: readonly string[] = Object.freeze([
+  'Every section is scoped to one workspace (workspace_id = $1); the document\'s SQL is unscoped because it assumed production holds exactly one workspace, and this command refuses rather than guess when it holds more.',
+  'Section 1 reads only the version of each setting still in force (superseded_at IS NULL); the document\'s SQL has no such predicate and would also list every retired version.',
+  'Section 2 groups the document\'s read 2 by sequence_enrollments.origin_kind, which did not exist at 23ec4338, and reports total - cold_legacy as wouldLeaveOnFirstTick because listStepWakes now excludes cold_legacy outright.',
+  'Section 4 reads sequence_enrollments.permission_id and opportunities.control_mode_origin, which 0025 added, beside the document\'s two proxies (hadConversation, hadInbound) rather than instead of them.',
+  'Section 4\'s hadInbound reads mail_messages.direction = \'incoming\'. The document\'s SQL says \'inbound\', which is not in mail_messages_direction_known (incoming, outgoing) and so answered false for every row it was ever run against.',
+  'Section 7 does not read mailbox_send_days.direct_sent: migration 0019 dropped the column, so the document\'s read 7 would fail outright on schema 25.',
+  'Section 8 splits the fences by their enrollment\'s origin_kind through outbound_messages.enrollment_id; a fence with no enrollment (a draft) is reported under a null origin kind.',
+  'Section 9 has no counterpart in the document: follow_up_permissions did not exist at 23ec4338.',
+]);
+
+/** A count column, which `pg` hands back as a string for bigint. */
+const asCount = (value: unknown): number => Number((value as string | number | null) ?? 0);
+
+/** A timestamp column as an ISO instant, or null. */
+const asInstant = (value: unknown): string | null =>
+  value === null || value === undefined ? null : new Date(value as string | Date).toISOString();
+
+/** A `date` column as `YYYY-MM-DD`, which is how `pg` hands it back for a bare date. */
+const asDate = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value);
+};
+
+/** An empty tally of the three origin kinds, so a missing group reads 0 rather than undefined. */
+function emptyOriginTally(): Record<OriginKind, number> {
+  return { cold_legacy: 0, prospecting: 0, follow_up: 0 };
+}
+
+interface SendPathScope {
+  readonly workspaceId: string;
+  readonly sample: number;
+}
+
+/**
+ * The workspace this report is about, and the row cap.
+ *
+ * `--workspace` is optional when the database holds exactly one workspace, which is
+ * production's shape today. Anything else refuses and says the count: a report that
+ * silently picked the first of two would be read as the whole answer.
+ */
+function readSendPathScope(
+  options: Readonly<Record<string, string>>,
+  workspaceIds: readonly string[],
+): { readonly ok: true; readonly scope: SendPathScope } | { readonly ok: false; readonly outcome: AdminOutcome } {
+  const named = options['--workspace'];
+  let workspaceId: string;
+  if (named === undefined) {
+    if (workspaceIds.length !== 1) {
+      return {
+        ok: false,
+        outcome: refuse(
+          'workspace_ambiguous',
+          `this database holds ${String(workspaceIds.length)} workspaces; name one with --workspace`,
+        ),
+      };
+    }
+    workspaceId = workspaceIds[0] ?? '';
+  } else {
+    if (!workspaceIds.includes(named)) {
+      return { ok: false, outcome: refuse('workspace_unknown', 'no workspace on this database has that id') };
+    }
+    workspaceId = named;
+  }
+
+  const rawSample = options['--sample'];
+  let sample = SEND_PATH_SAMPLE_DEFAULT;
+  if (rawSample !== undefined) {
+    const parsed = Number(rawSample);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > SEND_PATH_SAMPLE_MAX) {
+      return {
+        ok: false,
+        outcome: refuse(
+          'sample_out_of_range',
+          `--sample caps the per-row sections and is a whole number between 1 and ${String(SEND_PATH_SAMPLE_MAX)}`,
+        ),
+      };
+    }
+    sample = parsed;
+  }
+  return { ok: true, scope: { workspaceId, sample } };
+}
+
+/** Section 1: the three switches, as they actually stand (the document's read 1). */
+async function sendPathSwitches(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
+  const settings = await session.query(
+    `SELECT setting_key, version, value, changed_at
+       FROM workspace_settings
+      WHERE workspace_id = $1 AND superseded_at IS NULL AND setting_key = ANY($2::text[])
+      ORDER BY setting_key`,
+    [workspaceId, [...SWITCH_SETTING_KEYS]],
+  );
+  const domains = await session.query(
+    `SELECT domain, is_primary, automated_sending_enabled, spf_pass, dkim_pass, dmarc_pass
+       FROM sending_domains
+      WHERE workspace_id = $1
+      ORDER BY is_primary DESC, domain`,
+    [workspaceId],
+  );
+  return {
+    // The owner's own settings, as stored: `sending_enabled` carries the
+    // releaseGateReference the worker's image digest has to match, and nothing here is
+    // a prospect's anything.
+    settings: settings.rows.map(row => ({
+      settingKey: row['setting_key'],
+      version: asCount(row['version']),
+      value: row['value'],
+      changedAt: asInstant(row['changed_at']),
+    })),
+    domains: domains.rows.map(row => ({
+      domain: row['domain'],
+      isPrimary: row['is_primary'],
+      automatedSendingEnabled: row['automated_sending_enabled'],
+      spfPass: row['spf_pass'],
+      dkimPass: row['dkim_pass'],
+      dmarcPass: row['dmarc_pass'],
+    })),
+  };
+}
+
+/** Section 2: how much would leave on the first tick (the document's read 2). */
+async function sendPathDueNow(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
+  const { rows } = await session.query(
+    `SELECT n.origin_kind,
+            count(*) AS due_now,
+            count(*) FILTER (WHERE e.channel = 'email') AS due_email
+       FROM step_executions e
+       JOIN sequence_enrollments n
+         ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+      WHERE e.workspace_id = $1
+        AND n.ended_at IS NULL
+        AND n.state = 'active'
+        AND e.state IN ('pending', 'held')
+        AND e.due_at <= now()
+        AND e.not_before <= now()
+      GROUP BY n.origin_kind`,
+    [workspaceId],
+  );
+  const byOriginKind = emptyOriginTally();
+  const emailByOriginKind = emptyOriginTally();
+  let total = 0;
+  let email = 0;
+  for (const row of rows) {
+    const kind = String(row['origin_kind']) as OriginKind;
+    const due = asCount(row['due_now']);
+    const dueEmail = asCount(row['due_email']);
+    total += due;
+    email += dueEmail;
+    if (kind in byOriginKind) {
+      byOriginKind[kind] = due;
+      emailByOriginKind[kind] = dueEmail;
+    }
+  }
+  return {
+    total,
+    email,
+    byOriginKind,
+    emailByOriginKind,
+    // The number that matters: what `listStepWakes` would actually wake.
+    wouldLeaveOnFirstTick: total - byOriginKind.cold_legacy,
+    note:
+      'cold_legacy rows are excluded twice over — listStepWakes will not wake one (sequences/wake.ts) and followUpPermissionSource refuses it at the step — so they are listed here for completeness only. wouldLeaveOnFirstTick is total minus byOriginKind.cold_legacy.',
+  };
+}
+
+/** Section 3: what those enrollments are, and how old (the document's read 3, plus origin). */
+async function sendPathLiveEnrollments(
+  session: SessionQueryable,
+  workspaceId: string,
+): Promise<readonly Record<string, unknown>[]> {
+  const { rows } = await session.query(
+    `SELECT s.name AS sequence_name,
+            sv.version,
+            date_trunc('day', n.started_at) AS started_day,
+            n.origin_kind,
+            count(*) AS enrollments,
+            min(n.started_at) AS oldest,
+            max(n.started_at) AS newest
+       FROM sequence_enrollments n
+       JOIN sequence_versions sv ON sv.workspace_id = n.workspace_id AND sv.id = n.sequence_version_id
+       JOIN sequences s ON s.workspace_id = sv.workspace_id AND s.id = sv.sequence_id
+      WHERE n.workspace_id = $1 AND n.ended_at IS NULL
+      GROUP BY 1, 2, 3, 4
+      ORDER BY oldest, sequence_name, version, origin_kind`,
+    [workspaceId],
+  );
+  return rows.map(row => ({
+    sequenceName: row['sequence_name'],
+    version: asCount(row['version']),
+    startedDay: asInstant(row['started_day']),
+    originKind: row['origin_kind'],
+    enrollments: asCount(row['enrollments']),
+    oldest: asInstant(row['oldest']),
+    newest: asInstant(row['newest']),
+  }));
+}
+
+/**
+ * Section 4: the origin each live enrollment does or does not have (the document's read
+ * 4), now with 0025's real columns beside the two proxies it had to infer from.
+ *
+ * No e-mail address and no person's name: the firm's name so the operator recognises
+ * the row, and ids for everything else.
+ */
+async function sendPathLiveEnrollmentRows(
+  session: SessionQueryable,
+  workspaceId: string,
+  sample: number,
+): Promise<Record<string, unknown>> {
+  const counted = await session.query(
+    'SELECT count(*) AS total FROM sequence_enrollments WHERE workspace_id = $1 AND ended_at IS NULL',
+    [workspaceId],
+  );
+  const { rows } = await session.query(
+    `SELECT n.id AS enrollment_id,
+            n.firm_id,
+            f.name AS firm_name,
+            n.contact_id,
+            n.started_at,
+            n.origin_kind,
+            n.permission_id,
+            (p.id IS NOT NULL
+              AND p.consumed_at IS NULL
+              AND p.revoked_at IS NULL
+              AND p.expires_at > now()) AS permission_live,
+            o.control_mode,
+            o.control_mode_origin,
+            EXISTS (SELECT 1 FROM call_logs c
+                     WHERE c.workspace_id = n.workspace_id AND c.firm_id = n.firm_id
+                       AND c.outcome IN ('interested', 'callback_requested', 'referral_or_wrong_person')
+                       AND c.occurred_at < n.started_at) AS had_conversation,
+            EXISTS (SELECT 1 FROM mail_message_matches m
+                      JOIN mail_messages mm ON mm.workspace_id = m.workspace_id AND mm.id = m.mail_message_id
+                     WHERE m.workspace_id = n.workspace_id AND m.firm_id = n.firm_id
+                       AND mm.direction = 'incoming'
+                       AND mm.internal_date < n.started_at) AS had_inbound
+       FROM sequence_enrollments n
+       JOIN firms f ON f.workspace_id = n.workspace_id AND f.id = n.firm_id
+       JOIN opportunities o ON o.workspace_id = n.workspace_id AND o.id = n.opportunity_id
+       LEFT JOIN follow_up_permissions p ON p.workspace_id = n.workspace_id AND p.id = n.permission_id
+      WHERE n.workspace_id = $1 AND n.ended_at IS NULL
+      ORDER BY n.started_at, n.id
+      LIMIT $2`,
+    [workspaceId, sample],
+  );
+  const total = asCount(counted.rows[0]?.['total']);
+  return {
+    total,
+    sample,
+    truncated: total > rows.length,
+    rows: rows.map(row => ({
+      enrollmentId: row['enrollment_id'],
+      firmId: row['firm_id'],
+      firmName: row['firm_name'],
+      contactId: row['contact_id'],
+      startedAt: asInstant(row['started_at']),
+      originKind: row['origin_kind'],
+      permissionId: row['permission_id'],
+      // Null rather than false when there is no permission at all: "no permission" and
+      // "a permission that is spent" are different answers.
+      permissionLive: row['permission_id'] === null ? null : row['permission_live'],
+      controlMode: row['control_mode'],
+      controlModeOrigin: row['control_mode_origin'],
+      hadConversation: row['had_conversation'],
+      hadInbound: row['had_inbound'],
+    })),
+  };
+}
+
+/** Section 5: parallel threads at one firm (the document's read 5), twice. */
+async function sendPathParallelThreads(
+  session: SessionQueryable,
+  workspaceId: string,
+  prospectingOnly: boolean,
+): Promise<readonly Record<string, unknown>[]> {
+  const { rows } = await session.query(
+    `SELECT n.firm_id, f.name AS firm_name, count(DISTINCT n.contact_id) AS live_contacts
+       FROM sequence_enrollments n
+       JOIN firms f ON f.workspace_id = n.workspace_id AND f.id = n.firm_id
+      WHERE n.workspace_id = $1
+        AND n.ended_at IS NULL
+        AND ($2::boolean IS FALSE OR n.origin_kind = 'prospecting')
+      GROUP BY 1, 2
+     HAVING count(DISTINCT n.contact_id) > 1
+      ORDER BY live_contacts DESC, firm_name`,
+    [workspaceId, prospectingOnly],
+  );
+  return rows.map(row => ({
+    firmId: row['firm_id'],
+    firmName: row['firm_name'],
+    liveContacts: asCount(row['live_contacts']),
+  }));
+}
+
+/** Section 6: suppression is present and readable (the document's read 6). */
+async function sendPathSuppression(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
+  const byScope = await session.query(
+    'SELECT scope, count(*) AS count FROM effective_suppressions WHERE workspace_id = $1 GROUP BY scope ORDER BY scope',
+    [workspaceId],
+  );
+  const live = await session.query(
+    `SELECT count(*) AS live_enrollments_of_suppressed_people
+       FROM sequence_enrollments n
+      WHERE n.workspace_id = $1
+        AND n.ended_at IS NULL
+        AND (EXISTS (SELECT 1 FROM effective_suppressions s
+                      WHERE s.workspace_id = n.workspace_id
+                        AND s.scope = 'firm' AND s.canonical_key = n.firm_id::text)
+             OR EXISTS (SELECT 1 FROM effective_suppressions s
+                         JOIN email_addresses a
+                           ON a.workspace_id = s.workspace_id AND a.address = s.canonical_key
+                        WHERE s.workspace_id = n.workspace_id
+                          AND s.scope = 'handle' AND a.contact_id = n.contact_id))`,
+    [workspaceId],
+  );
+  return {
+    byScope: byScope.rows.map(row => ({ scope: row['scope'], count: asCount(row['count']) })),
+    liveEnrollmentsOfSuppressedPeople: asCount(live.rows[0]?.['live_enrollments_of_suppressed_people']),
+  };
+}
+
+/** Section 7: the mailbox's cap and ramp (the document's read 7), less the column 0019 dropped. */
+async function sendPathMailboxRamp(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
+  const ramp = await session.query(
+    `SELECT r.mailbox_id, m.email_address, r.healthy_sending_days, r.admin_daily_cap, r.raised_daily_cap,
+            r.last_advanced_on, r.last_health_failure
+       FROM mailbox_send_ramp r
+       JOIN mailboxes m ON m.workspace_id = r.workspace_id AND m.id = r.mailbox_id
+      WHERE r.workspace_id = $1
+      ORDER BY m.email_address`,
+    [workspaceId],
+  );
+  const days = await session.query(
+    `SELECT mailbox_id, business_date, automated_sent, cap_granted, closed_at, healthy
+       FROM mailbox_send_days
+      WHERE workspace_id = $1
+      ORDER BY business_date DESC
+      LIMIT 10`,
+    [workspaceId],
+  );
+  return {
+    ramp: ramp.rows.map(row => ({
+      mailboxId: row['mailbox_id'],
+      // The owner's own mailbox, exactly as `fss admin mailbox list` prints it.
+      address: String(row['email_address']).trim().toLowerCase(),
+      healthySendingDays: asCount(row['healthy_sending_days']),
+      adminDailyCap: row['admin_daily_cap'] === null ? null : asCount(row['admin_daily_cap']),
+      raisedDailyCap: row['raised_daily_cap'] === null ? null : asCount(row['raised_daily_cap']),
+      lastAdvancedOn: asDate(row['last_advanced_on']),
+      lastHealthFailure: row['last_health_failure'],
+    })),
+    recentDays: days.rows.map(row => ({
+      mailboxId: row['mailbox_id'],
+      businessDate: asDate(row['business_date']),
+      automatedSent: asCount(row['automated_sent']),
+      capGranted: asCount(row['cap_granted']),
+      closedAt: asInstant(row['closed_at']),
+      healthy: row['healthy'],
+    })),
+  };
+}
+
+/** Section 8: any fence already prepared and waiting (the document's read 8), split by origin. */
+async function sendPathPreparedFences(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
+  const byState = await session.query(
+    `SELECT state, count(*) AS count, min(created_at) AS oldest
+       FROM outbound_messages
+      WHERE workspace_id = $1 AND state IN ('prepared', 'held')
+      GROUP BY state
+      ORDER BY state`,
+    [workspaceId],
+  );
+  const byOrigin = await session.query(
+    `SELECT o.state, n.origin_kind, count(*) AS count, min(o.created_at) AS oldest
+       FROM outbound_messages o
+       LEFT JOIN sequence_enrollments n ON n.workspace_id = o.workspace_id AND n.id = o.enrollment_id
+      WHERE o.workspace_id = $1 AND o.state IN ('prepared', 'held')
+      GROUP BY 1, 2
+      ORDER BY 1, 2`,
+    [workspaceId],
+  );
+  return {
+    byState: byState.rows.map(row => ({
+      state: row['state'],
+      count: asCount(row['count']),
+      oldest: asInstant(row['oldest']),
+    })),
+    // A fence with no enrollment is a draft: the join is a LEFT JOIN and the origin
+    // kind is null rather than the row being dropped from the split.
+    byEnrollmentOriginKind: byOrigin.rows.map(row => ({
+      state: row['state'],
+      enrollmentOriginKind: row['origin_kind'],
+      count: asCount(row['count']),
+      oldest: asInstant(row['oldest']),
+    })),
+  };
+}
+
+/**
+ * Section 9: the permissions themselves, which the document could not read because
+ * `follow_up_permissions` did not exist when it was written.
+ *
+ * `defects` is the one number here that is a defect rather than a fact: migration
+ * 0025's CHECK makes a live `follow_up` enrollment with a null `permission_id`
+ * unrepresentable, so a non-zero count means the constraint was dropped or the
+ * permission was deleted out from under a live run.
+ */
+async function sendPathFollowUpPermissions(
+  session: SessionQueryable,
+  workspaceId: string,
+): Promise<Record<string, unknown>> {
+  // One mutually exclusive state per permission, in the order a reader would ask:
+  // revoked beats consumed beats expired.
+  const STATE = `CASE WHEN revoked_at IS NOT NULL THEN 'revoked'
+                      WHEN consumed_at IS NOT NULL THEN 'consumed'
+                      WHEN expires_at <= now() THEN 'expired'
+                      ELSE 'live' END`;
+  const byScope = await session.query(
+    `SELECT scope, ${STATE} AS state, count(*) AS count
+       FROM follow_up_permissions WHERE workspace_id = $1 GROUP BY 1, 2 ORDER BY 1, 2`,
+    [workspaceId],
+  );
+  const byKind = await session.query(
+    `SELECT kind, ${STATE} AS state, count(*) AS count
+       FROM follow_up_permissions WHERE workspace_id = $1 GROUP BY 1, 2 ORDER BY 1, 2`,
+    [workspaceId],
+  );
+  const defects = await session.query(
+    `SELECT count(*) AS defects
+       FROM sequence_enrollments n
+       LEFT JOIN follow_up_permissions p ON p.workspace_id = n.workspace_id AND p.id = n.permission_id
+      WHERE n.workspace_id = $1
+        AND n.ended_at IS NULL
+        AND n.origin_kind = 'follow_up'
+        AND (n.permission_id IS NULL OR p.id IS NULL OR p.revoked_at IS NOT NULL OR p.expires_at <= now())`,
+    [workspaceId],
+  );
+  return {
+    byScope: byScope.rows.map(row => ({ scope: row['scope'], state: row['state'], count: asCount(row['count']) })),
+    byKind: byKind.rows.map(row => ({ kind: row['kind'], state: row['state'], count: asCount(row['count']) })),
+    liveFollowUpsWithoutLivePermission: asCount(defects.rows[0]?.['defects']),
+    note:
+      'liveFollowUpsWithoutLivePermission must be 0: sequence_enrollments_follow_up_has_permission allows a null permission only on an ended row, so a non-zero count is a defect, not a state to interpret. A consumed permission is not counted here — consumption is what single_email means.',
+  };
+}
+
+/**
+ * `fss admin send-path report [--workspace <id>] [--sample <n>]`.
+ *
+ * The nine reads, in one `READ ONLY` transaction that is rolled back. Decides nothing.
+ */
+export async function sendPathReportCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const workspaceIds = await listWorkspaceIds(session);
+    const scoped = readSendPathScope(invocation.options, workspaceIds);
+    if (!scoped.ok) return scoped.outcome;
+    const { workspaceId, sample } = scoped.scope;
+
+    const schemaVersion = await readAppliedSchemaVersion(session);
+    // The transaction's own clock, so `readAt` is the instant every `now()` above saw.
+    const clock = await session.query<{ now: Date | string }>('SELECT now() AS now');
+
+    const sections = {
+      switches: await sendPathSwitches(session, workspaceId),
+      dueNow: await sendPathDueNow(session, workspaceId),
+      liveEnrollments: await sendPathLiveEnrollments(session, workspaceId),
+      liveEnrollmentRows: await sendPathLiveEnrollmentRows(session, workspaceId, sample),
+      firmsWithParallelThreads: {
+        anyOrigin: await sendPathParallelThreads(session, workspaceId, false),
+        prospectingOnly: await sendPathParallelThreads(session, workspaceId, true),
+      },
+      suppression: await sendPathSuppression(session, workspaceId),
+      mailboxRamp: await sendPathMailboxRamp(session, workspaceId),
+      preparedFences: await sendPathPreparedFences(session, workspaceId),
+      followUpPermissions: await sendPathFollowUpPermissions(session, workspaceId),
+    };
+
+    return accept({
+      ok: true,
+      report: {
+        schemaVersion,
+        readAt: asInstant(clock.rows[0]?.now),
+        workspaceId,
+        sample,
+        deviations: [...SEND_PATH_DEVIATIONS],
+        sections,
+      },
+    });
+  } finally {
+    await session.query('ROLLBACK');
+  }
 }
