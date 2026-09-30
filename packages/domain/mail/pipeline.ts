@@ -81,6 +81,11 @@ export interface MessagePipelineReport {
    * holds: recorded without it and processed as new, with their own metadata.
    */
   readonly rfcIdConflicts: number;
+  /**
+   * Ids whose metadata read found no message: deleted between the listing (or history
+   * page) and the read. Processed, and gone.
+   */
+  readonly vanishedMessages: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
   readonly newestInternalDate: string | null;
   /**
@@ -112,6 +117,7 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   automatedSendsRecognised: 0,
   duplicateRfcId: 0,
   rfcIdConflicts: 0,
+  vanishedMessages: 0,
   newestInternalDate: null,
   processedMessages: 0,
   readFailure: null,
@@ -169,6 +175,7 @@ export async function processMessageIds(
   let automatedSendsRecognised = 0;
   let duplicateRfcId = 0;
   let rfcIdConflicts = 0;
+  let vanishedMessages = 0;
   let newestInternalDate: string | null = null;
 
   let processedMessages = 0;
@@ -187,6 +194,7 @@ export async function processMessageIds(
     // A message that vanished between the listing and the read is gone rather than
     // broken: Gmail deletions are real, and the next listing will not mention it.
     if (metadata === null) {
+      vanishedMessages += 1;
       processedMessages = index + 1;
       continue;
     }
@@ -383,8 +391,43 @@ export async function processMessageIds(
     automatedSendsRecognised,
     duplicateRfcId,
     rfcIdConflicts,
+    vanishedMessages,
     newestInternalDate,
     processedMessages,
     readFailure,
+  };
+}
+
+/**
+ * Two consecutive batches' reports as one: counts add, the newest date is the later,
+ * and the processed prefix and any read failure are the second batch's on top of the
+ * first's. Used by a recovery that processes its ids in budgeted slices.
+ */
+export function combinePipelineReports(
+  first: MessagePipelineReport,
+  second: MessagePipelineReport,
+): MessagePipelineReport {
+  const newest =
+    first.newestInternalDate === null
+      ? second.newestInternalDate
+      : second.newestInternalDate === null || first.newestInternalDate > second.newestInternalDate
+        ? first.newestInternalDate
+        : second.newestInternalDate;
+  return {
+    messagesSeen: first.messagesSeen + second.messagesSeen,
+    messagesRecorded: first.messagesRecorded + second.messagesRecorded,
+    bodiesFetched: first.bodiesFetched + second.bodiesFetched,
+    matched: first.matched + second.matched,
+    ambiguous: first.ambiguous + second.ambiguous,
+    holdsOpened: first.holdsOpened + second.holdsOpened,
+    suppressionsRecorded: first.suppressionsRecorded + second.suppressionsRecorded,
+    directSendsRecorded: first.directSendsRecorded + second.directSendsRecorded,
+    automatedSendsRecognised: first.automatedSendsRecognised + second.automatedSendsRecognised,
+    duplicateRfcId: first.duplicateRfcId + second.duplicateRfcId,
+    rfcIdConflicts: first.rfcIdConflicts + second.rfcIdConflicts,
+    vanishedMessages: first.vanishedMessages + second.vanishedMessages,
+    newestInternalDate: newest,
+    processedMessages: first.processedMessages + second.processedMessages,
+    readFailure: second.readFailure ?? first.readFailure,
   };
 }

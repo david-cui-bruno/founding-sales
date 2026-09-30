@@ -17,6 +17,7 @@ import {
 } from './mailboxes.ts';
 import { recordedProviderMessageIds } from './messages.ts';
 import {
+  combinePipelineReports,
   EMPTY_PIPELINE_REPORT,
   processMessageIds,
   type MessagePipelineDeps,
@@ -53,7 +54,10 @@ import {
  * next one-minute scheduler pass re-arms the same job row — Appendix C's key
  * `mail-recover:{mailbox}:{generation}` has no instant in it, so there is exactly one
  * row per generation — and the hold stays on until one walk reaches the end of the
- * listing with every listed id recorded.
+ * listing with every listed id covered. Only newly recorded messages spend
+ * `maxMessages`; a read cap of three times it bounds a run's Gmail reads. A proven
+ * duplicate or a vanished id leaves no row, so more of them than the read cap stalls
+ * the recovery (`docs/greenfield/mail.md`, rule 3).
  *
  * **The hold clears on proof, not on success.** `ready`, the watermark and
  * `completed_at` are written together, predicated on the generation, the address and
@@ -75,6 +79,9 @@ import {
  * which is the truth today — FSS has sent nothing and enrolled nobody — and becomes
  * a two-line query in each of those lanes without changing this file.
  */
+/** A recovery run reads at most this many times `maxMessages` ids (fold 1). */
+export const RECOVERY_READ_CAP_FACTOR = 3;
+
 export interface RecoveryFloorSource {
   oldestUnresolvedAt(context: RepositoryContext, mailboxId: string): Promise<string | null>;
 }
@@ -386,12 +393,21 @@ export async function runMailRecovery(
   // this mailbox has no `mail_messages` row for, up to `maxMessages`. The rows are the
   // position: a message that vanished between runs shifts nothing, and one that is
   // still listed and not recorded is taken again.
-  const toProcess: string[] = [];
-  const taken = new Set<string>();
+  // Two budgets. `maxMessages` counts only messages this run newly records: a proven
+  // duplicate or a vanished id writes no row and costs nothing against it. The read cap
+  // bounds the run's duration whatever the ids turn out to be: at most
+  // `RECOVERY_READ_CAP_FACTOR × maxMessages` ids are read (one metadata read each; a
+  // collision adds one more read of the other message).
+  const readCap = RECOVERY_READ_CAP_FACTOR * maxMessages;
+
+  // The walk: listing first, then the pipeline, so no Gmail listing call waits behind
+  // the send gate the pipeline takes. It stops early once it holds more unrecorded ids
+  // than the read cap lets this run read, because this run then cannot complete.
+  const unrecorded: string[] = [];
+  const seen = new Set<string>();
   let pageToken: string | undefined;
   let pagesWalked = 0;
   let listingEnded = false;
-  let unrecordedLeft = false;
 
   for (;;) {
     const outcome = await deps.gmail.listMessageIds(access.access, {
@@ -414,15 +430,11 @@ export async function runMailRecovery(
       providerMessageIds: outcome.messageIds,
     });
     for (const id of outcome.messageIds) {
-      if (recorded.has(id) || taken.has(id)) continue;
-      if (toProcess.length >= maxMessages) {
-        unrecordedLeft = true;
-        break;
-      }
-      taken.add(id);
-      toProcess.push(id);
+      if (recorded.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      unrecorded.push(id);
     }
-    if (unrecordedLeft) break;
+    if (unrecorded.length > readCap) break;
     if (outcome.nextPageToken === null) {
       listingEnded = true;
       break;
@@ -430,11 +442,22 @@ export async function runMailRecovery(
     pageToken = outcome.nextPageToken;
   }
 
-  const pipeline = await processMessageIds(context, deps, {
-    mailbox,
-    access: access.access,
-    messageIds: toProcess,
-  });
+  // The pipeline, in slices no larger than either budget has left. Each id costs at
+  // least one read and at most one new row, so a slice can overrun neither.
+  let pipeline: MessagePipelineReport = EMPTY_PIPELINE_REPORT;
+  let processed = 0;
+  while (processed < unrecorded.length) {
+    const size = Math.min(maxMessages - pipeline.messagesRecorded, readCap - processed, unrecorded.length - processed);
+    if (size <= 0) break;
+    const slice = await processMessageIds(context, deps, {
+      mailbox,
+      access: access.access,
+      messageIds: unrecorded.slice(processed, processed + size),
+    });
+    pipeline = combinePipelineReports(pipeline, slice);
+    processed += slice.processedMessages;
+    if (slice.readFailure !== null) break;
+  }
   // The pipeline stops at a failed Gmail read instead of throwing, which `mail.sync` uses
   // to commit the prefix it processed. A recovery throws instead and the whole job rolls
   // back and is retried; the recorded rows are its position, so nothing is lost by
@@ -446,9 +469,12 @@ export async function runMailRecovery(
     );
   }
 
-  // Coverage is proved only by one walk that reached the end of the listing with every
-  // id it listed recorded, here or by an earlier run.
-  const complete = listingEnded && !unrecordedLeft;
+  // Coverage is proved only by one walk, in this run, that reached the end of the
+  // listing with every listed id covered: it has a row (from an earlier run, or recorded
+  // now), or this run found it a proven duplicate, or this run found it gone. Every id
+  // this run processed is one of those, so the walk must have ended and every unrecorded
+  // id it collected must have been processed.
+  const complete = listingEnded && processed === unrecorded.length;
 
   if (!complete) {
     const progress = await context.db.query(

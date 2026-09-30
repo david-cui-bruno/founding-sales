@@ -303,16 +303,29 @@ of its next run, moving `to_at` to after that read.
 **3. Resume by recorded ids.** A recovery run walks the listing from page 1 with
 Gmail's own `nextPageToken` (opaque; never stored), asks once per page which ids already
 have a `mail_messages` row for this mailbox (`provider_message_id = ANY(...)`), and
-processes up to `maxMessages` of the rest. The rows are the position, so a message
-deleted between runs shifts nothing. The recovery completes only when one run's walk
-reaches the end of the listing with every listed id recorded, here or earlier, and then
-`sync_state = 'ready'`, the watermark at `toAt`, `completed_at` and the release of the
-`coverage_incomplete` hold commit together, predicated on the generation, the address
-and `history_id` still equal to the handoff id; any mismatch throws and rolls back.
-`pages_completed` is the number of pages the last walk read, and is informational. A
-listed id that is never recorded — a message Gmail lists and cannot read, or a proven
-duplicate (rule 4) — is taken again by every run; that is correct, and it means a
-mailbox with more than `maxMessages` of them could not complete.
+processes the rest under two budgets: `maxMessages` counts only messages the run newly
+records (a proven duplicate or a vanished id writes no row and costs nothing against
+it), and a read cap of `RECOVERY_READ_CAP_FACTOR` (3) × `maxMessages` ids bounds the
+run's Gmail reads (one metadata read per id, plus one read of the other message on an
+RFC Message-ID collision). The whole walk comes before the pipeline, so no listing call
+waits behind the send gate; it stops early once it holds more unrecorded ids than the
+read cap. The rows are the position, so a message deleted between runs shifts nothing.
+The recovery completes only when one run's walk reaches the end of the listing with
+every listed id covered — it has a row, or this run found it a proven duplicate, or this
+run's metadata read found it gone — and then `sync_state = 'ready'`, the watermark at
+`toAt`, `completed_at` and the release of the `coverage_incomplete` hold commit
+together, predicated on the generation, the address and `history_id` still equal to the
+handoff id; any mismatch throws and rolls back. `pages_completed` is the number of pages
+the last walk read, and is informational.
+
+The residual, and it is a real limit: proven duplicates and vanished ids leave no
+record, so every run meets them again, first. While they number no more than the read
+cap, a run reads them all, still records up to `maxMessages` new messages, and the
+recovery completes in the run whose budget reaches the end. If they alone exceed the
+read cap (1,500 at the default page size), every run spends its whole read cap on the
+same ids at the front of the listing and neither records anything behind them nor
+completes: the recovery does not progress, and the coverage hold stays on. Fixing that
+needs a durable record of an id already covered (a migration, not made here).
 
 **4. RFC Message-ID conflicts.** `mail_messages_one_per_rfc_id` allows one row per RFC
 Message-ID per mailbox. `recordMessage` absorbs a collision instead of raising. A

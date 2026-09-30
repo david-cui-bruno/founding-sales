@@ -405,6 +405,88 @@ describe('resume by recorded ids', () => {
   });
 });
 
+describe('recovery budgets (fold 1)', () => {
+  /**
+   * Three proven duplicates, one vanished id and two new messages, in a recovery with
+   * `maxMessages` 2. The duplicates and the vanished id write no row, so they must not
+   * spend the budget: if they did, every run would re-take the same first ids and the
+   * recovery would never complete.
+   */
+  it('maxMessages 2 with 3 proven duplicates, a vanished id and 2 new messages completes, and counts each kind', async () => {
+    const at = (minute: number): number => Date.parse('2026-09-11T11:30:00Z') + minute * 60_000;
+    const original = (index: number) =>
+      fixtureMessage({
+        id: `orig${String(index)}`,
+        historyId: String(900 + index),
+        from: STRANGER,
+        to: 'sales.alpha@example.test',
+        subject: `Copy ${String(index)}`,
+        messageId: `copied${String(index)}@x.test`,
+        internalDateEpochMilliseconds: at(index),
+      });
+    world = await createMailWorld({ alphaMessages: [1, 2, 3].map(original) });
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+
+    // Second copies of the three originals (same direction, From, Subject, Date and
+    // Message-ID, another Gmail id), a message Gmail lists and cannot read, and two new
+    // messages — all inside the next recovery's interval, the vanished one second.
+    w.alpha.messages.push(
+      { ...original(1), id: 'dupe1', historyId: '1011' },
+      fixtureMessage({ id: 'vanished1', historyId: '1012', from: STRANGER, to: 'sales.alpha@example.test', internalDateEpochMilliseconds: at(4) }),
+      { ...original(2), id: 'dupe2', historyId: '1013' },
+      { ...original(3), id: 'dupe3', historyId: '1014' },
+      fixtureMessage({ id: 'new1', historyId: '1015', from: STRANGER, to: 'sales.alpha@example.test', internalDateEpochMilliseconds: at(5) }),
+      fixtureMessage({ id: 'new2', historyId: '1016', from: STRANGER, to: 'sales.alpha@example.test', internalDateEpochMilliseconds: at(6) }),
+    );
+    const before = await readMailbox(context, w.alpha.mailboxId);
+    const gmail = w.clientWith(w.alpha, { expiredHistoryIds: [before?.historyId ?? ''], vanishedMessageIds: ['vanished1'] });
+    const started = await asJob(w, async () => await runMailSync(context, { ...w.syncDeps(w.alpha), gmail }, { mailboxId: w.alpha.mailboxId }));
+    expect(started.outcome).toBe('recovery_started');
+
+    const reports: MailRecoveryReport[] = [];
+    for (let run = 0; run < 5; run += 1) {
+      const report = await asJob(w, async () =>
+        await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 2 }),
+      );
+      reports.push(report);
+      if (report.outcome !== 'continued') break;
+    }
+    expect(reports.map(report => report.outcome)).toEqual(['completed']);
+    const final = reports[0];
+    expect(final?.duplicateRfcId).toBe(3);
+    expect(final?.vanishedMessages).toBe(1);
+    expect(final?.messagesRecorded).toBe(2);
+    expect(final?.coverageProved).toBe(true);
+
+    const { rows } = await w.database.session.query<{ provider_message_id: string }>(
+      'SELECT provider_message_id FROM mail_messages WHERE mailbox_id = $1 ORDER BY provider_message_id',
+      [w.alpha.mailboxId],
+    );
+    expect(rows.map(row => row.provider_message_id)).toEqual(['new1', 'new2', 'orig1', 'orig2', 'orig3']);
+    expect((await readMailbox(context, w.alpha.mailboxId))?.syncState).toBe('ready');
+    expect(await readMailboxHold(context, w.alpha.mailboxId, 'coverage_incomplete')).toBeNull();
+  });
+
+  it('a run reads at most three times maxMessages ids, and does not complete when the cap stops it', async () => {
+    world = await createMailWorld({
+      alphaMessages: Array.from({ length: 8 }, (_, index) =>
+        fixtureMessage({ id: `gone${String(index)}`, historyId: String(1001 + index), from: STRANGER, to: 'sales.alpha@example.test' }),
+      ),
+    });
+    const w = world;
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const gmail = w.clientWith(w.alpha, { vanishedMessageIds: Array.from({ length: 8 }, (_, index) => `gone${String(index)}`) });
+    const report = await asJob(w, async () =>
+      await runMailRecovery(context, { ...w.syncDeps(w.alpha), gmail, pageSize: 2, maxMessages: 2 }, { mailboxId: w.alpha.mailboxId, generation: 1 }),
+    );
+    expect(report.outcome).toBe('continued');
+    expect(report.vanishedMessages).toBe(6);
+    expect(gmail.metadataReads).toHaveLength(6);
+  });
+});
+
 describe('RFC Message-ID collisions', () => {
   const deliver = async (w: MailWorld, ...messages: ReturnType<typeof fixtureMessage>[]) => {
     const context = w.systemContext(w.alpha.workspace.workspaceId);
