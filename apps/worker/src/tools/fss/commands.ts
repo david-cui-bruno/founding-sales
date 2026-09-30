@@ -78,6 +78,9 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // and nothing else, so a report of what the send path would do cannot itself reach a
   // mailbox.
   'send-path report': 'database',
+  // Call-to-booking A2: the mailbox switch's two reads, each one READ ONLY transaction.
+  'mailbox switch-preflight': 'database',
+  'send-path preview': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -254,6 +257,26 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary:
       'the nine read-before-lift reads of the send-path verification, in one READ ONLY transaction. Reads only, and decides nothing',
+  },
+  {
+    // Call-to-booking A2. What the operator reads before David consents to the new
+    // account (`docs/greenfield/mail.md`, "Switching the mailbox").
+    path: ['admin', 'mailbox', 'switch-preflight'],
+    valueFlags: ['--workspace', '--mailbox', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary:
+      'the mailbox, what references it, and the conditions under which a switch should wait (wouldRefuse), in one READ ONLY transaction. Reads only',
+  },
+  {
+    // Call-to-booking A2. Each send-path condition asked on its own, because the gate
+    // stops at the first refusal and the domain switch is off while sending is paused.
+    path: ['admin', 'send-path', 'preview'],
+    valueFlags: ['--workspace', '--sample', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary:
+      'for every prepared or held fence and every due e-mail step, each send condition evaluated independently, and the sender it would leave from. Reads only',
   },
 ]);
 

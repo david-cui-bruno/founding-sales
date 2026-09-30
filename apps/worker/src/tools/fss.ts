@@ -10,9 +10,11 @@ import {
   holdsReleaseRestoreCommand,
   mailboxListCommand,
   mailboxReconcileSentCommand,
+  mailboxSwitchPreflightCommand,
   releaseRecordPutCommand,
   restoreMarkerPutCommand,
   releaseRecordShowCommand,
+  sendPathPreviewCommand,
   sendPathReportCommand,
   suppressionJournalReplayCommand,
   type AdminInvocation,
@@ -169,6 +171,9 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   // Lane RB: the read-before-lift reads of
   // docs/greenfield/send-path-verification-20260929.md, in one READ ONLY transaction.
   'send-path report': sendPathReportCommand,
+  // Call-to-booking A2: the mailbox switch's preflight and the per-condition preview.
+  'mailbox switch-preflight': mailboxSwitchPreflightCommand,
+  'send-path preview': sendPathPreviewCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
