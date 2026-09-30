@@ -201,6 +201,11 @@ export interface MailGrantDeps {
   readonly stateSigningKey: Buffer;
   readonly now?: (() => Date) | undefined;
   readonly grantSeconds?: number | undefined;
+  /**
+   * How long a switch keeps retrying a mailbox row another transaction holds, in
+   * milliseconds (`MAILBOX_ROW_LOCK_WINDOW_MILLISECONDS` unless a test shortens it).
+   */
+  readonly rowLockWindowMilliseconds?: number | undefined;
 }
 
 export interface BeginGrantOutcome {
@@ -320,7 +325,12 @@ export interface CompleteGrantOutcome {
  */
 export async function recordGrantRefusal(
   context: RepositoryContext,
-  input: { readonly reason: MailRefusalCode; readonly attemptId: string | null },
+  input: {
+    readonly reason: MailRefusalCode;
+    readonly attemptId: string | null;
+    /** A short machine word for the operator, e.g. `mailbox_busy`. Never content. */
+    readonly detail?: string | undefined;
+  },
 ): Promise<void> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return;
@@ -328,7 +338,11 @@ export async function recordGrantRefusal(
     action: 'mailbox.grant_refused',
     subjectKind: 'user',
     subjectId: actor.userId,
-    detail: { reason: input.reason, attemptId: input.attemptId },
+    detail: {
+      reason: input.reason,
+      attemptId: input.attemptId,
+      ...(input.detail === undefined ? {} : { detail: input.detail }),
+    },
   });
 }
 
@@ -386,8 +400,8 @@ export async function completeGmailGrant(
   if (actor.kind !== 'user' || actor.userId !== claims.userId) return refuseMail('authorization_request_unknown');
 
   const attemptId = claims.attemptId ?? null;
-  const refuse = async (reason: MailRefusalCode): Promise<MailResult<CompleteGrantOutcome>> => {
-    await recordGrantRefusal(context, { reason, attemptId });
+  const refuse = async (reason: MailRefusalCode, detail?: string): Promise<MailResult<CompleteGrantOutcome>> => {
+    await recordGrantRefusal(context, { reason, attemptId, ...(detail === undefined ? {} : { detail }) });
     return refuseMail(reason);
   };
   // An expired state is this user's, provably, and still refused: audited, so the Mac
@@ -449,7 +463,7 @@ export async function completeGmailGrant(
   ).toISOString();
 
   try {
-    const outcome = await withRowLockRetry(async () => await withTransaction(context.db, async () => {
+    const outcome = await withRowLockRetry(deps.rowLockWindowMilliseconds ?? MAILBOX_ROW_LOCK_WINDOW_MILLISECONDS, async () => await withTransaction(context.db, async () => {
       // 1. The exclusive send gate, before any row.
       await lockSendGateForStopFact(context);
       // 2. The mailbox row, and the decision again on what the lock shows: a concurrent
@@ -561,6 +575,9 @@ export async function completeGmailGrant(
     });
   } catch (error) {
     if (error instanceof GrantRefusedInTransaction) return await refuse(error.reason);
+    // The row stayed busy for the whole window: every attempt rolled back, so nothing
+    // changed. Refused cleanly, and the owner can try again.
+    if (error instanceof MailboxRowBusy) return await refuse('grant_refused', 'mailbox_busy');
     throw error;
   }
 }
@@ -615,9 +632,15 @@ class MailboxRowBusy extends Error {
   }
 }
 
-/** How often, and how far apart, the switch retries a busy mailbox row: about five seconds in all. */
-export const MAILBOX_ROW_LOCK_ATTEMPTS = 50;
-const MAILBOX_ROW_LOCK_PAUSE_MILLISECONDS = 100;
+/**
+ * How long the switch retries a busy mailbox row: about 25 seconds, backing off from
+ * 100 ms to 1 s. A `mail.sync` importing messages holds its `KEY SHARE` for the whole
+ * job, Gmail reads included, so tens of seconds are ordinary; 25 s stays well inside the
+ * load balancer's 60 s idle timeout on the browser's callback request.
+ */
+export const MAILBOX_ROW_LOCK_WINDOW_MILLISECONDS = 25_000;
+const MAILBOX_ROW_LOCK_FIRST_PAUSE_MILLISECONDS = 100;
+const MAILBOX_ROW_LOCK_LONGEST_PAUSE_MILLISECONDS = 1_000;
 
 /**
  * The owner's mailbox row, locked `FOR UPDATE NOWAIT`, or null when there is none.
@@ -633,7 +656,8 @@ const MAILBOX_ROW_LOCK_PAUSE_MILLISECONDS = 100;
  * So the strong lock is taken up front, with `NOWAIT`, right after the gate. If an
  * import holds `KEY SHARE`, the lock is refused at once, the transaction rolls back —
  * releasing the gate the import is about to wait for — and the switch retries
- * (`withRowLockRetry`). Once the lock is held, the gate and the row are both this
+ * (`withRowLockRetry`); a row still busy when the window closes is a clean refusal,
+ * `grant_refused` with the detail `mailbox_busy`. Once the lock is held, the gate and the row are both this
  * transaction's: an importer can only wait on the row holding nothing this needs, and a
  * dispatch claim cannot hold the gate at all. The provider calls are all before the
  * transaction, so a retry repeats no Google call.
@@ -653,13 +677,18 @@ async function lockOwnMailbox(context: RepositoryContext, ownerUserId: string): 
   return id === undefined ? null : await readMailbox(context, id);
 }
 
-async function withRowLockRetry<T>(attempt: () => Promise<T>): Promise<T> {
-  for (let tries = 1; ; tries += 1) {
+async function withRowLockRetry<T>(windowMilliseconds: number, attempt: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + windowMilliseconds;
+  let pause = MAILBOX_ROW_LOCK_FIRST_PAUSE_MILLISECONDS;
+  for (;;) {
     try {
       return await attempt();
     } catch (error) {
-      if (!(error instanceof MailboxRowBusy) || tries >= MAILBOX_ROW_LOCK_ATTEMPTS) throw error;
-      await new Promise(resolve => setTimeout(resolve, MAILBOX_ROW_LOCK_PAUSE_MILLISECONDS));
+      if (!(error instanceof MailboxRowBusy)) throw error;
+      const left = deadline - Date.now();
+      if (left <= 0) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(pause, left)));
+      pause = Math.min(pause * 2, MAILBOX_ROW_LOCK_LONGEST_PAUSE_MILLISECONDS);
     }
   }
 }

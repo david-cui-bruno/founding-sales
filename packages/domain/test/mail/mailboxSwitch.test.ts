@@ -605,6 +605,35 @@ describe('the switch transaction takes the send gate, then the mailbox row', () 
     await late.session.query('ROLLBACK');
   });
 
+  it('refuses cleanly when an import holds the row for longer than the window: audited, nothing changed', async () => {
+    const importer = await extra();
+    const started = await begin(NEW_ADDRESS);
+    await importer.session.query('BEGIN');
+    await importer.session.query(
+      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+                                  internal_date, matched)
+       VALUES ($1, $2, 'long-import', 'long-import', 'incoming', now(), false)`,
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    const before = await snapshot();
+    const gmail = account(NEW_ADDRESS);
+    const startedAt = Date.now();
+    const done = await completeGmailGrant(owner(), grantDeps(gmail, { rowLockWindowMilliseconds: 700 }), {
+      state: started.state,
+      code: 'busy',
+    });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(700);
+    await importer.session.query('ROLLBACK');
+    expect(done).toEqual({ ok: false, reason: 'grant_refused' });
+    expect(await snapshot()).toEqual(before);
+    expect(gmail.calls.map(call => call.method)).not.toContain('stopWatch');
+    const { rows } = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'mailbox.grant_refused' AND actor_user_id = $2`,
+      [workspaceId(), ownerId()],
+    );
+    expect(rows.map(row => row.detail)).toEqual([{ reason: 'grant_refused', attemptId: started.attemptId, detail: 'mailbox_busy' }]);
+  });
+
   it('dates the switch from when it holds its locks: a sync committed during the wait stays the old account’s', async () => {
     const holder = await extra();
     const grantSession = await extra();

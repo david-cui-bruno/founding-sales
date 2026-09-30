@@ -615,8 +615,11 @@ the pause.
   unique-index column, which conflicts with the `KEY SHARE` an import holds from its
   message rows; `NOWAIT` because such an import then waits for the gate, and a callback
   that held the gate while waiting for the row would deadlock with it. A busy row rolls
-  the transaction back — releasing the gate — and it is retried, about five seconds in
-  all (no Google call is repeated). The switch's instant is `clock_timestamp()` read once
+  the transaction back — releasing the gate — and it is retried for about 25 seconds,
+  backing off from 100 ms to 1 s (a `mail.sync` holds its `KEY SHARE` for its whole job,
+  Gmail reads included; no Google call is repeated). A row still busy after that is a
+  clean refusal, `mailbox.grant_refused { reason: 'grant_refused', attemptId, detail:
+  'mailbox_busy' }`, and nothing changes; the owner tries again. The switch's instant is `clock_timestamp()` read once
   both locks are held, never the transaction's `now()`: a sync that committed against
   the old account while the callback waited stays the old account's. The fence
   re-check (a fence prepared since the connect refuses `mailbox_switch_pending_sends`
