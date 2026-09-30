@@ -373,7 +373,7 @@ ALTER TABLE provider_reservations
       AND
       (subject_kind NOT IN ('call_session', 'call_transcription')
         OR (model_name IS NULL AND max_input_tokens IS NULL AND max_output_tokens IS NULL
-            AND priced_unit = 'minute' AND max_units IS NOT NULL AND max_units > 0 AND max_units <= 240
+            AND priced_unit IS NOT NULL AND priced_unit = 'minute' AND max_units IS NOT NULL AND max_units > 0 AND max_units <= 240
             AND unit_price_micros IS NOT NULL AND unit_price_micros >= 0 AND unit_price_micros <= 10000000))
     );
 

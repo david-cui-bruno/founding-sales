@@ -430,6 +430,20 @@ export const CALL_TO_BOOKING_CONSTRAINT_CASES: readonly Case[] = [
         [workspace(f)],
       ),
   },
+  {
+    constraint: 'provider_reservations_priced_shape',
+    // A telephony reservation with its minutes and price but no unit. `priced_unit =
+    // 'minute'` alone is NULL here, which a CHECK accepts; the IS NOT NULL is the test.
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO provider_reservations
+           (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+            cents, max_units, unit_price_micros)
+         VALUES ($1, 'twilio.voice', 'call_session', gen_random_uuid(), 1, '2026-09-30', 'America/New_York',
+                 42, 30, 14000)`,
+        [workspace(f)],
+      ),
+  },
 
   // -------------------------------------------------------------------- call_sessions
   {
