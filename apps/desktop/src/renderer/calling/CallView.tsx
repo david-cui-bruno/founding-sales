@@ -20,9 +20,21 @@ export function CallView({ call }: { readonly call: CallControl }): JSX.Element 
   }
   if (state.phase === 'starting') {
     return (
-      <p data-testid="call-status" className="text-xs text-muted-foreground">
-        Starting the call…
-      </p>
+      <div className="flex items-center gap-2">
+        <p data-testid="call-status" className="flex-1 text-xs text-muted-foreground">
+          Starting the call…
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="call-hang-up"
+          onClick={() => {
+            call.hangUp();
+          }}
+        >
+          Hang up
+        </Button>
+      </div>
     );
   }
   if (state.phase === 'ended') {

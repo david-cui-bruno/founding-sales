@@ -59,6 +59,13 @@ export function useCall(ports: CallPorts | null): CallControl {
   const call = useRef<VoiceCall | null>(null);
   const device = useRef<VoiceDevice | null>(null);
   const live = useRef(false);
+  /**
+   * Which press of Call is current (review of C1, fold 1, finding 5). Hanging up while the
+   * call is still being set up, and leaving the card, move it on; every await in `place`
+   * compares its own number afterwards, and whatever it created in the meantime — a
+   * Device, a Call — is disconnected and destroyed at once. No call outlives its controls.
+   */
+  const generation = useRef(0);
   const portsRef = useRef(ports);
   portsRef.current = ports;
   const now = (): number => (portsRef.current?.now ?? Date.now)();
@@ -85,15 +92,22 @@ export function useCall(ports: CallPorts | null): CallControl {
     input => {
       const current = portsRef.current;
       if (current === null || live.current) return;
+      generation.current += 1;
+      const mine = generation.current;
+      const cancelled = (): boolean => mine !== generation.current;
       setState({ phase: 'starting', firmId: input.firmId, routeId: input.routeId });
       void (async () => {
         let started: CallStart;
         try {
           started = await current.start(input);
         } catch {
-          setState({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: CALL_FAILED_SENTENCE });
+          if (!cancelled()) {
+            setState({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: CALL_FAILED_SENTENCE });
+          }
           return;
         }
+        // Hung up or left while the session and token were being made: nothing is dialled.
+        if (cancelled()) return;
         if (!started.ok) {
           setState({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: callRefusalSentence(started.reason) });
           return;
@@ -110,6 +124,7 @@ export function useCall(ports: CallPorts | null): CallControl {
         setLive(true);
         setState(ringing);
         const ended = (): void => {
+          if (cancelled()) return;
           finish(prior => ({
             phase: 'ended',
             firmId: input.firmId,
@@ -118,24 +133,40 @@ export function useCall(ports: CallPorts | null): CallControl {
             seconds: prior.phase === 'connected' && prior.answeredAt !== null ? Math.floor((now() - prior.answeredAt) / 1000) : 0,
           }));
         };
+        let made: VoiceDevice | null = null;
         try {
-          const made = await (current.device ?? twilioVoiceDevice)(started.token);
+          made = await (current.device ?? twilioVoiceDevice)(started.token);
+          if (cancelled()) {
+            made.destroy();
+            return;
+          }
           device.current = made;
           // The session id, and nothing else: the number is the server's to put in <Dial>.
           const placed = await made.connect({ sessionId: started.sessionId });
+          if (cancelled()) {
+            // Created after the person hung up or left: gone at once, never an invisible call.
+            placed.disconnect();
+            made.destroy();
+            return;
+          }
           call.current = placed;
           placed.on('accept', () => {
+            if (cancelled()) return;
             setState(prior => (prior.phase === 'ringing' ? { ...prior, phase: 'connected', answeredAt: now() } : prior));
           });
           placed.on('disconnect', ended);
           placed.on('cancel', ended);
           placed.on('reject', ended);
           placed.on('error', (error?: unknown) => {
-            if (isMicrophoneDenied(error)) {
+            if (!cancelled() && isMicrophoneDenied(error)) {
               finish(() => ({ phase: 'refused', firmId: input.firmId, routeId: input.routeId, sentence: MICROPHONE_DENIED_SENTENCE }));
             }
           });
         } catch (error: unknown) {
+          if (cancelled()) {
+            made?.destroy();
+            return;
+          }
           finish(() => ({
             phase: 'refused',
             firmId: input.firmId,
@@ -158,8 +189,18 @@ export function useCall(ports: CallPorts | null): CallControl {
   }, []);
 
   const hangUp = useCallback((): void => {
-    call.current?.disconnect();
-  }, []);
+    const placed = call.current;
+    if (placed !== null) {
+      placed.disconnect();
+      return;
+    }
+    // Still being set up: cancel it. Whatever the pending start creates is torn down.
+    generation.current += 1;
+    device.current?.destroy();
+    device.current = null;
+    setLive(false);
+    setState(prior => (prior.phase === 'starting' || prior.phase === 'ringing' ? { phase: 'idle' } : prior));
+  }, [setLive]);
 
   const dismiss = useCallback((): void => {
     setState(prior => (prior.phase === 'ended' || prior.phase === 'refused' ? { phase: 'idle' } : prior));
@@ -180,6 +221,8 @@ export function useCall(ports: CallPorts | null): CallControl {
   // Leaving the page mid-call hangs up and tells the main process the call is over.
   useEffect(
     () => () => {
+      // A start still pending is cancelled: what it creates after this is torn down.
+      generation.current += 1;
       call.current?.disconnect();
       device.current?.destroy();
       if (live.current) {
