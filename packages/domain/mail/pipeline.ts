@@ -5,12 +5,11 @@ import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,
   applyDirectSendEffects,
-  directSendAppliedFirms,
   recordDeterministicClassification,
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
 import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
-import { directSendTargetOf, findMatchCandidates, recordMatches, withOutgoingRecipientConflicts } from './matching.ts';
+import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
 import { METADATA_HEADERS, type MailboxRow } from './types.ts';
@@ -103,7 +102,7 @@ export async function processMessageIds(
     }
 
     // Step 2: match, in 12.3's order, first rule that finds anything winning.
-    let candidates = await findMatchCandidates(context, {
+    const candidates = await findMatchCandidates(context, {
       mailboxId: input.mailbox.id,
       messageId: stored.message.id,
       metadata: normalized,
@@ -121,20 +120,20 @@ export async function processMessageIds(
         rfcMessageId: stored.message.rfcMessageId,
         providerMessageId: stored.message.providerMessageId,
       });
-      if (fenceId === null) {
-        // Once the direct-send effect has been applied — either marker, the current or
-        // the historical one — the message's candidate set is frozen (S1 review P1-D).
-        // A replay after a new address association would otherwise add the new firm as
-        // a held, ambiguous choice whose resolution could not move the effect.
-        if ((await directSendAppliedFirms(context, stored.message.id)).length > 0) {
-          matched += 1;
-          continue;
-        }
-        candidates = await withOutgoingRecipientConflicts(context, { candidates, metadata: normalized });
-      }
     }
 
-    const matches = await recordMatches(context, { messageId: stored.message.id, candidates });
+    // Once the direct-send effect has been applied — either marker — the message's
+    // candidate set is frozen (P1-D); the gate is taken before the marker is read (P1-H).
+    const matches = await recordMatchesForImport(context, {
+      messageId: stored.message.id,
+      candidates,
+      metadata: normalized,
+      directSend: stored.message.direction === 'outgoing' && fenceId === null,
+    });
+    if (matches.frozen) {
+      matched += 1;
+      continue;
+    }
     matched += 1;
     if (matches.ambiguous) ambiguous += 1;
     holdsOpened += matches.holdIds.length;

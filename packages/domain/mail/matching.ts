@@ -342,6 +342,37 @@ export async function recordMatches(
 }
 
 /**
+ * Record one imported message's matches, with the salesperson's own direct send frozen
+ * once its effect is applied (S1 review P1-D, round 4 P1-H).
+ *
+ * For an unfenced outgoing message the order is the send gate, then the marker read,
+ * then the match writes — one transaction, the import's. A resolution applies the
+ * direct-send effect under the same exclusive gate, so a replay that reads "no marker"
+ * cannot then write a newly known firm's match and hold after a resolution committed the
+ * marker in between: it waits for the gate and reads the marker. An applied marker
+ * (either kind) freezes the candidate set — no new match, no hold. Otherwise the To/Cc
+ * recipients are checked against the rule that matched (P1-1) and the matches recorded.
+ */
+export async function recordMatchesForImport(
+  context: RepositoryContext,
+  input: {
+    readonly messageId: string;
+    readonly candidates: readonly MatchCandidate[];
+    readonly metadata: NormalizedMetadata;
+    /** True for an outgoing message no FSS fence names: the salesperson's direct send. */
+    readonly directSend: boolean;
+  },
+): Promise<{ readonly frozen: true } | ({ readonly frozen: false } & RecordedMatches)> {
+  let candidates = input.candidates;
+  if (input.directSend) {
+    await lockSendGateForStopFact(context);
+    if ((await directSendAppliedFirms(context, input.messageId)).length > 0) return { frozen: true };
+    candidates = await withOutgoingRecipientConflicts(context, { candidates, metadata: input.metadata });
+  }
+  return { frozen: false, ...(await recordMatches(context, { messageId: input.messageId, candidates })) };
+}
+
+/**
  * The one opportunity a direct send's effect may be applied to at import, from the
  * stored match set (S1 review P1-A), or undefined while a person still has to choose.
  *

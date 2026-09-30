@@ -65,6 +65,18 @@ describe('the held outgoing messages on a firm page', () => {
     expect(said.length).toBeGreaterThan(0);
   });
 
+  it('says exactly why a resolution was refused: already applied, or not this person’s firm', () => {
+    draw({ messages: [MESSAGE], notice: 'already_applied' });
+    expect(screen.getByTestId('held-outgoing-notice').textContent).toBe(
+      'That e-mail was already recorded against another firm.',
+    );
+    cleanup();
+    draw({ messages: [MESSAGE], notice: 'not_assigned' });
+    expect(screen.getByTestId('held-outgoing-notice').textContent).toBe(
+      'This firm is assigned to somebody else, so it cannot be changed here.',
+    );
+  });
+
   it('is absent when nothing is held and nothing was said about one', () => {
     draw({ messages: [], notice: 'saved' });
     expect(screen.queryByTestId('held-outgoing')).toBeNull();

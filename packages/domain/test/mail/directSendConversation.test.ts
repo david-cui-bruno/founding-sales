@@ -4,7 +4,14 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import type { MatchCandidate } from '../../mail/matching.ts';
-import { directSendTargetOf, listHeldOutgoingForFirm, recordMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import {
+  directSendTargetOf,
+  listHeldOutgoingForFirm,
+  recordMatches,
+  recordMatchesForImport,
+  resolveAmbiguity,
+} from '../../mail/matching.ts';
+import type { NormalizedMetadata } from '../../mail/messages.ts';
 import { readMessage } from '../../mail/messages.ts';
 import type { MailMessageRow } from '../../mail/types.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
@@ -838,5 +845,99 @@ describe('S1 round-3 P2: the cold-mailbox hold comes before the not-yet-due refu
     expect(report.outcome, JSON.stringify(report)).toBe('held');
     expect(report.detail).toBe('cold_outreach_mailbox_required:gmail_dispatch:personal');
     expect(gmail.sends).toHaveLength(0);
+  });
+});
+
+describe('S1 round-4: a replay and a resolution of the same direct send', () => {
+  /** A contact at the firm that owns an address the message was already sent to. */
+  async function associate(firm: SeededFirm, address: string): Promise<void> {
+    await world.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility, eligibility_policy_version)
+       VALUES ($1, $2, $3, $4, 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')`,
+      [workspaceId(), firm.firmId, firm.contactId, address],
+    );
+  }
+
+  /** The metadata a replay reads for the message: only its To/Cc matter here. */
+  const metadataOf = (message: MailMessageRow): NormalizedMetadata =>
+    ({ headerTo: message.headerTo, headerCc: message.headerCc }) as unknown as NormalizedMetadata;
+
+  async function matchedFirms(messageId: string): Promise<readonly string[]> {
+    const { rows } = await world.database.session.query<{ firm_id: string }>(
+      'SELECT firm_id FROM mail_message_matches WHERE workspace_id = $1 AND mail_message_id = $2 ORDER BY firm_id',
+      [workspaceId(), messageId],
+    );
+    return rows.map(row => row.firm_id);
+  }
+
+  it('P1-H: a replay waiting on the gate while a resolution commits the marker sees it and writes nothing', async () => {
+    const left = await seedFirm(world, world.alpha, 'race-replay-left');
+    const right = await seedFirm(world, world.alpha, 'race-replay-right');
+    const late = await seedFirm(world, world.alpha, 'race-replay-late');
+    const message = await storeDirectSend({ to: [left.address, right.address, 'newly-known@prospect.example.test'] });
+    await recordMatches(worker(), { messageId: message.id, candidates: [candidateOf(left), candidateOf(right)] });
+    // The third address becomes known at another firm after the first import.
+    await associate(late, 'newly-known@prospect.example.test');
+    const asUser = repositoryContext(
+      workspaceScope(workspaceId(), {
+        kind: 'user',
+        userId: world.alpha.workspace.salesperson.userId,
+        role: 'salesperson',
+      }),
+      barrier.session,
+    );
+
+    await barrier.session.query('BEGIN');
+    const resolved = await resolveAmbiguity(asUser, {
+      messageId: message.id,
+      selectedOpportunityId: left.opportunityId,
+      human: false,
+    });
+    expect(resolved.ok).toBe(true);
+
+    await second.session.query('BEGIN');
+    const replay = recordMatchesForImport(second.context(workspaceId()), {
+      messageId: message.id,
+      candidates: [candidateOf(left)],
+      metadata: metadataOf(message),
+      directSend: true,
+    });
+    await waitUntilBlocked(barrier.session, second.pid, 'advisory');
+    await barrier.session.query('COMMIT');
+    const recorded = await replay;
+    await second.session.query('COMMIT');
+
+    expect(recorded.frozen).toBe(true);
+    expect(await matchedFirms(message.id)).toEqual([left.firmId, right.firmId].sort());
+    expect(await listHeldOutgoingForFirm(worker(), late.firmId)).toEqual([]);
+  });
+
+  it('P2: a message with only a historical direct_send_manual marker is frozen too', async () => {
+    const firm = await seedFirm(world, world.alpha, 'historical-freeze');
+    const late = await seedFirm(world, world.alpha, 'historical-freeze-late');
+    const message = await storeDirectSend({ to: [firm.address, 'known-later@prospect.example.test'] });
+    await recordMatches(worker(), { messageId: message.id, candidates: [candidateOf(firm)] });
+    await world.database.session.query(
+      `INSERT INTO mail_message_effects (workspace_id, mail_message_id, effect_kind, target_key, detail)
+       VALUES ($1, $2, 'direct_send_manual', $3, $4::jsonb)`,
+      [workspaceId(), message.id, `opportunity:${firm.opportunityId}`, JSON.stringify({ firmId: firm.firmId })],
+    );
+    await associate(late, 'known-later@prospect.example.test');
+
+    const recorded = await recordMatchesForImport(worker(), {
+      messageId: message.id,
+      candidates: [candidateOf(firm)],
+      metadata: metadataOf(message),
+      directSend: true,
+    });
+    expect(recorded.frozen).toBe(true);
+    expect(await matchedFirms(message.id)).toEqual([firm.firmId]);
+    const { rows: holds } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM active_holds
+        WHERE workspace_id = $1 AND source_event_id = $2 AND released_at IS NULL`,
+      [workspaceId(), message.id],
+    );
+    expect(holds[0]?.count).toBe('0');
   });
 });
