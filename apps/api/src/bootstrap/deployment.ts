@@ -332,6 +332,7 @@ export async function readApiDeployment(
       publicOrigin: publicOriginRaw.length > 0 ? publicOriginRaw.replace(/\/+$/u, '') : null,
       twilio: integrationSecrets.twilio,
       calcom: integrationSecrets.calcom,
+      missing: integrationSecrets.missing,
     },
     integrationSources: {
       twilio: integrationSecrets.twilioProblem ?? 'configured',

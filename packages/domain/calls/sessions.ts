@@ -145,17 +145,8 @@ export async function createCallSession(
   const zone = await workspaceBusinessZone(context);
   const businessDate = localDate(now, zone);
   const cents = telephonyReservationCents(budget.maxMinutesPerCall, budget.unitPriceMicros);
-  const { rows: spent } = await context.db.query<{ cents: string | null }>(
-    `SELECT sum(cents)::text AS cents FROM (
-       SELECT cost_cents AS cents FROM provider_ledger
-        WHERE workspace_id = $1 AND provider_key = $2 AND business_date = $3::date
-       UNION ALL
-       SELECT cents FROM provider_reservations
-        WHERE workspace_id = $1 AND provider_key = $2 AND business_date = $3::date AND state IN ('reserved', 'calling')
-     ) AS spend`,
-    [context.scope.workspaceId, TELEPHONY_PROVIDER_KEY, businessDate],
-  );
-  if (Number(spent[0]?.cents ?? 0) + cents > budget.dailyCeilingCents) return refuse('telephony_budget_exhausted');
+  const spentCents = await telephonySpentCents(context, businessDate);
+  if (spentCents + cents > budget.dailyCeilingCents) return refuse('telephony_budget_exhausted');
 
   // The whole dial decision, and the ticket.
   const ticket = await authorizeDialCommand(context, {
@@ -450,6 +441,31 @@ export async function resumeCallCadence(
     detail: { firmId: input.firmId, unansweredAttempts: cadence.unansweredAttempts },
   });
   return { ok: true, value: { firmId: input.firmId, releasedHoldId: holdId } };
+}
+
+/**
+ * Cents of Twilio minutes spent on one business date: settled ledger cost plus live
+ * (reserved or calling) reservations. The budget check and Settings' "spent today" both
+ * ask this, so they cannot disagree about the day boundary or what counts.
+ */
+export async function telephonySpentCents(context: RepositoryContext, businessDate: string): Promise<number> {
+  const { rows } = await context.db.query<{ cents: string | null }>(
+    `SELECT sum(cents)::text AS cents FROM (
+       SELECT cost_cents AS cents FROM provider_ledger
+        WHERE workspace_id = $1 AND provider_key = $2 AND business_date = $3::date
+       UNION ALL
+       SELECT cents FROM provider_reservations
+        WHERE workspace_id = $1 AND provider_key = $2 AND business_date = $3::date AND state IN ('reserved', 'calling')
+     ) AS spend`,
+    [context.scope.workspaceId, TELEPHONY_PROVIDER_KEY, businessDate],
+  );
+  return Number(rows[0]?.cents ?? 0);
+}
+
+/** Today's telephony spend, on the workspace's business day. */
+export async function telephonySpentToday(context: RepositoryContext): Promise<number> {
+  const zone = await workspaceBusinessZone(context);
+  return await telephonySpentCents(context, localDate(await databaseNow(context), zone));
 }
 
 /**

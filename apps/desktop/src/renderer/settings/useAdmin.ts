@@ -10,6 +10,7 @@ import type {
   AllowStatesInput,
   RecordHolidayCalendarInput,
   RecordSendingAuthenticationInput,
+  SaveIntegrationInput,
   SaveSettingInput,
   SetSendingCapInput,
 } from '../settingsContract.ts';
@@ -40,6 +41,7 @@ export interface AdminActions {
   /** Read this tab again, which is what Retry means everywhere on this page. */
   show(tab: SettingsTab): void;
   saveSetting(input: SaveSettingInput): void;
+  saveIntegration(input: SaveIntegrationInput): void;
   openHistory(settingKey: ActiveSettingKey): void;
   retireStage(stageKey: string): void;
   acknowledgeAlert(alertId: string): void;
@@ -75,6 +77,9 @@ export function useAdmin(tab: SettingsTab, identity: string | null, generation: 
       },
       saveSetting: input => {
         command(`setting:${input.settingKey}`, api => api.command('settings.saveSetting', input));
+      },
+      saveIntegration: input => {
+        command(`integration:${input.settingKey}`, api => api.command('settings.saveIntegration', input));
       },
       openHistory: settingKey => {
         read(api => api.read('settings.openHistory', { settingKey }));

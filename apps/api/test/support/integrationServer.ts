@@ -6,7 +6,7 @@ import { recordingLogger } from '../../src/bootstrap/log.ts';
 
 type RecordingLogger = ReturnType<typeof recordingLogger>;
 import { createApiServer } from '../../src/server.ts';
-import { calcom, calcomSignature, twilioSignature, twilioVoice, type RecordingHttp } from '../../src/integrations/providers.ts';
+import { calcom, calcomSignature, readIntegrationSecrets, CALCOM_SECRET_VARIABLE, TWILIO_SECRET_VARIABLE, twilioSignature, twilioVoice, type RecordingHttp } from '../../src/integrations/providers.ts';
 import type { AuthFixture } from './authFixture.ts';
 import { testRequestPool } from './poolFixture.ts';
 
@@ -55,6 +55,11 @@ export async function startIntegrationServer(
     readonly configured?: boolean;
     /** Twilio's REST API for the recording proxy (slice C1); absent is a 404 for every request. */
     readonly recordingHttp?: RecordingHttp;
+    /**
+     * Slice S1: build the integrations from these task secrets exactly as production does
+     * (`readIntegrationSecrets`), so a test can leave a field out or plant sentinel values.
+     */
+    readonly secretBundles?: { readonly twilioVoice?: Record<string, unknown>; readonly calcom?: Record<string, unknown> };
   } = {},
 ): Promise<IntegrationServer> {
   const authToken = hex(20);
@@ -65,6 +70,15 @@ export async function startIntegrationServer(
   const pool: pg.Pool = testRequestPool(fixture.database);
   const log = recordingLogger();
   const { db: _db, ...auth } = fixture.deps;
+  const fromEnvironment =
+    options.secretBundles === undefined
+      ? null
+      : readIntegrationSecrets({
+          ...(options.secretBundles.twilioVoice === undefined
+            ? {}
+            : { [TWILIO_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.twilioVoice) }),
+          ...(options.secretBundles.calcom === undefined ? {} : { [CALCOM_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.calcom) }),
+        });
   const server = createApiServer({
     connections: poolConnections(pool, log),
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
@@ -73,7 +87,10 @@ export async function startIntegrationServer(
     log,
     integrations: {
       publicOrigin: PUBLIC_ORIGIN,
-      twilio: configured
+      ...(fromEnvironment === null ? {} : { missing: fromEnvironment.missing }),
+      twilio: fromEnvironment !== null
+        ? fromEnvironment.twilio
+        : configured
         ? twilioVoice({
             accountSid,
             apiKeySid: `SK${hex(16)}`,
@@ -83,7 +100,7 @@ export async function startIntegrationServer(
             callerIdE164,
           }, { http: options.recordingHttp ?? (async () => await Promise.resolve(new Response(null, { status: 404 }))) })
         : null,
-      calcom: configured ? calcom({ webhookSecret }) : null,
+      calcom: fromEnvironment !== null ? fromEnvironment.calcom : configured ? calcom({ webhookSecret }) : null,
       decisionAt: () => INSIDE_CALLING_WINDOW,
     },
   });

@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import {
+  INTEGRATION_SETTING_KEYS,
+  INTEGRATION_SETTING_VALUE_SCHEMAS,
   SETTING_KEYS,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
+  integrationsSettingsResponseSchema,
   postureReferenceResponseSchema,
   settingHistoryResponseSchema,
   settingsSnapshotSchema,
@@ -150,6 +153,16 @@ export const adminStateSchema = z.strictObject({
   callingNumbers: z.array(callingNumberViewSchema).nullable(),
   /** The states on the "OK to call" list and the texts the section shows (9.2 step 6). */
   postures: posturesStateSchema.nullable(),
+  /**
+   * Settings → Calling & calendar (slice S1): the four switches and whether each
+   * integration's credentials are in place (field names only, and this window never shows
+   * them). Null for a salesperson, who is not asked, and when the read did not answer,
+   * which the section says rather than showing switches that read as "off". Optional on the
+   * wire so a state built before this slice still parses; the bridge always sends it.
+   */
+  integrations: integrationsSettingsResponseSchema.nullable().optional(),
+  /** The last refusal of an integrations save, as the code, for the section to put in a sentence. */
+  integrationsNotice: z.string().max(80).nullable().optional(),
 });
 export type AdminState = z.infer<typeof adminStateSchema>;
 
@@ -230,6 +243,24 @@ export const saveSettingInputSchema = z.strictObject({
   /** Optional in effect: empty is sent as "Changed on the Mac" (wave 1). */
   changeNote: z.string().max(500),
 });
+
+/**
+ * One of the four call-to-booking settings (`calling_provider`, `calendar_integration`,
+ * `telephony_budget`, `voicemail_script`), saved from Settings → Calling & calendar. The
+ * value is held to the key's own schema here as well as on the server.
+ */
+export const saveIntegrationInputSchema = z
+  .strictObject({
+    settingKey: z.enum(INTEGRATION_SETTING_KEYS),
+    value: z.unknown(),
+  })
+  .superRefine((input, context) => {
+    if (!INTEGRATION_SETTING_VALUE_SCHEMAS[input.settingKey].safeParse(input.value).success) {
+      context.addIssue({ code: 'custom', message: 'value does not match the setting', path: ['value'] });
+    }
+  });
+export type SaveIntegrationInput = z.infer<typeof saveIntegrationInputSchema>;
+
 export type SaveSettingInput = {
   readonly settingKey: ActiveSettingKey;
   readonly value: unknown;

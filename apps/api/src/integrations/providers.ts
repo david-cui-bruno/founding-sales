@@ -90,6 +90,12 @@ export interface IntegrationDeps {
   readonly twilio: TwilioVoice | null;
   readonly calcom: Calcom | null;
   /**
+   * Field NAMES the secrets lack or hold misshapen (slice S1: `GET /settings/integrations`).
+   * Names only, never a value. Absent (a test's fakes) reads as "none missing" when the
+   * integration is configured.
+   */
+  readonly missing?: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] } | undefined;
+  /**
    * The instant the dial decision is taken at, for a test that must be inside the calling
    * window whatever the wall clock says. Production passes none: database time.
    */
@@ -215,6 +221,17 @@ const field = (bundle: Readonly<Record<string, unknown>>, name: string, shape: R
   return typeof value === 'string' && shape.test(value.trim()) ? value.trim() : null;
 };
 
+const TWILIO_FIELD_NAMES = ['account_sid', 'api_key_sid', 'api_key_secret', 'twiml_app_sid', 'auth_token', 'caller_id_e164'] as const;
+const TWILIO_FIELD_BY_KEY: Readonly<Record<string, string>> = {
+  accountSid: 'account_sid',
+  apiKeySid: 'api_key_sid',
+  apiKeySecret: 'api_key_secret',
+  twimlAppSid: 'twiml_app_sid',
+  authToken: 'auth_token',
+  callerIdE164: 'caller_id_e164',
+};
+const CALCOM_FIELD_NAMES = ['webhook_secret'] as const;
+
 /**
  * Read both entries from the task environment. Each is null when absent or when any
  * required field is missing or misshapen; the reason is a field *name*, never a value.
@@ -224,7 +241,10 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   readonly calcom: Calcom | null;
   readonly twilioProblem: string | null;
   readonly calcomProblem: string | null;
+  readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] };
 } {
+  let twilioMissing: readonly string[] = TWILIO_FIELD_NAMES;
+  let calcomMissing: readonly string[] = CALCOM_FIELD_NAMES;
   let twilio: TwilioVoice | null = null;
   let twilioProblem: string | null = 'absent';
   const twilioBundle = jsonObject(environment[TWILIO_SECRET_VARIABLE]);
@@ -237,6 +257,9 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
       authToken: field(twilioBundle, 'auth_token', /^.{16,}$/u),
       callerIdE164: field(twilioBundle, 'caller_id_e164', /^\+[1-9][0-9]{7,14}$/u),
     };
+    twilioMissing = Object.entries(values)
+      .filter(([, value]) => value === null)
+      .map(([name]) => TWILIO_FIELD_BY_KEY[name] ?? name);
     const missing = Object.entries(values).find(([, value]) => value === null)?.[0] ?? null;
     if (missing === null) {
       twilio = twilioVoice(values as { [K in keyof typeof values]: string });
@@ -254,6 +277,7 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   if (calcomBundle !== null) {
     const webhookSecret = field(calcomBundle, 'webhook_secret', /^.{16,}$/u);
     if (webhookSecret !== null) {
+      calcomMissing = [];
       calcomDeps = calcom({ webhookSecret });
       calcomProblem = null;
     } else {
@@ -262,5 +286,12 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   } else if (environment[CALCOM_SECRET_VARIABLE] !== undefined) {
     calcomProblem = 'not_json';
   }
-  return { twilio, calcom: calcomDeps, twilioProblem, calcomProblem };
+  if (twilio !== null) twilioMissing = [];
+  return {
+    twilio,
+    calcom: calcomDeps,
+    twilioProblem,
+    calcomProblem,
+    missing: { twilioVoice: twilioMissing, calcom: calcomMissing },
+  };
 }

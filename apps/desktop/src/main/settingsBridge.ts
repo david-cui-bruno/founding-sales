@@ -5,6 +5,7 @@ import {
   callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
+  integrationsSettingsResponseSchema,
   outboundStatusResponseSchema,
   pipelineStagesResponseSchema,
   sendingDomainStatusSchema,
@@ -26,6 +27,7 @@ import type {
   PosturesState,
   RecordHolidayCalendarInput,
   RecordSendingAuthenticationInput,
+  SaveIntegrationInput,
   SaveSettingInput,
   SetSendingCapInput,
 } from '../renderer/settingsContract.ts';
@@ -133,6 +135,8 @@ export interface AdminBridgeHost {
   state(): Promise<AdminState>;
   show(input: { readonly screen: AdminScreen }): Promise<AdminState>;
   saveSetting(input: SaveSettingInput): Promise<AdminState>;
+  /** Settings → Calling & calendar: one of the four call-to-booking settings. */
+  saveIntegration(input: SaveIntegrationInput): Promise<AdminState>;
   openHistory(input: { readonly settingKey: ActiveSettingKey }): Promise<AdminState>;
   loadDashboard(input: { readonly from: string; readonly to: string }): Promise<AdminState>;
   retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
@@ -166,6 +170,8 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let sendingReadError: AdminState['sendingReadError'] = null;
   let callingNumbers: AdminState['callingNumbers'] = null;
   let postures: PosturesState | null = null;
+  let integrations: AdminState['integrations'] = null;
+  let integrationsNotice: string | null = null;
   /** The role the state above was read under, or null before the first read. */
   let roleSeen: AdminState['role'] | null = null;
   const window = defaultWindow(clock());
@@ -188,6 +194,8 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       sendingReadError = null;
       diagnostics = null;
       dashboard = null;
+      integrations = null;
+      integrationsNotice = null;
     }
     roleSeen = role;
     return { role, online: session.online, mayMutate: session.mayMutate };
@@ -210,6 +218,8 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       sendingReadError,
       callingNumbers,
       postures,
+      integrations,
+      integrationsNotice,
     };
   };
 
@@ -325,6 +335,20 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     };
   };
 
+  /**
+   * The four call-to-booking settings and whether their credentials are in place (slice S1),
+   * for an admin: a salesperson cannot change them, so the section is absent for one. A
+   * failure is the section's grey line and Retry, never a page notice.
+   */
+  const loadIntegrations = async (): Promise<void> => {
+    if (!(await isAdmin())) {
+      integrations = null;
+      return;
+    }
+    const answer = await deps.api.read('/settings/integrations', value => integrationsSettingsResponseSchema.parse(value));
+    integrations = answer.ok ? answer.value : null;
+  };
+
   const loadSettings = async (): Promise<void> => {
     const answer = await deps.api.read(SETTINGS_READ_PATH, value => settingsSnapshotSchema.parse(value));
     if (!answer.ok) {
@@ -348,6 +372,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     await loadSending();
     await loadCallingNumbers();
     await loadPostures();
+    await loadIntegrations();
   };
 
   /** One `/dashboard` read over the window named. It changes nothing but `dashboard`. */
@@ -405,6 +430,8 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       sendingReadError = null;
       callingNumbers = null;
       postures = null;
+      integrations = null;
+      integrationsNotice = null;
       roleSeen = null;
       return await snapshot();
     },
@@ -436,6 +463,22 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
         value => value,
       );
       return await afterCommand(outcome, loadSettings);
+    },
+
+    async saveIntegration(input) {
+      const outcome = await deps.api.command(
+        '/settings/update',
+        { settingKey: input.settingKey, value: input.value, changeNote: DEFAULT_CHANGE_NOTE },
+        value => value,
+      );
+      if (!outcome.ok) {
+        // The section's own sentence, not the page banner: the refusal belongs to the row.
+        integrationsNotice = outcome.reason.slice(0, 80);
+        return await snapshot();
+      }
+      integrationsNotice = null;
+      await loadIntegrations();
+      return await snapshot();
     },
 
     async openHistory(input) {

@@ -142,6 +142,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'settings.show': async (input: Parameters<AdminBridgeHost['show']>[0]) => await deps.settings.show(input),
     'settings.saveSetting': async (input: Parameters<AdminBridgeHost['saveSetting']>[0]) =>
       await deps.settings.saveSetting(input),
+    'settings.saveIntegration': async (input: Parameters<AdminBridgeHost['saveIntegration']>[0]) =>
+      await deps.settings.saveIntegration(input),
     'settings.openHistory': async (input: Parameters<AdminBridgeHost['openHistory']>[0]) =>
       await deps.settings.openHistory(input),
     'settings.loadDashboard': async (input: Parameters<AdminBridgeHost['loadDashboard']>[0]) =>

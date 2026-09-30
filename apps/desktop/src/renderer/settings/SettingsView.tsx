@@ -7,6 +7,7 @@ import { Alert } from '../ui/alert.tsx';
 import { Page, ViewHeader } from '../ui/layout.tsx';
 import { cn } from '../lib/utils.ts';
 import { Administration } from './Administration.tsx';
+import { CallingCalendarSection } from './CallingCalendarSection.tsx';
 import { MailboxSection } from './MailboxSection.tsx';
 import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
@@ -123,6 +124,16 @@ export function SettingsView({
                 available={hasMailboxBridge}
                 onSwitch={onSwitchMailbox}
               />
+              {state === null ? null : (
+                <CallingCalendarSection
+                  state={state}
+                  busy={key => admin.busy(`integration:${key}`)}
+                  onSave={admin.actions.saveIntegration}
+                  onRetry={() => {
+                    admin.actions.show('administration');
+                  }}
+                />
+              )}
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />

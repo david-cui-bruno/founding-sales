@@ -11,16 +11,30 @@ the Twilio secret.
 
 ## The switch and the settings
 
-Three workspace settings, versioned and audited like the others
+Four workspace settings, versioned and audited like the others
 (`packages/contracts/src/settings.ts`, `INTEGRATION_SETTING_KEYS`). They are written
 with `POST /settings/update` and are deliberately **not** in the `GET /settings`
 snapshot, because installed desktops parse that snapshot with a strict key list.
+
+**David turns these on in Settings → Calling & calendar** (slice S1,
+`apps/desktop/src/renderer/settings/CallingCalendarSection.tsx`): the in-app calling
+switch, the daily budget in dollars (0 to 100, kept as cents; the longest call is under
+"Advanced"), the voicemail script, and the Cal.com switch. The section reads
+`GET /settings/integrations` (any signed-in member; the Mac asks only for an admin), which
+answers the four values, `spentTodayCents` (today's settled plus reserved `twilio.voice`
+cost, on the day boundary the budget check uses) and, for each integration, whether its
+credentials are in place: `{ ok, missing }`, where `missing` holds field **names** only
+(`auth_token`), never a value, length or prefix. The section itself does not list the
+names; it says the account is not set up. Calling cannot be switched on while
+credentials are missing or the ceiling is 0, and can always be switched off. Only an
+admin may write these keys (`admin_only` for anyone else, the same rule as every setting).
 
 | Key | Value | Default |
 |---|---|---|
 | `calling_provider` | `{"provider": "tel" \| "twilio"}` | `tel` |
 | `telephony_budget` | `{"dailyCeilingCents": 0..10000, "maxMinutesPerCall": 1..240, "unitPriceMicros": ...}` | ceiling 0, 30 minutes, 14000 micro-dollars a minute |
 | `calendar_integration` | see [meetings.md](meetings.md) | `off` |
+| `voicemail_script` | `{"template": 1..2000 characters}` | `DEFAULT_VOICEMAIL_SCRIPT` |
 
 A ceiling of 0 means telephony is disabled: every session is refused with
 `telephony_budget_disabled`. Turning calling on therefore takes two writes, the
@@ -67,7 +81,10 @@ provider and a ceiling.
 
 `sweepCallSessionReservations` releases the reservation of a session that expired
 unused and estimates one whose call outlived its maximum by 15 minutes with no final
-callback. It is a domain function; scheduling it as a worker job is not done yet.
+callback. It is a domain function, and the worker runs it: `telephony.sweep`
+(`apps/worker/src/handlers/telephonySweep.ts`, registered and sourced in
+`apps/worker/src/bootstrap/main.ts`) is enqueued each quarter hour for every workspace
+that owes a sweep, keyed `telephony-sweep:{workspace}:{quarter hour}`.
 
 ## Signature verification
 
@@ -204,8 +221,10 @@ stops, ends or leaves the screen. The call history is on the firm page
 
 `{contactFirstName}`, `{firmName}`, `{callerName}` and `{callbackNumber}` (David's verified
 number), rendered by `renderVoicemailScript`. The default is `DEFAULT_VOICEMAIL_SCRIPT`.
-**Not yet editable:** a `voicemail_script` setting needs `workspace_settings_key_known`
-widened, which is a migration; until then `readVoicemailScript` answers the default.
+Editable in Settings → Calling & calendar (up to 2 000 characters): migration 0028 already
+admits the key, and `readVoicemailScript` reads the stored value and falls back to the
+default when none is stored or the stored value does not parse. `GET /calls/calling`
+serves the edited template, so the next call card uses it.
 
 ### The Mac
 
