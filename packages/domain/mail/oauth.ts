@@ -770,6 +770,11 @@ export async function disconnectMailbox(
     }
   }
 
+  // The exclusive send gate before any mailbox write (A1 fold 3): a disconnect is a stop
+  // fact, and `markMailboxDisconnected` updates the row, which a dispatch claim holding
+  // the gate shared may be about to key-share. Taken after the provider calls above, so
+  // no Google call happens under it. The caller's transaction (the command's) holds it.
+  await lockSendGateForStopFact(context);
   await cancelWatch(context, { mailboxId: mailbox.id, reason: 'disconnected' });
   const deleted = (await deleteRefreshToken(context, mailbox.id)) > 0;
   await markMailboxDisconnected(context, {

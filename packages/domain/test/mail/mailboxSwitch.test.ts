@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SessionQueryable } from '../../db/queryable.ts';
+import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import type { EnvelopeCipher } from '../../mail/envelope.ts';
 import type { GmailClient } from '../../mail/gmailClient.ts';
@@ -11,6 +11,7 @@ import { readAttachmentReferences } from '../../retention/attachments.ts';
 import {
   beginGmailGrant,
   completeGmailGrant,
+  disconnectMailbox,
   verifyGrantState,
   type MailGrantDeps,
 } from '../../mail/oauth.ts';
@@ -776,6 +777,64 @@ describe('the switch transaction takes the send gate, then the mailbox row', () 
       candidate: { firmId: firm.firmId, opportunityId: firm.opportunityId, contactId: firm.contactId, rule: 'participant', viaClosedOpportunity: false },
     });
     expect(effect.recorded).toBe(false);
+  });
+
+  /** The gate's holder blocks `waiter`, and the mailbox row is still free for a probe. */
+  async function blockedOnGateWithRowFree(holderPid: number, waiterPid: number, probe: ExtraSession): Promise<void> {
+    await waitUntilBlocked(world.database.session, waiterPid, 'advisory');
+    const { rows: blockers } = await world.database.session.query<{ blocked: boolean }>(
+      'SELECT $1::int = ANY (pg_blocking_pids($2)) AS blocked',
+      [holderPid, waiterPid],
+    );
+    expect(blockers).toEqual([{ blocked: true }]);
+    await probe.session.query('BEGIN');
+    const free = await probe.session.query('SELECT id FROM mailboxes WHERE workspace_id = $1 AND id = $2 FOR UPDATE NOWAIT', [
+      workspaceId(),
+      world.alpha.mailboxId,
+    ]);
+    expect(free.rows).toHaveLength(1);
+    await probe.session.query('ROLLBACK');
+  }
+
+  it('a same-address re-consent takes the gate before any mailbox row lock', async () => {
+    const holder = await extra();
+    const grantSession = await extra();
+    const probe = await extra();
+    const started = await begin(undefined);
+    await holder.session.query('BEGIN');
+    await lockSendGateForStopFact(holder.context(workspaceId()));
+    const pending = completeGmailGrant(userOn(grantSession.session), grantDeps(account(world.alpha.address)), {
+      state: started.state,
+      code: 'reconsent-gate-first',
+    });
+    await blockedOnGateWithRowFree(holder.pid, grantSession.pid, probe);
+    await holder.session.query('ROLLBACK');
+    expect(await pending).toMatchObject({ ok: true, value: { switched: false } });
+  });
+
+  it('a disconnect takes the gate before it writes the mailbox row', async () => {
+    const holder = await extra();
+    const disconnecting = await extra();
+    const probe = await extra();
+    await holder.session.query('BEGIN');
+    await lockSendGateForStopFact(holder.context(workspaceId()));
+    // The command's shape: one transaction around the whole disconnect.
+    const pending = withTransaction(disconnecting.session, async () =>
+      await disconnectMailbox(userOn(disconnecting.session), grantDeps(account(world.alpha.address)), {
+        mailboxId: world.alpha.mailboxId,
+        reason: 'owner_disconnect',
+      }),
+    );
+    await blockedOnGateWithRowFree(holder.pid, disconnecting.pid, probe);
+    await holder.session.query('ROLLBACK');
+    expect((await pending).ok).toBe(true);
+    const row = await mailboxRow();
+    expect(row.email_address).toBe(world.alpha.address);
+    const { rows } = await world.database.session.query<{ status: string }>(
+      'SELECT status FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), world.alpha.mailboxId],
+    );
+    expect(rows).toEqual([{ status: 'disconnected' }]);
   });
 
   it('never holds the gate while it waits for the row: it retries until the row is free', async () => {
