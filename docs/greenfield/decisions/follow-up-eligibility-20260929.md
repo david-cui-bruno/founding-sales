@@ -97,7 +97,7 @@ is the lock `enrollContact` already took:
   `packages/domain/test/outbound/firmExclusivityAtSend.test.ts` ran two real claims on
   two connections and asserted exactly one e-mail reaches Gmail.
 
-  **30 September 2026, send-path v2 (section 6d):** that claim-level concurrency proof is
+  **30 September 2026, send-path v2 (section 6e):** that claim-level concurrency proof is
   parked (skipped). It is unreachable for prospecting while every prospecting e-mail is
   refused before the claim with `cold_outreach_mailbox_required`, and it becomes
   reachable again when a cold-outreach transport dispatches. Until then the rule's
