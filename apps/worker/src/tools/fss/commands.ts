@@ -74,6 +74,10 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'schema-preflight 0020': 'database',
   // Lane W3-C2, the same shape for migration 0021.
   'schema-preflight 0021': 'database',
+  // Lane RB. The nine read-before-lift reads, in one READ ONLY transaction: PostgreSQL
+  // and nothing else, so a report of what the send path would do cannot itself reach a
+  // mailbox.
+  'send-path report': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -235,6 +239,21 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'what migration 0021 destroys or refuses on, counted read-only on schema 20',
+  },
+  {
+    // Lane RB. The eight reads at the bottom of
+    // `docs/greenfield/send-path-verification-20260929.md`, plus a ninth on
+    // `follow_up_permissions`, as one command: the document tells the operator to run
+    // them "as the read-only reporting role", and there is no such role and no way to
+    // reach production's private instance to use one. `--workspace` is optional while
+    // the database holds exactly one workspace, and the command refuses rather than
+    // pick when it holds more.
+    path: ['admin', 'send-path', 'report'],
+    valueFlags: ['--workspace', '--sample', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary:
+      'the nine read-before-lift reads of the send-path verification, in one READ ONLY transaction. Reads only, and decides nothing',
   },
 ]);
 

@@ -370,7 +370,7 @@ describe('the dependency mode is fixed per command', () => {
       ['mailbox reconcile-sent', 'gmail-read'],
     ]);
     expect(COMMAND_DEPENDENCIES['suppression-journal replay']).toBe('journal');
-    for (const name of ['holds list', 'holds release-restore', 'mailbox list', 'restore-marker put', 'release-record put', 'release-record show', 'workspace bootstrap']) {
+    for (const name of ['holds list', 'holds release-restore', 'mailbox list', 'restore-marker put', 'release-record put', 'release-record show', 'workspace bootstrap', 'send-path report']) {
       expect(COMMAND_DEPENDENCIES[name], `${name} must not reach anything but the database`).toBe('database');
     }
   });

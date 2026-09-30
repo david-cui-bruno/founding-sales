@@ -13,6 +13,7 @@ import {
   releaseRecordPutCommand,
   restoreMarkerPutCommand,
   releaseRecordShowCommand,
+  sendPathReportCommand,
   suppressionJournalReplayCommand,
   type AdminInvocation,
   type AdminOutcome,
@@ -165,6 +166,9 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'release-record show': releaseRecordShowCommand,
   'schema-preflight 0020': schemaPreflight0020Command,
   'schema-preflight 0021': schemaPreflight0021Command,
+  // Lane RB: the read-before-lift reads of
+  // docs/greenfield/send-path-verification-20260929.md, in one READ ONLY transaction.
+  'send-path report': sendPathReportCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
