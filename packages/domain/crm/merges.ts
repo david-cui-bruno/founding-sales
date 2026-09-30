@@ -100,6 +100,12 @@ export async function mergeFirms(
 ): Promise<CrmResult<MergeOutcome>> {
   if (input.sourceFirmId === input.targetFirmId) return refuse('merge_same_record');
 
+  // The send gate, EXCLUSIVE, before any firm row (`policy/sendGate.ts`: the gate first,
+  // then rows). The merge needs it anyway for the suppressions it carries over; taken
+  // after the firm locks, it closed a cycle with a Twilio call's consumption, which
+  // holds the gate SHARED and then locks the firm (review fold 2).
+  await lockSendGateForStopFact(context);
+
   // Lock in a stable order so two merges naming the same pair in opposite directions
   // cannot deadlock.
   const [firstId, secondId] =
