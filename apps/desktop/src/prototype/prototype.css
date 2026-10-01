@@ -1,0 +1,102 @@
+/*
+ * The prototype's stylesheet (Slice 1). Development only: `scripts/prototype.ts` compiles
+ * it with the same `compileStylesheet` the packaged build uses, and nothing in
+ * `BUNDLE_WINDOWS` or `scripts/bundle.ts` names it, so it never ships.
+ *
+ * Same layers and same reset as `src/renderer/tailwind.css`; the difference is the theme,
+ * which maps Tailwind's names onto the v2 tokens in `tokens.css`.
+ */
+
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+@import './tokens.css' layer(base);
+
+/* The prototype and the owned shadcn primitives it composes. */
+@source './**/*.{ts,tsx}';
+@source '../renderer/ui/**/*.tsx';
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar-bg);
+  --color-ok: var(--status-ok);
+  --color-warn: var(--status-warn);
+
+  --color-faint: var(--v2-faint);
+  --color-strong: var(--v2-border-strong);
+  --color-link: var(--v2-accent);
+  --color-selected: var(--v2-accent-soft);
+  --color-pressed: var(--v2-pressed);
+  --color-ok-soft: var(--v2-ok-soft);
+  --color-ok-ink: var(--v2-ok-ink);
+  --color-warn-soft: var(--v2-warn-soft);
+  --color-warn-ink: var(--v2-warn-ink);
+  --color-danger-soft: var(--v2-danger-soft);
+  --color-danger-ink: var(--v2-danger-ink);
+  --color-info-soft: var(--v2-info-soft);
+  --color-info-ink: var(--v2-info-ink);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--v2-font-sans);
+  --font-mono: var(--v2-font-mono);
+
+  --text-2xs: var(--v2-text-2xs);
+  --text-2xs--line-height: var(--v2-text-2xs-lh);
+  --text-xs: var(--v2-text-xs);
+  --text-xs--line-height: var(--v2-text-xs-lh);
+  --text-sm: var(--v2-text-sm);
+  --text-sm--line-height: var(--v2-text-sm-lh);
+  --text-base: var(--v2-text-base);
+  --text-base--line-height: var(--v2-text-base-lh);
+  --text-lg: var(--v2-text-lg);
+  --text-lg--line-height: var(--v2-text-lg-lh);
+  --text-xl: var(--v2-text-xl);
+  --text-xl--line-height: var(--v2-text-xl-lh);
+  --text-2xl: var(--v2-text-2xl);
+  --text-2xl--line-height: var(--v2-text-2xl-lh);
+
+  --shadow-sm: var(--v2-shadow-sm);
+  --shadow-md: var(--v2-shadow-md);
+  --shadow-lg: var(--v2-shadow-lg);
+}
+
+[hidden] {
+  display: none;
+}
+
+@layer base {
+  html,
+  body,
+  #prototype {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+  }
+}

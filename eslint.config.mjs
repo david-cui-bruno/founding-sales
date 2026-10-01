@@ -44,7 +44,7 @@ export default [
     // The renderer's React (1.0.12). The two rules that catch the mistakes a hook-based
     // view actually makes: a hook called conditionally, and an effect that reads state it
     // did not list. Nothing about formatting or about how a component should be written.
-    files: ['apps/desktop/src/renderer/**/*.tsx', 'apps/desktop/src/renderer/**/*.ts'],
+    files: ['apps/desktop/src/renderer/**/*.tsx', 'apps/desktop/src/renderer/**/*.ts', 'apps/desktop/src/prototype/**/*.tsx', 'apps/desktop/src/prototype/**/*.ts'],
     plugins: { 'react-hooks': reactHooks },
     rules: {
       'react-hooks/rules-of-hooks': 'error',

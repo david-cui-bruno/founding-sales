@@ -9,6 +9,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test --config playwright.config.ts",
     "test:host": "vitest run test/host",
+    "prototype": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/prototype.ts",
+    "prototype:screens": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/prototypeScreens.ts",
     "package": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/package.ts",
     "verify:package": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verifyPackage.ts"
   },

@@ -1,0 +1,116 @@
+/*
+ * Callie v2 design tokens (Slice 1 prototype, CRM improvement plan rev 2 §4).
+ *
+ * One coherent set, scoped under `.callie-v2` so nothing outside a v2 root reads it. Only
+ * the prototype imports this file; the production stylesheet (`src/renderer/tailwind.css`)
+ * does not, so every shipped screen is unchanged. A later slice adopts a screen by
+ * importing this file and putting `.callie-v2` on that screen's root.
+ *
+ * The names are shadcn's own (`--background`, `--primary`, `--ring` ...), so the owned
+ * primitives in `src/renderer/ui` restyle without being edited. The `--v2-*` names are the
+ * additions shadcn has no word for: the type scale, density and elevation.
+ *
+ * Direction: light, Notion's warm greys and Cursor's density. Colour is restrained to one
+ * ink, one accent (selection, focus, links) and four status hues that only ever mean state.
+ */
+
+.callie-v2 {
+  /* ---------- Type ---------- */
+  /* The Mac's own faces: SF Pro Text/Display through -apple-system, SF Mono for figures. */
+  --v2-font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --v2-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Scale (px / line-height). 13 is the working size of the interface, 14 the reading size
+     of the brief, 11 the size of labels and meta. Four weights are never needed: 400, 500, 600. */
+  --v2-text-2xs: 10.5px; --v2-text-2xs-lh: 14px;  /* kbd hints */
+  --v2-text-xs: 11.5px;  --v2-text-xs-lh: 16px;   /* labels, meta, chips */
+  --v2-text-sm: 13px;    --v2-text-sm-lh: 20px;   /* interface default */
+  --v2-text-base: 14px;  --v2-text-base-lh: 22px; /* reading text: brief, summaries */
+  --v2-text-lg: 16px;    --v2-text-lg-lh: 24px;   /* section heads inside a panel */
+  --v2-text-xl: 20px;    --v2-text-xl-lh: 28px;   /* view titles */
+  --v2-text-2xl: 24px;   --v2-text-2xl-lh: 30px;  /* the selected firm's name */
+
+  /* ---------- Density ---------- */
+  --v2-row: 30px;        /* one queue row / property row */
+  --v2-control: 28px;    /* buttons and inputs */
+  --v2-control-sm: 24px;
+  --v2-panel-pad: 20px;
+  --v2-gutter: 12px;
+
+  /* ---------- Neutrals (warm grey, hue 80) ---------- */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.24 0.006 80);          /* ink */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.24 0.006 80);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.006 80);
+  --muted: oklch(0.968 0.003 80);              /* hover, wells */
+  --muted-foreground: oklch(0.54 0.008 80);    /* secondary text, 4.6:1 on white */
+  --v2-faint: oklch(0.68 0.006 80);            /* tertiary text, placeholders, kbd */
+  --secondary: oklch(0.955 0.003 80);
+  --secondary-foreground: oklch(0.24 0.006 80);
+  --accent: oklch(0.955 0.003 80);             /* shadcn's "accent" is the hover grey */
+  --accent-foreground: oklch(0.24 0.006 80);
+  --border: oklch(0.915 0.004 80);             /* hairlines */
+  --v2-border-strong: oklch(0.86 0.005 80);    /* control outlines */
+  --input: oklch(0.86 0.005 80);
+  --sidebar-bg: oklch(0.977 0.003 80);         /* the rail and the queue */
+
+  /* ---------- Ink and the one accent ---------- */
+  --primary: oklch(0.24 0.006 80);             /* primary buttons are ink, not colour */
+  --primary-foreground: oklch(0.99 0 0);
+  --v2-accent: oklch(0.56 0.15 252);           /* selection, focus, links */
+  --v2-accent-soft: oklch(0.955 0.025 252);    /* selected row */
+  --ring: oklch(0.56 0.15 252);
+
+  /* ---------- Status (state only, never decoration) ---------- */
+  --status-ok: oklch(0.6 0.13 155);
+  --status-warn: oklch(0.72 0.15 70);
+  --destructive: oklch(0.56 0.2 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --v2-ok-soft: oklch(0.96 0.03 155);
+  --v2-ok-ink: oklch(0.42 0.1 155);
+  --v2-warn-soft: oklch(0.965 0.04 80);
+  --v2-warn-ink: oklch(0.47 0.11 60);
+  --v2-danger-soft: oklch(0.96 0.025 27);
+  --v2-danger-ink: oklch(0.48 0.17 27);
+  --v2-info-soft: oklch(0.96 0.02 252);
+  --v2-info-ink: oklch(0.45 0.13 252);
+
+  /* ---------- Radius, borders, elevation ---------- */
+  --radius: 0.5rem;                            /* 8px panels; shadcn derives md 6, sm 4 */
+  --v2-hairline: 1px solid var(--border);
+  --v2-shadow-sm: 0 1px 2px oklch(0.24 0.006 80 / 0.06);
+  --v2-shadow-md: 0 1px 2px oklch(0.24 0.006 80 / 0.05), 0 4px 12px oklch(0.24 0.006 80 / 0.07);
+  --v2-shadow-lg: 0 2px 4px oklch(0.24 0.006 80 / 0.05), 0 12px 32px oklch(0.24 0.006 80 / 0.12);
+
+  /* ---------- Focus and interaction ---------- */
+  --v2-focus: 0 0 0 1px var(--background), 0 0 0 3px oklch(0.56 0.15 252 / 0.55);
+  --v2-hover: var(--muted);
+  --v2-pressed: oklch(0.935 0.004 80);
+  --v2-duration: 120ms;
+
+  font-family: var(--v2-font-sans);
+  font-size: var(--v2-text-sm);
+  line-height: var(--v2-text-sm-lh);
+  color: var(--foreground);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+/* One focus treatment for every interactive element inside a v2 root: a 2px accent ring
+   with a 1px white gap, drawn as a shadow so it follows the radius and never shifts layout. */
+.callie-v2 :focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
+.callie-v2 ::selection {
+  background: oklch(0.56 0.15 252 / 0.18);
+}
+
+/* Tabular figures wherever a number changes in place (timers, counts, money). */
+.callie-v2 .tabular {
+  font-variant-numeric: tabular-nums;
+}
