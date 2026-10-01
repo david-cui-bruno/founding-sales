@@ -7,11 +7,13 @@ import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
 import { SETTINGS_ELSEWHERE } from '@fss/domain/settings/elsewhere.ts';
 import {
   readCalendarIntegration,
+  readCallTranscription,
   readCallingProvider,
   readTelephonyBudget,
   readVoicemailScript,
 } from '@fss/domain/settings/integrations.ts';
 import { telephonySpentToday } from '@fss/domain/calls/sessions.ts';
+import { transcriptionSpentToday } from '@fss/domain/calls/transcription.ts';
 import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
 import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
 import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
@@ -89,6 +91,16 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
           calcom: configured((integrations?.calcom ?? null) !== null, named?.calcom),
         },
         spentTodayCents: await telephonySpentToday(scoped.context),
+        // Slice C2, only when asked for: an S1 desktop parses this answer strictly.
+        ...(request.query.getAll('include').includes('transcription')
+          ? {
+              transcription: {
+                setting: await readCallTranscription(scoped.context),
+                configured: configured(integrations?.transcriptionConfigured === true, named?.transcription),
+                spentTodayCents: await transcriptionSpentToday(scoped.context),
+              },
+            }
+          : {}),
       }),
     };
   }

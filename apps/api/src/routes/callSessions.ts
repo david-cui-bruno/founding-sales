@@ -1,6 +1,7 @@
 import {
   callHistoryResponseSchema,
   callRecordingResponseSchema,
+  callTranscriptResponseSchema,
   callingStatusResponseSchema,
   createCallSessionCommandSchema,
   resumeCallCadenceCommandSchema,
@@ -15,6 +16,7 @@ import {
   resumeCallCadence,
 } from '@fss/domain/calls/sessions.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
+import { readCallTranscript } from '@fss/domain/calls/transcription.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -41,6 +43,12 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     with the account's API key and returned as bytes. Never a Twilio URL. Another
  *     firm's or workspace's session is 404, exactly like an unknown one.
  *
+ * Slice C2 adds one more read with the same switch:
+ *
+ *   * `GET /calls/transcript?callSessionId=` — the call's transcript (utterances by
+ *     speaker, with their times), to the firm's assigned salesperson or an admin. A call
+ *     with none, another firm's or another workspace's is 404, exactly like an unknown one.
+ *
  * All are 404 unless the caller's workspace has `calling_provider = twilio`, so with the
  * defaults the Mac keeps its `tel:` handoff and nothing here is reachable; 503 when the
  * switch is on and the Twilio configuration is not.
@@ -53,10 +61,11 @@ export const CALL_SESSION_PATHS: readonly string[] = [
   '/calls/cadence/resume',
   '/calls/history',
   '/calls/recording',
+  '/calls/transcript',
 ];
 
 /** The reads among them; every other path is a POST. */
-const GET_PATHS: ReadonlySet<string> = new Set(['/calls/calling', '/calls/history', '/calls/recording']);
+const GET_PATHS: ReadonlySet<string> = new Set(['/calls/calling', '/calls/history', '/calls/recording', '/calls/transcript']);
 
 export async function routeCallSessions(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!CALL_SESSION_PATHS.includes(request.path)) return null;
@@ -125,6 +134,14 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
         audioBase64: fetched.bytes.toString('base64'),
       }),
     };
+  }
+
+  if (request.path === '/calls/transcript') {
+    const callSessionId = idOf('callSessionId');
+    if (callSessionId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const transcript = await readCallTranscript(scoped.context, callSessionId);
+    if (transcript === null) return notFound;
+    return { status: 200, body: callTranscriptResponseSchema.parse(transcript) };
   }
 
   if (request.path === '/calls/cadence/resume') {

@@ -6,6 +6,7 @@ import {
   workspaceOfCallSession,
 } from '@fss/domain/calls/sessions.ts';
 import { workspacesWithIntegration } from '@fss/domain/settings/integrations.ts';
+import { enqueueCallTranscription } from '@fss/domain/calls/transcription.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -169,16 +170,33 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
     return { status: 200, body: EMPTY_TWIML, contentType: TWIML };
   }
 
-  // The recording callback.
+  // The recording callback. `recordingStatusCallbackEvent="completed"` asks Twilio for the
+  // final one only; a `RecordingStatus` other than `completed` (`absent`, `failed`) is a
+  // recording with no audio, and is never transcribed.
   const recordingDuration = numberOf(params['RecordingDuration']);
-  const outcome = await withTransaction(session, async () =>
-    await recordCallRecording(session, {
+  const recordingStatus = params['RecordingStatus'];
+  const outcome = await withTransaction(session, async () => {
+    const recorded = await recordCallRecording(session, {
       callSid: params['CallSid'] ?? '',
       recordingSid: params['RecordingSid'] ?? '',
       recordingUrl: params['RecordingUrl'] ?? '',
       ...(recordingDuration === undefined ? {} : { durationSeconds: recordingDuration }),
-    }),
-  );
+    });
+    // Slice C2: the transcription is queued from here, in the same transaction, when the
+    // workspace turned it on, the key is in place, the call was answered and the
+    // recording lasts at least twenty seconds (`calls/transcription.ts`).
+    if (recorded.recorded !== undefined && (recordingStatus === undefined || recordingStatus === 'completed')) {
+      const queued = await enqueueCallTranscription(session, {
+        workspaceId: recorded.recorded.workspaceId,
+        sessionId: recorded.recorded.sessionId,
+        keyConfigured: options.integrations?.transcriptionConfigured === true,
+      });
+      if (!queued.enqueued && queued.reason !== 'transcription_off') {
+        options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });
+      }
+    }
+    return recorded;
+  });
   if (!outcome.known) options.log?.log('info', 'twilio_callback_unknown_sid', { path: request.path });
   return { status: 200, body: EMPTY_TWIML, contentType: TWIML };
 }
