@@ -581,7 +581,8 @@ jobs:
               llm-classifier-api-key)
                 value="rehearsal-$(openssl rand -hex 24)" ;;
               # Call-to-booking (0028): "unconfigured", production's flags-off state; the API reads {} as not configured. Not a credential.
-              twilio-voice|calcom) value='{}' ;;
+              # Slice C2: `transcription` the same — {} is "no key", and no worker transcribes.
+              twilio-voice|calcom|transcription) value='{}' ;;
               *)
                 echo "::error::secret entry '$name' is in the stack's list and this step does not know how to fill it; a task naming it would not start"
                 exit 1 ;;

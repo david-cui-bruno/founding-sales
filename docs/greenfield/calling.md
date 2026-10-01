@@ -73,8 +73,8 @@ provider and a ceiling.
    the callback carries one, or estimated from the duration (whole minutes times the
    unit price).
 5. **`/integrations/twilio/recording`** keeps the recording SID, duration and the URL
-   *path* (never a signed URL). Transcription is a later slice (reservation subject
-   `call_transcription` is already admitted).
+   *path* (never a signed URL), and queues the call's transcription when it qualifies
+   (slice C2, [Transcription](#transcription-slice-c2) below).
 6. The salesperson logs the outcome with `POST /calls/log` as before, adding
    `callSessionId`; the log is linked to the session. The Mac adds it itself: the
    outcome recorded next for the same firm and number names the session.
@@ -100,7 +100,8 @@ with an empty `<Response/>`.
 ## The secret
 
 Secrets Manager entry `<prefix>/twilio-voice`, injected into the API task as the
-variable `twilio-voice`, one JSON object:
+variable `twilio-voice` (and, since slice C2, into the worker's, which reads only the
+account and API key fields, to fetch a recording for transcription), one JSON object:
 
 ```json
 {
@@ -216,6 +217,79 @@ read of the Mac's client is JSON; the Mac plays them from a `blob:` URL through 
 `<audio>` element (memory about the compressed size) and revokes the URL when playback
 stops, ends or leaves the screen. The call history is on the firm page
 (`apps/desktop/src/renderer/calling/CallHistory.tsx`, placed in `FirmPage.tsx`).
+
+### Transcription (slice C2)
+
+After a connected call of at least **20 seconds** Callie transcribes its recording and
+shows the transcript, with two speakers, under the call in the firm page's call history.
+Migration 0030 adds `call_transcripts` (one row per call session: provider, model,
+language, duration, and the utterances as `{speaker, start, end, text}`), deleted with
+the session, the firm or the person (a transcript is personal data).
+
+**Off until David turns it on.** Setting `call_transcription` =
+`{ "enabled": bool, "dailyCeilingCents": 0..500, "unitPriceMicros": ... }`, default off, $0 a
+day, 4 300 micro-dollars a minute. It is an integration key like the four above: not in the
+`GET /settings` snapshot; `GET /settings/integrations?include=transcription` answers it
+with `{ setting, configured: {ok, missing}, spentTodayCents }` (only when asked for, because
+a desktop built with slice S1 parses that answer strictly). Settings → Calling & calendar
+has "Transcribe calls" (on/off) and "Daily transcription budget" in dollars; both are
+disabled, with a sentence, while the key is missing, and the switch stays off while the
+budget is $0.
+
+**Which calls.** The final recording callback (`RecordingStatus=completed`, or none)
+queues `call.transcribe` in its own transaction only when transcription is enabled with a
+ceiling above 0, the key is in place, the call was **answered** (`answered_at` set) and the
+recording lasts **at least 20 seconds**. A short or unanswered call is never transcribed
+and never reaches a provider. The job is keyed `call-transcribe:{session}`.
+
+**The provider: Deepgram Nova-3, pre-recorded.** `POST https://api.deepgram.com/v1/listen`
+with the recording's bytes (read from Twilio by the worker, with the same authed fetch as
+the playback proxy, `packages/domain/calls/twilioRecording.ts`) and `model=nova-3`,
+`diarize=true`, `punctuate=true`, `utterances=true` and **`mip_opt_out=true` on every
+request**, so Deepgram keeps the audio only as long as processing takes and never uses it
+to train its models. The client (`apps/worker/src/transcription/deepgramClient.ts`) is built
+from Deepgram's public documentation, cited there; it sits behind `TranscriptionProvider`
+(`packages/domain/calls/transcription.ts`), so OpenAI's `gpt-4o-mini-transcribe` could
+replace it with a second implementation. Bounded: the audio at most 40 MiB, two minutes a
+request, an 8 MiB answer.
+
+**The cost.** $0.0043 a minute (Deepgram's published Nova-3 pre-recorded rate, read 30
+September 2026; `unitPriceMicros`, a setting so a price change is an edit, not a release).
+A three-minute call is about 1.3 cents, rounded up to 2. The paid-call pattern, as research
+and telephony apply it — `provider_reservations`, subject `call_transcription`, provider
+`deepgram.nova-3`, priced by the minute — in three committed chunks:
+
+1. reserve `ceil(recording seconds / 60) × unitPriceMicros` against the day's
+   transcription ceiling (settled plus open transcription reservations of the business
+   date, serialised per workspace), or refuse `transcription_budget_exhausted`
+   ("Transcription paused: today’s transcription budget is used…");
+2. mark the reservation `calling`, and nothing else;
+3. read the recording, call Deepgram, store the utterances and settle by id at the
+   duration Deepgram reports (started minutes). A 4xx answer is a refusal Deepgram did not
+   process: settled at 0, not retried. A timeout, a dropped connection, a 5xx or an
+   unreadable answer is ambiguous: **estimated** at its reservation first, then **one**
+   bounded retry, a fresh reservation cleared against the ceiling again. Two attempts at most.
+
+A lost lease is finalised by the sweep: `telephony.sweep` also releases (`reserved`) or
+estimates (`calling`) a transcription reservation still open 30 minutes after it was
+written, skipping a session whose per-session lock a live claim holds.
+
+**The key never leaves the worker's closure**: not in an outcome, an error, a job row or a
+log line (failures are words like `deepgram_http_401`), and `apps/worker/test/callTranscribe.test.ts`
+plants it in every failure the client can meet to prove it.
+
+**Reading it.** `GET /calls/transcript?callSessionId=` (the firm's assigned salesperson or
+an admin; anything else is 404, like a call with no transcript). The history row's
+`hasTranscript` offers a "Transcript" disclosure; the speakers are "Them" (speaker 0, who
+spoke first — on a call placed from Callie, the person who answered) and "You" when there
+are exactly two, and "Speaker 1", "Speaker 2", … otherwise; times are grey. A read that
+fails is a sentence from `reasonSentence`.
+
+**The secret.** Secrets Manager entry `<prefix>/transcription`, one JSON object,
+`{"provider": "deepgram", "api_key": "..."}`. The worker reads it (and `twilio-voice`, for the
+recording); the API reads it only to know whether it is in place, by field name. `{}` —
+what the rehearsal fills and what the release puts in production before the deploy that
+adds the entry to the tasks — reads as not configured, and nothing is transcribed.
 
 ### The voicemail script
 

@@ -272,9 +272,12 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
   # Slice M1: the `calcom` entry reaches the worker too; the rehearsal fills it with
   # `{}` (greenfield-release.yml), which has no `api_key`, so a rehearsal worker
   # reconciles nothing and never calls Cal.com.
+  # Slice C2: `transcription` and `twilio-voice` reach the worker too; the rehearsal fills
+  # both with `{}`, so a rehearsal worker registers no `call.transcribe` and never calls
+  # Twilio or Deepgram.
   assert {
-    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client"])
-    error_message = "A rehearsal worker is handed the Gmail client, the Cal.com entry and its database entry, and never the classifier key."
+    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice"])
+    error_message = "A rehearsal worker is handed the Gmail client, the Cal.com, transcription and Twilio entries and its database entry, and never the classifier key."
   }
 }
 

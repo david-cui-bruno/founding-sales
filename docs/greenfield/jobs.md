@@ -97,7 +97,9 @@ table:
 * **`bulk`** — it may take as long as it takes: `sequence.action`,
   `sequence.terminal_stop`, `route.validate`, `retention.batch`, `research.firm`,
   `research.sweep`, `calcom.reconcile` (the hourly repair of a lost Cal.com webhook;
-  the webhook itself already moved the pipeline when it arrived).
+  the webhook itself already moved the pipeline when it arrived), `call.transcribe`
+  (slice C2: one answered call's transcript, read later on the firm page; queued by the
+  recording callback, chunked in three like `research.firm`, see [calling.md](calling.md)).
 
 Two of those are lane R's (`docs/greenfield/research.md`). `research.firm` is one run
 of one firm at one revision, protected by `research_runs_one_per_revision`: a second

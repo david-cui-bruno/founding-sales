@@ -28,6 +28,10 @@ locals {
     # switch on; see the note in `infra/modules/cluster` about entering a value first.
     "twilio-voice",
     "calcom",
+    # Call transcription (slice C2): `{"provider": "deepgram", "api_key": "..."}`. The
+    # worker uses the key (`apps/worker/src/transcription/deepgramClient.ts`); the API
+    # reads only whether it is in place. `{}` until a key exists.
+    "transcription",
     # The two database identities (G12h, David's condition of 21 September).
     # Separate entries because the point is that the identity which may read one
     # may not read the other: `infra/modules/cluster` gives the first to the
