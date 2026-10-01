@@ -198,7 +198,7 @@ export interface CallSummaryDeps {
 
 export type BeginSummaryOutcome =
   | { readonly kind: 'reserved'; readonly attempt: number }
-  | { readonly kind: 'done'; readonly reason: SummarySkip | 'in_flight' | 'answered' };
+  | { readonly kind: 'done'; readonly reason: SummarySkip | 'in_flight' };
 
 export async function beginCallSummary(
   context: RepositoryContext,
@@ -212,10 +212,12 @@ export async function beginCallSummary(
   const rows = await listAttempts(context, subjectOf(input.sessionId));
   // One active paid obligation per call: an open reservation is another job's.
   if (rows.some(isOpen)) return { kind: 'done', reason: 'in_flight' };
-  // A fresh job (not this job's own retry) for a call whose latest attempt was paid has
-  // been answered for already, whatever the answer was.
-  const latest = rows[0];
-  if (!input.retry && latest !== undefined && latest.state !== 'released') return { kind: 'done', reason: 'answered' };
+  // There is no "answered" short cut (C3 review, finding 5): a call with no summary is owed
+  // its remaining paid attempt whichever job asks — this job's own retry, or the resumed job
+  // the source queues after a pause held that retry — and the lifetime cap below is what
+  // bounds it. A duplicate job cannot double-pay: the summary lock, the open check above
+  // and `provider_reservations_one_open_summary` admit one obligation at a time, and an
+  // accepted answer ends the call in `prepare` (it has a summary).
 
   if (!(await summariesOn(context))) return { kind: 'done', reason: 'disabled' };
   if (paidAttempts(rows) >= CALL_SUMMARY_MAX_PAID_ATTEMPTS || rows.length >= CALL_SUMMARY_MAX_ROWS) {

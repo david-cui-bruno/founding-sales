@@ -22,6 +22,7 @@ import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
+import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { providerFunding } from '@fss/domain/settings/funding.ts';
 import { CALL_SUMMARY_PROVIDER_KEY } from '@fss/domain/calls/summaryModel.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -511,6 +512,65 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       provider_message: 'output_config.format.schema: Invalid schema',
     });
     expect(JSON.stringify(logs)).not.toContain('Marisol');
+  });
+
+  it('paused before the retry of an ambiguous attempt reserves: back on, exactly one more request, and the summary', async () => {
+    mode = 'fail';
+    const id = await transcribedCall();
+    await enqueue(id, `call-summarize:${id}`);
+    const before = requests;
+    // Chunk 3 records the failed request in the ledger; the turn-off commits right then, so the
+    // retry's chunk 1 reads "off" before it reserves anything.
+    let paused = false;
+    const pausing: SessionQueryable = {
+      query: async <Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) => {
+        const result = await session.query<Row>(text, values);
+        if (!paused && text.includes('INSERT INTO provider_ledger') && text.includes('calls = provider_ledger.calls + 1')) {
+          paused = true;
+          await transcriptionOn(false, other);
+        }
+        return result;
+      },
+    };
+    try {
+      for (let pass = 0; pass < 10; pass += 1) {
+        const report = await runOnce(pausing, { registry: registry(), owner: 'summary-test', limit: 5 });
+        if (report.claimed === 0) break;
+      }
+      expect(paused).toBe(true);
+      expect(requests - before).toBe(1);
+      expect((await attempts(id)).map(row => row.state)).toEqual(['estimated']);
+      expect(await owedFor(id)).toEqual([]);
+    } finally {
+      mode = 'answer';
+      await transcriptionOn(true);
+    }
+    const owed = await owedFor(id);
+    expect(owed.map(spec => spec.idempotencyKey)).toEqual([`call-summarize:${id}:r1`]);
+    await enqueue(id, owed[0]?.idempotencyKey ?? '');
+    await drain();
+    expect(requests - before).toBe(2);
+    expect((await attempts(id)).map(row => row.state)).toEqual(['estimated', 'settled']);
+    expect(await summaryOf(id)).toBeDefined();
+    // And nothing more after that: the call has its summary.
+    await transcriptionOn(true);
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it('a summary request in flight is counted in the transcription switch’s “still finishing” line', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    const worker = system(other);
+    const finishing = async (): Promise<number> => (await readFinishing(system())).transcriptionFinishing;
+    const base = await finishing();
+    const begun = await withTransaction(other, async () => await beginCallSummary(worker, options, { sessionId: id, retry: false }));
+    if (begun.kind !== 'reserved') throw new Error(begun.reason);
+    expect(await finishing()).toBe(base);
+    const calling = await withTransaction(other, async () => await ensureCallSummaryCalling(worker, { sessionId: id, attempt: begun.attempt }));
+    if (calling.kind !== 'calling') throw new Error(calling.reason);
+    expect(await finishing()).toBe(base + 1);
+    await withTransaction(other, async () => await finishCallSummary(worker, options, { sessionId: id, attempt: calling.attempt, plan: calling.plan }));
+    expect(await finishing()).toBe(base);
   });
 
   it('an answer that reports no usage settles at the reservation, never at zero', async () => {

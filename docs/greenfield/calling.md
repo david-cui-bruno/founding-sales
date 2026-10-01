@@ -462,7 +462,10 @@ SHARED, held to the commit that marks `calling`; chunk 3 the request, then the s
 SHARE), the monthly lock, and the settlement by id at the answer's usage — or its estimate when
 the answer reports none or the transport threw. An unusable or ambiguous answer is retried once
 within the two. Held summaries resume once per change of the setting (`call-summarize` source),
-like transcriptions. The deletion workflow takes each targeted session's summary lock after the
+like transcriptions, and that includes a retry the switch held: a call with no summary and
+fewer than two paid attempts is owed its remaining attempt by whichever job asks (C3 review,
+finding 5), and the lock, the open check and the one-open index keep that to one obligation at a
+time. A summary request in flight (`calling`) counts in transcription's "still finishing" line. The deletion workflow takes each targeted session's summary lock after the
 firm and before the sessions' own locks.
 
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
