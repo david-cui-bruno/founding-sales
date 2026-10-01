@@ -94,6 +94,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'calling.resume': async (input: { readonly firmId: string }) => await deps.today.resumeCalling(input),
     'calling.history': async (input: { readonly firmId: string }) => await deps.today.callHistory(input),
     'calling.recording': async (input: { readonly sessionId: string }) => await deps.today.callRecording(input),
+    'calling.transcript': async (input: { readonly callSessionId: string }) => await deps.today.callTranscript(input),
 
     'replies.state': async () => await deps.replies.state(),
     'replies.refresh': async () => await deps.replies.refresh(),

@@ -15,7 +15,8 @@ import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
  * A firm deletion with migration 0028's rows (slice W): the call session, the meeting,
  * its Cal.com delivery and the review item go with the firm, in an order their foreign
  * keys onto the dial ticket and the call log allow, and the session's open reservation
- * is closed first rather than left counting against the budget for ever.
+ * is closed first rather than left counting against the budget for ever. Slice C2: the
+ * call's transcript goes too, and an open transcription attempt is finalised first.
  */
 describe('the deletion workflow and the call-to-booking rows', () => {
   let database: TestDatabase;
@@ -93,8 +94,24 @@ describe('the deletion workflow and the call-to-booking rows', () => {
     );
     expect(meeting).toMatchObject({ outcome: 'applied' });
 
+    // Slice C2: the call was transcribed, and a second transcription attempt is still
+    // `calling` (a claim mid-call when the deletion arrives).
+    await database.session.query(
+      `INSERT INTO call_transcripts (workspace_id, call_session_id, provider, model, language, duration_seconds, utterances)
+       VALUES ($1, $2, 'deepgram', 'nova-3', 'en', 95, '[{"speaker": 0, "start": 0, "end": 1, "text": "Hello?"}]'::jsonb)`,
+      [seeded.alpha.workspaceId, created.value.sessionId],
+    );
+    await database.session.query(
+      `INSERT INTO provider_reservations
+         (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+          cents, priced_unit, max_units, unit_price_micros, state)
+       VALUES ($1, 'deepgram.nova-3', 'call_transcription', $2, 1, '2026-09-30', 'America/New_York', 1, 'minute', 2, 4300, 'calling')`,
+      [seeded.alpha.workspaceId, created.value.sessionId],
+    );
+
     const preview = await previewDeletion(admin(), { targetKind: 'firm', firmId: crm.alpha.firmId });
     expect(preview.value?.removes['call_sessions']).toBe(1);
+    expect(preview.value?.removes['call_transcripts']).toBe(1);
     expect(preview.value?.removes['meetings']).toBe(1);
     expect(preview.value?.removes['calcom_events']).toBe(1);
     const outcome = await commitDeletion(admin(), {
@@ -116,6 +133,16 @@ describe('the deletion workflow and the call-to-booking rows', () => {
       [seeded.alpha.workspaceId],
     );
     expect(rows.map(row => row.state)).toEqual(['estimated']);
+    // The transcript went with the session, and its open attempt was estimated, not left counting.
+    const { rows: transcripts } = await database.session.query('SELECT 1 FROM call_transcripts WHERE call_session_id = $1', [
+      created.value.sessionId,
+    ]);
+    expect(transcripts).toEqual([]);
+    const { rows: transcription } = await database.session.query<{ state: string; settled_cents: number }>(
+      "SELECT state, settled_cents FROM provider_reservations WHERE workspace_id = $1 AND subject_kind = 'call_transcription'",
+      [seeded.alpha.workspaceId],
+    );
+    expect(transcription).toEqual([{ state: 'estimated', settled_cents: 1 }]);
   });
 
   it('removes a person s unmatched and domain-matched meetings with their contact (review fold 1, finding 10)', async () => {

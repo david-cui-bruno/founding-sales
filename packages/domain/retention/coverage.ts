@@ -221,6 +221,14 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ['deletion_removes'],
     'Every Cal.com booking uid a meeting has been; identifiers, not personal data; removed with the meeting (ON DELETE CASCADE).',
   ),
+
+  // ------------------------------------------------ call transcription (0030, slice C2)
+  // What the prospect said on a recorded call: personal data, so it goes with the
+  // firm or the person, exactly as the session it belongs to does.
+  call_transcripts: coverage(
+    ['deletion_removes'],
+    'The transcript of one recorded call (what each side said); removed with its call session, the firm or the person.',
+  ),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

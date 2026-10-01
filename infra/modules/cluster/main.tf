@@ -105,8 +105,16 @@ locals {
   #   * the worker reads `calcom` too (slice M1): its optional `api_key` is the Cal.com
   #     reconciliation's (`apps/worker/src/calcom/bookingsClient.ts`); without one the
   #     worker reconciles nothing. The entry already holds a value in production.
+  #   * call transcription (slice C2): the worker reads `transcription` — the Deepgram key
+  #     the `call.transcribe` job uses — and `twilio-voice`, whose API key reads the call's
+  #     recording from Twilio (`packages/domain/calls/twilioRecording.ts`, the same read
+  #     the API's playback proxy makes). The API is NOT given `transcription`: it learns
+  #     whether a worker can transcribe from that worker's heartbeat (`call_transcribe`
+  #     in its detail), so the Deepgram key reaches the worker's process and no other.
+  #     `transcription` must hold a value (`{}`) before the apply that adds it, as above;
+  #     `twilio-voice` already does.
   api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
-  worker_secret_names     = ["calcom", "google-gmail-oauth-client", "llm-classifier-api-key"]
+  worker_secret_names     = ["calcom", "google-gmail-oauth-client", "llm-classifier-api-key", "transcription", "twilio-voice"]
   operations_secret_names = ["google-gmail-oauth-client"]
 
   # The environment variable a process reads a secret under, where that is not the

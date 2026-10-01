@@ -6,6 +6,7 @@ import {
   type TestDatabase,
 } from '@fss/domain/db/testing/testDatabase.ts';
 import { researchFirmJobHandler } from '../src/handlers/research.ts';
+import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
 import { main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands.ts';
 import { CHUNKED_JOB_KINDS } from '../src/tools/fss/releaseIdle.ts';
@@ -122,7 +123,9 @@ beforeAll(async () => {
 beforeEach(async () => {
   await database.session.query('DELETE FROM command_receipts');
   await database.session.query('DELETE FROM jobs');
-  await database.session.query('DROP TABLE IF EXISTS call_sessions');
+  // CASCADE: slice C2's `call_transcripts` references the table; dropping it takes only that
+  // foreign key, which no test here reads.
+  await database.session.query('DROP TABLE IF EXISTS call_sessions CASCADE');
 });
 
 afterAll(async () => {
@@ -192,7 +195,12 @@ describe('fss admin release idle-check', () => {
   });
 
   it('keeps its chunked-kind list equal to the handlers that declare themselves chunked', () => {
-    const chunked = [researchFirmJobHandler({} as Parameters<typeof researchFirmJobHandler>[0])].filter(h => h.chunked === true).map(h => h.kind);
+    const chunked = [
+      researchFirmJobHandler({} as Parameters<typeof researchFirmJobHandler>[0]),
+      callTranscribeJobHandler({} as Parameters<typeof callTranscribeJobHandler>[0]),
+    ]
+      .filter(h => h.chunked === true)
+      .map(h => h.kind);
     expect([...CHUNKED_JOB_KINDS].sort()).toEqual([...chunked].sort());
   });
 

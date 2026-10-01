@@ -77,6 +77,14 @@ export const POSTURE_API_PATHS = {
  */
 export const SETTINGS_READ_PATH = '/settings?include=postal_address';
 
+/**
+ * The call-to-booking settings, with slice C2's transcription asked for by name: the API
+ * leaves it out unless asked, because a desktop built with slice S1 parses this answer
+ * with its own strict schema. An API from before C2 ignores the parameter, and the
+ * section then has no transcription row.
+ */
+export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription';
+
 /*
  * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
  * (lane g78): the calling-number change, the stages, the settings history, the alert
@@ -345,7 +353,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       integrations = null;
       return;
     }
-    const answer = await deps.api.read('/settings/integrations', value => integrationsSettingsResponseSchema.parse(value));
+    const answer = await deps.api.read(INTEGRATIONS_READ_PATH, value => integrationsSettingsResponseSchema.parse(value));
     integrations = answer.ok ? answer.value : null;
   };
 

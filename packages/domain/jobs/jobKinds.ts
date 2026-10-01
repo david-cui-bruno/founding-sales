@@ -36,6 +36,7 @@ export const JOB_KINDS = [
   'research.sweep',
   'telephony.sweep',
   'calcom.reconcile',
+  'call.transcribe',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -113,6 +114,10 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // over the same bookings inserts nothing and applies nothing; and the meeting's own
   // `last_event_at` ordering refuses anything older than what was applied.
   'calcom.reconcile': 'business_uniqueness',
+  // Slice C2. One transcript per call session (`call_transcripts_pkey`), inserted
+  // `ON CONFLICT DO NOTHING`, and every cent goes through a `provider_reservations` row
+  // per attempt, closed once by a compare-and-set on its state (`calls/transcription.ts`).
+  'call.transcribe': 'business_uniqueness',
 });
 
 /**
@@ -189,6 +194,8 @@ export const jobIdempotencyKey = Object.freeze({
     `telephony-sweep:${workspaceSlug}:${quarterHourIso}`,
   /** One Cal.com reconciliation per workspace per hour (slice M1). */
   calcomReconcile: (workspaceSlug: string, hourIso: string): string => `calcom-reconcile:${workspaceSlug}:${hourIso}`,
+  /** One transcription of one call session (slice C2): the session is the job's identity. */
+  callTranscribe: (callSessionId: string): string => `call-transcribe:${callSessionId}`,
 });
 
 /** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */
@@ -260,6 +267,8 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // import of two hundred firms is two hundred of these.
   'research.firm': 'bulk',
   'research.sweep': 'bulk',
+  // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.
+  'call.transcribe': 'bulk',
 });
 
 /** The lane a kind runs in, or `undefined` for a kind no table row classifies. */

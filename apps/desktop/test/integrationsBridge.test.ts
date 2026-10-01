@@ -14,14 +14,14 @@ const INTEGRATIONS = {
 };
 
 function scripted(answers: Record<string, { status: number; body: unknown }>) {
-  const calls: { path: string; method: string; body: unknown }[] = [];
+  const calls: { path: string; method: string; body: unknown; search: string }[] = [];
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.4.0',
     accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
-      calls.push({ path, method: init.method, body: init.body === undefined ? null : JSON.parse(init.body) });
+      calls.push({ path, method: init.method, body: init.body === undefined ? null : JSON.parse(init.body), search: new URL(url).search });
       return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
     },
   });
@@ -76,5 +76,36 @@ describe('the integrations half of the administration bridge', () => {
     expect(state.integrationsNotice).toBe('admin_only');
     // The page banner is whatever it was: the refusal belongs to the section's row.
     expect(state.notice).toBe(before.notice);
+  });
+});
+
+// Slice C2: the transcription row's values are asked for by name, so an S1 desktop's strict
+// reader never meets them, and this one gets them.
+describe('the transcription half of the integrations read', () => {
+  it('asks for transcription by name and keeps what comes back', async () => {
+    const withTranscription = {
+      ...INTEGRATIONS,
+      transcription: {
+        setting: { enabled: true, dailyCeilingCents: 200, unitPriceMicros: 4_300 },
+        configured: { ok: false, missing: ['api_key'] },
+        spentTodayCents: 3,
+      },
+    };
+    const admin = scripted({ '/settings/integrations': { status: 200, body: withTranscription } });
+    const state = await createAdminBridge({ api: admin.api, session: session('admin') }).state();
+    expect(admin.calls.find(call => call.path === '/settings/integrations')?.search).toBe('?include=transcription');
+    expect(state.integrations?.transcription).toEqual(withTranscription.transcription);
+  });
+
+  it('saves the transcription setting through /settings/update', async () => {
+    const { api, calls } = scripted({
+      '/settings/integrations': { status: 200, body: INTEGRATIONS },
+      '/settings/update': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+    });
+    const bridge = createAdminBridge({ api, session: session('admin') });
+    await bridge.state();
+    calls.length = 0;
+    await bridge.saveIntegration({ settingKey: 'call_transcription', value: { enabled: true, dailyCeilingCents: 100, unitPriceMicros: 4_300 } });
+    expect(calls[0]?.body).toMatchObject({ settingKey: 'call_transcription', value: { enabled: true, dailyCeilingCents: 100 } });
   });
 });

@@ -121,6 +121,16 @@ function errorReason(body: string): string | null {
   return typeof status === 'string' ? status.toLowerCase() : null;
 }
 
+/**
+ * The OAuth error code in a revocation answer (`{"error":"invalid_token",...}`, RFC
+ * 7009 section 2.2.1), or null. Only the code is read; nothing else in the body is
+ * kept.
+ */
+function revocationErrorCode(body: string): string | null {
+  const error = parseJson(body)?.['error'];
+  return typeof error === 'string' ? error : null;
+}
+
 /** What a non-2xx means, in the specification's vocabulary. */
 export type GmailFailure = 'grant_revoked' | 'rate_limited' | 'history_expired' | 'not_found' | 'unexpected';
 
@@ -464,12 +474,25 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     },
 
     revokeRefreshToken: async (config, refreshToken): Promise<void> => {
-      // Best effort by contract: the caller deletes the material either way.
-      await options.fetch(config.revocationEndpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ token: refreshToken }).toString(),
-      });
+      // Best effort for the caller, which deletes the material either way; but the
+      // caller records whether Google agreed, so this must not report a refusal as a
+      // revocation. 200 is revoked. 400 `invalid_token` is a token Google no longer
+      // knows — already revoked or expired — which is the outcome asked for. Anything
+      // else throws a typed failure carrying only the status; the body is never put in
+      // the error, because the caller's audit row is built from the error.
+      let response: HttpResponse;
+      try {
+        response = await options.fetch(config.revocationEndpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: refreshToken }).toString(),
+        });
+      } catch {
+        throw new GmailClientError('transport', 'the Google token revocation did not complete');
+      }
+      if (response.status === 200) return;
+      if (response.status === 400 && revocationErrorCode(response.body) === 'invalid_token') return;
+      throw new GmailClientError('unexpected_status', 'the Google token revocation was refused', response.status);
     },
 
     getProfile: async (access): Promise<GmailProfile> => {

@@ -542,8 +542,11 @@ export async function listFirmCallSessions(
     duration_seconds: number | null;
     recording_path: string | null;
     call_log_id: string | null;
+    has_transcript: boolean;
   }>(
-    `SELECT id, firm_id, status, started_at, answered_at, ended_at, duration_seconds, recording_path, call_log_id
+    `SELECT id, firm_id, status, started_at, answered_at, ended_at, duration_seconds, recording_path, call_log_id,
+            EXISTS (SELECT 1 FROM call_transcripts t
+                     WHERE t.workspace_id = call_sessions.workspace_id AND t.call_session_id = call_sessions.id) AS has_transcript
        FROM call_sessions
       WHERE workspace_id = $1 AND firm_id = $2 AND consumed_at IS NOT NULL
       ORDER BY consumed_at DESC, id
@@ -561,6 +564,8 @@ export async function listFirmCallSessions(
     durationSeconds: row.duration_seconds,
     hasRecording: row.recording_path !== null,
     callLogId: row.call_log_id,
+    // Slice C2: the call history's "Transcript" disclosure is offered only for these.
+    hasTranscript: row.has_transcript,
   }));
 }
 
@@ -998,12 +1003,13 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
 
 /**
  * A recording callback. Only the URL's path is kept (the host is Twilio's API and the
- * media needs the account's credentials either way). Idempotent.
+ * media needs the account's credentials either way). Idempotent. The session it names is
+ * returned once the recording is stored, for slice C2's transcription enqueue.
  */
 export async function recordCallRecording(
   db: Queryable,
   input: { readonly callSid: string; readonly recordingSid: string; readonly recordingUrl: string; readonly durationSeconds?: number | undefined },
-): Promise<{ readonly known: boolean }> {
+): Promise<{ readonly known: boolean; readonly recorded?: { readonly workspaceId: string; readonly sessionId: string } }> {
   const session = await sessionBySid(db, input.callSid);
   if (session === null) return { known: false };
   if (!/^RE[0-9a-f]{32}$/u.test(input.recordingSid)) return { known: true };
@@ -1024,7 +1030,7 @@ export async function recordCallRecording(
       WHERE workspace_id = $1 AND id = $2`,
     [session.workspace_id, session.id, input.recordingSid, path, duration],
   );
-  return { known: true };
+  return { known: true, recorded: { workspaceId: session.workspace_id, sessionId: session.id } };
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,9 @@ import {
   CALLING_NEEDS_BUDGET,
   CALLING_NEEDS_SETUP,
   CallingCalendarSection,
+  TRANSCRIPTION_BUDGET_RANGE,
+  TRANSCRIPTION_NEEDS_BUDGET,
+  TRANSCRIPTION_NEEDS_KEY,
   centsFromDollars,
 } from '../src/renderer/settings/CallingCalendarSection.tsx';
 import type { AdminState, SaveIntegrationInput } from '../src/renderer/settingsContract.ts';
@@ -197,5 +200,63 @@ describe('the section’s presence', () => {
     expect(screen.getByTestId('calling-calendar-unread')).toBeTruthy();
     fireEvent.click(screen.getByTestId('calling-calendar-retry'));
     expect(onRetry).toHaveBeenCalled();
+  });
+});
+
+// Slice C2: "Transcribe calls" and the daily transcription budget.
+describe('Transcribe calls', () => {
+  const transcription = (overrides: Partial<NonNullable<NonNullable<AdminState['integrations']>['transcription']>> = {}) => ({
+    setting: { enabled: false, dailyCeilingCents: 200, unitPriceMicros: 4_300 },
+    configured: { ok: true, missing: [] },
+    spentTodayCents: 3,
+    ...overrides,
+  });
+
+  it('is absent when the server did not answer it (an API from before C2)', () => {
+    show(stateOf());
+    expect(screen.queryByTestId('row-transcription')).toBeNull();
+  });
+
+  it('turns on with the key in place and a budget, keeping the budget and price', () => {
+    const { onSave } = show(stateOf({ integrations: integrations({ transcription: transcription() }) }));
+    expect(screen.getByTestId('transcription-detail').textContent).toBe('Calls are recorded but not transcribed.');
+    fireEvent.click(screen.getByTestId('transcription-switch'));
+    expect(onSave).toHaveBeenCalledWith({
+      settingKey: 'call_transcription',
+      value: { enabled: true, dailyCeilingCents: 200, unitPriceMicros: 4_300 },
+    });
+    expect(screen.getByTestId('transcription-budget-detail').textContent).toContain('Spent today $0.03.');
+  });
+
+  it('is disabled with a sentence while the key is missing, and the budget with it', () => {
+    show(stateOf({ integrations: integrations({ transcription: transcription({ configured: { ok: false, missing: ['api_key'] } }) }) }));
+    expect((screen.getByTestId('transcription-switch') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByTestId('transcription-detail').textContent).toBe(TRANSCRIPTION_NEEDS_KEY);
+    expect((screen.getByTestId('transcription-budget-dollars') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByTestId('transcription-budget-detail').textContent).toBe(TRANSCRIPTION_NEEDS_KEY);
+    // The field name is never shown.
+    expect(document.body.textContent).not.toContain('api_key');
+  });
+
+  it('stays off until a budget is set, and can always be turned off', () => {
+    show(stateOf({ integrations: integrations({ transcription: transcription({ setting: { enabled: false, dailyCeilingCents: 0, unitPriceMicros: 4_300 } }) }) }));
+    expect(screen.getByTestId('transcription-detail').textContent).toBe(TRANSCRIPTION_NEEDS_BUDGET);
+    expect((screen.getByTestId('transcription-switch') as HTMLInputElement).disabled).toBe(true);
+    cleanup();
+    const { onSave } = show(
+      stateOf({ integrations: integrations({ transcription: transcription({ setting: { enabled: true, dailyCeilingCents: 200, unitPriceMicros: 4_300 }, configured: { ok: false, missing: ['api_key'] } }) }) }),
+    );
+    fireEvent.click(screen.getByTestId('transcription-switch'));
+    expect(onSave).toHaveBeenCalledWith({ settingKey: 'call_transcription', value: { enabled: false, dailyCeilingCents: 200, unitPriceMicros: 4_300 } });
+  });
+
+  it('saves the daily budget in dollars, from $0 to $5', () => {
+    const { onSave } = show(stateOf({ integrations: integrations({ transcription: transcription() }) }));
+    fireEvent.change(screen.getByTestId('transcription-budget-dollars'), { target: { value: '5.01' } });
+    expect(screen.getByTestId('transcription-budget-issue').textContent).toBe(TRANSCRIPTION_BUDGET_RANGE);
+    expect((screen.getByTestId('transcription-budget-save') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('transcription-budget-dollars'), { target: { value: '1.50' } });
+    fireEvent.click(screen.getByTestId('transcription-budget-save'));
+    expect(onSave).toHaveBeenCalledWith({ settingKey: 'call_transcription', value: { enabled: false, dailyCeilingCents: 150, unitPriceMicros: 4_300 } });
   });
 });

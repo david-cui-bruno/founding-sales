@@ -868,6 +868,38 @@ describe('the switch transaction takes the send gate, then the mailbox row', () 
     ]);
   });
 
+  it('a disconnect whose revocation Google refuses (500) still completes, and the audit records revoked false with the status only', async () => {
+    const marker = 'revoke-body-marker';
+    const http = createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async () => await Promise.resolve({ status: 500, headers: {}, body: JSON.stringify({ error: marker }) }),
+    });
+    const gmail = account(world.alpha.address);
+    const done = await withTransaction(world.database.session, async () =>
+      await disconnectMailbox(owner(), grantDeps({ ...gmail, revokeRefreshToken: http.revokeRefreshToken }), {
+        mailboxId: world.alpha.mailboxId,
+        reason: 'owner_disconnect',
+      }),
+    );
+    expect(done).toMatchObject({ ok: true, value: { tokenDeleted: true } });
+    const { rows } = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'mailbox.disconnected'`,
+      [workspaceId()],
+    );
+    expect(rows).toEqual([
+      {
+        detail: {
+          reason: 'owner_disconnect',
+          tokenDeleted: true,
+          oldWatchStopped: true,
+          revoked: false,
+          failure: { revoke: 'status_500' },
+        },
+      },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain(marker);
+  });
+
   it('never holds the gate while it waits for the row: it retries until the row is free', async () => {
     const holder = await extra();
     const grantSession = await extra();

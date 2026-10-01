@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import {
+  TRANSCRIPTION_DAILY_CEILING_MAX_CENTS,
   VOICEMAIL_PLACEHOLDERS,
   VOICEMAIL_TEMPLATE_MAX_CHARACTERS,
   reasonSentence,
@@ -23,6 +24,10 @@ import { Textarea } from '../ui/textarea.tsx';
  *   * **Cal.com bookings** — `calendar_integration`; it cannot be turned on while the
  *     Cal.com webhook secret is missing.
  *
+ *   * **Transcribe calls** and its **daily transcription budget** (slice C2) — present when
+ *     the server answers them (`?include=transcription`). Off, and $0, until David sets
+ *     them; it cannot be turned on while the transcription key is missing on the server.
+ *
  * The section names no secret field, value or length: the read carries field *names* only
  * and this section says the account "is not set up" without listing them. Every refusal is
  * a sentence from `reasonSentence`, on the section, never a code.
@@ -35,6 +40,15 @@ export const CALLING_NEEDS_BUDGET = 'Calling stays off until a daily budget is s
 export const CALCOM_NEEDS_SECRET = 'Cal.com bookings need the Cal.com webhook secret to be set up on the server first.';
 export const BUDGET_RANGE = 'Enter an amount from $0 to $100.';
 export const MINUTES_RANGE = 'Enter a whole number of minutes from 1 to 240.';
+export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription key to be set up on the server first.';
+export const TRANSCRIPTION_NEEDS_BUDGET = 'Transcription stays off until a daily transcription budget is set.';
+export const TRANSCRIPTION_BUDGET_RANGE = 'Enter an amount from $0 to $5.';
+
+/** Dollars typed → cents, or null when it is not an amount from 0 to 5. */
+export function transcriptionCentsFromDollars(typed: string): number | null {
+  const cents = centsFromDollars(typed);
+  return cents !== null && cents <= TRANSCRIPTION_DAILY_CEILING_MAX_CENTS ? cents : null;
+}
 
 const money = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
 
@@ -81,7 +95,7 @@ export function CallingCalendarSection({
   return (
     <Loaded
       // A new server answer (after a save) resets the drafts to what is now in force.
-      key={JSON.stringify([integrations.telephonyBudget, integrations.voicemailScript])}
+      key={JSON.stringify([integrations.telephonyBudget, integrations.voicemailScript, integrations.transcription?.setting ?? null])}
       integrations={integrations}
       editable={state.mayMutate}
       notice={state.integrationsNotice ?? null}
@@ -259,6 +273,10 @@ function Loaded({
           </Button>
         </Row>
 
+        {integrations.transcription === undefined ? null : (
+          <TranscriptionRows transcription={integrations.transcription} editable={editable} busy={busy} onSave={onSave} />
+        )}
+
         <Row data-testid="row-calcom">
           <RowMain
             line="Cal.com bookings"
@@ -287,5 +305,103 @@ function Loaded({
         </p>
       )}
     </Section>
+  );
+}
+
+/** Slice C2: "Transcribe calls" and the daily transcription budget, in dollars. */
+function TranscriptionRows({
+  transcription,
+  editable,
+  busy,
+  onSave,
+}: {
+  readonly transcription: NonNullable<IntegrationsSettingsResponse['transcription']>;
+  readonly editable: boolean;
+  busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
+  onSave(input: SaveIntegrationInput): void;
+}): JSX.Element {
+  const setting = transcription.setting;
+  const [dollars, setDollars] = useState((setting.dailyCeilingCents / 100).toFixed(2));
+  const on = setting.enabled;
+  const keyMissing = !transcription.configured.ok;
+  const noBudget = setting.dailyCeilingCents <= 0;
+  const reason = on ? null : keyMissing ? TRANSCRIPTION_NEEDS_KEY : noBudget ? TRANSCRIPTION_NEEDS_BUDGET : null;
+  const cents = transcriptionCentsFromDollars(dollars);
+  const changed = cents !== setting.dailyCeilingCents;
+  const saving = busy('call_transcription');
+  return (
+    <>
+      <Row data-testid="row-transcription">
+        <RowMain
+          line="Transcribe calls"
+          detail={
+            <span data-testid="transcription-detail">
+              {reason ??
+                (on
+                  ? 'Answered calls of at least 20 seconds are transcribed.'
+                  : 'Calls are recorded but not transcribed.')}
+            </span>
+          }
+        />
+        <input
+          type="checkbox"
+          role="switch"
+          aria-label="Transcribe calls"
+          data-testid="transcription-switch"
+          checked={on}
+          disabled={!editable || saving || reason !== null}
+          onChange={event => {
+            onSave({ settingKey: 'call_transcription', value: { ...setting, enabled: event.target.checked } });
+          }}
+        />
+      </Row>
+      <Row data-testid="row-transcription-budget" className="items-start">
+        <RowMain
+          line="Daily transcription budget"
+          detail={
+            <span data-testid="transcription-budget-detail">
+              {keyMissing
+                ? TRANSCRIPTION_NEEDS_KEY
+                : `Spent today ${money(transcription.spentTodayCents)}. Transcription stops for the day when the budget is used.`}
+            </span>
+          }
+        />
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <span className="flex items-center gap-1 text-sm">
+            $
+            <Input
+              data-testid="transcription-budget-dollars"
+              aria-label="Transcription dollars per day"
+              inputMode="decimal"
+              autoComplete="off"
+              className="h-7 w-20 text-right text-xs"
+              disabled={!editable || saving || keyMissing}
+              aria-invalid={cents === null}
+              value={dollars}
+              onChange={event => {
+                setDollars(event.target.value);
+              }}
+            />
+            <span className="text-xs text-muted-foreground">a day</span>
+            <Button
+              size="sm"
+              data-testid="transcription-budget-save"
+              disabled={!editable || saving || keyMissing || cents === null || !changed}
+              onClick={() => {
+                if (cents === null) return;
+                onSave({ settingKey: 'call_transcription', value: { ...setting, dailyCeilingCents: cents } });
+              }}
+            >
+              Save
+            </Button>
+          </span>
+          {cents === null ? (
+            <span data-testid="transcription-budget-issue" className="text-xs text-destructive">
+              {TRANSCRIPTION_BUDGET_RANGE}
+            </span>
+          ) : null}
+        </span>
+      </Row>
+    </>
   );
 }

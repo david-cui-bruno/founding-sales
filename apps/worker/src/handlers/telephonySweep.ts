@@ -1,6 +1,7 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { sweepCallSessionReservations, workspacesOwingCallSessionSweep } from '@fss/domain/calls/sessions.ts';
+import { sweepTranscriptionReservations, workspacesOwingTranscriptionSweep } from '@fss/domain/calls/transcription.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey, quarterHourOf } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -25,6 +26,11 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * backlog stays truthful. The switch is not consulted: a workspace that turned calling
  * off still has its last reservations finalised.
  *
+ * Slice C2 adds the transcription reservations (`sweepTranscriptionReservations`): one
+ * still open half an hour after it was written belongs to a `call.transcribe` claim that
+ * is gone, and is released (`reserved`) or estimated (`calling`) the same way. A workspace
+ * owes a sweep when either predicate finds work.
+ *
  * There is no heartbeat: the job is one short transaction over at most a handful of
  * rows, well inside its sixty-second lease, and the job registry has no heartbeat
  * mechanism for a handler that is not chunked.
@@ -40,7 +46,9 @@ export function telephonySweepJobHandler(
     maxAttempts: options.maxAttempts ?? TELEPHONY_SWEEP_MAX_ATTEMPTS,
     leaseSeconds: options.leaseSeconds ?? 60,
     handle: async input => {
-      await sweepCallSessionReservations(repositoryContext(input.scope, input.session));
+      const context = repositoryContext(input.scope, input.session);
+      await sweepCallSessionReservations(context);
+      await sweepTranscriptionReservations(context);
     },
   };
 }
@@ -49,7 +57,9 @@ export function telephonySweepSource(): DueWorkSource {
   return {
     name: 'telephony-sweep',
     find: async (session: SessionQueryable, now: string): Promise<readonly JobSpecification[]> => {
-      const owing = await workspacesOwingCallSessionSweep(session);
+      const owing = [
+        ...new Set([...(await workspacesOwingCallSessionSweep(session)), ...(await workspacesOwingTranscriptionSweep(session))]),
+      ];
       if (owing.length === 0) return [];
       const { rows } = await session.query<{ id: string; slug: string }>(
         'SELECT id, slug FROM workspaces WHERE id = ANY($1::uuid[]) ORDER BY id',

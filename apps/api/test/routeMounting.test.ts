@@ -75,6 +75,7 @@ describe('what the API mounts', () => {
       '/calls/log',
       '/calls/recording',
       '/calls/session',
+      '/calls/transcript',
       '/crm/firm-page',
       '/crm/firms/add',
       '/dashboard',

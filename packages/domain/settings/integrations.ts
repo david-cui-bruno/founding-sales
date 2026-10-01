@@ -2,9 +2,11 @@ import {
   DEFAULT_INTEGRATION_SETTING_VALUES,
   DEFAULT_VOICEMAIL_SCRIPT,
   calendarIntegrationSettingSchema,
+  callTranscriptionSettingSchema,
   callingProviderSettingSchema,
   telephonyBudgetSettingSchema,
   voicemailScriptSettingSchema,
+  type CallTranscriptionSetting,
   type TelephonyBudgetSetting,
 } from '@fss/contracts';
 import type { SessionQueryable } from '../db/queryable.ts';
@@ -49,6 +51,17 @@ export async function readTelephonyBudget(context: RepositoryContext): Promise<T
 export async function readVoicemailScript(context: RepositoryContext): Promise<string> {
   const parsed = voicemailScriptSettingSchema.safeParse((await readSetting(context, 'voicemail_script')).value);
   return parsed.success ? parsed.data.template : DEFAULT_VOICEMAIL_SCRIPT;
+}
+
+const TRANSCRIPTION_OFF = callTranscriptionSettingSchema.parse(DEFAULT_INTEGRATION_SETTING_VALUES.call_transcription);
+
+/**
+ * Call transcription (slice C2): on or off, the day's ceiling in cents, the price per
+ * minute. A stored value that does not parse is off with a zero ceiling, like the budget.
+ */
+export async function readCallTranscription(context: RepositoryContext): Promise<CallTranscriptionSetting> {
+  const parsed = callTranscriptionSettingSchema.safeParse((await readSetting(context, 'call_transcription')).value);
+  return parsed.success ? parsed.data : { ...TRANSCRIPTION_OFF, enabled: false, dailyCeilingCents: 0 };
 }
 
 /**

@@ -214,7 +214,12 @@ export interface GmailClient {
     input: { readonly code: string; readonly codeVerifier: string },
   ): Promise<GmailTokenOutcome>;
   refreshAccessToken(config: GmailOAuthConfig, refreshToken: string): Promise<GmailAccessOutcome>;
-  /** Best effort; a revoked grant is already revoked and is not an error. */
+  /**
+   * Best effort for the caller; a revoked grant is already revoked and is not an error.
+   * Resolves on 200 and on 400 `invalid_token` (already revoked or expired). Any other
+   * answer throws `GmailClientError` (`unexpected_status` with the status, or
+   * `transport`), never carrying the response body.
+   */
   revokeRefreshToken(config: GmailOAuthConfig, refreshToken: string): Promise<void>;
   getProfile(access: GmailAccessGrant): Promise<GmailProfile>;
   watch(access: GmailAccessGrant, input: { readonly topicName: string }): Promise<GmailWatchOutcome>;

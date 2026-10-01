@@ -128,6 +128,8 @@ describe('the operation registry', () => {
       'calling.resume',
       'calling.history',
       'calling.recording',
+      // Slice C2: the call's transcript, under its row on the firm page.
+      'calling.transcript',
     ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
       'today.state',

@@ -182,12 +182,18 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
  *     owns the read, the write and the editor). `{ template }`, at most 2 000 characters;
  *     absent is `DEFAULT_VOICEMAIL_TEMPLATE`. Not an integration, but kept out of the
  *     snapshot for the same reason, so it lives in this list.
+ *   * `call_transcription` — slice C2 (migration 0030): whether answered, recorded calls of
+ *     at least twenty seconds are transcribed, the per-day ceiling in cents for that, and
+ *     the price per minute in micro-dollars. Off, a ceiling of 0, and Deepgram's published
+ *     Nova-3 pre-recorded rate (4 300, i.e. $0.0043 a minute, read 30 September 2026) by
+ *     default — a setting, not a constant, so a price change is an edit.
  */
 export const INTEGRATION_SETTING_KEYS = [
   'calling_provider',
   'calendar_integration',
   'telephony_budget',
   'voicemail_script',
+  'call_transcription',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -221,11 +227,26 @@ export const voicemailScriptSettingSchema = z.strictObject({
 });
 export type VoicemailScriptSetting = z.infer<typeof voicemailScriptSettingSchema>;
 
+/** The highest daily transcription ceiling an admin may set: $5. */
+export const TRANSCRIPTION_DAILY_CEILING_MAX_CENTS = 500;
+/** Deepgram Nova-3 pre-recorded, pay as you go: $0.0043 a minute (https://deepgram.com/pricing, read 30 Sep 2026). */
+export const DEFAULT_TRANSCRIPTION_UNIT_PRICE_MICROS = 4_300;
+
+export const callTranscriptionSettingSchema = z.strictObject({
+  enabled: z.boolean(),
+  /** Cents per business day for transcription. 0 means nothing is transcribed. At most $5. */
+  dailyCeilingCents: z.number().int().min(0).max(TRANSCRIPTION_DAILY_CEILING_MAX_CENTS),
+  /** Micro-dollars per minute of audio. */
+  unitPriceMicros: z.number().int().min(0).max(10_000_000),
+});
+export type CallTranscriptionSetting = z.infer<typeof callTranscriptionSettingSchema>;
+
 export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   calling_provider: callingProviderSettingSchema,
   calendar_integration: calendarIntegrationSettingSchema,
   telephony_budget: telephonyBudgetSettingSchema,
   voicemail_script: voicemailScriptSettingSchema,
+  call_transcription: callTranscriptionSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -233,6 +254,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   calendar_integration: { integration: 'off' },
   telephony_budget: { dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14_000 },
   voicemail_script: { template: DEFAULT_VOICEMAIL_TEMPLATE },
+  call_transcription: { enabled: false, dailyCeilingCents: 0, unitPriceMicros: DEFAULT_TRANSCRIPTION_UNIT_PRICE_MICROS },
 });
 
 /** The schema and default for any stored key. */
@@ -259,6 +281,19 @@ export const integrationsSettingsResponseSchema = z.strictObject({
   configured: z.strictObject({ twilioVoice: integrationConfigured, calcom: integrationConfigured }),
   /** Today's settled plus reserved Twilio minutes, in cents, on the budget's own day boundary. */
   spentTodayCents: z.number().int().min(0),
+  /**
+   * Slice C2's call transcription, answered only to a client that asks for it with
+   * `?include=transcription`: a desktop built with slice S1 parses this answer with its
+   * own strict build of this schema, and an unasked-for key would make its whole section
+   * unreadable. `spentTodayCents` is today's settled plus reserved transcription cost.
+   */
+  transcription: z
+    .strictObject({
+      setting: callTranscriptionSettingSchema,
+      configured: integrationConfigured,
+      spentTodayCents: z.number().int().min(0),
+    })
+    .optional(),
 });
 export type IntegrationsSettingsResponse = z.infer<typeof integrationsSettingsResponseSchema>;
 

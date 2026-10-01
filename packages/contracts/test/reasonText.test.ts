@@ -158,3 +158,15 @@ describe('the meeting match refusals', () => {
     }
   });
 });
+
+// Slice C2: the transcription refusals.
+describe('the transcription refusals', () => {
+  it('has a sentence for every code, and no code in any of them', async () => {
+    const { TRANSCRIPTION_REFUSAL_CODES, TRANSCRIPTION_REFUSAL_SENTENCES } = await import('../src/index.ts');
+    expect(Object.keys(TRANSCRIPTION_REFUSAL_SENTENCES).sort()).toEqual([...TRANSCRIPTION_REFUSAL_CODES].sort());
+    for (const code of TRANSCRIPTION_REFUSAL_CODES) {
+      expect(hasReasonSentence(code), code).toBe(true);
+      expect(reasonSentence(code), code).not.toContain('_');
+    }
+  });
+});

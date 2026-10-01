@@ -58,6 +58,8 @@ describe('job kind classes', () => {
       'research.sweep',
       // Slice M1: the hourly repair of a lost Cal.com webhook.
       'calcom.reconcile',
+      // Slice C2: a call's transcript, read later on the firm page.
+      'call.transcribe',
     ]);
   });
 
