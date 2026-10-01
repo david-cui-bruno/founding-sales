@@ -72,8 +72,9 @@ jobs:
     # production is still at 22, a release of 24 would otherwise be given evidence for
     # 23→24 while production performs 22→24. The deployed state is read from
     # production's own public /health (`build.commit`, `schema.databaseVersion`),
-    # resolved by tools/ci/resolve-prod-base.sh; the variables `FSS_PROD_SCHEMA` and
-    # `FSS_PROD_COMMIT` are only the fallback, and every reading of them fails closed.
+    # resolved by tools/ci/resolve-prod-base.sh, and only for a branch that changes the
+    # schema or a migration; the variables `FSS_PROD_SCHEMA` and `FSS_PROD_COMMIT` are
+    # not read at all.
     #
     # The job always runs and decides for itself whether there is anything to do. A
     # `paths:` filter would leave a required check waiting for ever on a branch that
@@ -119,46 +120,74 @@ jobs:
         # does need a Node that can read a `.ts` file.
         with:
           node-version-file: .node-version
+      - name: Does this branch change the schema or a migration?
+        # Decided from the repository alone, with no call to production and no variable:
+        # REQUIRED_SCHEMA at HEAD against the merge-base with origin/main, and any byte of
+        # the migrations directory (or .gitattributes, which changes the bytes checked
+        # out). An ordinary pull request therefore never depends on production being up,
+        # on a variable being current, or on a deploy that landed while it ran. Only a
+        # branch that changes the schema or a migration goes on to ask production.
+        id: change
+        run: |
+          set -euo pipefail
+          range_file=packages/domain/db/schemaRange.ts
+          fail() { echo "FAIL: $1" >&2; exit 1; }
+          git rev-parse --verify --quiet origin/main >/dev/null \
+            || git fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1 || true
+          git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so it cannot be told whether this branch changes the schema'
+          base="$(git merge-base origin/main HEAD)" || fail 'this branch has no merge-base with origin/main'
+          required_schema() {
+            git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
+          }
+          at_base="$(required_schema "$base")"
+          at_head="$(required_schema HEAD)"
+          [ -n "$at_base" ] || fail "REQUIRED_SCHEMA could not be read from the merge-base $base"
+          [ -n "$at_head" ] || fail 'REQUIRED_SCHEMA could not be read from HEAD'
+          if [ "$at_base" != "$at_head" ]; then
+            echo "this branch moves REQUIRED_SCHEMA from $at_base to $at_head"
+            echo 'changed=yes' >> "$GITHUB_OUTPUT"
+          elif ! git diff --no-renames --quiet "$base" HEAD -- packages/domain/db/migrations .gitattributes; then
+            echo "this branch changes the migrations directory (REQUIRED_SCHEMA stays $at_head)"
+            echo 'changed=yes' >> "$GITHUB_OUTPUT"
+          else
+            echo "this branch changes neither the schema nor a migration; there is no upgrade to test, and production is not asked"
+            echo 'changed=no' >> "$GITHUB_OUTPUT"
+          fi
       - name: Resolve what production runs, from production
         # The base of the upgrade is what production reports about itself on its public
-        # /health (build.commit and schema.databaseVersion), no credential. The repository
-        # variables FSS_PROD_COMMIT / FSS_PROD_SCHEMA go stale after every autodeploy
-        # (they broke PR 344 and again during releases 0028-0030), so they are only the
-        # fallback, with a warning, and only on a branch that runs no upgrade (it declares
-        # the schema the variables say): an upgrade needs /health attested (200, serving,
-        # schema accepted, 40-hex build.commit) and otherwise fails closed, as the old
-        # attestation step did. Bounded curl, three attempts. The logic lives in
+        # /health (build.commit and schema.databaseVersion), no credential. There is no
+        # fallback: the repository variables FSS_PROD_COMMIT / FSS_PROD_SCHEMA go stale
+        # after every autodeploy (they broke PR 344 and again during releases 0028-0030)
+        # and are not read at all. /health must be attested (curl exit 0, 200, no
+        # redirect, serving, schema accepted, a 40-hex build.commit) or the step fails,
+        # as the old attestation step did. Only a branch that changes the schema or a
+        # migration gets here. Bounded curl, three attempts. The logic lives in
         # tools/ci/resolve-prod-base.sh and is run by test/ops/resolveProdBase.check.ts.
         id: prod
-        env:
-          VAR_PROD_COMMIT: ${{ vars.FSS_PROD_COMMIT }}
-          VAR_PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
+        if: steps.change.outputs.changed == 'yes'
         run: bash tools/ci/resolve-prod-base.sh
       - name: What production runs, and what this branch would move it to
         id: range
+        if: steps.change.outputs.changed == 'yes'
         env:
           PROD_SCHEMA: ${{ steps.prod.outputs.schema }}
           PROD_COMMIT: ${{ steps.prod.outputs.commit }}
-          PROD_SOURCE: ${{ steps.prod.outputs.source }}
         run: |
           set -euo pipefail
           range_file=packages/domain/db/schemaRange.ts
           fail() { echo "FAIL: $1" >&2; exit 1; }
 
-          # Fail closed on every unreadable answer. A missing variable is not "nothing
-          # to do": it is a job that cannot tell what production runs.
-          [ -n "$PROD_SCHEMA" ] || fail 'the repository variable FSS_PROD_SCHEMA is unset; it names the schema production runs'
-          [ -n "$PROD_COMMIT" ] || fail 'the repository variable FSS_PROD_COMMIT is unset; it names the commit production'"'"'s images were built from'
-          case "$PROD_SCHEMA" in
-            ''|*[!0-9]*) fail "FSS_PROD_SCHEMA is '$PROD_SCHEMA', which is not a schema version" ;;
-          esac
-          [ "$PROD_SCHEMA" -gt 0 ] || fail 'FSS_PROD_SCHEMA is zero'
-          case "$PROD_COMMIT" in
-            0000000000000000000000000000000000000000) fail 'FSS_PROD_COMMIT is the zero commit' ;;
-          esac
-          git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null || fail "FSS_PROD_COMMIT $PROD_COMMIT is not a commit in this repository"
-          git rev-parse --verify --quiet origin/main >/dev/null \
-            || git fetch --no-tags --depth=0 origin main:refs/remotes/origin/main >/dev/null 2>&1 || true
+          [ -n "$PROD_SCHEMA" ] && [ -n "$PROD_COMMIT" ] || fail "production's attested schema and commit are missing"
+          # The attested commit may be newer than this checkout (a deploy landed after
+          # the checkout). Fetch it, bounded, before looking for it.
+          git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null \
+            || timeout 120 git fetch --no-tags origin "$PROD_COMMIT" >/dev/null 2>&1 || true
+          git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null || fail "the commit production runs, $PROD_COMMIT, is not in this repository and could not be fetched"
+          git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so the production commit cannot be cross-checked against the released line'
+          git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
+            || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
+          git merge-base --is-ancestor "$PROD_COMMIT" origin/main \
+            || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of origin/main; production would be running a commit that was never released"
 
           required_schema() {
             git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
@@ -168,41 +197,8 @@ jobs:
           [ -n "$from" ] || fail "REQUIRED_SCHEMA could not be read from $PROD_COMMIT"
           [ -n "$to" ] || fail 'REQUIRED_SCHEMA could not be read from HEAD'
           [ "$from" = "$PROD_SCHEMA" ] \
-            || fail "the deployed commit declares REQUIRED_SCHEMA $from but FSS_PROD_SCHEMA says $PROD_SCHEMA; one of the two is stale"
-          echo "production runs schema $from at $PROD_COMMIT (resolved by the previous step); this branch declares $to"
-
-          # An upgrade is never based on the variables (the resolver refuses that too).
-          if [ "$from" != "$to" ] && [ "$PROD_SOURCE" != health ]; then
-            fail "this branch would upgrade schema $from to $to but production's base came from '$PROD_SOURCE', not from its /health"
-          fi
-          # The ancestry of what production runs matters when there is an upgrade to
-          # test: the branch must contain it and main must have released it. With equal
-          # schemas there is nothing to rebase onto, and a code-only deploy that landed
-          # while this run was in flight must not turn an ordinary pull request red.
-          if [ "$from" != "$to" ]; then
-            git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
-              || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
-            git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so the production commit cannot be cross-checked against the released line'
-            git merge-base --is-ancestor "$PROD_COMMIT" origin/main \
-              || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of origin/main; production would be running a commit that was never released"
-          fi
-
-          # Normally PROD_COMMIT is production's own build.commit, so nothing is behind.
-          # On the variable fallback it can lag: any commit deployed at schema `from` has
-          # byte-identical migrations 1..from, so a lagging value degrades only the code
-          # that writes the fixture, never the migration comparison below. Say so.
-          newest_at_from="$PROD_COMMIT"
-          lag_range=''
-          if git rev-parse --verify --quiet origin/main >/dev/null && git merge-base --is-ancestor "$PROD_COMMIT" origin/main; then
-            lag_range="$PROD_COMMIT..origin/main"
-          fi
-          for candidate in $([ -z "$lag_range" ] || git rev-list --reverse "$lag_range"); do
-            [ "$(required_schema "$candidate")" = "$from" ] || break
-            newest_at_from="$candidate"
-          done
-          if [ "$newest_at_from" != "$PROD_COMMIT" ]; then
-            echo "::warning title=FSS_PROD_COMMIT is behind::FSS_PROD_COMMIT is $PROD_COMMIT, but $newest_at_from is the newest commit on main still at schema $from. The migrations compared are identical either way; the fixture is written by older application code than production runs."
-          fi
+            || fail "the commit production runs declares REQUIRED_SCHEMA $from but its /health says the database is on $PROD_SCHEMA"
+          echo "production runs schema $from at $PROD_COMMIT (attested by /health); this branch declares $to"
 
           # A migration at or below the deployed schema that differs from the deployed
           # bytes is refused whatever the schema numbers say: production's runner

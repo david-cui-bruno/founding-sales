@@ -14,24 +14,26 @@ import { repositoryPath } from './support/repository.ts';
  * is a way around those gates, and nothing else in the suite notices one.
  *
  * This parses every non-test source file with the TypeScript compiler (syntax only, no
- * type check) and reports every REFERENCE to a provider method that is not lexically
- * inside its owner function:
+ * type check) and reports EVERY Identifier, PrivateIdentifier, StringLiteral or
+ * NoSubstitutionTemplateLiteral node whose text equals a guarded method name, anywhere
+ * outside its owner function, unless it sits in a pure declaration position. It does not
+ * enumerate spellings: property access, optional calls, element access, every form of
+ * destructuring (declaration, computed key, assignment), aliases, arguments and anything
+ * not yet thought of are all just "the name appears".
  *
- *   - property access, called or not (`x.m(`, `x?.m(`, `x.m`, `f(x.m)`, `const a = x.m`);
- *   - element access with a string literal (`x['m'](`);
- *   - a destructuring binding (`const { m } = x`, `const { m: a } = x`).
- *
- * Definitions are not references and are never matched, structurally: method and
- * property declarations, interface and type members, object-literal members
- * (`m(...) {}`, `m: ...`) and indexed-access types are different syntax kinds from the
- * three above, so the adapters and the interfaces need no file-level exemption.
+ * A pure declaration position is the NAME of a method or property signature, a method,
+ * property or accessor declaration (interface, type literal, class), or an object-literal
+ * member (`m(...) {}`, `m: ...`, shorthand `{ m }`), a computed name of one of those, or a
+ * literal type (`Pick<X, 'm'>`). Those define or describe the method, so the adapters
+ * and interfaces need no file-level exemption. An unrelated hit (another object's
+ * `kind === 'extract'`, say) goes in ALLOWED_ELSEWHERE with a reason.
  *
  * Inside the owner, the number of references must be exactly the expected number of
  * calls (all of them call expressions), so a second call or an alias inside the owner
  * fails too.
  *
- * Not caught, by the nature of a syntactic check: calling the provider through a name
- * this table does not list (a new method), or reflection (`Reflect.get(x, name)`).
+ * Not caught, by the nature of a syntactic check: a provider reached through a name this
+ * table does not list (a new method), or built at run time (`x['send' + 'Message']`).
  */
 
 interface Boundary {
@@ -88,7 +90,26 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
-  // { file: 'packages/domain/x/y.ts', method: 'sendMessage', reason: 'why, and what gates it instead' },
+  {
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    method: 'extract',
+    reason: "the string 'extract' names a failed install step (`step: 'extract'`) after `ditto` unzips an update; it is not the research provider",
+  },
+  {
+    file: 'apps/worker/src/tools/fss/readOnlyGmail.ts',
+    method: 'sendMessage',
+    reason: "`refusedAsync('sendMessage')` installs a REFUSING stub on the read-only Gmail wrapper; it makes the method throw and never calls the provider",
+  },
+  {
+    file: 'packages/domain/mail/gmailClientFake.ts',
+    method: 'sendMessage',
+    reason: "`record('sendMessage', ...)` is the in-memory fake logging that it was called; the fake is a test double with no provider behind it",
+  },
+  {
+    file: 'packages/domain/crm/import.ts',
+    method: 'classify',
+    reason: 'a local function that classifies spreadsheet import rows as new, duplicate or invalid; unrelated to the reply classifier provider',
+  },
 ];
 
 const ROOTS = ['apps', 'packages', 'tools', 'scripts'];
@@ -99,14 +120,11 @@ const TEST_FILE = /\.(?:test|check|spec)\.[a-z]+$/u;
 export interface Reference {
   readonly method: string;
   readonly line: number;
-  /** Whether the reference is the callee of a call expression. */
+  /** Whether the appearance is the callee of a call expression. */
   readonly called: boolean;
   /** The enclosing named functions, innermost first. */
   readonly enclosing: readonly string[];
 }
-
-const isStringLike = (node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
-  ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 
 /** The names a function-like node answers to: its own, or its variable's. */
 function functionName(node: ts.Node): string | undefined {
@@ -128,29 +146,83 @@ function enclosingFunctions(node: ts.Node): string[] {
   return names;
 }
 
-/** Every reference to one of `methods` in `text` (see the header for what counts). */
+/**
+ * Whether an object or array literal is the TARGET of an assignment (`({ m: x } = y)`,
+ * `[{ m }] = ys`, `for ({ m } of ys)`), where its members read from the right-hand side
+ * instead of defining anything.
+ */
+function isAssignmentTarget(literal: ts.Node): boolean {
+  let current: ts.Node = literal;
+  while (current.parent !== undefined) {
+    const parent = current.parent;
+    if (ts.isParenthesizedExpression(parent) || ts.isArrayLiteralExpression(parent) || ts.isSpreadElement(parent) || ts.isSpreadAssignment(parent) || ts.isObjectLiteralExpression(parent)) {
+      current = parent;
+    } else if (ts.isPropertyAssignment(parent) && parent.initializer === current) {
+      current = parent;
+    } else if (ts.isShorthandPropertyAssignment(parent) && parent.objectAssignmentInitializer === current) {
+      current = parent;
+    } else {
+      break;
+    }
+  }
+  const parent = current.parent;
+  if (parent === undefined) return false;
+  if (ts.isBinaryExpression(parent)) return parent.left === current && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+  return (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === current;
+}
+
+/** Whether `node` is the name (or computed name) of a definition, or a literal type. */
+function inDeclarationPosition(node: ts.Node): boolean {
+  let name: ts.Node = node;
+  if (name.parent !== undefined && ts.isComputedPropertyName(name.parent)) name = name.parent;
+  const parent = name.parent;
+  if (parent === undefined) return false;
+  if (ts.isLiteralTypeNode(parent)) return true;
+  if (
+    ts.isMethodSignature(parent) ||
+    ts.isPropertySignature(parent) ||
+    ts.isMethodDeclaration(parent) ||
+    ts.isPropertyDeclaration(parent) ||
+    ts.isGetAccessorDeclaration(parent) ||
+    ts.isSetAccessorDeclaration(parent)
+  ) {
+    return parent.name === name;
+  }
+  if (ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent)) {
+    // An object-literal member defines a method, unless the literal is being assigned to.
+    return parent.name === name && !isAssignmentTarget(parent.parent);
+  }
+  return false;
+}
+
+/** Every appearance of one of `methods` in `text` outside a declaration position. */
 export function referencesIn(text: string, methods: ReadonlySet<string>, fileName = 'file.ts'): Reference[] {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, /\.[cm]?[jt]sx$/u.test(fileName) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const found: Reference[] = [];
-  const lineOf = (node: ts.Node): number => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
   const calleeOf = (node: ts.Node): boolean => {
     let outer: ts.Node = node;
     // `x.m!(...)`, `(x.m)(...)` and `x.m?.(...)` are still calls of the reference.
     while (outer.parent !== undefined && (ts.isNonNullExpression(outer.parent) || ts.isParenthesizedExpression(outer.parent))) outer = outer.parent;
     return outer.parent !== undefined && ts.isCallExpression(outer.parent) && outer.parent.expression === outer;
   };
-  const add = (node: ts.Node, method: string, called: boolean): void => {
-    found.push({ method, line: lineOf(node), called, enclosing: enclosingFunctions(node) });
-  };
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAccessExpression(node) && methods.has(node.name.text)) {
-      add(node, node.name.text, calleeOf(node));
-    } else if (ts.isElementAccessExpression(node) && isStringLike(node.argumentExpression) && methods.has(node.argumentExpression.text)) {
-      add(node, node.argumentExpression.text, calleeOf(node));
-    } else if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
-      const key = node.propertyName ?? node.name;
-      const name = ts.isIdentifier(key) || isStringLike(key) ? key.text : undefined;
-      if (name !== undefined && methods.has(name)) add(node, name, false);
+    let name: string | undefined;
+    if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      name = node.text.replace(/^#/u, '');
+    }
+    if (name !== undefined && methods.has(name) && !inDeclarationPosition(node)) {
+      // The expression the name belongs to: `x.m` or `x['m']`, else the name itself.
+      let expression: ts.Node = node;
+      const parent = node.parent;
+      if (parent !== undefined && ((ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isElementAccessExpression(parent) && parent.argumentExpression === node))) {
+        expression = parent;
+      }
+      found.push({
+        method: name,
+        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        called: calleeOf(expression),
+        enclosing: enclosingFunctions(node),
+      });
     }
     ts.forEachChild(node, visit);
   };
@@ -330,7 +402,7 @@ describe('the check itself', () => {
   });
 
   it('fails on destructuring, in the same file and elsewhere', () => {
-    for (const code of ['const { sendMessage } = gmail;', 'const { sendMessage: send } = gmail;', "const { 'sendMessage': send } = gmail;", 'function f({ sendMessage }: G) { return sendMessage; }']) {
+    for (const code of ['const { sendMessage } = gmail;', 'const { sendMessage: send } = gmail;', "const { 'sendMessage': send } = gmail;", 'function f({ sendMessage }: G) { return 1; }', 'const { ["sendMessage"]: send } = gmail;', 'const { [`sendMessage`]: send } = gmail;', 'let send: any;\n({ sendMessage: send } = gmail);', 'let send2: any;\n[{ sendMessage: send2 }] = [gmail];', 'for (const { sendMessage } of gmails) {}']) {
       expect(kinds(withSite(`${code}\n`)), code).toEqual(['outside-owner:sendMessage']);
       expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': SITE, 'apps/worker/src/x.ts': `${code}\n` }), TABLE)), code).toEqual(['outside-owner:sendMessage']);
     }
@@ -379,15 +451,21 @@ describe('the check itself', () => {
     expect(withSite(`${definitions}\n`)).toEqual([]);
   });
 
-  it('does not fail on comments, strings, tests, or an unrelated bare function', () => {
+  it('does not fail on comments, strings that merely contain the name, or tests', () => {
     const found = withSite('', {
       'apps/api/src/note.ts': "// gmail.sendMessage(grant, request) is only made in site.ts\n/* x.sendMessage(y) */\nexport const a = 'x.sendMessage(y)';\n",
-      'packages/domain/crm/import.ts': 'async function sendMessage(a: A) { return a; }\nawait sendMessage(context);\n',
       'apps/api/test/second.test.ts': 'gmail.sendMessage(a, b);\n',
       'packages/domain/test/helper.ts': 'gmail.sendMessage(a, b);\n',
       'apps/worker/src/fake.check.ts': 'gmail.sendMessage(a, b);\n',
     });
     expect(found).toEqual([]);
+  });
+
+  it('flags an unrelated hit of the same name until it is allow-listed with a reason', () => {
+    const files = { 'packages/domain/site.ts': SITE, 'packages/domain/crm/import.ts': 'async function sendMessage(a: A) { return a; }\nawait sendMessage(context);\n' };
+    expect(kinds(findViolations(scratch(files), TABLE))).toEqual(['outside-owner:sendMessage', 'outside-owner:sendMessage']);
+    const allowed: readonly Allowed[] = [{ file: 'packages/domain/crm/import.ts', method: 'sendMessage', reason: 'a local function of the same name, unrelated' }];
+    expect(findViolations(scratch(files), TABLE, allowed)).toEqual([]);
   });
 
   it('honours an allow-list entry, and only for that file and method', () => {
@@ -405,6 +483,8 @@ describe('the check itself', () => {
       ['packages/domain/outbound/send.ts', 'withRetry(deps.gmail.sendMessage, 3);\n'],
       ['packages/domain/outbound/send.ts', 'const alias = deps.gmail.sendMessage;\n'],
       ['packages/domain/outbound/send.ts', 'deps.gmail.sendMessage?.(1, 2);\n'],
+      ['packages/domain/outbound/send.ts', 'const { ["sendMessage"]: viaComputed } = deps.gmail;\n'],
+      ['packages/domain/outbound/send.ts', 'let viaAssignment: any;\n({ sendMessage: viaAssignment } = deps.gmail);\n'],
       ['packages/domain/research/enrichment.ts', 'export const helper = (e: any) => e.extract(1);\n'],
       ['packages/domain/classification/classify.ts', 'export const helper = (c: any) => c.classify(1);\n'],
       ['packages/domain/calls/transcription.ts', 'export const helper = (p: any) => p.transcribe(1);\n'],

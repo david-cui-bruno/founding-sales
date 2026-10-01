@@ -66,8 +66,13 @@ export function declaredSecretNames(terraform: string): string[] {
   if (assignments.length > 1) throw unsupported('more than one secret_names assignment');
   const start = (assignments[0]?.index ?? 0) + (assignments[0]?.[0].length ?? 0);
   const rest = code.slice(start);
-  const list = /^\s*\[([^\]]*)\]/u.exec(rest);
+  const list = /^\s*\[([^\]]*)\]([^\n]*)/u.exec(rest);
   if (list === null) throw unsupported('secret_names is not a single literal list');
+  // Nothing may follow the closing bracket: not on its line (`] + [...]`, `] != x ? ..`),
+  // and not as the next token (a continued expression).
+  if ((list[2] ?? '').trim() !== '') throw unsupported('something follows the secret_names list on its line');
+  const after = rest.slice((list[0] ?? '').length).trimStart();
+  if (/^[?:.[+\-*/%&|=!<>,]/u.test(after)) throw unsupported('the secret_names list continues into an expression');
   const names: string[] = [];
   for (const entry of (list[1] ?? '').split(',')) {
     const item = entry.trim();
@@ -79,8 +84,11 @@ export function declaredSecretNames(terraform: string): string[] {
   if (new Set(names).size !== names.length) throw unsupported('a name is listed twice');
   const resources = [...code.matchAll(/resource\s+"aws_secretsmanager_secret"\s+"[^"]+"\s*\{/gu)];
   if (resources.length !== 1) throw unsupported(`${String(resources.length)} aws_secretsmanager_secret resources, expected one`);
-  const forEach = /resource\s+"aws_secretsmanager_secret"\s+"[^"]+"\s*\{\s*for_each\s*=\s*toset\(\s*local\.secret_names\s*\)/u;
-  if (!forEach.test(code)) throw unsupported('the secret resource is not `for_each = toset(local.secret_names)`');
+  const forEach = /resource\s+"aws_secretsmanager_secret"\s+"[^"]+"\s*\{\s*for_each\s*=([^\n]*)/u.exec(code);
+  const expression = (forEach?.[1] ?? '').replace(/\s+/gu, '');
+  if (expression !== 'toset(local.secret_names)') {
+    throw unsupported(`the secret resource's for_each is \`${expression}\`, not exactly \`toset(local.secret_names)\``);
+  }
   const mentions = [...code.matchAll(/(?<![\w.])local\.secret_names\b/gu)];
   if (mentions.length !== 1) throw unsupported('secret_names is used somewhere other than the one for_each');
   return names;
@@ -186,9 +194,15 @@ describe('the rehearsal fills every secret the stack declares', () => {
       `${base}resource "aws_secretsmanager_secret" "second" {\n  for_each = toset(local.secret_names)\n}\n`,
       base.replace('secret_names = [', 'secret_names = concat(["x"], ['),
       `${base}locals {\n  more = local.secret_names\n}\n`,
+      // The follow-up review's two mutations, and a continued list.
+      base.replace('toset(local.secret_names)', 'toset(local.secret_names) != toset([]) ? toset(["new-secret"]) : toset([])'),
+      base.replace('\n  ]\n}', '\n  ] != [] ? ["new-secret"] : []\n}'),
+      base.replace('\n  ]\n}', '\n  ]\n  + ["new-secret"]\n}'),
     ];
     for (const text of cases) expect(() => declaredSecretNames(text), text).toThrow();
     expect(declaredSecretNames(base)).toEqual(['a-1']);
+    // Whitespace inside the exact expression is fine.
+    expect(declaredSecretNames(base.replace('toset(local.secret_names)', 'toset( local.secret_names )  '))).toEqual(['a-1']);
   });
 
   it('reads case labels with spaces around the bar, several per line, quotes and comment lines', () => {
