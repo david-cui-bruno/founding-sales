@@ -230,7 +230,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'The transcript of one recorded call (what each side said); removed with its call session, the firm or the person.',
   ),
 
-  // ------------------------------------------------ after-call summaries (0033, slice C3b)
+  // ------------------------------------------------ after-call summaries (0032, slice C3b)
   // A model's summary of what the prospect said, with quotes of it: personal data, so it
   // goes with the call it summarizes, exactly as the transcript does.
   call_summaries: coverage(

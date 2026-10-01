@@ -1,7 +1,7 @@
 import { callSession, type CallToBookingFixture } from './callToBookingCases.ts';
 
 /**
- * A failing insert for every constraint migration 0033 adds (`call_summaries` and
+ * A failing insert for every constraint migration 0032 adds (`call_summaries` and
  * `provider_reservations_one_open_summary`, slice C3b). Each case breaks exactly one
  * constraint, inside the transaction the caller rolls back.
  */
@@ -14,7 +14,7 @@ interface Case {
 }
 
 /** A valid uuid that is never a row. */
-const ABSENT = '00000000-0000-4000-8000-0000000033a1';
+const ABSENT = '00000000-0000-4000-8000-0000000032a1';
 
 async function summary(
   f: Fixture,

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { instant } from './foundationRows.ts';
 
 /**
- * After-call summaries (slice C3b, migration 0033).
+ * After-call summaries (slice C3b, migration 0032).
  *
  * After a recorded call has a transcript, the worker asks a model for a short summary,
  * up to five suggested next steps, and the commitments it heard, quoted. **Suggestions

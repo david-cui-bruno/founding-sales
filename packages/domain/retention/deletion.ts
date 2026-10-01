@@ -329,7 +329,7 @@ async function measure(
         WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
       byContact,
     ),
-    // Slice C3b (0033): a call's summary quotes the prospect; counted in its own right too.
+    // Slice C3b (0032): a call's summary quotes the prospect; counted in its own right too.
     call_summaries: await countOf(
       context,
       `SELECT count(*) AS count FROM call_summaries x

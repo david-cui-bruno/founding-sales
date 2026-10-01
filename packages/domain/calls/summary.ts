@@ -34,7 +34,7 @@ import {
 } from './summaryModel.ts';
 
 /**
- * After-call summaries (slice C3b, migration 0033): one summary per transcribed call,
+ * After-call summaries (slice C3b, migration 0032): one summary per transcribed call,
  * with suggested next steps and the commitments heard. Suggestions only — nothing here
  * sends, books or schedules anything.
  *
@@ -50,7 +50,7 @@ import {
  *
  * ## The money: the paid-call pattern, as the classifier applies it
  *
- * `provider_reservations`, subject `call_summary` (0033), subject id the call session,
+ * `provider_reservations`, subject `call_summary` (0032), subject id the call session,
  * priced by model and tokens. `call.summarize` is chunked in three, each its own commit:
  *
  *   1. `beginCallSummary` — the switch, the lifetime cap (two paid attempts per call), the
@@ -83,7 +83,7 @@ import {
  * anything, and one that has not reached its lock finds the session gone.
  */
 
-/** `provider_reservations.subject_kind` for one call's summary (admitted by 0033). */
+/** `provider_reservations.subject_kind` for one call's summary (admitted by 0032). */
 export const CALL_SUMMARY_SUBJECT_KIND = 'call_summary';
 /** Paid attempts one call may ever hold: the first, and one retry of an unusable or ambiguous one. */
 export const CALL_SUMMARY_MAX_PAID_ATTEMPTS = 2;
