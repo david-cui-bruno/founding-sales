@@ -14,6 +14,7 @@ import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Section, Tag } from '../ui/layout.tsx';
 import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
+import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -778,6 +779,8 @@ export function FirmPage({
           <Holds page={page} />
           {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
           <CallHistory firmId={page.read.firm.id} />
+          {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}
+          <FirmMeetings firmId={page.read.firm.id} />
         </>
       )}
     </>

@@ -13,6 +13,8 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { bindReleaseAttestation } from '../release/records.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
+import { lockCalendarRoutingForWrite } from '../policy/calendarRouting.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 
 /**
  * Versioned administrative configuration with a change history
@@ -283,6 +285,18 @@ export async function updateSetting(
       );
       if (!binding.ok) return { ok: false, reason: binding.reason };
     }
+  }
+
+  // The Cal.com switch decides which workspace a deployment's bookings land in. The
+  // webhook and the reconciliation decide that under the deployment's calendar routing
+  // lock, SHARED, and then this workspace's send gate (`policy/calendarRouting.ts`,
+  // slice M1 review folds 2 and 3). So a write of it, in any workspace, takes the
+  // routing lock EXCLUSIVE and then this workspace's gate — in that order, before the
+  // setting's own lock — and enabling B waits for an in-flight reconcile of A as
+  // turning A off does.
+  if (input.settingKey === 'calendar_integration') {
+    await lockCalendarRoutingForWrite(context.db);
+    await lockSendGateForStopFact(context);
   }
 
   // The same name a reader may hold SHARED (`lockSettingForRead`), so a send's claim and

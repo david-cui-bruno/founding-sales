@@ -29,6 +29,8 @@ import { researchPageFetch } from '../research/companyPageFetch.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
+import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
+import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -80,6 +82,12 @@ export interface HandlerComposition {
   readonly mail: MailWorkerOptions | undefined;
   readonly send: OutboundSendDeps | undefined;
   readonly research: ResearchWorkerOptions | undefined;
+  /**
+   * Cal.com reconciliation (slice M1): present only when the task environment's `calcom`
+   * entry carries an `api_key`. Absent, `calcom.reconcile` is not registered and its
+   * source materializes nothing (`workerDueWorkSources({ calcomReconcile: false })`).
+   */
+  readonly calcom?: CalcomReconcileOptions | undefined;
 }
 
 /**
@@ -157,6 +165,8 @@ export function registerHandlers(
   // Call-to-booking (slice W). The telephony reservations' backstop: PostgreSQL only,
   // no provider call, so like `retention.batch` it is registered in every deployment.
   registry.register(telephonySweepJobHandler());
+  // Slice M1. The one handler here that calls Cal.com, so only with a key.
+  if (composition.calcom !== undefined) registry.register(calcomReconcileJobHandler(composition.calcom));
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -317,7 +327,7 @@ export async function composeHandlers(
  * Every source inserts rows and talks to nothing outside PostgreSQL, which is what
  * makes running one from a command line safe.
  */
-export function workerDueWorkSources(): readonly DueWorkSource[] {
+export function workerDueWorkSources(options: { readonly calcomReconcile?: boolean } = {}): readonly DueWorkSource[] {
   return [
     canarySource(),
     todayBuildSource(),
@@ -327,6 +337,10 @@ export function workerDueWorkSources(): readonly DueWorkSource[] {
     retentionSource(),
     researchSweepSource(),
     telephonySweepSource(),
+    // Slice M1. Registered always, so the list is the documented one; it materializes a
+    // job only in a worker that has a Cal.com API key to run it with — a job no handler
+    // here could claim would sit in the queue for ever, one more each hour.
+    calcomReconcileSource({ enabled: options.calcomReconcile === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -383,10 +397,16 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // Lane g71: which worker image this is, from the ECS task metadata (or
   // FSS_IMAGE_DIGEST outside ECS), once. Public, so it is in the startup line.
   const identity = await discoverImageDigest(environment);
-  const composition = await composeHandlers(deployment, classifier, {
+  const composed = await composeHandlers(deployment, classifier, {
     ...(config.metrics.region === null ? {} : { region: config.metrics.region }),
     imageDigest: identity.digest,
   });
+  // Slice M1: the key is read once, here, and lives only in the client's closure.
+  const calcomReconcile = readCalcomReconcileClient(environment);
+  const composition: HandlerComposition =
+    calcomReconcile.client === null
+      ? composed
+      : { ...composed, calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
@@ -398,6 +418,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // Which source the image was built from, beside which bytes it is. Baked in by
     // `ARG FSS_BUILD_COMMIT`; null on a laptop and on any image built before it existed.
     build_commit: buildCommit(environment),
+    // Whether reconciliation runs, and if not why, by field name only.
+    calcom_reconcile: calcomReconcile.problem ?? 'configured',
   });
 
   const sink = await createSink(config, log);
@@ -415,7 +437,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry(), composition),
-      sources: workerDueWorkSources(),
+      sources: workerDueWorkSources({ calcomReconcile: composition.calcom !== undefined }),
       sink,
       log,
     });

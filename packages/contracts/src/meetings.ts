@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { commandIdSchema } from './auth.ts';
+import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
 
 /**
@@ -30,3 +32,65 @@ export const meetingDtoSchema = z.object({
   endsAt: instant,
 });
 export type MeetingDto = z.infer<typeof meetingDtoSchema>;
+
+// ---------------------------------------------------------------------------
+// Slice M1: the firm page's meetings, the bookings to match, and the match command.
+// ---------------------------------------------------------------------------
+
+/** A meeting as the firm page lists it: its state and its time. Strict: nothing else. */
+export const firmMeetingDtoSchema = z.strictObject({
+  meetingId: uuid,
+  state: z.enum(MEETING_STATES),
+  startsAt: instant,
+  endsAt: instant,
+});
+export type FirmMeetingDto = z.infer<typeof firmMeetingDtoSchema>;
+
+/** `GET /meetings/firm?firmId=` — the firm's meetings, newest start first. */
+export const firmMeetingsResponseSchema = z.strictObject({ meetings: z.array(firmMeetingDtoSchema) });
+
+/**
+ * A booking Callie could not attach to a firm by itself (`firm_unmatched` /
+ * `firm_ambiguous`): who booked it and when, so a person can pick the firm.
+ */
+export const unmatchedMeetingDtoSchema = z.strictObject({
+  meetingId: uuid,
+  state: z.enum(MEETING_STATES),
+  startsAt: instant,
+  endsAt: instant,
+  attendeeEmail: z.string().max(320).nullable(),
+  reason: z.enum(['firm_unmatched', 'firm_ambiguous']).nullable(),
+});
+export type UnmatchedMeetingDto = z.infer<typeof unmatchedMeetingDtoSchema>;
+
+/** `GET /meetings/unmatched` — at most fifty, soonest first. */
+export const unmatchedMeetingsResponseSchema = z.strictObject({ meetings: z.array(unmatchedMeetingDtoSchema) });
+
+/** What `POST /meetings/match` may refuse with. Each has a sentence in `reasonText.ts`. */
+export const MEETING_MATCH_REFUSAL_CODES = [
+  'meeting_unknown',
+  'meeting_already_matched',
+  'firm_unknown',
+  'firm_merged',
+  'not_assigned',
+  'invalid_input',
+] as const;
+export type MeetingMatchRefusalCode = (typeof MEETING_MATCH_REFUSAL_CODES)[number];
+
+/** `POST /meetings/match { meetingId, firmId }`: attach an unmatched booking to a firm. */
+export const matchMeetingCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  meetingId: uuid,
+  firmId: uuid,
+});
+
+export const meetingMatchedSchema = z.strictObject({
+  meetingId: uuid,
+  firmId: uuid,
+  contactId: uuid.nullable(),
+  state: z.enum(MEETING_STATES),
+  /** What the booked evidence did: `none` for a cancelled meeting, which owes nothing. */
+  stage: z.enum(['moved', 'opened', 'unchanged', 'review', 'none']),
+});
+export type MeetingMatched = z.infer<typeof meetingMatchedSchema>;

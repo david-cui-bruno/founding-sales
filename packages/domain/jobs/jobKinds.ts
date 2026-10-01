@@ -35,6 +35,7 @@ export const JOB_KINDS = [
   'research.firm',
   'research.sweep',
   'telephony.sweep',
+  'calcom.reconcile',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -107,6 +108,11 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // `reserved` or `calling`, a compare-and-set on its state: a second run finds it
   // `released` or `estimated` and settles nothing twice.
   'telephony.sweep': 'business_uniqueness',
+  // Slice M1. Every effect is a synthesized Cal.com event recorded at
+  // `calcom_events_once` under a deterministic id before it is applied, so a second run
+  // over the same bookings inserts nothing and applies nothing; and the meeting's own
+  // `last_event_at` ordering refuses anything older than what was applied.
+  'calcom.reconcile': 'business_uniqueness',
 });
 
 /**
@@ -181,7 +187,17 @@ export const jobIdempotencyKey = Object.freeze({
   /** One call-session reservation sweep per workspace per quarter hour, when it owes one. */
   telephonySweep: (workspaceSlug: string, quarterHourIso: string): string =>
     `telephony-sweep:${workspaceSlug}:${quarterHourIso}`,
+  /** One Cal.com reconciliation per workspace per hour (slice M1). */
+  calcomReconcile: (workspaceSlug: string, hourIso: string): string => `calcom-reconcile:${workspaceSlug}:${hourIso}`,
 });
+
+/** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */
+export function hourOf(instant: string | number): string {
+  const milliseconds = typeof instant === 'number' ? instant : Date.parse(instant);
+  if (!Number.isFinite(milliseconds)) throw new RangeError('an hour is derived from a real instant');
+  const hour = 60 * 60 * 1000;
+  return new Date(milliseconds - (milliseconds % hour)).toISOString();
+}
 
 /** Fifteen minutes in milliseconds; the canary's period (13.3). */
 export const CANARY_PERIOD_MILLISECONDS = 15 * 60 * 1000;
@@ -232,6 +248,9 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // An abandoned call session holds budget until this releases it, and the next call
   // may be refused for want of it: the salesperson is the one waiting.
   'telephony.sweep': 'urgent',
+  // Nobody is waiting on it: a webhook already moved the pipeline when it arrived, and
+  // this is the hourly repair of one that did not.
+  'calcom.reconcile': 'bulk',
   // Nobody is watching the clock on these, and there can be a great many of them.
   'sequence.action': 'bulk',
   'sequence.terminal_stop': 'bulk',

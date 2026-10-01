@@ -56,6 +56,8 @@ describe('job kind classes', () => {
       // an import of two hundred firms is two hundred of the first.
       'research.firm',
       'research.sweep',
+      // Slice M1: the hourly repair of a lost Cal.com webhook.
+      'calcom.reconcile',
     ]);
   });
 

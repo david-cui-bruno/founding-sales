@@ -102,8 +102,11 @@ locals {
   #     `secrets` block names an entry with no value, so both entries must hold a value
   #     (`{}` is enough: the API reads an incomplete entry as "not configured") before
   #     the apply that adds them here.
+  #   * the worker reads `calcom` too (slice M1): its optional `api_key` is the Cal.com
+  #     reconciliation's (`apps/worker/src/calcom/bookingsClient.ts`); without one the
+  #     worker reconciles nothing. The entry already holds a value in production.
   api_secret_names        = ["calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"]
-  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]
+  worker_secret_names     = ["calcom", "google-gmail-oauth-client", "llm-classifier-api-key"]
   operations_secret_names = ["google-gmail-oauth-client"]
 
   # The environment variable a process reads a secret under, where that is not the
