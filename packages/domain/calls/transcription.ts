@@ -16,6 +16,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
 import { markCalling, settleAttempt, type ReservationState } from '../research/reservations.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
+import { clearMonthlyCash } from '../settings/cashCeiling.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import type { TwilioRecordingFetcher } from './twilioRecording.ts';
 import { boundMp3 } from './mp3Bound.ts';
@@ -407,6 +408,9 @@ async function clearAttempt(
   if (setting.dailyCeilingCents <= 0) return { ok: false, reason: 'transcription_budget_exhausted' };
   const spent = await transcriptionSpentCents(context, businessDate);
   if (spent + cents > setting.dailyCeilingCents) return { ok: false, reason: 'transcription_budget_exhausted' };
+  // And the month's cash ceiling (slice P1, invariant I2), under the workspace's monthly
+  // lock taken inside the daily one; the caller inserts the reservation in this transaction.
+  if (!(await clearMonthlyCash(context, { at: input.at, zone, cents }))) return { ok: false, reason: 'monthly_cash_ceiling' };
   return { ok: true, cents, minutes, unitPriceMicros: setting.unitPriceMicros, businessDate, zone };
 }
 

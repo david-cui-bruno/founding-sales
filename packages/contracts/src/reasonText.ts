@@ -262,6 +262,8 @@ export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalC
     'The last call was at about this time of day. Try at least two hours earlier or later in their day.',
   telephony_budget_disabled: 'Calling from Callie has no budget set. An administrator can set one in Settings, under Calling.',
   telephony_budget_exhausted: 'Calling paused: today’s calling budget is used.',
+  monthly_cash_ceiling:
+    'Calling paused: this month’s spending limit is reached. An administrator can raise it in Settings, under Calling & calendar.',
   caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
 });
 
@@ -381,6 +383,7 @@ export const TRANSCRIPTION_REFUSAL_SENTENCES: Readonly<Record<TranscriptionRefus
   transcription_off: 'Call transcription is off. An administrator can turn it on in Settings, under Calling & calendar.',
   transcription_unconfigured: 'Call transcription is not set up on the server yet, so this call was not transcribed.',
   transcription_budget_exhausted: 'Transcription paused: today’s transcription budget is used. Calls are transcribed again tomorrow.',
+  monthly_cash_ceiling: 'Transcription paused: this month’s spending limit is reached, so this call was not transcribed.',
   transcription_not_eligible: 'Only answered calls of at least twenty seconds are transcribed.',
   transcription_failed: 'This call could not be transcribed.',
   transcript_unavailable: 'Callie could not read this transcript just now. Try again in a minute.',

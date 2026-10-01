@@ -21,6 +21,7 @@ import { authorizeDial } from '../dial/authorize.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
 import { markCalling, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
 import { readTelephonyBudget, readVoicemailScript } from '../settings/integrations.ts';
+import { clearMonthlyCash } from '../settings/cashCeiling.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { localDate, localParts } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -147,6 +148,10 @@ export async function createCallSession(
   const cents = telephonyReservationCents(budget.maxMinutesPerCall, budget.unitPriceMicros);
   const spentCents = await telephonySpentCents(context, businessDate);
   if (spentCents + cents > budget.dailyCeilingCents) return refuse('telephony_budget_exhausted');
+  // And the month's cash ceiling (slice P1, invariant I2), under the workspace's monthly
+  // lock taken inside the daily one, so the reservation inserted below is the one both
+  // checks were made against.
+  if (!(await clearMonthlyCash(context, { at: now, zone, cents }))) return refuse('monthly_cash_ceiling');
 
   // The whole dial decision, and the ticket.
   const ticket = await authorizeDialCommand(context, {

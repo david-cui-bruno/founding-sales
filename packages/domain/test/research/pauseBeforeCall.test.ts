@@ -10,6 +10,7 @@ import { beginFirmResearch, ensureResearchCalling, finishFirmResearch, runFirmRe
 import type { ExtractionProvider, ExtractionRequest, PageFetchProvider } from '../../research/providers.ts';
 import { updateResearchSettings } from '../../research/settings.ts';
 import { selectFirmsForSweep } from '../../research/sweep.ts';
+import { readFinishing } from '../../settings/finishing.ts';
 
 /**
  * Slice P1, invariant I1, on the research path: the research switch is read again
@@ -182,6 +183,8 @@ describe('I1: research turned off between chunk 2 and chunk 3', () => {
   it('off: no fetch, no count, no model call; the reservation released; the run resumable', async () => {
     const where = await upToTheCall(1);
     await setResearch(false);
+    // Marked `calling` and not yet called: the one the finishing line counts.
+    expect(await readFinishing(context)).toMatchObject({ researchOn: false, researchFinishing: 1 });
     const fetch = countingFetch();
     const extraction = recordingExtraction();
     const result = await chunkThree(where, 1, fetch, extraction);
@@ -191,6 +194,7 @@ describe('I1: research turned off between chunk 2 and chunk 3', () => {
     expect(extraction.counted).toHaveLength(0);
     expect(extraction.called).toHaveLength(0);
     expect(await runRow(where.runId)).toEqual({ outcome: 'refused', refusal: 'research_disabled', state: 'released', settled: 0 });
+    expect((await readFinishing(context)).researchFinishing).toBe(0);
 
     // Resumable: with research back on, the firm is due again, and a new revision calls once.
     await setResearch(true);

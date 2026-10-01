@@ -150,6 +150,7 @@ describe('what the API mounts', () => {
       '/sequences/versions/retire',
       '/sequences/versions/steps',
       '/settings',
+      '/settings/finishing',
       '/settings/history',
       '/settings/integrations',
       '/settings/update',

@@ -187,6 +187,11 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
  *     the price per minute in micro-dollars. Off, a ceiling of 0, and Deepgram's published
  *     Nova-3 pre-recorded rate (4 300, i.e. $0.0043 a minute, read 30 September 2026) by
  *     default — a setting, not a constant, so a price change is an edit.
+ *   * `monthly_cash_ceiling_cents` — slice P1 (migration 0031): the month-to-date cash
+ *     ceiling, in cents, that telephony and transcription reservations are cleared against
+ *     together with their daily ceilings. `{ cents }`, 0 to 5 000; absent is 2 500 ($25).
+ *     Month-to-date spend is every provider's settled cost plus its open reservations on
+ *     the workspace business time zone's calendar month.
  */
 export const INTEGRATION_SETTING_KEYS = [
   'calling_provider',
@@ -194,6 +199,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'telephony_budget',
   'voicemail_script',
   'call_transcription',
+  'monthly_cash_ceiling_cents',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -241,12 +247,24 @@ export const callTranscriptionSettingSchema = z.strictObject({
 });
 export type CallTranscriptionSetting = z.infer<typeof callTranscriptionSettingSchema>;
 
+/** The highest month-to-date cash ceiling an admin may set: $50. */
+export const MONTHLY_CASH_CEILING_MAX_CENTS = 5_000;
+/** The month-to-date cash ceiling a workspace has before an admin sets one: $25. */
+export const DEFAULT_MONTHLY_CASH_CEILING_CENTS = 2_500;
+
+export const monthlyCashCeilingSettingSchema = z.strictObject({
+  /** Cents per calendar month across telephony, transcription and every other provider. 0 refuses every new reservation. */
+  cents: z.number().int().min(0).max(MONTHLY_CASH_CEILING_MAX_CENTS),
+});
+export type MonthlyCashCeilingSetting = z.infer<typeof monthlyCashCeilingSettingSchema>;
+
 export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   calling_provider: callingProviderSettingSchema,
   calendar_integration: calendarIntegrationSettingSchema,
   telephony_budget: telephonyBudgetSettingSchema,
   voicemail_script: voicemailScriptSettingSchema,
   call_transcription: callTranscriptionSettingSchema,
+  monthly_cash_ceiling_cents: monthlyCashCeilingSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -255,6 +273,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   telephony_budget: { dailyCeilingCents: 0, maxMinutesPerCall: 30, unitPriceMicros: 14_000 },
   voicemail_script: { template: DEFAULT_VOICEMAIL_TEMPLATE },
   call_transcription: { enabled: false, dailyCeilingCents: 0, unitPriceMicros: DEFAULT_TRANSCRIPTION_UNIT_PRICE_MICROS },
+  monthly_cash_ceiling_cents: { cents: DEFAULT_MONTHLY_CASH_CEILING_CENTS },
 });
 
 /** The schema and default for any stored key. */
@@ -294,8 +313,29 @@ export const integrationsSettingsResponseSchema = z.strictObject({
       spentTodayCents: z.number().int().min(0),
     })
     .optional(),
+  /**
+   * Slice P1's month-to-date cash ceiling, answered only to a client that asks with
+   * `?include=month`, for the reason `transcription` is. `spentMonthCents` is this calendar
+   * month's settled plus reserved cost across every provider, on the business time zone.
+   */
+  month: z
+    .strictObject({
+      ceilingCents: z.number().int().min(0).max(MONTHLY_CASH_CEILING_MAX_CENTS),
+      spentMonthCents: z.number().int().min(0),
+    })
+    .optional(),
 });
 export type IntegrationsSettingsResponse = z.infer<typeof integrationsSettingsResponseSchema>;
+
+/**
+ * `GET /settings/finishing` (slice P1, invariant I1): whether each switch is on, and how
+ * many provider requests already submitted are still finishing — e-mails claimed for Gmail
+ * and research model calls in flight. Turning a switch off starts nothing new; these may
+ * finish and their results are recorded. Nothing is recalled or reversed.
+ */
+const finishingCount = z.strictObject({ on: z.boolean(), finishing: z.number().int().min(0) });
+export const finishingResponseSchema = z.strictObject({ sending: finishingCount, research: finishingCount });
+export type FinishingResponse = z.infer<typeof finishingResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Commands and reads

@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { readFence } from '../../outbound/fence.ts';
+import { claimForDispatch, readFence } from '../../outbound/fence.ts';
+import { readFinishing } from '../../settings/finishing.ts';
 import { recordAuthenticationChecklist, setAutomatedSendingEnabled } from '../../outbound/domainGuard.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { updateSetting } from '../../settings/store.ts';
@@ -258,4 +259,27 @@ describe('I1: a switch write waits for an in-flight claim (the send gate)', () =
       }
     });
   }
+});
+
+describe('I1: what is still finishing after sending went off', () => {
+  it('counts a claimed fence Gmail has not answered for, on or off, and stops counting it once it is recorded', async () => {
+    const before = await readFinishing(context());
+    expect(before.sendingDomainOn).toBe(true);
+    const firm = await seedFirm(world, world.alpha, 'p1-finishing');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    // A claim committed, the Gmail call in flight: what the turn-off lets finish.
+    const claim = await claimForDispatch(context(), { outboundMessageId: fenceId });
+    expect(claim.ok).toBe(true);
+    await setDomainSwitch(world.database.session, false);
+    const during = await readFinishing(context());
+    expect(during.sendingDomainOn).toBe(false);
+    expect(during.sendingFinishing).toBe(before.sendingFinishing + 1);
+    // Recorded: no longer finishing.
+    await world.database.session.query(
+      `UPDATE outbound_messages SET state = 'sent', sent_at = now(), provider_message_id = 'p1-finished', provider_thread_id = 'p1-finished'
+        WHERE id = $1`,
+      [fenceId],
+    );
+    expect((await readFinishing(context())).sendingFinishing).toBe(before.sendingFinishing);
+  });
 });

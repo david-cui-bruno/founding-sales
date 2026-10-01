@@ -26,6 +26,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS } from '@fss/domain/jobs/jobKinds.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
+import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
@@ -203,7 +204,7 @@ describe('the call.transcribe job', () => {
   const system = (): RepositoryContext =>
     repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), database.session);
 
-  async function setting(settingKey: 'call_transcription' | 'telephony_budget', value: unknown): Promise<void> {
+  async function setting(settingKey: 'call_transcription' | 'telephony_budget' | 'monthly_cash_ceiling_cents', value: unknown): Promise<void> {
     const saved = await withTransaction(database.session, async () => await updateSetting(admin(), { settingKey, value }));
     if (!saved.ok) throw new Error(saved.reason);
   }
@@ -596,6 +597,99 @@ describe('the call.transcribe job', () => {
       expect(await attempts(late)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
     } finally {
       await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  /** This calendar month's spend, on the business calendar, as of the fixture's call instant. */
+  const monthSpent = async (): Promise<number> =>
+    (await readSpend(system(), { businessTimeZone: await workspaceBusinessZone(system()), at: policy.insideWindow })).monthToDateCents;
+  /** A call session's reservation at the budget above: thirty minutes at 1.4¢, rounded up. */
+  const CALL_RESERVATION_CENTS = 42;
+  const createSession = async (session: typeof database.session, commandId: string) =>
+    await createCallSession(
+      repositoryContext(
+        workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.salesperson.userId, role: 'salesperson' }),
+        session,
+      ),
+      {
+        firmId: crm.alpha.firmId,
+        routeId: policy.alpha.phoneRouteId,
+        routeVersion: policy.alpha.phoneRouteVersion,
+        callingIdentityId: policy.alpha.callingIdentityId,
+        deviceId: seeded.alpha.salesperson.deviceId,
+        commandId,
+        configuredCallerIdE164: '+14015550100',
+        at: policy.insideWindow,
+      },
+    );
+
+  it('refuses a call session or a transcription that would pass the month’s cash ceiling (slice P1)', async () => {
+    const eligible = await call(90);
+    try {
+      // One cent short of a call's reservation: the call is refused, before any ticket.
+      await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS - 1 });
+      const refused = await withTransaction(database.session, async () => await createSession(database.session, 'month-refused'));
+      expect(refused).toEqual({ ok: false, reason: 'monthly_cash_ceiling' });
+
+      // No headroom at all: the transcription is refused at its reservation, and calls nobody.
+      await setting('monthly_cash_ceiling_cents', { cents: await monthSpent() });
+      const common = { sessionId: eligible, at: policy.insideWindow, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      expect(await withTransaction(database.session, async () => await beginCallTranscription(system(), common))).toEqual({
+        kind: 'done',
+        reason: 'monthly_cash_ceiling',
+      });
+      expect(await attempts(eligible)).toEqual([]);
+
+      // Exactly enough: the call fits.
+      await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS });
+      const fits = await withTransaction(database.session, async () => await createSession(database.session, 'month-fits'));
+      expect(fits.ok).toBe(true);
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
+    }
+  });
+
+  it('serialises two reservations at the edge of the month: a call holding the last cents makes a transcription wait, then refuses it (slice P1)', async () => {
+    const eligible = await call(90);
+    const other = await database.appRuntimeSession();
+    const worker = repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), other);
+    // Room for the call or the transcription, not both.
+    await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS });
+    await database.session.query('BEGIN');
+    let open = true;
+    try {
+      // The call reserves the last cents, uncommitted.
+      const created = await createSession(database.session, 'month-edge-call');
+      expect(created.ok).toBe(true);
+
+      // Meanwhile a worker, on its own connection, clears the transcription's reservation.
+      const common = { sessionId: eligible, at: policy.insideWindow, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      let settled = false;
+      const begun = withTransaction(other, async () => await beginCallTranscription(worker, common)).finally(() => {
+        settled = true;
+      });
+      // It waits on the monthly lock the call's transaction holds.
+      let waiting = false;
+      for (let attempt = 0; attempt < 200 && !waiting; attempt += 1) {
+        const { rows } = await database.session.query<{ waiting: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                           WHERE NOT l.granted AND l.locktype = 'advisory' AND a.pid <> pg_backend_pid()
+                             AND a.datname = current_database()) AS waiting`,
+        );
+        waiting = rows[0]?.waiting === true;
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(waiting).toBe(true);
+      expect(settled).toBe(false);
+
+      await database.session.query('COMMIT');
+      open = false;
+      // It then reads the committed call and refuses: the month would be passed.
+      expect(await begun).toEqual({ kind: 'done', reason: 'monthly_cash_ceiling' });
+      expect(await attempts(eligible)).toEqual([]);
+    } finally {
+      if (open) await database.session.query('ROLLBACK');
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
     }
   });
 

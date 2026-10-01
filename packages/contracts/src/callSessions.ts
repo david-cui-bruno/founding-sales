@@ -53,6 +53,8 @@ export type CallSessionCreated = z.infer<typeof callSessionCreatedSchema>;
  *     time of day: the next one is at least `CALL_CADENCE.spacingMinutes` from it.
  *   * `telephony_budget_disabled` — the workspace's telephony ceiling is 0 (the default).
  *   * `telephony_budget_exhausted` — this call's reservation would pass today's ceiling.
+ *   * `monthly_cash_ceiling` — this call's reservation would pass the workspace's
+ *     month-to-date cash ceiling (`monthly_cash_ceiling_cents`, slice P1).
  *   * `caller_id_mismatch` — the calling identity is not the caller id the Twilio
  *     configuration names, so Twilio would refuse or misrepresent the call.
  */
@@ -62,6 +64,7 @@ export const CALL_SESSION_REFUSAL_CODES = [
   'call_attempt_too_soon',
   'telephony_budget_disabled',
   'telephony_budget_exhausted',
+  'monthly_cash_ceiling',
   'caller_id_mismatch',
 ] as const;
 export type CallSessionRefusalCode = (typeof CALL_SESSION_REFUSAL_CODES)[number];
@@ -260,6 +263,8 @@ export const TRANSCRIPTION_REFUSAL_CODES = [
   'transcription_off',
   'transcription_unconfigured',
   'transcription_budget_exhausted',
+  // This call's reservation would pass the month-to-date cash ceiling (slice P1).
+  'monthly_cash_ceiling',
   'transcription_not_eligible',
   'transcription_failed',
   'transcript_unavailable',

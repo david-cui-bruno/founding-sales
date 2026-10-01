@@ -70,6 +70,38 @@ describe('Settings → Calling & calendar (slice S1)', () => {
     });
   });
 
+  it('answers the month’s cash ceiling only when asked, $25 by default, and lets only an admin change it within $0–$50 (slice P1)', async () => {
+    expect((await get('/settings/integrations', adminToken)).body).not.toHaveProperty('month');
+    const asked = await get('/settings/integrations?include=month', salespersonToken);
+    expect(asked.status, asked.text).toBe(200);
+    expect(asked.body['month']).toEqual({ ceilingCents: 2_500, spentMonthCents: 0 });
+
+    const refused = await update(salespersonToken, 'monthly_cash_ceiling_cents', { cents: 1_000 });
+    expect(refused.text).toContain('admin_only');
+    for (const value of [{ cents: 5_001 }, { cents: -1 }, { cents: 12.5 }, { dollars: 10 }]) {
+      const invalid = await update(adminToken, 'monthly_cash_ceiling_cents', value);
+      expect(invalid.status, JSON.stringify(value)).toBeGreaterThanOrEqual(400);
+      expect(invalid.text).toContain('invalid_value');
+    }
+    const saved = await update(adminToken, 'monthly_cash_ceiling_cents', { cents: 4_000 });
+    expect(saved.status, saved.text).toBe(200);
+    expect((await get('/settings/integrations?include=transcription&include=month', adminToken)).body['month']).toEqual({
+      ceilingCents: 4_000,
+      spentMonthCents: 0,
+    });
+    // Not in the settings snapshot, for the reason none of the integration keys is.
+    const snapshot = await get('/settings', adminToken);
+    expect(snapshot.text).not.toContain('monthly_cash_ceiling_cents');
+    expect((await update(adminToken, 'monthly_cash_ceiling_cents', { cents: 2_500 })).status).toBe(200);
+  });
+
+  it('answers what is still finishing after a switch went off: GET only, two switches and two counts (slice P1)', async () => {
+    const answer = await get('/settings/finishing', salespersonToken);
+    expect(answer.status, answer.text).toBe(200);
+    expect(answer.body).toEqual({ sending: { on: false, finishing: 0 }, research: { on: true, finishing: 0 } });
+    expect((await call(server.origin, 'POST', '/settings/finishing', adminToken, {})).status).toBe(405);
+  });
+
   it('lets any member read and only an admin write: a salesperson is refused admin_only and nothing changes', async () => {
     const refused = await update(salespersonToken, 'calling_provider', { provider: 'twilio' });
     expect(refused.status, refused.text).toBeGreaterThanOrEqual(400);
