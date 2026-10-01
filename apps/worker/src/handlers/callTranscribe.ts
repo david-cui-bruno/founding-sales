@@ -77,13 +77,26 @@ export class CallTranscribeError extends Error {
   }
 }
 
+/** The Twilio recording read's own timeout (`readTranscriptionComposition`), in seconds. */
+const RECORDING_READ_SECONDS = 30;
+/** Room for the chunk's database work on top of the two network waits. */
+const LEASE_MARGIN_SECONDS = 90;
+
+/**
+ * The lease chunk 3 needs: the recording read, the provider's longest call, and room to
+ * spare — at least C2's 240 s (Deepgram's two minutes). Amazon Transcribe's upload, job and
+ * poll (slice C3a) take longer than Deepgram's one request, so its lease is longer.
+ */
+export function callTranscribeLeaseSeconds(provider: TranscriptionProvider): number {
+  return Math.max(240, RECORDING_READ_SECONDS + Math.ceil(provider.maxCallSeconds ?? 120) + LEASE_MARGIN_SECONDS);
+}
+
 export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHandler {
   return {
     kind: 'call.transcribe',
     protection: 'business_uniqueness',
     maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
-    // The recording read plus Deepgram's two minutes, with room to spare.
-    leaseSeconds: options.leaseSeconds ?? 240,
+    leaseSeconds: options.leaseSeconds ?? callTranscribeLeaseSeconds(options.provider),
     chunked: true,
     handle: async (input): Promise<void | JobChunk> => {
       const sessionId = input.job.payload['callSessionId'];
@@ -93,7 +106,7 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       const context = repositoryContext(input.scope, input.session);
       const at = await databaseNow(context);
       const fencing = input.job.fencingToken;
-      const common = { sessionId, at, keyConfigured: true, providerKey: options.provider.providerKey };
+      const common = { sessionId, at, keyConfigured: true, providerKey: options.provider.providerKey, pricing: options.provider.pricing };
       const log = (event: string, fields: Readonly<Record<string, string | number | boolean | null>>): void => {
         options.log?.(event, { workspace_id: input.scope.workspaceId, call_session_id: sessionId, ...fields });
       };

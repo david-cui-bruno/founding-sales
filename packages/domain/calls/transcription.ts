@@ -17,6 +17,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { markCalling, settleAttempt, type ReservationState } from '../research/reservations.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { clearMonthlyCash } from '../settings/cashCeiling.ts';
+import { providerFunding } from '../settings/funding.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import type { TwilioRecordingFetcher } from './twilioRecording.ts';
 import { boundMp3 } from './mp3Bound.ts';
@@ -25,10 +26,13 @@ import { boundMp3 } from './mp3Bound.ts';
  * Call transcription (slice C2, migration 0030).
  *
  * After a connected call of at least `TRANSCRIPTION_MINIMUM_SECONDS` the worker sends its
- * recording to the transcription provider — Deepgram Nova-3, pre-recorded, diarized, with
- * `mip_opt_out=true` — and stores the utterances in `call_transcripts`, one row per call
- * session. The provider sits behind `TranscriptionProvider`, so another one (OpenAI's
- * `gpt-4o-mini-transcribe`) is a second implementation of that port, not a change here.
+ * recording to the transcription provider and stores the utterances in `call_transcripts`,
+ * one row per call session. The provider sits behind `TranscriptionProvider`. Since slice
+ * C3a (1 October 2026) the primary one is Amazon Transcribe with channel identification
+ * (`apps/worker/src/transcription/awsTranscribeClient.ts`), paid from AWS credits;
+ * Deepgram Nova-3, multichannel, stays selectable for comparison. Both label each
+ * utterance by its recording channel (`RECORDING_CHANNEL_ROLES`: 0 you, 1 them), never by
+ * diarization.
  *
  * ## When a call is transcribed
  *
@@ -118,6 +122,32 @@ export type TranscriptionOutcome =
    */
   | { readonly ok: false; readonly kind: 'ambiguous'; readonly code: string };
 
+/**
+ * How a provider prices audio (slice C3a). A provider without one is priced as C2's
+ * Deepgram was: the setting's `unitPriceMicros` for every started minute.
+ */
+export interface TranscriptionPricing {
+  /** Micro-dollars per minute of audio, in place of the setting's; null keeps the setting's. */
+  readonly unitPriceMicros: number | null;
+  /**
+   * How many times one minute of recording is billed: 2 for a provider that may bill each
+   * channel of the stereo recording separately. Folded into the reservation's
+   * `unit_price_micros`, so the reservation and its settlement agree.
+   */
+  readonly billedChannels: number;
+  /**
+   * Billed by the second with this minimum (Amazon Transcribe: 15 s), rather than by the
+   * started minute. Null: by the started minute.
+   */
+  readonly perSecondMinimumSeconds: number | null;
+}
+
+export const PER_MINUTE_PRICING: TranscriptionPricing = Object.freeze({
+  unitPriceMicros: null,
+  billedChannels: 1,
+  perSecondMinimumSeconds: null,
+});
+
 export interface TranscriptionProvider {
   /** `provider_reservations.provider_key` and `provider_ledger.provider_key`, e.g. `deepgram.nova-3`. */
   readonly providerKey: string;
@@ -125,7 +155,22 @@ export interface TranscriptionProvider {
   readonly provider: string;
   /** `call_transcripts.model`, e.g. `nova-3`. */
   readonly model: string;
-  transcribe(input: { readonly audio: Buffer; readonly contentType: 'audio/mpeg' }): Promise<TranscriptionOutcome>;
+  /** Slice C3a. Absent: `PER_MINUTE_PRICING`. */
+  readonly pricing?: TranscriptionPricing | undefined;
+  /**
+   * The longest one `transcribe` may take, in seconds, every wait and timeout included
+   * (slice C3a). The job's lease is sized from it. Absent: C2's 120.
+   */
+  readonly maxCallSeconds?: number | undefined;
+  /**
+   * `subject` names the call and the paid attempt, so a provider that stores anything (a
+   * job name, an object key) can make it unique to this attempt (slice C3a).
+   */
+  transcribe(input: {
+    readonly audio: Buffer;
+    readonly contentType: 'audio/mpeg';
+    readonly subject?: { readonly sessionId: string; readonly attempt: number } | undefined;
+  }): Promise<TranscriptionOutcome>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +185,36 @@ export function transcriptionMinutes(seconds: number): number {
 /** Cents `minutes` cost at `unitPriceMicros` a minute, rounded up. */
 export function transcriptionCents(minutes: number, unitPriceMicros: number): number {
   return Math.ceil((Math.trunc(minutes) * Math.trunc(unitPriceMicros)) / 10_000);
+}
+
+/** The reservation's price per minute of recording: the provider's or the setting's, times its billed channels. */
+export function reservationUnitPriceMicros(pricing: TranscriptionPricing, settingMicros: number): number {
+  const base = pricing.unitPriceMicros ?? settingMicros;
+  return Math.min(10_000_000, Math.trunc(base) * Math.max(1, Math.trunc(pricing.billedChannels)));
+}
+
+/**
+ * What one attempt settles at, from the duration the provider (or the audio sent to it)
+ * measured, never past what was cleared: the audio was cut to the reserved minutes, so a
+ * longer measure is rounding, not more audio.
+ *
+ *   * by the minute (C2): the started minutes, at least one, at most the reservation's;
+ *   * by the second (Amazon Transcribe, C3a): `ceil(seconds)`, at least the provider's
+ *     minimum (15 s), at most the reserved minutes' seconds, at `unitPriceMicros / 60` a
+ *     second, rounded up to the cent.
+ */
+export function transcriptionSettledCents(
+  pricing: TranscriptionPricing,
+  durationSeconds: number,
+  reservation: { readonly maxUnits: number; readonly unitPriceMicros: number },
+): number {
+  const maxMinutes = Math.max(1, Math.trunc(reservation.maxUnits));
+  if (pricing.perSecondMinimumSeconds === null) {
+    return transcriptionCents(Math.min(transcriptionMinutes(durationSeconds), maxMinutes), reservation.unitPriceMicros);
+  }
+  const measured = Math.ceil(Math.max(0, Number.isFinite(durationSeconds) ? durationSeconds : maxMinutes * 60));
+  const seconds = Math.min(maxMinutes * 60, Math.max(Math.trunc(pricing.perSecondMinimumSeconds), measured));
+  return Math.ceil((seconds * Math.trunc(reservation.unitPriceMicros)) / 600_000);
 }
 
 /**
@@ -413,7 +488,13 @@ type Clearance =
  */
 async function clearAttempt(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<Clearance> {
   const setting = await readCallTranscription(context);
   if (!setting.enabled) return { ok: false, reason: 'transcription_off' };
@@ -426,14 +507,20 @@ async function clearAttempt(
   const businessDate = localDate(input.at, zone);
   // Priced with the margin; these minutes are the bound the audio is cut to before upload.
   const minutes = transcriptionMinutes(facts.recordingSeconds + TRANSCRIPTION_DURATION_MARGIN_SECONDS);
-  const cents = transcriptionCents(minutes, setting.unitPriceMicros);
+  // The provider's price where it has one (Amazon Transcribe, slice C3a), else the setting's.
+  const unitPriceMicros = reservationUnitPriceMicros(input.pricing ?? PER_MINUTE_PRICING, setting.unitPriceMicros);
+  const cents = transcriptionCents(minutes, unitPriceMicros);
   if (setting.dailyCeilingCents <= 0) return { ok: false, reason: 'transcription_budget_exhausted' };
   const spent = await transcriptionSpentCents(context, businessDate);
   if (spent + cents > setting.dailyCeilingCents) return { ok: false, reason: 'transcription_budget_exhausted' };
   // And the month's cash ceiling (slice P1, invariant I2), under the workspace's monthly
   // lock taken inside the daily one; the caller inserts the reservation in this transaction.
-  if (!(await clearMonthlyCash(context, { at: input.at, zone, cents }))) return { ok: false, reason: 'monthly_cash_ceiling' };
-  return { ok: true, cents, minutes, unitPriceMicros: setting.unitPriceMicros, businessDate, zone };
+  // A credit-funded provider (Amazon Transcribe, slice C3a) is not cash: its cents count
+  // against the day's transcription cap above and never against the month's cash.
+  if (providerFunding(input.providerKey) === 'cash' && !(await clearMonthlyCash(context, { at: input.at, zone, cents }))) {
+    return { ok: false, reason: 'monthly_cash_ceiling' };
+  }
+  return { ok: true, cents, minutes, unitPriceMicros, businessDate, zone };
 }
 
 async function reserve(
@@ -476,7 +563,13 @@ export type BeginOutcome =
 /** Chunk 1: the conditions, the ceiling, and attempt 1's reservation. No provider is asked anything. */
 export async function beginCallTranscription(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean; readonly providerKey: string },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<BeginOutcome> {
   await lockTranscription(context, input.sessionId);
   if (await transcribed(context, input.sessionId)) return { kind: 'done', reason: 'already_transcribed' };
@@ -505,7 +598,13 @@ export type CallingOutcome =
  */
 export async function ensureTranscriptionCalling(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean; readonly providerKey: string },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<CallingOutcome> {
   await lockTranscription(context, input.sessionId);
   // The budget lock before any settlement below: an estimate takes the monthly spend lock,
@@ -627,7 +726,11 @@ export async function finishCallTranscription(
 
   let outcome: TranscriptionOutcome;
   try {
-    outcome = await input.provider.transcribe({ audio: bounded.bytes, contentType: recording.contentType });
+    outcome = await input.provider.transcribe({
+      audio: bounded.bytes,
+      contentType: recording.contentType,
+      subject: { sessionId: input.sessionId, attempt: input.attempt },
+    });
   } catch {
     // A port that throws is a port whose call may have gone out. Never the error's text:
     // it is the provider adapter's, and the adapter is the one place a key could be.
@@ -662,9 +765,9 @@ export async function finishCallTranscription(
     ],
   );
   // Settled at the provider's duration, never past the minutes that were cleared: the audio
-  // was cut to them, so a longer report is the provider's rounding, not more audio.
-  const minutes = Math.min(transcriptionMinutes(outcome.durationSeconds), Math.max(1, reservation.maxUnits));
-  const cents = transcriptionCents(minutes, reservation.unitPriceMicros);
+  // was cut to them, so a longer report is the provider's rounding, not more audio. By the
+  // started minute, or by the second for a provider that bills so (slice C3a).
+  const cents = transcriptionSettledCents(input.provider.pricing ?? PER_MINUTE_PRICING, outcome.durationSeconds, reservation);
   const settled = await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents } });
   return { kind: 'transcribed', settledCents: settled?.recordedCents ?? 0, utterances: utterances.length };
 }
