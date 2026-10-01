@@ -1,4 +1,5 @@
 import {
+  finishingResponseSchema,
   researchFirmResponseSchema,
   researchRunResultSchema,
   researchAddLinkResultSchema,
@@ -11,6 +12,7 @@ import {
 } from '../renderer/researchContract.ts';
 import type { AuthedClient } from './authedClient.ts';
 import type { ApiOutcome } from './apiClient.ts';
+import { FINISHING_READ_PATH } from './settingsBridge.ts';
 
 /**
  * Research's half of the bridge, in the main process (lane R; specification 14.2).
@@ -77,6 +79,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
   let spend: ResearchState['spend'] = null;
   let notice: string | null = null;
   let role: ResearchState['role'] = null;
+  let finishing: ResearchState['finishing'] = null;
 
   const snapshot = async (): Promise<ResearchState> => {
     const session = await deps.session.state();
@@ -88,6 +91,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
       role = seen;
       settings = null;
       worstCaseRunCents = null;
+      finishing = null;
     }
     return researchStateSchema.parse({
       firm,
@@ -97,6 +101,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
       notice,
       mayMutate: session.mayMutate,
       role,
+      finishing,
     });
   };
 
@@ -141,12 +146,17 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
     worstCaseRunCents = answer.value.worstCaseRunCents;
     spend = answer.value.spend;
     notice = null;
+    // Slice P1: "Research is off. 1 model call already started is finishing." A failed read
+    // (an API from before P1) is no line, never a notice.
+    const read = await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value));
+    finishing = read.ok ? read.value.research : null;
     return true;
   };
 
   return {
     async forget() {
       firm = null;
+      finishing = null;
       settings = null;
       worstCaseRunCents = null;
       spend = null;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
+import { outboundStatusAnswer } from './support/outboundStatus.ts';
 
 /** The bridge half of Settings → Calling & calendar (slice S1). Fictional data only. */
 
@@ -93,7 +94,8 @@ describe('the transcription half of the integrations read', () => {
     };
     const admin = scripted({ '/settings/integrations': { status: 200, body: withTranscription } });
     const state = await createAdminBridge({ api: admin.api, session: session('admin') }).state();
-    expect(admin.calls.find(call => call.path === '/settings/integrations')?.search).toBe('?include=transcription');
+    // Slice P1 asks for the month by name beside it.
+    expect(admin.calls.find(call => call.path === '/settings/integrations')?.search).toBe('?include=transcription&include=month');
     expect(state.integrations?.transcription).toEqual(withTranscription.transcription);
   });
 
@@ -107,5 +109,38 @@ describe('the transcription half of the integrations read', () => {
     calls.length = 0;
     await bridge.saveIntegration({ settingKey: 'call_transcription', value: { enabled: true, dailyCeilingCents: 100, unitPriceMicros: 4_300 } });
     expect(calls[0]?.body).toMatchObject({ settingKey: 'call_transcription', value: { enabled: true, dailyCeilingCents: 100 } });
+  });
+});
+
+// Slice P1: the month's cash limit, asked for by name; and what is still finishing.
+describe('the month and finishing halves of the administration reads', () => {
+  it('asks for the month by name and keeps it, and saves the limit through /settings/update', async () => {
+    const withMonth = { ...INTEGRATIONS, month: { ceilingCents: 2_500, spentMonthCents: 340 } };
+    const { api, calls } = scripted({
+      '/settings/integrations': { status: 200, body: withMonth },
+      '/settings/update': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+    });
+    const bridge = createAdminBridge({ api, session: session('admin') });
+    const state = await bridge.state();
+    expect(state.integrations?.month).toEqual({ ceilingCents: 2_500, spentMonthCents: 340 });
+    calls.length = 0;
+    await bridge.saveIntegration({ settingKey: 'monthly_cash_ceiling_cents', value: { cents: 4_000 } });
+    expect(calls[0]?.body).toMatchObject({ settingKey: 'monthly_cash_ceiling_cents', value: { cents: 4_000 } });
+  });
+
+  it('reads /settings/finishing after the sending status, and keeps no line when it is not answered', async () => {
+    const status = outboundStatusAnswer();
+    const answered = scripted({
+      '/outbound/status': { status: 200, body: status },
+      '/settings/finishing': { status: 200, body: { sending: { on: false, finishing: 1 }, research: { on: true, finishing: 0 } } },
+    });
+    const state = await createAdminBridge({ api: answered.api, session: session('admin') }).state();
+    expect(answered.calls.filter(call => call.path === '/settings/finishing').map(call => call.method)).toEqual(['GET']);
+    expect(state.sendingAdmin?.finishing).toEqual({ on: false, finishing: 1 });
+
+    const older = scripted({ '/outbound/status': { status: 200, body: status } });
+    const without = await createAdminBridge({ api: older.api, session: session('admin') }).state();
+    expect(without.sendingAdmin).not.toBeNull();
+    expect(without.sendingAdmin?.finishing).toBeNull();
   });
 });

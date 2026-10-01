@@ -5,6 +5,7 @@ import {
   callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
+  finishingResponseSchema,
   integrationsSettingsResponseSchema,
   outboundStatusResponseSchema,
   pipelineStagesResponseSchema,
@@ -78,12 +79,20 @@ export const POSTURE_API_PATHS = {
 export const SETTINGS_READ_PATH = '/settings?include=postal_address';
 
 /**
- * The call-to-booking settings, with slice C2's transcription asked for by name: the API
+ * The call-to-booking settings, with slice C2's transcription and slice P1's month asked
+ * for by name: the API
  * leaves it out unless asked, because a desktop built with slice S1 parses this answer
  * with its own strict schema. An API from before C2 ignores the parameter, and the
  * section then has no transcription row.
  */
-export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription';
+export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription&include=month';
+
+/**
+ * Slice P1's read of what is still finishing after a switch went off. A path of its own,
+ * so no answer an installed build parses strictly gains a field; an API from before P1
+ * answers 404 and the sections show no finishing line.
+ */
+export const FINISHING_READ_PATH = '/settings/finishing';
 
 /*
  * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
@@ -306,7 +315,12 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
               automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
             },
       ramps: collected,
+      finishing: null,
     };
+    // Slice P1: "Sending is off. 1 message already submitted is finishing." A failed read is
+    // no line, never a notice: the section above already read.
+    const finishing = await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value));
+    if (finishing.ok) sendingAdmin = { ...sendingAdmin, finishing: finishing.value.sending };
     sendingReadError = null;
   };
 

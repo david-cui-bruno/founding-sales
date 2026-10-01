@@ -614,7 +614,8 @@ describe('the role an open carries (lane g69)', () => {
     const promoted = await admin.state();
     expect(promoted.role).toBe('admin');
     expect(asked).toContain('/outbound/status');
-    expect(promoted.sendingAdmin).toEqual({ domain: null, ramps: [] });
+    // `finishing` null: this fixture's API does not answer slice P1's read.
+    expect(promoted.sendingAdmin).toEqual({ domain: null, ramps: [], finishing: null });
   });
 
   it('applies a demotion the same way, and leaves the role alone when the renewal did not change it', async () => {

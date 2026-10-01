@@ -2,7 +2,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JSX } from 'react';
-import { adminViewOf } from '../src/renderer/settingsView.ts';
+import { adminViewOf, finishingSentence } from '../src/renderer/settingsView.ts';
 import type { AdminState } from '../src/renderer/settingsContract.ts';
 import { SendingSection } from '../src/renderer/settings/SendingSection.tsx';
 import { ResearchSettingsSection } from '../src/renderer/settings/ResearchSettingsSection.tsx';
@@ -179,5 +179,54 @@ describe('the research settings form', () => {
     await waitFor(() => {
       expect(field('monthlyCostCeilingCents').value).toBe('9000');
     });
+  });
+});
+
+// Slice P1, invariant I1: a switch is off, and what was already submitted is finishing.
+describe('the finishing line', () => {
+  it('says what is finishing only while the switch is off, in the singular and the plural', () => {
+    expect(finishingSentence('sending', { on: false, finishing: 1 })).toBe('Sending is off. 1 message already submitted is finishing.');
+    expect(finishingSentence('sending', { on: false, finishing: 2 })).toBe('Sending is off. 2 messages already submitted are finishing.');
+    expect(finishingSentence('research', { on: false, finishing: 1 })).toBe('Research is off. 1 model call already started is finishing.');
+    expect(finishingSentence('sending', { on: true, finishing: 3 })).toBeNull();
+    expect(finishingSentence('sending', { on: false, finishing: 0 })).toBeNull();
+    expect(finishingSentence('research', null)).toBeNull();
+    expect(finishingSentence('research', undefined)).toBeNull();
+  });
+
+  it('shows it in Settings → Sending', () => {
+    render(sending({ ...recorded, finishing: { on: false, finishing: 1 } }));
+    expect(screen.getByTestId('sending-finishing').textContent).toBe('Sending is off. 1 message already submitted is finishing.');
+    cleanup();
+    render(sending({ ...recorded, finishing: { on: true, finishing: 1 } }));
+    expect(screen.queryByTestId('sending-finishing')).toBeNull();
+    cleanup();
+    render(sending(recorded));
+    expect(screen.queryByTestId('sending-finishing')).toBeNull();
+  });
+
+  it('shows it in Settings → Research', () => {
+    const state: ResearchState = {
+      firm: null,
+      settings: {
+        enabled: false,
+        dailyFirmCeiling: 25,
+        dailyCostCeilingCents: 300,
+        monthlyCostCeilingCents: 5000,
+        maxPagesPerFirm: 8,
+        maxPageBytes: 1_000_000,
+        modelName: 'claude-haiku-4-5',
+        updatedByUserId: null,
+        updatedAt: null,
+      },
+      worstCaseRunCents: 4,
+      spend: null,
+      notice: null,
+      mayMutate: true,
+      role: 'admin',
+      finishing: { on: false, finishing: 2 },
+    };
+    render(<ResearchSettingsSection state={state} saving={false} onSave={noop} />);
+    expect(screen.getByTestId('research-finishing').textContent).toBe('Research is off. 2 model calls already started are finishing.');
   });
 });

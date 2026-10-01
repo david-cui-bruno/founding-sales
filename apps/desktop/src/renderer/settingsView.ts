@@ -55,9 +55,29 @@ export const SENDING_CHECK_NAMES = [
 ] as const;
 export type SendingCheckName = (typeof SENDING_CHECK_NAMES)[number];
 
+/**
+ * Slice P1's "finishing" line: a switch is off, and provider requests already submitted
+ * before it went off are still finishing. Null while the switch is on (work in flight is
+ * then simply work) and when nothing is finishing. Nothing is recalled or reversed, and
+ * the sentence promises neither.
+ */
+export function finishingSentence(
+  kind: 'sending' | 'research',
+  finishing: { readonly on: boolean; readonly finishing: number } | null | undefined,
+): string | null {
+  if (finishing == null || finishing.on || finishing.finishing <= 0) return null;
+  const count = finishing.finishing;
+  const one = count === 1;
+  return kind === 'sending'
+    ? `Sending is off. ${String(count)} ${one ? 'message' : 'messages'} already submitted ${one ? 'is' : 'are'} finishing.`
+    : `Research is off. ${String(count)} ${one ? 'model call' : 'model calls'} already started ${one ? 'is' : 'are'} finishing.`;
+}
+
 export interface SendingAdminSectionView {
   /** The checklist as one sentence, naming what is still missing. */
   readonly domainLine: string;
+  /** Slice P1: "Sending is off. 1 message already submitted is finishing.", or null. */
+  readonly finishingLine: string | null;
   readonly domain: string | null;
   /**
    * The checklist as the server has it recorded, which is what the form starts from.
@@ -483,6 +503,7 @@ function sendingAdminSection(state: AdminState, reason: string | null): SendingA
 
   return {
     domainLine,
+    finishingLine: finishingSentence('sending', posture.finishing),
     domain: domain?.domain ?? null,
     checks: {
       spfPass: domain?.spfPass === true,

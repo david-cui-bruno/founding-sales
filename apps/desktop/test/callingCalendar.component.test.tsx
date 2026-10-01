@@ -7,6 +7,7 @@ import {
   CALLING_NEEDS_BUDGET,
   CALLING_NEEDS_SETUP,
   CallingCalendarSection,
+  MONTH_RANGE,
   TRANSCRIPTION_BUDGET_RANGE,
   TRANSCRIPTION_NEEDS_BUDGET,
   TRANSCRIPTION_NEEDS_KEY,
@@ -258,5 +259,34 @@ describe('Transcribe calls', () => {
     fireEvent.change(screen.getByTestId('transcription-budget-dollars'), { target: { value: '1.50' } });
     fireEvent.click(screen.getByTestId('transcription-budget-save'));
     expect(onSave).toHaveBeenCalledWith({ settingKey: 'call_transcription', value: { enabled: false, dailyCeilingCents: 150, unitPriceMicros: 4_300 } });
+  });
+});
+
+// Slice P1, invariant I2: the month's cash limit, and what the month has cost against it.
+describe('the monthly spending limit', () => {
+  it('is absent when the server does not answer it', () => {
+    show(stateOf());
+    expect(screen.queryByTestId('row-month')).toBeNull();
+  });
+
+  it('shows "this month: $x of $y" and saves the limit in cents', () => {
+    const { onSave } = show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 340 } }) }));
+    expect(screen.getByTestId('month-detail').textContent).toBe(
+      'This month: $3.40 of $25.00. Calls and transcription stop when the limit is reached.',
+    );
+    const field = screen.getByTestId('month-dollars') as HTMLInputElement;
+    expect(field.value).toBe('25.00');
+    expect((screen.getByTestId('month-save') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(field, { target: { value: '40' } });
+    fireEvent.click(screen.getByTestId('month-save'));
+    expect(onSave).toHaveBeenCalledWith({ settingKey: 'monthly_cash_ceiling_cents', value: { cents: 4_000 } });
+  });
+
+  it('refuses an amount over $50 before it is sent', () => {
+    const { onSave } = show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 0 } }) }));
+    fireEvent.change(screen.getByTestId('month-dollars'), { target: { value: '50.01' } });
+    expect(screen.getByTestId('month-issue').textContent).toBe(MONTH_RANGE);
+    expect((screen.getByTestId('month-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
