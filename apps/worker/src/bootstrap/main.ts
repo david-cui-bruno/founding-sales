@@ -32,7 +32,7 @@ import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/tele
 import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
 import { callTranscribeJobHandler, heldTranscriptionSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
-import { readTranscriptionProvider } from '../transcription/deepgramClient.ts';
+import { readSelectedTranscriptionProvider } from '../transcription/selectProvider.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -335,7 +335,8 @@ export function readTranscriptionComposition(
   environment: Readonly<Record<string, string | undefined>>,
   log?: CallTranscribeOptions['log'],
 ): { readonly options: CallTranscribeOptions | null; readonly problem: string | null } {
-  const provider = readTranscriptionProvider(environment);
+  // Slice C3a: Amazon Transcribe or Deepgram, as `FSS_TRANSCRIPTION_PROVIDER` says.
+  const provider = readSelectedTranscriptionProvider(environment, log === undefined ? {} : { aws: { log } });
   if (provider.provider === null) return { options: null, problem: `transcription:${provider.problem ?? 'absent'}` };
   const twilio = readTwilioRecordingCredentials(environment);
   if (twilio.credentials === null) return { options: null, problem: `twilio:${twilio.problem ?? 'absent'}` };

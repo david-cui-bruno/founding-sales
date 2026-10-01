@@ -153,6 +153,26 @@ variable "journal_bucket_arn" {
   type        = string
 }
 
+variable "call_audio_bucket_arn" {
+  description = "The call-audio bucket's ARN (infra/modules/recordings, slice C3a). The worker task role may put, get and delete objects under calls/ and nothing else in it."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.call_audio_bucket_arn))
+    error_message = "call_audio_bucket_arn is an S3 bucket ARN."
+  }
+}
+
+variable "aws_account_id" {
+  description = "The account the Transcribe jobs run in: the worker task role's Get and Delete name them by ARN (slice C3a)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "An AWS account id is twelve digits."
+  }
+}
+
 variable "journal_kms_key_arn" {
   description = "Customer key protecting journal objects."
   type        = string

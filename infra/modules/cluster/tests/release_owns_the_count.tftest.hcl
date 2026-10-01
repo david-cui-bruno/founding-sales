@@ -62,6 +62,8 @@ variables {
   app_runtime_database_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/app-runtime-database-cccccc"
   migration_database_secret_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/migration-database-bbbbbb"
   journal_bucket_arn              = "arn:aws:s3:::fss-test-suppression-journal-123456789012"
+  call_audio_bucket_arn           = "arn:aws:s3:::fss-test-call-audio-123456789012"
+  aws_account_id                  = "123456789012"
   journal_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555551"
   envelope_kms_key_arn            = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555552"
   secrets_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"

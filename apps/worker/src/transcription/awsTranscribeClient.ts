@@ -48,6 +48,19 @@ import type { TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider 
  *   6. the object and the job deleted, whatever happened (best effort, logged; the
  *      bucket's one-day expiry is the backstop).
  *
+ * The pause boundary (`docs/greenfield/calling.md`, "What the pause guarantees") is the
+ * final settings read immediately before `StartTranscriptionJob`: `finalCheck`, after the
+ * upload. A turn-off read there deletes the object and sends nothing (`withdrawn`).
+ *
+ * ## Settled at the reservation
+ *
+ * `GetTranscriptionJob` reports no media duration, and the transcript none either, so
+ * nothing Transcribe answers says what it billed. The attempt is settled at its
+ * reservation — the started minutes of the bounded audio at $0.006 a minute, at most a
+ * minute's $0.006 above the per-second bill — as the paid-call pattern settles every answer
+ * that reports no usage. The stored transcript's duration is the uploaded audio's, from its
+ * MP3 frames.
+ *
  * ## Failure classes (the paid-call pattern)
  *
  *   * `refused` — nothing was transcribed and nothing billed: the upload failed (no job
@@ -383,6 +396,14 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
         return { ok: false, kind: 'refused', code: 'aws_transcribe_upload_failed' };
       }
 
+      // The pause boundary: the final settings read, immediately before the request. The
+      // upload above is a network round trip; a turn-off during it stops the job here.
+      const withdrawn = input.finalCheck === undefined ? null : await input.finalCheck();
+      if (withdrawn !== null) {
+        await deleteObject(key);
+        return { ok: false, kind: 'withdrawn', reason: withdrawn };
+      }
+
       // 3. The job. From here on Transcribe may have accepted it.
       const deadline = now() + timeoutMs;
       try {
@@ -458,12 +479,11 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
       // 6. Nothing kept: the audio and the job (with its transcript) deleted.
       await cleanUp();
       if (utterances === null) return { ok: false, kind: 'ambiguous', code: 'aws_transcribe_transcript_unreadable' };
-      // Transcribe bills the media it was given, and that is the audio uploaded: its length
-      // from its own frames is the job's media duration.
-      const measured = boundMp3(input.audio, Number.POSITIVE_INFINITY)?.seconds;
-      // Unmeasurable audio is not sent (`finishCallTranscription` bounds it first); if it ever
-      // were, an infinite duration settles at the reservation.
-      return { ok: true, durationSeconds: measured ?? Number.POSITIVE_INFINITY, language: 'en', utterances };
+      // The transcript's duration is the uploaded audio's, from its own frames. The job reports
+      // no media duration, so nothing reports what was billed: the attempt settles at its
+      // reservation (`billedSeconds: null`), which priced exactly this audio's bound.
+      const measured = boundMp3(input.audio, Number.POSITIVE_INFINITY)?.seconds ?? 0;
+      return { ok: true, durationSeconds: measured, billedSeconds: null, language: 'en', utterances };
     },
   };
 }

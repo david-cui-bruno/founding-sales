@@ -82,6 +82,37 @@ describe('the Transcript disclosure', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('names the legs of an Amazon Transcribe transcript "You" and "Them", by channel (slice C3a)', async () => {
+    render(
+      <CallHistory
+        firmId={FIRM_ID}
+        ports={{
+          history: async () => await Promise.resolve({ calls: [call()] }),
+          recording: async () => await Promise.resolve({ recording: null, reason: null }),
+          transcript: async () =>
+            await Promise.resolve({
+              transcript: {
+                ...transcript([
+                  // The prospect spoke first: the channel, not the order, says who.
+                  { speaker: 1, start: 0, end: 1, text: 'Example Law, good morning.' },
+                  { speaker: 0, start: 2, end: 3, text: 'Hi, it is David from Callie.' },
+                ]),
+                provider: 'aws_transcribe',
+                model: 'standard',
+              },
+              reason: null,
+            }),
+        }}
+      />,
+    );
+    const details = (await screen.findByTestId('call-transcript')) as HTMLDetailsElement;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('call-transcript-speaker').map(node => node.textContent)).toEqual(['Them', 'You']);
+    });
+  });
+
   it('numbers three speakers too', async () => {
     render(
       <CallHistory

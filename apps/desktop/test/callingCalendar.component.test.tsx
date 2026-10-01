@@ -303,6 +303,21 @@ describe('the monthly spending limit', () => {
     expect(onSave).toHaveBeenCalledWith({ settingKey: 'monthly_cash_ceiling_cents', value: { cents: 4_000 } });
   });
 
+  it('shows the month’s credit-funded cost on its own line, apart from the cash (slice C3a)', () => {
+    show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 340, creditsMonthCents: 12 } }) }));
+    expect(screen.getByTestId('month-detail').textContent).toBe(
+      'This month: $3.40 of $25.00. Calls, transcription, research and reply reading stop when the limit is reached.',
+    );
+    expect(screen.getByTestId('month-credits').textContent).toBe(
+      'Credits this month: $0.12. Transcription paid from AWS credits is not counted against the limit.',
+    );
+  });
+
+  it('shows no credits line for a server that does not answer it', () => {
+    show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 340 } }) }));
+    expect(screen.queryByTestId('month-credits')).toBeNull();
+  });
+
   it('refuses an amount over $50 before it is sent', () => {
     const { onSave } = show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 0 } }) }));
     fireEvent.change(screen.getByTestId('month-dollars'), { target: { value: '50.01' } });

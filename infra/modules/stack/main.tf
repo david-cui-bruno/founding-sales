@@ -184,6 +184,18 @@ module "journal" {
   tags = local.tags
 }
 
+# Slice C3a: the private bucket a call's recording waits in, for one Transcribe job,
+# for at most a day.
+module "recordings" {
+  source = "../recordings"
+
+  name_prefix    = var.name_prefix
+  aws_account_id = var.aws_account_id
+  force_destroy  = var.destroyable
+
+  tags = local.tags
+}
+
 module "database" {
   source = "../database"
 
@@ -254,10 +266,12 @@ module "cluster" {
   app_runtime_database_secret_arn = module.secrets.app_runtime_database_secret_arn
   migration_database_secret_arn   = module.secrets.migration_database_secret_arn
 
-  journal_bucket_arn   = module.journal.bucket_arn
-  journal_kms_key_arn  = module.journal.kms_key_arn
-  envelope_kms_key_arn = module.secrets.envelope_kms_key_arn
-  secrets_kms_key_arn  = module.secrets.secrets_kms_key_arn
+  journal_bucket_arn    = module.journal.bucket_arn
+  call_audio_bucket_arn = module.recordings.bucket_arn
+  aws_account_id        = var.aws_account_id
+  journal_kms_key_arn   = module.journal.kms_key_arn
+  envelope_kms_key_arn  = module.secrets.envelope_kms_key_arn
+  secrets_kms_key_arn   = module.secrets.secrets_kms_key_arn
 
   # Lane g81: the reply classifier's key reaches the worker in production only. A
   # rehearsal's entry holds a fixture and the classifier has no recorded seam, so a
@@ -276,6 +290,10 @@ module "cluster" {
   # environment and ignores a variable it does not read.
   worker_environment = {
     FSS_WORKER_CONCURRENCY = tostring(var.worker_concurrency)
+    # Slice C3a: Amazon Transcribe is the transcription engine, its audio staged in the
+    # call-audio bucket. No secret: the worker task role is the credential.
+    FSS_TRANSCRIPTION_PROVIDER = "aws_transcribe"
+    FSS_CALL_AUDIO_BUCKET      = module.recordings.bucket_name
   }
 
   environment = {

@@ -106,11 +106,24 @@ const MAX_PRICED_MINUTES = 240;
 export type TranscriptionOutcome =
   | {
       readonly ok: true;
-      /** The audio's length as the provider measured it, in seconds. What is settled. */
+      /** The audio's length as the provider measured it, in seconds. Stored with the transcript. */
       readonly durationSeconds: number;
+      /**
+       * The duration the provider's answer reports billing, when it differs from
+       * `durationSeconds` (slice C3a). Absent: `durationSeconds` is what is settled. Null:
+       * the answer reports none (Amazon Transcribe's job carries no media duration), so the
+       * attempt is settled at its reservation — never at a computed figure.
+       */
+      readonly billedSeconds?: number | null | undefined;
       readonly language: string;
       readonly utterances: readonly CallTranscriptUtterance[];
     }
+  /**
+   * The final settings read, immediately before the request (slice C3a: a provider with
+   * work before its request, as Amazon Transcribe's upload is, asks `finalCheck` after it),
+   * said transcription is off: nothing was sent, nothing billed.
+   */
+  | { readonly ok: false; readonly kind: 'withdrawn'; readonly reason: TranscriptionRefusalCode }
   /**
    * The provider answered and refused (an HTTP 4xx): the request was not processed, so
    * nothing was billed. `code` is a word of ours (`deepgram_http_401`), never a body.
@@ -170,6 +183,13 @@ export interface TranscriptionProvider {
     readonly audio: Buffer;
     readonly contentType: 'audio/mpeg';
     readonly subject?: { readonly sessionId: string; readonly attempt: number } | undefined;
+    /**
+     * The pause boundary (slice P1, `docs/greenfield/calling.md`, "What the pause
+     * guarantees"): the final settings read. A provider that does anything slow before its
+     * paid request calls this immediately before the request, and on a refusal sends
+     * nothing and answers `withdrawn` with it. Null: still authorized.
+     */
+    readonly finalCheck?: (() => Promise<TranscriptionRefusalCode | null>) | undefined;
   }): Promise<TranscriptionOutcome>;
 }
 
@@ -730,6 +750,8 @@ export async function finishCallTranscription(
       audio: bounded.bytes,
       contentType: recording.contentType,
       subject: { sessionId: input.sessionId, attempt: input.attempt },
+      // Read again where the provider's request actually leaves (after an upload, say).
+      finalCheck: async () => await stillAuthorized(context, true),
     });
   } catch {
     // A port that throws is a port whose call may have gone out. Never the error's text:
@@ -738,6 +760,10 @@ export async function finishCallTranscription(
   }
 
   if (!outcome.ok) {
+    if (outcome.kind === 'withdrawn') {
+      await releaseNotCalled();
+      return { kind: 'done', reason: outcome.reason };
+    }
     if (outcome.kind === 'refused') {
       await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
       return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
@@ -767,7 +793,10 @@ export async function finishCallTranscription(
   // Settled at the provider's duration, never past the minutes that were cleared: the audio
   // was cut to them, so a longer report is the provider's rounding, not more audio. By the
   // started minute, or by the second for a provider that bills so (slice C3a).
-  const cents = transcriptionSettledCents(input.provider.pricing ?? PER_MINUTE_PRICING, outcome.durationSeconds, reservation);
+  // An answer that reports no billed duration is settled at the reservation (slice C3a).
+  const billed = outcome.billedSeconds === undefined ? outcome.durationSeconds : outcome.billedSeconds;
+  const cents =
+    billed === null ? reservation.cents : transcriptionSettledCents(input.provider.pricing ?? PER_MINUTE_PRICING, billed, reservation);
   const settled = await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents } });
   return { kind: 'transcribed', settledCents: settled?.recordedCents ?? 0, utterances: utterances.length };
 }

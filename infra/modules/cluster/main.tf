@@ -183,6 +183,12 @@ locals {
 
   journal_object_arn = "${var.journal_bucket_arn}/*"
 
+  # Slice C3a: the call audio the worker hands Amazon Transcribe, under one prefix
+  # (`callAudioObjectKey` in apps/worker/src/transcription/awsTranscribeClient.ts), and the
+  # jobs it starts, named `<name_prefix>-<session>-a<attempt>` (`transcriptionJobName`).
+  call_audio_object_arn      = "${var.call_audio_bucket_arn}/calls/*"
+  transcription_job_arn_glob = "arn:aws:transcribe:${var.aws_region}:${var.aws_account_id}:transcription-job/${var.name_prefix}-*"
+
   ecs_assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -474,6 +480,38 @@ resource "aws_iam_role_policy" "worker_task" {
         Condition = {
           StringEquals = { "cloudwatch:namespace" = var.metric_namespace }
         }
+      },
+      {
+        # Slice C3a. One call's recording, put for Transcribe, read by Transcribe with
+        # this role's permissions (it reads a job's media as the caller), and deleted
+        # when the job ends. Objects under calls/ only; no list, no bucket action.
+        Sid      = "StageCallAudioForTranscription"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = [local.call_audio_object_arn]
+      },
+      {
+        # StartTranscriptionJob has no resource type in the service authorization
+        # reference (it is authorized against "*"). Its output condition keys narrow it
+        # instead: a job naming an output bucket or key is refused, so every job's
+        # transcript is the service-managed one the worker reads once and deletes.
+        Sid      = "StartTranscriptionJobsWithServiceManagedOutput"
+        Effect   = "Allow"
+        Action   = ["transcribe:StartTranscriptionJob"]
+        Resource = ["*"]
+        Condition = {
+          Null = {
+            "transcribe:OutputBucketName" = "true"
+            "transcribe:OutputKey"        = "true"
+          }
+        }
+      },
+      {
+        # Get and Delete take the transcription-job resource: only this stack's jobs.
+        Sid      = "FollowAndDeleteThisStacksTranscriptionJobs"
+        Effect   = "Allow"
+        Action   = ["transcribe:GetTranscriptionJob", "transcribe:DeleteTranscriptionJob"]
+        Resource = [local.transcription_job_arn_glob]
       },
     ]
   })

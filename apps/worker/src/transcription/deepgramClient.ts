@@ -1,6 +1,6 @@
-import { CALL_RECORDING_MAX_BYTES, type CallTranscriptUtterance } from '@fss/contracts';
+import { CALL_RECORDING_MAX_BYTES, RECORDING_CHANNEL_ROLES, type CallTranscriptUtterance } from '@fss/contracts';
 import { boundedBody } from '@fss/domain/calls/twilioRecording.ts';
-import type { TranscriptionOutcome, TranscriptionProvider } from '@fss/domain/calls/transcription.ts';
+import type { TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider } from '@fss/domain/calls/transcription.ts';
 import { TRANSCRIPTION_SECRET_VARIABLE, readTranscriptionSecret } from '@fss/domain/calls/transcriptionSecret.ts';
 
 /**
@@ -12,12 +12,23 @@ import { TRANSCRIPTION_SECRET_VARIABLE, readTranscriptionSecret } from '@fss/dom
  *   * https://developers.deepgram.com/reference/speech-to-text/listen-pre-recorded —
  *     `POST https://api.deepgram.com/v1/listen`; `Authorization: Token <API_KEY>`; the
  *     audio's own bytes as the body with its content type; the query parameters `model`,
- *     `diarize`, `punctuate`, `utterances` and `mip_opt_out`; the answer
- *     `{ metadata: { request_id, duration, models }, results: { utterances: [{ start, end,
- *     confidence, channel, speaker, transcript }] } }`;
- *   * https://developers.deepgram.com/docs/diarization — `diarize=true` still works for
- *     pre-recorded audio (it routes to the v1 diarizer; `diarize_model` is the newer
- *     spelling), and speakers are numbered 0, 1, … in the order they first speak;
+ *     `multichannel`, `punctuate`, `utterances` and `mip_opt_out`; the answer
+ *     `{ metadata: { request_id, duration, channels, models }, results: { utterances: [{
+ *     start, end, confidence, channel, transcript }] } }`;
+ *   * https://developers.deepgram.com/docs/multichannel (read 1 October 2026) —
+ *     `multichannel=true` transcribes each channel of the audio independently, and each
+ *     utterance says which `channel` it came from.
+ *
+ * ## Channels, not diarization (slice C3a)
+ *
+ * The recording is Twilio's dual-channel one, a leg per channel, so who said what is the
+ * channel: `RECORDING_CHANNEL_ROLES` (0 you, 1 them). C2 asked for `diarize=true` and
+ * numbered voices; that is no longer requested, and a `speaker` in the answer is ignored —
+ * a diarizer's number never becomes a role. The transcript is stored as model
+ * `nova-3-multichannel`, so the firm page can tell it from C2's diarized rows. Deepgram's
+ * pricing page does not say whether multichannel audio is billed per channel, so it is
+ * reserved as though it were (`DEEPGRAM_PRICING`, two billed channels): the bound is
+ * never below the bill. Deepgram stays for comparison; Amazon Transcribe is primary.
  *   * https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program —
  *     `mip_opt_out=true`: the request is kept only as long as processing it takes and is
  *     not used to improve Deepgram's models. Sent on every request;
@@ -47,10 +58,14 @@ export const DEEPGRAM_LISTEN_URL = 'https://api.deepgram.com/v1/listen';
 export const DEEPGRAM_MODEL = 'nova-3';
 /** The ledger's and the reservations' `provider_key` for this provider and model. */
 export const DEEPGRAM_PROVIDER_KEY = `deepgram.${DEEPGRAM_MODEL}`;
+/** `call_transcripts.model`: channel-labelled (`CHANNEL_LABELLED_TRANSCRIPTS`), unlike C2's `nova-3` rows. */
+export const DEEPGRAM_TRANSCRIPT_MODEL = `${DEEPGRAM_MODEL}-multichannel`;
+/** The setting's price a minute, for each of the two channels (see the module's note). */
+export const DEEPGRAM_PRICING: TranscriptionPricing = Object.freeze({ unitPriceMicros: null, billedChannels: 2, perSecondMinimumSeconds: null });
 /** The query every request carries, in this order. */
 export const DEEPGRAM_QUERY: readonly (readonly [string, string])[] = Object.freeze([
   ['model', DEEPGRAM_MODEL],
-  ['diarize', 'true'],
+  ['multichannel', 'true'],
   ['punctuate', 'true'],
   ['utterances', 'true'],
   ['mip_opt_out', 'true'],
@@ -75,6 +90,13 @@ export type DeepgramHttp = (
 const finiteAtLeastZero = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
+/** Channel 0 → you, 1 → them (`RECORDING_CHANNEL_ROLES`); any other value null. */
+function speakerOfDeepgramChannel(channel: unknown): number | null {
+  if (channel === RECORDING_CHANNEL_ROLES.you) return RECORDING_CHANNEL_ROLES.you;
+  if (channel === RECORDING_CHANNEL_ROLES.them) return RECORDING_CHANNEL_ROLES.them;
+  return null;
+}
+
 /** The documented answer, or null when it is not that shape. */
 export function parseDeepgramAnswer(body: unknown): { readonly durationSeconds: number; readonly utterances: CallTranscriptUtterance[] } | null {
   if (typeof body !== 'object' || body === null) return null;
@@ -83,6 +105,8 @@ export function parseDeepgramAnswer(body: unknown): { readonly durationSeconds: 
   const results = typeof top['results'] === 'object' && top['results'] !== null ? (top['results'] as Record<string, unknown>) : null;
   const duration = finiteAtLeastZero(metadata?.['duration']);
   if (duration === null || results === null) return null;
+  // The two legs, verified where the answer says how many channels it heard.
+  if (metadata?.['channels'] !== undefined && metadata['channels'] !== 2) return null;
   const raw = results['utterances'];
   if (raw !== undefined && !Array.isArray(raw)) return null;
   const utterances: CallTranscriptUtterance[] = [];
@@ -92,9 +116,9 @@ export function parseDeepgramAnswer(body: unknown): { readonly durationSeconds: 
     const start = finiteAtLeastZero(item['start']);
     const end = finiteAtLeastZero(item['end']);
     const text = item['transcript'];
-    const speaker = item['speaker'] === undefined ? 0 : item['speaker'];
-    if (start === null || end === null || typeof text !== 'string') return null;
-    if (typeof speaker !== 'number' || !Number.isInteger(speaker) || speaker < 0 || speaker > 31) return null;
+    // The channel is the speaker; a diarizer's `speaker`, if any, is never read.
+    const speaker = speakerOfDeepgramChannel(item['channel']);
+    if (start === null || end === null || typeof text !== 'string' || speaker === null) return null;
     utterances.push({ speaker, start, end: Math.max(start, end), text: text.slice(0, MAX_UTTERANCE_CHARACTERS) });
   }
   return { durationSeconds: duration, utterances };
@@ -107,7 +131,8 @@ export function deepgramTranscription(options: { readonly apiKey: string; readon
   return {
     providerKey: DEEPGRAM_PROVIDER_KEY,
     provider: 'deepgram',
-    model: DEEPGRAM_MODEL,
+    model: DEEPGRAM_TRANSCRIPT_MODEL,
+    pricing: DEEPGRAM_PRICING,
     transcribe: async (input): Promise<TranscriptionOutcome> => {
       if (input.audio.byteLength === 0 || input.audio.byteLength > CALL_RECORDING_MAX_BYTES) {
         return { ok: false, kind: 'refused', code: 'audio_size' };

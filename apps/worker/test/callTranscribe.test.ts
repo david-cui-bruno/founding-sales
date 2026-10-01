@@ -26,7 +26,9 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS } from '@fss/domain/jobs/jobKinds.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
-import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
+import { readCreditSpend, readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
+import { localDate } from '@fss/domain/src/rules/localClock.ts';
+import { AWS_TRANSCRIBE_PRICING, AWS_TRANSCRIBE_PROVIDER_KEY } from '../src/transcription/awsTranscribeClient.ts';
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
@@ -64,14 +66,16 @@ const answer = (duration: number): unknown => ({
   metadata: { request_id: 'request-1', duration, models: ['nova-3'] },
   results: {
     utterances: [
-      { start: 0.5, end: 1.5, confidence: 0.9, channel: 0, speaker: 0, transcript: 'Hello?' },
+      // The prospect answers on channel 1; David speaks on channel 0. A diarizer's
+      // `speaker` (here the opposite numbering) is never read (slice C3a).
+      { start: 0.5, end: 1.5, confidence: 0.9, channel: 1, speaker: 0, transcript: 'Hello?' },
       { start: 2, end: 4, confidence: 0.9, channel: 0, speaker: 1, transcript: 'Hi, it is David from Callie.' },
     ],
   },
 });
 
 describe('the Deepgram client', () => {
-  it('posts the audio to /v1/listen with nova-3, diarization, utterances and mip_opt_out', async () => {
+  it('posts the audio to /v1/listen with nova-3, multichannel, utterances and mip_opt_out, and labels by channel', async () => {
     const seen: { url: string; headers: Record<string, string>; body: number }[] = [];
     const provider = deepgramTranscription({
       apiKey: FAKE_KEY,
@@ -85,12 +89,15 @@ describe('the Deepgram client', () => {
       ok: true,
       durationSeconds: 61.2,
       language: 'en',
+      // Channel 1 is them, channel 0 is you (`RECORDING_CHANNEL_ROLES`).
       utterances: [
-        { speaker: 0, start: 0.5, end: 1.5, text: 'Hello?' },
-        { speaker: 1, start: 2, end: 4, text: 'Hi, it is David from Callie.' },
+        { speaker: 1, start: 0.5, end: 1.5, text: 'Hello?' },
+        { speaker: 0, start: 2, end: 4, text: 'Hi, it is David from Callie.' },
       ],
     });
-    expect(seen[0]?.url).toBe('https://api.deepgram.com/v1/listen?model=nova-3&diarize=true&punctuate=true&utterances=true&mip_opt_out=true');
+    expect(seen[0]?.url).toBe('https://api.deepgram.com/v1/listen?model=nova-3&multichannel=true&punctuate=true&utterances=true&mip_opt_out=true');
+    expect(provider.model).toBe('nova-3-multichannel');
+    expect(provider.pricing?.billedChannels).toBe(2);
     expect(seen[0]?.headers).toEqual({ authorization: `Token ${FAKE_KEY}`, 'content-type': 'audio/mpeg', accept: 'application/json' });
     expect(seen[0]?.body).toBe(AUDIO.byteLength);
     expect(provider).not.toHaveProperty('apiKey');
@@ -155,7 +162,11 @@ describe('the Deepgram client', () => {
     expect(parseDeepgramAnswer(answer(10))).not.toBeNull();
     expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: {} })).toEqual({ durationSeconds: 3, utterances: [] });
     expect(parseDeepgramAnswer({ metadata: { duration: -1 }, results: {} })).toBeNull();
-    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, speaker: 'x', transcript: '' }] } })).toBeNull();
+    // No channel, or a channel the two-leg recording does not have, is not the shape.
+    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, speaker: 0, transcript: '' }] } })).toBeNull();
+    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, channel: 2, transcript: '' }] } })).toBeNull();
+    // And an answer that heard other than two channels.
+    expect(parseDeepgramAnswer({ metadata: { duration: 3, channels: 1 }, results: {} })).toBeNull();
   });
 
   it('reads the key from the transcription entry, and says what is missing by field name only', () => {
@@ -164,7 +175,7 @@ describe('the Deepgram client', () => {
     expect(readTranscriptionProvider({ transcription: JSON.stringify({ provider: 'deepgram', api_key: 'short' }) }).problem).toBe('field:api_key');
     const configured = readTranscriptionProvider({ transcription: JSON.stringify({ provider: 'deepgram', api_key: FAKE_KEY }) });
     expect(configured.problem).toBeNull();
-    expect(configured.provider?.model).toBe('nova-3');
+    expect(configured.provider?.model).toBe('nova-3-multichannel');
   });
 
   it('composes the job only with both the key and the Twilio recording credentials', () => {
@@ -708,6 +719,72 @@ describe('the call.transcribe job', () => {
       expect(fits.ok).toBe(true);
     } finally {
       await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
+    }
+  });
+
+  // Slice C3a: Amazon Transcribe is paid from AWS credits. It needs no cash headroom and
+  // its cost is not cash spend, but the day's transcription cap still counts it.
+  it('reserves and settles a Transcribe transcription with no cash headroom, outside the cash month but inside the daily transcription cap (slice C3a)', async () => {
+    const now = (): string => new Date().toISOString();
+    const zone = await workspaceBusinessZone(system());
+    const cash = async (): Promise<number> => (await readSpend(system(), { businessTimeZone: zone, at: now() })).monthToDateCents;
+    const credits = async (): Promise<number> => (await readCreditSpend(system(), { businessTimeZone: zone, at: now() })).monthToDateCents;
+    const today = async (): Promise<number> => await transcriptionSpentCents(system(), localDate(now(), zone));
+    const transcribe: TranscriptionProvider & { calls: number } = {
+      providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+      provider: 'aws_transcribe',
+      model: 'standard',
+      pricing: AWS_TRANSCRIBE_PRICING,
+      calls: 0,
+      transcribe: async () => {
+        transcribe.calls += 1;
+        return await Promise.resolve({ ...ok(150), billedSeconds: null });
+      },
+    };
+    const sessionId = await call(150);
+    // Placed now: placing a call needs cash headroom, which the test then takes away.
+    const next = await call(150);
+    const cashBefore = await cash();
+    const creditsBefore = await credits();
+    const todayBefore = await today();
+    try {
+      // No cash headroom at all: a Deepgram (cash) transcription would be refused here.
+      await setting('monthly_cash_ceiling_cents', { cents: cashBefore });
+      const deepgram = { sessionId, at: now(), keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      expect(await withTransaction(database.session, async () => await beginCallTranscription(system(), deepgram))).toEqual({
+        kind: 'done',
+        reason: 'monthly_cash_ceiling',
+      });
+      expect((await enqueue(sessionId)).enqueued).toBe(true);
+      await drain(transcribe);
+      expect(transcribe.calls).toBe(1);
+      // (150 + 2) s is three minutes at Transcribe's $0.006 (18 000 µ$ → 2 ¢), settled at the
+      // reservation: the job reports no media duration.
+      expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+      expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
+      // Not cash: the month's cash spend has not moved; the credits line has.
+      expect(await cash()).toBe(cashBefore);
+      expect(await credits()).toBe(creditsBefore + 2);
+      // But the day's transcription cap counts it.
+      expect(await today()).toBe(todayBefore + 2);
+
+      // So a day whose cap these 2 ¢ used up refuses the next Transcribe call, cash or not.
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: todayBefore + 3, unitPriceMicros: 4_300 });
+      const begun = await withTransaction(
+        database.session,
+        async () =>
+          await beginCallTranscription(system(), {
+            sessionId: next,
+            at: now(),
+            keyConfigured: true,
+            providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+            pricing: AWS_TRANSCRIBE_PRICING,
+          }),
+      );
+      expect(begun).toEqual({ kind: 'done', reason: 'transcription_budget_exhausted' });
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
     }
   });
 
