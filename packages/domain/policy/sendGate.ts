@@ -20,7 +20,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  *   * **every writer of a stop fact** takes it EXCLUSIVE inside its own transaction,
  *     before it commits (`lockSendGateForStopFact`): a hold opening, a restrictive
  *     suppression event, an opportunity going manual or closing, an enrollment ending,
- *     a firm changing hands.
+ *     a firm changing hands — and a write of either sending switch (slice P1): the
+ *     attestation `sending_enabled`, the domain's `automated_sending_enabled` and the
+ *     DNS checklist it depends on, so a turn-off is ordered against every claim.
  *
  * The result is a total order between each claim and each stop. A stop that took the
  * gate first commits before the claim can read, and the re-check sees it. A claim that

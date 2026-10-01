@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { PERSONAL_GMAIL_DOMAINS } from './types.ts';
 
 /**
@@ -241,6 +242,10 @@ export async function recordAuthenticationChecklist(
     readonly postmasterReviewed: boolean;
   },
 ): Promise<ChecklistOutcome> {
+  // A checklist that stops passing turns automated sending off (below), and the claim
+  // reads both under the send gate SHARED: so the write takes it EXCLUSIVE first, and is
+  // ordered against every in-flight claim (slice P1, invariant I1).
+  await lockSendGateForStopFact(context);
   const { rows } = await context.db.query<DomainDbRow>(
     `UPDATE sending_domains
         SET spf_pass = $3, dkim_pass = $4, dmarc_pass = $5,
@@ -283,6 +288,10 @@ export async function setAutomatedSendingEnabled(
   context: RepositoryContext,
   input: { readonly domain: string; readonly enabled: boolean },
 ): Promise<ChecklistOutcome> {
+  // The switch the claim reads under the send gate SHARED. Taken EXCLUSIVE first, before
+  // any row, so a turn-off waits for an in-flight claim and every later claim reads it
+  // (slice P1, invariant I1; the lock order of `policy/sendGate.ts`).
+  await lockSendGateForStopFact(context);
   const existing = await readSendingDomain(context, input.domain);
   if (existing === null) return { ok: false, reason: 'domain_unknown' };
   if (input.enabled && !authenticationPasses(existing)) {
