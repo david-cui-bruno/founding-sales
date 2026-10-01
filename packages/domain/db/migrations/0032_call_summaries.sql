@@ -28,9 +28,23 @@
 --     shaped exactly as before, and no stored row is a `call_summary`, so the index starts
 --     empty.
 --
+-- ## Also: `transcription_provider_jobs` (slice C3a fix round, 1 October 2026)
+--
+--   * One row per provider-side transcription job (Amazon Transcribe), keyed by its job
+--     name. Written and committed BEFORE `StartTranscriptionJob` (`submitting`), moved to
+--     `started` in the commit right after it, and `collected` or `abandoned` once its result
+--     is settled — so a crash or a lost lease after Start resumes polling the recorded job
+--     instead of estimating it and buying another, and no poll runs inside a long
+--     transaction. The same row records what is still owed to AWS: the input object and
+--     the service-managed job (whose transcript AWS otherwise keeps for up to 90 days),
+--     deleted by a retried sweep that marks each done.
+--   * No foreign key to `call_sessions`, on purpose: the deletion workflow removes the
+--     session, and the cleanup owed for it must outlive it. The row carries ids, a job
+--     name and an object key, no prospect identity: `operational`.
+--
 -- ## Release shape
 --
--- `touches-existing` for the constraint swaps and the index; the table is new and
+-- `touches-existing` for the constraint swaps and the index; both tables are new and
 -- unreferenced by any deployed binary. Granted as `call_transcripts` is.
 -- ---------------------------------------------------------------------------
 
@@ -78,3 +92,42 @@ CREATE UNIQUE INDEX provider_reservations_one_open_summary
   WHERE subject_kind = 'call_summary' AND state IN ('reserved', 'calling');
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON call_summaries TO app_runtime, migration;
+
+-- ---------------------------------------------------------------------------
+-- transcription_provider_jobs (slice C3a fix round)
+-- ---------------------------------------------------------------------------
+CREATE TABLE transcription_provider_jobs (
+  workspace_id uuid NOT NULL REFERENCES workspaces (id),
+  job_name text NOT NULL,
+  call_session_id uuid NOT NULL,
+  attempt integer NOT NULL,
+  reservation_id uuid NOT NULL,
+  provider_key text NOT NULL,
+  object_key text,
+  state text NOT NULL DEFAULT 'submitting',
+  next_poll_at timestamptz NOT NULL DEFAULT now(),
+  polls integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz,
+  job_deleted_at timestamptz,
+  object_deleted_at timestamptz,
+  cleanup_attempts integer NOT NULL DEFAULT 0,
+  CONSTRAINT transcription_provider_jobs_pkey PRIMARY KEY (workspace_id, job_name),
+  CONSTRAINT transcription_provider_jobs_one_per_attempt UNIQUE (workspace_id, call_session_id, attempt),
+  CONSTRAINT transcription_provider_jobs_job_name_shape CHECK (job_name ~ '^[0-9A-Za-z._-]{1,200}$'),
+  CONSTRAINT transcription_provider_jobs_provider_key_shape CHECK (provider_key ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+  CONSTRAINT transcription_provider_jobs_object_key_shape CHECK (object_key IS NULL OR (object_key ~ '^[0-9A-Za-z/._-]+$' AND char_length(object_key) <= 512)),
+  CONSTRAINT transcription_provider_jobs_attempt_positive CHECK (attempt >= 1),
+  CONSTRAINT transcription_provider_jobs_state_known CHECK (state IN ('submitting', 'started', 'collected', 'abandoned')),
+  CONSTRAINT transcription_provider_jobs_counts_nonnegative CHECK (polls >= 0 AND cleanup_attempts >= 0),
+  CONSTRAINT transcription_provider_jobs_finished_consistent
+    CHECK ((state IN ('collected', 'abandoned')) = (finished_at IS NOT NULL))
+);
+
+-- The collect and cleanup source's question: what is due now.
+CREATE INDEX transcription_provider_jobs_due
+  ON transcription_provider_jobs (next_poll_at)
+  WHERE state IN ('submitting', 'started') OR job_deleted_at IS NULL OR object_deleted_at IS NULL;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON transcription_provider_jobs TO app_runtime, migration;

@@ -1,7 +1,6 @@
 import { CALL_RECORDING_MAX_BYTES, RECORDING_CHANNEL_ROLES, type CallTranscriptUtterance } from '@fss/contracts';
 import { boundedBody } from '@fss/domain/calls/twilioRecording.ts';
-import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
-import type { TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider } from '@fss/domain/calls/transcription.ts';
+import type { CollectOutcome, TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider } from '@fss/domain/calls/transcription.ts';
 
 /**
  * Amazon Transcribe, standard batch, with channel identification (slice C3a): the primary
@@ -33,24 +32,27 @@ import type { TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider 
  *     nothing more. The AWS Price List API gave $0.0001 a second for this account's
  *     region (E1, 1 October 2026): `AWS_TRANSCRIBE_PRICING`.
  *
- * ## The flow, inside chunk 3 of `call.transcribe`
+ * ## The flow (slice C3a fix round: nothing waits inside a transaction)
  *
- *   1. the earlier attempts' job and object of the same call, deleted (best effort): a lost
- *      claim's job must not keep a transcript in the service's storage;
- *   2. the recording's bytes — already bounded to the reserved minutes by `boundMp3` —
- *      put in the private call-audio bucket at `calls/<session>/attempt-<n>.mp3`;
- *   3. `StartTranscriptionJob` as `<prefix>-<session>-a<n>`: en-US, mp3, channel
- *      identification on;
- *   4. `GetTranscriptionJob` polled with backoff (3 s, × 1.5, at most 15 s) until it ends
- *      or `AWS_TRANSCRIBE_TIMEOUT_MS` passes;
- *   5. the transcript fetched from `TranscriptFileUri` over HTTPS, at most
- *      `MAX_TRANSCRIPT_BYTES`, and mapped by channel to utterances;
- *   6. the object and the job deleted, whatever happened (best effort, logged; the
- *      bucket's one-day expiry is the backstop).
+ * `packages/domain/calls/transcription.ts` drives it, through `transcribe` (the one paid
+ * request) and `jobs` (status reads and deletes):
  *
- * The pause boundary (`docs/greenfield/calling.md`, "What the pause guarantees") is the
- * final settings read immediately before `StartTranscriptionJob`: `finalCheck`, after the
- * upload. A turn-off read there deletes the object and sends nothing (`withdrawn`).
+ *   1. chunk 3a records the job's names (`jobs.names`) and commits, before anything is sent;
+ *   2. chunk 3b (`transcribe`): the recording's bytes — already bounded to the reserved
+ *      minutes by `boundMp3` — put in the private call-audio bucket at
+ *      `calls/<session>/attempt-<n>.mp3`; the final settings read (`finalCheck`, the pause
+ *      boundary, nothing between it and the request); `StartTranscriptionJob` as
+ *      `<prefix>-<session>-a<n>`, en-US, mp3, channel identification on. The answer is
+ *      `started` at once, and the domain commits that;
+ *   3. later, short claims (`jobs.collect`): one `GetTranscriptionJob` each, and once it
+ *      completed the transcript from `TranscriptFileUri` over HTTPS, at most
+ *      `MAX_TRANSCRIPT_BYTES`, mapped by channel to utterances;
+ *   4. `jobs.cleanUp`, retried by the domain until both are gone: the object and the job
+ *      (with its service-managed transcript, which AWS otherwise keeps up to 90 days).
+ *
+ * Both SDK clients make exactly one attempt per request (`maxAttempts: 1`): an automatic
+ * retry of `StartTranscriptionJob` would be a second paid request with no final settings
+ * read before it. Every retry is the application's.
  *
  * ## Settled at the reservation
  *
@@ -58,18 +60,18 @@ import type { TranscriptionOutcome, TranscriptionPricing, TranscriptionProvider 
  * nothing Transcribe answers says what it billed. The attempt is settled at its
  * reservation — the started minutes of the bounded audio at $0.006 a minute, at most a
  * minute's $0.006 above the per-second bill — as the paid-call pattern settles every answer
- * that reports no usage. The stored transcript's duration is the uploaded audio's, from its
- * MP3 frames.
+ * that reports no usage. The stored transcript's duration is its last segment's end.
  *
- * ## Failure classes (the paid-call pattern)
+ * ## Failure classes
  *
- *   * `refused` — nothing was transcribed and nothing billed: the upload failed (no job
- *     was asked for), Transcribe answered `StartTranscriptionJob` with a 4xx refusal, or
- *     the job ended FAILED with a reason (terminal: retrying the same audio fails again).
- *   * `ambiguous` — `StartTranscriptionJob` may have been accepted and nobody knows what
- *     it did: a network failure or 5xx on Start, a job that has not ended by the timeout,
- *     a COMPLETED job whose transcript could not be read, or one whose channels are not
- *     the two this call's recording has.
+ *   * `transcribe` answers `refused` when no job can exist: the upload failed, or Transcribe
+ *     refused Start with a 4xx other than a name already taken; `withdrawn` when the final
+ *     settings read said off. Anything else — accepted, a 5xx, a timeout, a dropped
+ *     connection, the name taken — is `started`: the job's own status, read by `collect`,
+ *     says whether it exists, so an attempt that may have started is never bought twice.
+ *   * `collect` answers `failed` for a FAILED job (terminal, not billed), `unreadable` for a
+ *     COMPLETED one whose transcript cannot be read or is not two channels (billed),
+ *     `not_found` when there is no such job, `unknown` when the look itself failed.
  *
  * ## No credential here
  *
@@ -89,16 +91,8 @@ export const AWS_TRANSCRIBE_PRICING: TranscriptionPricing = Object.freeze({
   billedChannels: 1,
   perSecondMinimumSeconds: 15,
 });
-/**
- * The longest the whole flow may take. E1's jobs took 12–23 s for one to two minutes of
- * audio; seven minutes leaves a half-hour call room. The job's lease is sized from it
- * (`callTranscribeLeaseSeconds`).
- */
-export const AWS_TRANSCRIBE_TIMEOUT_MS = 420_000;
-/** The first wait before `GetTranscriptionJob`, the growth of each next one, and the longest. */
-export const AWS_TRANSCRIBE_POLL = Object.freeze({ firstMs: 3_000, factor: 1.5, maxMs: 15_000 });
-/** One upload, one Start, one Get, one delete, one transcript read: each its own bound. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/** Each request's own bound: the upload, Start, one status read, one delete, the transcript read. */
+const REQUEST_TIMEOUT_MS = 20_000;
 /** A transcript of a four-hour call is well under this. */
 const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 const MAX_UTTERANCE_CHARACTERS = 4_000;
@@ -112,10 +106,10 @@ export interface AwsSdkClient {
 
 /** The pieces of `@aws-sdk/client-s3` and `@aws-sdk/client-transcribe` used, narrowed so a test can hand in fakes. */
 export interface AwsTranscribeSdk {
-  readonly S3Client: new (configuration: { region: string }) => AwsSdkClient;
+  readonly S3Client: new (configuration: { region: string; maxAttempts: number }) => AwsSdkClient;
   readonly PutObjectCommand: new (input: Record<string, unknown>) => unknown;
   readonly DeleteObjectCommand: new (input: Record<string, unknown>) => unknown;
-  readonly TranscribeClient: new (configuration: { region: string }) => AwsSdkClient;
+  readonly TranscribeClient: new (configuration: { region: string; maxAttempts: number }) => AwsSdkClient;
   readonly StartTranscriptionJobCommand: new (input: Record<string, unknown>) => unknown;
   readonly GetTranscriptionJobCommand: new (input: Record<string, unknown>) => unknown;
   readonly DeleteTranscriptionJobCommand: new (input: Record<string, unknown>) => unknown;
@@ -150,9 +144,8 @@ export interface AwsTranscribeOptions {
   readonly jobPrefix: string;
   readonly sdk?: AwsTranscribeSdk | undefined;
   readonly http?: TranscriptHttp | undefined;
-  readonly sleep?: ((milliseconds: number) => Promise<void>) | undefined;
-  readonly now?: (() => number) | undefined;
-  readonly timeoutMs?: number | undefined;
+  /** For tests only: merged into both clients' configuration (an in-memory transport, credentials). */
+  readonly clientConfiguration?: Readonly<Record<string, unknown>> | undefined;
   /** A line for a cleanup that failed: what (`object`, `job`) and the error's name, never a key or a message. */
   readonly log?: ((event: string, fields: Readonly<Record<string, string | number | boolean | null>>) => void) | undefined;
 }
@@ -313,26 +306,52 @@ function startRefused(error: unknown): boolean {
   return nameOf(error) !== 'ConflictException';
 }
 
-const defaultSleep = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>(resolve => setTimeout(resolve, milliseconds));
-};
+/** One attempt per request: no SDK retry ever repeats a paid request past the final settings read. */
+export const AWS_SDK_MAX_ATTEMPTS = 1;
 
 export function awsTranscribeTranscription(options: AwsTranscribeOptions): TranscriptionProvider {
   const http: TranscriptHttp = options.http ?? (async (url, init) => await fetch(url, init));
-  const sleep = options.sleep ?? defaultSleep;
-  const now = options.now ?? ((): number => Date.now());
-  const timeoutMs = options.timeoutMs ?? AWS_TRANSCRIBE_TIMEOUT_MS;
   type Clients = { readonly sdk: AwsTranscribeSdk; readonly s3: AwsSdkClient; readonly jobs: AwsSdkClient };
   let clients: Promise<Clients> | null = null;
   const connect = async (): Promise<Clients> => {
     clients ??= (async () => {
       const sdk = options.sdk ?? (await loadAwsTranscribeSdk());
-      return { sdk, s3: new sdk.S3Client({ region: options.region }), jobs: new sdk.TranscribeClient({ region: options.region }) };
+      const configuration = { ...options.clientConfiguration, region: options.region, maxAttempts: AWS_SDK_MAX_ATTEMPTS };
+      return { sdk, s3: new sdk.S3Client(configuration), jobs: new sdk.TranscribeClient(configuration) };
     })();
     return await clients;
   };
   const log = (event: string, fields: Readonly<Record<string, string | number | boolean | null>>): void => {
     options.log?.(event, fields);
+  };
+  const signal = (): AbortSignal => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const names = (subject: { readonly sessionId: string; readonly attempt: number }): { jobName: string; objectKey: string } => ({
+    jobName: transcriptionJobName(options.jobPrefix, subject.sessionId, subject.attempt),
+    objectKey: callAudioObjectKey(subject.sessionId, subject.attempt),
+  });
+  /** Delete one object; true once it is gone (S3's delete of a missing key succeeds). */
+  const deleteObject = async (objectKey: string): Promise<boolean> => {
+    const { sdk, s3 } = await connect();
+    try {
+      await s3.send(new sdk.DeleteObjectCommand({ Bucket: options.bucket, Key: objectKey }), { abortSignal: signal() });
+      return true;
+    } catch (error) {
+      log('aws_transcribe_cleanup_failed', { what: 'object', error: nameOf(error) });
+      return false;
+    }
+  };
+  /** Delete one job and its stored transcript; true once it is gone (already gone included). */
+  const deleteJob = async (jobName: string): Promise<boolean> => {
+    const { sdk, jobs } = await connect();
+    try {
+      await jobs.send(new sdk.DeleteTranscriptionJobCommand({ TranscriptionJobName: jobName }), { abortSignal: signal() });
+      return true;
+    } catch (error) {
+      // "The requested job couldn't be found" is a 400 BadRequestException: already gone.
+      if (nameOf(error) === 'BadRequestException') return true;
+      log('aws_transcribe_cleanup_failed', { what: 'job', error: nameOf(error) });
+      return false;
+    }
   };
 
   return {
@@ -340,51 +359,23 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
     provider: AWS_TRANSCRIBE_PROVIDER,
     model: AWS_TRANSCRIBE_MODEL,
     pricing: AWS_TRANSCRIBE_PRICING,
-    maxCallSeconds: Math.ceil(timeoutMs / 1000) + 2 * Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+    // The upload and Start, each one bounded request.
+    maxCallSeconds: 2 * Math.ceil(REQUEST_TIMEOUT_MS / 1000),
     transcribe: async (input): Promise<TranscriptionOutcome> => {
       if (input.audio.byteLength === 0 || input.audio.byteLength > CALL_RECORDING_MAX_BYTES) {
         return { ok: false, kind: 'refused', code: 'audio_size' };
       }
       // Without a subject (a caller from before C3a) the attempt is unique by a random tag.
-      const sessionId = input.subject?.sessionId ?? crypto.randomUUID();
-      const attempt = input.subject?.attempt ?? 1;
+      const subject = input.subject ?? { sessionId: crypto.randomUUID(), attempt: 1 };
+      const { jobName, objectKey } = names(subject);
       const { sdk, s3, jobs } = await connect();
-      const key = callAudioObjectKey(sessionId, attempt);
-      const jobName = transcriptionJobName(options.jobPrefix, sessionId, attempt);
-      const signal = (): AbortSignal => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
-      const deleteObject = async (objectKey: string): Promise<void> => {
-        try {
-          await s3.send(new sdk.DeleteObjectCommand({ Bucket: options.bucket, Key: objectKey }), { abortSignal: signal() });
-        } catch (error) {
-          log('aws_transcribe_cleanup_failed', { what: 'object', error: nameOf(error) });
-        }
-      };
-      const deleteJob = async (name: string, quiet: boolean): Promise<void> => {
-        try {
-          await jobs.send(new sdk.DeleteTranscriptionJobCommand({ TranscriptionJobName: name }), { abortSignal: signal() });
-        } catch (error) {
-          // An earlier attempt usually has no job left: not found is the expected answer.
-          if (!quiet || statusOf(error) !== 400) log('aws_transcribe_cleanup_failed', { what: 'job', error: nameOf(error) });
-        }
-      };
-      const cleanUp = async (): Promise<void> => {
-        await deleteObject(key);
-        await deleteJob(jobName, false);
-      };
-
-      // 1. A lost claim's earlier attempts of this call leave nothing behind.
-      for (let earlier = 1; earlier < attempt; earlier += 1) {
-        await deleteJob(transcriptionJobName(options.jobPrefix, sessionId, earlier), true);
-        await deleteObject(callAudioObjectKey(sessionId, earlier));
-      }
-
-      // 2. The upload. Nothing has been asked of Transcribe yet, so a failure bills nothing.
+      // The upload. Nothing has been asked of Transcribe yet, so a failure bills nothing.
       try {
         await s3.send(
           new sdk.PutObjectCommand({
             Bucket: options.bucket,
-            Key: key,
+            Key: objectKey,
             Body: input.audio,
             ContentType: input.contentType,
             ServerSideEncryption: 'AES256',
@@ -392,98 +383,88 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
           { abortSignal: signal() },
         );
       } catch {
-        await deleteObject(key);
+        await deleteObject(objectKey);
         return { ok: false, kind: 'refused', code: 'aws_transcribe_upload_failed' };
       }
 
       // The pause boundary: the final settings read, immediately before the request. The
-      // upload above is a network round trip; a turn-off during it stops the job here.
-      const withdrawn = input.finalCheck === undefined ? null : await input.finalCheck();
+      // upload above is a network round trip; a turn-off during it stops the job here. A
+      // read that throws sends nothing either, and the object is deleted all the same.
+      let withdrawn: Awaited<ReturnType<NonNullable<typeof input.finalCheck>>> = null;
+      try {
+        withdrawn = input.finalCheck === undefined ? null : await input.finalCheck();
+      } catch (error) {
+        await deleteObject(objectKey);
+        throw error;
+      }
       if (withdrawn !== null) {
-        await deleteObject(key);
+        await deleteObject(objectKey);
         return { ok: false, kind: 'withdrawn', reason: withdrawn };
       }
 
-      // 3. The job. From here on Transcribe may have accepted it.
-      const deadline = now() + timeoutMs;
+      // The paid request, once: the client makes one attempt (`AWS_SDK_MAX_ATTEMPTS`).
       try {
         await jobs.send(
           new sdk.StartTranscriptionJobCommand({
             TranscriptionJobName: jobName,
             LanguageCode: AWS_TRANSCRIBE_LANGUAGE_CODE,
             MediaFormat: 'mp3',
-            Media: { MediaFileUri: `s3://${options.bucket}/${key}` },
+            Media: { MediaFileUri: `s3://${options.bucket}/${objectKey}` },
             Settings: { ChannelIdentification: true },
           }),
           { abortSignal: signal() },
         );
       } catch (error) {
         if (startRefused(error)) {
-          await deleteObject(key);
+          await deleteObject(objectKey);
           return { ok: false, kind: 'refused', code: 'aws_transcribe_start_refused' };
         }
-        await cleanUp();
-        return { ok: false, kind: 'ambiguous', code: nameOf(error) === 'ConflictException' ? 'aws_transcribe_job_exists' : 'aws_transcribe_start_unknown' };
+        // It may have been accepted: the job's status will say. Nothing is deleted yet.
+        return { ok: false, kind: 'started', code: nameOf(error) === 'ConflictException' ? 'aws_transcribe_job_exists' : 'aws_transcribe_start_unknown' };
       }
-
-      // 4. Polled to its end, or to the deadline.
-      let wait: number = AWS_TRANSCRIBE_POLL.firstMs;
-      let transcriptUri: string | null = null;
-      for (;;) {
-        const left = deadline - now();
-        if (left <= 0) {
-          await cleanUp();
-          return { ok: false, kind: 'ambiguous', code: 'aws_transcribe_timeout' };
-        }
-        await sleep(Math.min(wait, left));
-        wait = Math.min(AWS_TRANSCRIBE_POLL.maxMs, Math.round(wait * AWS_TRANSCRIBE_POLL.factor));
+      return { ok: false, kind: 'started', code: 'started' };
+    },
+    jobs: {
+      names,
+      collect: async (jobName): Promise<CollectOutcome> => {
+        const { sdk, jobs } = await connect();
         let job: Record<string, unknown> | null;
         try {
-          const answer = record(
-            await jobs.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: jobName }), { abortSignal: signal() }),
-          );
+          const answer = record(await jobs.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: jobName }), { abortSignal: signal() }));
           job = record(answer?.['TranscriptionJob']);
-        } catch {
-          // A failed read says nothing about the job; the deadline bounds the asking.
-          continue;
+        } catch (error) {
+          // "The requested job couldn't be found" (probed 1 October 2026): never started.
+          if (nameOf(error) === 'BadRequestException') return { kind: 'not_found' };
+          return { kind: 'unknown', code: 'aws_transcribe_status_unknown' };
         }
         const status = job?.['TranscriptionJobStatus'];
-        if (status === 'FAILED') {
-          // Terminal: the same audio fails the same way. A failed job is not billed.
-          await cleanUp();
-          return { ok: false, kind: 'refused', code: 'aws_transcribe_job_failed' };
-        }
-        if (status === 'COMPLETED') {
-          const uri = record(job?.['Transcript'])?.['TranscriptFileUri'];
-          transcriptUri = typeof uri === 'string' ? uri : null;
-          break;
-        }
-      }
-
-      // 5. The transcript, from the service-managed output over HTTPS.
-      let utterances: CallTranscriptUtterance[] | null = null;
-      if (transcriptUri !== null && isServiceTranscriptUri(transcriptUri)) {
+        if (status === 'FAILED') return { kind: 'failed', code: 'aws_transcribe_job_failed' };
+        if (status !== 'COMPLETED') return status === 'QUEUED' || status === 'IN_PROGRESS' ? { kind: 'running' } : { kind: 'unknown', code: 'aws_transcribe_status_unknown' };
+        const uri = record(job?.['Transcript'])?.['TranscriptFileUri'];
+        if (typeof uri !== 'string' || !isServiceTranscriptUri(uri)) return { kind: 'unreadable', code: 'aws_transcribe_transcript_unreadable' };
+        let utterances: CallTranscriptUtterance[] | null = null;
         try {
-          const response = await http(transcriptUri, { method: 'GET', signal: signal() });
+          const response = await http(uri, { method: 'GET', signal: signal() });
           if (response.status === 200) {
             const bytes = await boundedBody(response, MAX_TRANSCRIPT_BYTES);
             if (bytes !== null) utterances = parseAwsTranscript(JSON.parse(bytes.toString('utf8')) as unknown);
           } else {
             await response.body?.cancel().catch(() => undefined);
+            // A presigned URL that expired or a transient read: the next look gets a fresh one.
+            return { kind: 'unknown', code: 'aws_transcribe_transcript_unavailable' };
           }
         } catch {
-          utterances = null;
+          return { kind: 'unknown', code: 'aws_transcribe_transcript_unavailable' };
         }
-      }
-
-      // 6. Nothing kept: the audio and the job (with its transcript) deleted.
-      await cleanUp();
-      if (utterances === null) return { ok: false, kind: 'ambiguous', code: 'aws_transcribe_transcript_unreadable' };
-      // The transcript's duration is the uploaded audio's, from its own frames. The job reports
-      // no media duration, so nothing reports what was billed: the attempt settles at its
-      // reservation (`billedSeconds: null`), which priced exactly this audio's bound.
-      const measured = boundMp3(input.audio, Number.POSITIVE_INFINITY)?.seconds ?? 0;
-      return { ok: true, durationSeconds: measured, billedSeconds: null, language: 'en', utterances };
+        if (utterances === null) return { kind: 'unreadable', code: 'aws_transcribe_transcript_unreadable' };
+        // The job reports no media duration: settled at the reservation (`billedSeconds: null`).
+        const durationSeconds = utterances.reduce((latest, utterance) => Math.max(latest, utterance.end), 0);
+        return { kind: 'completed', durationSeconds, billedSeconds: null, language: 'en', utterances };
+      },
+      cleanUp: async item => ({
+        objectDone: item.objectDone || item.objectKey === null ? true : await deleteObject(item.objectKey),
+        jobDone: item.jobDone ? true : await deleteJob(item.jobName),
+      }),
     },
   };
 }

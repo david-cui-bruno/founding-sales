@@ -31,7 +31,7 @@ import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminal
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
 import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
-import { callTranscribeJobHandler, heldTranscriptionSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource, transcriptionJobsSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
 import { readSelectedTranscriptionProvider } from '../transcription/selectProvider.ts';
 import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
 import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
@@ -371,7 +371,13 @@ export function readTranscriptionComposition(
  * makes running one from a command line safe.
  */
 export function workerDueWorkSources(
-  options: { readonly calcomReconcile?: boolean; readonly transcription?: boolean; readonly summary?: boolean } = {},
+  options: {
+    readonly calcomReconcile?: boolean;
+    readonly transcription?: boolean;
+    readonly summary?: boolean;
+    /** Slice C3a fix round: the provider whose recorded jobs are collected and cleaned up, when it has jobs. */
+    readonly transcriptionJobsProviderKey?: string | null;
+  } = {},
 ): readonly DueWorkSource[] {
   return [
     canarySource(),
@@ -388,6 +394,7 @@ export function workerDueWorkSources(
     calcomReconcileSource({ enabled: options.calcomReconcile === true }),
     // Slice P1. Like Cal.com's: listed always, materializing only where `call.transcribe` is registered.
     heldTranscriptionSource({ enabled: options.transcription === true }),
+    transcriptionJobsSource({ providerKey: options.transcriptionJobsProviderKey ?? null }),
     // Slice C3b. Listed always, materializing only where `call.summarize` is registered.
     callSummarySource({ enabled: options.summary === true }),
     ...mailSources(),
@@ -501,6 +508,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
       sources: workerDueWorkSources({
         calcomReconcile: composition.calcom !== undefined,
         transcription: composition.transcription !== undefined,
+        transcriptionJobsProviderKey: composition.transcription?.provider.jobs === undefined ? null : composition.transcription.provider.providerKey,
         summary: composition.summary !== undefined,
       }),
       sink,

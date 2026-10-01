@@ -237,6 +237,14 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ['deletion_removes'],
     'The summary, suggested next steps and quoted commitments of one transcribed call; removed with its call session, the firm or the person.',
   ),
+
+  // ------------------------------------------------ transcription jobs (0032, slice C3a fix round)
+  // Ids, a provider job name and an object key: what is owed to AWS after a call. Kept
+  // past a deletion on purpose, so the job and its object are still deleted at AWS.
+  transcription_provider_jobs: coverage(
+    ['operational'],
+    'One provider-side transcription job per attempt and the deletes still owed for it; ids and names, no prospect identity; outlives a deleted session so the AWS copies are still removed.',
+  ),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

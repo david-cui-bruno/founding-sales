@@ -11,6 +11,7 @@ import {
   enqueueCallTranscription,
   ensureTranscriptionCalling,
   finishCallTranscription,
+  finaliseTranscriptionsOfSessions,
   readCallTranscript,
   sweepTranscriptionReservations,
   transcriptionSpentCents,
@@ -37,7 +38,7 @@ import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { callTranscribeJobHandler, heldTranscriptionSource } from '../src/handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource, transcriptionJobsSource } from '../src/handlers/callTranscribe.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
@@ -830,6 +831,254 @@ describe('the call.transcribe job', () => {
       if (open) await database.session.query('ROLLBACK');
       await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
     }
+  });
+
+  // ---------------------------------------------------------------- C3a fix round (C3-R1)
+  /** An asynchronous provider shaped like Amazon Transcribe, its AWS side in memory. */
+  function fakeTranscribe(options: { readonly runningLooks?: number; readonly failJobDeletes?: number } = {}) {
+    const state = {
+      starts: [] as string[],
+      looks: 0,
+      live: new Set<string>(),
+      deletedJobs: [] as string[],
+      deletedObjects: [] as string[],
+      failJobDeletes: options.failJobDeletes ?? 0,
+    };
+    const names = (subject: { readonly sessionId: string; readonly attempt: number }) => ({
+      jobName: `fss-test-${subject.sessionId}-a${String(subject.attempt)}`,
+      objectKey: `calls/${subject.sessionId}/attempt-${String(subject.attempt)}.mp3`,
+    });
+    const provider: TranscriptionProvider = {
+      providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+      provider: 'aws_transcribe',
+      model: 'standard',
+      pricing: AWS_TRANSCRIBE_PRICING,
+      transcribe: async input => {
+        const withdrawn = await input.finalCheck?.();
+        if (withdrawn !== null && withdrawn !== undefined) return { ok: false, kind: 'withdrawn', reason: withdrawn };
+        const { jobName } = names(input.subject ?? { sessionId: 'x', attempt: 1 });
+        state.starts.push(jobName);
+        state.live.add(jobName);
+        return { ok: false, kind: 'started', code: 'started' };
+      },
+      jobs: {
+        names,
+        collect: async jobName => {
+          await Promise.resolve();
+          if (!state.live.has(jobName)) return { kind: 'not_found' };
+          state.looks += 1;
+          if (state.looks <= (options.runningLooks ?? 0)) return { kind: 'running' };
+          return { kind: 'completed', durationSeconds: 150, billedSeconds: null, language: 'en', utterances: [{ speaker: 1, start: 0.5, end: 1.5, text: 'Hello?' }, { speaker: 0, start: 2, end: 4, text: 'Hi, it is David.' }] };
+        },
+        cleanUp: async item => {
+          await Promise.resolve();
+          let jobDone = item.jobDone;
+          if (!jobDone) {
+            if (state.failJobDeletes > 0) state.failJobDeletes -= 1;
+            else {
+              state.deletedJobs.push(item.jobName);
+              state.live.delete(item.jobName);
+              jobDone = true;
+            }
+          }
+          if (!item.objectDone && item.objectKey !== null) state.deletedObjects.push(item.objectKey);
+          return { jobDone, objectDone: true };
+        },
+      },
+    };
+    return { provider, state, names };
+  }
+
+  async function providerJobs(sessionId: string): Promise<{ state: string; job_deleted: boolean; object_deleted: boolean }[]> {
+    const { rows } = await database.session.query<{ state: string; job_deleted: boolean; object_deleted: boolean }>(
+      `SELECT state, job_deleted_at IS NOT NULL AS job_deleted, object_deleted_at IS NOT NULL AS object_deleted
+         FROM transcription_provider_jobs WHERE call_session_id = $1 ORDER BY attempt`,
+      [sessionId],
+    );
+    return rows;
+  }
+
+  /** One later look: what is due is made due now, the source asked, its jobs run. */
+  async function collectRound(provider: TranscriptionProvider): Promise<void> {
+    await database.session.query("UPDATE transcription_provider_jobs SET next_poll_at = now() - interval '1 second'");
+    const due = await transcriptionJobsSource({ providerKey: provider.providerKey }).find(database.session, new Date().toISOString());
+    for (const spec of due) await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+    await drain(provider);
+  }
+
+  async function ledgerCalls(providerKey: string): Promise<number> {
+    const { rows } = await database.session.query<{ calls: string | null }>(
+      'SELECT sum(cost_cents)::text AS calls FROM provider_ledger WHERE workspace_id = $1 AND provider_key = $2',
+      [seeded.alpha.workspaceId, providerKey],
+    );
+    return Number(rows[0]?.calls ?? 0);
+  }
+
+  it('waits for a slow Transcribe job outside any claim: collected by later runs, settled once, never bought again (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 3 });
+    const sessionId = await call(150);
+    const callsBefore = await ledgerCalls(AWS_TRANSCRIBE_PROVIDER_KEY);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    // Started, recorded, and the job is done: no claim is waiting on Transcribe.
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a1`]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', job_deleted: false, object_deleted: false }]);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'calling', cents: 2, settled_cents: 0 }]);
+    const { rows: open } = await database.session.query("SELECT 1 FROM jobs WHERE kind = 'call.transcribe' AND state NOT IN ('done', 'dead')");
+    expect(open).toEqual([]);
+    // The sweep leaves an attempt that is being collected alone, however old.
+    await database.session.query("UPDATE provider_reservations SET created_at = now() - interval '2 hours' WHERE subject_id = $1", [sessionId]);
+    await withTransaction(database.session, async () => await sweepTranscriptionReservations(system()));
+    expect((await attempts(sessionId))[0]?.state).toBe('calling');
+    // Three looks find it running; the fourth collects it.
+    for (let round = 0; round < 3; round += 1) {
+      await collectRound(fake.provider);
+      expect((await attempts(sessionId))[0]?.state).toBe('calling');
+    }
+    await collectRound(fake.provider);
+    expect(fake.state.looks).toBe(4);
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+    // Its 2 ¢, once, in the ledger.
+    expect(await ledgerCalls(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe(callsBefore + 2);
+    expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
+    // And what it owed AWS is deleted and recorded so.
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', job_deleted: true, object_deleted: true }]);
+    // Nothing more is due: another round asks nothing and changes nothing.
+    await collectRound(fake.provider);
+    expect(fake.state.looks).toBe(4);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+  });
+
+  it('after a crash between Start and its commit, collects the job it started instead of starting another (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const common = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common));
+    const finish = { sessionId, attempt: 1, at: common.at, recordings, provider: fake.provider };
+    expect(await withTransaction(database.session, async () => await finishCallTranscription(system(), finish))).toEqual({ kind: 'prepared' });
+    // The request goes out, and the process dies before the commit that says so.
+    await database.session.query('BEGIN');
+    expect(await finishCallTranscription(system(), finish)).toEqual({ kind: 'started', code: 'started' });
+    await database.session.query('ROLLBACK');
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'submitting', job_deleted: false, object_deleted: false }]);
+    // The job that was queued for this call is claimed again: it collects, it does not buy.
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', job_deleted: true, object_deleted: true }]);
+  });
+
+  it('retries, under a new attempt, only a recorded job the provider never started (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const common = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common));
+    // Names committed, and the claim died before the request.
+    await withTransaction(database.session, async () => await finishCallTranscription(system(), { sessionId, attempt: 1, at: common.at, recordings, provider: fake.provider }));
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    // Not found at AWS: attempt 1 estimated (nobody can vouch for it), attempt 2 started.
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a2`]);
+    expect((await attempts(sessionId)).map(row => row.state)).toEqual(['estimated', 'calling']);
+    await collectRound(fake.provider);
+    expect((await attempts(sessionId)).map(row => row.state)).toEqual(['estimated', 'settled']);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('keeps a failed job delete owed and retries it until AWS confirms, then marks it done (C3-R1 #4)', async () => {
+    const fake = fakeTranscribe({ failJobDeletes: 2 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    await collectRound(fake.provider);
+    expect((await attempts(sessionId))[0]?.state).toBe('settled');
+    // Transcribed, but the job (and its stored transcript) is still at AWS: owed, not forgotten.
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', job_deleted: false, object_deleted: true }]);
+    expect(fake.state.live.has(`fss-test-${sessionId}-a1`)).toBe(true);
+    await collectRound(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', job_deleted: false, object_deleted: true }]);
+    await collectRound(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', job_deleted: true, object_deleted: true }]);
+    expect(fake.state.live.has(`fss-test-${sessionId}-a1`)).toBe(false);
+    expect(fake.state.deletedJobs).toEqual([`fss-test-${sessionId}-a1`]);
+  });
+
+  it('deletes what an interrupted final attempt left at AWS: a deleted call’s job is abandoned and still cleaned up (C3-R1 #4)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 100 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', job_deleted: false, object_deleted: false }]);
+    // The deletion workflow's step for the session: the attempt estimated, the job abandoned.
+    await withTransaction(database.session, async () => await finaliseTranscriptionsOfSessions(system(), [sessionId], new Date().toISOString()));
+    expect((await attempts(sessionId))[0]?.state).toBe('estimated');
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'abandoned', job_deleted: false, object_deleted: false }]);
+    // The workflow then removes the session; the row owing AWS outlives it.
+    await database.session.query('DELETE FROM call_sessions WHERE id = $1', [sessionId]);
+    await collectRound(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'abandoned', job_deleted: true, object_deleted: true }]);
+    expect(fake.state.deletedObjects).toEqual([`calls/${sessionId}/attempt-1.mp3`]);
+  });
+
+  it('never calls one provider against another’s reservation: Deepgram → Transcribe releases and reserves again (C3-R1 #3)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const deepgramCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    // Reserved while the worker ran Deepgram; the deployment then switched to Transcribe.
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), deepgramCommon));
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    await collectRound(fake.provider);
+    const { rows } = await database.session.query<{ attempt: number; provider_key: string; state: string; settled_cents: number }>(
+      "SELECT attempt, provider_key, state, settled_cents FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1 ORDER BY attempt",
+      [sessionId],
+    );
+    expect(rows).toEqual([
+      { attempt: 1, provider_key: DEEPGRAM_PROVIDER_KEY, state: 'released', settled_cents: 0 },
+      { attempt: 2, provider_key: AWS_TRANSCRIBE_PROVIDER_KEY, state: 'settled', settled_cents: 2 },
+    ]);
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a2`]);
+  });
+
+  it('never calls one provider against another’s reservation: Transcribe → Deepgram releases and reserves again (C3-R1 #3)', async () => {
+    const sessionId = await call(150);
+    const awsCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), awsCommon));
+    // And marked calling under Transcribe's key by a claim whose cursor was then lost
+    // between chunk 2 and chunk 3 would be estimated (it may have been sent); a reservation
+    // still reserved is released. Here: reserved.
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    const deepgram = scripted([ok(150)]);
+    await drain(deepgram);
+    expect(deepgram.calls).toBe(1);
+    const { rows } = await database.session.query<{ attempt: number; provider_key: string; state: string }>(
+      "SELECT attempt, provider_key, state FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1 ORDER BY attempt",
+      [sessionId],
+    );
+    expect(rows).toEqual([
+      { attempt: 1, provider_key: AWS_TRANSCRIBE_PROVIDER_KEY, state: 'released' },
+      { attempt: 2, provider_key: DEEPGRAM_PROVIDER_KEY, state: 'settled' },
+    ]);
+  });
+
+  it('releases, in chunk 3, an attempt marked calling for another provider, and reserves again under this one (C3-R1 #3)', async () => {
+    const sessionId = await call(150);
+    const awsCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), awsCommon));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), awsCommon));
+    const deepgram = scripted([ok(150)]);
+    const finished = await withTransaction(
+      database.session,
+      async () => await finishCallTranscription(system(), { sessionId, attempt: 1, at: awsCommon.at, recordings, provider: deepgram }),
+    );
+    expect(finished).toEqual({ kind: 'retry', code: 'provider_changed' });
+    expect(deepgram.calls).toBe(0);
+    expect((await attempts(sessionId))[0]?.state).toBe('released');
   });
 
   it('closes only the attempts that are themselves old, leaving a fresh retry alone (P2)', async () => {

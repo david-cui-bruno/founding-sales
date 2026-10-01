@@ -4,9 +4,12 @@ import { databaseNow } from '@fss/domain/policy/clock.ts';
 import {
   CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
   beginCallTranscription,
+  cleanUpTranscriptionJobs,
+  collectCallTranscription,
   ensureTranscriptionCalling,
   finishCallTranscription,
   listHeldTranscriptions,
+  listTranscriptionJobsDue,
   type TranscriptionProvider,
 } from '@fss/domain/calls/transcription.ts';
 import type { TwilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
@@ -49,7 +52,8 @@ export interface CallTranscribeOptions {
   readonly leaseSeconds?: number | undefined;
 }
 
-type Step = 'reserved' | 'calling' | 'retry';
+/** `submit`: an asynchronous provider's job names are committed; this claim sends the request next. */
+type Step = 'reserved' | 'calling' | 'retry' | 'submit';
 
 interface TranscribeProgress {
   readonly attempt: number;
@@ -65,7 +69,7 @@ export function parseTranscribeProgress(progress: unknown): TranscribeProgress |
   const step = row['step'];
   const fencing = row['fencing'];
   if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1) return null;
-  if (step !== 'reserved' && step !== 'calling' && step !== 'retry') return null;
+  if (step !== 'reserved' && step !== 'calling' && step !== 'retry' && step !== 'submit') return null;
   if (typeof fencing !== 'string' || fencing === '') return null;
   return { attempt, step, fencing };
 }
@@ -113,6 +117,34 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       };
       const carried = parseTranscribeProgress(input.job.payload['progress']);
 
+      // Slice C3a fix round. A claim that is not continuing its own cursor looks first at the
+      // call's recorded provider job, whoever started it: a crash or a lost lease after the
+      // request resumes collecting that job, never estimates it and buys another. One status
+      // read per claim, in this chunk's short transaction; a job still running is looked at
+      // again by a later `call.transcribe` (`transcriptionJobsSource`), never waited for.
+      const ownCursor = carried !== null && carried.fencing === fencing;
+      if (!ownCursor && options.provider.jobs !== undefined) {
+        const collected = await collectCallTranscription(context, { sessionId, at, provider: options.provider });
+        if (collected.kind !== 'none') {
+          // And what the finished jobs of this call still owe AWS, tried now and recorded.
+          await cleanUpTranscriptionJobs(context, { sessionId, provider: options.provider });
+          if (collected.kind === 'retry') {
+            log('call_transcription_retry', { code: collected.code });
+            return { progress: { attempt: 1, step: 'retry', fencing }, done: false };
+          }
+          if (collected.kind === 'transcribed') {
+            log('call_transcription', { settled_cents: collected.settledCents, utterances: collected.utterances });
+          } else if (collected.kind === 'pending') {
+            log('call_transcription_pending', {});
+          } else {
+            log('call_transcription_skipped', { reason: collected.reason, code: collected.code });
+          }
+          return { progress: { step: collected.kind }, done: true };
+        }
+        const cleaned = await cleanUpTranscriptionJobs(context, { sessionId, provider: options.provider, due: true });
+        if (cleaned.owed > 0) log('call_transcription_cleanup_owed', { owed: cleaned.owed });
+      }
+
       if (carried === null) {
         // Chunk 1, or a lost cursor: if attempts already exist the rows say where the job
         // got to, and chunk 2 is where an attempt of unknown standing is resolved.
@@ -124,9 +156,13 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
         return { progress: { attempt: begun.attempt, step: 'reserved', fencing }, done: false };
       }
 
-      if (carried.step !== 'calling' || carried.fencing !== fencing) {
+      if ((carried.step !== 'calling' && carried.step !== 'submit') || carried.fencing !== fencing) {
         // Chunk 2: "a call may now have happened", durable, and nothing else.
         const calling = await ensureTranscriptionCalling(context, common);
+        if (calling.kind === 'collecting') {
+          log('call_transcription_pending', {});
+          return { progress: { ...carried }, done: true };
+        }
         if (calling.kind === 'closed') {
           log('call_transcription_skipped', { reason: calling.reason });
           return { progress: { ...carried }, done: true };
@@ -145,6 +181,14 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       if (finished.kind === 'retry') {
         log('call_transcription_retry', { attempt: carried.attempt, code: finished.code });
         return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
+      }
+      if (finished.kind === 'prepared') {
+        // The job's names are committed; the request goes in the next chunk, this claim's.
+        return { progress: { attempt: carried.attempt, step: 'submit', fencing }, done: false };
+      }
+      if (finished.kind === 'started') {
+        log('call_transcription_started', { attempt: carried.attempt, code: finished.code });
+        return { progress: { ...carried }, done: true };
       }
       if (finished.kind === 'transcribed') {
         log('call_transcription', { attempt: carried.attempt, settled_cents: finished.settledCents, utterances: finished.utterances });
@@ -172,6 +216,28 @@ export function heldTranscriptionSource(options: { readonly enabled: boolean }):
         kind: 'call.transcribe' as const,
         idempotencyKey: jobIdempotencyKey.callTranscribe(held.sessionId, held.revision),
         payload: { callSessionId: held.sessionId },
+        maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
+      }));
+    },
+  };
+}
+
+/**
+ * The source that keeps an asynchronous provider's jobs moving (slice C3a fix round): one
+ * `call.transcribe` under a new revision key for each call whose recorded job is due a
+ * look, or whose finished job still owes AWS a delete (`listTranscriptionJobsDue`).
+ * Materializes nothing without a provider that has jobs.
+ */
+export function transcriptionJobsSource(options: { readonly providerKey: string | null }): DueWorkSource {
+  return {
+    name: 'call-transcribe-collect',
+    find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
+      if (options.providerKey === null) return [];
+      return (await listTranscriptionJobsDue(session, options.providerKey)).map(due => ({
+        workspaceId: due.workspaceId,
+        kind: 'call.transcribe' as const,
+        idempotencyKey: jobIdempotencyKey.callTranscribe(due.sessionId, due.revision),
+        payload: { callSessionId: due.sessionId },
         maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
       }));
     },
