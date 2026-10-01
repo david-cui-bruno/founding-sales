@@ -44,6 +44,16 @@ function monthlyCashLockName(workspaceId: string): string {
 }
 
 /**
+ * Take the workspace's monthly lock for the rest of the transaction, for a write that
+ * changes what the month has spent outside a clearance (a settlement correction).
+ */
+export async function lockMonthlyCash(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    monthlyCashLockName(context.scope.workspaceId),
+  ]);
+}
+
+/**
  * Whether one more reservation of `cents`, dated `at` on the `zone` business calendar, fits
  * this month's ceiling. Takes the workspace's monthly lock, which is held until the
  * caller's transaction ends — so the caller must insert its reservation in the same

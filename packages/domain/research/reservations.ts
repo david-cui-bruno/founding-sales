@@ -317,6 +317,55 @@ export async function settleAttempt(
 }
 
 /**
+ * Replace a closed reservation's recorded cost with the provider's own figure, and move the
+ * ledger by the difference (slice P1, finding 5).
+ *
+ * Telephony's terminal callback may settle a call from its duration (an estimate) or from
+ * a first price, and a later callback can carry Twilio's final price. The provider's
+ * figure is the cost, so the row becomes `settled` at it and the ledger row of the
+ * reservation's own date moves by `new − previous`. Idempotent: a figure already recorded
+ * changes nothing. The caller holds the workspace's monthly lock.
+ */
+export async function correctSettledCents(
+  context: RepositoryContext,
+  input: { readonly reservationId: string; readonly cents: number },
+): Promise<{ readonly previous: number; readonly recorded: number } | null> {
+  const cents = Math.max(0, Math.trunc(input.cents));
+  const { rows } = await context.db.query<{
+    previous: number;
+    business_date: string;
+    business_time_zone: string;
+    provider_key: string;
+  }>(
+    `WITH old AS (
+       SELECT id, settled_cents FROM provider_reservations
+        WHERE workspace_id = $1 AND id = $2 AND state IN ('settled', 'estimated')
+        FOR UPDATE
+     )
+     UPDATE provider_reservations p
+        SET state = 'settled', settled_cents = $3
+       FROM old
+      WHERE p.workspace_id = $1 AND p.id = old.id AND (p.settled_cents <> $3 OR p.state <> 'settled')
+      RETURNING old.settled_cents AS previous, p.business_date::text AS business_date, p.business_time_zone, p.provider_key`,
+    [context.scope.workspaceId, input.reservationId, cents],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  const delta = cents - Number(row.previous);
+  if (delta !== 0) {
+    await context.db.query(
+      `INSERT INTO provider_ledger
+         (workspace_id, provider_key, business_date, business_time_zone, calls, failures, cost_cents, updated_at)
+       VALUES ($1, $2, $3::date, $4, 0, 0, greatest(0, $5::integer), now())
+       ON CONFLICT (workspace_id, provider_key, business_date) DO UPDATE
+          SET cost_cents = greatest(0, provider_ledger.cost_cents + $5::integer), updated_at = now()`,
+      [context.scope.workspaceId, row.provider_key, row.business_date, row.business_time_zone, delta],
+    );
+  }
+  return { previous: Number(row.previous), recorded: cents };
+}
+
+/**
  * Add invoiced cents to one ledger row, by an explicit date.
  *
  * Separate from `recordProviderCall` because a settlement is not a call: the call was
