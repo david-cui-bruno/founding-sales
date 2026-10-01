@@ -544,6 +544,34 @@ export async function finishFirmResearch(
    * the job complete.
    */
   const closedElsewhere = (): ResearchResult<ResearchRunReport> => accept(replayed(input.firmId, input.revision));
+  /**
+   * The final pause check (slice P1, invariant I1): the research switch, read again
+   * immediately before a provider request — the page fetch, the token count and the model
+   * call. Null while research is on.
+   *
+   * Off is a hold, not a failure. Nothing has been asked of the model, so this attempt's
+   * cents go back (`released_not_called`, which this claim may write because it holds the
+   * run's lock and knows first-hand it did not call), and the run closes `refused` with
+   * `research_disabled` — the same answer chunk 1 gives a run that starts while research
+   * is off. That refusal is not a look at the firm (`selectFirmsForSweep` counts only
+   * completed, failed and `no_sources` runs), so the firm is exactly as due as it was
+   * before this run, and the sweep — which runs only while research is on — picks it up
+   * again as a new revision when the switch comes back.
+   */
+  const pausedBeforeCall = async (): Promise<ResearchResult<ResearchRunReport> | null> => {
+    if ((await readResearchSettings(context)).enabled) return null;
+    await release();
+    const cost = await totalCost();
+    const closed = await refuseRun(context, {
+      runId,
+      at: input.at,
+      refusalCode: 'research_disabled',
+      costCents: cost.cents,
+      costEstimated: cost.estimated,
+    });
+    if (!closed) return closedElsewhere();
+    return refuse('research_disabled');
+  };
   /** Everything this run has been recorded as costing, across every attempt. */
   const totalCost = async (): Promise<{ readonly cents: number; readonly estimated: boolean }> => {
     const rows = await listAttempts(context, subject);
@@ -589,6 +617,10 @@ export async function finishFirmResearch(
     if (!closed) return closedElsewhere();
     return refuse('no_sources');
   }
+
+  // Research turned off since chunk 2: no page is fetched (slice P1).
+  const pausedBeforeFetch = await pausedBeforeCall();
+  if (pausedBeforeFetch !== null) return pausedBeforeFetch;
 
   // A provider that throws is a provider that failed, and a failure after a consumed
   // clearance is a committed `failed` run rather than a rollback. `providerAttempt`
@@ -692,6 +724,9 @@ export async function finishFirmResearch(
       maxOutputTokens: reservation.maxOutputTokens,
       cents: reservation.cents,
     };
+    // Turned off while the pages were being fetched: nothing is counted or called.
+    const pausedBeforeCount = await pausedBeforeCall();
+    if (pausedBeforeCount !== null) return pausedBeforeCount;
     let offered: readonly FactSource[] = sources;
     let counted: number | null = null;
     let countFailed = false;
@@ -748,6 +783,11 @@ export async function finishFirmResearch(
       bump('extraction_over_budget');
       extractionOutcome = 'over_budget';
     } else {
+      // The final pause check, immediately before the one paid request (slice P1,
+      // invariant I1). The token count above is a network round trip, and a switch turned
+      // off during it is read here; nothing but this read stands between it and the call.
+      const pausedBeforeModel = await pausedBeforeCall();
+      if (pausedBeforeModel !== null) return pausedBeforeModel;
       const answer = await providerAttempt(async () =>
         await extraction.extract({
           sources: offered.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),

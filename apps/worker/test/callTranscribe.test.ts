@@ -568,6 +568,37 @@ describe('the call.transcribe job', () => {
     }
   });
 
+  it('calls nobody when transcription is turned off while the recording is read from Twilio (slice P1)', async () => {
+    const at = new Date().toISOString();
+    const late = await call(90);
+    const common = { sessionId: late, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    expect(await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common))).toEqual({ kind: 'calling', attempt: 1 });
+    // The switch goes off during the Twilio read: after the first re-check, before Deepgram.
+    // Written in the chunk's own transaction, so the next read in it sees the write.
+    const turnsOff: TwilioRecordingFetcher = {
+      fetchRecording: async () => {
+        const saved = await updateSetting(admin(), {
+          settingKey: 'call_transcription',
+          value: { enabled: false, dailyCeilingCents: 500, unitPriceMicros: 4_300 },
+        });
+        if (!saved.ok) throw new Error(saved.reason);
+        return { ok: true as const, contentType: 'audio/mpeg' as const, bytes: AUDIO };
+      },
+    };
+    try {
+      const provider = scripted([ok(90)]);
+      const finished = await withTransaction(database.session, async () =>
+        await finishCallTranscription(system(), { sessionId: late, attempt: 1, at, recordings: turnsOff, provider }),
+      );
+      expect(finished).toEqual({ kind: 'done', reason: 'transcription_off' });
+      expect(provider.calls).toBe(0);
+      expect(await attempts(late)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
   it('closes only the attempts that are themselves old, leaving a fresh retry alone (P2)', async () => {
     const sessionId = await call(90);
     const at = new Date().toISOString();

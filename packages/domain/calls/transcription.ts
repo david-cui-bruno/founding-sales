@@ -583,6 +583,14 @@ export async function finishCallTranscription(
     await releaseNotCalled();
     return { kind: 'done', reason: 'transcription_not_eligible' };
   }
+  // The final pause check (slice P1, invariant I1), immediately before the provider call.
+  // The check above ran before the recording was read from Twilio, which is a network
+  // round trip; a switch turned off (or a ceiling set to $0) during it is read here.
+  const withdrawnLate = await stillAuthorized(context, true);
+  if (withdrawnLate !== null) {
+    await releaseNotCalled();
+    return { kind: 'done', reason: withdrawnLate };
+  }
 
   let outcome: TranscriptionOutcome;
   try {
