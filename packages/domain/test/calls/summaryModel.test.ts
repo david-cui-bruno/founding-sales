@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { anthropicCallSummarizer, providerErrorOf, usageOfSummary } from '../../calls/summaryAdapter.ts';
+import { anthropicCallSummarizer, usageOfSummary } from '../../calls/summaryAdapter.ts';
+import { providerErrorOf } from '../../classification/providerError.ts';
+import { schemaProblems } from '../support/structuredOutputsSchema.ts';
 import {
   CALL_SUMMARY_JSON_SCHEMA,
   CALL_SUMMARY_PROMPT_VERSION,
@@ -160,7 +162,7 @@ describe('the adapter', () => {
       usage: null,
       content: null,
       answeredBy: null,
-      provider: { status: null, type: null, message: null },
+      provider: { status: null, type: null, message: null, refused: false },
     });
     expect((await respond({ stop_reason: 'refusal', content: [{ type: 'text', text: answer() }], usage }).summarize(input)).outcome).toBe('refusal');
     expect((await respond({ stop_reason: 'end_turn', content: [], usage }).summarize(input)).outcome).toBe('malformed');
@@ -199,7 +201,13 @@ describe('a request the API refuses', () => {
       usage: null,
       content: null,
       answeredBy: null,
-      provider: { status: 400, type: 'invalid_request_error', message },
+      // The API's sentence, its quoted spans removed (C3 review, finding 6).
+      provider: {
+        status: 400,
+        type: 'invalid_request_error',
+        message: 'output_config.format.schema: Invalid schema: Enum value … does not match declared type …string…null…',
+        refused: true,
+      },
     });
   });
 
@@ -210,48 +218,30 @@ describe('a request the API refuses', () => {
     expect((await throwing(new FakeApiError(408, { type: 'error', error: { type: 'timeout_error', message: 'x' } })).summarize(input)).outcome).toBe('provider_error');
     const dropped = await throwing(new Error('socket hang up')).summarize(input);
     expect(dropped.outcome).toBe('provider_error');
-    expect(dropped.provider).toEqual({ status: null, type: null, message: null });
-    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(300);
+    expect(dropped.provider).toEqual({ status: null, type: null, message: null, refused: false });
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(160);
+  });
+
+  it('never lets transcript text through a provider message: quotes removed, other statuses keep none', async () => {
+    const CANARY = 'Marisol-canary-7f3a says she will sign on Friday';
+    const messages = [
+      [400, 'invalid_request_error', `messages.0.content: text "${CANARY}" is not allowed`],
+      [400, 'invalid_request_error', `unexpected value '${CANARY}' at messages.0`],
+      [400, 'invalid_request_error', `unbalanced quote: '${CANARY}`],
+      [400, 'invalid_request_error', `${'x'.repeat(170)} ${CANARY}`],
+      [413, 'request_too_large', CANARY],
+      [429, 'rate_limit_error', CANARY],
+      [500, 'api_error', CANARY],
+      [400, 'not_found_error', CANARY],
+    ] as const;
+    for (const [status, type, message] of messages) {
+      const attempt = await throwing(new FakeApiError(status, { type: 'error', error: { type, message } })).summarize(input);
+      expect(JSON.stringify(attempt), `${String(status)} ${type}`).not.toContain('canary');
+      expect(attempt.provider?.status).toBe(status);
+      expect(attempt.provider?.type).toBe(type);
+    }
   });
 });
-
-/**
- * The structured-outputs rules a schema must keep, walked over every node: an enum's values
- * are each of the node's declared type(s); a nullable value is `anyOf` with `{ type: 'null' }`
- * rather than a type list beside an enum; every object is closed and requires every property;
- * and none of the constraints the API refuses (length, numeric, array size, or a pattern).
- */
-function schemaProblems(node: unknown, path = '$'): string[] {
-  if (typeof node !== 'object' || node === null) return [];
-  if (Array.isArray(node)) return node.flatMap((child, index) => schemaProblems(child, `${path}[${String(index)}]`));
-  const schema = node as Record<string, unknown>;
-  const problems: string[] = [];
-  const declared = schema['type'] === undefined ? null : Array.isArray(schema['type']) ? (schema['type'] as string[]) : [schema['type'] as string];
-  if (Array.isArray(schema['enum'])) {
-    if (declared === null) problems.push(`${path}: enum without a type`);
-    else {
-      if (declared.length !== 1) problems.push(`${path}: enum beside a type list ${JSON.stringify(declared)}`);
-      for (const value of schema['enum'] as unknown[]) {
-        const kind = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value === 'number' ? (Number.isInteger(value) ? 'integer' : 'number') : typeof value;
-        if (!declared.includes(kind) && !(kind === 'integer' && declared.includes('number'))) problems.push(`${path}: enum value ${JSON.stringify(value)} is not ${JSON.stringify(declared)}`);
-      }
-    }
-  }
-  for (const banned of ['minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minItems', 'maxItems', 'pattern']) {
-    if (banned in schema) problems.push(`${path}: ${banned} is not supported`);
-  }
-  if (declared?.includes('object')) {
-    if (schema['additionalProperties'] !== false) problems.push(`${path}: an object must set additionalProperties: false`);
-    const keys = Object.keys((schema['properties'] as Record<string, unknown> | undefined) ?? {}).sort();
-    const required = [...((schema['required'] as string[] | undefined) ?? [])].sort();
-    if (JSON.stringify(keys) !== JSON.stringify(required)) problems.push(`${path}: required ${JSON.stringify(required)} is not every property ${JSON.stringify(keys)}`);
-  }
-  for (const [key, child] of Object.entries(schema)) {
-    if (key === 'enum' || key === 'required') continue;
-    problems.push(...schemaProblems(child, `${path}.${key}`));
-  }
-  return problems;
-}
 
 describe('the output schema the request carries', () => {
   it('keeps every structured-outputs rule, for both models', () => {

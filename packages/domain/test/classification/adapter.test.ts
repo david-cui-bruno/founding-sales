@@ -287,7 +287,28 @@ describe('a request the API refuses', () => {
     expect(attempt.ok).toBe(false);
     expect(attempt.call.outcome).toBe('provider_error');
     expect(attempt.usageReported).toBe(false);
-    expect(attempt.provider).toEqual({ status: 400, type: 'invalid_request_error', message, refused: true });
+    // The API's sentence with its quoted spans removed (C3 review, finding 6).
+    expect(attempt.provider).toEqual({
+      status: 400,
+      type: 'invalid_request_error',
+      message: 'output_config.format.schema: Invalid schema: Enum value … does not match declared type …string…null…',
+      refused: true,
+    });
+  });
+
+  it('never lets the message text through a provider error: quotes removed, other statuses keep none', async () => {
+    const CANARY = 'canary-reply-body-2b9c please call me Tuesday';
+    for (const [status, type, message] of [
+      [400, 'invalid_request_error', `messages.0.content: "${CANARY}" is not allowed`],
+      [400, 'invalid_request_error', `bad value '${CANARY}`],
+      [400, 'invalid_request_error', `${'x'.repeat(170)} ${CANARY}`],
+      [413, 'request_too_large', CANARY],
+      [500, 'api_error', CANARY],
+    ] as const) {
+      const attempt = await throwing(new FakeApiError(status, { type: 'error', error: { type, message } })).classify(MESSAGE);
+      expect(JSON.stringify(attempt), `${String(status)} ${type}`).not.toContain('canary');
+      expect(attempt.provider).toMatchObject({ status, type });
+    }
   });
 
   it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps a long message bounded', async () => {
@@ -298,7 +319,7 @@ describe('a request the API refuses', () => {
     const dropped = await throwing(new Error('socket hang up')).classify(MESSAGE);
     expect(dropped.provider).toEqual({ status: null, type: null, message: null, refused: false });
     expect(dropped.call.outcome).toBe('provider_error');
-    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(300);
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(160);
   });
 });
 

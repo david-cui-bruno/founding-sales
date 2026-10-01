@@ -1,4 +1,5 @@
 import type { AnthropicMessageResponse, AnthropicMessagesTransport } from '../classification/anthropicClient.ts';
+import { providerErrorOf, type ProviderErrorDetail } from '../classification/providerError.ts';
 import {
   buildCallSummaryRequest,
   readCallSummaryAnswer,
@@ -21,9 +22,10 @@ import {
  * | `provider_refused` | The API answered 4xx (not 408): the request was refused before any generation. Terminal. | 0 |
  * | `provider_error` | A 5xx, a 408, a timeout or a dropped connection: nobody knows what was billed. | the estimate |
  *
- * A refused or failed request carries `provider`: the HTTP status and the API's own error
- * type and message (its text about the request — a schema it rejected, a key it refused —
- * never the transcript, which no error body quotes back). A 4xx `invalid_request_error`
+ * A refused or failed request carries `provider` (`classification/providerError.ts`, the one
+ * helper the classifier shares): the HTTP status and the API's error type, and a message
+ * only for a 400 `invalid_request_error`, with its quoted spans removed and cut at 160
+ * characters — so no transcript text can reach a log through it. A 4xx `invalid_request_error`
  * used to be read as an ambiguous failure and retried at an estimate; it is the API saying
  * no, before generation, and the next attempt would say no too.
  *
@@ -34,35 +36,7 @@ import {
 
 export type CallSummaryOutcome = 'accepted' | 'refusal' | 'malformed' | 'schema_invalid' | 'provider_refused' | 'provider_error';
 
-/** What the API said when it did not answer: status, its error type, its message (bounded). */
-export interface ProviderErrorDetail {
-  readonly status: number | null;
-  readonly type: string | null;
-  readonly message: string | null;
-}
-
-/** The longest provider message kept: enough for a schema complaint, not a body. */
-const PROVIDER_MESSAGE_MAX = 300;
-
-/**
- * Read an error the SDK threw: `status` and the response body's `error.type` /
- * `error.message` (an `APIError`), or nothing for a connection failure or a timeout.
- */
-export function providerErrorOf(error: unknown): ProviderErrorDetail {
-  if (typeof error !== 'object' || error === null) return { status: null, type: null, message: null };
-  const record = error as { status?: unknown; type?: unknown; error?: unknown };
-  const status = typeof record.status === 'number' && Number.isInteger(record.status) ? record.status : null;
-  const body = typeof record.error === 'object' && record.error !== null ? (record.error as { error?: unknown }).error : undefined;
-  const inner = typeof body === 'object' && body !== null ? (body as { type?: unknown; message?: unknown }) : {};
-  const type = typeof inner.type === 'string' ? inner.type : typeof record.type === 'string' ? record.type : null;
-  const message = typeof inner.message === 'string' ? inner.message.slice(0, PROVIDER_MESSAGE_MAX) : null;
-  return { status, type: type === null ? null : type.slice(0, 64), message };
-}
-
-/** A 4xx other than 408 (a timeout) is a refusal before generation; everything else is ambiguous. */
-export function refusedBeforeGeneration(detail: ProviderErrorDetail): boolean {
-  return detail.status !== null && detail.status >= 400 && detail.status < 500 && detail.status !== 408;
-}
+export type { ProviderErrorDetail } from '../classification/providerError.ts';
 
 export interface CallSummaryAttempt {
   readonly outcome: CallSummaryOutcome;
@@ -117,7 +91,7 @@ export function anthropicCallSummarizer(options: { readonly transport: Anthropic
       } catch (error) {
         const provider = providerErrorOf(error);
         return {
-          outcome: refusedBeforeGeneration(provider) ? 'provider_refused' : 'provider_error',
+          outcome: provider.refused ? 'provider_refused' : 'provider_error',
           usage: null,
           content: null,
           answeredBy: null,

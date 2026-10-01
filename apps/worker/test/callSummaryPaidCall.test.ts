@@ -97,7 +97,8 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
         // The SDK's APIError shape: status, the parsed body.
         throw Object.assign(new Error('400 invalid_request_error'), {
           status: 400,
-          error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Invalid schema' } },
+          // The canary: a transcript line quoted back in the API's message (C3 review, finding 6).
+          error: { type: 'error', error: { type: 'invalid_request_error', message: "Invalid request near 'Yes, this is Marisol. Who did you say you were with?'" } },
         });
       }
       const usage = { input_tokens: 900, output_tokens: 300 };
@@ -509,7 +510,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       reason: 'provider_refused',
       provider_status: 400,
       provider_error_type: 'invalid_request_error',
-      provider_message: 'output_config.format.schema: Invalid schema',
+      provider_message: 'Invalid request near …',
     });
     expect(JSON.stringify(logs)).not.toContain('Marisol');
   });

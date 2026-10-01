@@ -465,7 +465,15 @@ within the two. Held summaries resume once per change of the setting (`call-summ
 like transcriptions, and that includes a retry the switch held: a call with no summary and
 fewer than two paid attempts is owed its remaining attempt by whichever job asks (C3 review,
 finding 5), and the lock, the open check and the one-open index keep that to one obligation at a
-time. A summary request in flight (`calling`) counts in transcription's "still finishing" line. The deletion workflow takes each targeted session's summary lock after the
+time. A summary request in flight (`calling`) counts in transcription's "still finishing" line.
+
+**Provider errors in the logs (C3 review, finding 6).** A request the API refuses with a 4xx
+(not 408) is `provider_refused`: refused before generation, settled at 0, not retried; a 5xx,
+408 or dropped connection is `provider_error`, estimated and retried once. The classifier and the
+summary log failures through one helper (`classification/providerError.ts`): the status and the
+error type always, and a message only for a 400 `invalid_request_error`, with every quoted span
+removed and cut at 160 characters. No other status logs a message, so a provider error that
+echoes the request cannot copy an e-mail or a transcript into a log. The deletion workflow takes each targeted session's summary lock after the
 firm and before the sessions' own locks.
 
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
