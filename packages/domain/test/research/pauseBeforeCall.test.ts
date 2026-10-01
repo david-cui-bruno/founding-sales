@@ -25,7 +25,9 @@ import { readFinishing } from '../../settings/finishing.ts';
  */
 
 const AT = '2026-09-28T14:00:00.000Z';
-const PAGE = `<p>${'We manage residential property for owners. '.repeat(20)}</p>`;
+const PAGE = `<p>${'We manage residential property for owners. '.repeat(20)}</p>`
+  .concat(`<p>${'Our maintenance team takes every work order. '.repeat(20)}</p>`)
+  .concat(`<p>${'The portfolio is about four hundred doors. '.repeat(20)}</p>`);
 const hashOf = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
 let database: TestDatabase;
@@ -67,14 +69,27 @@ beforeEach(async () => {
   }
 });
 
-/** A page fetch that counts its requests. */
-function countingFetch(): PageFetchProvider & { readonly requests: () => number } {
+/** A page fetch that counts its requests; `duringFetch` runs inside it. */
+function countingFetch(duringFetch: () => Promise<void> = async () => {}): PageFetchProvider & {
+  readonly requests: () => number;
+  readonly askedPause: () => boolean;
+} {
   let requests = 0;
+  let askedPause = false;
   return {
     providerKey: 'company_page',
     requests: () => requests,
+    askedPause: () => askedPause,
     fetchPages: async request => {
       requests += 1;
+      await duringFetch();
+      // The adapter asks the predicate before each of its own requests; this fake asks once.
+      if (request.shouldContinue !== undefined) {
+        askedPause = true;
+        if (!(await request.shouldContinue())) {
+          return { ok: true as const, costCents: 0, value: { pages: [], skipped: { paused: 1 } } };
+        }
+      }
       return await Promise.resolve({
         ok: true as const,
         costCents: 0,
@@ -95,7 +110,7 @@ function countingFetch(): PageFetchProvider & { readonly requests: () => number 
 }
 
 /** An extraction that records its counts and calls; `duringCount` runs inside the count. */
-function recordingExtraction(duringCount: () => Promise<void> = async () => {}): ExtractionProvider & {
+function recordingExtraction(duringCount: () => Promise<void> = async () => {}, tokens = 1_000): ExtractionProvider & {
   readonly counted: ExtractionRequest[];
   readonly called: ExtractionRequest[];
 } {
@@ -108,7 +123,7 @@ function recordingExtraction(duringCount: () => Promise<void> = async () => {}):
     countInputTokens: async (request: ExtractionRequest) => {
       counted.push(request);
       await duringCount();
-      return 1_000;
+      return tokens;
     },
     extract: async (request: ExtractionRequest) => {
       called.push(request);
@@ -228,5 +243,43 @@ describe('I1: research turned off between chunk 2 and chunk 3', () => {
     expect(extraction.counted).toHaveLength(1);
     expect(extraction.called).toHaveLength(0);
     expect(await runRow(where.runId)).toEqual({ outcome: 'refused', refusal: 'research_disabled', state: 'released', settled: 0 });
+  });
+});
+
+describe('I1: research turned off inside chunk 3, between its requests', () => {
+  it('off during the page fetch: the fetcher is handed the predicate, and nothing is counted or called', async () => {
+    const where = await upToTheCall(1);
+    const fetch = countingFetch(async () => {
+      await setResearch(false);
+    });
+    const extraction = recordingExtraction();
+    const result = await chunkThree(where, 1, fetch, extraction);
+    expect(fetch.askedPause()).toBe(true);
+    expect(result).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(extraction.counted).toHaveLength(0);
+    expect(extraction.called).toHaveLength(0);
+    expect(await runRow(where.runId)).toEqual({ outcome: 'refused', refusal: 'research_disabled', state: 'released', settled: 0 });
+  });
+
+  it('off during an oversized count: no second count and no call', async () => {
+    const where = await upToTheCall(1);
+    // Every count is too large for the reservation, so without the pause the loop drops a
+    // block and counts again.
+    const extraction = recordingExtraction(async () => {
+      await setResearch(false);
+    }, 10_000_000);
+    const result = await chunkThree(where, 1, countingFetch(), extraction);
+    expect(result).toEqual({ ok: false, reason: 'research_disabled' });
+    expect(extraction.counted).toHaveLength(1);
+    expect(extraction.called).toHaveLength(0);
+    expect(await runRow(where.runId)).toMatchObject({ outcome: 'refused', state: 'released' });
+  });
+
+  it('the control: on, an oversized count is counted again after a drop', async () => {
+    const where = await upToTheCall(1);
+    const extraction = recordingExtraction(async () => {}, 10_000_000);
+    await chunkThree(where, 1, countingFetch(), extraction);
+    expect(extraction.counted.length).toBeGreaterThan(1);
+    expect(extraction.called).toHaveLength(0);
   });
 });

@@ -670,3 +670,62 @@ describe('the homepage’s own links', () => {
     ]);
   });
 });
+
+// Slice P1, invariant I1: the pause predicate is asked before every request.
+describe('the research pause, asked before each request', () => {
+  const responses = {
+    'https://example.test/robots.txt': robotsAllowing,
+    'https://example.test/': ok(HOME),
+    'https://example.test/about': ok(HOME),
+  };
+
+  it('makes no request at all once research is off, even when it went off during the address lookup', async () => {
+    let on = true;
+    const sent: string[] = [];
+    const provider = researchPageFetch({
+      lookup: async () => {
+        on = false; // turned off while the name was being resolved
+        return await Promise.resolve(['93.184.216.34']);
+      },
+      request: async options => {
+        sent.push(options.url);
+        return await Promise.resolve(responses[options.url as keyof typeof responses] ?? ok(HOME));
+      },
+      now: () => Date.parse('2026-09-28T14:00:00.000Z'),
+    });
+    const answer = await provider.fetchPages({
+      ...request,
+      maxPagesPerFirm: 2,
+      urls: ['https://example.test/', 'https://example.test/about'],
+      shouldContinue: async () => await Promise.resolve(on),
+    });
+    expect(sent).toEqual([]);
+    expect(answer.ok).toBe(true);
+    if (answer.ok) {
+      expect(answer.value.pages).toEqual([]);
+      expect(answer.value.skipped['paused']).toBe(2);
+    }
+  });
+
+  it('stops between pages: off after the first page, nothing more is requested', async () => {
+    let on = true;
+    const sent: string[] = [];
+    const provider = researchPageFetch({
+      lookup: async () => await Promise.resolve(['93.184.216.34']),
+      request: async options => {
+        sent.push(options.url);
+        if (options.url === 'https://example.test/') on = false;
+        return await Promise.resolve(responses[options.url as keyof typeof responses] ?? ok(HOME));
+      },
+      now: () => Date.parse('2026-09-28T14:00:00.000Z'),
+    });
+    const answer = await provider.fetchPages({
+      ...request,
+      maxPagesPerFirm: 2,
+      urls: ['https://example.test/', 'https://example.test/about'],
+      shouldContinue: async () => await Promise.resolve(on),
+    });
+    expect(sent).toEqual(['https://example.test/robots.txt', 'https://example.test/']);
+    expect(answer.ok && answer.value.pages.length).toBe(1);
+  });
+});

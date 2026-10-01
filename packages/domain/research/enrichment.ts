@@ -632,8 +632,14 @@ export async function finishFirmResearch(
       links,
       maxPagesPerFirm: settings.maxPagesPerFirm,
       maxBytes: settings.maxPageBytes,
+      // The final pause check before each request the fetcher makes (slice P1).
+      shouldContinue: async () => (await readResearchSettings(context)).enabled,
     }),
   );
+  // Research turned off during the fetch: the fetcher stopped asking, and the run is held
+  // here rather than judged on the pages it happened to have.
+  const pausedDuringFetch = await pausedBeforeCall();
+  if (pausedDuringFetch !== null) return pausedDuringFetch;
   // The fetch is free, so its ledger row is a count and a failure code rather than
   // money. It is recorded anyway: "what refused research today" is the question the
   // ledger exists to answer, and a fetch that fails every morning is the answer.
@@ -724,13 +730,14 @@ export async function finishFirmResearch(
       maxOutputTokens: reservation.maxOutputTokens,
       cents: reservation.cents,
     };
-    // Turned off while the pages were being fetched: nothing is counted or called.
-    const pausedBeforeCount = await pausedBeforeCall();
-    if (pausedBeforeCount !== null) return pausedBeforeCount;
     let offered: readonly FactSource[] = sources;
     let counted: number | null = null;
     let countFailed = false;
     for (let drop = 0; drop <= MAX_BUDGET_DROPS; drop += 1) {
+      // The final pause check before every count request, the retries after a drop
+      // included: a switch turned off during one count stops the next (slice P1).
+      const pausedBeforeCount = await pausedBeforeCall();
+      if (pausedBeforeCount !== null) return pausedBeforeCount;
       let count: number;
       try {
         count = await extraction.countInputTokens({
