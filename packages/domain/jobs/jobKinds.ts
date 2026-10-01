@@ -197,7 +197,9 @@ export const jobIdempotencyKey = Object.freeze({
   /** One Cal.com reconciliation per workspace per hour (slice M1). */
   calcomReconcile: (workspaceSlug: string, hourIso: string): string => `calcom-reconcile:${workspaceSlug}:${hourIso}`,
   /** One transcription of one call session (slice C2): the session is the job's identity. */
-  callTranscribe: (callSessionId: string): string => `call-transcribe:${callSessionId}`,
+  /** `revision` is the turn-on that re-owes a call the switch held while off (slice P1). */
+  callTranscribe: (callSessionId: string, revision = 0): string =>
+    revision === 0 ? `call-transcribe:${callSessionId}` : `call-transcribe:${callSessionId}:r${String(revision)}`,
 });
 
 /** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */

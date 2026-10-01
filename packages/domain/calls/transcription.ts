@@ -74,8 +74,16 @@ import { boundMp3 } from './mp3Bound.ts';
 
 /** `provider_reservations.subject_kind` (admitted by 0028). */
 export const TRANSCRIPTION_SUBJECT_KIND = 'call_transcription';
-/** Paid attempts one call may ever hold: the first, and one bounded retry of an ambiguous one. */
+/**
+ * Paid attempts one call may ever hold: the first, and one bounded retry of an ambiguous one.
+ * An attempt released without a provider call (the switch turned off before it, slice P1)
+ * is not paid and does not count; `TRANSCRIPTION_MAX_ROWS` bounds those.
+ */
 export const TRANSCRIPTION_MAX_ATTEMPTS = 2;
+/** Reservation rows one call may ever have, released ones included (slice P1). */
+export const TRANSCRIPTION_MAX_ROWS = 6;
+/** How long after a call a transcription the switch held is still resumed (slice P1). */
+export const TRANSCRIPTION_RESUME_DAYS = 7;
 /** A reservation older than this has outlived every lease that could still be using it. */
 export const TRANSCRIPTION_SWEEP_MINUTES = 30;
 /**
@@ -318,6 +326,11 @@ async function listTranscriptionAttempts(context: RepositoryContext, sessionId: 
   }));
 }
 
+/** Attempts that may have reached the provider: every row but a released one. */
+function paidAttempts(rows: readonly AttemptRow[]): number {
+  return rows.filter(row => row.state !== 'released').length;
+}
+
 /** Whether the call already has a transcript. */
 async function transcribed(context: RepositoryContext, sessionId: string): Promise<boolean> {
   const { rows } = await context.db.query('SELECT 1 FROM call_transcripts WHERE workspace_id = $1 AND call_session_id = $2', [
@@ -508,7 +521,11 @@ export async function ensureTranscriptionCalling(
       await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'estimated' } });
     }
   }
-  if (rows.length >= TRANSCRIPTION_MAX_ATTEMPTS) return { kind: 'closed', reason: 'transcription_failed' };
+  // Paid attempts only: one released before any provider call (paused, slice P1) cost
+  // nothing and is no reason to give up; the row cap bounds those.
+  if (paidAttempts(rows) >= TRANSCRIPTION_MAX_ATTEMPTS || rows.length >= TRANSCRIPTION_MAX_ROWS) {
+    return { kind: 'closed', reason: 'transcription_failed' };
+  }
   const clearance = await clearAttempt(context, input);
   if (!clearance.ok) return { kind: 'closed', reason: clearance.reason };
   const attempt = rows.reduce((highest, row) => Math.max(highest, row.attempt), 0) + 1;
@@ -612,7 +629,7 @@ export async function finishCallTranscription(
     }
     // Ambiguous: estimated at the reservation first, then the bounded retry (chunk 2).
     await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'estimated' } });
-    if (rows.length >= TRANSCRIPTION_MAX_ATTEMPTS) return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
+    if (paidAttempts(rows) >= TRANSCRIPTION_MAX_ATTEMPTS || rows.length >= TRANSCRIPTION_MAX_ROWS) return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
     return { kind: 'retry', code: outcome.code };
   }
 
@@ -669,6 +686,69 @@ export async function sweepTranscriptionReservations(
     estimated += closed.estimated;
   }
   return { released, estimated };
+}
+
+/**
+ * Transcriptions the switch held (slice P1, invariant I1): paused work is held, not
+ * completed, so turning transcription back on runs each of them once.
+ *
+ * A `call.transcribe` job that met "off" — at chunk 1, at chunk 2, or at the final check
+ * before the provider call — completes with its reservation released, and the job store
+ * ignores a second enqueue of the same key. So a held call is found from the rows: an
+ * eligible call (answered, a recording of at least twenty seconds) of the last
+ * `TRANSCRIPTION_RESUME_DAYS`, with no transcript, a `call.transcribe` job that has
+ * finished (none queued, running or retryable), no open reservation, fewer than
+ * `TRANSCRIPTION_MAX_ATTEMPTS` paid attempts, and a current setting that is on, has a
+ * ceiling above 0, and was written **after** the last of those jobs finished. Each such
+ * call is owed one job under a new revision key, `call-transcribe:{session}:r{n}`, n the
+ * number of jobs the call already has: once that job finishes it is newer than the
+ * setting, so a call is resumed at most once for each change of the setting, and a
+ * resumed job pays only if the earlier ones did not (chunk 2 counts paid attempts).
+ *
+ * The same rule resumes a call refused for the day's ceiling once an administrator
+ * changes the setting; a call never queued (it ended while transcription was off) is not
+ * held work and is not transcribed later.
+ */
+export interface HeldTranscription {
+  readonly workspaceId: string;
+  readonly sessionId: string;
+  readonly revision: number;
+}
+
+export async function listHeldTranscriptions(db: Queryable): Promise<readonly HeldTranscription[]> {
+  const { rows } = await db.query<{ workspace_id: string; session_id: string; jobs: string }>(
+    `SELECT cs.workspace_id, cs.id AS session_id, j.jobs::text AS jobs
+       FROM call_sessions cs
+       JOIN workspace_settings s
+         ON s.workspace_id = cs.workspace_id AND s.setting_key = 'call_transcription' AND s.superseded_at IS NULL
+       CROSS JOIN LATERAL (
+         SELECT count(*) AS jobs, max(updated_at) AS finished_at,
+                bool_and(state = 'done') AS all_done
+           FROM jobs
+          WHERE workspace_id = cs.workspace_id AND kind = 'call.transcribe'
+            AND payload ->> 'callSessionId' = cs.id::text
+       ) j
+      WHERE cs.answered_at IS NOT NULL AND cs.recording_path IS NOT NULL
+        AND cs.recording_duration_seconds >= $1
+        AND cs.created_at > now() - make_interval(days => $2)
+        AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
+        AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at
+        AND NOT EXISTS (SELECT 1 FROM call_transcripts t WHERE t.workspace_id = cs.workspace_id AND t.call_session_id = cs.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM provider_reservations r
+           WHERE r.workspace_id = cs.workspace_id AND r.subject_kind = $3 AND r.subject_id = cs.id
+             AND r.state IN ('reserved', 'calling')
+        )
+        AND (
+          SELECT count(*) FROM provider_reservations r
+           WHERE r.workspace_id = cs.workspace_id AND r.subject_kind = $3 AND r.subject_id = cs.id
+             AND r.state <> 'released'
+        ) < $4
+      ORDER BY cs.workspace_id, cs.id
+      LIMIT 50`,
+    [TRANSCRIPTION_MINIMUM_SECONDS, TRANSCRIPTION_RESUME_DAYS, TRANSCRIPTION_SUBJECT_KIND, TRANSCRIPTION_MAX_ATTEMPTS],
+  );
+  return rows.map(row => ({ workspaceId: row.workspace_id, sessionId: row.session_id, revision: Number(row.jobs) }));
 }
 
 /** The workspaces the transcription sweep would find work in now; the scheduler's question. */

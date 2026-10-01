@@ -35,7 +35,8 @@ import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource } from '../src/handlers/callTranscribe.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
 import {
@@ -598,6 +599,63 @@ describe('the call.transcribe job', () => {
     } finally {
       await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
     }
+  });
+
+  it('holds a transcription turned off mid-flight, and runs it exactly once when turned back on (slice P1, finding 6)', async () => {
+    const held = await call(90);
+    expect((await enqueue(held)).enqueued).toBe(true);
+    // Off during the Twilio read: the final check before Deepgram finds it, and the job completes.
+    const turnsOff: TwilioRecordingFetcher = {
+      fetchRecording: async () => {
+        await setting('call_transcription', { enabled: false, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+        return { ok: true as const, contentType: 'audio/mpeg' as const, bytes: AUDIO };
+      },
+    };
+    const source = heldTranscriptionSource({ enabled: true });
+    const owed = async () =>
+      (await source.find(database.session, new Date().toISOString())).filter(spec => spec.payload['callSessionId'] === held);
+    const resume = async (): Promise<readonly string[]> => {
+      const specs = await owed();
+      for (const spec of specs) await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+      return specs.map(spec => spec.idempotencyKey);
+    };
+    const first = scripted([ok(90)]);
+    await drain(first, turnsOff);
+    expect(first.calls).toBe(0);
+    expect(await attempts(held)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+    // Still off: nothing is owed. A worker without the handler never materializes one.
+    expect(await owed()).toEqual([]);
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    expect(await heldTranscriptionSource({ enabled: false }).find(database.session, new Date().toISOString())).toEqual([]);
+    // Turned off mid-flight a second time: a held attempt cost nothing, so it is no reason to give up.
+    expect(await resume()).toEqual([`call-transcribe:${held}:r1`]);
+    await drain(first, turnsOff);
+    expect(first.calls).toBe(0);
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    expect(await resume()).toEqual([`call-transcribe:${held}:r2`]);
+    const second = scripted([ok(90), ok(90)]);
+    await drain(second);
+    expect(second.calls).toBe(1);
+    // One paid attempt: the held ones cost nothing, the resumed one is settled once.
+    expect(await attempts(held)).toEqual([
+      { attempt: 1, state: 'released', cents: 1, settled_cents: 0 },
+      { attempt: 2, state: 'released', cents: 1, settled_cents: 0 },
+      { attempt: 3, state: 'settled', cents: 1, settled_cents: 1 },
+    ]);
+    expect(await readCallTranscript(salesperson(), held)).not.toBeNull();
+    // And never again: the source owes nothing more, and a re-enqueue of a key runs nothing.
+    expect(await owed()).toEqual([]);
+    await withTransaction(database.session, async () =>
+      await enqueueJob(database.session, {
+        workspaceId: seeded.alpha.workspaceId,
+        kind: 'call.transcribe',
+        idempotencyKey: `call-transcribe:${held}:r2`,
+        payload: { callSessionId: held },
+        maxAttempts: 3,
+      }),
+    );
+    await drain(second);
+    expect(second.calls).toBe(1);
   });
 
   /** This calendar month's spend, on the business calendar, as of the fixture's call instant. */

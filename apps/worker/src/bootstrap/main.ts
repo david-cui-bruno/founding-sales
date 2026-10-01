@@ -31,7 +31,7 @@ import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminal
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
 import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
-import { callTranscribeJobHandler, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
 import { readTranscriptionProvider } from '../transcription/deepgramClient.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
@@ -360,7 +360,9 @@ export function readTranscriptionComposition(
  * Every source inserts rows and talks to nothing outside PostgreSQL, which is what
  * makes running one from a command line safe.
  */
-export function workerDueWorkSources(options: { readonly calcomReconcile?: boolean } = {}): readonly DueWorkSource[] {
+export function workerDueWorkSources(
+  options: { readonly calcomReconcile?: boolean; readonly transcription?: boolean } = {},
+): readonly DueWorkSource[] {
   return [
     canarySource(),
     todayBuildSource(),
@@ -374,6 +376,8 @@ export function workerDueWorkSources(options: { readonly calcomReconcile?: boole
     // job only in a worker that has a Cal.com API key to run it with — a job no handler
     // here could claim would sit in the queue for ever, one more each hour.
     calcomReconcileSource({ enabled: options.calcomReconcile === true }),
+    // Slice P1. Like Cal.com's: listed always, materializing only where `call.transcribe` is registered.
+    heldTranscriptionSource({ enabled: options.transcription === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -477,7 +481,10 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry(), composition),
-      sources: workerDueWorkSources({ calcomReconcile: composition.calcom !== undefined }),
+      sources: workerDueWorkSources({
+        calcomReconcile: composition.calcom !== undefined,
+        transcription: composition.transcription !== undefined,
+      }),
       sink,
       log,
     });

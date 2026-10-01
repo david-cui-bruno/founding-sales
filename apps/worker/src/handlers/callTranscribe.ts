@@ -6,9 +6,14 @@ import {
   beginCallTranscription,
   ensureTranscriptionCalling,
   finishCallTranscription,
+  listHeldTranscriptions,
   type TranscriptionProvider,
 } from '@fss/domain/calls/transcription.ts';
 import type { TwilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**
  * The `call.transcribe` job (slice C2): one answered, recorded call's transcript.
@@ -133,6 +138,28 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
         log('call_transcription_skipped', { reason: finished.reason, code: finished.code ?? null });
       }
       return { progress: { ...carried }, done: true };
+    },
+  };
+}
+
+/**
+ * The source that resumes transcriptions the switch held (slice P1, invariant I1): one
+ * `call.transcribe` under a new revision key for each call `listHeldTranscriptions`
+ * finds. Materializes nothing in a worker without the handler, so a job no handler here
+ * could claim never sits in the queue.
+ */
+export function heldTranscriptionSource(options: { readonly enabled: boolean }): DueWorkSource {
+  return {
+    name: 'call-transcribe-resume',
+    find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
+      if (!options.enabled) return [];
+      return (await listHeldTranscriptions(session)).map(held => ({
+        workspaceId: held.workspaceId,
+        kind: 'call.transcribe' as const,
+        idempotencyKey: jobIdempotencyKey.callTranscribe(held.sessionId, held.revision),
+        payload: { callSessionId: held.sessionId },
+        maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
+      }));
     },
   };
 }
