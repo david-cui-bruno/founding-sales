@@ -7,6 +7,7 @@ import {
   type CallSessionDto,
   type CallTranscriptResponse,
 } from '@fss/contracts';
+import { CallSummaryBlock } from './CallSummary.tsx';
 import { Button } from '../ui/button.tsx';
 import { callTimer } from './callText.ts';
 import { playRecording, type Playback } from './playRecording.ts';
@@ -23,6 +24,9 @@ import { playRecording, type Playback } from './playRecording.ts';
  * for C2's diarized ones (`transcriptSpeakerLabels`) — its time
  * in grey, and what was said. A call with no
  * transcript shows nothing; a read that failed is a sentence from `reasonSentence`.
+ *
+ * Slice C3b: a call with a summary shows it under its row, above the transcript: a few
+ * sentences, the suggested next steps and the commitments heard (`CallSummary.tsx`).
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -261,6 +265,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
                 <span className="w-12" />
               )}
             </div>
+            {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
             {call.hasTranscript === true && ports.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
             ) : null}

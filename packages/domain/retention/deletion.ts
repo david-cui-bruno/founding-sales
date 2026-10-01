@@ -4,7 +4,7 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
-import { finaliseSummariesOfSessions } from '../calls/summary.ts';
+import { finaliseSummariesOfSessions, lockSummariesForDeletion } from '../calls/summary.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockMonthlySpend } from '../research/ledger.ts';
 import { lockRun } from '../research/runs.ts';
@@ -676,6 +676,12 @@ export async function commitDeletion(
     `SELECT id FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     [context.scope.workspaceId, scope.contactId, scope.firmId],
   );
+  // Slice C3b: their summary locks first — a subject lock, after the firm and before the
+  // sessions' own locks and rows, which a summary's chunk 3 takes in that order too.
+  await lockSummariesForDeletion(
+    context,
+    targetedSessions.map(session => session.id),
+  );
   await lockSessionsForDeletion(
     context,
     targetedSessions.map(session => session.id),
@@ -866,10 +872,10 @@ export async function commitDeletion(
       await databaseNow(context),
     );
   }
-  // Slice C3b: each session's open summary attempts finalised by compare-and-set
-  // (`reserved` released, `calling` estimated), then its summary removed. The sessions are
-  // already locked FOR UPDATE, so a summary claim finishing its request waits for this
-  // deletion and then finds the session gone.
+  // Slice C3b: each session's open summary attempts finalised as the sweep does it
+  // (`reserved` released, `calling` estimated), then its summary removed. Its summary lock
+  // was taken above, so a claim finishing its request waits for this deletion and then
+  // finds the session gone.
   const { rows: summarizedSessions } = await context.db.query<{ id: string }>(
     `SELECT s.id FROM call_sessions s
       WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}

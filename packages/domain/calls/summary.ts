@@ -2,7 +2,7 @@ import type { CallSummaryDto, CallTranscriptUtterance } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
+import { lockMonthlySpend, recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
 import {
   listAttempts,
   markCalling,
@@ -13,7 +13,7 @@ import {
 } from '../research/reservations.ts';
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
-import { lockSettingForRead } from '../settings/store.ts';
+import { settingLockName } from '../settings/store.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import type { CallSummaryAttempt, CallSummaryOutcome, CallSummaryPort } from './summaryAdapter.ts';
 import {
@@ -68,6 +68,17 @@ import {
  *
  * The input bound is the request's UTF-8 byte length, which no tokenizer exceeds, so the
  * reservation is a true upper bound without a count call between chunk 2 and the request.
+ *
+ * ## The one lock order (`docs/greenfield/calling.md`)
+ *
+ * firm → the subject's own lock (here: the call's summary lock, then its session row) →
+ * the kind's budget lock (`call_summary_budget`) → the workspace monthly lock → rows. Chunk
+ * 1 takes summary → budget → monthly; chunk 2 summary → monthly → the switch's setting lock
+ * SHARED (a leaf); chunk 3 summary → the session row (KEY SHARE) → monthly → reservation,
+ * ledger and summary rows. The deletion workflow takes the summary locks of every session it
+ * removes after the firm and before the sessions' own locks and rows
+ * (`lockSummariesForDeletion`), so a claim mid-request finishes before the deletion measures
+ * anything, and one that has not reached its lock finds the session gone.
  */
 
 /** `provider_reservations.subject_kind` for one call's summary (admitted by 0033). */
@@ -273,7 +284,12 @@ export async function ensureCallSummaryCalling(
   const zone = await workspaceBusinessZone(context);
   // The month, then the switch: the last two things read before the commit.
   const withinMonth = await monthWithinCeiling(context, { at, zone });
-  await lockSettingForRead(context, 'call_transcription');
+  // The switch's own setting lock, SHARED, held to the commit that marks `calling`: a save
+  // of `call_transcription` takes it EXCLUSIVE, so a turn-off either committed before this
+  // read (and holds the call) or waits for this commit (and this request is submitted).
+  await context.db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [
+    settingLockName(context.scope.workspaceId, 'call_transcription'),
+  ]);
   if (!(await summariesOn(context))) {
     await release();
     return { kind: 'done', reason: 'disabled' };
@@ -311,13 +327,13 @@ export async function finishCallSummary(
   }
 
   await lockSummary(context, input.sessionId);
-  // The session row, KEY SHARE, before any reservation row is touched: the deletion
-  // workflow locks the sessions it removes FOR UPDATE first, so this waits for it (and
-  // then finds the session gone) rather than holding something it will want.
+  // The session row, KEY SHARE (the summary's foreign key needs it to stay), then the month,
+  // both before any reservation, ledger or summary row is written: the one lock order.
   const { rows: live } = await context.db.query(
     'SELECT 1 FROM call_sessions WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE',
     [context.scope.workspaceId, input.sessionId],
   );
+  await lockMonthlySpend(context);
   const row = await readAttempt(context, { ...subjectOf(input.sessionId), attempt: input.attempt });
   const at = await databaseNow(context);
   let settledCents = 0;
@@ -386,6 +402,7 @@ export async function estimateAbandonedSummary(
   input: { readonly sessionId: string; readonly attempt: number },
 ): Promise<void> {
   await lockSummary(context, input.sessionId);
+  await lockMonthlySpend(context);
   const row = await readAttempt(context, { ...subjectOf(input.sessionId), attempt: input.attempt });
   if (row !== null && row.state === 'calling') {
     await settleAttempt(context, { reservationId: row.id, at: await databaseNow(context), outcome: { kind: 'estimated' } });
@@ -449,15 +466,25 @@ export async function workspacesOwingSummarySweep(db: Queryable): Promise<readon
 }
 
 /**
- * The deletion workflow's step for sessions it is about to remove, after it has locked
- * them FOR UPDATE: their open summary attempts finalised by compare-and-set on each row's
- * state — `reserved` released, `calling` estimated — without the summary lock, which a
- * claim holds while it waits on the session row (taking it here would be a cycle). A row
- * a claim marks `calling` between the read and the write stays open and the sweep
- * estimates it; the money is never released under a request.
+ * The deletion workflow's lock on the summaries of the sessions it is about to remove:
+ * each one's summary lock, in id order, after the firm and before the sessions' own locks
+ * and rows (`lockSessionsForDeletion`). A claim mid-request (chunk 3 sends before it takes
+ * its lock) waits for the deletion and then finds the session gone; a claim holding the
+ * lock finishes first. Held to the commit.
+ */
+export async function lockSummariesForDeletion(context: RepositoryContext, sessionIds: readonly string[]): Promise<void> {
+  for (const sessionId of [...new Set(sessionIds)].sort()) await lockSummary(context, sessionId);
+}
+
+/**
+ * The deletion workflow's step for the sessions it removes, under the locks above and the
+ * monthly lock: their open summary attempts finalised as the sweep does it — `reserved`
+ * released, `calling` estimated. The summaries themselves are deleted by the workflow (and
+ * would cascade with their sessions).
  */
 export async function finaliseSummariesOfSessions(context: RepositoryContext, sessionIds: readonly string[], at: string): Promise<void> {
   for (const sessionId of [...new Set(sessionIds)].sort()) {
+    await lockSummary(context, sessionId);
     for (const row of await listAttempts(context, subjectOf(sessionId))) {
       if (row.state === 'reserved') await settleAttempt(context, { reservationId: row.id, at, outcome: { kind: 'released' } });
       else if (row.state === 'calling') await settleAttempt(context, { reservationId: row.id, at, outcome: { kind: 'estimated' } });
