@@ -388,7 +388,7 @@ describe('choosing the provider from the task environment', () => {
     const twilio = JSON.stringify({ account_sid: `AC${'a'.repeat(32)}`, api_key_sid: `SK${'b'.repeat(32)}`, api_key_secret: 'c'.repeat(24) });
     const composed = readTranscriptionComposition({ ...aws, transcription: '{}', 'twilio-voice': twilio });
     expect(composed.problem).toBeNull();
-    expect(composed.options?.provider.providerKey).toBe('aws_transcribe.standard');
+    expect(composed.options?.provider?.providerKey).toBe('aws_transcribe.standard');
     // So the worker's heartbeat says call_transcribe, which is all the API reads.
     const registry = registerHandlers(new HandlerRegistry(), { transcription: composed.options ?? undefined } as Parameters<typeof registerHandlers>[1]);
     expect(registry.get('call.transcribe')).toBeDefined();

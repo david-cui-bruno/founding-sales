@@ -15,6 +15,7 @@ import {
   finaliseTranscriptionsOfSessions,
   readCallTranscript,
   sweepTranscriptionReservations,
+  transcriptionCollectJobKey,
   transcriptionSpentCents,
   transcriptionWorkerAvailable,
   workspacesOwingTranscriptionSweep,
@@ -34,12 +35,12 @@ import { AWS_TRANSCRIBE_PRICING, AWS_TRANSCRIBE_PROVIDER_KEY } from '../src/tran
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
-import { readTranscriptionComposition, registerHandlers } from '../src/bootstrap/main.ts';
+import { readTranscriptionComposition, registerHandlers, workerDueWorkSources, workerSourceFlags } from '../src/bootstrap/main.ts';
 import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { callTranscribeJobHandler, heldTranscriptionSource, transcriptionJobsSource } from '../src/handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, callTranscribeStartsNewAttempts, heldTranscriptionSource, transcriptionJobsSource } from '../src/handlers/callTranscribe.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
@@ -1020,6 +1021,66 @@ describe('the call.transcribe job', () => {
     } finally {
       await database.session.query('DELETE FROM transcription_provider_jobs WHERE id = ANY($1::uuid[])', [dead]);
     }
+  });
+
+  it('composes the collector and its source without the Deepgram key or the Twilio credentials, and collects collect-only (C3-N #3)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 0 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 0 }]);
+    await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [sessionId]);
+    const { rows: ids } = await database.session.query<{ id: string }>('SELECT id FROM transcription_provider_jobs WHERE call_session_id = $1', [sessionId]);
+    const lookKey = transcriptionCollectJobKey(ids[0]?.id ?? '', 0);
+
+    const bucket = { FSS_CALL_AUDIO_BUCKET: 'fss-test-call-audio-123456789012', AWS_REGION: 'us-east-1', FSS_NAME_PREFIX: 'fss-test' };
+    const twilio = JSON.stringify({ account_sid: `AC${'a'.repeat(32)}`, api_key_sid: `SK${'b'.repeat(32)}`, api_key_secret: 'c'.repeat(24) });
+    const deepgram = JSON.stringify({ provider: 'deepgram', api_key: FAKE_KEY });
+    const variants: { name: string; environment: Record<string, string>; problem: RegExp }[] = [
+      { name: 'Deepgram chosen, no key', environment: { ...bucket, FSS_TRANSCRIPTION_PROVIDER: 'deepgram', transcription: '{}', 'twilio-voice': twilio }, problem: /^transcription:/u },
+      { name: 'Deepgram key, no Twilio credentials', environment: { ...bucket, transcription: deepgram }, problem: /^twilio:absent$/u },
+      { name: 'Transcribe chosen, no Twilio credentials', environment: { ...bucket, FSS_TRANSCRIPTION_PROVIDER: 'aws_transcribe', transcription: '{}' }, problem: /^twilio:absent$/u },
+    ];
+    for (const variant of variants) {
+      const composed = readTranscriptionComposition(variant.environment);
+      expect(composed.problem, variant.name).toMatch(variant.problem);
+      expect(composed.options?.collector?.providerKey, variant.name).toBe(AWS_TRANSCRIBE_PROVIDER_KEY);
+      expect(composed.options?.provider, variant.name).toBeUndefined();
+      expect(JSON.stringify(composed), variant.name).not.toContain(FAKE_KEY);
+      const composition = { transcription: composed.options ?? undefined };
+      const registry = registerHandlers(new HandlerRegistry(), composition as Parameters<typeof registerHandlers>[1]);
+      expect(registry.get('call.transcribe'), variant.name).toBeDefined();
+      // Registered, but it starts nothing: the heartbeat flag the API reads stays false.
+      expect(callTranscribeStartsNewAttempts(registry.get('call.transcribe')), variant.name).toBe(false);
+      const flags = workerSourceFlags(composition);
+      expect(flags, variant.name).toMatchObject({ transcription: false, transcriptionCollector: true });
+      const source = workerDueWorkSources(flags).find(entry => entry.name === 'call-transcribe-collect');
+      // The source queries (inside a transaction rolled back, so the next variant sees the row due).
+      await database.session.query('BEGIN');
+      try {
+        const specs = (await source?.find(database.session, new Date().toISOString())) ?? [];
+        expect(specs.map(spec => spec.idempotencyKey), variant.name).toContain(lookKey);
+      } finally {
+        await database.session.query('ROLLBACK');
+      }
+    }
+    // Without the bucket there is nothing to collect with, and nothing is composed.
+    expect(readTranscriptionComposition({ transcription: '{}' }).options).toBeNull();
+
+    // A collect-only handler collects the recorded job, and a new call it cannot start is
+    // skipped without reserving anything.
+    const registry = new HandlerRegistry().register(callTranscribeJobHandler({ collector: fake.provider, log: (event, fields) => logs.push({ event, fields }) }));
+    const due = await transcriptionJobsSource({ enabled: true }).find(database.session, new Date().toISOString());
+    for (const spec of due) await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+    const fresh = await call(150);
+    expect((await enqueue(fresh)).enqueued).toBe(true);
+    for (let pass = 0; pass < 5; pass += 1) {
+      if ((await runOnce(database.session, { registry, owner: 'collect-only-test', limit: 10 })).claimed === 0) break;
+    }
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 1 }]);
+    expect((await attempts(sessionId))[0]?.state).toBe('settled');
+    expect(await attempts(fresh)).toEqual([]);
+    expect(logs.some(line => line.event === 'call_transcription_skipped' && line.fields['reason'] === 'transcription_unconfigured')).toBe(true);
   });
 
   it('after a crash between Start and its commit, collects the job it started instead of starting another (C3-R1 #1)', async () => {

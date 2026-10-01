@@ -34,25 +34,31 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  *     and the reservation settled by id. An ambiguous attempt is estimated there and the
  *     cursor goes back to chunk 2 (`step: 'retry'`) for the one bounded retry.
  *
- * Registered only in a worker that has both the `transcription` key and the Twilio
- * recording credentials; without either the kind stays unclaimed in the queue, which is
- * what a worker without a key does by design (the API does not queue one while the key
- * is missing either).
+ * Starts new attempts only in a worker that has both a provider and the Twilio recording
+ * credentials. With only the call-audio bucket configured it is registered collect-only
+ * (review C3-N): recorded Transcribe jobs are collected, a claim with nothing to collect is
+ * skipped as `transcription_unconfigured`, and the heartbeat says it starts nothing, so the
+ * API does not queue new ones. With neither, the kind stays unclaimed in the queue.
  *
  * The provider's outcome completes the job whatever it was; `maxAttempts` is about a
  * poison payload or a lost lease, never about Deepgram.
  */
 
 export interface CallTranscribeOptions {
-  /** The provider new attempts use. */
-  readonly provider: TranscriptionProvider;
+  /**
+   * The provider new attempts use. Absent, with `recordings`, in a collect-only worker
+   * (review C3-N): the call-audio bucket is configured but the Deepgram key or the Twilio
+   * recording credentials are not, so recorded Transcribe jobs are still collected and no
+   * new attempt is started.
+   */
+  readonly provider?: TranscriptionProvider | undefined;
   /**
    * The Amazon Transcribe adapter, present whenever the call-audio bucket is configured,
    * whichever provider new attempts use (review C3-F, finding 3): recorded jobs are always
    * collected, so switching to Deepgram strands nothing.
    */
   readonly collector?: TranscriptionProvider | undefined;
-  readonly recordings: TwilioRecordingFetcher;
+  readonly recordings?: TwilioRecordingFetcher | undefined;
   /** The line a run leaves: a code and counts, never a transcript, a URL or a key. */
   readonly log?: ((event: string, fields: Readonly<Record<string, string | number | boolean | null>>) => void) | undefined;
   readonly leaseSeconds?: number | undefined;
@@ -108,12 +114,30 @@ export function callTranscribeLeaseSeconds(provider: Pick<TranscriptionProvider,
   return Math.max(240, RECORDING_READ_SECONDS + Math.ceil(provider?.maxCallSeconds ?? 120) + LEASE_MARGIN_SECONDS);
 }
 
+/** The handlers that can start new attempts (a provider and the recording read). */
+const STARTS_NEW_ATTEMPTS = new WeakSet<JobHandler>();
+
+/**
+ * Whether this `call.transcribe` handler starts new attempts: the worker heartbeat's
+ * `call_transcribe` flag, which the API reads before it queues a transcription. A
+ * collect-only handler (review C3-N) is registered, but says false.
+ */
+export function callTranscribeStartsNewAttempts(handler: JobHandler | undefined): boolean {
+  return handler !== undefined && STARTS_NEW_ATTEMPTS.has(handler);
+}
+
 export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHandler {
+  const handler = buildCallTranscribeJobHandler(options);
+  if (options.provider !== undefined && options.recordings !== undefined) STARTS_NEW_ATTEMPTS.add(handler);
+  return handler;
+}
+
+function buildCallTranscribeJobHandler(options: CallTranscribeOptions): JobHandler {
   return {
     kind: 'call.transcribe',
     protection: 'business_uniqueness',
     maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
-    leaseSeconds: options.leaseSeconds ?? callTranscribeLeaseSeconds(options.provider),
+    leaseSeconds: options.leaseSeconds ?? callTranscribeLeaseSeconds(options.provider ?? options.collector),
     chunked: true,
     handle: async (input): Promise<void | JobChunk> => {
       const sessionId = input.job.payload['callSessionId'];
@@ -123,7 +147,6 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       const context = repositoryContext(input.scope, input.session);
       const at = await databaseNow(context);
       const fencing = input.job.fencingToken;
-      const common = { sessionId, at, keyConfigured: true, providerKey: options.provider.providerKey, pricing: options.provider.pricing };
       const log = (event: string, fields: Readonly<Record<string, string | number | boolean | null>>): void => {
         options.log?.(event, { workspace_id: input.scope.workspaceId, call_session_id: sessionId, ...fields });
       };
@@ -135,7 +158,9 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       // at most one output read, then the commit; a job still running is looked at again by
       // a later `call.transcribe` (`transcriptionJobsSource`), never waited for.
       const ownCursor = carried !== null && carried.fencing === fencing;
-      if (!ownCursor && options.collector !== undefined) {
+      const { provider, recordings } = options;
+      const startsNew = provider !== undefined && recordings !== undefined;
+      if ((!ownCursor || !startsNew) && options.collector !== undefined) {
         const collected = await collectCallTranscription(context, { sessionId, at, collector: options.collector });
         if (collected.kind === 'retry') {
           // The ordinary ambiguous rule: chunk 2 may reserve the one retry within the cap.
@@ -154,6 +179,14 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
           return { progress: { step: collected.kind }, done: true };
         }
       }
+      if (!startsNew) {
+        // A collect-only worker (review C3-N): nothing recorded to collect, and no provider or
+        // recording credentials to start an attempt with. Nothing was reserved or bought; the
+        // held-transcription rule resumes the call after the setting next changes.
+        log('call_transcription_skipped', { reason: 'transcription_unconfigured', code: null });
+        return { progress: { step: 'unconfigured' }, done: true };
+      }
+      const common = { sessionId, at, keyConfigured: true, providerKey: provider.providerKey, pricing: provider.pricing };
 
       if (carried === null) {
         // Chunk 1, or a lost cursor: if attempts already exist the rows say where the job
@@ -185,8 +218,8 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
         sessionId,
         attempt: carried.attempt,
         at,
-        recordings: options.recordings,
-        provider: options.provider,
+        recordings,
+        provider,
       });
       if (finished.kind === 'retry') {
         log('call_transcription_retry', { attempt: carried.attempt, code: finished.code });
