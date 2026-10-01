@@ -1055,6 +1055,58 @@ export type CollectTranscriptionOutcome =
   | { readonly kind: 'done'; readonly reason: TranscriptionRefusalCode | 'already_transcribed'; readonly code: string };
 
 /**
+ * The one give-up path: the attempt estimated (when it is still `calling`) and the job
+ * `failed`, terminal. The caller holds the session lock and the budget lock, in that order.
+ * Used by a look that finds the job past its deadline and by the scheduler, which gives up
+ * a job past its deadline itself when no look ever ran.
+ */
+async function giveUpProviderJob(
+  context: RepositoryContext,
+  job: ProviderJobRow,
+  reservation: { readonly id: string; readonly state: string } | undefined,
+  at: string,
+): Promise<void> {
+  if (reservation?.state === 'calling') {
+    await settleAttempt(context, { reservationId: reservation.id, at, outcome: { kind: 'estimated' } });
+  }
+  await markProviderJob(context, job.jobName, { state: 'failed' });
+}
+
+/** How many jobs past their deadline one scheduler pass gives up. */
+export const TRANSCRIPTION_GIVE_UPS_PER_PASS = 20;
+
+/**
+ * Gives up, in the scheduler pass's own transaction, the recorded jobs past
+ * `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` that are still open. A look enforces the deadline
+ * only when it runs; a row whose look jobs all die would otherwise be looked at every five
+ * minutes for ever. Database writes only (the attempt is estimated at its reservation, as
+ * every give-up is); no provider is asked. A session a live claim holds is left for the next
+ * pass.
+ */
+async function giveUpExpiredProviderJobs(db: Queryable): Promise<void> {
+  const { rows } = await db.query<{ workspace_id: string; call_session_id: string; job_name: string }>(
+    `SELECT workspace_id, call_session_id, job_name FROM transcription_provider_jobs
+      WHERE state IN ('submitting', 'started')
+        AND created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) <= now()
+      ORDER BY created_at, id
+      LIMIT $1`,
+    [TRANSCRIPTION_GIVE_UPS_PER_PASS],
+  );
+  for (const row of rows) {
+    const context = repositoryContext(workspaceScope(row.workspace_id, { kind: 'system', component: 'scheduler' }), db);
+    if (!(await tryLockTranscription(context, row.call_session_id))) continue;
+    await lockTranscriptionBudget(context);
+    // Asked again under the lock: a claim may have finished the job since the read.
+    const job = (await providerJobsOf(context, row.call_session_id)).find(
+      candidate => candidate.jobName === row.job_name && (candidate.state === 'submitting' || candidate.state === 'started') && candidate.expired,
+    );
+    if (job === undefined) continue;
+    const reservation = (await listTranscriptionAttempts(context, row.call_session_id)).find(attempt => attempt.id === job.reservationId);
+    await giveUpProviderJob(context, job, reservation, await databaseNow(context));
+  }
+}
+
+/**
  * One look at the call's recorded provider job, under the session's lock, in a short
  * transaction: one status read and, once it completed, one read of its output object, then
  * the commit — nothing else, so the claim is bounded (`callTranscribeLeaseSeconds`). This is
@@ -1094,8 +1146,7 @@ export async function collectCallTranscription(
     }
   };
   const terminal = async (code: string): Promise<CollectTranscriptionOutcome> => {
-    await estimate();
-    await markProviderJob(context, job.jobName, { state: 'failed' });
+    await giveUpProviderJob(context, job, reservation, input.at);
     return { kind: 'done', reason: 'transcription_failed', code };
   };
   const ambiguous = async (code: string): Promise<CollectTranscriptionOutcome> => {
@@ -1173,14 +1224,18 @@ export const TRANSCRIPTION_LOOKS_PER_PASS = 50;
  * keeps the row at the front of the window: the window moves on to the next due rows. The
  * look's key is the row id and the look number before the move, so every look is a new job
  * however long the job runs. `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` still ends a job: the
- * first look claimed past it marks the job `failed`. Rows a live claim holds are skipped
+ * scheduler itself gives up a job past it (`giveUpExpiredProviderJobs`, estimated and
+ * `failed`) before it looks for due rows, and emits no look for it, so looks that never run
+ * cannot keep a row alive; a look already claimed past it does the same. Rows a live claim holds are skipped
  * this pass, not waited for.
  */
 export async function scheduleTranscriptionLooks(db: Queryable): Promise<readonly TranscriptionJobDue[]> {
+  await giveUpExpiredProviderJobs(db);
   const { rows } = await db.query<{ id: string; workspace_id: string; call_session_id: string; look: number }>(
     `WITH due AS (
        SELECT workspace_id, job_name, looks FROM transcription_provider_jobs
         WHERE state IN ('submitting', 'started') AND next_look_at <= now()
+          AND created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) > now()
         ORDER BY next_look_at, id
         LIMIT $1
         FOR UPDATE SKIP LOCKED

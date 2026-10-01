@@ -1128,10 +1128,10 @@ describe('the call.transcribe job', () => {
     const sessionId = await call(150);
     expect((await enqueue(sessionId)).enqueued).toBe(true);
     await drain(fake.provider);
-    // Past the deadline: the next look (the source counted it) gives up, estimated, terminal.
+    // Past the deadline: the scheduler gives up, estimated, terminal, and emits no look (REL1).
     await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
-    await collectRound(fake.provider);
-    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
+    expect(await collectRound(fake.provider)).toBe(0);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 0 }]);
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
     // Any later claim for the call — a resume, a stray enqueue — buys nothing.
     await withTransaction(database.session, async () =>
@@ -1139,6 +1139,45 @@ describe('the call.transcribe job', () => {
     );
     await drain(fake.provider);
     expect(await attempts(sessionId)).toHaveLength(1);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('gives up a job past its deadline from the scheduler when every look job dies before running: estimated once, no further looks (REL1)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 1_000 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    const source = transcriptionJobsSource({ enabled: true });
+    const lookJobs = async (): Promise<number> => {
+      const { rows } = await database.session.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM jobs WHERE kind = 'call.transcribe' AND idempotency_key LIKE 'call-transcribe-collect:%'",
+      );
+      return Number(rows[0]?.n ?? 0);
+    };
+    const before = await lookJobs();
+    const due = async (): Promise<void> => {
+      await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [sessionId]);
+    };
+    // Inside the deadline a pass emits a look; its job is never drained: it "dies".
+    await due();
+    await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    expect(await lookJobs()).toBe(before + 1);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 1 }]);
+    // Past the deadline, with no look ever having run.
+    await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
+    await due();
+    await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
+    const spent = await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY);
+    // Later passes: no look, no second settlement.
+    for (let pass = 0; pass < 3; pass += 1) {
+      await due();
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    }
+    expect(await lookJobs()).toBe(before + 1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
+    expect(await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe(spent);
     expect(fake.state.starts).toHaveLength(1);
   });
 
