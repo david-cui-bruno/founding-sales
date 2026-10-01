@@ -16,7 +16,13 @@ import type { ExtractionRequest } from './providers.ts';
  * that does, and it re-exports these so its own callers need not know they moved.
  */
 
-export const EXTRACTION_PROMPT_VERSION = 'research.extract.1';
+/**
+ * Bumped whenever a byte of the system text or the output schema moves (`.2`: the schema's
+ * array-size and length keywords moved into the reader, `EXTRACTION_ANSWER_LIMITS`, after
+ * Amazon Bedrock refused the first with "For 'array' type, property 'maxItems' is not
+ * supported" — the structured-outputs rule the reply classifier and the summary already keep).
+ */
+export const EXTRACTION_PROMPT_VERSION = 'research.extract.2';
 
 export const EXTRACTION_SYSTEM_TEXT = [
   'You read text a property-management firm published on its own website and say which',
@@ -41,6 +47,27 @@ export const EXTRACTION_SYSTEM_TEXT = [
   'they are shown to the reader labelled as such. Keep each under 200 characters.',
 ].join('\n');
 
+/**
+ * The limits the answer is held to, checked by the reader (`parseExtractionAnswer` in
+ * `apps/worker/src/research/anthropicExtraction.ts`) rather than by the provider schema:
+ * structured outputs refuse `minItems`, `maxItems` and `maxLength` with a 400, so a schema
+ * that carried them was a request that could never be answered.
+ */
+export const EXTRACTION_ANSWER_LIMITS = Object.freeze({
+  maxSelections: 30,
+  maxSourceReferenceLength: 500,
+  maxBlockIdLength: 64,
+  questions: 2,
+  maxQuestionLength: 200,
+  maxOpeningLength: 300,
+});
+
+/**
+ * The output schema sent to the provider: closed, every field required, and only what
+ * structured outputs accept — no length or array-size constraints (`EXTRACTION_ANSWER_LIMITS`
+ * are the reader's), and every enum value of its declared type
+ * (`packages/domain/test/research/extractionSchema.test.ts` walks it with the shared walker).
+ */
 export const EXTRACTION_OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -48,25 +75,24 @@ export const EXTRACTION_OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = Objec
   properties: {
     selections: {
       type: 'array',
-      maxItems: 30,
+      description: `At most ${String(EXTRACTION_ANSWER_LIMITS.maxSelections)} selections.`,
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['key', 'sourceReference', 'blockId'],
         properties: {
           key: { type: 'string', enum: [...FACT_KEYS] },
-          sourceReference: { type: 'string', maxLength: 500 },
-          blockId: { type: 'string', maxLength: 64 },
+          sourceReference: { type: 'string' },
+          blockId: { type: 'string' },
         },
       },
     },
     questions: {
       type: 'array',
-      minItems: 2,
-      maxItems: 2,
-      items: { type: 'string', maxLength: 200 },
+      description: `Exactly ${String(EXTRACTION_ANSWER_LIMITS.questions)} questions, each under ${String(EXTRACTION_ANSWER_LIMITS.maxQuestionLength)} characters.`,
+      items: { type: 'string' },
     },
-    opening: { type: 'string', maxLength: 300 },
+    opening: { type: 'string', description: `Under ${String(EXTRACTION_ANSWER_LIMITS.maxOpeningLength)} characters.` },
   },
 });
 

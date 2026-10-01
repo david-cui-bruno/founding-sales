@@ -3,7 +3,9 @@ import type {
   AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
 import type { ClassifierRequest } from '@fss/domain/classification/prompt.ts';
+import { providerErrorOf } from '@fss/domain/classification/providerError.ts';
 import {
+  EXTRACTION_ANSWER_LIMITS,
   EXTRACTION_OUTPUT_SCHEMA,
   EXTRACTION_PROMPT_VERSION,
   EXTRACTION_SYSTEM_TEXT,
@@ -54,7 +56,8 @@ import { EXTRACTION_PROVIDER } from '@fss/domain/research/types.ts';
  * A refusal, a missing text block, text that is not JSON, JSON the schema refuses,
  * or a thrown SDK error are one outcome: `provider_failure`, with the cents the call
  * cost still recorded. The run records it and the job retries under the ladder; the
- * pages the run already fetched stay.
+ * pages the run already fetched stay. A 4xx other than 408 (`provider_refused`) costs
+ * nothing: the API refused the request before generating anything.
  */
 
 interface ParsedAnswer {
@@ -80,6 +83,12 @@ function textOf(response: AnthropicMessageResponse): string | null {
  * makes and not one this code may rely on, and a malformed answer that reached
  * `validateFactSelections` would be refused there anyway — but with a less useful
  * reason than `provider_failure`.
+ *
+ * The limits the provider schema can no longer carry (`EXTRACTION_ANSWER_LIMITS`) are held
+ * here: more than thirty selections is not an answer, and the whole of it is refused; a
+ * selection whose source or block id is longer than any this code offers is dropped like
+ * any other malformed entry; questions that are not exactly two short strings, and an
+ * opening past its length, are left out, so no suggestion reaches a person unchecked.
  */
 export function parseExtractionAnswer(text: string): ParsedAnswer | null {
   let value: unknown;
@@ -92,6 +101,7 @@ export function parseExtractionAnswer(text: string): ParsedAnswer | null {
   const record = value as Record<string, unknown>;
   const rawSelections = record['selections'];
   if (!Array.isArray(rawSelections)) return null;
+  if (rawSelections.length > EXTRACTION_ANSWER_LIMITS.maxSelections) return null;
 
   const selections: { key: string; sourceReference: string; blockId: string }[] = [];
   for (const entry of rawSelections) {
@@ -101,6 +111,8 @@ export function parseExtractionAnswer(text: string): ParsedAnswer | null {
     const sourceReference = row['sourceReference'];
     const blockId = row['blockId'];
     if (typeof key !== 'string' || typeof sourceReference !== 'string' || typeof blockId !== 'string') continue;
+    if (sourceReference.length > EXTRACTION_ANSWER_LIMITS.maxSourceReferenceLength) continue;
+    if (blockId.length > EXTRACTION_ANSWER_LIMITS.maxBlockIdLength) continue;
     // An unknown key or an unknown block is *not* dropped here: it is passed on so
     // `validateFactSelections` counts it, which is where the drift the dashboard
     // would show becomes visible.
@@ -108,17 +120,20 @@ export function parseExtractionAnswer(text: string): ParsedAnswer | null {
   }
 
   const rawQuestions = record['questions'];
+  const question = (value: unknown): value is string =>
+    typeof value === 'string' && value.trim() !== '' && value.length <= EXTRACTION_ANSWER_LIMITS.maxQuestionLength;
   const questions =
     Array.isArray(rawQuestions) &&
-    rawQuestions.length === 2 &&
-    typeof rawQuestions[0] === 'string' &&
-    typeof rawQuestions[1] === 'string' &&
-    rawQuestions[0].trim() !== '' &&
-    rawQuestions[1].trim() !== ''
+    rawQuestions.length === EXTRACTION_ANSWER_LIMITS.questions &&
+    question(rawQuestions[0]) &&
+    question(rawQuestions[1])
       ? ([rawQuestions[0], rawQuestions[1]] as const)
       : null;
   const rawOpening = record['opening'];
-  const opening = typeof rawOpening === 'string' && rawOpening.trim() !== '' ? rawOpening : null;
+  const opening =
+    typeof rawOpening === 'string' && rawOpening.trim() !== '' && rawOpening.length <= EXTRACTION_ANSWER_LIMITS.maxOpeningLength
+      ? rawOpening
+      : null;
   return { selections, questions, opening };
 }
 
@@ -172,14 +187,21 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
       let response: AnthropicMessageResponse;
       try {
         response = await options.transport.create(requestFor(input));
-      } catch {
+      } catch (error) {
         // The error is deliberately not carried out of here. An SDK error message can
         // quote a request body, and a request body is a firm's published pages plus
         // the prompt — nothing secret, but nothing a ledger row needs either.
         //
-        // `costEstimated` is what stops that zero being believed. The request may have
-        // reached the model and been billed; what came back was a broken socket, not an
-        // invoice. The caller records the run's reservation instead.
+        // A 4xx other than 408 is the API refusing the request before any generation
+        // (`classification/providerError.ts`, the helper the classifier and the summary
+        // share): it billed nothing, and the same request would be refused again, so it
+        // is settled at 0 — not estimated — and the run fails without another attempt.
+        if (providerErrorOf(error).refused) return { ok: false, failureCode: 'provider_refused', costCents: 0 };
+        //
+        // Anything else is ambiguous, and `costEstimated` is what stops that zero being
+        // believed. The request may have reached the model and been billed; what came
+        // back was a broken socket, not an invoice. The caller records the run's
+        // reservation instead.
         return { ok: false, failureCode: 'provider_error', costCents: 0, costEstimated: true };
       }
 

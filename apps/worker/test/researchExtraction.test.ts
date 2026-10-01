@@ -4,7 +4,8 @@ import type {
   AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
 import { validateFactSelections } from '@fss/domain/research/facts.ts';
-import { MAX_EXTRACTION_OUTPUT_TOKENS } from '@fss/domain/research/pricing.ts';
+import { MAX_EXTRACTION_OUTPUT_TOKENS, PRICE_CENTS_PER_MILLION } from '@fss/domain/research/pricing.ts';
+import { schemaProblems } from '@fss/domain/test/support/structuredOutputsSchema.ts';
 import { anthropicExtraction, extractionUserText, parseExtractionAnswer } from '../src/research/anthropicExtraction.ts';
 
 /**
@@ -88,6 +89,20 @@ describe('the request', () => {
     const schema = JSON.stringify((body['output_config'] as { format: { schema: unknown } }).format.schema);
     expect(schema).toContain('blockId');
     expect(schema).not.toContain('"quote"');
+  });
+
+  it('sends a schema structured outputs accept, for every research model (the shared walker)', async () => {
+    const models = Object.keys(PRICE_CENTS_PER_MILLION);
+    expect(models.length).toBeGreaterThan(0);
+    for (const modelName of models) {
+      const transport = transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }));
+      await anthropicExtraction({ transport }).extract({ ...request, modelName });
+      await anthropicExtraction({ transport }).countInputTokens({ ...request, modelName });
+      for (const body of [...transport.seen, ...transport.counted]) {
+        const schema = (body as { output_config: { format: { schema: unknown } } }).output_config.format.schema;
+        expect(schemaProblems(schema), modelName).toEqual([]);
+      }
+    }
   });
 
   it('names the firm and every fact key exactly once', () => {
@@ -224,6 +239,53 @@ describe('the answer', () => {
     // a provider failure with no cents, because nothing was ever sent.
     const broken = anthropicExtraction({ transport: transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }), new Error('429')) });
     await expect(broken.countInputTokens(request)).rejects.toThrow('429');
+  });
+
+  it('refuses a 4xx other than 408 at 0 cents, never estimated; a 408 or a 5xx stays ambiguous', async () => {
+    // The Anthropic SDK's APIError shape: the status, and the parsed body.
+    const apiError = (status: number, type: string, message: string): Error =>
+      Object.assign(new Error(`${String(status)} ${type}`), { status, error: { type: 'error', error: { type, message } } });
+    const refused = await anthropicExtraction({
+      transport: transportOf(apiError(400, 'invalid_request_error', "output_config.format.schema: For 'array' type, property 'maxItems' is not supported")),
+    }).extract(request);
+    expect(refused).toEqual({ ok: false, failureCode: 'provider_refused', costCents: 0 });
+    for (const status of [403, 404, 429]) {
+      expect(await anthropicExtraction({ transport: transportOf(apiError(status, 'some_error', 'no')) }).extract(request)).toEqual({
+        ok: false,
+        failureCode: 'provider_refused',
+        costCents: 0,
+      });
+    }
+    for (const status of [408, 500, 529]) {
+      expect(await anthropicExtraction({ transport: transportOf(apiError(status, 'api_error', 'later')) }).extract(request)).toEqual({
+        ok: false,
+        failureCode: 'provider_error',
+        costCents: 0,
+        costEstimated: true,
+      });
+    }
+  });
+
+  it('holds the answer to the limits the provider schema no longer carries', () => {
+    const selection = { key: 'portfolio_size', sourceReference: 'https://example.test/', blockId: 'b1' };
+    // Thirty selections is an answer; thirty-one is not.
+    expect(parseExtractionAnswer(JSON.stringify({ selections: Array.from({ length: 30 }, () => selection), questions: null, opening: null }))?.selections).toHaveLength(30);
+    expect(parseExtractionAnswer(JSON.stringify({ selections: Array.from({ length: 31 }, () => selection), questions: null, opening: null }))).toBeNull();
+    // An over-long source or block id is dropped like any malformed entry.
+    expect(
+      parseExtractionAnswer(
+        JSON.stringify({
+          selections: [selection, { ...selection, sourceReference: `https://example.test/${'a'.repeat(500)}` }, { ...selection, blockId: 'b'.repeat(65) }],
+          questions: null,
+          opening: null,
+        }),
+      )?.selections,
+    ).toEqual([selection]);
+    // Questions: exactly two, each at most 200 characters; an opening at most 300.
+    const ok = 'q'.repeat(200);
+    expect(parseExtractionAnswer(JSON.stringify({ selections: [], questions: [ok, ok], opening: 'o'.repeat(300) }))).toMatchObject({ questions: [ok, ok], opening: 'o'.repeat(300) });
+    expect(parseExtractionAnswer(JSON.stringify({ selections: [], questions: [ok, `${ok}q`], opening: 'o'.repeat(301) }))).toMatchObject({ questions: null, opening: null });
+    expect(parseExtractionAnswer(JSON.stringify({ selections: [], questions: ['a', 'b', 'c'], opening: 'hi' }))).toMatchObject({ questions: null });
   });
 
   it('reads a generated pair only when both halves are there', () => {
