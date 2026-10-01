@@ -1,5 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { lockCalendarRoutingForRead } from '@fss/domain/policy/calendarRouting.ts';
 import { lockSendGateForStopFact } from '@fss/domain/policy/sendGate.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { hourOf, jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
@@ -80,10 +81,13 @@ export function calcomReconcileJobHandler(options: CalcomReconcileOptions): JobH
         ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       });
-      // The workspace's send gate first, then the switch, in the transaction that applies
-      // (review fold 2, finding 4): a write of `calendar_integration` takes the same gate
-      // (`settings/store.ts`), so turning this workspace off either committed before this
-      // read — and nothing is applied — or waits until this transaction ends.
+      // The deployment's calendar routing lock SHARED, then the workspace's send gate,
+      // then the switch, in the transaction that applies (review folds 2 and 3, finding
+      // 4): every write of `calendar_integration`, in any workspace, takes the routing
+      // lock EXCLUSIVE (`settings/store.ts`), so a switch — this workspace off, another
+      // one on — either committed before this read, and nothing is applied, or waits
+      // until this transaction ends. The read below is the uniqueness check.
+      await lockCalendarRoutingForRead(input.session);
       await lockSendGateForStopFact(repositoryContext(input.scope, input.session));
       if (!(await stillRouted())) {
         skipped('before_apply');

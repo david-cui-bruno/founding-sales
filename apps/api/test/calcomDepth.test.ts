@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
 import { startIntegrationServer, type IntegrationServer } from './support/integrationServer.ts';
+import { databaseUrlOf } from './support/poolFixture.ts';
+import { CALENDAR_ROUTING_LOCK_NAME } from '@fss/domain/policy/calendarRouting.ts';
 
 /**
  * Cal.com depth (slice M1), every step a real HTTP request through the real server:
@@ -344,5 +347,35 @@ describe('Cal.com depth, over HTTP', () => {
       [world.firmId, since],
     );
     expect(enrollments).toEqual([]);
+  });
+
+  // ---- review fold 3: the routing lock, SHARED for deliveries ------------------------
+  it('decides a delivery under the routing lock, shared: deliveries never wait for each other, a switch write makes them wait', async () => {
+    const world = await firmWithWork();
+    const holder = new pg.Client({ connectionString: databaseUrlOf(fixture.database) });
+    await holder.connect();
+    try {
+      // Another delivery in flight holds the lock SHARED: this one is not held up.
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [CALENDAR_ROUTING_LOCK_NAME]);
+      const shared = await calcom(booking('BOOKING_CREATED', '2026-09-30T21:00:00.000Z', uid(), world.attendee));
+      expect(shared).toMatchObject({ status: 'accepted', outcome: 'applied' });
+      await holder.query('COMMIT');
+
+      // A write of `calendar_integration` holds it EXCLUSIVE: the delivery waits for it.
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [CALENDAR_ROUTING_LOCK_NAME]);
+      let done = false;
+      const waiting = calcom(booking('BOOKING_CREATED', '2026-09-30T21:05:00.000Z', uid(), world.attendee)).then(answer => {
+        done = true;
+        return answer;
+      });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      expect(done).toBe(false);
+      await holder.query('COMMIT');
+      expect(await waiting).toMatchObject({ status: 'accepted' });
+    } finally {
+      await holder.end();
+    }
   });
 });

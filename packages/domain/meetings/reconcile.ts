@@ -4,7 +4,16 @@ import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { aliasMeeting, foldMeetings, MEETING_COLUMNS, receiveSynthesizedCalcomEvent, type MeetingRow, type ParsedEvent } from './calcom.ts';
+import {
+  aliasMeeting,
+  attendeesConflict,
+  foldMeetings,
+  MEETING_COLUMNS,
+  openAttendeeConflict,
+  receiveSynthesizedCalcomEvent,
+  type MeetingRow,
+  type ParsedEvent,
+} from './calcom.ts';
 import { attendeeAddressOf, deletionTombstoneKeyOf } from './attendee.ts';
 
 /**
@@ -227,6 +236,10 @@ export interface ReconcileCounts {
   readonly stale: number;
   readonly duplicate: number;
   readonly unmatched: number;
+  /** Chains whose newest listed booking was moved to one this read did not list, recorded as the meeting's current uid. */
+  readonly successors: number;
+  /** Chains left alone because their uids resolve to meetings booked by different attendees. */
+  readonly conflicted: number;
 }
 
 /** What `planChain` reads of the meeting a chain resolves to. */
@@ -246,8 +259,12 @@ export interface StoredMeeting {
  * into the one holding the oldest uid (`foldMeetings`, W's rules), keeping the newest
  * state, times and current uid — even when the newest row is already cancelled (review
  * fold 2, finding 1). Null when no uid is known.
+ *
+ * Rows booked by different attendees are not folded (review fold 3, finding 7): each
+ * keeps its own uids, a review item names them (`openAttendeeConflict`), and the chain
+ * is left alone — `'conflict'`.
  */
-async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | null> {
+async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | 'conflict' | null> {
   const { rows: found } = await context.db.query<{ id: string; position: string }>(
     `SELECT m.id, min(u.position) AS position
        FROM unnest($2::text[]) WITH ORDINALITY AS u(uid, position)
@@ -266,6 +283,10 @@ async function unifyChain(context: RepositoryContext, uids: readonly string[]): 
   const survivorId = [...found].sort((left, right) => Number(left.position) - Number(right.position))[0]?.id;
   const survivor = rows.find(row => row.id === survivorId) ?? rows[0];
   if (survivor === undefined) return null;
+  if (rows.length > 1 && attendeesConflict(rows)) {
+    await openAttendeeConflict(context, rows);
+    return 'conflict';
+  }
   const meeting = rows.length === 1 ? survivor : await foldMeetings(context, rows, survivor.id);
   await aliasMeeting(context, meeting.id, uids);
   return meeting;
@@ -290,6 +311,12 @@ export interface PlannedEvent {
 export interface BookingChain {
   readonly uids: readonly string[];
   readonly bookings: ReadonlyMap<string, CalcomBooking>;
+  /**
+   * The uid the newest listed booking was rescheduled to when this read did not list
+   * that booking (beyond the window): a link learned without the new booking's body
+   * (review fold 3, finding 6). Not in `uids`, which plan from bodies.
+   */
+  readonly successor: string | null;
 }
 
 const MAX_CHAIN = 50;
@@ -332,7 +359,9 @@ export function bookingChains(bookings: readonly CalcomBooking[]): readonly Book
       if (!byUid.has(before)) break;
     }
     for (const uid of uids) covered.add(uid);
-    chains.push({ uids, bookings: byUid });
+    const after = next.get(tail);
+    const successor = after !== undefined && !byUid.has(after) && !uids.includes(after) ? after : null;
+    chains.push({ uids, bookings: byUid, successor });
   }
   return chains;
 }
@@ -473,6 +502,39 @@ async function attendeeTombstoned(context: RepositoryContext, attendeeEmail: str
 }
 
 /**
+ * The link to a booking this read did not list (review fold 3, finding 6): the newest
+ * listed booking names `rescheduledToUid = B`, and B's body is beyond the window. The
+ * uid is already the meeting's (`unifyChain` aliased it). When the meeting stands at the
+ * booking that was moved — not cancelled, not already past it — and this snapshot is no
+ * older than the meeting's last applied event, the meeting's current uid becomes B and
+ * its state `rescheduled` (a held or no-show meeting keeps its state, as every link
+ * does). Its times stay the old booking's until B's own body arrives, by webhook or a
+ * later read, and `last_event_at` is not moved: the instant here is the old booking's,
+ * and B's events, which carry B's times, must still apply.
+ */
+async function recordSuccessor(
+  context: RepositoryContext,
+  meeting: StoredMeeting,
+  chain: BookingChain,
+  tail: CalcomBooking,
+): Promise<boolean> {
+  if (chain.successor === null || meeting.state === 'cancelled') return false;
+  if (meeting.current_booking_uid !== tail.uid) return false;
+  if (Date.parse(instantOfBooking(tail)) < meeting.last_event_at.getTime()) return false;
+  const { rowCount } = await context.db.query(
+    `UPDATE meetings
+        SET current_booking_uid = $3,
+            state = CASE WHEN state IN ('held', 'no_show') THEN state ELSE 'rescheduled' END,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND current_booking_uid = $4 AND state <> 'cancelled'`,
+    [context.scope.workspaceId, meeting.id, chain.successor, tail.uid],
+  );
+  if (rowCount === null || rowCount === 0) return false;
+  await aliasMeeting(context, meeting.id, [chain.successor]);
+  return true;
+}
+
+/**
  * Apply one read of the window to `meetings`. The caller runs it in one transaction.
  *
  * The send gate is taken first, once, and held to the end of the transaction, so the
@@ -501,6 +563,8 @@ export async function reconcileCalcomBookings(
     stale: 0,
     duplicate: 0,
     unmatched: 0,
+    successors: 0,
+    conflicted: 0,
   };
   for (const chain of chains) {
     const tail = chain.bookings.get(chain.uids[chain.uids.length - 1] ?? '');
@@ -508,7 +572,13 @@ export async function reconcileCalcomBookings(
       counts.skipped += 1;
       continue;
     }
-    const meeting = await unifyChain(context, chain.uids);
+    // The successor's uid is the chain's too: aliased, and folded with any row it has.
+    const known = chain.successor === null ? chain.uids : [...chain.uids, chain.successor];
+    const meeting = await unifyChain(context, known);
+    if (meeting === 'conflict') {
+      counts.conflicted += 1;
+      continue;
+    }
     if (meeting === null) {
       const attendees = chain.uids.map(uid => chain.bookings.get(uid)?.attendeeEmail ?? null);
       let tombstoned = false;
@@ -520,7 +590,8 @@ export async function reconcileCalcomBookings(
     }
     const planned = planChain(chain, meeting, input.now);
     if (planned.length === 0) {
-      counts.unchanged += 1;
+      if (meeting !== null && chain.successor !== null && (await recordSuccessor(context, meeting, chain, tail))) counts.successors += 1;
+      else counts.unchanged += 1;
       continue;
     }
     for (const event of planned) {
@@ -548,7 +619,9 @@ export async function reconcileCalcomBookings(
     }
     // Every uid of the chain is this meeting's from now on, intermediates included, and
     // anything the events left as a second row is folded in (0029).
-    await unifyChain(context, chain.uids);
+    const after = await unifyChain(context, known);
+    if (after === 'conflict') counts.conflicted += 1;
+    else if (after !== null && chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
   }
   if (counts.synthesized > 0) {
     await recordCrmAuditEvent(context, {

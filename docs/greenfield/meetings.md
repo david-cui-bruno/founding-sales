@@ -27,6 +27,8 @@ answers 503 rather than guess.
   `MEETING_ENDED`, `BOOKING_NO_SHOW_UPDATED`. Anything else is recorded as `ignored`.
 * A delivery older than the meeting's last applied event is recorded as `stale` and
   changes nothing. Cancelled is terminal.
+* Which workspace a delivery lands in — the one with the switch on — is decided and
+  applied in one transaction under the **calendar routing lock** (below), shared.
 
 ## What a booking does
 
@@ -55,6 +57,34 @@ A → B → C still reaches the one meeting (and a late, older create of B is `s
 `meetings.booking_uid` and `current_booking_uid` stay as they were: the original and
 the current uid. An alias is never dropped; when two meetings turn out to be one
 booking they are folded and the loser's aliases move to the survivor.
+
+**A fold never loses an attendee.** A survivor with no attendee takes the folded row's,
+so a deletion that takes the meeting still measures and tombstones the person. Rows
+booked by two different attendees (compared NFKC, trimmed, lower-cased) are **not**
+folded, by the webhook or by the hourly read: each keeps its own uids, and a review item
+`meeting.attendee_conflict` names both meeting ids (in its key and its detail). Its
+reason is `firm_ambiguous`, because 0028's reason list has no other fitting value. It is
+not a `meeting.booked` item, so **Bookings to match** does not list it. A deletion that
+takes either meeting takes the item. The webhook answers such a reschedule `unmatched`
+and changes neither row; the read counts the chain as `conflicted`.
+
+## Lock order: routing, then the send gate, then rows
+
+Cal.com names no workspace, so "the one workspace with `calendar_integration =
+calcom`" spans every workspace and has a lock of its own, across the deployment:
+`pg_advisory_xact_lock(hashtextextended('fss.calendar-routing', 0))`
+(`packages/domain/policy/calendarRouting.ts`).
+
+* **Readers take it SHARED**, before the workspace's send gate: the webhook, around its
+  routing decision and the apply, and the hourly read, around its last routing check
+  and the apply. Two deliveries never wait for each other on it.
+* **A write of `calendar_integration`, in any workspace, takes it EXCLUSIVE**, then that
+  workspace's send gate, then the setting's own lock (`settings/store.ts`). Turning A
+  off or B on either commits before a reader decides, or waits until the reader has
+  applied.
+* Everywhere: the routing lock, then the workspace's send gate, then rows (firm, then
+  meeting, then what `applyStageEvidence` locks). Nothing takes the routing lock after
+  the gate. A deletion takes the gate only.
 
 ## The secret
 
@@ -95,10 +125,11 @@ bookings and repairs the difference.
   hour (`calcom-reconcile:{workspace}:{hour}`), in the bulk lane. The job asks again when
   it runs and once more just before it applies what it read: if its workspace is no
   longer the one switched on, it does nothing and logs `calcom_reconcile_skipped`. The
-  last check is made in the applying transaction **after** it takes the workspace's
-  send gate, and a write of `calendar_integration` takes that workspace's send gate
-  too, so switching a workspace off either lands before the check (and nothing is
-  applied) or waits until the run has committed.
+  last check — this workspace on, and no other — is made in the applying transaction
+  **after** it takes the calendar routing lock (shared) and the workspace's send gate.
+  Every write of `calendar_integration` takes the routing lock exclusive, so switching
+  this workspace off **or another one on** either lands before the check (and nothing
+  is applied) or waits until the run has committed.
 * **What it reads.** Cal.com API v2 `GET https://api.cal.com/v2/bookings` with
   `Authorization: Bearer <api_key>` and `cal-api-version: 2026-05-01`, for bookings with
   `afterStart = now − 7 days` and `beforeEnd = now + 60 days`, every status, 100 a
@@ -136,7 +167,15 @@ bookings and repairs the difference.
     `stale` instead of booking a demo that is not happening — followed by each older
     link, newest first, so every original uid lands on the one row.
   * A chain whose newest booking was moved again to one this read does not list (beyond
-    the window) changes no state.
+    the window, `rescheduledToUid = B`) still records the link (review fold 3). B's
+    uid becomes an alias of the chain's meeting, and a row B already has (its
+    cancellation came first, say) is folded in. When the meeting stands at the moved
+    booking and the snapshot is no older than its last event, its current uid becomes B
+    and its state `rescheduled`; a held or no-show meeting keeps its state. Its times
+    stay the old booking's until B's body arrives, by webhook or a later read. Its
+    `last_event_at` is not moved, so B's own events still apply (`successors` in the
+    counts). A booking whose `rescheduledFromUid` was not listed is already part of
+    its chain.
   * Derived events — an end (`MEETING_ENDED`), a no-show mark (an attendee `absent`) or
     its reversal — come only from a snapshot whose `updatedAt` is no older than the
     meeting's last applied event, and only about the meeting's current booking. An end
@@ -168,7 +207,7 @@ bookings and repairs the difference.
   lists leaves its meeting alone. It sends nothing to anybody.
 * **What it leaves behind.** A log line `calcom_reconcile` with the counts (bookings,
   chains, unchanged, skipped, tombstoned, synthesized, applied, stale, duplicate,
-  unmatched, pages, truncated) and, when anything was synthesized, one audit event
+  unmatched, successors, conflicted, pages, truncated) and, when anything was synthesized, one audit event
   `meeting.reconciled` with the same counts. Never a booking's details.
 
 ## Matching a booking by hand (slice M1)

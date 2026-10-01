@@ -488,6 +488,138 @@ describe('Cal.com reconciliation', () => {
     );
     expect(Number(rows[0]?.count)).toBe(0);
   });
+
+  // ---- review fold 3, finding 6: a successor beyond the window is still a link -------
+  it('records A→B when only A is listed, so B s cancellation lands on the one meeting (fold 3, item 6)', async () => {
+    const [z, a, b] = [uid(), uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    // Cal.com lists A (which came from Z, moved to B); B itself is beyond the window.
+    const counts = await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledFromUid: z, rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' }),
+    ]);
+    expect(counts).toMatchObject({ successors: 1, synthesized: 0 });
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'rescheduled' }]);
+    // A's times until B's body arrives.
+    expect((await meeting(b))?.starts_at.toISOString()).toBe('2026-10-06T15:00:00.000Z');
+    expect(await resolvedMeetings([z, a, b])).toHaveLength(1);
+
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b, { startTime: '2026-10-09T13:00:00.000Z', endTime: '2026-10-09T13:30:00.000Z' }));
+    expect(await meetingsNamed([z, a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    expect(await resolvedMeetings([z, a, b])).toHaveLength(1);
+    // A replay of the same read changes nothing.
+    await reconcile([parsed(a, { status: 'cancelled', rescheduledFromUid: z, rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' })]);
+    expect(await meetingsNamed([z, a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+  });
+
+  it('folds B s row into A when B s cancellation came first and only A is listed (fold 3, item 6)', async () => {
+    const [a, b] = [uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b));
+    expect(await resolvedMeetings([a, b])).toHaveLength(2);
+    await reconcile([parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' })]);
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: b, state: 'cancelled' }]);
+    expect(await resolvedMeetings([a, b])).toHaveLength(1);
+  });
+
+  it('does not take a successor from a snapshot older than the meeting s last event (fold 3, item 6)', async () => {
+    const [a, b] = [uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T15:00:00.000Z', webhookBooking(a));
+    expect(await reconcile([parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' })])).toMatchObject({ successors: 0 });
+    expect(await meetingsNamed([a, b])).toEqual([{ booking_uid: a, current_booking_uid: a, state: 'booked' }]);
+  });
+
+  // ---- review fold 3, finding 7: a fold never loses an attendee ------------------------
+  async function deleteFirm(firmId: string, commandId: string): Promise<readonly string[]> {
+    const admin = repositoryContext(
+      workspaceScope(workspaceId(), { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    const preview = await withTransaction(database.session, async () => await previewDeletion(admin, { targetKind: 'firm', firmId }));
+    const committed = await withTransaction(database.session, async () =>
+      await commitDeletion(admin, {
+        requestId: preview.value?.requestId ?? '',
+        previewHash: preview.value?.previewHash ?? '',
+        commandId,
+        journal: recordingSuppressionJournal(),
+      }),
+    );
+    expect(committed.ok, committed.ok ? '' : committed.reason).toBe(true);
+    return preview.value?.tombstoneHandles ?? [];
+  }
+
+  it('keeps the attendee of a folded row, so deleting the firm keeps the person deleted (fold 3, item 7)', async () => {
+    const [a, b] = [uid(), uid()];
+    const attendee = 'person@fold-law.example';
+    const { rows: firmRows } = await database.session.query<{ id: string }>(
+      `INSERT INTO firms (workspace_id, name, website, assigned_user_id) VALUES ($1, 'Fold Law', 'https://fold-law.example', $2) RETURNING id`,
+      [workspaceId(), seeded.alpha.salesperson.userId],
+    );
+    const firmId = firmRows[0]?.id ?? '';
+    // A arrived with no attendee; A→B was lost; B's cancellation carries the person and is
+    // matched to the firm by domain (no e-mail route holds the address).
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a, { attendees: [] }));
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b, { attendees: [{ email: attendee }] }));
+    const snapshot = [
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z', attendees: [] }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z', attendees: [{ email: attendee, absent: false }] }),
+    ];
+    await reconcile(snapshot);
+    const { rows: folded } = await database.session.query<{ attendee_email: string | null; firm_id: string | null }>(
+      'SELECT attendee_email, firm_id FROM meetings WHERE workspace_id = $1 AND booking_uid = $2',
+      [workspaceId(), a],
+    );
+    expect(folded).toEqual([{ attendee_email: attendee, firm_id: firmId }]);
+    expect(await resolvedMeetings([a, b])).toHaveLength(1);
+
+    expect(await deleteFirm(firmId, `delete-${a}`)).toContain(attendee);
+    expect(await reconcile(snapshot)).toMatchObject({ tombstoned: 1, synthesized: 0 });
+    expect(await meetingsNamed([a, b])).toEqual([]);
+    const { rows } = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM meetings WHERE workspace_id = $1 AND attendee_email = $2', [
+      workspaceId(),
+      attendee,
+    ]);
+    expect(Number(rows[0]?.count)).toBe(0);
+  });
+
+  it('does not fold rows booked by different attendees, and asks a person (fold 3, item 7)', async () => {
+    const [a, b] = [uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a, { attendees: [{ email: 'first.person@elsewhere.example' }] }));
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b, { attendees: [{ email: 'Second.Person@elsewhere.example' }] }));
+    const ids = async (): Promise<string[]> => {
+      const { rows } = await database.session.query<{ id: string }>(
+        'SELECT id FROM meetings WHERE workspace_id = $1 AND booking_uid = ANY($2::text[]) ORDER BY id',
+        [workspaceId(), [a, b]],
+      );
+      return rows.map(row => row.id);
+    };
+    const before = await ids();
+    expect(before).toHaveLength(2);
+
+    // The webhook's own fold (A→B delivered late) and the reconciliation's both refuse.
+    await webhook('BOOKING_RESCHEDULED', '2026-09-30T13:00:00.000Z', webhookBooking(b, { rescheduleUid: a, attendees: [{ email: 'second.person@elsewhere.example' }] }));
+    const counts = await reconcile([
+      parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z', attendees: [{ email: 'first.person@elsewhere.example', absent: false }] }),
+      parsed(b, { status: 'cancelled', rescheduledFromUid: a, createdAt: '2026-09-30T13:00:00.000Z', updatedAt: '2026-09-30T14:00:00.000Z', attendees: [{ email: 'second.person@elsewhere.example', absent: false }] }),
+    ]);
+    expect(counts).toMatchObject({ conflicted: 1, synthesized: 0 });
+    expect(await ids()).toEqual(before);
+    expect(await meetingsNamed([a, b])).toEqual([
+      { booking_uid: a, current_booking_uid: a, state: 'booked' },
+      { booking_uid: b, current_booking_uid: b, state: 'cancelled' },
+    ].sort((left, right) => left.booking_uid.localeCompare(right.booking_uid)));
+    // Each keeps its own uid.
+    const { rows: aliases } = await database.session.query<{ booking_uid: string; meeting_id: string }>(
+      'SELECT a.booking_uid, a.meeting_id FROM meeting_booking_uids a WHERE a.workspace_id = $1 AND a.booking_uid = ANY($2::text[])',
+      [workspaceId(), [a, b]],
+    );
+    expect(new Set(aliases.map(row => row.meeting_id)).size).toBe(2);
+    const { rows: items } = await database.session.query<{ evidence_id: string; detail: { meetingIds: string } }>(
+      "SELECT evidence_id, detail FROM stage_review_items WHERE workspace_id = $1 AND evidence_kind = 'meeting.attendee_conflict' AND resolved_at IS NULL",
+      [workspaceId()],
+    );
+    const item = items.find(row => row.evidence_id === before.join(':'));
+    expect(item?.detail.meetingIds).toBe(before.join(','));
+  });
 });
 
 describe('planChain', () => {

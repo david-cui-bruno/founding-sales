@@ -136,11 +136,64 @@ export interface MeetingRow {
   readonly starts_at: Date;
   readonly ends_at: Date;
   readonly last_event_at: Date;
+  readonly attendee_email: string | null;
   readonly [column: string]: unknown;
 }
 
 export const MEETING_COLUMNS =
-  'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at';
+  'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at, attendee_email';
+
+/**
+ * Whether rows that look like one meeting are booked by different people (slice M1,
+ * review fold 3, finding 7). Compared in the one canonical form (`meetings/attendee.ts`);
+ * a row with no attendee conflicts with nobody. Rows with two attendees are never folded:
+ * a fold keeps one attendee, and the other would then be on no row a deletion measures.
+ */
+export function attendeesConflict(rows: readonly Pick<MeetingRow, 'attendee_email'>[]): boolean {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    if (row.attendee_email === null) continue;
+    keys.add(attendeeAddressOf(row.attendee_email) ?? row.attendee_email.normalize('NFKC').trim().toLowerCase());
+  }
+  return keys.size > 1;
+}
+
+/** The attendee a fold's survivor ends with: its own, else the first folded row's. */
+function attendeeAfterFold(survivor: MeetingRow, others: readonly MeetingRow[]): string | null {
+  return survivor.attendee_email ?? others.find(row => row.attendee_email !== null)?.attendee_email ?? null;
+}
+
+/** Room for five meeting ids in a review item's `evidence_id` (200 characters). */
+const CONFLICT_IDS_IN_EVIDENCE = 5;
+
+/**
+ * Rows that should be one meeting but name different attendees: nothing is folded. Each
+ * row keeps its own uids, and a person is asked (review fold 3, finding 7). The review
+ * item's evidence is `meeting.attendee_conflict`, keyed by the meeting ids, which its
+ * detail also lists; `stage_review_items_reason_known` (0028) admits no reason of its
+ * own, so its reason is `firm_ambiguous` — which booking is whose cannot be decided.
+ * It is not a `meeting.booked` item, so "Bookings to match" does not list it, and a
+ * deletion that takes either meeting takes it (`retention/deletion.ts`).
+ */
+export async function openAttendeeConflict(context: RepositoryContext, rows: readonly MeetingRow[]): Promise<void> {
+  const ids = rows.map(row => row.id).sort();
+  await openReviewItem(
+    context,
+    {
+      evidenceKind: 'meeting.attendee_conflict',
+      evidenceId: ids.slice(0, CONFLICT_IDS_IN_EVIDENCE).join(':'),
+      detail: { meetingIds: ids.join(','), bookingUids: rows.map(row => row.current_booking_uid).join(',') },
+    },
+    'firm_ambiguous',
+    { firmId: null, opportunityId: null },
+  );
+  await recordCrmAuditEvent(context, {
+    action: 'meeting.fold_refused',
+    subjectKind: 'meeting',
+    subjectId: ids[0] ?? '',
+    detail: { meetingIds: ids, reason: 'attendee_conflict' },
+  });
+}
 
 /**
  * The meeting a booking uid belongs to, locked. Through `meeting_booking_uids` (0029,
@@ -428,6 +481,12 @@ async function applyEvent(
   if (kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
     const replacement = await meetingByUid(context, event.uid);
     if (replacement !== null && replacement.id !== existing.id) {
+      // Two people: the rows stay apart, each with its own uids, and a person decides.
+      // The reschedule changes neither (review fold 3, finding 7).
+      if (attendeesConflict([existing, replacement])) {
+        await openAttendeeConflict(context, [existing, replacement]);
+        return none('unmatched', existing);
+      }
       await foldReplacement(context, existing, replacement);
       if (replacement.last_event_at.getTime() > Date.parse(event.createdAt)) {
         // The replacement's row is newer than this reschedule: it may itself have been
@@ -496,6 +555,13 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
     replacement.id,
     survivor.id,
   ]);
+  // The person who booked stays on a row (review fold 3, finding 7): the caller has
+  // refused a fold of two different attendees, so this only fills an empty one.
+  await context.db.query('UPDATE meetings SET attendee_email = COALESCE(attendee_email, $3) WHERE workspace_id = $1 AND id = $2', [
+    workspaceId,
+    survivor.id,
+    replacement.attendee_email,
+  ]);
   await context.db.query(
     `DELETE FROM stage_review_items
       WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
@@ -520,6 +586,9 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
  * the row is removed, and its unresolved review item goes with it. The survivor takes the
  * newest row's state, times and current uid (the greatest `last_event_at`), and the
  * links of a matched row when it has none of its own. No alias is lost: they move first.
+ * No attendee is lost either (review fold 3, finding 7): a survivor with none takes the
+ * folded row's, and rows with two different attendees are refused here — the caller
+ * checks `attendeesConflict` first and asks a person instead (`openAttendeeConflict`).
  * The caller holds the send gate and has the rows locked.
  */
 export async function foldMeetings(context: RepositoryContext, rows: readonly MeetingRow[], survivorId: string): Promise<MeetingRow> {
@@ -528,6 +597,8 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
   if (survivor === undefined) throw new Error('the fold names a survivor that is not one of its rows');
   const others = rows.filter(row => row.id !== survivorId);
   if (others.length === 0) return survivor;
+  if (attendeesConflict(rows)) throw new Error('a fold of meetings booked by different attendees was attempted');
+  const attendee = attendeeAfterFold(survivor, others);
   const newest = [...rows].sort((left, right) => right.last_event_at.getTime() - left.last_event_at.getTime())[0] ?? survivor;
   const linked = survivor.firm_id === null ? (others.find(row => row.firm_id !== null) ?? null) : null;
   for (const other of others) {
@@ -550,6 +621,7 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
             current_booking_uid = $7, last_event_at = GREATEST(last_event_at, $8::timestamptz),
             firm_id = COALESCE(firm_id, $9::uuid), contact_id = CASE WHEN firm_id IS NULL THEN $10::uuid ELSE contact_id END,
             opportunity_id = CASE WHEN firm_id IS NULL THEN $11::uuid ELSE opportunity_id END,
+            attendee_email = COALESCE(attendee_email, $12::text),
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${MEETING_COLUMNS}`,
@@ -565,6 +637,7 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
       linked?.firm_id ?? null,
       linked?.contact_id ?? null,
       linked?.opportunity_id ?? null,
+      attendee,
     ],
   );
   const result = folded[0] ?? survivor;

@@ -289,4 +289,85 @@ describe('the calcom.reconcile job and its source', () => {
     const { rows } = await database.session.query<{ count: string }>("SELECT count(*) AS count FROM meetings WHERE booking_uid = 'gated1x'");
     expect(Number(rows[0]?.count)).toBe(0);
   });
+
+  // ---- review fold 3: one routing lock across the deployment -------------------------
+  const pending = async (promise: Promise<unknown>): Promise<boolean> => {
+    let done = false;
+    void promise.then(
+      () => {
+        done = true;
+      },
+      () => {
+        done = true;
+      },
+    );
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return !done;
+  };
+  const routedBooking = (bookingUid: string) => ({
+    uid: bookingUid,
+    status: 'accepted',
+    start: '2026-10-06T15:00:00.000Z',
+    end: '2026-10-06T15:30:00.000Z',
+    createdAt: '2026-09-30T12:00:00.000Z',
+    updatedAt: '2026-09-30T12:00:00.000Z',
+    attendees: [{ email: `${bookingUid}@elsewhere.example`, absent: false }],
+  });
+  const meetingsWith = async (bookingUid: string): Promise<number> => {
+    const { rows } = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM meetings WHERE booking_uid = $1', [bookingUid]);
+    return Number(rows[0]?.count);
+  };
+  const enableBeta = (session: Awaited<ReturnType<TestDatabase['appRuntimeSession']>>) =>
+    updateSetting(
+      repositoryContext(workspaceScope(seeded.beta.workspaceId, { kind: 'user', userId: seeded.beta.admin.userId, role: 'admin' }), session),
+      { settingKey: 'calendar_integration', value: { integration: 'calcom' } },
+    );
+  const reconcileAlpha = async (handler: ReturnType<typeof calcomReconcileJobHandler>): Promise<void> => {
+    await handler.handle({
+      session: database.session,
+      scope: workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
+      job: {} as Parameters<typeof handler.handle>[0]['job'],
+    });
+  };
+
+  it('makes enabling another workspace wait while a reconcile holds the routing lock (fold 3, item 1)', async () => {
+    await database.session.query("DELETE FROM workspace_settings WHERE setting_key = 'calendar_integration'");
+    await switchOn(seeded.alpha.workspaceId, seeded.alpha.admin.userId);
+    const other = await database.appRuntimeSession();
+    const handler = calcomReconcileJobHandler({ client: fake([routedBooking('routing1x')]), now: () => '2026-10-01T12:00:00.000Z' });
+    let enable: Promise<unknown> = Promise.resolve();
+    let waited = false;
+    await withTransaction(database.session, async () => {
+      await reconcileAlpha(handler);
+      // Applied, not committed: the run still holds the routing lock SHARED.
+      enable = withTransaction(other, async () => await enableBeta(other));
+      waited = await pending(enable);
+    });
+    expect(waited).toBe(true);
+    expect(await enable).toMatchObject({ ok: true });
+    expect(await meetingsWith('routing1x')).toBe(1);
+  });
+
+  it('waits for an enable of another workspace in flight, then re-checks uniqueness and applies nothing (fold 3, item 1)', async () => {
+    await database.session.query("DELETE FROM workspace_settings WHERE setting_key = 'calendar_integration'");
+    await switchOn(seeded.alpha.workspaceId, seeded.alpha.admin.userId);
+    const lines: Record<string, unknown>[] = [];
+    const other = await database.appRuntimeSession();
+    await other.query('BEGIN');
+    expect(await enableBeta(other)).toMatchObject({ ok: true });
+
+    const handler = calcomReconcileJobHandler({
+      client: fake([routedBooking('routing2x')]),
+      now: () => '2026-10-01T12:00:00.000Z',
+      log: (event, fields) => lines.push({ event, ...fields }),
+    });
+    const run = withTransaction(database.session, async () => await reconcileAlpha(handler));
+    // Beta's switch is not committed, so alpha still looks like the only one; the run
+    // waits at the routing lock instead of importing.
+    expect(await pending(run)).toBe(true);
+    await other.query('COMMIT');
+    await run;
+    expect(lines.at(-1)).toMatchObject({ event: 'calcom_reconcile_skipped', stage: 'before_apply' });
+    expect(await meetingsWith('routing2x')).toBe(0);
+  });
 });

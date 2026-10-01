@@ -151,9 +151,17 @@ const MEETING_IN_SCOPE = `(
     SELECT a.address FROM email_addresses a
      WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}))`;
 
-/** The review items opened for one of those meetings, which name no firm when unmatched. */
-const MEETING_REVIEW_IN_SCOPE = `(evidence_kind = 'meeting.booked' AND evidence_id IN (
-  SELECT m.id::text FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}))`;
+/**
+ * The review items opened for one of those meetings, which name no firm when unmatched:
+ * a booking's own (`meeting.booked`, keyed by its id), and an attendee conflict between
+ * two meetings (`meeting.attendee_conflict`, keyed by their ids joined with `:`, slice
+ * M1 review fold 3) when either is taken.
+ */
+const MEETING_REVIEW_IN_SCOPE = `((evidence_kind = 'meeting.booked' AND evidence_id IN (
+  SELECT m.id::text FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}))
+  OR (evidence_kind = 'meeting.attendee_conflict' AND EXISTS (
+  SELECT 1 FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}
+     AND strpos(stage_review_items.evidence_id, m.id::text) > 0)))`;
 
 /**
  * The same rule for G7b's confirmations, which carry a firm but no contact.
