@@ -20,7 +20,8 @@ import type { TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts'
  * for 24 hours (5.3), so the list is the one read whose shape is also a retention
  * decision: a field added here is a field that ends up encrypted on somebody's
  * laptop, and the strict schema on the other side is what makes that a parse failure
- * rather than a surprise.
+ * rather than a surprise. (Slice S2 added `blockers`, two codes and never a value, to
+ * both sides at once.)
  *
  * The expanded card is a *second* read and is not cached. Its tasks name a contact,
  * which the cache has no room for, and 4.2 says an offline client shows "its
