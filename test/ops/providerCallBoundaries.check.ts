@@ -61,13 +61,15 @@ export const BOUNDARIES: readonly Boundary[] = [
   {
     name: 'research provider calls (page fetch, token count, extraction)',
     site: 'packages/domain/research/enrichment.ts',
-    owner: 'finishFirmResearch',
+    // P1 fix round 2: chunk 3's body; `finishFirmResearch` wraps it only to write the page-fetch ledger row last.
+    owner: 'finishFirmResearchBody',
     methods: { fetchPages: 1, countInputTokens: 1, extract: 1 },
   },
   {
     name: 'reply classifier provider',
     site: 'packages/domain/classification/classify.ts',
-    owner: 'classifyReplyWithModel',
+    // P1 fix round 2: the classifier is three chunks; the request is chunk 3's, after chunk 2 committed `calling`.
+    owner: 'finishClassification',
     methods: { classify: 1 },
   },
   {

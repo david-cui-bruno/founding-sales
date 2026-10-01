@@ -131,6 +131,19 @@ export interface ResearchClearanceInput {
   readonly attemptKind: 'first' | 'retry';
 }
 
+/**
+ * The workspace's research budget lock, a transaction lock, re-entrant. Taken by every
+ * clearance, and by chunk 2 before it settles an earlier attempt (slice P1, fix round 2):
+ * a settlement takes the monthly spend lock, which comes after this one in the one lock
+ * order (`docs/greenfield/calling.md`).
+ */
+export async function lockResearchBudget(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [
+    BUDGET_LOCK_NAMESPACE,
+    hashOfWorkspace(context.scope.workspaceId),
+  ]);
+}
+
 /** Price and clear exactly one reservation, or say why not. */
 export async function claimResearchClearance(
   context: RepositoryContext,
@@ -152,10 +165,7 @@ export async function claimResearchClearance(
   // The budget lock, before anything is read. Every number below is a sum over rows
   // another claim could be inserting, so reading them without it is the read-then-write
   // that ceilings exist to avoid.
-  await context.db.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [
-    BUDGET_LOCK_NAMESPACE,
-    hashOfWorkspace(context.scope.workspaceId),
-  ]);
+  await lockResearchBudget(context);
 
   const counted =
     input.attemptKind === 'first'

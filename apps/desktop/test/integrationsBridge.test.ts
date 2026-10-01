@@ -132,15 +132,26 @@ describe('the month and finishing halves of the administration reads', () => {
     const status = outboundStatusAnswer();
     const answered = scripted({
       '/outbound/status': { status: 200, body: status },
-      '/settings/finishing': { status: 200, body: { sending: { on: false, finishing: 1 }, research: { on: true, finishing: 0 } } },
+      '/settings/finishing': {
+        status: 200,
+        body: {
+          sending: { on: false, finishing: 1 },
+          research: { on: true, finishing: 0 },
+          transcription: { on: false, finishing: 2 },
+          classification: { on: false, finishing: 1 },
+        },
+      },
     });
     const state = await createAdminBridge({ api: answered.api, session: session('admin') }).state();
     expect(answered.calls.filter(call => call.path === '/settings/finishing').map(call => call.method)).toEqual(['GET']);
     expect(state.sendingAdmin?.finishing).toEqual({ on: false, finishing: 1 });
+    // The same answer carries transcription and reply reading to Calling & calendar (fix round 2).
+    expect(state.paidFinishing).toEqual({ transcription: { on: false, finishing: 2 }, classification: { on: false, finishing: 1 } });
 
     const older = scripted({ '/outbound/status': { status: 200, body: status } });
     const without = await createAdminBridge({ api: older.api, session: session('admin') }).state();
     expect(without.sendingAdmin).not.toBeNull();
     expect(without.sendingAdmin?.finishing).toBeNull();
+    expect(without.paidFinishing).toBeNull();
   });
 });

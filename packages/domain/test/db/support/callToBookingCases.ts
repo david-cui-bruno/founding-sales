@@ -421,6 +421,34 @@ export const CALL_TO_BOOKING_CONSTRAINT_CASES: readonly Case[] = [
 
   // ------------------------------------------------------ provider_reservations (0028)
   {
+    constraint: 'provider_reservations_one_open_reply',
+    // Slice P1 (0031): two open attempts for one reply, the second paid obligation the
+    // classifier must never hold.
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO provider_reservations
+           (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+            cents, model_name, max_input_tokens, max_output_tokens)
+         SELECT $1, 'anthropic_classifier', 'reply_classification', s.id, a, '2026-10-01', 'America/New_York',
+                2, 'claude-opus-5', 100, 512
+           FROM (SELECT gen_random_uuid() AS id) s, generate_series(1, 2) a`,
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'provider_reservations_priced_shape',
+    // Slice P1 (0031): a reply classification is priced like research, never by the minute.
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO provider_reservations
+           (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+            cents, priced_unit, max_units, unit_price_micros)
+         VALUES ($1, 'anthropic_classifier', 'reply_classification', gen_random_uuid(), 1, '2026-10-01', 'America/New_York',
+                 2, 'minute', 1, 1000)`,
+        [workspace(f)],
+      ),
+  },
+  {
     constraint: 'provider_reservations_priced_shape',
     // A call subject priced like a model call: the shape the telephony subjects may not have.
     run: async f =>

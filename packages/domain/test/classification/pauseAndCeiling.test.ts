@@ -9,10 +9,13 @@ import { createClassifierWorld, type ClassifierWorld } from './support/classifie
 /**
  * Slice P1 on the reply classifier.
  *
- *   * I1: the switch is read again after the last database await before the request, so a
- *     switch turned off while the message body is being read stops the call.
- *   * I2: the request is cleared against the month's cash ceiling with an upper bound from
- *     the exact request, and its cost is written to the provider ledger the month reads.
+ *   * I1: chunk 2 reads the switch after the body and the month, so a switch turned off
+ *     while the message body is being read stops the call.
+ *   * I2: chunk 1 reserves the exact request's upper bound against the month's cash
+ *     ceiling, and the settlement writes its cost to the provider ledger the month reads.
+ *
+ * The three chunks here run in one transaction (`classifyReplyWithModel`); the job's own
+ * commits, its rollback and its concurrency are `apps/worker/test/classifyPaidCall.test.ts`.
  */
 const CASE = 'terse-human-reply';
 let world: ClassifierWorld;
@@ -32,6 +35,7 @@ beforeEach(async () => {
   await session().query("DELETE FROM mail_message_classifications WHERE workspace_id = $1 AND layer = 'model'", [workspaceId()]);
   await session().query('DELETE FROM mail_classification_calls WHERE workspace_id = $1', [workspaceId()]);
   await session().query('DELETE FROM provider_ledger WHERE workspace_id = $1', [workspaceId()]);
+  await session().query("DELETE FROM provider_reservations WHERE workspace_id = $1 AND subject_kind = 'reply_classification'", [workspaceId()]);
   await session().query("DELETE FROM workspace_settings WHERE workspace_id = $1 AND setting_key = 'monthly_cash_ceiling_cents'", [workspaceId()]);
   await session().query('UPDATE classifier_settings SET enabled = true WHERE workspace_id = $1', [workspaceId()]);
 });

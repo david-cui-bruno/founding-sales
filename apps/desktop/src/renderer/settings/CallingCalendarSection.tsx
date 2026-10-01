@@ -8,6 +8,7 @@ import {
   type IntegrationsSettingsResponse,
 } from '@fss/contracts';
 import type { AdminState, SaveIntegrationInput } from '../settingsContract.ts';
+import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
@@ -117,6 +118,10 @@ export function CallingCalendarSection({
         integrations.month?.ceilingCents ?? null,
       ])}
       integrations={integrations}
+      finishingLines={[
+        finishingSentence('transcription', state.paidFinishing?.transcription),
+        finishingSentence('classification', state.paidFinishing?.classification),
+      ].filter((line): line is string => line !== null)}
       editable={state.mayMutate}
       notice={state.integrationsNotice ?? null}
       busy={busy}
@@ -127,12 +132,15 @@ export function CallingCalendarSection({
 
 function Loaded({
   integrations,
+  finishingLines,
   editable,
   notice,
   busy,
   onSave,
 }: {
   readonly integrations: IntegrationsSettingsResponse;
+  /** Slice P1: "Transcription is off. 1 transcription already sent is finishing.", and the classifier's. */
+  readonly finishingLines: readonly string[];
   readonly editable: boolean;
   readonly notice: string | null;
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
@@ -300,6 +308,11 @@ function Loaded({
         {integrations.month === undefined ? null : (
           <MonthRow month={integrations.month} editable={editable} busy={busy} onSave={onSave} />
         )}
+        {finishingLines.map(line => (
+          <p key={line} data-testid="paid-finishing" className="py-1 text-sm text-muted-foreground">
+            {line}
+          </p>
+        ))}
 
         <Row data-testid="row-calcom">
           <RowMain

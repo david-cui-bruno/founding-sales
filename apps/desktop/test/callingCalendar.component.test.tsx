@@ -262,6 +262,27 @@ describe('Transcribe calls', () => {
   });
 });
 
+// Slice P1, invariant I1: transcription and reply reading still finishing after a turn-off.
+describe('the paid finishing lines', () => {
+  it('shows transcription and reply reading in flight while their switch is off, and nothing otherwise', () => {
+    show(
+      stateOf({
+        integrations: integrations(),
+        paidFinishing: { transcription: { on: false, finishing: 1 }, classification: { on: false, finishing: 1 } },
+      }),
+    );
+    expect(screen.getAllByTestId('paid-finishing').map(line => line.textContent)).toEqual([
+      'Transcription is off. 1 transcription already sent is finishing.',
+      'Reply reading is off. 1 reply already sent to the model is finishing.',
+    ]);
+  });
+
+  it('is absent while the switches are on or the read did not answer', () => {
+    show(stateOf({ integrations: integrations(), paidFinishing: { transcription: { on: true, finishing: 2 } } }));
+    expect(screen.queryByTestId('paid-finishing')).toBeNull();
+  });
+});
+
 // Slice P1, invariant I2: the month's cash limit, and what the month has cost against it.
 describe('the monthly spending limit', () => {
   it('is absent when the server does not answer it', () => {

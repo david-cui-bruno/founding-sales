@@ -95,7 +95,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
 
   if (request.path === '/settings/finishing') {
     // Slice P1: what is still finishing after a switch went off. Any signed-in member may
-    // read it; it carries three booleans and three counts, nothing about any firm.
+    // read it; it carries four booleans and four counts, nothing about any firm.
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
     }
@@ -111,6 +111,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
         },
         research: { on: counts.researchOn, finishing: counts.researchFinishing },
         transcription: { on: await transcriptionOn(scoped.context), finishing: counts.transcriptionFinishing },
+        classification: { on: counts.classificationOn, finishing: counts.classificationFinishing },
       }),
     };
   }

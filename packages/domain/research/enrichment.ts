@@ -6,7 +6,7 @@ import { validateFactSelections, type AdmittedFact, type FactSource } from './fa
 import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
 import { parsePageText } from './pageText.ts';
-import { claimResearchClearance, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
+import { claimResearchClearance, lockResearchBudget, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
 import { recordProviderCall, workspaceBusinessZone } from './ledger.ts';
 import {
   listAttempts,
@@ -364,6 +364,9 @@ export async function ensureResearchCalling(
   // otherwise reserve a fresh attempt against a finished run and call the model for it.
   const run = await lockRun(context, input.runId);
   if (run === null || run.outcome !== 'running') return { kind: 'closed' };
+  // The budget lock before any settlement below (slice P1, fix round 2): settling takes
+  // the monthly spend lock, and a retry's clearance takes this one, so it must come first.
+  await lockResearchBudget(context);
 
   const rows = await listAttempts(context, subject);
   const reserved = rows.find(row => row.state === 'reserved');
@@ -473,6 +476,21 @@ export interface FinishResearchInput {
 export async function finishFirmResearch(
   context: RepositoryContext,
   input: FinishResearchInput,
+): Promise<ResearchResult<ResearchRunReport>> {
+  // The page fetch's ledger row is written at the end of the chunk, not after the fetch
+  // (slice P1, fix round 2): every ledger write takes the workspace's monthly spend lock,
+  // and taken after the fetch it would be held across the token count and the model call,
+  // stopping every call and transcription clearance for as long as the model takes.
+  const deferred: (() => Promise<void>)[] = [];
+  const result = await finishFirmResearchBody(context, input, deferred);
+  for (const write of deferred) await write();
+  return result;
+}
+
+async function finishFirmResearchBody(
+  context: RepositoryContext,
+  input: FinishResearchInput,
+  deferred: (() => Promise<void>)[],
 ): Promise<ResearchResult<ResearchRunReport>> {
   const { runId } = input;
   const subject = { subjectKind: 'research_run' as const, subjectId: runId };
@@ -643,12 +661,14 @@ export async function finishFirmResearch(
   // The fetch is free, so its ledger row is a count and a failure code rather than
   // money. It is recorded anyway: "what refused research today" is the question the
   // ledger exists to answer, and a fetch that fails every morning is the answer.
-  await recordProviderCall(context, {
-    providerKey: input.pageFetch.providerKey,
-    at: input.at,
-    businessTimeZone,
-    costCents: fetched.costCents,
-    ...(fetched.ok ? {} : { failureCode: fetched.failureCode }),
+  deferred.push(async () => {
+    await recordProviderCall(context, {
+      providerKey: input.pageFetch.providerKey,
+      at: input.at,
+      businessTimeZone,
+      costCents: fetched.costCents,
+      ...(fetched.ok ? {} : { failureCode: fetched.failureCode }),
+    });
   });
   if (!fetched.ok) {
     // No model call was made, so this attempt's cents go back.

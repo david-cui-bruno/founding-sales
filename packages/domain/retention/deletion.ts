@@ -652,6 +652,24 @@ export async function commitDeletion(
     context,
     targetedSessions.map(session => session.id),
   );
+  // And, for a firm, every research run that still has an open reservation, before the
+  // first settlement below (slice P1, fix round 2): a settlement takes the monthly spend
+  // lock, and a run lock waited for after it would be a cycle with a chunk 3 that holds the
+  // run and is settling its own call. The finalisation further down takes them again.
+  if (scope.contactId === null) {
+    const { rows: runsToLock } = await context.db.query<{ id: string }>(
+      `SELECT r.id FROM research_runs r
+        WHERE r.workspace_id = $1 AND r.firm_id = $2
+          AND EXISTS (
+            SELECT 1 FROM provider_reservations p
+             WHERE p.workspace_id = r.workspace_id
+               AND p.subject_kind = 'research_run' AND p.subject_id = r.id
+               AND p.state IN ('reserved', 'calling'))
+        ORDER BY r.started_at`,
+      [context.scope.workspaceId, scope.firmId],
+    );
+    for (const run of runsToLock) await lockRun(context, run.id);
+  }
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's

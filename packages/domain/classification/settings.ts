@@ -77,12 +77,25 @@ export interface UpdateClassifierSettingsInput {
   readonly dailyCallCap?: number | undefined;
 }
 
+/**
+ * The classifier switch lock (slice P1, fix round 2): every write of `classifier_settings`
+ * takes it exclusively, and a classification's chunk 2 takes it shared for its final read
+ * and holds it to the commit that marks the attempt `calling`. So a turn-off either commits
+ * before that read (and no request is made) or waits for that commit (and the request
+ * counts as submitted). A leaf: nothing is locked while it is held exclusively.
+ */
+export async function lockClassifierSwitch(context: RepositoryContext, mode: 'shared' | 'exclusive'): Promise<void> {
+  const fn = mode === 'shared' ? 'pg_advisory_xact_lock_shared' : 'pg_advisory_xact_lock';
+  await context.db.query(`SELECT ${fn}(hashtextextended($1, 0))`, [`${context.scope.workspaceId}:classifier_switch`]);
+}
+
 export async function updateClassifierSettings(
   context: RepositoryContext,
   input: UpdateClassifierSettingsInput,
 ): Promise<ClassificationResult<ClassifierSettings>> {
   const decision = decideAdminOnly(context);
   if (!decision.permitted) return refuseClassification('admin_only');
+  await lockClassifierSwitch(context, 'exclusive');
 
   const actor = context.scope.actor;
   const current = await readClassifierSettings(context);

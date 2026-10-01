@@ -6,10 +6,9 @@ import type { ClassifierInput } from './prompt.ts';
 /**
  * What one reply classification may cost, and what it did (slice P1, invariant I2).
  *
- * The classifier has no reservation row: a call is one request inside one job, decided
- * and made in the same transaction. So it is cleared against the month's cash ceiling with
- * an upper bound computed from the exact request it is about to send, and its cost is
- * added to the provider ledger afterwards, where the month-to-date total reads it.
+ * The classifier follows the paid-call pattern (`paidCall.ts`): each attempt reserves this
+ * upper bound, computed from the exact request it will send, and is settled by id at the
+ * cost its answer reports — or kept at the bound when nobody knows what was billed.
  *
  * Prices are Anthropic's first-party rates per million tokens, in cents (the claude-api
  * reference's model table, cached 25 September 2026, read 1 October 2026): Claude Opus 5
@@ -38,17 +37,22 @@ export const CLASSIFIER_PROVIDER_KEY = 'anthropic_classifier';
  * second model after a refusal, so the bound is doubled for it.
  */
 export function classifierCallCeilingCents(settings: ClassifierSettings, input: ClassifierInput): number {
+  const price = CLASSIFIER_PRICE_CENTS_PER_MILLION[settings.modelName];
+  const inputTokens = classifierInputTokenBound(settings, input);
+  const one = (inputTokens * price.input * CACHE_WRITE_MULTIPLIER + settings.maxOutputTokens * price.output) / 1_000_000;
+  const fallbacks = MODEL_CAPABILITIES[settings.modelName].serverSideFallbacks ? 2 : 1;
+  return Math.ceil(one * fallbacks);
+}
+
+/** The input-token bound of one request: the UTF-8 byte length of the serialized request. */
+export function classifierInputTokenBound(settings: ClassifierSettings, input: ClassifierInput): number {
   const request = buildClassifierRequest({
     model: settings.modelName,
     effort: settings.effort,
     maxOutputTokens: settings.maxOutputTokens,
     message: input,
   });
-  const price = CLASSIFIER_PRICE_CENTS_PER_MILLION[settings.modelName];
-  const inputTokens = Buffer.byteLength(JSON.stringify(request), 'utf8');
-  const one = (inputTokens * price.input * CACHE_WRITE_MULTIPLIER + settings.maxOutputTokens * price.output) / 1_000_000;
-  const fallbacks = MODEL_CAPABILITIES[settings.modelName].serverSideFallbacks ? 2 : 1;
-  return Math.ceil(one * fallbacks);
+  return Math.max(1, Buffer.byteLength(JSON.stringify(request), 'utf8'));
 }
 
 /** What a request that was answered cost, from its reported usage, rounded up to a cent. */

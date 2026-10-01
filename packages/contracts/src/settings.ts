@@ -330,16 +330,18 @@ export type IntegrationsSettingsResponse = z.infer<typeof integrationsSettingsRe
 /**
  * `GET /settings/finishing` (slice P1, invariant I1): whether each switch is on, and how
  * much already started is still finishing — e-mails claimed for Gmail, research runs under
- * way, and transcriptions whose Deepgram request may be in flight. Turning a switch off
+ * way, transcriptions whose Deepgram request may be in flight, and reply classifications
+ * whose model request may be (`classification`). Turning a switch off
  * starts nothing new; these may finish and their results are recorded. Nothing is
- * recalled or reversed. `transcription` is optional so a reader tolerates an answer
- * without it.
+ * recalled or reversed. `transcription` and `classification` are optional so a reader
+ * tolerates an answer without them.
  */
 const finishingCount = z.strictObject({ on: z.boolean(), finishing: z.number().int().min(0) });
 export const finishingResponseSchema = z.strictObject({
   sending: finishingCount,
   research: finishingCount,
   transcription: finishingCount.optional(),
+  classification: finishingCount.optional(),
 });
 export type FinishingResponse = z.infer<typeof finishingResponseSchema>;
 

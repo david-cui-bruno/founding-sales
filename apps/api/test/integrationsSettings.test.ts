@@ -102,6 +102,7 @@ describe('Settings → Calling & calendar (slice S1)', () => {
       sending: { on: false, finishing: 0 },
       research: { on: true, finishing: 0 },
       transcription: { on: false, finishing: 0 },
+      classification: { on: true, finishing: 0 },
     });
     expect((await call(server.origin, 'POST', '/settings/finishing', adminToken, {})).status).toBe(405);
   });

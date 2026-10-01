@@ -284,6 +284,17 @@ export async function lockTranscription(context: RepositoryContext, sessionId: s
   ]);
 }
 
+/**
+ * The workspace's transcription budget lock (re-entrant). Taken by every clearance, and by
+ * chunk 2 before it settles anything (slice P1, fix round 2): a settlement takes the monthly
+ * spend lock, which comes after this one in the one lock order.
+ */
+async function lockTranscriptionBudget(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `${context.scope.workspaceId}:transcription_budget`,
+  ]);
+}
+
 async function tryLockTranscription(context: RepositoryContext, sessionId: string): Promise<boolean> {
   const { rows } = await context.db.query<{ locked: boolean }>(
     'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS locked',
@@ -410,9 +421,7 @@ async function clearAttempt(
   const facts = await sessionFacts(context, input.sessionId);
   if (!eligible(facts)) return { ok: false, reason: 'transcription_not_eligible' };
   // Serialised per workspace, so two calls cannot both fit the last cents.
-  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-    `${context.scope.workspaceId}:transcription_budget`,
-  ]);
+  await lockTranscriptionBudget(context);
   const zone = await workspaceBusinessZone(context);
   const businessDate = localDate(input.at, zone);
   // Priced with the margin; these minutes are the bound the audio is cut to before upload.
@@ -499,6 +508,9 @@ export async function ensureTranscriptionCalling(
   input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean; readonly providerKey: string },
 ): Promise<CallingOutcome> {
   await lockTranscription(context, input.sessionId);
+  // The budget lock before any settlement below: an estimate takes the monthly spend lock,
+  // and a retry's clearance takes this one, so this one comes first (fix round 2, finding 4).
+  await lockTranscriptionBudget(context);
   if ((await sessionFacts(context, input.sessionId)) === null || (await transcribed(context, input.sessionId))) {
     await finaliseOpenAttempts(context, input.sessionId, input.at);
     return { kind: 'closed', reason: 'already_transcribed' };

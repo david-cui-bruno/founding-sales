@@ -188,6 +188,10 @@ describe('the finishing line', () => {
     expect(finishingSentence('sending', { on: false, finishing: 1 })).toBe('Sending is off. 1 message already submitted is finishing.');
     expect(finishingSentence('sending', { on: false, finishing: 2 })).toBe('Sending is off. 2 messages already submitted are finishing.');
     expect(finishingSentence('research', { on: false, finishing: 1 })).toBe('Research is off. 1 research run already under way is finishing.');
+    expect(finishingSentence('transcription', { on: false, finishing: 1 })).toBe('Transcription is off. 1 transcription already sent is finishing.');
+    expect(finishingSentence('classification', { on: false, finishing: 2 })).toBe(
+      'Reply reading is off. 2 replies already sent to the model are finishing.',
+    );
     expect(finishingSentence('sending', { on: true, finishing: 3 })).toBeNull();
     expect(finishingSentence('sending', { on: false, finishing: 0 })).toBeNull();
     expect(finishingSentence('research', null)).toBeNull();

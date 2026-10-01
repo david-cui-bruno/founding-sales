@@ -189,6 +189,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let postures: PosturesState | null = null;
   let integrations: AdminState['integrations'] = null;
   let integrationsNotice: string | null = null;
+  let paidFinishing: AdminState['paidFinishing'] = null;
   /** The role the state above was read under, or null before the first read. */
   let roleSeen: AdminState['role'] | null = null;
   const window = defaultWindow(clock());
@@ -213,6 +214,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       dashboard = null;
       integrations = null;
       integrationsNotice = null;
+      paidFinishing = null;
     }
     roleSeen = role;
     return { role, online: session.online, mayMutate: session.mayMutate };
@@ -237,6 +239,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       postures,
       integrations,
       integrationsNotice,
+      paidFinishing,
     };
   };
 
@@ -321,6 +324,14 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     // no line, never a notice: the section above already read.
     const finishing = await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value));
     if (finishing.ok) sendingAdmin = { ...sendingAdmin, finishing: finishing.value.sending };
+    // The same answer carries transcription and reply reading (fix round 2), for the
+    // Calling & calendar section: no second request.
+    paidFinishing = finishing.ok
+      ? {
+          ...(finishing.value.transcription === undefined ? {} : { transcription: finishing.value.transcription }),
+          ...(finishing.value.classification === undefined ? {} : { classification: finishing.value.classification }),
+        }
+      : null;
     sendingReadError = null;
   };
 

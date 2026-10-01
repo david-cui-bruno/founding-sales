@@ -62,15 +62,23 @@ export type SendingCheckName = (typeof SENDING_CHECK_NAMES)[number];
  * the sentence promises neither.
  */
 export function finishingSentence(
-  kind: 'sending' | 'research',
+  kind: 'sending' | 'research' | 'transcription' | 'classification',
   finishing: { readonly on: boolean; readonly finishing: number } | null | undefined,
 ): string | null {
   if (finishing == null || finishing.on || finishing.finishing <= 0) return null;
-  const count = finishing.finishing;
-  const one = count === 1;
-  return kind === 'sending'
-    ? `Sending is off. ${String(count)} ${one ? 'message' : 'messages'} already submitted ${one ? 'is' : 'are'} finishing.`
-    : `Research is off. ${String(count)} ${one ? 'research run' : 'research runs'} already under way ${one ? 'is' : 'are'} finishing.`;
+  const count = String(finishing.finishing);
+  const one = finishing.finishing === 1;
+  const verb = one ? 'is' : 'are';
+  switch (kind) {
+    case 'sending':
+      return `Sending is off. ${count} ${one ? 'message' : 'messages'} already submitted ${verb} finishing.`;
+    case 'research':
+      return `Research is off. ${count} ${one ? 'research run' : 'research runs'} already under way ${verb} finishing.`;
+    case 'transcription':
+      return `Transcription is off. ${count} ${one ? 'transcription' : 'transcriptions'} already sent ${verb} finishing.`;
+    case 'classification':
+      return `Reply reading is off. ${count} ${one ? 'reply' : 'replies'} already sent to the model ${verb} finishing.`;
+  }
 }
 
 export interface SendingAdminSectionView {

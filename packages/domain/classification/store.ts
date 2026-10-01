@@ -216,8 +216,8 @@ export interface PendingClassification {
   readonly workspaceId: string;
   readonly messageId: string;
   /**
-   * Null for a reply never attempted; otherwise the turn-on (the settings write, as epoch
-   * milliseconds) that re-owes a reply its classifier held. Part of the job's key.
+   * Null for a reply never attempted; otherwise the hold (the latest attempt the switch
+   * held, as epoch milliseconds) that the turn-on re-owes. Part of the job's key.
    */
   readonly resume: string | null;
 }
@@ -236,41 +236,67 @@ export async function listPendingModelClassifications(
   limit: number,
 ): Promise<readonly PendingClassification[]> {
   const { rows } = await session.query<{ workspace_id: string; id: string; resume: string | null }>(
-    `SELECT m.workspace_id, m.id,
-            CASE WHEN p.last_disabled_at IS NULL THEN NULL
-                 ELSE (extract(epoch FROM s.updated_at) * 1000)::bigint::text END AS resume
-       FROM mail_messages m
-       JOIN mail_message_classifications d
-         ON d.workspace_id = m.workspace_id AND d.mail_message_id = m.id AND d.layer = 'deterministic'
-       LEFT JOIN classifier_settings s ON s.workspace_id = m.workspace_id
-       LEFT JOIN LATERAL (
-         SELECT max(c.called_at) AS last_disabled_at FROM mail_classification_calls c
-          WHERE c.workspace_id = m.workspace_id AND c.mail_message_id = m.id AND c.outcome = 'disabled'
-       ) p ON true
-      WHERE m.direction = 'incoming'
-        AND m.matched
-        AND d.class = 'uncertain'
-        AND NOT EXISTS (
-          SELECT 1 FROM mail_message_classifications g
-           WHERE g.workspace_id = m.workspace_id AND g.mail_message_id = m.id AND g.layer = 'model'
-        )
-        -- Slice P1: a reply whose job ran while the classifier was off was held, not
-        -- answered. It is owed again once the switch is back on — the settings row written
-        -- after the last "disabled" attempt, and on now — as a new job keyed by that write,
-        -- so it runs once per turn-on and never while the switch stays off. Bounded to
-        -- replies of the last RESUME window: an old reply nobody looked at is not worth a
-        -- paid call because somebody changed a setting.
+    `SELECT q.workspace_id, q.id,
+            CASE WHEN q.hold_at IS NULL THEN NULL
+                 ELSE (extract(epoch FROM q.hold_at) * 1000)::bigint::text END AS resume
+       FROM (
+         SELECT m.workspace_id, m.id, m.internal_date, s.enabled, s.updated_at, lc.called_at, lr.state AS last_state,
+                rc.paid, rc.open,
+                CASE
+                  WHEN lr.state IS NULL AND lc.outcome = 'disabled' THEN lc.called_at
+                  WHEN lr.state = 'released' AND (lc.called_at IS NULL OR lc.outcome = 'disabled' OR lr.settled_at >= lc.called_at)
+                    THEN greatest(lr.settled_at, CASE WHEN lc.outcome = 'disabled' THEN lc.called_at END)
+                END AS hold_at
+           FROM mail_messages m
+           JOIN mail_message_classifications d
+             ON d.workspace_id = m.workspace_id AND d.mail_message_id = m.id AND d.layer = 'deterministic'
+           LEFT JOIN classifier_settings s ON s.workspace_id = m.workspace_id
+           LEFT JOIN LATERAL (
+             SELECT c.outcome, c.called_at FROM mail_classification_calls c
+              WHERE c.workspace_id = m.workspace_id AND c.mail_message_id = m.id
+              ORDER BY c.called_at DESC, c.id DESC LIMIT 1
+           ) lc ON true
+           LEFT JOIN LATERAL (
+             SELECT r.state, r.settled_at FROM provider_reservations r
+              WHERE r.workspace_id = m.workspace_id AND r.subject_kind = 'reply_classification' AND r.subject_id = m.id
+              ORDER BY r.attempt DESC LIMIT 1
+           ) lr ON true
+           CROSS JOIN LATERAL (
+             SELECT count(*) FILTER (WHERE r.state <> 'released') AS paid,
+                    count(*) FILTER (WHERE r.state IN ('reserved', 'calling')) AS open
+               FROM provider_reservations r
+              WHERE r.workspace_id = m.workspace_id AND r.subject_kind = 'reply_classification' AND r.subject_id = m.id
+           ) rc
+          WHERE m.direction = 'incoming'
+            AND m.matched
+            AND d.class = 'uncertain'
+            AND NOT EXISTS (
+              SELECT 1 FROM mail_message_classifications g
+               WHERE g.workspace_id = m.workspace_id AND g.mail_message_id = m.id AND g.layer = 'model'
+            )
+       ) q
+      -- Slice P1 (fix round 2). Owed once when never attempted; and owed again, once, when
+      -- the reply's LATEST attempt was held — recorded disabled, or a reservation
+      -- released without a request — and the switch was turned on after that hold, within
+      -- the RESUME window. The key names the hold, not the settings write, so saving the
+      -- settings again creates no second obligation; chunk 1 refuses one anyway while an
+      -- attempt is open or the reply's latest attempt was paid. Never with an open
+      -- reservation, and never past the lifetime cap of paid attempts.
+      WHERE q.open = 0 AND q.paid < $3
         AND (
-          p.last_disabled_at IS NULL
-          OR (s.enabled AND s.updated_at > p.last_disabled_at
-              AND m.internal_date > now() - make_interval(days => $2::integer))
+          (q.called_at IS NULL AND q.last_state IS NULL)
+          OR (q.hold_at IS NOT NULL AND q.enabled AND q.updated_at > q.hold_at
+              AND q.internal_date > now() - make_interval(days => $2::integer))
         )
-      ORDER BY m.internal_date, m.id
+      ORDER BY q.internal_date, q.id
       LIMIT $1`,
-    [Math.max(1, Math.min(limit, 200)), CLASSIFY_RESUME_DAYS],
+    [Math.max(1, Math.min(limit, 200)), CLASSIFY_RESUME_DAYS, CLASSIFY_PAID_ATTEMPTS_BOUND],
   );
   return rows.map(row => ({ workspaceId: row.workspace_id, messageId: row.id, resume: row.resume }));
 }
+
+/** The lifetime bound on paid attempts per reply; `classify.ts` holds the same number. */
+const CLASSIFY_PAID_ATTEMPTS_BOUND = 2;
 
 /** How far back a reply held by a turned-off classifier is classified once it is back on. */
 export const CLASSIFY_RESUME_DAYS = 7;

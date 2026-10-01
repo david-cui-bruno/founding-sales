@@ -2,6 +2,7 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { sweepCallSessionReservations, workspacesOwingCallSessionSweep } from '@fss/domain/calls/sessions.ts';
 import { sweepTranscriptionReservations, workspacesOwingTranscriptionSweep } from '@fss/domain/calls/transcription.ts';
+import { sweepClassificationReservations, workspacesOwingClassificationSweep } from '@fss/domain/classification/classify.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey, quarterHourOf } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -29,7 +30,8 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * Slice C2 adds the transcription reservations (`sweepTranscriptionReservations`): one
  * still open half an hour after it was written belongs to a `call.transcribe` claim that
  * is gone, and is released (`reserved`) or estimated (`calling`) the same way. A workspace
- * owes a sweep when either predicate finds work.
+ * owes a sweep when either predicate finds work. Slice P1 adds the reply classifier's
+ * reservations the same way (`sweepClassificationReservations`, half an hour).
  *
  * There is no heartbeat: the job is one short transaction over at most a handful of
  * rows, well inside its sixty-second lease, and the job registry has no heartbeat
@@ -47,8 +49,13 @@ export function telephonySweepJobHandler(
     leaseSeconds: options.leaseSeconds ?? 60,
     handle: async input => {
       const context = repositoryContext(input.scope, input.session);
+      // One lock order (slice P1, fix round 2): the call sessions' rows in one statement,
+      // then the settlements under the monthly spend lock; the transcription and classifier
+      // subjects only by try-lock, which never waits, so nothing here waits while holding
+      // the monthly lock.
       await sweepCallSessionReservations(context);
       await sweepTranscriptionReservations(context);
+      await sweepClassificationReservations(context);
     },
   };
 }
@@ -58,7 +65,11 @@ export function telephonySweepSource(): DueWorkSource {
     name: 'telephony-sweep',
     find: async (session: SessionQueryable, now: string): Promise<readonly JobSpecification[]> => {
       const owing = [
-        ...new Set([...(await workspacesOwingCallSessionSweep(session)), ...(await workspacesOwingTranscriptionSweep(session))]),
+        ...new Set([
+          ...(await workspacesOwingCallSessionSweep(session)),
+          ...(await workspacesOwingTranscriptionSweep(session)),
+          ...(await workspacesOwingClassificationSweep(session)),
+        ]),
       ];
       if (owing.length === 0) return [];
       const { rows } = await session.query<{ id: string; slug: string }>(
