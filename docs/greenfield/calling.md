@@ -447,11 +447,30 @@ So spend is durable whatever the handler does after the request: a rolled-back c
 leaves the attempt `calling`, which `readSpend` counts, and the job's next claim (or the
 sweep, after half an hour) estimates it. There is no overshoot beyond the reservations.
 
+**After-call summaries (slice C3b, migration 0032).** Once a call has a channel-labelled
+transcript, `call.summarize` asks a model (Claude Haiku 4.5 by default; `FSS_CALL_SUMMARY_MODEL`
+may name Claude Sonnet 5.5) for a summary of three to six sentences, up to five suggested next
+steps and the commitments heard, quoted and checked against the side that said them. Suggestions
+only: the Mac shows them under the call (`GET /calls/history?include=summary`) and on the Today
+card, and nothing is sent or scheduled from them. The switch is transcription's own,
+`call_transcription` (on, with a ceiling above 0); there is no second one. The job is the
+classifier's shape with `provider_reservations` subject `call_summary`: chunk 1 the switch, two
+paid attempts per call for life, forty a day (`call_summary_budget`), the month, and a
+reservation at the request's byte bound (one open per call,
+`provider_reservations_one_open_summary`); chunk 2 the month and then the switch's setting lock
+SHARED, held to the commit that marks `calling`; chunk 3 the request, then the session row (KEY
+SHARE), the monthly lock, and the settlement by id at the answer's usage — or its estimate when
+the answer reports none or the transport threw. An unusable or ambiguous answer is retried once
+within the two. Held summaries resume once per change of the setting (`call-summarize` source),
+like transcriptions. The deletion workflow takes each targeted session's summary lock after the
+firm and before the sessions' own locks.
+
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
 
-routing → send gate → firm (and contact) → the subject's own lock (call session row,
-transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
-`transcription_budget`, research `RSCH`, `classifier_budget`) → the workspace monthly lock →
+routing → send gate → firm (and contact) → the subject's own lock (call summary, call session
+row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
+`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`) → the
+workspace monthly lock →
 rows: reservations, ledger, and the rows that reference a message (classifier attempts).
 
 The deletion workflow follows it whole (P1 final round): after the send gate it locks the
