@@ -308,6 +308,54 @@ running. `{}` —
 what the rehearsal fills and what the release puts in production before the deploy that
 adds the entry to the worker task — reads as not configured, and nothing is transcribed.
 
+### Pausing, and the month's cash ceiling (slice P1)
+
+**A switch turned off (invariant I1).** When a sending switch (the attestation
+`sending_enabled`, or the domain's `automated_sending_enabled` with its DNS checklist), the
+research switch, or `call_transcription.enabled` is off, queued work is held and no new
+provider request starts. The last check runs immediately before each provider call:
+
+| Provider call | Final boundary | Final switch check |
+| --- | --- | --- |
+| Gmail send | `outbound/send.ts` `dispatchOutboundMessage` → `gmail.sendMessage` | `recheckAndClaim`: both switches and the attestation, under the send gate SHARED, in the claiming transaction. Every writer of either switch takes the gate EXCLUSIVE, so a turn-off waits for an open claim and every later claim reads it and holds the fence; a held fence sends exactly once when the switch is back on. |
+| Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages`, `countInputTokens`, `extract` | `research_settings.enabled`, read again immediately before each. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
+| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt. |
+| Reply classifier | `classification/classify.ts` `classifyReplyWithModel` → `classify` | `classifier_settings.enabled`; only database reads lie between the check and the call. |
+
+A request already submitted may finish and its result is recorded; nothing recalls a sent
+message or reverses a charge. `GET /settings/finishing` answers each switch and how many
+requests are still finishing (fences `dispatching`; research reservations `calling`), and
+Settings shows "Sending is off. 1 message already submitted is finishing." (and the research
+twin) while a switch is off and something is.
+
+One window remains on the e-mail path, by design of the fence: the claim's COMMIT is the
+point a message counts as submitted, and a turn-off that commits after it (it has waited on
+the gate for exactly that commit) lets that one message go. `dispatching` has no edge back to
+`held` (migration 0010), so there is no re-check after the commit.
+
+**The month's cash ceiling (invariant I2).** Daily ceilings are not a monthly guarantee:
+$1.25 of calling and $0.50 of transcription a day already allow $38.50 over twenty-two
+weekdays. `monthly_cash_ceiling_cents` (`{ "cents": 0..5000 }`, $25 by default, migration
+0031; admin-written through `POST /settings/update`, not in the settings snapshot) is checked
+when a call session or a transcription attempt reserves its cents, under a workspace monthly
+lock taken inside that provider's daily budget lock, so it is atomic with the daily check.
+Month-to-date spend is every provider's settled cost plus its open reservations, on the
+calendar month of the workspace business time zone (`readSpend`). A refusal is
+`monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
+of $y" (`GET /settings/integrations?include=month`). Research has its own monthly ceiling and
+is not refused by this one, but its spend counts towards it. The reply classifier records its
+calls in `classifier_calls`, not in the ledger, so it is outside both.
+
+**Funding labels** (documentation only; nothing enforces or reads them). Eligible provider
+credits are tracked outside Callie; the ceiling counts every cent at its price whatever pays it.
+
+| `provider_key` | What | Funding |
+| --- | --- | --- |
+| `twilio.voice` | Twilio minutes | cash |
+| `deepgram.nova-3` | transcription | credits-eligible (confirm against the account) |
+| `anthropic_extraction` | research model calls | credits-eligible (confirm against the account) |
+| `company_page` | firms' own websites | free (a count, no cents) |
+
 ### The voicemail script
 
 `{contactFirstName}`, `{firmName}`, `{callerName}` and `{callbackNumber}` (David's verified
