@@ -183,9 +183,14 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
         return { ok: false, failureCode: 'provider_error', costCents: 0, costEstimated: true };
       }
 
-      // A response with no usage at all is the same situation as a throw: the call
-      // happened, and nobody said what it cost.
-      const costEstimated = response.usage === undefined || response.usage === null;
+      // A response with no usage at all — or without its input or output count (slice P1)
+      // — is the same situation as a throw: the call happened, and nobody said what it
+      // cost. A missing count is never read as zero tokens.
+      const costEstimated =
+        response.usage === undefined ||
+        response.usage === null ||
+        typeof response.usage.input_tokens !== 'number' ||
+        typeof response.usage.output_tokens !== 'number';
       const inputTokens = response.usage?.input_tokens ?? 0;
       const outputTokens = response.usage?.output_tokens ?? 0;
       // Read even though this request enables no caching: a category nobody reads is a

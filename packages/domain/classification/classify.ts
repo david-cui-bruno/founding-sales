@@ -4,7 +4,6 @@ import { applyModelSuggestion, authoredText, type ReplyClassification } from '..
 import type { ReplyClassifierPort } from './adapter.ts';
 import type { ClassifierInput } from './prompt.ts';
 import {
-  countCallsToday,
   listClassifications,
   recordClassifierCall,
   recordModelClassification,
@@ -19,7 +18,7 @@ import {
 } from './pricing.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { localDate } from '../src/rules/localClock.ts';
-import { recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
+import { lockMonthlySpend, recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
 import { listAttempts, markCalling, readAttempt, reserveAttempt, settleAttempt, type ReservationRow } from '../research/reservations.ts';
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
 import {
@@ -153,11 +152,22 @@ async function lockClassifierBudget(context: RepositoryContext): Promise<void> {
 const paidAttempts = (rows: readonly ReservationRow[]): number => rows.filter(row => row.state !== 'released').length;
 const isOpen = (row: ReservationRow): boolean => row.state === 'reserved' || row.state === 'calling';
 
-/** Paid classifier attempts reserved on today's business date: the daily cap's count. */
-async function reservedToday(context: RepositoryContext, businessDate: string): Promise<number> {
+/**
+ * The daily cap's count for one business date (P1 final round, #3): the classifier's paid
+ * reservations dated that day, plus that day's sent requests recorded with no reservation
+ * at all for their reply — the requests made before 0031, which reserved nothing. Every
+ * request since has a reservation, so the two populations are disjoint and add. Both are
+ * read on the reservation's business date, in the workspace's zone.
+ */
+async function classifierRequestsOn(context: RepositoryContext, businessDate: string): Promise<number> {
   const { rows } = await context.db.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM provider_reservations
-      WHERE workspace_id = $1 AND subject_kind = $2 AND business_date = $3::date AND state <> 'released'`,
+    `SELECT ((SELECT count(*) FROM provider_reservations
+               WHERE workspace_id = $1 AND subject_kind = $2 AND business_date = $3::date AND state <> 'released')
+           + (SELECT count(*) FROM mail_classification_calls c
+               WHERE c.workspace_id = $1 AND c.request_sent AND c.business_date = $3::date
+                 AND NOT EXISTS (
+                   SELECT 1 FROM provider_reservations r
+                    WHERE r.workspace_id = c.workspace_id AND r.subject_kind = $2 AND r.subject_id = c.mail_message_id)))::text AS n`,
     [context.scope.workspaceId, CLASSIFICATION_SUBJECT_KIND, businessDate],
   );
   return Number(rows[0]?.n ?? '0');
@@ -294,7 +304,7 @@ export async function beginClassification(
   await lockClassifierBudget(context);
   const at = await databaseNow(context);
   const zone = await workspaceBusinessZone(context);
-  const today = Math.max(await reservedToday(context, localDate(at, zone)), await countCallsToday(context));
+  const today = await classifierRequestsOn(context, localDate(at, zone));
   if (settings.dailyCallCap === 0 || today >= settings.dailyCallCap) return await done('capped');
   const cents = classifierCallCeilingCents(settings, prepared.input);
   if (!(await clearMonthlyCash(context, { at, zone, cents }))) return await done('capped');
@@ -399,6 +409,10 @@ export async function finishClassification(
   const attempt = await deps.classifierFor(input.plan.settings).classify(input.plan.input);
 
   await lockReply(context, input.messageId);
+  // The month before the message's rows (P1 final round, #4): the deletion workflow takes the
+  // monthly lock before it deletes a message, so recording this attempt (its rows reference
+  // the message) comes after the monthly lock here too.
+  await lockMonthlySpend(context);
   const row = await readAttempt(context, { ...subjectOf(input.messageId), attempt: input.attempt });
   await recordClassifierCall(context, { messageId: input.messageId, call: attempt.call });
   const at = await databaseNow(context);
@@ -409,8 +423,9 @@ export async function finishClassification(
       at,
       outcome: !attempt.call.requestSent
         ? { kind: 'released_not_called' }
-        : ambiguous
-          ? { kind: 'estimated' }
+        : ambiguous || !attempt.usageReported
+          ? // No reported counts: the reservation is the cost, never a computed zero.
+            { kind: 'estimated' }
           : { kind: 'settled', cents: classifierCallCents(input.plan.settings.modelName, attempt.call) },
     });
     if (attempt.call.requestSent) {

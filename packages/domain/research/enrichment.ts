@@ -495,6 +495,15 @@ async function finishFirmResearchBody(
   const { runId } = input;
   const subject = { subjectKind: 'research_run' as const, subjectId: runId };
 
+  // The firm before the run (slice P1, final round, #5): this chunk's evidence and facts
+  // reference the firm, and the deletion workflow takes the firm row first and then every
+  // active run of it. Taking the firm's KEY SHARE here first keeps one order — firm, then
+  // run — so a page-only run and a firm deletion wait for each other instead of deadlocking.
+  await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE', [
+    context.scope.workspaceId,
+    input.firmId,
+  ]);
+
   // First, before anything: the run row's lock, and then its state. A run that is not
   // `running` is finished, and a stale cursor pointing at one must not fetch a page,
   // call a model or reopen a decision. The lock is held for the whole of this chunk —

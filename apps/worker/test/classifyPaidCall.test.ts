@@ -8,7 +8,7 @@ import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { recordedAnthropicTransport, type RecordedAnswer } from '@fss/domain/classification/recorded.ts';
 import type { AnthropicMessagesTransport } from '@fss/domain/classification/anthropicClient.ts';
 import { updateClassifierSettings } from '@fss/domain/classification/settings.ts';
-import { sweepClassificationReservations } from '@fss/domain/classification/classify.ts';
+import { beginClassification, sweepClassificationReservations } from '@fss/domain/classification/classify.ts';
 import { CLASSIFIER_PROMPT_VERSION } from '@fss/domain/classification/types.ts';
 import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
@@ -53,20 +53,24 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
   let counter = 0;
 
   /** What the transport does next: answer, fail, or answer slowly. Counts every request. */
-  let mode: 'answer' | 'fail' | 'malformed' = 'answer';
+  let mode: 'answer' | 'fail' | 'malformed' | 'nousage' = 'answer';
   let delayMs = 0;
   let requests = 0;
+  /** Set by a test that watches the worker's statements: called when a request goes out. */
+  let onRequest: (() => void) | null = null;
   const recorded = recordedAnthropicTransport({
     answers: new Map<string, RecordedAnswer>([
       ['answer', { text: ANSWER }],
       ['malformed', { text: 'not json at all' }],
+      ['nousage', { text: ANSWER, noUsage: true }],
     ]),
-    keyOf: () => (mode === 'malformed' ? 'malformed' : 'answer'),
+    keyOf: () => (mode === 'malformed' ? 'malformed' : mode === 'nousage' ? 'nousage' : 'answer'),
   });
   const transport: AnthropicMessagesTransport = {
     countTokens: recorded.countTokens,
     create: async request => {
       requests += 1;
+      onRequest?.();
       if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
       if (mode === 'fail') throw new Error('socket hang up');
       return await recorded.create(request);
@@ -215,6 +219,34 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
   /** One reservation's cents for these words: every reply here is the same request. */
   let C = 0;
 
+  it('the daily cap counts a pre-0031 request with no reservation and the new reservations together (P1 final round, #3)', async () => {
+    // Run first, on an empty day: one request recorded before 0031 (no reservation), a cap
+    // of 2, and two replies reserving before either has recorded a call.
+    const legacy = await reply();
+    await session.query(
+      `INSERT INTO mail_classification_calls (workspace_id, mail_message_id, model_name, prompt_version, effort, request_sent,
+                                              outcome, input_tokens, cached_input_tokens, output_tokens, latency_ms, business_date)
+       SELECT $1, $2, 'claude-opus-5', $3, 'low', true, 'accepted', 10, 0, 10, 5, (now() AT TIME ZONE w.business_time_zone)::date
+         FROM workspaces w WHERE w.id = $1`,
+      [workspaceId, legacy, CLASSIFIER_PROMPT_VERSION],
+    );
+    await session.query('UPDATE classifier_settings SET daily_call_cap = 2 WHERE workspace_id = $1', [workspaceId]);
+    const deps = { classifierFor: () => ({ classify: async () => await Promise.reject(new Error('not called')) }), processEnabled: true };
+    try {
+      const first = await reply();
+      const second = await reply();
+      const a = await withTransaction(session, async () => await beginClassification(system(), deps, { messageId: first, retry: false }));
+      const b = await withTransaction(session, async () => await beginClassification(system(), deps, { messageId: second, retry: false }));
+      expect(a.kind).toBe('reserved');
+      expect(b).toMatchObject({ kind: 'done', report: { outcome: 'capped' } });
+      // Gone again, so the rest of this file starts from an ordinary day with nothing owed.
+      await session.query("DELETE FROM provider_reservations WHERE subject_kind = 'reply_classification' AND subject_id = $1", [first]);
+      await session.query('DELETE FROM mail_message_classifications WHERE mail_message_id = ANY($1::uuid[])', [[legacy, first, second]]);
+    } finally {
+      await session.query('UPDATE classifier_settings SET daily_call_cap = 500 WHERE workspace_id = $1', [workspaceId]);
+    }
+  });
+
   it('the control: one request, settled at its cost, the model row written', async () => {
     mode = 'answer';
     const id = await reply();
@@ -228,6 +260,35 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
     C = rows[0]?.cents ?? 0;
     expect(C).toBeGreaterThan(0);
     expect(await outcomes(id)).toEqual(['accepted']);
+  });
+
+  it('nothing but BEGIN comes between chunk 2\'s commit and the request (P1 final round, #1)', async () => {
+    mode = 'answer';
+    const id = await reply();
+    await enqueue(id, `classify-reply:${id}`);
+    const statements: string[] = [];
+    const watching: SessionQueryable = {
+      query: async <Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) => {
+        statements.push(text.trim().split(/\s+/u).slice(0, 3).join(' '));
+        return await session.query<Row>(text, values);
+      },
+    };
+    let atRequest = -1;
+    onRequest = () => {
+      atRequest = statements.length;
+    };
+    try {
+      for (let pass = 0; pass < 8; pass += 1) {
+        const report = await runOnce(watching, { registry: registry(), owner: 'paid-test', limit: 5 });
+        if (report.claimed === 0) break;
+      }
+    } finally {
+      onRequest = null;
+    }
+    expect(atRequest).toBeGreaterThan(0);
+    const before = statements.slice(0, atRequest);
+    const lastCommit = before.lastIndexOf('COMMIT');
+    expect(before.slice(lastCommit + 1)).toEqual(['BEGIN']);
   });
 
   it('paused while chunk 2 waits for the month: no request, released, recorded disabled, and owed again', async () => {
@@ -307,6 +368,21 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
       await ceiling(5000);
       mode = 'answer';
     }
+  });
+
+  it('an answer without usage is settled at its reservation, never at a computed zero (P1 final round, #2)', async () => {
+    mode = 'nousage';
+    const id = await reply();
+    await enqueue(id, `classify-reply:${id}`);
+    const before = requests;
+    try {
+      await drain();
+    } finally {
+      mode = 'answer';
+    }
+    expect(requests - before).toBe(1);
+    expect(await attempts(id)).toEqual([{ attempt: 1, state: 'estimated', cents: C, settled_cents: C }]);
+    expect(await outcomes(id)).toEqual(['accepted']);
   });
 
   it('a chunk 3 rolled back after its request leaves the attempt charged, and the sweep estimates it', async () => {

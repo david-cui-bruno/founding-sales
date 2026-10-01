@@ -41,6 +41,8 @@ import type { ClassifierRequest } from './prompt.ts';
 export interface RecordedAnswer {
   /** The raw text the model returned. A string on purpose: malformed cases are strings. */
   readonly text?: string | undefined;
+  /** Slice P1: a response whose usage reports no counts, as a broken one might. */
+  readonly noUsage?: boolean | undefined;
   readonly stopReason?: string | undefined;
   readonly refusalCategory?: string | undefined;
   readonly model?: string | undefined;
@@ -144,7 +146,7 @@ export function recordedAnthropicTransport(options: RecordedTransportOptions): R
             ? { type: 'refusal', category: answer.refusalCategory ?? null }
             : null,
         content: answer.text === undefined ? [] : [{ type: 'text', text: answer.text }],
-        usage: {
+        usage: answer.noUsage === true ? {} : {
           input_tokens: volatileTokens,
           output_tokens: answer.outputTokens ?? 90,
           cache_creation_input_tokens: warm ? 0 : cachedPrefixTokens,

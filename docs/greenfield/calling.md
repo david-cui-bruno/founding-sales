@@ -352,10 +352,26 @@ calendar, "Transcription is off. 1 transcription already sent is finishing." and
 reading is off. 1 reply already sent to the model is finishing." while a switch is off and
 something is.
 
-One window remains on the e-mail path, by design of the fence: the claim's COMMIT is the
-point a message counts as submitted, and a turn-off that commits after it (it has waited on
-the gate for exactly that commit) lets that one message go. `dispatching` has no edge back to
-`held` (migration 0010), so there is no re-check after the commit.
+**What the pause guarantees** (the boundaries, decided in the P1 final round). Each paid
+path has one point after which a request counts as already submitted; a turn-off that
+commits after that point lets that one request go, and one that commits before it stops it:
+
+* Gmail — the claim's COMMIT. A turn-off that commits after it (it has waited on the gate for
+  exactly that commit) lets that one message go. `dispatching` has no edge back to `held`
+  (migration 0010), so there is no re-check after the commit.
+* the reply classifier — chunk 2's COMMIT that marks the attempt `calling`, taken under the
+  classifier switch lock. Between that commit and the request the runner issues nothing but
+  the next chunk's `BEGIN` (its clock comes from the progress write, not a query) and chunk 3
+  sends before any read.
+* research and transcription — the final settings read immediately before each request. A
+  turn-off that commits while that read is in flight is equivalent to one committed just
+  after it: the request counts as already submitted.
+
+A `calling` classifier attempt whose claim is gone (a lost lease, a requeue between chunk 2
+and chunk 3) is estimated at its reservation by the job's next claim or by the sweep, by
+design: nobody can know whether its request left. A reply holds at most two paid attempts,
+so a reply loses at most two estimates this way and is then left with its deterministic
+classification.
 
 **The month's cash ceiling (invariant I2).** Daily ceilings are not a monthly guarantee:
 $1.25 of calling and $0.50 of transcription a day already allow $38.50 over twenty-two
@@ -379,12 +395,17 @@ like `research.firm` and `call.transcribe`, with `provider_reservations` subject
    attempts, six rows), the daily call cap (today's paid reservations), and the month's cash
    ceiling, then the attempt reserved at the request's upper bound: its UTF-8 bytes as input
    tokens at the cache-write price plus `max_output_tokens`, doubled when the server may fall
-   back. One open reservation per reply (`provider_reservations_one_open_reply`).
+   back. One open reservation per reply (`provider_reservations_one_open_reply`). The daily
+   count is the classifier's paid reservations dated today plus today's sent requests with no
+   reservation for their reply (those made before 0031), both on the same business date.
 2. chunk 2 (`ensureClassificationCalling`), committed — the request built, the month and the
    switch read last, the attempt marked `calling`; off or over the month releases it.
 3. chunk 3 (`finishClassification`) — the request, then the settlement by id at the answer's
-   cost (`anthropic_classifier` in the ledger). An ambiguous failure keeps the reservation as
-   its estimate and, under two paid attempts, goes back to chunk 1 for the one retry.
+   cost (`anthropic_classifier` in the ledger). An ambiguous failure, or an answer that does
+   not report its input and output counts, keeps the reservation as its estimate — never a
+   computed zero (research's extraction applies the same rule; transcription settles only on
+   a duration the answer reports). An ambiguous failure, under two paid attempts, goes back
+   to chunk 1 for the one retry.
 
 So spend is durable whatever the handler does after the request: a rolled-back chunk 3
 leaves the attempt `calling`, which `readSpend` counts, and the job's next claim (or the
@@ -392,10 +413,20 @@ sweep, after half an hour) estimates it. There is no overshoot beyond the reserv
 
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
 
-routing → send gate → firm → the subject's own lock (call session row, transcription
-session, research run, reply) → its kind's budget lock (`telephony_budget`,
+routing → send gate → firm (and contact) → the subject's own lock (call session row,
+transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
 `transcription_budget`, research `RSCH`, `classifier_budget`) → the workspace monthly lock →
-reservation and ledger rows.
+rows: reservations, ledger, and the rows that reference a message (classifier attempts).
+
+The deletion workflow follows it whole (P1 final round): after the send gate it locks the
+firm (and the contact), then every call session and its transcription, then every active
+research run of the firm (running, or holding an open reservation), then the monthly lock —
+all before it deletes or settles anything. Research chunk 3 takes the firm's KEY SHARE before
+its run, so a page-only run and a firm deletion wait for each other in that order; the
+classifier's chunk 3 takes the monthly lock before it records its attempt, as its chunk 2
+already does. `packages/domain/test/retention/deletionLockOrder.test.ts` drives both of the
+verification's interleavings (deletion against a paused classification, and against a
+page-only research run); both now finish.
 
 Every write to a `provider_ledger` row takes the monthly lock first (`lockMonthlySpend`,
 inside `recordProviderCall`, the settlement and the correction), so a transaction that holds

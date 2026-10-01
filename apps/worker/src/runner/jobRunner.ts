@@ -147,7 +147,7 @@ function budgetOverrun(
 
 type AttemptResult =
   | { readonly outcome: JobRunOutcome; readonly chunk?: undefined; readonly progress?: undefined }
-  | { readonly outcome: 'chunk'; readonly chunk: JobChunk; readonly progress: ProgressOutcome };
+  | { readonly outcome: 'chunk'; readonly chunk: JobChunk; readonly progress: ProgressOutcome; readonly writtenHostMs: number };
 
 interface AttemptOptions {
   readonly handler: JobHandler;
@@ -196,6 +196,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
   let outcome: JobRunOutcome = 'lease_lost';
   let chunk: JobChunk | null = null;
   let progress: ProgressOutcome | null = null;
+  let writtenHostMs = 0;
   let thrown: unknown = null;
   try {
     await withTransaction(session, async () => {
@@ -210,6 +211,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
         if (written.outcome === 'lease_lost') throw new LeaseLost();
         chunk = result;
         progress = written;
+        writtenHostMs = Date.now();
         return;
       }
       outcome = await completeJob(session, job);
@@ -225,7 +227,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
   if (thrown !== null) {
     return { outcome: await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure }) };
   }
-  if (chunk !== null && progress !== null) return { outcome: 'chunk', chunk, progress };
+  if (chunk !== null && progress !== null) return { outcome: 'chunk', chunk, progress, writtenHostMs };
   return { outcome };
 }
 
@@ -277,10 +279,15 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
         ...(written.chunking === null ? {} : { chunking: written.chunking }),
       },
     };
-    // A fresh reading, after the commit. The bookkeeping the write returned was taken
-    // inside the chunk's own transaction, and the deadline this decides is the next
-    // chunk's, so it has to be read now.
-    clock = await now();
+    // A fresh reading, after the commit, of the database clock — without a query (slice P1,
+    // final round): the progress write's own database time, plus the host time since it.
+    // A chunk that marks a paid attempt `calling` is followed by its provider request, and
+    // nothing but the next chunk's BEGIN may come between that commit and the request.
+    // A test that steers the clock still asks its own function.
+    clock =
+      overrideNow === undefined && written.chunking !== null
+        ? written.chunking.lastChunkMs + Math.max(0, Date.now() - attempt.writtenHostMs)
+        : await now();
     longestChunk = Math.max(longestChunk, clock - startedAt);
     if (!Number.isFinite(deadline) || clock + longestChunk + CHUNK_MARGIN_MILLISECONDS >= deadline) {
       // Out of lease with work left: back to the queue, cursor kept, runnable now.

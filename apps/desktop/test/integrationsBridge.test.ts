@@ -66,6 +66,31 @@ describe('the integrations half of the administration bridge', () => {
     expect(state.integrationsNotice).toBeNull();
   });
 
+  it('reads what is finishing again after a paid switch is saved, so the line shows at once (P1 final round, #7)', async () => {
+    const answers: Record<string, { status: number; body: unknown }> = {
+      '/settings/integrations': { status: 200, body: INTEGRATIONS },
+      '/settings/update': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+    };
+    const { api, calls } = scripted(answers);
+    const bridge = createAdminBridge({ api, session: session('admin') });
+    expect((await bridge.state()).paidFinishing ?? null).toBeNull();
+    answers['/settings/finishing'] = {
+      status: 200,
+      body: { sending: { on: true, finishing: 0 }, research: { on: true, finishing: 0 }, transcription: { on: false, finishing: 1 } },
+    };
+    calls.length = 0;
+    const state = await bridge.saveIntegration({
+      settingKey: 'call_transcription',
+      value: { enabled: false, dailyCeilingCents: 50, unitPriceMicros: 4_300 },
+    });
+    expect(calls.map(call => call.path)).toEqual(['/settings/update', '/settings/integrations', '/settings/finishing']);
+    expect(state.paidFinishing).toEqual({ transcription: { on: false, finishing: 1 } });
+    // A setting that starts no paid request reads nothing more.
+    calls.length = 0;
+    await bridge.saveIntegration({ settingKey: 'calendar_integration', value: { integration: 'calcom' } });
+    expect(calls.map(call => call.path)).toEqual(['/settings/update', '/settings/integrations']);
+  });
+
   it('keeps a refusal on the section as its code and leaves the page notice alone', async () => {
     const refused = scripted({
       '/settings/integrations': { status: 200, body: INTEGRATIONS },
