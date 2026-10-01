@@ -85,6 +85,16 @@ export interface LogCallOutcomeInput {
   readonly outcome: CallOutcome;
   /** An entered past time. Absent means now, on the database's clock (C15). */
   readonly occurredAt?: string | undefined;
+  /**
+   * Which way the call went (migration 0034). Absent is `outbound`, every call placed from
+   * Callie or the phone app. `inbound` is a callback David took on his mobile and logged
+   * afterwards ("Log incoming call", slice S2): it names no ticket, session, route or
+   * calling identity, because Callie placed nothing, and only an outcome that says
+   * somebody was reached — an incoming call is never an unanswered attempt.
+   */
+  readonly direction?: 'outbound' | 'inbound' | undefined;
+  /** How long an incoming call lasted, in seconds, when David says. Inbound only. */
+  readonly durationSeconds?: number | undefined;
   readonly note?: string | undefined;
   /** For `callback_requested`: the wall clock the salesperson confirmed. */
   readonly callback?:
@@ -171,6 +181,18 @@ interface TicketRow {
   readonly [column: string]: unknown;
 }
 
+/**
+ * The outcomes an incoming call may be logged with (migration 0034): it was answered, so
+ * somebody was reached. The same five that start the cadence's count again.
+ */
+export const INBOUND_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>([
+  'interested',
+  'referral_or_wrong_person',
+  'callback_requested',
+  'not_interested',
+  'do_not_call',
+]);
+
 /** Outcomes that fulfil a callback: somebody was reached, or a message was left. */
 function fulfilsCallback(outcome: CallOutcome, engaged: boolean): boolean {
   return engaged || outcome === 'voicemail_left';
@@ -212,6 +234,32 @@ export async function logCallOutcome(
     const serverNow = Date.parse(now);
     if (entered > serverNow + CALL_OCCURRED_AT_TOLERANCE_SECONDS * 1000) return refusePolicy('occurred_at_in_future');
     occurredAt = entered > serverNow ? now : new Date(entered).toISOString();
+  }
+
+  // An incoming call (migration 0034): Callie placed nothing, so nothing that binds a
+  // placed call may be named, and it was answered — David took it — so its outcome is one
+  // that says somebody was reached. Refused before anything is written, like every other
+  // contradiction in the request.
+  const direction = input.direction ?? 'outbound';
+  if (direction === 'inbound') {
+    if (
+      input.ticketId !== undefined ||
+      input.callSessionId !== undefined ||
+      input.routeId !== undefined ||
+      input.callingIdentityId !== undefined ||
+      !INBOUND_OUTCOMES.has(input.outcome)
+    ) {
+      return refusePolicy('invalid_input');
+    }
+  } else if (input.durationSeconds !== undefined) {
+    // An outbound call's length is its session's; a typed one would be a second answer.
+    return refusePolicy('invalid_input');
+  }
+  if (
+    input.durationSeconds !== undefined &&
+    (!Number.isInteger(input.durationSeconds) || input.durationSeconds < 0 || input.durationSeconds > 86_400)
+  ) {
+    return refusePolicy('invalid_input');
   }
 
   // A call placed through a Twilio call session names the session; its ticket is the
@@ -287,6 +335,9 @@ export async function logCallOutcome(
     const item = await readTodayItem(context, input.itemId);
     if (item === null || item.firmId !== input.firmId) return refusePolicy('item_unknown');
     if (item.sourceKind === 'step_execution' && item.sourceId !== null) {
+      // A sequence's call step is completed by the call it asked for, which an incoming
+      // call is not.
+      if (direction === 'inbound') return refusePolicy('invalid_input');
       bound = await loadBoundCallStep(context, { stepExecutionId: item.sourceId, firmId: input.firmId });
       if (bound === null) return refusePolicy('item_unknown');
     } else if (item.sourceKind === 'callback' && item.sourceId !== null) {
@@ -359,8 +410,9 @@ export async function logCallOutcome(
   const logged = await context.db.query<{ id: string }>(
     `INSERT INTO call_logs
        (workspace_id, firm_id, contact_id, opportunity_id, phone_route_id, calling_identity_id,
-        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14)
+        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note,
+        direction, duration_seconds)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14, $15, $16)
      RETURNING id`,
     [
       context.scope.workspaceId,
@@ -377,6 +429,8 @@ export async function logCallOutcome(
       actor.userId,
       input.commandId ?? null,
       input.note ?? null,
+      direction,
+      input.durationSeconds ?? null,
     ],
   );
   const callLogId = logged.rows[0]?.id;
