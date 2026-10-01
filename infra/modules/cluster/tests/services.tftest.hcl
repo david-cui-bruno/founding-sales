@@ -234,3 +234,85 @@ run "an_inverted_schema_range_is_refused" {
 
   expect_failures = [var.worker_schema_range]
 }
+
+# Slice BR1: with the Bedrock transport the worker may invoke exactly the US inference
+# profiles the code maps, the foundation models they route to only through those profiles,
+# and count tokens on the one model that answers it. Nothing else of Bedrock, and nothing
+# of it for the API.
+run "the_bedrock_worker_invokes_only_the_mapped_profiles_and_their_routed_models" {
+  command = plan
+
+  variables {
+    worker_model_transport = "bedrock"
+  }
+
+  assert {
+    condition     = output.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
+    error_message = "A Bedrock worker is told so, under the variable the code reads."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement : statement
+      if anytrue([for action in statement.Action : startswith(action, "bedrock:")])
+      ] == [
+      {
+        Sid    = "InvokeClaudeThroughUsInferenceProfiles"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5",
+        ]
+      },
+      {
+        Sid    = "InvokeTheModelsThoseProfilesRouteTo"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5",
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-5",
+          "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-opus-5",
+          "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-5-5",
+          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-5",
+          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5-5",
+        ]
+        Condition = { StringEquals = { "bedrock:InferenceProfileArn" = [
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5",
+        ] } }
+      },
+      {
+        Sid      = "CountTokensBeforeResearchCalls"
+        Effect   = "Allow"
+        Action   = ["bedrock:CountTokens"]
+        Resource = ["arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"]
+      },
+    ]
+    error_message = "The worker's Bedrock grant is InvokeModel on the three US profiles, on their routed models only through them, and CountTokens on Haiku 4.5 here."
+  }
+
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.api_task.policy, "bedrock:")
+    error_message = "The API makes no model call and is granted nothing of Bedrock."
+  }
+}
+
+# The default grants nothing of Bedrock and sets no transport: the worker keeps the
+# direct API it had, and a rehearsal is not given a model it would call for its fixtures.
+run "the_default_worker_has_no_bedrock_grant_and_no_transport_variable" {
+  command = plan
+
+  assert {
+    condition = (
+      !strcontains(aws_iam_role_policy.worker_task.policy, "bedrock:")
+      && !contains(keys(output.worker_environment), "FSS_MODEL_TRANSPORT")
+    )
+    error_message = "worker_model_transport defaults to anthropic: no Bedrock statement, no FSS_MODEL_TRANSPORT."
+  }
+}

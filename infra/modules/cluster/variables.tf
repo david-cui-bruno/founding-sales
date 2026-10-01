@@ -203,6 +203,25 @@ variable "worker_reads_classifier_key" {
   default     = false
 }
 
+variable "worker_model_transport" {
+  description = <<-EOT
+    How the worker sends its Claude calls (slice BR1): "anthropic" (the direct API, with
+    the classifier key) or "bedrock" (Amazon Bedrock, with the worker task role, paid from
+    the account's credits). "bedrock" sets FSS_MODEL_TRANSPORT on the worker and grants
+    its task role bedrock:InvokeModel on the US inference profiles the code maps
+    (`packages/domain/classification/modelTransport.ts`), on the foundation models they
+    route to only through those profiles, and bedrock:CountTokens on the counted model.
+    "anthropic" grants nothing and sets nothing, so the worker keeps its old default.
+  EOT
+  type        = string
+  default     = "anthropic"
+
+  validation {
+    condition     = contains(["anthropic", "bedrock"], var.worker_model_transport)
+    error_message = "worker_model_transport is anthropic or bedrock."
+  }
+}
+
 variable "metric_namespace" {
   description = "CloudWatch namespace the applications publish counters and heartbeats to, and the only one their task roles may publish into. FSS/<name_prefix>, derived once in infra/modules/stack. No default: the bare FSS namespace was shared by every environment in the account (g42)."
   type        = string

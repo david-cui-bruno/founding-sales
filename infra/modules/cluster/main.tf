@@ -78,7 +78,64 @@ locals {
     FSS_ROLE       = "worker"
     FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
     FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
-  })
+    },
+    # Slice BR1: `readModelTransport` in packages/domain/classification/modelTransport.ts.
+    # Absent unless Bedrock is chosen, so the worker keeps its old default.
+    { for name, value in { FSS_MODEL_TRANSPORT = "bedrock" } : name => value if var.worker_model_transport == "bedrock" },
+  )
+
+  # Slice BR1: the Claude models the worker may reach on Bedrock, as each US system-defined
+  # inference profile and the foundation model it routes to. The same pairs as
+  # `BEDROCK_MODEL_TABLE` in packages/domain/classification/modelTransport.ts
+  # (test/ops/terraformCrossChecks.check.ts holds them equal). A US profile routes to its
+  # model in us-east-1, us-east-2 and us-west-2 (`aws bedrock list-inference-profiles`),
+  # and a call through it is authorized against the profile in this region AND the
+  # foundation model in whichever region serves it, so the model is granted in all three
+  # (docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html).
+  bedrock_models = {
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0" = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    "us.anthropic.claude-opus-5"                  = "anthropic.claude-opus-5"
+    "us.anthropic.claude-sonnet-5-5"              = "anthropic.claude-sonnet-5-5"
+  }
+  bedrock_routed_regions = ["us-east-1", "us-east-2", "us-west-2"]
+  # CountTokens takes the foundation model in this region; only Haiku 4.5 answers it (the
+  # code substitutes a byte bound for the others and never calls it for them).
+  bedrock_counted_models = ["anthropic.claude-haiku-4-5-20251001-v1:0"]
+
+  bedrock_profile_arns = [for id in sort(keys(local.bedrock_models)) : "arn:aws:bedrock:${var.aws_region}:${var.aws_account_id}:inference-profile/${id}"]
+  bedrock_foundation_model_arns = sort(flatten([
+    for model in values(local.bedrock_models) : [for region in local.bedrock_routed_regions : "arn:aws:bedrock:${region}::foundation-model/${model}"]
+  ]))
+
+  # A filter rather than a conditional: the three statements are different object types,
+  # which a conditional cannot return beside an empty list.
+  worker_bedrock_statements = [for statement in [
+    {
+      # InvokeModel only: the transport sends one non-streaming request, so no
+      # InvokeModelWithResponseStream, no Converse, no async invoke.
+      Sid      = "InvokeClaudeThroughUsInferenceProfiles"
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel"]
+      Resource = local.bedrock_profile_arns
+    },
+    {
+      # The routed models, and only through those profiles: a direct InvokeModel on a
+      # foundation model id carries no bedrock:InferenceProfileArn and is not allowed.
+      Sid       = "InvokeTheModelsThoseProfilesRouteTo"
+      Effect    = "Allow"
+      Action    = ["bedrock:InvokeModel"]
+      Resource  = local.bedrock_foundation_model_arns
+      Condition = { StringEquals = { "bedrock:InferenceProfileArn" = local.bedrock_profile_arns } }
+    },
+    {
+      # Research's exact token count before it calls. CountTokens has only the
+      # foundation-model resource type (servicereference bedrock.json) and is not billed.
+      Sid      = "CountTokensBeforeResearchCalls"
+      Effect   = "Allow"
+      Action   = ["bedrock:CountTokens"]
+      Resource = [for model in local.bedrock_counted_models : "arn:aws:bedrock:${var.aws_region}::foundation-model/${model}"]
+    },
+  ] : statement if var.worker_model_transport == "bedrock"]
 
   # Each task definition carries the application secrets its own process reads, by
   # the name it reads them under, and no others (lane g81, audit S17). Until then one
@@ -451,7 +508,7 @@ resource "aws_iam_role_policy" "worker_task" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         # 10.2: the worker's mail pipeline records prospect opt-outs during sync
         # and must journal them *before* acknowledging. No delete, in any form:
@@ -526,7 +583,7 @@ resource "aws_iam_role_policy" "worker_task" {
         Action   = ["transcribe:GetTranscriptionJob"]
         Resource = [local.transcription_job_arn_glob]
       },
-    ]
+    ], local.worker_bedrock_statements)
   })
 }
 

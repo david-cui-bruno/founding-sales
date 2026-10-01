@@ -278,6 +278,11 @@ module "cluster" {
   # rehearsal worker holding it would call the provider with a key that cannot work.
   worker_reads_classifier_key = local.is_production
 
+  # Slice BR1: production sends its Claude calls through Amazon Bedrock, paid from the
+  # account's credits. A rehearsal keeps the old default: its worker holds no classifier
+  # key, so it calls no model, and Bedrock would make it call one for its fixture replies.
+  worker_model_transport = local.is_production ? "bedrock" : "anthropic"
+
   metric_namespace = local.metric_namespace
 
   # The upgrade notice's address is the API's alone (lane g86), and absent rather
