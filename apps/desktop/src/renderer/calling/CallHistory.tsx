@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import type { CallSessionDto } from '@fss/contracts';
+import {
+  hasReasonSentence,
+  reasonSentence,
+  transcriptSpeakerLabels,
+  type CallSessionDto,
+  type CallTranscriptResponse,
+} from '@fss/contracts';
 import { Button } from '../ui/button.tsx';
 import { callTimer } from './callText.ts';
 import { playRecording, type Playback } from './playRecording.ts';
@@ -9,6 +15,12 @@ import { playRecording, type Playback } from './playRecording.ts';
  * Shown on the firm page (`FirmPage.tsx`). The audio comes through the API's proxy — the
  * Mac never holds a Twilio URL — and plays from a `blob:` URL revoked when it stops
  * (`playRecording.ts`).
+ *
+ * Slice C2: a call with a transcript has a "Transcript" disclosure under its row. Opening
+ * it reads the transcript once; each utterance is its speaker ("You" and "Them" when the
+ * two voices can be told apart, "Speaker 1", "Speaker 2" otherwise —
+ * `transcriptSpeakerLabels`), its time in grey, and what was said. A call with no
+ * transcript shows nothing; a read that failed is a sentence from `reasonSentence`.
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -32,6 +44,11 @@ export interface CallHistoryPorts {
     readonly reason: string | null;
   }>;
   play?: (audioBase64: string, contentType: string) => Promise<Playback>;
+  /** Slice C2. Absent (an older host) means no disclosure is offered. */
+  transcript?: (callSessionId: string) => Promise<{
+    readonly transcript: CallTranscriptResponse | null;
+    readonly reason: string | null;
+  }>;
 }
 
 export function registryHistoryPorts(): CallHistoryPorts | null {
@@ -40,7 +57,96 @@ export function registryHistoryPorts(): CallHistoryPorts | null {
   return {
     history: async firmId => await api.read('calling.history', { firmId }),
     recording: async sessionId => await api.read('calling.recording', { sessionId }),
+    transcript: async callSessionId => await api.read('calling.transcript', { callSessionId }),
   };
+}
+
+/** `m:ss` from the start of the recording. */
+export function transcriptTime(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${String(Math.floor(whole / 60))}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+type TranscriptState =
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'shown'; readonly transcript: CallTranscriptResponse }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'refused'; readonly reason: string };
+
+/**
+ * One call's "Transcript" disclosure. Closed until opened, and the read is made on the
+ * first opening only. Nothing at all is rendered when the read says there is none.
+ */
+export function TranscriptDisclosure({
+  callSessionId,
+  read,
+}: {
+  readonly callSessionId: string;
+  readonly read: NonNullable<CallHistoryPorts['transcript']>;
+}): JSX.Element | null {
+  const [state, setState] = useState<TranscriptState | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  if (state?.kind === 'none') return null;
+  const load = (): void => {
+    if (state !== null) return;
+    setState({ kind: 'loading' });
+    read(callSessionId).then(
+      answer => {
+        if (!mounted.current) return;
+        if (answer.transcript !== null) setState({ kind: 'shown', transcript: answer.transcript });
+        else if (answer.reason === null) setState({ kind: 'none' });
+        else setState({ kind: 'refused', reason: answer.reason });
+      },
+      () => {
+        if (mounted.current) setState({ kind: 'refused', reason: 'transcript_unavailable' });
+      },
+    );
+  };
+  return (
+    <details
+      data-testid="call-transcript"
+      className="text-xs"
+      onToggle={event => {
+        if ((event.currentTarget as HTMLDetailsElement).open) load();
+      }}
+    >
+      <summary className="cursor-default text-muted-foreground">Transcript</summary>
+      {state === null || state.kind === 'loading' ? (
+        <p className="py-1 text-muted-foreground">Reading the transcript…</p>
+      ) : state.kind === 'refused' ? (
+        <p data-testid="call-transcript-problem" className="py-1 text-muted-foreground">
+          {reasonSentence(hasReasonSentence(state.reason) ? state.reason : 'transcript_unavailable')}
+        </p>
+      ) : state.kind === 'shown' ? (
+        <TranscriptLines transcript={state.transcript} />
+      ) : null}
+    </details>
+  );
+}
+
+function TranscriptLines({ transcript }: { readonly transcript: CallTranscriptResponse }): JSX.Element {
+  const labels = transcriptSpeakerLabels(transcript.utterances);
+  return (
+    <ol data-testid="call-transcript-lines" className="flex flex-col gap-1 py-1">
+      {transcript.utterances.map((utterance, index) => (
+        <li key={index} data-testid="call-transcript-line" className="flex gap-2">
+          <span data-testid="call-transcript-time" className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">
+            {transcriptTime(utterance.start)}
+          </span>
+          <span data-testid="call-transcript-speaker" className="w-16 shrink-0 font-medium">
+            {labels.get(utterance.speaker) ?? `Speaker ${String(utterance.speaker + 1)}`}
+          </span>
+          <span className="min-w-0 flex-1">{utterance.text}</span>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readonly firmId: string; readonly ports?: CallHistoryPorts | null }): JSX.Element | null {
@@ -125,31 +231,36 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
       <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">Calls</h3>
       <ul className="flex flex-col border-t border-border">
         {calls.map(call => (
-          <li key={call.sessionId} data-testid="call-history-row" className="group/row flex items-center gap-3 border-b border-border py-1.5 text-sm">
-            <span className="flex-1 truncate">{when(call.startedAt ?? call.endedAt)}</span>
-            <span className="text-xs text-muted-foreground">{STATUS_WORDS[call.status]}</span>
-            <span data-testid="call-history-duration" className="w-14 text-right text-xs text-muted-foreground tabular-nums">
-              {call.durationSeconds === null ? '—' : callTimer(call.durationSeconds)}
-            </span>
-            {call.hasRecording ? (
-              <Button
-                variant="quiet"
-                size="sm"
-                data-testid="call-history-play"
-                onClick={() => {
-                  if (playing === call.sessionId) {
-                    stopPlayback();
-                    setPlaying(null);
-                    return;
-                  }
-                  void play(call.sessionId);
-                }}
-              >
-                {playing === call.sessionId ? 'Stop' : 'Play'}
-              </Button>
-            ) : (
-              <span className="w-12" />
-            )}
+          <li key={call.sessionId} data-testid="call-history-row" className="group/row flex flex-col border-b border-border py-1.5 text-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex-1 truncate">{when(call.startedAt ?? call.endedAt)}</span>
+              <span className="text-xs text-muted-foreground">{STATUS_WORDS[call.status]}</span>
+              <span data-testid="call-history-duration" className="w-14 text-right text-xs text-muted-foreground tabular-nums">
+                {call.durationSeconds === null ? '—' : callTimer(call.durationSeconds)}
+              </span>
+              {call.hasRecording ? (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  data-testid="call-history-play"
+                  onClick={() => {
+                    if (playing === call.sessionId) {
+                      stopPlayback();
+                      setPlaying(null);
+                      return;
+                    }
+                    void play(call.sessionId);
+                  }}
+                >
+                  {playing === call.sessionId ? 'Stop' : 'Play'}
+                </Button>
+              ) : (
+                <span className="w-12" />
+              )}
+            </div>
+            {call.hasTranscript === true && ports.transcript !== undefined ? (
+              <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
+            ) : null}
           </li>
         ))}
       </ul>

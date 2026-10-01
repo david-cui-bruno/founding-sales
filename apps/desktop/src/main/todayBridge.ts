@@ -4,6 +4,7 @@ import {
   TODAY_CARD_VERSION,
   callHistoryResponseSchema,
   callRecordingResponseSchema,
+  callTranscriptResponseSchema,
   callSessionCreatedSchema,
   callbackInstant,
   callingStatusResponseSchema,
@@ -184,6 +185,11 @@ export interface TodayBridgeHost {
   callHistory(input: { readonly firmId: string }): Promise<{ readonly calls: CallHistoryCalls | null }>;
   callRecording(input: { readonly sessionId: string }): Promise<{
     readonly recording: z.infer<typeof callRecordingResponseSchema> | null;
+    readonly reason: string | null;
+  }>;
+  /** Slice C2: one call's transcript; both null when it has none. */
+  callTranscript(input: { readonly callSessionId: string }): Promise<{
+    readonly transcript: z.infer<typeof callTranscriptResponseSchema> | null;
     readonly reason: string | null;
   }>;
 }
@@ -1200,6 +1206,16 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         value => callRecordingResponseSchema.parse(value),
       );
       return answer.ok ? { recording: answer.value, reason: null } : { recording: null, reason: answer.reason.slice(0, 80) };
+    },
+
+    async callTranscript(input) {
+      const answer = await deps.api.read(
+        `/calls/transcript?callSessionId=${encodeURIComponent(input.callSessionId)}`,
+        value => callTranscriptResponseSchema.parse(value),
+      );
+      if (answer.ok) return { transcript: answer.value, reason: null };
+      // No transcript is not a failure: the call simply has none, and the page shows nothing.
+      return { transcript: null, reason: answer.reason === 'not_found' ? null : answer.reason.slice(0, 80) };
     },
   };
 

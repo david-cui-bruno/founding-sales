@@ -3,6 +3,7 @@ import {
   CALL_OUTCOMES,
   callCadenceSchema,
   callRecordingResponseSchema,
+  callTranscriptResponseSchema,
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
   firmMeetingDtoSchema,
@@ -336,6 +337,16 @@ export const callRecordingViewSchema = z.strictObject({
   reason: z.string().max(80).nullable(),
 });
 
+/**
+ * One call's transcript (slice C2). `transcript` null and `reason` null when the call has
+ * none (the API's 404): the page shows nothing. `reason` is the code when it could not be
+ * read, for the page to put in a sentence.
+ */
+export const callTranscriptViewSchema = z.strictObject({
+  transcript: callTranscriptResponseSchema.nullable(),
+  reason: z.string().max(80).nullable(),
+});
+
 // ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
@@ -521,6 +532,13 @@ export const OPERATIONS = {
     input: z.strictObject({ sessionId: uuid }),
     output: callRecordingViewSchema,
     transform: 'none: the audio the API proxied from Twilio, never a URL',
+  },
+  'calling.transcript': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/transcript?callSessionId={uuid}' }],
+    input: z.strictObject({ callSessionId: uuid }),
+    output: callTranscriptViewSchema,
+    transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
   // --- Research (lane R) --------------------------------------------------
@@ -948,7 +966,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: nothing,
     output: adminStateSchema,
@@ -965,7 +983,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: z.strictObject({ screen: z.enum(SETTINGS_TAB_SCREENS) }),
     output: adminStateSchema,
@@ -981,7 +999,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: saveSettingInputSchema,
     output: adminStateSchema,
@@ -991,7 +1009,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/settings/update' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: saveIntegrationInputSchema,
     output: adminStateSchema,
@@ -1035,7 +1053,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: z.strictObject({ stageKey: z.string().min(1).max(80) }),
     output: adminStateSchema,
@@ -1094,7 +1112,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations' },
+      { method: 'GET', path: '/settings/integrations?include=transcription' },
     ],
     input: recordHolidayCalendarInputSchema,
     output: adminStateSchema,
