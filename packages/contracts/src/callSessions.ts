@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import { callSummaryDtoSchema } from './callSummaries.ts';
 
 /**
  * The call-session wire contract (call-to-booking slice W, migration 0028).
@@ -200,6 +201,11 @@ export const callSessionDtoSchema = z.object({
    * Mac reading an API from before C2 still parses the history, and absent reads as no.
    */
   hasTranscript: z.boolean().optional(),
+  /**
+   * Slice C3b: the call's summary and suggested next steps, only when the read asked for
+   * them (`include=summary`) and the call has one. An older Mac never asks.
+   */
+  summary: callSummaryDtoSchema.optional(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
 

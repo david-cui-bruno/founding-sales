@@ -105,8 +105,8 @@ const toRow = (row: ReservationDbRow): ReservationRow => ({
   settledCents: Number(row.settled_cents),
 });
 
-/** The subjects priced by model and tokens: research runs and, since slice P1, replies. */
-export type TokenPricedSubjectKind = 'research_run' | 'reply_classification';
+/** The subjects priced by model and tokens: research runs, replies (slice P1) and call summaries (slice C3b). */
+export type TokenPricedSubjectKind = 'research_run' | 'reply_classification' | 'call_summary';
 
 export interface ReserveInput {
   readonly providerKey: string;

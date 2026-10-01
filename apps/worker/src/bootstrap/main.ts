@@ -33,6 +33,8 @@ import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileO
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
 import { callTranscribeJobHandler, heldTranscriptionSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
 import { readSelectedTranscriptionProvider } from '../transcription/selectProvider.ts';
+import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
+import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -97,6 +99,11 @@ export interface HandlerComposition {
    * Absent, `call.transcribe` is not registered and its jobs wait in the queue.
    */
   readonly transcription?: CallTranscribeOptions | undefined;
+  /**
+   * After-call summaries (slice C3b): present only when the classifier's Anthropic
+   * transport is. Absent, `call.summarize` is not registered and its source finds nothing.
+   */
+  readonly summary?: CallSummarizeOptions | undefined;
 }
 
 /**
@@ -178,6 +185,8 @@ export function registerHandlers(
   if (composition.calcom !== undefined) registry.register(calcomReconcileJobHandler(composition.calcom));
   // Slice C2. Calls Twilio for the recording and Deepgram for the transcript, so only with both.
   if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
+  // Slice C3b. Calls Anthropic, with the classifier's transport, so only with its key.
+  for (const handler of callSummarizeHandlers(composition.summary)) registry.register(handler);
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -362,7 +371,7 @@ export function readTranscriptionComposition(
  * makes running one from a command line safe.
  */
 export function workerDueWorkSources(
-  options: { readonly calcomReconcile?: boolean; readonly transcription?: boolean } = {},
+  options: { readonly calcomReconcile?: boolean; readonly transcription?: boolean; readonly summary?: boolean } = {},
 ): readonly DueWorkSource[] {
   return [
     canarySource(),
@@ -379,6 +388,8 @@ export function workerDueWorkSources(
     calcomReconcileSource({ enabled: options.calcomReconcile === true }),
     // Slice P1. Like Cal.com's: listed always, materializing only where `call.transcribe` is registered.
     heldTranscriptionSource({ enabled: options.transcription === true }),
+    // Slice C3b. Listed always, materializing only where `call.summarize` is registered.
+    callSummarySource({ enabled: options.summary === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -443,12 +454,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const calcomReconcile = readCalcomReconcileClient(environment);
   // Slice C2: the transcription key and the recording credentials, each read once, here.
   const transcription = readTranscriptionComposition(environment, (event, fields) => log.log('info', event, fields));
+  // Slice C3b: the summary rides the classifier's transport; the model is the deployment's.
+  const summary = readCallSummaryComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
   const composition: HandlerComposition = {
     ...composed,
     ...(calcomReconcile.client === null
       ? {}
       : { calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } }),
     ...(transcription.options === null ? {} : { transcription: transcription.options }),
+    ...(summary.options === null ? {} : { summary: summary.options }),
   };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
@@ -465,6 +479,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
     // Whether transcription runs, and if not why, by field name only.
     call_transcription: transcription.problem ?? 'configured',
+    // Whether after-call summaries run, and with which model; never a key.
+    call_summary: summary.problem ?? summary.options?.model ?? 'configured',
   });
 
   const sink = await createSink(config, log);
@@ -485,6 +501,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
       sources: workerDueWorkSources({
         calcomReconcile: composition.calcom !== undefined,
         transcription: composition.transcription !== undefined,
+        summary: composition.summary !== undefined,
       }),
       sink,
       log,
