@@ -115,6 +115,13 @@ describe('reasonSentence covers every list of codes', () => {
     }
   });
 
+  it('gives the month’s cash ceiling one sentence, whichever map carries it (slice P1)', async () => {
+    const { CALL_SESSION_REFUSAL_SENTENCES, TRANSCRIPTION_REFUSAL_SENTENCES } = await import('../src/reasonText.ts');
+    expect(CALL_SESSION_REFUSAL_SENTENCES.monthly_cash_ceiling).toBe(TRANSCRIPTION_REFUSAL_SENTENCES.monthly_cash_ceiling);
+    expect(reasonSentence('monthly_cash_ceiling')).toBe(CALL_SESSION_REFUSAL_SENTENCES.monthly_cash_ceiling);
+    expect(reasonSentence('monthly_cash_ceiling')).toContain('spending limit');
+  });
+
   it('says the sentences the brief gives', () => {
     expect(reasonSentence('coverage_incomplete')).toBe('Callie is still reading this mailbox and won’t send from it until it has caught up.');
     expect(reasonSentence('cold_outreach_mailbox_required')).toContain('Call this firm instead');
