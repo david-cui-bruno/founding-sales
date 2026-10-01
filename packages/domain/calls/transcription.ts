@@ -1074,14 +1074,28 @@ async function giveUpProviderJob(
 
 /** How many jobs past their deadline one scheduler pass gives up. */
 export const TRANSCRIPTION_GIVE_UPS_PER_PASS = 20;
+/** How many expired jobs one pass looks at to find those it can give up: busy ones are passed over, not counted. */
+export const TRANSCRIPTION_GIVE_UP_WINDOW = 200;
+
+async function tryAdvisoryLock(db: Queryable, name: string): Promise<boolean> {
+  const { rows } = await db.query<{ locked: boolean }>('SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS locked', [name]);
+  return rows[0]?.locked === true;
+}
 
 /**
  * Gives up, in the scheduler pass's own transaction, the recorded jobs past
  * `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` that are still open. A look enforces the deadline
  * only when it runs; a row whose look jobs all die would otherwise be looked at every five
  * minutes for ever. Database writes only (the attempt is estimated at its reservation, as
- * every give-up is); no provider is asked. A session a live claim holds is left for the next
- * pass.
+ * every give-up is); no provider is asked.
+ *
+ * It never waits (a collector holds the budget lock across its provider request, and the
+ * pass's statement timeout would roll the whole pass back): the session lock, the budget lock
+ * and the monthly spend lock, in the repo's one lock order, are each only tried. A job whose
+ * locks are not all free is skipped, inside a savepoint so that nothing it took stays held,
+ * and is given up by a later pass. The scan looks at `TRANSCRIPTION_GIVE_UP_WINDOW` expired
+ * jobs, oldest first, and gives up at most `TRANSCRIPTION_GIVE_UPS_PER_PASS` of them, so busy
+ * jobs cannot occupy the pass.
  */
 async function giveUpExpiredProviderJobs(db: Queryable): Promise<void> {
   const { rows } = await db.query<{ workspace_id: string; call_session_id: string; job_name: string }>(
@@ -1090,19 +1104,40 @@ async function giveUpExpiredProviderJobs(db: Queryable): Promise<void> {
         AND created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) <= now()
       ORDER BY created_at, id
       LIMIT $1`,
-    [TRANSCRIPTION_GIVE_UPS_PER_PASS],
+    [TRANSCRIPTION_GIVE_UP_WINDOW],
   );
+  let givenUp = 0;
   for (const row of rows) {
-    const context = repositoryContext(workspaceScope(row.workspace_id, { kind: 'system', component: 'scheduler' }), db);
-    if (!(await tryLockTranscription(context, row.call_session_id))) continue;
-    await lockTranscriptionBudget(context);
-    // Asked again under the lock: a claim may have finished the job since the read.
-    const job = (await providerJobsOf(context, row.call_session_id)).find(
-      candidate => candidate.jobName === row.job_name && (candidate.state === 'submitting' || candidate.state === 'started') && candidate.expired,
-    );
-    if (job === undefined) continue;
-    const reservation = (await listTranscriptionAttempts(context, row.call_session_id)).find(attempt => attempt.id === job.reservationId);
-    await giveUpProviderJob(context, job, reservation, await databaseNow(context));
+    if (givenUp >= TRANSCRIPTION_GIVE_UPS_PER_PASS) return;
+    // A savepoint where there is a transaction (the scheduler pass); outside one the locks
+    // are released by each statement anyway.
+    let savepoint = true;
+    try {
+      await db.query('SAVEPOINT transcription_give_up');
+    } catch {
+      savepoint = false;
+    }
+    try {
+      const context = repositoryContext(workspaceScope(row.workspace_id, { kind: 'system', component: 'scheduler' }), db);
+      const free =
+        (await tryLockTranscription(context, row.call_session_id)) &&
+        (await tryAdvisoryLock(db, `${row.workspace_id}:transcription_budget`)) &&
+        (await tryAdvisoryLock(db, `${row.workspace_id}:monthly_cash_ceiling`));
+      if (!free) {
+        if (savepoint) await db.query('ROLLBACK TO SAVEPOINT transcription_give_up');
+        continue;
+      }
+      // Asked again under the locks: a claim may have finished the job since the read.
+      const job = (await providerJobsOf(context, row.call_session_id)).find(
+        candidate => candidate.jobName === row.job_name && (candidate.state === 'submitting' || candidate.state === 'started') && candidate.expired,
+      );
+      if (job === undefined) continue;
+      const reservation = (await listTranscriptionAttempts(context, row.call_session_id)).find(attempt => attempt.id === job.reservationId);
+      await giveUpProviderJob(context, job, reservation, await databaseNow(context));
+      givenUp += 1;
+    } finally {
+      if (savepoint) await db.query('RELEASE SAVEPOINT transcription_give_up').catch(() => undefined);
+    }
   }
 }
 
