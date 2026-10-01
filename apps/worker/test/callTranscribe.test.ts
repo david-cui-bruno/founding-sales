@@ -37,6 +37,7 @@ import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { callTranscribeJobHandler, heldTranscriptionSource } from '../src/handlers/callTranscribe.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
 import {
@@ -576,6 +577,8 @@ describe('the call.transcribe job', () => {
     const common = { sessionId: late, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
     await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
     expect(await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common))).toEqual({ kind: 'calling', attempt: 1 });
+    // Settings' finishing line counts it while its request may be in flight.
+    expect((await readFinishing(system())).transcriptionFinishing).toBe(1);
     // The switch goes off during the Twilio read: after the first re-check, before Deepgram.
     // Written in the chunk's own transaction, so the next read in it sees the write.
     const turnsOff: TwilioRecordingFetcher = {
@@ -596,6 +599,7 @@ describe('the call.transcribe job', () => {
       expect(finished).toEqual({ kind: 'done', reason: 'transcription_off' });
       expect(provider.calls).toBe(0);
       expect(await attempts(late)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+      expect((await readFinishing(system())).transcriptionFinishing).toBe(0);
     } finally {
       await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
     }

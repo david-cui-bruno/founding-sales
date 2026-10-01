@@ -146,7 +146,7 @@ export function createResearchBridge(deps: ResearchBridgeDeps): ResearchBridgeHo
     worstCaseRunCents = answer.value.worstCaseRunCents;
     spend = answer.value.spend;
     notice = null;
-    // Slice P1: "Research is off. 1 model call already started is finishing." A failed read
+    // Slice P1: "Research is off. 1 research run already under way is finishing." A failed read
     // (an API from before P1) is no line, never a notice.
     const read = await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value));
     finishing = read.ok ? read.value.research : null;

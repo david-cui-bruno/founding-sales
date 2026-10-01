@@ -272,7 +272,7 @@ describe('the monthly spending limit', () => {
   it('shows "this month: $x of $y" and saves the limit in cents', () => {
     const { onSave } = show(stateOf({ integrations: integrations({ month: { ceilingCents: 2_500, spentMonthCents: 340 } }) }));
     expect(screen.getByTestId('month-detail').textContent).toBe(
-      'This month: $3.40 of $25.00. Calls and transcription stop when the limit is reached.',
+      'This month: $3.40 of $25.00. Calls, transcription, research and reply reading stop when the limit is reached.',
     );
     const field = screen.getByTestId('month-dollars') as HTMLInputElement;
     expect(field.value).toBe('25.00');

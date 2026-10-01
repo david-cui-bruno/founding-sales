@@ -70,7 +70,7 @@ export function finishingSentence(
   const one = count === 1;
   return kind === 'sending'
     ? `Sending is off. ${String(count)} ${one ? 'message' : 'messages'} already submitted ${one ? 'is' : 'are'} finishing.`
-    : `Research is off. ${String(count)} ${one ? 'model call' : 'model calls'} already started ${one ? 'is' : 'are'} finishing.`;
+    : `Research is off. ${String(count)} ${one ? 'research run' : 'research runs'} already under way ${one ? 'is' : 'are'} finishing.`;
 }
 
 export interface SendingAdminSectionView {

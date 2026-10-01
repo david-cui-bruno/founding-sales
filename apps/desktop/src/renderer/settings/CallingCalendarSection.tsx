@@ -56,7 +56,7 @@ export function monthCentsFromDollars(typed: string): number | null {
 
 /** "This month: $3.40 of $25.00." — what the month has cost against its limit. */
 export function monthLine(month: { readonly ceilingCents: number; readonly spentMonthCents: number }): string {
-  return `This month: ${money(month.spentMonthCents)} of ${money(month.ceilingCents)}. Calls and transcription stop when the limit is reached.`;
+  return `This month: ${money(month.spentMonthCents)} of ${money(month.ceilingCents)}. Calls, transcription, research and reply reading stop when the limit is reached.`;
 }
 
 /** Dollars typed → cents, or null when it is not an amount from 0 to 5. */

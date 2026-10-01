@@ -187,7 +187,7 @@ describe('the finishing line', () => {
   it('says what is finishing only while the switch is off, in the singular and the plural', () => {
     expect(finishingSentence('sending', { on: false, finishing: 1 })).toBe('Sending is off. 1 message already submitted is finishing.');
     expect(finishingSentence('sending', { on: false, finishing: 2 })).toBe('Sending is off. 2 messages already submitted are finishing.');
-    expect(finishingSentence('research', { on: false, finishing: 1 })).toBe('Research is off. 1 model call already started is finishing.');
+    expect(finishingSentence('research', { on: false, finishing: 1 })).toBe('Research is off. 1 research run already under way is finishing.');
     expect(finishingSentence('sending', { on: true, finishing: 3 })).toBeNull();
     expect(finishingSentence('sending', { on: false, finishing: 0 })).toBeNull();
     expect(finishingSentence('research', null)).toBeNull();
@@ -227,6 +227,6 @@ describe('the finishing line', () => {
       finishing: { on: false, finishing: 2 },
     };
     render(<ResearchSettingsSection state={state} saving={false} onSave={noop} />);
-    expect(screen.getByTestId('research-finishing').textContent).toBe('Research is off. 2 model calls already started are finishing.');
+    expect(screen.getByTestId('research-finishing').textContent).toBe('Research is off. 2 research runs already under way are finishing.');
   });
 });

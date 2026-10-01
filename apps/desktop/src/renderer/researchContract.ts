@@ -50,7 +50,7 @@ export const researchStateSchema = z.strictObject({
   mayMutate: z.boolean(),
   role: z.enum(['admin', 'salesperson']).nullable(),
   /**
-   * Slice P1, admin only: whether research is on and how many model calls already started
+   * Slice P1, admin only: whether research is on and how many research runs already under way
    * are still finishing (`GET /settings/finishing`). Null when not read or not answered.
    */
   finishing: z.strictObject({ on: z.boolean(), finishing: z.number().int().min(0) }).nullable().optional(),

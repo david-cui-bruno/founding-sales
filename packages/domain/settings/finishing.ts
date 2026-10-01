@@ -13,8 +13,15 @@ import { readResearchSettings } from '../research/settings.ts';
  *   * **sending** — fences in `dispatching`: claimed, so Gmail has been or is being asked,
  *     and not yet recorded `sent` or moved to `reconciling`. A fence whose worker died is
  *     adopted into `reconciling` by the sweep after five minutes and leaves this count.
- *   * **research** — research reservations in `calling`: a model call may be in flight.
- *     One left by a worker that vanished is finalised by the sweep after half an hour.
+ *   * **research** — research runs under way: reservations in `calling`, marked before the
+ *     run's first page request. A run that meets "off" stops before its next page or
+ *     model request (fix round, finding 3), so this is runs, not model calls, and it falls
+ *     to 0 as each one stops. One left by a worker that vanished is finalised by the sweep
+ *     after half an hour.
+ *   * **transcription** — transcription reservations in `calling`: from chunk 2 on a
+ *     Deepgram request may be in flight; the final check before it releases one that has
+ *     not started. Classification has no durable in-flight row (a classifier request is
+ *     recorded when it returns), so it has no count here.
  *
  * The domain half of "on" is the workspace's own facts: the primary domain's checklist and
  * enable for sending (the attestation half needs the process's identity, and the route
@@ -25,14 +32,17 @@ export interface FinishingCounts {
   readonly sendingDomainOn: boolean;
   readonly researchFinishing: number;
   readonly researchOn: boolean;
+  readonly transcriptionFinishing: number;
 }
 
 export async function readFinishing(context: RepositoryContext): Promise<FinishingCounts> {
-  const { rows } = await context.db.query<{ sending: number; research: number }>(
+  const { rows } = await context.db.query<{ sending: number; research: number; transcription: number }>(
     `SELECT (SELECT count(*)::int FROM outbound_messages
               WHERE workspace_id = $1 AND state = 'dispatching') AS sending,
             (SELECT count(*)::int FROM provider_reservations
-              WHERE workspace_id = $1 AND subject_kind = 'research_run' AND state = 'calling') AS research`,
+              WHERE workspace_id = $1 AND subject_kind = 'research_run' AND state = 'calling') AS research,
+            (SELECT count(*)::int FROM provider_reservations
+              WHERE workspace_id = $1 AND subject_kind = 'call_transcription' AND state = 'calling') AS transcription`,
     [context.scope.workspaceId],
   );
   const domain = await readPrimarySendingDomain(context);
@@ -41,5 +51,6 @@ export async function readFinishing(context: RepositoryContext): Promise<Finishi
     sendingDomainOn: domain !== null && authenticationPasses(domain) && domain.automatedSendingEnabled,
     researchFinishing: Number(rows[0]?.research ?? 0),
     researchOn: (await readResearchSettings(context)).enabled,
+    transcriptionFinishing: Number(rows[0]?.transcription ?? 0),
   };
 }

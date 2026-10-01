@@ -98,7 +98,11 @@ describe('Settings → Calling & calendar (slice S1)', () => {
   it('answers what is still finishing after a switch went off: GET only, two switches and two counts (slice P1)', async () => {
     const answer = await get('/settings/finishing', salespersonToken);
     expect(answer.status, answer.text).toBe(200);
-    expect(answer.body).toEqual({ sending: { on: false, finishing: 0 }, research: { on: true, finishing: 0 } });
+    expect(answer.body).toEqual({
+      sending: { on: false, finishing: 0 },
+      research: { on: true, finishing: 0 },
+      transcription: { on: false, finishing: 0 },
+    });
     expect((await call(server.origin, 'POST', '/settings/finishing', adminToken, {})).status).toBe(405);
   });
 

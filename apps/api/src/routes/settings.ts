@@ -95,7 +95,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
 
   if (request.path === '/settings/finishing') {
     // Slice P1: what is still finishing after a switch went off. Any signed-in member may
-    // read it; it carries two booleans and two counts, nothing about any firm.
+    // read it; it carries three booleans and three counts, nothing about any firm.
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
     }
@@ -110,6 +110,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
           finishing: counts.sendingFinishing,
         },
         research: { on: counts.researchOn, finishing: counts.researchFinishing },
+        transcription: { on: await transcriptionOn(scoped.context), finishing: counts.transcriptionFinishing },
       }),
     };
   }
@@ -227,4 +228,10 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     // is a record of what this command did.
     return outcome.ok ? { ok: true, value: outcome.value } : { ok: false, reason: outcome.reason };
   });
+}
+
+/** Whether call transcription is on for the finishing line: the switch, and a ceiling above 0. */
+async function transcriptionOn(context: RepositoryContext): Promise<boolean> {
+  const setting = await readCallTranscription(context);
+  return setting.enabled && setting.dailyCeilingCents > 0;
 }
