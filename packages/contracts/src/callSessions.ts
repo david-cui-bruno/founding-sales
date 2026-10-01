@@ -192,6 +192,11 @@ export const callSessionDtoSchema = z.object({
   durationSeconds: z.number().int().min(0).nullable(),
   hasRecording: z.boolean(),
   callLogId: uuid.nullable(),
+  /**
+   * Slice C2: whether the call has a transcript (`GET /calls/transcript`). Optional, so a
+   * Mac reading an API from before C2 still parses the history, and absent reads as no.
+   */
+  hasTranscript: z.boolean().optional(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
 
@@ -210,3 +215,71 @@ export type VoiceAccessTokenResponse = z.infer<typeof voiceAccessTokenResponseSc
 
 /** The Voice access token's life, in seconds. Twilio's ceiling is 24 hours; ours is one. */
 export const VOICE_ACCESS_TOKEN_SECONDS = 3600;
+
+// ---------------------------------------------------------------------------
+// Call transcripts (slice C2, migration 0030)
+// ---------------------------------------------------------------------------
+
+/** A call is transcribed only when it was answered and its recording lasts at least this long. */
+export const TRANSCRIPTION_MINIMUM_SECONDS = 20;
+
+/** One stretch of speech: who (Deepgram's speaker index, 0 = whoever spoke first), when, what. */
+export const callTranscriptUtteranceSchema = z.strictObject({
+  speaker: z.number().int().min(0).max(31),
+  /** Seconds from the start of the recording. */
+  start: z.number().min(0),
+  end: z.number().min(0),
+  text: z.string().max(4_000),
+});
+export type CallTranscriptUtterance = z.infer<typeof callTranscriptUtteranceSchema>;
+
+/** The most utterances one transcript keeps (a four-hour call is far below it). */
+export const CALL_TRANSCRIPT_MAX_UTTERANCES = 5_000;
+
+/**
+ * `GET /calls/transcript?callSessionId=`: the transcript of one call, to the firm's
+ * assigned salesperson or an admin. 404 (`not_found`) when the call has none, or is not
+ * the caller's to read.
+ */
+export const callTranscriptResponseSchema = z.strictObject({
+  callSessionId: uuid,
+  provider: z.string().min(1).max(32),
+  model: z.string().min(1).max(64),
+  language: z.string().min(2).max(16),
+  durationSeconds: z.number().int().min(0),
+  createdAt: instant,
+  utterances: z.array(callTranscriptUtteranceSchema).max(CALL_TRANSCRIPT_MAX_UTTERANCES),
+});
+export type CallTranscriptResponse = z.infer<typeof callTranscriptResponseSchema>;
+
+/**
+ * Why a call was not transcribed, or why its transcript could not be read. Each has a
+ * sentence in `reasonText.ts` (its own block).
+ */
+export const TRANSCRIPTION_REFUSAL_CODES = [
+  'transcription_off',
+  'transcription_unconfigured',
+  'transcription_budget_exhausted',
+  'transcription_not_eligible',
+  'transcription_failed',
+  'transcript_unavailable',
+] as const;
+export type TranscriptionRefusalCode = (typeof TRANSCRIPTION_REFUSAL_CODES)[number];
+
+/**
+ * The name each speaker index is shown under. Deepgram numbers speakers in the order they
+ * first speak, so speaker 0 is whoever spoke first. On a call placed from Callie that is
+ * the person who answered — "Them" — and the other voice is "You". That is only a
+ * reading of the order, so it is used only when the transcript has exactly two speakers
+ * and speaker 0 speaks first; anything else (one voice, three, a gap in the numbering) is
+ * "Speaker 1", "Speaker 2", … rather than a guess.
+ */
+export function transcriptSpeakerLabels(utterances: readonly CallTranscriptUtterance[]): ReadonlyMap<number, string> {
+  const speakers = [...new Set(utterances.map(utterance => utterance.speaker))].sort((left, right) => left - right);
+  const labels = new Map<number, string>();
+  const sure = speakers.length === 2 && speakers[0] === 0 && speakers[1] === 1 && utterances[0]?.speaker === 0;
+  for (const speaker of speakers) {
+    labels.set(speaker, sure ? (speaker === 0 ? 'Them' : 'You') : `Speaker ${String(speaker + 1)}`);
+  }
+  return labels;
+}

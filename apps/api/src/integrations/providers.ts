@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { CALL_RECORDING_MAX_BYTES, VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
+import { VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
+import { twilioRecordingFetcher, type RecordingFetch, type RecordingHttp } from '@fss/domain/calls/twilioRecording.ts';
 import { CALCOM_SECRET_VARIABLE, readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
+import { TRANSCRIPTION_SECRET_VARIABLE, readTranscriptionSecret } from '@fss/domain/calls/transcriptionSecret.ts';
 
 /**
  * The two provider integrations of the call-to-booking milestone, as the API holds them
@@ -47,39 +49,10 @@ export interface TwilioVoice {
   fetchRecording(path: string): Promise<RecordingFetch>;
 }
 
-export type RecordingFetch =
-  | { readonly ok: true; readonly contentType: 'audio/mpeg'; readonly bytes: Buffer }
-  | { readonly ok: false; readonly reason: 'not_found' | 'too_large' | 'unavailable' };
-
-/** The HTTP port `fetchRecording` uses; `fetch` in production, a stub in tests. */
-export type RecordingHttp = (
-  url: string,
-  init: { readonly method: 'GET'; readonly headers: Record<string, string> },
-) => Promise<Response>;
-
-/** Twilio's REST host. The stored path never carries a host; this is the only one asked. */
-export const TWILIO_API_ORIGIN = 'https://api.twilio.com';
-
-/** Read a response body, refusing one larger than `limit` without holding more than that. */
-async function boundedBody(response: Response, limit: number): Promise<Buffer | null> {
-  const declared = Number(response.headers.get('content-length') ?? '');
-  if (Number.isFinite(declared) && declared > limit) return null;
-  if (response.body === null) return Buffer.alloc(0);
-  const chunks: Buffer[] = [];
-  let total = 0;
-  const reader = response.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, total);
-}
+// The recording read is shared with the worker's transcription job (slice C2), so it
+// lives in the domain; these names are re-exported for the API's own callers and tests.
+export type { RecordingFetch, RecordingHttp } from '@fss/domain/calls/twilioRecording.ts';
+export { TWILIO_API_ORIGIN } from '@fss/domain/calls/twilioRecording.ts';
 
 export interface Calcom {
   /** Cal.com's `X-Cal-Signature-256`: hex HMAC-SHA256 of the raw body, keyed by the webhook secret. */
@@ -96,7 +69,16 @@ export interface IntegrationDeps {
    * Names only, never a value. Absent (a test's fakes) reads as "none missing" when the
    * integration is configured.
    */
-  readonly missing?: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] } | undefined;
+  readonly missing?:
+    | { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[]; readonly transcription?: readonly string[] | undefined }
+    | undefined;
+  /**
+   * Slice C2: whether the `transcription` entry holds a key of a known provider. The API
+   * never uses the key — the worker does — and keeps only this answer, so the recording
+   * callback queues no transcription while it is missing and Settings can say so. Absent
+   * reads as not configured.
+   */
+  readonly transcriptionConfigured?: boolean | undefined;
   /**
    * The instant the dial decision is taken at, for a test that must be inside the calling
    * window whatever the wall clock says. Production passes none: database time.
@@ -147,8 +129,7 @@ export function twilioVoice(
   ports: { readonly http?: RecordingHttp } = {},
 ): TwilioVoice {
   const { authToken, apiKeySecret, apiKeySid } = values;
-  const http: RecordingHttp = ports.http ?? (async (url, init) => await fetch(url, init));
-  const recordingPath = new RegExp(`^/2010-04-01/Accounts/${values.accountSid}/Recordings/RE[0-9a-f]{32}$`, 'u');
+  const recordings = twilioRecordingFetcher(values, ports.http === undefined ? {} : { http: ports.http });
   return {
     accountSid: values.accountSid,
     twimlAppSid: values.twimlAppSid,
@@ -176,27 +157,7 @@ export function twilioVoice(
       const signature = createHmac('sha256', apiKeySecret).update(signingInput).digest('base64url');
       return { token: `${signingInput}.${signature}`, expiresAtSeconds: exp };
     },
-    fetchRecording: async path => {
-      if (!recordingPath.test(path)) return { ok: false, reason: 'not_found' };
-      let response: Response;
-      try {
-        response = await http(`${TWILIO_API_ORIGIN}${path}.mp3`, {
-          method: 'GET',
-          headers: {
-            authorization: `Basic ${Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64')}`,
-            accept: 'audio/mpeg',
-          },
-        });
-      } catch {
-        return { ok: false, reason: 'unavailable' };
-      }
-      if (response.status === 404) return { ok: false, reason: 'not_found' };
-      if (response.status !== 200) return { ok: false, reason: 'unavailable' };
-      const bytes = await boundedBody(response, CALL_RECORDING_MAX_BYTES).catch(() => undefined);
-      if (bytes === undefined) return { ok: false, reason: 'unavailable' };
-      if (bytes === null) return { ok: false, reason: 'too_large' };
-      return { ok: true, contentType: 'audio/mpeg', bytes };
-    },
+    fetchRecording: async path => await recordings.fetchRecording(path),
   };
 }
 
@@ -243,9 +204,12 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   readonly calcom: Calcom | null;
   readonly twilioProblem: string | null;
   readonly calcomProblem: string | null;
-  readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] };
+  readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[]; readonly transcription: readonly string[] };
   /** Whether the optional reconciliation key is there: `configured`, `absent` or `field:api_key`. */
   readonly calcomApiKey: string;
+  /** Slice C2: whether the transcription key is in place; the key itself is not kept. */
+  readonly transcriptionConfigured: boolean;
+  readonly transcriptionProblem: string | null;
 } {
   let twilioMissing: readonly string[] = TWILIO_FIELD_NAMES;
   let calcomMissing: readonly string[] = CALCOM_FIELD_NAMES;
@@ -292,12 +256,16 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
     calcomProblem = calcomReading.problem;
   }
   if (twilio !== null) twilioMissing = [];
+  // Slice C2. Read for its shape only: the reading's key is dropped here, on purpose.
+  const transcription = readTranscriptionSecret(environment[TRANSCRIPTION_SECRET_VARIABLE]);
   return {
     twilio,
     calcom: calcomDeps,
     twilioProblem,
     calcomProblem,
-    missing: { twilioVoice: twilioMissing, calcom: calcomMissing },
+    missing: { twilioVoice: twilioMissing, calcom: calcomMissing, transcription: transcription.ok ? [] : transcription.missing },
     calcomApiKey,
+    transcriptionConfigured: transcription.ok,
+    transcriptionProblem: transcription.ok ? null : transcription.problem,
   };
 }

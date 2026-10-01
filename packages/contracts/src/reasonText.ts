@@ -4,6 +4,7 @@ import type { DialRefusalCode } from './dial.ts';
 import type { GrantRefusalCode } from './mail.ts';
 import type { HoldReasonCode } from './reasonCodes.ts';
 import type { MeetingMatchRefusalCode } from './meetings.ts';
+import type { TranscriptionRefusalCode } from './callSessions.ts';
 import type { RESEARCH_REFUSAL_CODES } from './research.ts';
 
 /**
@@ -372,6 +373,19 @@ export const MEETING_MATCH_REFUSAL_SENTENCES: Readonly<Record<MeetingMatchRefusa
   invalid_input: INVALID_INPUT,
 });
 
+// ---------------------------------------------------------------------------
+// Slice C2: call transcription (the job's refusals and the transcript read)
+// ---------------------------------------------------------------------------
+
+export const TRANSCRIPTION_REFUSAL_SENTENCES: Readonly<Record<TranscriptionRefusalCode, string>> = Object.freeze({
+  transcription_off: 'Call transcription is off. An administrator can turn it on in Settings, under Calling & calendar.',
+  transcription_unconfigured: 'Call transcription is not set up on the server yet, so this call was not transcribed.',
+  transcription_budget_exhausted: 'Transcription paused: today’s transcription budget is used. Calls are transcribed again tomorrow.',
+  transcription_not_eligible: 'Only answered calls of at least twenty seconds are transcribed.',
+  transcription_failed: 'This call could not be transcribed.',
+  transcript_unavailable: 'Callie could not read this transcript just now. Try again in a minute.',
+});
+
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...INTEGRATION_SETTINGS_SENTENCES,
@@ -389,6 +403,7 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...STAGE_REVIEW_SENTENCES,
   ...MAILBOX_DETAIL_SENTENCES,
   ...MEETING_MATCH_REFUSAL_SENTENCES,
+  ...TRANSCRIPTION_REFUSAL_SENTENCES,
 });
 
 /** Whether `code` has a sentence of its own (not the generic one). */

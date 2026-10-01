@@ -31,6 +31,9 @@ import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminal
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
 import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
+import { callTranscribeJobHandler, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
+import { readTranscriptionProvider } from '../transcription/deepgramClient.ts';
+import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -88,6 +91,12 @@ export interface HandlerComposition {
    * source materializes nothing (`workerDueWorkSources({ calcomReconcile: false })`).
    */
   readonly calcom?: CalcomReconcileOptions | undefined;
+  /**
+   * Call transcription (slice C2): present only when the task environment has both the
+   * `transcription` entry's key and the `twilio-voice` entry's recording credentials.
+   * Absent, `call.transcribe` is not registered and its jobs wait in the queue.
+   */
+  readonly transcription?: CallTranscribeOptions | undefined;
 }
 
 /**
@@ -167,6 +176,8 @@ export function registerHandlers(
   registry.register(telephonySweepJobHandler());
   // Slice M1. The one handler here that calls Cal.com, so only with a key.
   if (composition.calcom !== undefined) registry.register(calcomReconcileJobHandler(composition.calcom));
+  // Slice C2. Calls Twilio for the recording and Deepgram for the transcript, so only with both.
+  if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -317,6 +328,28 @@ export async function composeHandlers(
 }
 
 /**
+ * The transcription job's two ports from the task environment (slice C2), or why not, as
+ * `transcription:<field>` or `twilio:<field>` — a field name, never a value.
+ */
+export function readTranscriptionComposition(
+  environment: Readonly<Record<string, string | undefined>>,
+  log?: CallTranscribeOptions['log'],
+): { readonly options: CallTranscribeOptions | null; readonly problem: string | null } {
+  const provider = readTranscriptionProvider(environment);
+  if (provider.provider === null) return { options: null, problem: `transcription:${provider.problem ?? 'absent'}` };
+  const twilio = readTwilioRecordingCredentials(environment);
+  if (twilio.credentials === null) return { options: null, problem: `twilio:${twilio.problem ?? 'absent'}` };
+  return {
+    options: {
+      provider: provider.provider,
+      recordings: twilioRecordingFetcher(twilio.credentials, { timeoutMs: 30_000 }),
+      ...(log === undefined ? {} : { log }),
+    },
+    problem: null,
+  };
+}
+
+/**
  * Every due-work source the one-minute pass reads (13.1).
  *
  * Exported because `src/tools/fss.ts`'s `admin scheduler run-once` is Appendix E step
@@ -403,10 +436,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   });
   // Slice M1: the key is read once, here, and lives only in the client's closure.
   const calcomReconcile = readCalcomReconcileClient(environment);
-  const composition: HandlerComposition =
-    calcomReconcile.client === null
-      ? composed
-      : { ...composed, calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } };
+  // Slice C2: the transcription key and the recording credentials, each read once, here.
+  const transcription = readTranscriptionComposition(environment, (event, fields) => log.log('info', event, fields));
+  const composition: HandlerComposition = {
+    ...composed,
+    ...(calcomReconcile.client === null
+      ? {}
+      : { calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } }),
+    ...(transcription.options === null ? {} : { transcription: transcription.options }),
+  };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
@@ -420,6 +458,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     build_commit: buildCommit(environment),
     // Whether reconciliation runs, and if not why, by field name only.
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
+    // Whether transcription runs, and if not why, by field name only.
+    call_transcription: transcription.problem ?? 'configured',
   });
 
   const sink = await createSink(config, log);
