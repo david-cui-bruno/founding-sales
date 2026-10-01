@@ -240,6 +240,8 @@ export interface ReconcileCounts {
   readonly successors: number;
   /** Chains left alone because their uids resolve to meetings booked by different attendees. */
   readonly conflicted: number;
+  /** Of those, the ones whose membership was too large to record as a review item. */
+  readonly conflictsUnrecorded: number;
 }
 
 /** What `planChain` reads of the meeting a chain resolves to. */
@@ -262,9 +264,10 @@ export interface StoredMeeting {
  *
  * Rows booked by different attendees are not folded (review fold 3, finding 7): each
  * keeps its own uids, a review item names them (`openAttendeeConflict`), and the chain
- * is left alone — `'conflict'`.
+ * is left alone — `'conflict'`, or `'conflict_unrecorded'` when the membership is too
+ * large for a review item (review fold 4): left alone all the same, and counted.
  */
-async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | 'conflict' | null> {
+async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | 'conflict' | 'conflict_unrecorded' | null> {
   const { rows: found } = await context.db.query<{ id: string; position: string }>(
     `SELECT m.id, min(u.position) AS position
        FROM unnest($2::text[]) WITH ORDINALITY AS u(uid, position)
@@ -284,8 +287,7 @@ async function unifyChain(context: RepositoryContext, uids: readonly string[]): 
   const survivor = rows.find(row => row.id === survivorId) ?? rows[0];
   if (survivor === undefined) return null;
   if (rows.length > 1 && attendeesConflict(rows)) {
-    await openAttendeeConflict(context, rows);
-    return 'conflict';
+    return (await openAttendeeConflict(context, rows)) ? 'conflict' : 'conflict_unrecorded';
   }
   const meeting = rows.length === 1 ? survivor : await foldMeetings(context, rows, survivor.id);
   await aliasMeeting(context, meeting.id, uids);
@@ -565,6 +567,7 @@ export async function reconcileCalcomBookings(
     unmatched: 0,
     successors: 0,
     conflicted: 0,
+    conflictsUnrecorded: 0,
   };
   for (const chain of chains) {
     const tail = chain.bookings.get(chain.uids[chain.uids.length - 1] ?? '');
@@ -575,8 +578,9 @@ export async function reconcileCalcomBookings(
     // The successor's uid is the chain's too: aliased, and folded with any row it has.
     const known = chain.successor === null ? chain.uids : [...chain.uids, chain.successor];
     const meeting = await unifyChain(context, known);
-    if (meeting === 'conflict') {
+    if (meeting === 'conflict' || meeting === 'conflict_unrecorded') {
       counts.conflicted += 1;
+      if (meeting === 'conflict_unrecorded') counts.conflictsUnrecorded += 1;
       continue;
     }
     if (meeting === null) {
@@ -620,8 +624,10 @@ export async function reconcileCalcomBookings(
     // Every uid of the chain is this meeting's from now on, intermediates included, and
     // anything the events left as a second row is folded in (0029).
     const after = await unifyChain(context, known);
-    if (after === 'conflict') counts.conflicted += 1;
-    else if (after !== null && chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
+    if (after === 'conflict' || after === 'conflict_unrecorded') {
+      counts.conflicted += 1;
+      if (after === 'conflict_unrecorded') counts.conflictsUnrecorded += 1;
+    } else if (after !== null && chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
   }
   if (counts.synthesized > 0) {
     await recordCrmAuditEvent(context, {

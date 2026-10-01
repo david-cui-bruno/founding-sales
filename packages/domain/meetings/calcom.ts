@@ -163,26 +163,37 @@ function attendeeAfterFold(survivor: MeetingRow, others: readonly MeetingRow[]):
   return survivor.attendee_email ?? others.find(row => row.attendee_email !== null)?.attendee_email ?? null;
 }
 
-/** Room for five meeting ids in a review item's `evidence_id` (200 characters). */
-const CONFLICT_IDS_IN_EVIDENCE = 5;
+/** 0028's bound on a review item's `detail` (`stage_review_items_detail_bounded`). */
+const REVIEW_DETAIL_MAX = 2000;
 
 /**
  * Rows that should be one meeting but name different attendees: nothing is folded. Each
- * row keeps its own uids, and a person is asked (review fold 3, finding 7). The review
- * item's evidence is `meeting.attendee_conflict`, keyed by the meeting ids, which its
- * detail also lists; `stage_review_items_reason_known` (0028) admits no reason of its
- * own, so its reason is `firm_ambiguous` — which booking is whose cannot be decided.
- * It is not a `meeting.booked` item, so "Bookings to match" does not list it, and a
- * deletion that takes either meeting takes it (`retention/deletion.ts`).
+ * row keeps its own uids, and a person is asked (review fold 3, finding 7).
+ *
+ * The review item's evidence is `meeting.attendee_conflict`. Its `evidence_id` is `c`
+ * and the sha256 of the sorted meeting ids — one item per membership, whatever its size
+ * (`evidence_id` holds 200 characters). Its `detail` is the **complete** membership and
+ * nothing else: `meetingIds`, every id, comma-separated (review fold 4). A deletion that
+ * takes any member finds the item by that list (`retention/deletion.ts`). A membership
+ * whose list does not fit 0028's 2,000-character detail is not recorded: the rows are
+ * still left apart, the answer is `false`, and the caller counts it — never a throw
+ * that would roll back a whole reconciliation. (A reconciliation's chain names at most
+ * 51 uids, and 51 ids fit, so this is a bound, not a path.)
+ *
+ * `stage_review_items_reason_known` (0028) admits no reason of its own, so its reason
+ * is `firm_ambiguous` — which booking is whose cannot be decided. It is not a
+ * `meeting.booked` item, so "Bookings to match" does not list it.
  */
-export async function openAttendeeConflict(context: RepositoryContext, rows: readonly MeetingRow[]): Promise<void> {
-  const ids = rows.map(row => row.id).sort();
+export async function openAttendeeConflict(context: RepositoryContext, rows: readonly MeetingRow[]): Promise<boolean> {
+  const ids = [...new Set(rows.map(row => row.id))].sort();
+  const detail = { meetingIds: ids.join(',') };
+  if (JSON.stringify(detail).length > REVIEW_DETAIL_MAX) return false;
   await openReviewItem(
     context,
     {
       evidenceKind: 'meeting.attendee_conflict',
-      evidenceId: ids.slice(0, CONFLICT_IDS_IN_EVIDENCE).join(':'),
-      detail: { meetingIds: ids.join(','), bookingUids: rows.map(row => row.current_booking_uid).join(',') },
+      evidenceId: `c${createHash('sha256').update(ids.join(',')).digest('hex')}`,
+      detail,
     },
     'firm_ambiguous',
     { firmId: null, opportunityId: null },
@@ -191,8 +202,9 @@ export async function openAttendeeConflict(context: RepositoryContext, rows: rea
     action: 'meeting.fold_refused',
     subjectKind: 'meeting',
     subjectId: ids[0] ?? '',
-    detail: { meetingIds: ids, reason: 'attendee_conflict' },
+    detail: { members: ids.length, reason: 'attendee_conflict' },
   });
+  return true;
 }
 
 /**
@@ -501,7 +513,13 @@ async function applyEvent(
       }
     }
   }
-  const timesChange = kind === 'BOOKING_RESCHEDULED' || kind === 'BOOKING_CREATED';
+  // An event about the meeting's current booking that carries that booking's times sets
+  // them, whatever its trigger (review fold 4). A meeting moved to a booking whose body
+  // was never read — the reconciliation's link to an unlisted successor keeps the old
+  // booking's times — takes the new booking's times from its first event, a cancellation
+  // included, before the state it applies. The ordering above has already let it apply.
+  const aboutCurrent = event.uid !== null && event.uid === existing.current_booking_uid && event.startsAt !== null && event.endsAt !== null;
+  const timesChange = kind === 'BOOKING_RESCHEDULED' || kind === 'BOOKING_CREATED' || aboutCurrent;
   const { rows } = await context.db.query<MeetingRow>(
     `UPDATE meetings
         SET state = $3, state_before_no_show = $4,

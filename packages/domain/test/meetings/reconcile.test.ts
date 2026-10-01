@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { withTransaction } from '../../db/queryable.ts';
-import { receiveCalcomEvent } from '../../meetings/calcom.ts';
+import { openAttendeeConflict, receiveCalcomEvent } from '../../meetings/calcom.ts';
 import {
   bookingChains,
   fetchCalcomBookings,
@@ -617,8 +617,100 @@ describe('Cal.com reconciliation', () => {
       "SELECT evidence_id, detail FROM stage_review_items WHERE workspace_id = $1 AND evidence_kind = 'meeting.attendee_conflict' AND resolved_at IS NULL",
       [workspaceId()],
     );
-    const item = items.find(row => row.evidence_id === before.join(':'));
-    expect(item?.detail.meetingIds).toBe(before.join(','));
+    const item = items.find(row => row.detail.meetingIds === before.join(','));
+    expect(item?.evidence_id).toMatch(/^c[0-9a-f]{64}$/u);
+  });
+
+  // ---- review fold 4: conflicts of any size, and a successor's own times ----------------
+  /** `count` meetings booked by different people on one chain, each at a firm of its own. */
+  async function conflictingChain(count: number, label: string, uidOf: (index: number) => string): Promise<{ uids: string[]; snapshot: CalcomBooking[] }> {
+    const uids = Array.from({ length: count }, (_, index) => uidOf(index));
+    for (const [index, id] of uids.entries()) {
+      await database.session.query(
+        `INSERT INTO firms (workspace_id, name, website, assigned_user_id) VALUES ($1, $2, $3, $4)`,
+        [workspaceId(), `${label} ${String(index)} Law`, `https://${label}${String(index)}-law.example`, seeded.alpha.salesperson.userId],
+      );
+      await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(id, { attendees: [{ email: `person@${label}${String(index)}-law.example` }] }));
+    }
+    const snapshot = uids.map((id, index) =>
+      parsed(id, {
+        status: index === count - 1 ? 'accepted' : 'cancelled',
+        rescheduledFromUid: index === 0 ? null : uids[index - 1],
+        rescheduledToUid: index === count - 1 ? null : uids[index + 1],
+        createdAt: '2026-09-30T13:00:00.000Z',
+        updatedAt: '2026-09-30T13:00:00.000Z',
+        attendees: [{ email: `person@${label}${String(index)}-law.example`, absent: false }],
+      }),
+    );
+    return { uids, snapshot };
+  }
+
+  const conflictItems = async (): Promise<{ id: string; meetingIds: string[] }[]> => {
+    const { rows } = await database.session.query<{ id: string; detail: { meetingIds: string } }>(
+      "SELECT id, detail FROM stage_review_items WHERE workspace_id = $1 AND evidence_kind = 'meeting.attendee_conflict'",
+      [workspaceId()],
+    );
+    return rows.map(row => ({ id: row.id, meetingIds: row.detail.meetingIds.split(',') }));
+  };
+
+  it('removes a six-member conflict item when the firm of its sixth member is deleted (fold 4, item 1)', async () => {
+    const { uids, snapshot } = await conflictingChain(6, 'sixway', index => `six${String(index)}${uid()}`);
+    expect(await reconcile(snapshot)).toMatchObject({ conflicted: 1, conflictsUnrecorded: 0 });
+    const { rows } = await database.session.query<{ id: string; firm_id: string }>(
+      'SELECT id, firm_id FROM meetings WHERE workspace_id = $1 AND booking_uid = ANY($2::text[]) ORDER BY id',
+      [workspaceId(), uids],
+    );
+    expect(rows).toHaveLength(6);
+    const item = (await conflictItems()).find(entry => entry.meetingIds.length === 6);
+    expect(item?.meetingIds).toEqual(rows.map(row => row.id));
+    // The member that sorts last: beyond any five-id key.
+    await deleteFirm(rows[5]?.firm_id ?? '', `delete-six-${uids[0] ?? ''}`);
+    expect((await conflictItems()).map(entry => entry.id)).not.toContain(item?.id);
+  });
+
+  it('records a thirteen-member conflict of 128-character uids and goes on with the run (fold 4, item 2)', async () => {
+    const { uids, snapshot } = await conflictingChain(13, 'thirteen', index => `${String(index).padStart(2, '0')}${uid()}`.padEnd(128, 'u'));
+    expect(uids.every(id => id.length === 128)).toBe(true);
+    const other = uid();
+    const counts = await reconcile([...snapshot, parsed(other, { attendees: [{ email: 'after.conflict@elsewhere.example', absent: false }] })]);
+    expect(counts).toMatchObject({ conflicted: 1, conflictsUnrecorded: 0 });
+    expect(await meetingsNamed([other])).toEqual([{ booking_uid: other, current_booking_uid: other, state: 'booked' }]);
+    expect((await conflictItems()).some(entry => entry.meetingIds.length === 13)).toBe(true);
+  });
+
+  it('leaves apart and does not record a membership too large for a review item, without throwing (fold 4, item 2)', async () => {
+    const rows = Array.from({ length: 60 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      firm_id: null,
+      contact_id: null,
+      opportunity_id: null,
+      state: 'booked' as const,
+      state_before_no_show: null,
+      booking_uid: `big${String(index)}`,
+      current_booking_uid: `big${String(index)}`,
+      starts_at: new Date(),
+      ends_at: new Date(),
+      last_event_at: new Date(),
+      attendee_email: `p${String(index)}@big.example`,
+    }));
+    const before = (await conflictItems()).length;
+    const context = repositoryContext(workspaceScope(workspaceId(), { kind: 'system', component: 'worker' }), database.session);
+    expect(await withTransaction(database.session, async () => await openAttendeeConflict(context, rows))).toBe(false);
+    expect((await conflictItems()).length).toBe(before);
+  });
+
+  it('gives a meeting linked to an unlisted successor that booking s own times from its cancellation (fold 4, item 3)', async () => {
+    const [a, b] = [uid(), uid()];
+    await webhook('BOOKING_CREATED', '2026-09-30T12:00:00.000Z', webhookBooking(a));
+    await reconcile([parsed(a, { status: 'cancelled', rescheduledToUid: b, updatedAt: '2026-09-30T13:00:00.000Z' })]);
+    expect((await meeting(b))?.starts_at.toISOString()).toBe('2026-10-06T15:00:00.000Z');
+    await webhook('BOOKING_CANCELLED', '2026-09-30T14:00:00.000Z', webhookBooking(b, { startTime: '2026-10-09T13:00:00.000Z', endTime: '2026-10-09T13:30:00.000Z' }));
+    const after = await meeting(b);
+    expect(after?.state).toBe('cancelled');
+    expect(after?.starts_at.toISOString()).toBe('2026-10-09T13:00:00.000Z');
+    // A later, older-dated event about B changes nothing: cancelled is terminal.
+    await webhook('BOOKING_CANCELLED', '2026-09-30T13:30:00.000Z', webhookBooking(b, { startTime: '2026-10-10T13:00:00.000Z', endTime: '2026-10-10T13:30:00.000Z' }));
+    expect((await meeting(b))?.starts_at.toISOString()).toBe('2026-10-09T13:00:00.000Z');
   });
 });
 

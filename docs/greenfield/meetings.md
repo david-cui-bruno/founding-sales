@@ -61,12 +61,22 @@ booking they are folded and the loser's aliases move to the survivor.
 **A fold never loses an attendee.** A survivor with no attendee takes the folded row's,
 so a deletion that takes the meeting still measures and tombstones the person. Rows
 booked by two different attendees (compared NFKC, trimmed, lower-cased) are **not**
-folded, by the webhook or by the hourly read: each keeps its own uids, and a review item
-`meeting.attendee_conflict` names both meeting ids (in its key and its detail). Its
-reason is `firm_ambiguous`, because 0028's reason list has no other fitting value. It is
-not a `meeting.booked` item, so **Bookings to match** does not list it. A deletion that
-takes either meeting takes the item. The webhook answers such a reschedule `unmatched`
-and changes neither row; the read counts the chain as `conflicted`.
+folded, by the webhook or by the hourly read: each keeps its own uids, and one review
+item `meeting.attendee_conflict` per membership asks a person. Its key is `c` plus the
+sha256 of the sorted meeting ids. Its detail is the complete membership and nothing else
+(`meetingIds`, comma-separated). Its reason is `firm_ambiguous`, because 0028's reason
+list has no other fitting value. It is not a `meeting.booked` item, so **Bookings to
+match** does not list it. A deletion that takes **any** member takes the item, found by
+that list. A membership whose list would not fit 0028's 2,000-character detail is not
+recorded; the rows stay apart all the same and the read counts it in
+`conflictsUnrecorded`, never failing the run. A chain names at most 51 uids, which fit.
+The webhook answers such a reschedule `unmatched` and changes neither row; the read
+counts the chain as `conflicted`.
+
+An event about the meeting's **current** booking that carries times sets them, whatever
+its trigger: a meeting linked to a successor whose body was never read (below) takes
+that booking's times from its first event, a cancellation included. As every event, it
+applies only when the ordering lets it; a cancelled meeting stays as it is.
 
 ## Lock order: routing, then the send gate, then rows
 
@@ -207,7 +217,7 @@ bookings and repairs the difference.
   lists leaves its meeting alone. It sends nothing to anybody.
 * **What it leaves behind.** A log line `calcom_reconcile` with the counts (bookings,
   chains, unchanged, skipped, tombstoned, synthesized, applied, stale, duplicate,
-  unmatched, successors, conflicted, pages, truncated) and, when anything was synthesized, one audit event
+  unmatched, successors, conflicted, conflictsUnrecorded, pages, truncated) and, when anything was synthesized, one audit event
   `meeting.reconciled` with the same counts. Never a booking's details.
 
 ## Matching a booking by hand (slice M1)
