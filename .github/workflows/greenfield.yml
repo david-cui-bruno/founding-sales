@@ -70,9 +70,10 @@ jobs:
     # **FROM is what production runs, not what git history says** (GPT-6 review of PR
     # 314, P0-2). A base-branch tip is not the deployed schema: if 23 has merged but
     # production is still at 22, a release of 24 would otherwise be given evidence for
-    # 23→24 while production performs 22→24. The deployed state is held in two
-    # repository variables the release process maintains — `FSS_PROD_SCHEMA` and
-    # `FSS_PROD_COMMIT` — and every reading of them fails closed.
+    # 23→24 while production performs 22→24. The deployed state is read from
+    # production's own public /health (`build.commit`, `schema.databaseVersion`),
+    # resolved by tools/ci/resolve-prod-base.sh; the variables `FSS_PROD_SCHEMA` and
+    # `FSS_PROD_COMMIT` are only the fallback, and every reading of them fails closed.
     #
     # The job always runs and decides for itself whether there is anything to do. A
     # `paths:` filter would leave a required check waiting for ever on a branch that
@@ -118,11 +119,24 @@ jobs:
         # does need a Node that can read a `.ts` file.
         with:
           node-version-file: .node-version
+      - name: Resolve what production runs, from production
+        # The base of the upgrade is what production reports about itself on its public
+        # /health (build.commit and schema.databaseVersion), no credential. The repository
+        # variables FSS_PROD_COMMIT / FSS_PROD_SCHEMA go stale after every autodeploy
+        # (they broke PR 344 and again during releases 0028-0030), so they are only the
+        # fallback, with a warning, when /health cannot be reached or parsed; with neither
+        # the step fails closed. Bounded curl, three attempts. The logic lives in
+        # tools/ci/resolve-prod-base.sh and is run by test/ops/resolveProdBase.check.ts.
+        id: prod
+        env:
+          VAR_PROD_COMMIT: ${{ vars.FSS_PROD_COMMIT }}
+          VAR_PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
+        run: bash tools/ci/resolve-prod-base.sh
       - name: What production runs, and what this branch would move it to
         id: range
         env:
-          PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
-          PROD_COMMIT: ${{ vars.FSS_PROD_COMMIT }}
+          PROD_SCHEMA: ${{ steps.prod.outputs.schema }}
+          PROD_COMMIT: ${{ steps.prod.outputs.commit }}
         run: |
           set -euo pipefail
           range_file=packages/domain/db/schemaRange.ts
@@ -157,15 +171,12 @@ jobs:
           [ -n "$to" ] || fail 'REQUIRED_SCHEMA could not be read from HEAD'
           [ "$from" = "$PROD_SCHEMA" ] \
             || fail "the deployed commit declares REQUIRED_SCHEMA $from but FSS_PROD_SCHEMA says $PROD_SCHEMA; one of the two is stale"
-          echo "the variables say production runs schema $from at $PROD_COMMIT; this branch declares $to. Production is asked itself in the next step, but only if there is an upgrade to test"
+          echo "production runs schema $from at $PROD_COMMIT (resolved by the previous step); this branch declares $to"
 
-          # The schema is attestable from the gate job; the COMMIT is not. `/health` does
-          # not report the image's build commit (a follow-up will add it), so the best
-          # this job can do is the cross-checks above. That is survivable by immutability:
-          # any commit deployed at schema `from` has byte-identical migrations 1..from, so
-          # a lagging variable degrades only the code that writes the fixture — the shapes
-          # and rows the data lands in — and never the migration comparison below. Say so
-          # out loud when it is lagging, because a fixture written by older code tests less.
+          # Normally PROD_COMMIT is production's own build.commit, so nothing is behind.
+          # On the variable fallback it can lag: any commit deployed at schema `from` has
+          # byte-identical migrations 1..from, so a lagging value degrades only the code
+          # that writes the fixture, never the migration comparison below. Say so.
           newest_at_from="$PROD_COMMIT"
           for candidate in $(git rev-list --reverse "$PROD_COMMIT..origin/main"); do
             [ "$(required_schema "$candidate")" = "$from" ] || break
@@ -204,81 +215,6 @@ jobs:
             echo "to=$to"
             echo "base_commit=$PROD_COMMIT"
           } >> "$GITHUB_OUTPUT"
-      - name: What production actually runs, attested from production
-        # The variables say what the release process last recorded. This says what
-        # production is answering right now, from the public health endpoint, with no
-        # credential (GPT-6 review of PR 314, P0-2). A variable that disagrees with the
-        # running service is stale, and a stale FROM means the upgrade evidence is for
-        # an upgrade nobody will perform. Fail closed on unreachable and on malformed:
-        # "cannot tell" is never "nothing to check". Three attempts absorb a blip.
-        #
-        # **After the decision, not before it.** Asking production on every pull request
-        # would make a branch that touches no migration turn red when the API is having
-        # a bad minute. The step before this one settled, from the repository alone,
-        # whether there is an upgrade at all — including the byte comparison of every
-        # deployed migration, which no variable can lie about. So a skipped job makes no
-        # production call, and a job that is about to test an upgrade cannot start
-        # without an attested FROM.
-        id: attest
-        if: steps.range.outputs.run == 'yes'
-        env:
-          PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
-          PROD_COMMIT: ${{ vars.FSS_PROD_COMMIT }}
-          FROM_SCHEMA: ${{ steps.range.outputs.from }}
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$1"; exit 1; }
-          body="$RUNNER_TEMP/health.json"
-          code=000
-          for attempt in 1 2 3; do
-            # No `--location`: curl does not follow redirects unless asked, and a 3xx
-            # answered by something other than the production API must not be read as
-            # production. The status code is checked rather than left to `--fail`,
-            # which accepts a 3xx.
-            # `|| true`, not `|| echo 000`: curl writes the code itself even when it
-            # fails, and a second echo would concatenate onto it.
-            code="$(curl --silent --show-error --max-time 15 -o "$body" -w '%{http_code}' "$FSS_PRODUCTION_ORIGIN/health" || true)"
-            [ -n "$code" ] || code=000
-            [ "$code" = 200 ] || { [ "$attempt" = 3 ] || sleep 5; continue; }
-            break
-          done
-          [ "$code" = 200 ] \
-            || fail "production's $FSS_PRODUCTION_ORIGIN/health did not answer 200 in three attempts (last status $code); the schema production runs cannot be attested, so this job cannot say what to upgrade from"
-          jq -e . "$body" >/dev/null 2>&1 || fail "production's /health did not answer JSON: $(head -c 300 "$body")"
-
-          status="$(jq -r '.status // ""' "$body")"
-          accepted="$(jq -r '.schema.accepted // false' "$body")"
-          version="$(jq -r '.schema.databaseVersion // empty' "$body")"
-          # All three are refusals, not warnings. A service that is not serving, or is
-          # refusing its own schema, is not a service whose schema number should be
-          # taken as the thing to upgrade from.
-          [ "$status" = serving ] || fail "production's /health says status '$status', not 'serving'; it is not in a state to attest what to upgrade from"
-          [ "$accepted" = true ] || fail "production's /health says it does not accept its own schema (accepted=$accepted)"
-          case "$version" in
-            ''|*[!0-9]*) fail "production's /health does not report a schema version (.schema.databaseVersion); it answered: $(head -c 300 "$body")" ;;
-          esac
-          [ "$version" -gt 0 ] || fail "production's /health reports schema version 0"
-          [ "$version" = "$PROD_SCHEMA" ] \
-            || fail "FSS_PROD_SCHEMA says $PROD_SCHEMA but production's /health attests $version; the variable is stale, and an upgrade tested from the wrong schema is not the upgrade production performs"
-          [ "$version" = "$FROM_SCHEMA" ] \
-            || fail "the deployed commit declares REQUIRED_SCHEMA $FROM_SCHEMA but production's /health attests $version; FSS_PROD_COMMIT names a commit production is not running"
-
-          # The commit, once production runs an image that carries it. `FSS_PROD_COMMIT`
-          # chooses the code that writes the fixture, so a wrong-but-plausible value at
-          # the right schema produces data the deployed application would never have
-          # written — the one thing identical migration bytes do not make safe (GPT-6,
-          # third review, P0-2). The image now carries `FSS_BUILD_COMMIT` and `/health`
-          # reports it, so from the first release after that change this is attested
-          # rather than trusted. Until then the field is absent and this warns.
-          build="$(jq -r '.build.commit // empty' "$body")"
-          if [ -z "$build" ]; then
-            echo "::warning title=The build commit is not attested yet::production's /health reports no build.commit, so FSS_PROD_COMMIT ($PROD_COMMIT) is taken on trust. The images built by the first release after this change carry it; this warning closes itself then."
-          elif [ "$build" != "$PROD_COMMIT" ]; then
-            fail "production's /health attests its images were built from $build, but FSS_PROD_COMMIT says $PROD_COMMIT; the fixture would be written by the wrong application code"
-          else
-            echo "production's images were built from $build, which is what FSS_PROD_COMMIT says"
-          fi
-          echo "production is answering on schema $version (status $status, accepted $accepted); FROM is attested"
       - name: The grants baseline may not move in the same pull request as a migration
         # `grants-baseline.json` is what every privilege comparison is against, so a
         # change that moves both it and a migration can launder any access change past
