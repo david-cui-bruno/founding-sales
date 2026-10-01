@@ -18,6 +18,7 @@ import {
   researchSweepSource,
 } from '../src/handlers/research.ts';
 import { composeResearch, describeResearch } from '../src/bootstrap/main.ts';
+import { anthropicExtraction } from '../src/research/anthropicExtraction.ts';
 
 /**
  * The two research jobs as the worker runs them (specification 13.1, 13.2,
@@ -297,6 +298,31 @@ describe('the research jobs', () => {
         // `estimated` at what it held, and that is what the run and the ledger say.
         reservation: { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
         cost: 3,
+      },
+      {
+        // The real adapter over a transport that answers 400 invalid_request_error, as the
+        // API does for a schema it refuses: refused before any generation, so the attempt
+        // settles at 0 — not at its estimate — and nothing calls again.
+        name: 'the API refuses the extraction request with a 400',
+        options: {
+          pageFetch: countingFetch(),
+          extraction: anthropicExtraction({
+            transport: {
+              countTokens: async () => await Promise.resolve(100),
+              create: async () =>
+                await Promise.reject(
+                  Object.assign(new Error('400 invalid_request_error'), {
+                    status: 400,
+                    error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: not supported' } },
+                  }),
+                ),
+            },
+          }),
+        },
+        evidence: 1,
+        ledger: 2,
+        reservation: { attempt: 1, state: 'settled', cents: 3, settled: 0 },
+        cost: 0,
       },
       {
         // One row here: the page fetch's. Nothing was asked of the model, so nothing
