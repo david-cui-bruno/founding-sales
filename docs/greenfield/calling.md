@@ -520,6 +520,7 @@ the month's cash ceiling and shown apart; a kind not listed is cash.
 | `anthropic_extraction` | research model calls | cash |
 | `anthropic_classifier` | reply classifier calls | cash |
 | `anthropic_call_summary` | after-call summaries (slice C3b) | cash |
+| `aws_bedrock.classifier`, `aws_bedrock.call_summary`, `aws_bedrock.extraction` | the same three model calls through Amazon Bedrock (slice BR1, `FSS_MODEL_TRANSPORT=bedrock`, production) | credits (AWS) |
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script

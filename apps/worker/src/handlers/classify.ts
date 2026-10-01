@@ -5,7 +5,9 @@ import {
   loadAnthropicTransport,
   type AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
+import { loadBedrockTransport } from '@fss/domain/classification/bedrockClient.ts';
 import { classifyReplyHandler, type ClassifyHandlerOptions } from '@fss/domain/classification/handler.ts';
+import { MODEL_TRANSPORT_VARIABLE, readModelTransport } from '@fss/domain/classification/modelTransport.ts';
 import { listPendingModelClassifications } from '@fss/domain/classification/store.ts';
 import type { ClassifierSettings } from '@fss/domain/classification/types.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -72,7 +74,7 @@ export function classifyHandlers(options: ClassifyWorkerOptions | undefined): re
     });
   return [
     classifyReplyHandler(
-      { classifierFor, processEnabled: options.processEnabled },
+      { classifierFor, processEnabled: options.processEnabled, transport: options.transport.kind ?? 'anthropic' },
       {
         ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
         ...(options.leaseSeconds === undefined ? {} : { leaseSeconds: options.leaseSeconds }),
@@ -82,22 +84,64 @@ export function classifyHandlers(options: ClassifyWorkerOptions | undefined): re
   ];
 }
 
+/** The transport loaders, injectable so a test can prove which one a configuration builds. */
+export interface TransportLoaders {
+  readonly anthropic: typeof loadAnthropicTransport;
+  readonly bedrock: typeof loadBedrockTransport;
+}
+
+const LIVE_LOADERS: TransportLoaders = { anthropic: loadAnthropicTransport, bedrock: loadBedrockTransport };
+
+/**
+ * Which model transport this deployment builds, or why none (slice BR1).
+ *
+ * `FSS_MODEL_TRANSPORT=bedrock` builds the Bedrock transport from `AWS_REGION` and the task
+ * role, and needs no key; the classifier key is not read at all, so a deployment that holds
+ * one cannot fall back to the direct API. Unset or `anthropic` is the direct API, and needs
+ * the key, as before. Any other value builds nothing.
+ */
+export async function readModelTransportComposition(
+  environment: Readonly<Record<string, string | undefined>>,
+  loaders: TransportLoaders = LIVE_LOADERS,
+): Promise<{ readonly transport: AnthropicMessagesTransport | null; readonly problem: string | null }> {
+  const problem = modelTransportProblem(environment);
+  if (problem !== null) return { transport: null, problem };
+  if (readModelTransport(environment).kind === 'bedrock') {
+    return { transport: await loaders.bedrock({ region: (environment['AWS_REGION'] ?? '').trim() }), problem: null };
+  }
+  return { transport: await loaders.anthropic({ secrets: environmentClassifierSecrets(environment) }), problem: null };
+}
+
+/**
+ * Why this deployment builds no model transport, by variable name only, or null when it
+ * builds one: `FSS_MODEL_TRANSPORT` (not a transport), `AWS_REGION` (Bedrock chosen with no
+ * region) or `anthropic:absent` (the direct API chosen with no key). For the startup line.
+ */
+export function modelTransportProblem(environment: Readonly<Record<string, string | undefined>>): string | null {
+  const selected = readModelTransport(environment);
+  if (selected.kind === null) return MODEL_TRANSPORT_VARIABLE;
+  if (selected.kind === 'bedrock') return (environment['AWS_REGION'] ?? '').trim() === '' ? 'AWS_REGION' : null;
+  return environmentClassifierSecrets(environment).names().length === 0 ? 'anthropic:absent' : null;
+}
+
 /**
  * Read the deployment's classifier configuration, or nothing.
  *
  * The key never becomes a value this function returns: `loadAnthropicTransport`
  * hands it to the SDK client's constructor and the closure holds a client. Nothing
  * here can be logged, serialized or put in an error body, which is the same rule
- * `MailWorkerOptions` follows for the Gmail client secret.
+ * `MailWorkerOptions` follows for the Gmail client secret. The Bedrock transport holds
+ * no secret at all: its credential is the task role.
  */
 export async function classifyWorkerOptions(
   environment: Readonly<Record<string, string | undefined>>,
   log?: ClassifyHandlerOptions['log'],
+  loaders: TransportLoaders = LIVE_LOADERS,
 ): Promise<ClassifyWorkerOptions | undefined> {
-  const secrets = environmentClassifierSecrets(environment);
-  if (secrets.names().length === 0) return undefined;
+  const composed = await readModelTransportComposition(environment, loaders);
+  if (composed.transport === null) return undefined;
   return {
-    transport: await loadAnthropicTransport({ secrets }),
+    transport: composed.transport,
     processEnabled: (environment['FSS_CLASSIFIER'] ?? 'on').trim().toLowerCase() !== 'off',
     ...(log === undefined ? {} : { log }),
   };
@@ -107,10 +151,13 @@ export async function classifyWorkerOptions(
 export function describeClassifier(options: ClassifyWorkerOptions | undefined): {
   readonly classifier_configured: boolean;
   readonly classifier_enabled: boolean;
+  readonly model_transport?: string;
 } {
   return {
     classifier_configured: options !== undefined,
     classifier_enabled: options?.processEnabled ?? false,
+    // Which transport the model calls go through (slice BR1); never a key.
+    ...(options === undefined ? {} : { model_transport: options.transport.kind ?? 'anthropic' }),
   };
 }
 

@@ -33,7 +33,13 @@ export function readCallSummaryComposition(
   const model = chosen === '' ? DEFAULT_CALL_SUMMARY_MODEL : chosen;
   if (!isCallSummaryModel(model)) return { options: null, problem: 'call_summary:model_unknown' };
   return {
-    options: { summarizer: anthropicCallSummarizer({ transport: classifier.transport }), model, ...(log === undefined ? {} : { log }) },
+    options: {
+      summarizer: anthropicCallSummarizer({ transport: classifier.transport }),
+      model,
+      // Slice BR1: the reservation's provider key, price and funding follow the transport.
+      transport: classifier.transport.kind ?? 'anthropic',
+      ...(log === undefined ? {} : { log }),
+    },
     problem: null,
   };
 }

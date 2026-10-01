@@ -9,6 +9,7 @@ import {
   type CallSummarySide,
   type CallTranscriptUtterance,
 } from '@fss/contracts';
+import { modelProviderKey, transportPrice, type ModelTransportKind } from '../classification/modelTransport.ts';
 import type { ClassifierRequest } from '../classification/prompt.ts';
 import { SERVER_SIDE_FALLBACK_BETA } from '../classification/types.ts';
 
@@ -76,8 +77,23 @@ export const CALL_SUMMARY_MODEL_TABLE: Readonly<
   },
 });
 
-/** `provider_reservations.provider_key` and `provider_ledger.provider_key` for summaries. */
+/** `provider_reservations.provider_key` and `provider_ledger.provider_key` for summaries over the direct API. */
 export const CALL_SUMMARY_PROVIDER_KEY = 'anthropic_call_summary';
+
+/** The summary's `provider_key` on a transport (slice BR1): `anthropic_call_summary` or `aws_bedrock.call_summary`. */
+export function callSummaryProviderKey(transport: ModelTransportKind): string {
+  return modelProviderKey('call_summary', transport);
+}
+
+/**
+ * Cents per million tokens on a transport: the table above for the direct API, Bedrock's
+ * regional on-demand rates (`modelTransport.ts`) for Bedrock — Haiku 4.5 $1.10 / $5.50,
+ * Sonnet 5.5 $2.20 / $11.
+ */
+function summaryPrice(model: CallSummaryModel, transport: ModelTransportKind): { readonly input: number; readonly output: number } {
+  const table = CALL_SUMMARY_MODEL_TABLE[model];
+  return transportPrice(transport, model, { input: table.inputCentsPerMillion, output: table.outputCentsPerMillion });
+}
 
 /**
  * The longest transcript text (UTF-8 bytes) a summary is asked for. Far above any call a
@@ -251,9 +267,15 @@ export function callSummaryInputTokenBound(request: ClassifierRequest): number {
  * the output rate, doubled for a model whose refusal may be re-run by a server-side
  * fallback. Rounded up to a cent.
  */
-export function callSummaryCeilingCents(model: CallSummaryModel, maxInputTokens: number, maxOutputTokens: number): number {
+export function callSummaryCeilingCents(
+  model: CallSummaryModel,
+  maxInputTokens: number,
+  maxOutputTokens: number,
+  transport: ModelTransportKind = 'anthropic',
+): number {
   const table = CALL_SUMMARY_MODEL_TABLE[model];
-  const one = (maxInputTokens * table.inputCentsPerMillion + maxOutputTokens * table.outputCentsPerMillion) / 1_000_000;
+  const price = summaryPrice(model, transport);
+  const one = (maxInputTokens * price.input + maxOutputTokens * price.output) / 1_000_000;
   return Math.max(1, Math.ceil(one * (table.serverSideFallbacks ? 2 : 1)));
 }
 
@@ -265,12 +287,10 @@ export interface CallSummaryUsage {
 }
 
 /** What an answered request cost, from its reported usage, rounded up to a cent. */
-export function callSummaryCents(model: CallSummaryModel, usage: CallSummaryUsage): number {
-  const table = CALL_SUMMARY_MODEL_TABLE[model];
+export function callSummaryCents(model: CallSummaryModel, usage: CallSummaryUsage, transport: ModelTransportKind = 'anthropic'): number {
+  const price = summaryPrice(model, transport);
   return Math.ceil(
-    (usage.inputTokens * table.inputCentsPerMillion +
-      usage.cachedInputTokens * table.inputCentsPerMillion * 1.25 +
-      usage.outputTokens * table.outputCentsPerMillion) /
+    (usage.inputTokens * price.input + usage.cachedInputTokens * price.input * 1.25 + usage.outputTokens * price.output) /
       1_000_000,
   );
 }

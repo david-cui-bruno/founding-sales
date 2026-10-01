@@ -202,6 +202,8 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
           trigger: payload.trigger,
           ...(payload.requestedByUserId === undefined ? {} : { requestedByUserId: payload.requestedByUserId }),
           at,
+          // Slice BR1: the reservation carries the extraction port's key, which names its transport.
+          ...(options.extraction === undefined ? {} : { providerKey: options.extraction.providerKey }),
         });
         // A refusal and a replay are both finished jobs: the run row already says why,
         // and there is nothing for a second chunk to do.
@@ -240,6 +242,7 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
           // about, and a `calling` row left behind by a worker that then died would be
           // finalised at the full cost of a call that could not have happened.
           hasExtraction: options.extraction !== undefined,
+          ...(options.extraction === undefined ? {} : { providerKey: options.extraction.providerKey }),
         });
         if (permission.kind === 'closed') return;
         const progress: ResearchProgress = {

@@ -18,7 +18,7 @@ import type {
   ProviderOutcome,
 } from '@fss/domain/research/providers.ts';
 import { MAX_EXTRACTION_OUTPUT_TOKENS, centsOf } from '@fss/domain/research/pricing.ts';
-import { EXTRACTION_PROVIDER } from '@fss/domain/research/types.ts';
+import { modelProviderKey } from '@fss/domain/classification/modelTransport.ts';
 
 /**
  * The live extraction: one model call per run, over the transport the reply
@@ -147,6 +147,9 @@ export interface AnthropicExtractionOptions {
 export { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_PROMPT_VERSION, EXTRACTION_SYSTEM_TEXT, extractionUserText };
 
 export function anthropicExtraction(options: AnthropicExtractionOptions): ExtractionProvider {
+  // Slice BR1: the transport decides the key (`anthropic_extraction`, cash, or
+  // `aws_bedrock.extraction`, credits) and the price table every cent below is computed at.
+  const transport = options.transport.kind ?? 'anthropic';
   /**
    * Exactly what `extract` would send, so a count is a count of the real request.
    *
@@ -174,7 +177,7 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
   });
 
   return {
-    providerKey: EXTRACTION_PROVIDER,
+    providerKey: modelProviderKey('extraction', transport),
     /**
      * The provider's own count of the request `extract` would send.
      *
@@ -224,12 +227,16 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
       // Priced whatever happened next: a refusal and a malformed answer both cost the
       // tokens they burned, and a ledger that only counted successes would be a budget
       // that a broken model could walk straight through.
-      const costCents = centsOf(input.modelName, {
-        inputTokens,
-        outputTokens,
-        cacheWriteTokens,
-        cacheReadTokens,
-      });
+      const costCents = centsOf(
+        input.modelName,
+        {
+          inputTokens,
+          outputTokens,
+          cacheWriteTokens,
+          cacheReadTokens,
+        },
+        transport,
+      );
 
       const estimated = costEstimated ? { costEstimated: true } : {};
       if (response.stop_reason === 'refusal') {

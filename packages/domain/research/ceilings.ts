@@ -3,6 +3,8 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { incrementDailyCounter, readDailyCounter } from '../jobs/counters.ts';
 import { readSpend, workspaceBusinessZone } from './ledger.ts';
 import { clearMonthlyCash, readMonthlyCashCeiling } from '../settings/cashCeiling.ts';
+import { providerFunding } from '../settings/funding.ts';
+import { transportOfProviderKey } from '../classification/modelTransport.ts';
 import {
   isPricedModel,
   worstCaseInputTokens,
@@ -10,7 +12,7 @@ import {
   MAX_EXTRACTION_OUTPUT_TOKENS,
 } from './pricing.ts';
 import { readResearchSettings, type ResearchSettings } from './settings.ts';
-import { accept, refuse, type ResearchResult } from './types.ts';
+import { EXTRACTION_PROVIDER, accept, refuse, type ResearchResult } from './types.ts';
 
 /**
  * The research caps (David's answer 8: "$20–30 a month, with calls ahead of
@@ -129,6 +131,12 @@ export interface ResearchClearanceInput {
    * firm's three rows a day, the daily cents, the monthly cents — is identical.
    */
   readonly attemptKind: 'first' | 'retry';
+  /**
+   * The `provider_key` the reservation will carry (slice BR1): `anthropic_extraction`
+   * (the default; the direct API, cash) or `aws_bedrock.extraction` (Bedrock, credits). It
+   * decides the price table and whether the month's cash ceiling applies.
+   */
+  readonly providerKey?: string | undefined;
 }
 
 /**
@@ -151,11 +159,14 @@ export async function claimResearchClearance(
 ): Promise<ResearchResult<ResearchClearance>> {
   const settings = await readResearchSettings(context);
   if (!settings.enabled) return refuse('research_disabled');
-  if (!isPricedModel(settings.modelName)) return refuse('model_unpriced');
+  const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
+  const transport = transportOfProviderKey(providerKey);
+  if (!isPricedModel(settings.modelName, transport)) return refuse('model_unpriced');
 
   const businessTimeZone = await workspaceBusinessZone(context);
   const priced = {
     modelName: settings.modelName,
+    transport,
     maxPagesPerFirm: settings.maxPagesPerFirm,
     maxPageBytes: settings.maxPageBytes,
   };
@@ -197,7 +208,12 @@ export async function claimResearchClearance(
   // under its monthly lock — taken after the research budget lock, the order every
   // reservation keeps (own budget lock first, the monthly lock last). The caller inserts
   // the reservation in this transaction, so the lock covers it.
-  if (!(await clearMonthlyCash(context, { at: input.at, zone: businessTimeZone, cents: worstCaseCents }))) {
+  // A credit-funded call (Bedrock, slice BR1) is not cleared against the cash ceiling, as
+  // Amazon Transcribe's is not; research's own two cost ceilings above still apply.
+  if (
+    providerFunding(providerKey) === 'cash' &&
+    !(await clearMonthlyCash(context, { at: input.at, zone: businessTimeZone, cents: worstCaseCents }))
+  ) {
     return refuse('monthly_cash_ceiling');
   }
 

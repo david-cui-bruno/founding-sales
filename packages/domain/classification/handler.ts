@@ -116,6 +116,8 @@ export function classifyReplyHandler(deps: ClassifyReplyDeps, options: ClassifyH
         // Chunk 2.
         const calling = await ensureClassificationCalling(context, deps, { messageId, attempt: carried.attempt });
         if (calling.kind === 'done') return { progress: { ...carried }, done: true };
+        // Reserved for the other transport and released: back to chunk 1 (slice BR1).
+        if (calling.kind === 'retry') return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
         PLANS.set(planKey(input.job.id, fencing, calling.attempt), calling.plan);
         return { progress: { attempt: calling.attempt, step: 'calling', fencing }, done: false };
       }

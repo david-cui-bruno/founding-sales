@@ -12,6 +12,8 @@ import {
   type ReservationRow,
 } from '../research/reservations.ts';
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
+import { providerFunding } from '../settings/funding.ts';
+import { transportOfProviderKey, type ModelTransportKind } from '../classification/modelTransport.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { settingLockName } from '../settings/store.ts';
 import { localDate } from '../src/rules/localClock.ts';
@@ -20,11 +22,11 @@ import {
   CALL_SUMMARY_MAX_TRANSCRIPT_BYTES,
   CALL_SUMMARY_MODEL_TABLE,
   CALL_SUMMARY_PROMPT_VERSION,
-  CALL_SUMMARY_PROVIDER_KEY,
   buildCallSummaryRequest,
   callSummaryCeilingCents,
   callSummaryCents,
   callSummaryInputTokenBound,
+  callSummaryProviderKey,
   isCallSummaryModel,
   transcriptText,
   type CallSummaryInput,
@@ -194,6 +196,11 @@ export interface CallSummaryDeps {
   readonly summarizer: CallSummaryPort;
   /** The deployment's model (`FSS_CALL_SUMMARY_MODEL`); Haiku 4.5 unless set. */
   readonly model: CallSummaryModel;
+  /**
+   * The transport `summarizer` sends through (slice BR1): the attempt's `provider_key`, its
+   * price table and whether the month's cash ceiling applies. Absent is the direct API.
+   */
+  readonly transport?: ModelTransportKind | undefined;
 }
 
 export type BeginSummaryOutcome =
@@ -202,7 +209,7 @@ export type BeginSummaryOutcome =
 
 export async function beginCallSummary(
   context: RepositoryContext,
-  deps: Pick<CallSummaryDeps, 'model'>,
+  deps: Pick<CallSummaryDeps, 'model' | 'transport'>,
   input: { readonly sessionId: string; readonly retry: boolean },
 ): Promise<BeginSummaryOutcome> {
   await lockSummary(context, input.sessionId);
@@ -232,11 +239,16 @@ export async function beginCallSummary(
   const maxOutputTokens = CALL_SUMMARY_MODEL_TABLE[deps.model].maxOutputTokens;
   const request = buildCallSummaryRequest({ model: deps.model, maxOutputTokens, call: prepared.call });
   const maxInputTokens = callSummaryInputTokenBound(request);
-  const cents = callSummaryCeilingCents(deps.model, maxInputTokens, maxOutputTokens);
-  if (!(await clearMonthlyCash(context, { at, zone, cents }))) return { kind: 'done', reason: 'capped' };
+  const transport = deps.transport ?? 'anthropic';
+  const providerKey = callSummaryProviderKey(transport);
+  const cents = callSummaryCeilingCents(deps.model, maxInputTokens, maxOutputTokens, transport);
+  // The month's cash ceiling is for cash: a credit-funded summary is not cleared against it (slice BR1).
+  if (providerFunding(providerKey) === 'cash' && !(await clearMonthlyCash(context, { at, zone, cents }))) {
+    return { kind: 'done', reason: 'capped' };
+  }
   const attempt = rows.reduce((highest, row) => Math.max(highest, row.attempt), 0) + 1;
   await reserveAttempt(context, {
-    providerKey: CALL_SUMMARY_PROVIDER_KEY,
+    providerKey,
     ...subjectOf(input.sessionId),
     attempt,
     at,
@@ -262,11 +274,14 @@ export interface CallSummaryPlan {
 
 export type EnsureSummaryOutcome =
   | { readonly kind: 'calling'; readonly attempt: number; readonly plan: CallSummaryPlan }
+  /** Reserved for the other transport (slice BR1) and released, nothing sent: chunk 1 reserves again. */
+  | { readonly kind: 'retry' }
   | { readonly kind: 'done'; readonly reason: SummarySkip | 'not_reserved' };
 
 export async function ensureCallSummaryCalling(
   context: RepositoryContext,
   input: { readonly sessionId: string; readonly attempt: number },
+  deps: Pick<CallSummaryDeps, 'transport'> = {},
 ): Promise<EnsureSummaryOutcome> {
   await lockSummary(context, input.sessionId);
   const row = await readAttempt(context, { ...subjectOf(input.sessionId), attempt: input.attempt });
@@ -274,6 +289,11 @@ export async function ensureCallSummaryCalling(
   const release = async (): Promise<void> => {
     await settleAttempt(context, { reservationId: row.id, at: await databaseNow(context), outcome: { kind: 'released' } });
   };
+  // Never one transport against money reserved — and priced, and funded — for the other.
+  if (row.providerKey !== callSummaryProviderKey(deps.transport ?? 'anthropic')) {
+    await release();
+    return { kind: 'retry' };
+  }
   const prepared = await prepare(context, input.sessionId);
   if (prepared.kind === 'skip') {
     await release();
@@ -293,7 +313,8 @@ export async function ensureCallSummaryCalling(
   const at = await databaseNow(context);
   const zone = await workspaceBusinessZone(context);
   // The month, then the switch: the last two things read before the commit.
-  const withinMonth = await monthWithinCeiling(context, { at, zone });
+  // A credit-funded attempt was never cleared against the cash ceiling, so it is not stopped by it (slice BR1).
+  const withinMonth = providerFunding(row.providerKey) === 'cash' ? await monthWithinCeiling(context, { at, zone }) : true;
   // The switch's own setting lock, SHARED, held to the commit that marks `calling`: a save
   // of `call_transcription` takes it EXCLUSIVE, so a turn-off either committed before this
   // read (and holds the call) or waits for this commit (and this request is submitted).
@@ -362,11 +383,11 @@ export async function finishCallSummary(
           ? { kind: 'settled', cents: 0 }
           : attempt.usage === null
             ? { kind: 'estimated' }
-            : { kind: 'settled', cents: callSummaryCents(input.plan.model, attempt.usage) },
+            : { kind: 'settled', cents: callSummaryCents(input.plan.model, attempt.usage, transportOfProviderKey(row.providerKey)) },
     });
     settledCents = settled?.recordedCents ?? 0;
     await recordProviderCall(context, {
-      providerKey: CALL_SUMMARY_PROVIDER_KEY,
+      providerKey: row.providerKey,
       at,
       businessTimeZone: row.businessTimeZone,
       costCents: 0,

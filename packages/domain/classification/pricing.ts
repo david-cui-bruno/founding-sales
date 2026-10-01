@@ -1,4 +1,5 @@
 import type { ClassifierModel } from '@fss/contracts';
+import { modelProviderKey, transportPrice, type ModelTransportKind } from './modelTransport.ts';
 import { buildClassifierRequest } from './prompt.ts';
 import { MODEL_CAPABILITIES, type ClassifierSettings } from './types.ts';
 import type { ClassifierInput } from './prompt.ts';
@@ -15,6 +16,10 @@ import type { ClassifierInput } from './prompt.ts';
  * $5 / $25, Claude Haiku 4.5 $1 / $5. A cache write is 1.25× the input rate; reads are
  * cheaper, and are charged here at the write rate, because the adapter records the two
  * together and over-counting is the direction in which nothing is lost.
+ *
+ * Over Amazon Bedrock (slice BR1) the same formulas take Bedrock's regional on-demand rates
+ * (`modelTransport.ts`'s table, from the AWS Price List API): Haiku 4.5 $1.10 / $5.50,
+ * Opus 5 $5.50 / $27.50. The multipliers are the same.
  */
 export const CLASSIFIER_PRICE_CENTS_PER_MILLION: Readonly<Record<ClassifierModel, { readonly input: number; readonly output: number }>> =
   Object.freeze({
@@ -25,8 +30,21 @@ export const CLASSIFIER_PRICE_CENTS_PER_MILLION: Readonly<Record<ClassifierModel
 
 const CACHE_WRITE_MULTIPLIER = 1.25;
 
-/** `provider_ledger.provider_key` for the reply classifier. */
+/** `provider_ledger.provider_key` for the reply classifier over the direct API. */
 export const CLASSIFIER_PROVIDER_KEY = 'anthropic_classifier';
+
+/**
+ * The classifier's `provider_key` on a transport (slice BR1): `anthropic_classifier` (cash)
+ * or `aws_bedrock.classifier` (credits).
+ */
+export function classifierProviderKey(transport: ModelTransportKind): string {
+  return modelProviderKey('classifier', transport);
+}
+
+/** Cents per million tokens for a model on a transport: first-party above, Bedrock's own table. */
+function classifierPrice(modelName: ClassifierModel, transport: ModelTransportKind): { readonly input: number; readonly output: number } {
+  return transportPrice(transport, modelName, CLASSIFIER_PRICE_CENTS_PER_MILLION[modelName]);
+}
 
 /**
  * The most one request can cost, before it is sent.
@@ -36,8 +54,12 @@ export const CLASSIFIER_PROVIDER_KEY = 'anthropic_classifier';
  * request's own `max_tokens`. A model with server-side fallbacks may be answered by a
  * second model after a refusal, so the bound is doubled for it.
  */
-export function classifierCallCeilingCents(settings: ClassifierSettings, input: ClassifierInput): number {
-  const price = CLASSIFIER_PRICE_CENTS_PER_MILLION[settings.modelName];
+export function classifierCallCeilingCents(
+  settings: ClassifierSettings,
+  input: ClassifierInput,
+  transport: ModelTransportKind = 'anthropic',
+): number {
+  const price = classifierPrice(settings.modelName, transport);
   const inputTokens = classifierInputTokenBound(settings, input);
   const one = (inputTokens * price.input * CACHE_WRITE_MULTIPLIER + settings.maxOutputTokens * price.output) / 1_000_000;
   const fallbacks = MODEL_CAPABILITIES[settings.modelName].serverSideFallbacks ? 2 : 1;
@@ -59,8 +81,9 @@ export function classifierInputTokenBound(settings: ClassifierSettings, input: C
 export function classifierCallCents(
   modelName: ClassifierModel,
   usage: { readonly inputTokens: number; readonly cachedInputTokens: number; readonly outputTokens: number },
+  transport: ModelTransportKind = 'anthropic',
 ): number {
-  const price = CLASSIFIER_PRICE_CENTS_PER_MILLION[modelName];
+  const price = classifierPrice(modelName, transport);
   return Math.ceil(
     (usage.inputTokens * price.input +
       usage.cachedInputTokens * price.input * CACHE_WRITE_MULTIPLIER +
