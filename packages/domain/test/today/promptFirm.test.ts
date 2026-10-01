@@ -192,6 +192,37 @@ describe('the build and a refresh, concurrently', () => {
     }
   });
 
+  it('a basics edit against the morning build: one lock order, so neither is a deadlock victim', async () => {
+    // S2 review, finding 1. The build takes Today's lock exclusively and then each firm's
+    // foreign-key lock as it writes the firm's task. A basics edit that locked the firm
+    // first and then waited on Today's lock was the other half of a cycle; with Today's
+    // lock first it simply waits for the build, and both finish.
+    const firmId = await addFirm();
+    await database.session.query('DELETE FROM today_items WHERE firm_id = $1', [firmId]);
+    const now = await databaseNow(worker());
+    const businessDate = await businessDateOf(worker(), now);
+    await otherSession.query('BEGIN');
+    let open = true;
+    try {
+      // The build's first step, held: Today's lock, exclusively.
+      await otherSession.query(`SELECT pg_advisory_xact_lock(hashtextextended('today.build:' || $1::text, 0))`, [
+        seeded.alpha.workspaceId,
+      ]);
+      const editing = withTransaction(database.session, async () =>
+        await updateFirmBasics(salesperson(), { firmId, locality: 'Providence', regionCode: 'RI' }),
+      );
+      expect(await waitingOnAdvisory(await pidOf(database.session), otherSession)).toBe(true);
+      // The rest of the build: it writes this firm's task, which needs the firm's key lock.
+      await buildTodaySnapshot(worker(otherSession), { businessDate, now });
+      await otherSession.query('COMMIT');
+      open = false;
+      expect(await editing).toMatchObject({ ok: true, value: { regionCode: 'RI', locality: 'Providence' } });
+      expect(await itemStatus(firmId)).toBe('open');
+    } finally {
+      if (open) await otherSession.query('ROLLBACK').catch(() => undefined);
+    }
+  });
+
   it('two firms added at once do not wait for each other', async () => {
     await database.session.query('BEGIN');
     try {
@@ -273,6 +304,48 @@ describe('the firm’s basics, from the card', () => {
     });
     const { rows } = await database.session.query<{ region_code: string | null }>('SELECT region_code FROM firms WHERE id = $1', [firmId]);
     expect(rows[0]?.region_code).toBeNull();
+  });
+
+  it('refuses a number to replace that is not this firm’s, and writes nothing at all', async () => {
+    // S2 review, finding 2: the replacement is checked before the first write, and a
+    // refusal after one rolls back, so a refused save leaves the firm, its numbers and the
+    // audit trail exactly as they were.
+    const firmId = await addFirm();
+    const otherFirm = await addFirm();
+    const foreign = await updateFirmBasics(salesperson(), { firmId: otherFirm, phone: { number: '4015550150' } });
+    if (!foreign.ok || foreign.value.routeId === null) throw new Error('the other firm has no number');
+    const snapshot = async (): Promise<unknown> => ({
+      firm: (
+        await database.session.query('SELECT locality, region_code, time_zone, updated_at FROM firms WHERE id = $1', [firmId])
+      ).rows,
+      routes: (await database.session.query('SELECT id, e164, eligibility FROM phone_routes WHERE firm_id = $1 ORDER BY id', [firmId])).rows,
+      audit: Number(
+        (
+          await database.session.query<{ count: string }>(
+            `SELECT count(*) AS count FROM audit_events
+              WHERE workspace_id = $1 AND (subject_id = $2 OR detail->>'firmId' = $2::text)`,
+            [seeded.alpha.workspaceId, firmId],
+          )
+        ).rows[0]?.count,
+      ),
+    });
+    const before = await snapshot();
+    for (const replacesRouteId of [foreign.value.routeId, '00000000-0000-4000-8000-00000000dead']) {
+      const refused = await withTransaction(database.session, async () =>
+        await updateFirmBasics(salesperson(), {
+          firmId,
+          locality: 'Providence',
+          regionCode: 'RI',
+          phone: { number: '4015550151', replacesRouteId },
+        }),
+      );
+      expect(refused).toEqual({ ok: false, reason: 'route_unknown' });
+      expect(await snapshot()).toEqual(before);
+    }
+    const { rows } = await database.session.query<{ eligibility: string }>('SELECT eligibility FROM phone_routes WHERE id = $1', [
+      foreign.value.routeId,
+    ]);
+    expect(rows[0]?.eligibility).toBe('usable');
   });
 
   it('is the firm’s assignee’s or an admin’s to change, like every other edit', async () => {

@@ -1,7 +1,7 @@
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
 import { isUsStateCode } from '../src/rules/statePosture.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { refreshTodayForFirm } from '../today/build.ts';
+import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import { readFirmBasics, type FirmBasicsDto } from '../today/dto.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { decideFirmMutation } from './authorization.ts';
@@ -75,6 +75,36 @@ export async function updateFirmBasics(context: RepositoryContext, input: Update
   }
   if (issues.length > 0) return { ok: false, reason: 'invalid_input', issues };
 
+  return await undoingRefusal(context, async () => await writeBasics(context, input, { phone, locality, regionCode, timeZone }));
+}
+
+async function writeBasics(
+  context: RepositoryContext,
+  input: UpdateFirmBasicsInput,
+  values: {
+    readonly phone: string | null | undefined;
+    readonly locality: string | null | undefined;
+    readonly regionCode: string | null | undefined;
+    readonly timeZone: string | undefined;
+  },
+): Promise<FirmBasicsResult> {
+  const { phone, locality, regionCode, timeZone } = values;
+  // One lock order (S2 review, finding 1; docs/greenfield/calling.md): Today's lock, then
+  // the route being replaced, then the firm — `retireRoute`'s own route → firm order — and
+  // only then a write. The morning build holds Today's lock while it takes firm locks.
+  await lockTodayForFirmChange(context);
+
+  // Everything that can refuse is checked before the first write (S2 review, finding 2):
+  // the number being replaced must be one of this firm's own phone numbers.
+  const replaced = phone === undefined || phone === null ? undefined : input.phone?.replacesRouteId;
+  if (replaced !== undefined) {
+    const { rows } = await context.db.query<{ firm_id: string }>(
+      'SELECT firm_id FROM phone_routes WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+      [context.scope.workspaceId, replaced],
+    );
+    if (rows[0]?.firm_id !== input.firmId) return { ok: false, reason: 'route_unknown' };
+  }
+
   // The firm's lock and the assignment rule, before anything else reads it.
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return { ok: false, reason: 'firm_unknown' };
@@ -109,14 +139,8 @@ export async function updateFirmBasics(context: RepositoryContext, input: Update
     const added = await addPhoneRoute(context, { firmId: input.firmId, e164: phone, source: 'salesperson' });
     if (!added.ok) return { ok: false, reason: added.reason };
     routeId = added.value.id;
-    const replaced = input.phone?.replacesRouteId;
+    // Checked above: one of this firm's own numbers, locked.
     if (replaced !== undefined && replaced !== routeId) {
-      const { rows } = await context.db.query<{ firm_id: string }>(
-        'SELECT firm_id FROM phone_routes WHERE workspace_id = $1 AND id = $2',
-        [context.scope.workspaceId, replaced],
-      );
-      // Only one of this firm's own numbers can be replaced from its card.
-      if (rows[0]?.firm_id !== input.firmId) return { ok: false, reason: 'route_unknown' };
       const retired = await retireRoute(context, { routeKind: 'phone', routeId: replaced, reason: 'replaced_by_salesperson' });
       if (!retired.ok) return { ok: false, reason: retired.reason };
     }
@@ -136,4 +160,46 @@ export async function updateFirmBasics(context: RepositoryContext, input: Update
   const basics = (await readFirmBasics(context, [input.firmId])).get(input.firmId);
   if (basics === undefined) return { ok: false, reason: 'firm_unknown' };
   return { ok: true, value: { firmId: input.firmId, routeId, ...basics } };
+}
+
+const BASICS_SAVEPOINT = 'crm_firm_basics';
+
+/**
+ * Run the edit so that a refusal undoes everything it wrote and nothing before it (S2
+ * review, finding 2). The checks above the first write make a refusal after one unlikely
+ * (a number `addPhoneRoute` will not record, a zone it cannot write), but a refusal that
+ * left the firm half edited would still commit with its receipt through `runCommand`.
+ * Inside a transaction — every command — this is a savepoint, so the refusal's receipt
+ * still commits and the edit does not; outside one (a test on an autocommit session) the
+ * edit is its own transaction. An exception rolls back and propagates. The pattern is
+ * `dial/calls.ts`'s and the import row's.
+ */
+async function undoingRefusal(context: RepositoryContext, work: () => Promise<FirmBasicsResult>): Promise<FirmBasicsResult> {
+  let nested = true;
+  try {
+    await context.db.query(`SAVEPOINT ${BASICS_SAVEPOINT}`);
+  } catch (error) {
+    // 25P01 no_active_sql_transaction: not inside a transaction block.
+    if ((error as { code?: string }).code !== '25P01') throw error;
+    nested = false;
+    await context.db.query('BEGIN');
+  }
+  const undo = async (): Promise<void> => {
+    if (nested) {
+      await context.db.query(`ROLLBACK TO SAVEPOINT ${BASICS_SAVEPOINT}`);
+      await context.db.query(`RELEASE SAVEPOINT ${BASICS_SAVEPOINT}`);
+    } else {
+      await context.db.query('ROLLBACK');
+    }
+  };
+  let result: FirmBasicsResult;
+  try {
+    result = await work();
+  } catch (error) {
+    await undo();
+    throw error;
+  }
+  if (result.ok) await context.db.query(nested ? `RELEASE SAVEPOINT ${BASICS_SAVEPOINT}` : 'COMMIT');
+  else await undo();
+  return result;
 }

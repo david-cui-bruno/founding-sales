@@ -289,11 +289,26 @@ async function lockTodayBuild(context: RepositoryContext, mode: 'exclusive' | 's
  * writes the same rows. Called in the transaction of the change that made the firm what
  * it is (`createFirm`, `updateFirmBasics`), so the task commits with the firm or not at all.
  */
+/**
+ * Take Today's lock as a change to one firm does (shared), **before any firm or route row
+ * lock** (S2 review, finding 1). The morning build holds this lock exclusively and then
+ * takes the firms' foreign-key locks as it writes their tasks; a change that locked a firm
+ * first and then waited here would be the other half of a deadlock. So every transaction
+ * that ends in `refreshTodayForFirm` calls this first — `createFirm`, `updateFirmBasics` —
+ * and the order is the one in docs/greenfield/calling.md: Today's lock → firm → route.
+ * Re-taking it later in the same transaction (the refresh does) is free.
+ */
+export async function lockTodayForFirmChange(context: RepositoryContext): Promise<void> {
+  await lockTodayBuild(context, 'shared');
+}
+
 export async function refreshTodayForFirm(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly now?: string | undefined; readonly sources?: readonly TodaySource[] | undefined },
 ): Promise<TodayBuildReport> {
-  await lockTodayBuild(context, 'shared');
+  // Already held when the caller followed the lock order; taken here for one that has
+  // locked nothing yet.
+  await lockTodayForFirmChange(context);
   const now = input.now ?? (await databaseNow(context));
   const businessDate = await businessDateOf(context, now);
   return await buildFrom(context, { businessDate, now, sources: input.sources }, input.firmId);

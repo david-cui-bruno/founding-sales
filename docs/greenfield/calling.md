@@ -488,6 +488,17 @@ already does. `packages/domain/test/retention/deletionLockOrder.test.ts` drives 
 verification's interleavings (deletion against a paused classification, and against a
 page-only research run); both now finish.
 
+**Today's lock comes first for a change that refreshes Today (slice S2 review, finding 1).**
+The morning build takes Today's advisory lock (`today.build:<workspace>`) exclusively and then
+the firms' foreign-key locks as it writes their tasks. A transaction that ends in
+`refreshTodayForFirm` therefore takes that lock, shared, before any firm or route row lock
+(`lockTodayForFirmChange`): `createFirm` (Add firm and every import row that creates a firm)
+before its insert, and `updateFirmBasics` before it locks the number it replaces and then the
+firm (Today's lock → route → firm, `retireRoute`'s own route → firm order). A basics edit and
+the build then wait for each other in one direction only;
+`packages/domain/test/today/promptFirm.test.ts` drives that interleaving, and without the
+early lock PostgreSQL picks a deadlock victim.
+
 Every write to a `provider_ledger` row takes the monthly lock first (`lockMonthlySpend`,
 inside `recordProviderCall`, the settlement and the correction), so a transaction that holds
 a ledger row always holds the monthly lock and ledger rows cannot be part of a cycle; the

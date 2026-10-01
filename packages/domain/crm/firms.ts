@@ -6,7 +6,7 @@ import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
-import { refreshTodayForFirm } from '../today/build.ts';
+import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import { FIRM_ZONE_SOURCES } from './zone.ts';
 import {
   accept,
@@ -98,6 +98,10 @@ export async function createFirm(
     return refuse('not_assigned');
   }
   if (input.name.trim().length === 0) return refuse('invalid_input');
+  // Slice S2 lock order: Today's lock before any row this transaction writes or locks,
+  // because it ends in `refreshTodayForFirm` and the morning build holds that lock while
+  // it takes firm locks (S2 review, finding 1).
+  await lockTodayForFirmChange(context);
 
   let created: FirmRow;
   try {
