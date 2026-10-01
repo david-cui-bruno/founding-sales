@@ -53,7 +53,8 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
   let counter = 0;
 
   /** What the transport does next: answer, fail, or answer slowly. Counts every request. */
-  let mode: 'answer' | 'fail' | 'malformed' | 'nousage' = 'answer';
+  let mode: 'answer' | 'fail' | 'malformed' | 'nousage' | 'reject_400' = 'answer';
+  const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
   let delayMs = 0;
   let requests = 0;
   /** Set by a test that watches the worker's statements: called when a request goes out. */
@@ -73,6 +74,13 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
       onRequest?.();
       if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
       if (mode === 'fail') throw new Error('socket hang up');
+      if (mode === 'reject_400') {
+        // The SDK's APIError shape: status, the parsed body.
+        throw Object.assign(new Error('400 invalid_request_error'), {
+          status: 400,
+          error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Invalid schema' } },
+        });
+      }
       return await recorded.create(request);
     },
   };
@@ -172,7 +180,7 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
 
   const registry = (): HandlerRegistry => {
     const built = new HandlerRegistry();
-    for (const handler of classifyHandlers({ transport, processEnabled: true })) built.register(handler);
+    for (const handler of classifyHandlers({ transport, processEnabled: true, log: (event, fields) => logs.push({ event, fields }) })) built.register(handler);
     return built;
   };
   async function enqueue(messageId: string, key: string): Promise<void> {
@@ -368,6 +376,33 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
       await ceiling(5000);
       mode = 'answer';
     }
+  });
+
+  it('a 400 invalid_request is refused before generation: one request, settled at 0, no retry, the API’s words in the log', async () => {
+    mode = 'reject_400';
+    const id = await reply();
+    await enqueue(id, `classify-reply:${id}`);
+    const before = requests;
+    const spent = await monthSpent();
+    logs.length = 0;
+    try {
+      await drain();
+    } finally {
+      mode = 'answer';
+    }
+    expect(requests - before).toBe(1);
+    expect(await attempts(id)).toEqual([{ attempt: 1, state: 'settled', cents: C, settled_cents: 0 }]);
+    expect(await monthSpent()).toBe(spent);
+    expect(logs.find(line => line.event === 'classify_reply_provider_failed' && line.fields['mail_message_id'] === id)?.fields).toMatchObject({
+      reason: 'provider_refused',
+      will_retry: false,
+      provider_status: 400,
+      provider_error_type: 'invalid_request_error',
+      provider_message: 'output_config.format.schema: Invalid schema',
+    });
+    // The recorded call stays `provider_error`: the CHECK constraint has no other word and this fix has no migration.
+    expect(await outcomes(id)).toEqual(['provider_error']);
+    expect(JSON.stringify(logs)).not.toContain('Tuesday');
   });
 
   it('an answer without usage is settled at its reservation, never at a computed zero (P1 final round, #2)', async () => {

@@ -38,7 +38,7 @@ describe('the prompt is versioned by its bytes', () => {
     expect(createHash('sha256').update(CLASSIFIER_SYSTEM_PROMPT).digest('hex')).toBe(
       '352f2129d6eef61f819d19830af94bb6adfb191963301f6e8ab812dd3d82ef8c',
     );
-    expect(CLASSIFIER_PROMPT_VERSION).toBe('g7b.replies.1');
+    expect(CLASSIFIER_PROMPT_VERSION).toBe('g7b.replies.2');
   });
 
   it('carries nothing in the prompt that changes between two calls', () => {
