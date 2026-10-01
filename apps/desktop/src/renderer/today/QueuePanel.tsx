@@ -82,8 +82,10 @@ export function QueuePanel({
           groups.map(group => (
             <div key={group.id} data-testid="queue-group" data-group={group.id} className="mb-3">
               <h3 className="flex h-7 items-center justify-between px-2 text-xs font-medium text-muted-foreground">
-                {group.label}
-                <span className="text-faint tabular">{group.cards.length}</span>
+                <span data-testid="queue-group-label">{group.label}</span>
+                <span data-testid="queue-group-count" className="text-faint tabular">
+                  {group.cards.length}
+                </span>
               </h3>
               <ul className="flex flex-col gap-px">
                 {group.cards.map(card => {

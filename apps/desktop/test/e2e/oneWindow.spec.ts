@@ -96,11 +96,31 @@ test('the Window menu shows each view in the one window, and a Settings tab is n
 });
 
 test('a Today card opens its firm through the CRM bridge, and the firm page leads back to Firms', async ({ page }) => {
-  server = await startAppServer({ crm: crmState({ screen: 'pipeline', firm: null, pipeline: pipelineView() }) });
+  server = await startAppServer({
+    crm: crmState({ screen: 'pipeline', firm: null, pipeline: pipelineView() }),
+    // Slice S2: the firm opens in the middle first, so the scripted main process opens any card.
+    operations: {
+      'today.expand': argument => {
+        const firmId = (argument as { firmId: string }).firmId;
+        const today = server.today.state();
+        const card = today.cards.find(entry => entry.firmId === firmId);
+        const next = {
+          ...today,
+          expanded: card === undefined ? null : expandedFirm({ firmId, firmName: card.firmName, lane: card.lane, counts: card.counts, tasks: [], routes: [] }),
+          notice: null,
+        };
+        server.today.setState(next);
+        return next;
+      },
+    },
+  });
   await page.goto(server.url());
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
 
-  await page.getByTestId('today-card').first().getByTestId('card-open-firm').click();
+  // Slice S2: the queue row opens the firm in the middle; its header has the firm page.
+  await page.locator(`[data-testid="queue-row"][data-firm="${REPLY_FIRM_ID}"]`).click();
+  await expect(page.getByTestId('firm-name')).toBeVisible();
+  await page.getByTestId('card-open-firm').click();
   // The handoff: the bridge is told which firm, because it holds the open firm.
   await expect.poll(() => server.called('crm.openFirm')).toEqual([{ firmId: REPLY_FIRM_ID }]);
   await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
@@ -205,7 +225,7 @@ test('coming back to Today keeps the list on screen and does not read it again w
   await page.getByTestId('nav-sequences').click();
   await expect(page.getByTestId('heading')).toHaveText('Sequences');
   await page.getByTestId('nav-today').click();
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
   expect(server.called('today.refresh')).toHaveLength(1);
 });
 
@@ -345,7 +365,7 @@ test('a session change empties the window: the cache and everything typed go at 
    */
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url());
-  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await expect(page.getByTestId('queue-row').first()).toBeVisible();
   await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
 
   // The sidebar's reads are keyed on the person alone, so the only thing that makes

@@ -37,10 +37,11 @@ test('a card opens while the Mac is offline and the list is stale, under the off
   await page.goto(server.url());
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
 
-  const card = page.getByTestId('today-card').nth(1);
-  await expect(card.getByTestId('card-expand')).toBeEnabled();
-  await card.getByTestId('card-expand').click();
-  await expect.poll(() => called('today.expand')).toEqual([{ firmId: FIRM_ID }]);
+  // Slice S2: a queue row opens the firm in the middle (the first is opened by itself).
+  const card = page.locator(`[data-testid="queue-row"][data-firm="${FIRM_ID}"]`);
+  await expect(card).toBeEnabled();
+  await card.click();
+  await expect.poll(() => called('today.expand')).toContainEqual({ firmId: FIRM_ID });
   await expect(page.getByTestId('today-task').first()).toBeVisible();
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
 });
@@ -66,7 +67,7 @@ test('a snooze on the wire holds its own form and nothing else, and a second pre
   await expect(submit).toBeDisabled();
   // Everything that is not this form is still the person's to use.
   await expect(page.getByTestId('refresh')).toBeEnabled();
-  await expect(page.getByTestId('card-expand').first()).toBeEnabled();
+  await expect(page.getByTestId('queue-row').first()).toBeEnabled();
   await expect(page.getByTestId('nav-firms')).toBeEnabled();
   expect(await page.getByTestId('column').evaluate(node => (node as HTMLElement).inert)).toBe(false);
   await pressAgain(page, submit);
@@ -260,7 +261,7 @@ test('signing out empties the request cache: the next person’s Today is read a
   // it already had — the one thing 12.4 will not have.
   server = await startAppServer({ today: todayState() });
   await page.goto(server.url());
-  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await expect(page.getByTestId('queue-row').first()).toBeVisible();
   await expect.poll(() => called('today.refresh').length).toBe(1);
 
   await page.getByTestId('this-mac-summary').click();
@@ -270,6 +271,6 @@ test('signing out empties the request cache: the next person’s Today is read a
   await page.getByTestId('workspace-id').fill(EXAMPLE_WORKSPACE);
   await page.getByTestId('device-label').fill("David's MacBook");
   await page.getByTestId('sign-in').click();
-  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await expect(page.getByTestId('queue-row').first()).toBeVisible();
   await expect.poll(() => called('today.refresh').length).toBe(2);
 });

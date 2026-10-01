@@ -4,7 +4,7 @@ import type { TodayCardBlocker } from '@fss/contracts';
 import type { FirmBasicsAnswer } from '../../shared/operations.ts';
 import type { CallControl } from '../calling/useCall.ts';
 import { useCallingStatus } from '../calling/useCallingStatus.ts';
-import type { HomeView } from '../homeView.ts';
+import { UNAVAILABLE, type HomeView } from '../homeView.ts';
 import { cn } from '../lib/utils.ts';
 import { navigate } from '../routes.ts';
 import type { TodayCard, TodayState } from '../todayContract.ts';
@@ -344,7 +344,9 @@ export function TodayWorkspace({
     primaryRoute?.e164 ?? null,
   ].filter((part): part is string => part !== null && part !== '');
 
-  const unavailable = !hasTodayBridge || actions === null || state === null || todayView === null;
+  // No registry: say so where Today would be. No answer yet: the regions wait, empty.
+  const unavailable = !hasTodayBridge || actions === null;
+  const loading = state === null || todayView === null;
 
   const header = (
     <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-5">
@@ -412,11 +414,16 @@ export function TodayWorkspace({
         </div>
       )}
       {unavailable ? (
-        <p data-testid="today-unavailable" className="p-6 text-sm text-muted-foreground">
-          {home.lanes?.emptyLine ?? 'Unavailable in this build'}
-        </p>
+        <div className="max-w-[640px] p-6">
+          <p data-testid="today-unavailable" className="text-sm text-muted-foreground">
+            {UNAVAILABLE}
+          </p>
+          <HomeExtras home={home} onConnectMailbox={onConnectMailbox} />
+        </div>
+      ) : loading ? (
+        <div data-testid="today" aria-busy={today.pending > 0} className="flex-1" />
       ) : (
-        <div data-testid="today" className="relative flex min-h-0 flex-1">
+        <div data-testid="today" aria-busy={today.pending > 0} className="relative flex min-h-0 flex-1">
           <div
             data-testid="queue-region"
             className={cn(
@@ -441,7 +448,7 @@ export function TodayWorkspace({
           <div ref={firmRegion} data-region="firm" data-testid="today-firm" className="min-w-0 flex-1 overflow-y-auto">
             {expanded === null ? (
               <p data-testid="today-empty" className="pt-24 text-center text-sm text-muted-foreground">
-                {cards.length === 0 ? (todayView.emptyMessage ?? 'Nothing is due today.') : 'Pick a firm from the queue.'}
+                {cards.length === 0 ? (home.lanes?.emptyLine ?? todayView.emptyMessage ?? 'Nothing is due today.') : 'Pick a firm from the queue.'}
               </p>
             ) : (
               <div className="mx-auto flex max-w-[760px] flex-col px-8 pt-6 pb-16">

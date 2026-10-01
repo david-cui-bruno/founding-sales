@@ -130,11 +130,14 @@ const appInert = async (page: Page): Promise<boolean> =>
 test('while the launch update installs, the whole window is read-only — sidebar included — and says why', async ({ page }) => {
   server = await startAppServer({ update: { kind: 'none' }, mailbox: notConnectedMailbox(), connectAnswer: notConnectedMailbox() });
   await page.goto(server.url());
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
   await expect(page.getByTestId('updating-banner')).toHaveCount(0);
   // This Mac open, so its Connect Gmail and Sign out are on screen when the install starts.
   await page.getByTestId('this-mac-summary').click();
   await expect(page.getByTestId('mailbox-connect')).toBeVisible();
+  // Slice S2 opens the first firm of the queue by itself; what counts is that nothing more is asked.
+  await expect(page.getByTestId('firm-name')).toBeVisible();
+  const expandsBefore = called('today.expand').length;
 
   server.update.setState({ kind: 'installing', version: '1.0.6' });
   await updateChanged(page);
@@ -142,17 +145,17 @@ test('while the launch update installs, the whole window is read-only — sideba
   await expect(page.locator('#app')).toHaveAttribute('aria-busy', 'true');
   expect(await appInert(page)).toBe(true);
   // Readable: the list is still there.
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
 
   // Nothing presses: not the sidebar's Connect Gmail or Sign out, not a view, not a card.
   await pressAt(page, page.getByTestId('mailbox-connect'));
   await pressAt(page, page.getByTestId('sign-out'));
   await pressAt(page, page.getByTestId('nav-firms'));
-  await pressAt(page, page.getByTestId('card-expand').first());
+  await pressAt(page, page.locator('[data-testid="queue-row"]:not([aria-current])').first());
   await page.waitForTimeout(200);
   expect(called('mailbox.connect')).toEqual([]);
   expect(called('callie.signOut')).toEqual([]);
-  expect(called('today.expand')).toEqual([]);
+  expect(called('today.expand')).toHaveLength(expandsBefore);
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
 
   // An install that did not go ahead gives the page back.
@@ -228,6 +231,6 @@ test('a refusal by version during a background read puts the upgrade screen up b
   await expect(page.getByTestId('heading')).toHaveText('Update Callie');
   await expect(page.getByTestId('upgrade-only')).toBeVisible();
   // Nothing of the page that was up is left to press.
-  await expect(page.getByTestId('card-expand')).toHaveCount(0);
+  await expect(page.getByTestId('queue-row')).toHaveCount(0);
   await expect(page.getByTestId('refresh')).toHaveCount(0);
 });

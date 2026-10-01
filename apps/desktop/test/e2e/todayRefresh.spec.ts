@@ -32,7 +32,7 @@ async function settled(page: Page): Promise<void> {
 }
 
 async function markFirstCard(page: Page): Promise<void> {
-  await page.getByTestId('today-card').first().evaluate(card => {
+  await page.getByTestId('queue-row').first().evaluate(card => {
     (card as HTMLElement).dataset['mark'] = 'kept';
   });
 }
@@ -55,7 +55,7 @@ test('the list says how old it is, and the minutes move without redrawing anythi
   await markFirstCard(page);
   await page.clock.runFor(5 * 60_000);
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 5 min ago');
-  await expect(page.getByTestId('today-card').first()).toHaveAttribute('data-mark', 'kept');
+  await expect(page.getByTestId('queue-row').first()).toHaveAttribute('data-mark', 'kept');
   // Five minutes of ticks at 09:05 in New York is no reason to read the list again.
   expect(called('today.refresh')).toHaveLength(1);
 });
@@ -80,25 +80,32 @@ test('a focus a minute after the last read reads the list again, quietly, and ke
   await expect.poll(() => called('today.refresh')).toEqual([{}, { quiet: true }]);
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
   // Only the read time changed, so the lanes on screen are the ones drawn before.
-  await expect(page.getByTestId('today-card').first()).toHaveAttribute('data-mark', 'kept');
+  await expect(page.getByTestId('queue-row').first()).toHaveAttribute('data-mark', 'kept');
 
   // And not again straight away.
   await focusWindow(page);
   expect(called('today.refresh')).toHaveLength(2);
 });
 
-test('a read Home would make by itself waits while somebody is typing in the lanes', async ({ page }) => {
+test('a read Home would make by itself waits while somebody is typing, and a draft left behind survives the read', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-21T13:00:20.000Z') });
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url());
   await settled(page);
 
-  await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
-  await page.getByTestId('heading').click();
+  // Typing: the focus is in a field on Today, so the read waits.
+  await page.getByTestId('snooze-reason').first().fill('Waiting on their board');
   await page.clock.runFor(5 * 60_000);
   await focusWindow(page);
   expect(called('today.refresh')).toHaveLength(1);
-  await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
+
+  // Slice S2: drafts live above the list and are keyed by firm, so a draft left behind no
+  // longer holds the list back (it would be yesterday's list by lunchtime); the read goes
+  // ahead and the words are still there.
+  await page.getByTestId('heading').click();
+  await focusWindow(page);
+  await expect.poll(() => called('today.refresh')).toHaveLength(2);
+  await expect(page.getByTestId('snooze-reason').first()).toHaveValue('Waiting on their board');
 });
 
 test('the business day’s rollover reads the list with nobody there, and looks again ten minutes on', async ({ page }) => {
@@ -141,7 +148,7 @@ test('a failed read says so beside Retry, over the list it kept, and Retry reads
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 2 min ago');
   // The existing lines say why, and the list stays readable.
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
 
   await page.getByTestId('today-retry').click();
   await expect.poll(() => called('today.refresh')).toHaveLength(3);

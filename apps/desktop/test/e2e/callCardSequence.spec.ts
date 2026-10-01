@@ -37,6 +37,8 @@ test('an interested call agrees to a sequence, shows its plan, and starts it', a
   await page.goto(server.url());
   await expect.poll(() => server.called('today.refresh').length).toBeGreaterThan(0);
   await expect(page.getByTestId('today')).toHaveAttribute('aria-busy', 'false');
+  // Slice S2: the expanded firm opens in the middle by itself; its outcome form is one press away.
+  await page.getByTestId('firm-outcome').click();
 
   await page.getByTestId('outcome-select').selectOption('interested');
   await expect(page.getByTestId('outcome-follow-up-kind').locator('option')).toHaveText([

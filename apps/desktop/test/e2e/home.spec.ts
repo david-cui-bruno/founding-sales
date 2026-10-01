@@ -47,7 +47,16 @@ const called = (method: string): unknown[] =>
  */
 async function settled(page: Page): Promise<void> {
   await expect.poll(() => called('today.refresh').length).toBeGreaterThan(0);
-  await expect(page.getByTestId('today')).toHaveAttribute('aria-busy', 'false');
+  // Slice S2: a firm is open in the middle — the one the state names, or the first of the
+  // queue, opened by itself — and nothing is on the wire.
+  await expect(page.getByTestId('firm-name').or(page.getByTestId('today-empty'))).toBeVisible();
+  await expect(page.getByTestId('home')).toHaveAttribute('aria-busy', 'false');
+}
+
+/** The notes and outcome form, which slice S2 keeps one press away rather than always open. */
+async function openOutcome(page: Page): Promise<void> {
+  await page.getByTestId('firm-outcome').click();
+  await expect(page.getByTestId('outcome-form')).toBeVisible();
 }
 
 /** Record any dialog, so a spec can prove none was opened. */
@@ -60,7 +69,7 @@ function dialogsOf(page: Page): string[] {
   return dialogs;
 }
 
-test('Home opens on the business date, a line of counts, and the four lanes in the server’s order', async ({ page }) => {
+test('Home opens on the business date, a line of counts, and the queue in the plan’s order', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
 
@@ -68,19 +77,18 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
   // Sending is off on this workspace, so the list's emails are counted as held.
   await expect(page.getByTestId('summary')).toHaveText('4 firms · 1 reply · 1 callback · 4 emails held');
 
-  await expect(page.getByTestId('lane-label')).toHaveText(['Replies', 'Callbacks', 'Due today', 'New firms']);
-  await expect(page.getByTestId('lane-count')).toHaveText(['1', '1', '1', '1']);
-  // The new firm's instant is three weeks earlier and it is still last: the lane
-  // decides, and the page never re-sorts what the snapshot ordered.
-  await expect(page.getByTestId('card-firm')).toHaveText([
-    'Ashgrove Test Partners',
+  // Slice S2: callbacks first, then replies, what is due and the new prospects — the
+  // plan's order. The new firm's instant is three weeks earlier and it is still last:
+  // within a group the page never re-sorts what the snapshot ordered.
+  await expect(page.getByTestId('queue-group-label')).toHaveText(['Callbacks', 'Replies waiting', 'Due today', 'New prospects']);
+  await expect(page.getByTestId('queue-group-count')).toHaveText(['1', '1', '1', '1']);
+  await expect(page.getByTestId('queue-firm')).toHaveText([
     'Northwind Test Holdings',
+    'Ashgrove Test Partners',
     'Copperline Test Holdings',
     'Larkspur Test Foundry',
   ]);
-  // Five people are due at Northwind; there is one card, and it carries the counts.
-  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call');
-  await expect(page.getByTestId('card-counts').nth(3)).toHaveText('Nothing outstanding');
+  await expect(page.getByTestId('queue-line')).toHaveText(['Callback', 'Replied', 'Due: 1 email', 'Not yet contacted']);
 
   // The cached list first, then today's: the morning list is there without a press.
   await settled(page);
@@ -88,9 +96,11 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
   // sidebar's figures (`useHomeAdmin`) before Today's own state (`useToday`). It is a
   // read of its own and not part of that sequence — the list is still the cache first
   // and the server second (29 September 2026).
+  // Slice S2: and then the first firm of the queue, opened without a press.
   expect(server.calls.map(call => call.method).filter(method => method.startsWith('today.'))).toEqual([
     'today.callsPlaced',
     'today.state',
+    'today.expand',
     'today.refresh',
   ]);
 });
@@ -285,17 +295,18 @@ test('a firm name that looks like markup is shown as text', async ({ page }) => 
     today: { ...base, cards: base.cards.map((card, index) => (index === 0 ? { ...card, firmName: '<img src=x onerror=alert(1)>' } : card)) },
   });
   await page.goto(server.url());
-  await expect(page.getByTestId('card-firm').nth(0)).toHaveText('<img src=x onerror=alert(1)>');
+  await expect(page.getByTestId('queue-firm').nth(1)).toHaveText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
 });
 
-test('expanding a card reveals one task per contact, under its own row', async ({ page }) => {
+test('the selected firm shows one task per contact, in the middle of the screen', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
   await settled(page);
 
-  await page.getByTestId('card-expand').nth(1).click();
-  const card = page.getByTestId('today-card').nth(1);
+  // The first firm of the queue is selected without a press (slice S2).
+  await expect(page.getByTestId('queue-row').nth(0)).toHaveAttribute('aria-current', 'true');
+  const card = page.getByTestId('today-firm');
   await expect(card.getByTestId('firm-name')).toHaveText('Northwind Test Holdings');
   await expect(card.getByTestId('today-task')).toHaveCount(5);
   await expect(page.getByTestId('task-kind').nth(0)).toHaveText('Callback');
@@ -305,7 +316,6 @@ test('expanding a card reveals one task per contact, under its own row', async (
   await expect(page.getByTestId('task-snoozed')).toHaveCount(1);
   // The business zone's clock: 18:00Z is 14:00 in New York in September.
   await expect(page.getByTestId('task-due').nth(0)).toHaveText('14:00');
-  await expect(page.getByTestId('card-expand').nth(1)).toHaveText('Close');
 
   expect(called('today.expand')).toEqual([{ firmId: FIRM_ID }]);
 });
@@ -487,6 +497,7 @@ test('an outcome will not record until it has everything it needs', async ({ pag
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url());
   await settled(page);
+  await openOutcome(page);
 
   await expect(page.getByTestId('outcome-submit')).toBeDisabled();
   await page.getByTestId('outcome-select').selectOption('callback_requested');
@@ -526,6 +537,7 @@ test('the outcome names the task it was for and the number just called (lane g79
   });
   await page.goto(server.url());
   await settled(page);
+  await openOutcome(page);
 
   await expect(page.getByTestId('outcome-call')).toHaveText('The call to +14015550187.');
   // The call due and the callback are the two tasks a call can be recorded against;
@@ -598,6 +610,7 @@ test('a callback recorded with no day says where it is waiting', async ({ page }
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url());
   await settled(page);
+  await openOutcome(page);
   await page.getByTestId('outcome-select').selectOption('callback_requested');
   await page.getByTestId('outcome-submit').click();
   await expect(page.getByTestId('banner-info')).toContainText('“Callback — needs a time” is on today’s list');
@@ -609,6 +622,7 @@ test('“do not call” says how wide the suppression is before it is recorded',
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url());
   await settled(page);
+  await openOutcome(page);
   await page.getByTestId('outcome-select').selectOption('do_not_call');
   await expect(page.getByTestId('outcome-warning')).toContainText('stops Callie calling this number');
 });
@@ -627,13 +641,14 @@ test('an outage is a banner over Home, and nothing on it is disabled for it (wav
   await expect(page.getByTestId('banner-warning').nth(1)).toContainText('Changes will fail until Callie reconnects.');
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · offline');
 
-  await expect(page.getByTestId('today-card')).toHaveCount(4);
-  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call');
+  await expect(page.getByTestId('queue-row')).toHaveCount(4);
+  await expect(page.getByTestId('queue-line').nth(0)).toHaveText('Callback');
   await expect(page.getByTestId('today-task')).toHaveCount(5);
 
   // Until wave 1 every one of these was greyed out until somebody pressed Refresh.
-  for (const index of [0, 1, 2, 3]) await expect(page.getByTestId('card-expand').nth(index)).toBeEnabled();
+  for (const index of [0, 1, 2, 3]) await expect(page.getByTestId('queue-row').nth(index)).toBeEnabled();
   await expect(page.getByTestId('snooze-reason').nth(0)).toBeEnabled();
+  await openOutcome(page);
   await expect(page.getByTestId('outcome-select')).toBeEnabled();
   await expect(page.getByTestId('needs-connect')).toBeEnabled();
 });
@@ -644,7 +659,7 @@ test('an empty list says what to do next in one grey line', async ({ page }) => 
   await expect(page.getByTestId('today-empty')).toHaveText(
     'Nothing today. Add firms and a sequence, and tomorrow’s list builds at 05:00.',
   );
-  await expect(page.getByTestId('lane')).toHaveCount(0);
+  await expect(page.getByTestId('queue-group')).toHaveCount(0);
   await expect(page.getByTestId('summary')).toHaveText('');
 });
 
@@ -661,7 +676,7 @@ test('a page built without the operation registry says so wherever an answer wou
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');
-  await expect(page.getByTestId('today-card')).toHaveCount(0);
+  await expect(page.getByTestId('queue-row')).toHaveCount(0);
   await expect(page.getByTestId('figures-line')).toHaveText('Unavailable in this build');
   await expect(page.getByTestId('status-calling')).toHaveText('Calling number: unavailable in this build');
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox: unavailable in this build');
