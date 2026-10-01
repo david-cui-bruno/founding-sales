@@ -102,6 +102,17 @@ export function sideOfSpeaker(speaker: number): CallSummarySide | null {
   return null;
 }
 
+/**
+ * The transcripts whose `speaker` is the recording channel, as `provider/model` (slice
+ * C3a's list). Only these are summarized: a diarized transcript (C2's `deepgram/nova-3`)
+ * says which voice, not whose, and a summary of it could not say who promised what.
+ */
+export const CHANNEL_LABELLED_TRANSCRIPTS: readonly string[] = Object.freeze(['aws_transcribe/standard', 'deepgram/nova-3-multichannel']);
+
+export function transcriptIsChannelLabelled(transcript: { readonly provider: string; readonly model: string }): boolean {
+  return CHANNEL_LABELLED_TRANSCRIPTS.includes(`${transcript.provider}/${transcript.model}`);
+}
+
 export interface CallSummaryInput {
   readonly firmName: string;
   readonly contactName: string | null;

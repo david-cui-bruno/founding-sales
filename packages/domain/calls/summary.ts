@@ -25,7 +25,9 @@ import {
   callSummaryCeilingCents,
   callSummaryCents,
   callSummaryInputTokenBound,
+  CHANNEL_LABELLED_TRANSCRIPTS,
   isCallSummaryModel,
+  transcriptIsChannelLabelled,
   transcriptText,
   type CallSummaryInput,
   type CallSummaryModel,
@@ -158,8 +160,14 @@ type Prepared = { readonly kind: 'ready'; readonly call: CallSummaryInput } | { 
 
 /** What the call is now: gone, summarized already, too long, or the input a request would carry. */
 async function prepare(context: RepositoryContext, sessionId: string): Promise<Prepared> {
-  const { rows } = await context.db.query<{ firm_name: string; contact_name: string | null; utterances: unknown }>(
-    `SELECT f.name AS firm_name, c.full_name AS contact_name, t.utterances
+  const { rows } = await context.db.query<{
+    firm_name: string;
+    contact_name: string | null;
+    provider: string;
+    model: string;
+    utterances: unknown;
+  }>(
+    `SELECT f.name AS firm_name, c.full_name AS contact_name, t.provider, t.model, t.utterances
        FROM call_transcripts t
        JOIN call_sessions s ON s.workspace_id = t.workspace_id AND s.id = t.call_session_id
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
@@ -169,6 +177,8 @@ async function prepare(context: RepositoryContext, sessionId: string): Promise<P
   );
   const row = rows[0];
   if (row === undefined) return { kind: 'skip', reason: 'not_applicable' };
+  // Only a channel-labelled transcript: in a diarized one nobody knows which voice is whose.
+  if (!transcriptIsChannelLabelled(row)) return { kind: 'skip', reason: 'not_applicable' };
   if (await hasSummary(context, sessionId)) return { kind: 'skip', reason: 'already_summarized' };
   const utterances = Array.isArray(row.utterances) ? (row.utterances as CallTranscriptUtterance[]) : [];
   if (utterances.length === 0) return { kind: 'skip', reason: 'not_applicable' };
@@ -504,7 +514,7 @@ export interface OwedSummary {
 }
 
 /**
- * Calls owed a summary, for the `call-summarize` source. A transcript of the last
+ * Calls owed a summary, for the `call-summarize` source. A channel-labelled transcript of the last
  * `CALL_SUMMARY_RESUME_DAYS`, no summary, the transcription switch on with a ceiling above
  * 0, no open summary reservation, fewer than two paid summary attempts, and either no
  * `call.summarize` job yet or — a held summary (paused work is held, not completed) —
@@ -524,6 +534,7 @@ export async function listOwedSummaries(db: Queryable, limit = 50): Promise<read
             AND payload ->> 'callSessionId' = t.call_session_id::text
        ) j
       WHERE t.created_at > now() - make_interval(days => $1)
+        AND t.provider || '/' || t.model = ANY($5::text[])
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
         AND (j.jobs = 0 OR (j.all_done AND s.changed_at > j.finished_at))
         AND NOT EXISTS (SELECT 1 FROM call_summaries x WHERE x.workspace_id = t.workspace_id AND x.call_session_id = t.call_session_id)
@@ -539,7 +550,7 @@ export async function listOwedSummaries(db: Queryable, limit = 50): Promise<read
         ) < $3
       ORDER BY t.created_at, t.workspace_id, t.call_session_id
       LIMIT $4`,
-    [CALL_SUMMARY_RESUME_DAYS, CALL_SUMMARY_SUBJECT_KIND, CALL_SUMMARY_MAX_PAID_ATTEMPTS, limit],
+    [CALL_SUMMARY_RESUME_DAYS, CALL_SUMMARY_SUBJECT_KIND, CALL_SUMMARY_MAX_PAID_ATTEMPTS, limit, [...CHANNEL_LABELLED_TRANSCRIPTS]],
   );
   return rows.map(row => ({ workspaceId: row.workspace_id, sessionId: row.session_id, revision: Number(row.jobs) }));
 }

@@ -309,4 +309,42 @@ describe('call transcription, end to end (slice C2)', () => {
       await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.salesperson.userId]);
     }
   });
+
+  it('adds a call’s summary to the history only when asked (slice C3b), so an older Mac never meets it', async () => {
+    await fixture.db.query(
+      `INSERT INTO call_summaries (workspace_id, call_session_id, model, prompt_version, summary, next_steps, commitments)
+       VALUES ($1, $2, 'claude-haiku-4-5-20251001', 'c3b.summary.1', $3, $4::jsonb, $5::jsonb)`,
+      [
+        fixture.alpha.workspaceId,
+        answered.sessionId,
+        'You reached the office. They asked for pricing. You agreed to send it.',
+        JSON.stringify([{ action: 'Send pricing', owner: 'you', due: 'by Friday' }]),
+        JSON.stringify([{ speaker: 'you', quote: 'I will send it by Friday' }]),
+      ],
+    );
+    const plain = await get(`/calls/history?firmId=${answered.firmId}`, salespersonToken);
+    expect(plain.status).toBe(200);
+    expect(JSON.stringify(plain.body)).not.toContain('summary');
+    const asked = await get(`/calls/history?firmId=${answered.firmId}&include=summary`, salespersonToken);
+    expect(asked.status, asked.text).toBe(200);
+    expect(asked.body['calls']).toEqual([
+      expect.objectContaining({
+        sessionId: answered.sessionId,
+        summary: {
+          summary: 'You reached the office. They asked for pricing. You agreed to send it.',
+          nextSteps: [{ action: 'Send pricing', owner: 'you', due: 'by Friday' }],
+          commitments: [{ speaker: 'you', quote: 'I will send it by Friday' }],
+          model: 'claude-haiku-4-5-20251001',
+          createdAt: expect.any(String) as unknown,
+        },
+      }),
+    ]);
+    // Another firm's salesperson reads nothing, summary or not.
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.admin.userId]);
+    try {
+      expect((await get(`/calls/history?firmId=${answered.firmId}&include=summary`, salespersonToken)).status).toBe(404);
+    } finally {
+      await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.salesperson.userId]);
+    }
+  });
 });
