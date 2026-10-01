@@ -29,11 +29,11 @@ import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
  * | `malformed` | No text block, or text that is not JSON. |
  * | `schema_invalid` | JSON that does not satisfy the strict schema. |
  * | `excerpt_unverified` | A quote that is not in the message. A fabricated citation discredits the answer that rests on it, so the whole suggestion goes. |
- * | `provider_error` | The SDK threw. `attempt.provider.refused` says whether the API answered 4xx (not 408): refused before generation, settled at 0 and not retried. Any other throw (5xx, 408, a dropped connection) is ambiguous: estimated, one retry. |
+ * | `provider_refused` | The API answered 4xx (not 408): refused before generation, settled at 0 and not retried. Admitted by migration 0033. |
+ * | `provider_error` | The SDK threw anything else (5xx, 408, a dropped connection): ambiguous, estimated, one retry. |
  *
- * The call record keeps `provider_error` for both, because `mail_classification_calls_outcome_known`
- * is a CHECK constraint and this fix carries no migration; the difference travels on `attempt.provider`
- * (status, error type, a 400's leading parameter path; never its text) to the settlement and the log.
+ * The call record says which; what the API said travels on `attempt.provider` (status, error type,
+ * a 400's leading parameter path; never its text) to the settlement and the log.
  *
  * `excerpt_unverified` is the one that is a judgement rather than a mechanism, and
  * it is the conservative reading of the brief's "verbatim substring of the input,
@@ -129,13 +129,14 @@ export function anthropicReplyClassifier(options: AnthropicClassifierOptions): R
         // The SDK error itself is deliberately not carried. Its message can quote a
         // request body, and a request body is somebody's email; what is kept is the API's
         // own status, error type and at most a parameter path, never its text.
+        const provider = providerErrorOf(error);
         return {
           ok: false,
           usageReported: false,
-          provider: providerErrorOf(error),
+          provider,
           call: {
             ...base,
-            outcome: 'provider_error',
+            outcome: provider.refused ? 'provider_refused' : 'provider_error',
             inputTokens: 0,
             cachedInputTokens: 0,
             outputTokens: 0,

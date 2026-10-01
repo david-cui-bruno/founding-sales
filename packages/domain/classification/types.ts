@@ -110,6 +110,7 @@ export const CLASSIFIER_CALL_OUTCOMES = [
   'schema_invalid',
   'excerpt_unverified',
   'provider_error',
+  'provider_refused',
   'disabled',
   'capped',
   'not_applicable',

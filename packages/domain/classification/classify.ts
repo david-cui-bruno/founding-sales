@@ -69,7 +69,7 @@ export interface ClassifyReplyOutcome {
   /** True when this call was the one that wrote the model row. */
   readonly recorded: boolean;
   readonly call: ClassifierCallRecord | null;
-  /** For a `provider_error`: what the API said (status, type, bounded message), when it said anything. */
+  /** For a `provider_error` or `provider_refused`: what the API said (status, type, bounded message), when it said anything. */
   readonly provider?: ProviderErrorDetail | undefined;
 }
 
@@ -419,11 +419,10 @@ export async function finishClassification(
   const row = await readAttempt(context, { ...subjectOf(input.messageId), attempt: input.attempt });
   await recordClassifierCall(context, { messageId: input.messageId, call: attempt.call });
   const at = await databaseNow(context);
-  const failed = attempt.call.outcome === 'provider_error';
   // A 4xx other than 408 is the API refusing the request before generation: it billed
   // nothing and would refuse the next one the same way. Settled at 0, terminal.
-  const refused = failed && attempt.provider?.refused === true;
-  const ambiguous = failed && !refused;
+  const refused = attempt.call.outcome === 'provider_refused';
+  const ambiguous = attempt.call.outcome === 'provider_error';
   if (row !== null) {
     await settleAttempt(context, {
       reservationId: row.id,
