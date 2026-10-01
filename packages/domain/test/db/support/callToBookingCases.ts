@@ -13,12 +13,14 @@ import type { TwoWorkspaces } from './fixtures.ts';
  * cases they already had.
  */
 
-interface Fixture {
+export interface CallToBookingFixture {
   readonly session: SessionQueryable;
   readonly seeded: TwoWorkspaces;
   readonly crm: SeededCrm;
   readonly mail: SeededMail;
 }
+
+type Fixture = CallToBookingFixture;
 
 interface Case {
   readonly constraint: string;
@@ -222,7 +224,8 @@ async function sessionParts(f: Fixture): Promise<Row> {
   };
 }
 
-async function callSession(f: Fixture, overrides: Row = {}): Promise<string> {
+/** Exported for slice C2's cases (`callTranscriptsCases.ts`), which need a session to hang a transcript on. */
+export async function callSession(f: Fixture, overrides: Row = {}): Promise<string> {
   return await insert(f, 'call_sessions', { ...(await sessionParts(f)), ...overrides });
 }
 
