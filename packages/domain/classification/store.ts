@@ -215,6 +215,11 @@ export async function countCallsToday(context: RepositoryContext): Promise<numbe
 export interface PendingClassification {
   readonly workspaceId: string;
   readonly messageId: string;
+  /**
+   * Null for a reply never attempted; otherwise the turn-on (the settings write, as epoch
+   * milliseconds) that re-owes a reply its classifier held. Part of the job's key.
+   */
+  readonly resume: string | null;
 }
 
 /**
@@ -230,11 +235,18 @@ export async function listPendingModelClassifications(
   session: SessionQueryable,
   limit: number,
 ): Promise<readonly PendingClassification[]> {
-  const { rows } = await session.query<{ workspace_id: string; id: string }>(
-    `SELECT m.workspace_id, m.id
+  const { rows } = await session.query<{ workspace_id: string; id: string; resume: string | null }>(
+    `SELECT m.workspace_id, m.id,
+            CASE WHEN p.last_disabled_at IS NULL THEN NULL
+                 ELSE (extract(epoch FROM s.updated_at) * 1000)::bigint::text END AS resume
        FROM mail_messages m
        JOIN mail_message_classifications d
          ON d.workspace_id = m.workspace_id AND d.mail_message_id = m.id AND d.layer = 'deterministic'
+       LEFT JOIN classifier_settings s ON s.workspace_id = m.workspace_id
+       LEFT JOIN LATERAL (
+         SELECT max(c.called_at) AS last_disabled_at FROM mail_classification_calls c
+          WHERE c.workspace_id = m.workspace_id AND c.mail_message_id = m.id AND c.outcome = 'disabled'
+       ) p ON true
       WHERE m.direction = 'incoming'
         AND m.matched
         AND d.class = 'uncertain'
@@ -242,12 +254,26 @@ export async function listPendingModelClassifications(
           SELECT 1 FROM mail_message_classifications g
            WHERE g.workspace_id = m.workspace_id AND g.mail_message_id = m.id AND g.layer = 'model'
         )
+        -- Slice P1: a reply whose job ran while the classifier was off was held, not
+        -- answered. It is owed again once the switch is back on — the settings row written
+        -- after the last "disabled" attempt, and on now — as a new job keyed by that write,
+        -- so it runs once per turn-on and never while the switch stays off. Bounded to
+        -- replies of the last RESUME window: an old reply nobody looked at is not worth a
+        -- paid call because somebody changed a setting.
+        AND (
+          p.last_disabled_at IS NULL
+          OR (s.enabled AND s.updated_at > p.last_disabled_at
+              AND m.internal_date > now() - make_interval(days => $2::integer))
+        )
       ORDER BY m.internal_date, m.id
       LIMIT $1`,
-    [Math.max(1, Math.min(limit, 200))],
+    [Math.max(1, Math.min(limit, 200)), CLASSIFY_RESUME_DAYS],
   );
-  return rows.map(row => ({ workspaceId: row.workspace_id, messageId: row.id }));
+  return rows.map(row => ({ workspaceId: row.workspace_id, messageId: row.id, resume: row.resume }));
 }
+
+/** How far back a reply held by a turned-off classifier is classified once it is back on. */
+export const CLASSIFY_RESUME_DAYS = 7;
 
 export interface ProposedDisposition {
   readonly disposition: ReplyDisposition | null;

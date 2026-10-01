@@ -173,7 +173,9 @@ export const jobIdempotencyKey = Object.freeze({
     `send-day-close:${mailboxId}:${businessDate}`,
   retentionBatch: (dataKind: string, period: string): string => `retention:${dataKind}:${period}`,
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,
-  classifyReply: (messageId: string): string => `classify-reply:${messageId}`,
+  /** `resume` is the turn-on that re-owes a reply the classifier held while off (slice P1). */
+  classifyReply: (messageId: string, resume: string | null = null): string =>
+    resume === null ? `classify-reply:${messageId}` : `classify-reply:${messageId}:resume-${resume}`,
   /**
    * One look at one email route at one version. The round says which look:
    * `new` when the route is created, `sweep-<UTC hour or day>` for the scheduler's retry

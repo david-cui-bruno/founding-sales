@@ -133,7 +133,7 @@ export function classifyReplySource(limit: number = CLASSIFY_SWEEP_LIMIT): DueWo
       return pending.map(row => ({
         workspaceId: row.workspaceId,
         kind: 'classify.reply',
-        idempotencyKey: jobIdempotencyKey.classifyReply(row.messageId),
+        idempotencyKey: jobIdempotencyKey.classifyReply(row.messageId, row.resume),
         payload: { messageId: row.messageId },
         maxAttempts: 2,
       }));
