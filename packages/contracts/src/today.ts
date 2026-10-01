@@ -37,12 +37,28 @@ const todayCountsSchema = z.object({
   callsDue: z.number().int().min(0),
 });
 
+/**
+ * Why a card cannot be called yet, from the firm's own record (slice S2): no number to
+ * call, or no state and time zone (the calling window and the state posture both need
+ * them). Codes, never sentences, and never the values themselves: the list is cached on
+ * the Mac (5.3), and a code is not personal data. The dial check on the expanded card
+ * still has the last word; these are the two the person can fix from Today.
+ */
+export const TODAY_CARD_BLOCKERS = ['no_phone', 'no_location'] as const;
+export type TodayCardBlocker = (typeof TODAY_CARD_BLOCKERS)[number];
+
 export const todayCardDtoSchema = z.object({
   firmId: uuid,
   firmName,
   lane: z.enum(TODAY_LANES),
   dueAt: instant,
   counts: todayCountsSchema,
+  /**
+   * Slice S2. Optional, so a list from an API before it parses; an installed desktop
+   * (1.0.25 and before) parses the card with `z.object` and drops the key before its
+   * strict cache sees it.
+   */
+  blockers: z.array(z.enum(TODAY_CARD_BLOCKERS)).optional(),
 });
 export type TodayCardDto = z.infer<typeof todayCardDtoSchema>;
 
@@ -153,6 +169,18 @@ export const todayFirmResponseSchema = z.object({
    * the Macs it serves. Adding it is not a wire break.
    */
   brief: callBriefSchema.nullable().optional(),
+  /**
+   * The firm's editable basics (slice S2): what Today's Edit shows and changes. Optional,
+   * and only in card version 2, so an installed desktop never sees it.
+   */
+  basics: z
+    .object({
+      locality: z.string().max(120).nullable(),
+      regionCode: z.string().regex(/^[A-Z]{2}$/u).nullable(),
+      timeZone: ianaTimeZone.nullable(),
+      blockers: z.array(z.enum(TODAY_CARD_BLOCKERS)),
+    })
+    .optional(),
 });
 export type TodayFirmResponse = z.infer<typeof todayFirmResponseSchema>;
 
