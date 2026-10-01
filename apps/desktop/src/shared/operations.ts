@@ -7,6 +7,8 @@ import {
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
   firmMeetingDtoSchema,
+  firmBasicsIssueSchema,
+  TODAY_CARD_BLOCKERS,
   instant,
   meetingMatchedSchema,
   unmatchedMeetingDtoSchema,
@@ -136,6 +138,61 @@ const outcomeInput = z.strictObject({
     ])
     .nullable(),
 });
+
+/**
+ * A firm's calling basics as typed (slice S2, `POST /crm/firms/basics`). Absent leaves a
+ * field alone; null clears the locality or the state.
+ */
+const firmBasicsInput = z.strictObject({
+  firmId: uuid,
+  phone: z.strictObject({ number: z.string().min(1).max(40), replacesRouteId: uuid.optional() }).optional(),
+  locality: z.string().max(200).nullable().optional(),
+  regionCode: z.string().max(10).nullable().optional(),
+  timeZone: z.string().min(1).max(64).optional(),
+});
+
+/** What saving the basics came to: the saved values, or the refusal and its fields. */
+export const firmBasicsAnswerSchema = z.strictObject({
+  saved: z
+    .strictObject({
+      firmId: uuid,
+      routeId: uuid.nullable(),
+      locality: z.string().max(200).nullable(),
+      regionCode: z.string().max(10).nullable(),
+      timeZone: z.string().max(64).nullable(),
+      blockers: z.array(z.enum(TODAY_CARD_BLOCKERS)),
+    })
+    .nullable(),
+  reason: z.string().max(80).nullable(),
+  issues: z.array(firmBasicsIssueSchema),
+});
+export type FirmBasicsAnswer = z.infer<typeof firmBasicsAnswerSchema>;
+
+/**
+ * The outcomes the form offers for an incoming call: it was answered (migration 0034).
+ * `do_not_call` is one the server accepts too, but an incoming call names no number, so
+ * without "covers all contact" it would suppress nothing; the firm page's own stop
+ * controls are where that is decided, not a quick log.
+ */
+export const INCOMING_CALL_OUTCOMES = ['interested', 'callback_requested', 'not_interested', 'referral_or_wrong_person'] as const satisfies readonly (typeof CALL_OUTCOMES)[number][];
+
+/** "Log incoming call" (slice S2): a callback David took on his mobile. */
+const incomingCallInput = z.strictObject({
+  firmId: uuid,
+  contactId: uuid.nullable(),
+  /** When the call happened, as an instant: the form's local time on this Mac. */
+  occurredAt: instant,
+  durationSeconds: z.number().int().min(0).max(86_400).nullable(),
+  outcome: z.enum(INCOMING_CALL_OUTCOMES),
+  note: z.string().max(2000),
+});
+
+export const incomingCallAnswerSchema = z.strictObject({
+  logged: z.boolean(),
+  /** The refusal code, or a follow-up code the window says (a callback that needs a time). */
+  reason: z.string().max(80).nullable(),
+});
+export type IncomingCallAnswer = z.infer<typeof incomingCallAnswerSchema>;
 
 /** Send-path v2 (slice S3): which agreed sequence to preview, for whom, at the open firm. */
 const followUpPreviewInput = z.strictObject({ firmId: uuid, contactId: uuid, sequenceVersionId: uuid });
@@ -1252,6 +1309,24 @@ export const OPERATIONS = {
     input: z.strictObject({ meetingId: uuid, firmId: uuid }),
     output: z.strictObject({ matched: meetingMatchedSchema.nullable(), reason: z.string().max(80).nullable() }),
     transform: 'none: the match, or the refusal code the window turns into a sentence',
+  },
+
+  // --- Slice S2: the firm's calling basics, and an incoming call ----------------
+  // Straight through the authenticated client, like Meetings: each answers its own small
+  // shape, and the view that asked (Today, or the firm page) reads its own state again.
+  'firms.saveBasics': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/crm/firms/basics' }],
+    input: firmBasicsInput,
+    output: firmBasicsAnswerSchema,
+    transform: 'none: the saved basics and what still blocks a call, or the refusal code and every field at fault',
+  },
+  'calls.logIncoming': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/log' }],
+    input: incomingCallInput,
+    output: incomingCallAnswerSchema,
+    transform: 'direction inbound and nothing a placed call binds: no ticket, session, route or calling identity',
   },
 } as const satisfies Readonly<Record<string, Operation>>;
 

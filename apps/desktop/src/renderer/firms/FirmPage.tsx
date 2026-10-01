@@ -15,6 +15,7 @@ import { Row, RowActions, RowMain, Rows, Section, Tag } from '../ui/layout.tsx';
 import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
 import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
+import { BasicsEditor } from '../today/BasicsEditor.tsx';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -38,9 +39,21 @@ import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
  * worker checks every new address's domain — and "Check again" queues another.
  */
 
-function Identity({ page }: { readonly page: FirmPageResponse }): JSX.Element {
+function Identity({
+  page,
+  actionsEnabled,
+  onBasicsSaved,
+}: {
+  readonly page: FirmPageResponse;
+  readonly actionsEnabled: boolean;
+  onBasicsSaved(): void;
+}): JSX.Element {
   const firm = page.read.firm;
   const detail = page.visibility === 'assigned_or_admin' && page.read.visibility === 'assigned_or_admin' ? page.read.firm : null;
+  const [editing, setEditing] = useState(false);
+  // The number a new one replaces: the firm's own callable line, else its first callable one.
+  const callable = detail?.phoneRoutes.filter(route => route.eligibility === 'usable') ?? [];
+  const phone = callable.find(route => route.contactId === null) ?? callable[0] ?? null;
   const where = [firm.locality, firm.regionCode].filter(part => part !== null).join(', ');
   const rows: readonly (readonly [string, string])[] = [
     ['Website', firm.website ?? '—'],
@@ -66,6 +79,33 @@ function Identity({ page }: { readonly page: FirmPageResponse }): JSX.Element {
           </div>
         ))}
       </dl>
+      {/* Slice S2: the number, city, state and zone a call needs, the same form as Today's. */}
+      {detail === null ? null : editing ? (
+        <div className="callie-v2 mt-3 max-w-[560px]">
+          <BasicsEditor
+            firmId={firm.id}
+            values={{ locality: firm.locality, regionCode: firm.regionCode, timeZone: firm.timeZone }}
+            phone={phone === null ? null : { routeId: phone.id, e164: phone.value }}
+            enabled={actionsEnabled}
+            onSaved={() => {
+              setEditing(false);
+              onBasicsSaved();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="firm-edit-basics"
+          className="mt-3"
+          disabled={!actionsEnabled}
+          onClick={() => setEditing(true)}
+        >
+          Edit phone and location
+        </Button>
+      )}
     </section>
   );
 }
@@ -704,6 +744,7 @@ export function FirmPage({
   heldOutgoing = [],
   notice = null,
   onResolveOutgoing = () => undefined,
+  onBasicsSaved = () => undefined,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -721,6 +762,8 @@ export function FirmPage({
   /** The window's notice, shown under the held messages when it is about one of them. */
   readonly notice?: string | null;
   onResolveOutgoing?(request: ResolveOutgoingRequest): void;
+  /** The basics were saved (slice S2): read the page again. */
+  onBasicsSaved?(): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -728,7 +771,7 @@ export function FirmPage({
   const detail = page.visibility === 'assigned_or_admin' && page.read.visibility === 'assigned_or_admin' ? page.read.firm : null;
   return (
     <>
-      <Identity page={page} />
+      <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} />
       {page.visibility !== 'assigned_or_admin' || detail === null ? (
         <p data-testid="firm-redacted" className="mt-6 text-sm text-muted-foreground">
           {redactionNotice ?? ''}

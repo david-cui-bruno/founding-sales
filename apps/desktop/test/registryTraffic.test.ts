@@ -166,6 +166,15 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'settings.revokePosture': { postureId: UUID },
   'meetings.forFirm': { firmId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
+  'firms.saveBasics': { firmId: UUID, regionCode: 'TX' },
+  'calls.logIncoming': {
+    firmId: UUID,
+    contactId: null,
+    occurredAt: '2026-10-01T14:00:00.000Z',
+    durationSeconds: 120,
+    outcome: 'interested',
+    note: '',
+  },
   'diagnostics.requeueJob': { jobId: UUID, reason: 'the mailbox was reconnected' },
   'diagnostics.resolveSend': { outboundMessageId: UUID, resolution: 'delivered' },
 });
@@ -263,6 +272,14 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         forFirm: async input => await handlers['meetings.forFirm'](input as never),
         unmatched: async () => await handlers['meetings.unmatched'](undefined as never),
         match: async input => await handlers['meetings.match'](input as never),
+      };
+    })(),
+    // Slice S2: answered by `operationHost.ts` against the client directly, like Meetings.
+    ...(() => {
+      const handlers = operationHandlers({ api } as unknown as OperationHostDeps);
+      return {
+        firms: { saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never) },
+        calls: { logIncoming: async (input: unknown) => await handlers['calls.logIncoming'](input as never) },
       };
     })(),
     mailbox: createMailboxBridge({

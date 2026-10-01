@@ -124,6 +124,12 @@ export interface AppServerOptions {
   readonly updateFound?: string;
   /** Bridges the page is built without, as a page without the preload would be. */
   readonly without?: readonly Optional[];
+  /**
+   * Answers for operations no fixture above scripts, by full name (`calling.status`,
+   * `firms.saveBasics`, `calls.logIncoming`): slice S2's Today specs. Absent, such an
+   * operation fails as it always has, which the older specs rely on.
+   */
+  readonly operations?: Readonly<Record<string, (argument: unknown, calls: readonly Call[]) => unknown>>;
 }
 
 export interface AppServer {
@@ -295,6 +301,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   const answer = (method: string, argument: unknown): unknown => {
     const [bridge = '', name = ''] = method.split('.');
     const mine = of(bridge);
+    const scripted = options.operations?.[method];
+    if (scripted !== undefined) return scripted(argument, calls);
     if (bridge === 'callie') {
       if (name === 'signIn') desktop = options.signInAnswer ?? signedInState();
       if (name === 'signOut') desktop = options.signOutAnswer ?? signedOutState({ notice: 'signed_out' });
