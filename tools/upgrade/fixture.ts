@@ -8,7 +8,7 @@ import { confirmReplyDisposition } from '@fss/domain/classification/confirmation
 import { updateClassifierSettings } from '@fss/domain/classification/settings.ts';
 import { recordClassifierCall, recordModelClassification } from '@fss/domain/classification/store.ts';
 import { addFirm, commitImportRow, previewCsvImport } from '@fss/domain/crm/import.ts';
-import { changeStage, openOpportunity } from '@fss/domain/crm/pipeline.ts';
+import { changeStage, listPipelineStages, openOpportunity } from '@fss/domain/crm/pipeline.ts';
 import { listRoutes, verifyRoute } from '@fss/domain/crm/routes.ts';
 import { createCallback, resolveConfirmedInstant } from '@fss/domain/dial/callbacks.ts';
 import { logCallOutcome } from '@fss/domain/dial/calls.ts';
@@ -826,10 +826,15 @@ function opportunitiesPart(asSalesperson: () => RepositoryContext, state: State)
     fills: ['sequence_event_cursors'],
     run: async () => {
       if (state.primaryFirmId === '') return 'the firms part did not run';
-      // Seven firms get an opportunity: five stay open on five different stages, one is
-      // closed Lost with a reason, and the deletable firm keeps one so the deletion
-      // workflow has business history to stop.
-      const stages = ['contacting', 'engaged', 'qualified', 'proposal'];
+      // Seven firms get an opportunity: the open ones spread over every open stage this
+      // schema has, one is closed Lost with a reason, and the deletable firm keeps one so
+      // the deletion workflow has business history to stop. The stages are read, not named:
+      // 0028 replaced contacting/engaged/proposal, and a fixture naming them could not load
+      // at schema 28, which made every 28 → N upgrade test fail at this part.
+      const stages = (await listPipelineStages(asSalesperson()))
+        .filter(stage => stage.terminal_kind === null && stage.retired !== true && stage.key !== 'new')
+        .map(stage => stage.key)
+        .slice(0, 4);
       const firms = [...state.firmIds.slice(0, 6), state.deletableFirmId];
       const opened: string[] = [];
       for (const firmId of firms) {
