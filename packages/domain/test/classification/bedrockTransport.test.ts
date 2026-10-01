@@ -12,6 +12,7 @@ import {
   BEDROCK_MODEL_TABLE,
   MODEL_TRANSPORT_VARIABLE,
   UnmappedBedrockModelError,
+  bedrockModelRoute,
   modelProviderKey,
   readModelTransport,
   transportOfProviderKey,
@@ -86,6 +87,20 @@ function opusRequest(): ClassifierRequest {
   return buildClassifierRequest({ model: 'claude-opus-5', effort: 'low', maxOutputTokens: 512, message: MESSAGE });
 }
 
+function haikuRequest(): ClassifierRequest {
+  return buildClassifierRequest({ model: 'claude-haiku-4-5', effort: 'low', maxOutputTokens: 512, message: MESSAGE });
+}
+
+/**
+ * A test-only table that maps Opus 5 — which the production table does not, because this
+ * account cannot call it — so the degradations that only a fallback model or an uncounted
+ * model exercises stay tested for the day such a model is mapped.
+ */
+const TEST_TABLE = {
+  ...BEDROCK_MODEL_TABLE,
+  'claude-opus-5': { inferenceProfileId: 'us.anthropic.claude-opus-5', foundationModelId: 'anthropic.claude-opus-5', countTokens: false, inputCentsPerMillion: 550, outputCentsPerMillion: 2_750 },
+};
+
 describe('FSS_MODEL_TRANSPORT selects the transport, and nothing else does', () => {
   it('is the direct API when unset or anthropic, Bedrock when bedrock, and a named problem otherwise', () => {
     expect(readModelTransport({})).toEqual({ kind: 'anthropic', problem: null });
@@ -97,15 +112,20 @@ describe('FSS_MODEL_TRANSPORT selects the transport, and nothing else does', () 
 });
 
 describe('the one model table', () => {
-  it('maps every model a classifier, summary or research request may name to a US inference profile', () => {
+  it('maps only the models this account can call (Haiku 4.5), and routes every other model a builder may send to the direct API', () => {
+    expect(Object.keys(BEDROCK_MODEL_TABLE).sort()).toEqual(['claude-haiku-4-5', 'claude-haiku-4-5-20251001']);
+    const route = bedrockModelRoute({ directAvailable: true });
     const models = new Set<string>([...CLASSIFIER_MODELS, ...CALL_SUMMARY_MODELS, ...Object.keys(PRICE_CENTS_PER_MILLION)]);
     for (const model of models) {
       const row = BEDROCK_MODEL_TABLE[model];
-      expect(row, model).toBeDefined();
-      expect(row?.inferenceProfileId.startsWith('us.anthropic.'), model).toBe(true);
-      // The profile is the foundation model behind a `us.` prefix.
-      expect(row?.inferenceProfileId, model).toBe(`us.${row?.foundationModelId ?? ''}`);
+      expect(route(model), model).toBe(row === undefined ? 'anthropic' : 'bedrock');
+      if (row !== undefined) expect(row.inferenceProfileId, model).toBe(`us.${row.foundationModelId}`);
     }
+    // The production classifier default stays on its current path.
+    expect(route('claude-opus-5')).toBe('anthropic');
+    // With no key, an unmapped model has no route at all, and a mapped one is unaffected.
+    expect(bedrockModelRoute({ directAvailable: false })('claude-opus-5')).toBeNull();
+    expect(bedrockModelRoute({ directAvailable: false })('claude-haiku-4-5')).toBe('bedrock');
   });
 
   it('names the profiles listed in us-east-1 and the Price List rates read on 1 October 2026', () => {
@@ -117,8 +137,6 @@ describe('the one model table', () => {
       outputCentsPerMillion: 550,
     });
     expect(BEDROCK_MODEL_TABLE['claude-haiku-4-5']).toBe(BEDROCK_MODEL_TABLE['claude-haiku-4-5-20251001']);
-    expect(BEDROCK_MODEL_TABLE['claude-opus-5']).toMatchObject({ inferenceProfileId: 'us.anthropic.claude-opus-5', countTokens: false, inputCentsPerMillion: 550, outputCentsPerMillion: 2_750 });
-    expect(BEDROCK_MODEL_TABLE['claude-sonnet-5-5']).toMatchObject({ inferenceProfileId: 'us.anthropic.claude-sonnet-5-5', countTokens: false, inputCentsPerMillion: 220, outputCentsPerMillion: 1_100 });
   });
 
   it('prices nothing it cannot map', () => {
@@ -146,7 +164,7 @@ describe('the request Bedrock is sent', () => {
     // The control: the direct API's request for Opus 5 carries both.
     expect(request.betas).toEqual([SERVER_SIDE_FALLBACK_BETA]);
     expect(request.fallbacks).toBe('default');
-    const body = JSON.parse(bedrockRequestOf(request).body) as Record<string, unknown>;
+    const body = JSON.parse(bedrockRequestOf(request, TEST_TABLE).body) as Record<string, unknown>;
     expect(body).not.toHaveProperty('fallbacks');
     expect(body).not.toHaveProperty('betas');
     expect(body).not.toHaveProperty('anthropic_beta');
@@ -156,26 +174,26 @@ describe('the request Bedrock is sent', () => {
 
   it('passes any other beta flag on as anthropic_beta', () => {
     const request = { ...opusRequest(), betas: [SERVER_SIDE_FALLBACK_BETA, 'some-other-beta-2026-01-01'] };
-    expect(JSON.parse(bedrockRequestOf(request).body)).toMatchObject({ anthropic_beta: ['some-other-beta-2026-01-01'] });
+    expect(JSON.parse(bedrockRequestOf(request, TEST_TABLE).body)).toMatchObject({ anthropic_beta: ['some-other-beta-2026-01-01'] });
   });
 
-  it('degrades the summary request for Sonnet 5.5 the same way', () => {
-    const request = buildCallSummaryRequest({
-      model: 'claude-sonnet-5-5',
-      maxOutputTokens: 4_000,
+  it('degrades a summary request carrying fallbacks the same way', () => {
+    const built = buildCallSummaryRequest({
+      model: 'claude-haiku-4-5-20251001',
+      maxOutputTokens: 1_500,
       call: { firmName: 'Northgate', contactName: null, utterances: [{ speaker: 0, start: 0, end: 1, text: 'Hello.' }] },
     });
-    expect(request.fallbacks).toBe('default');
+    const request = { ...built, betas: [SERVER_SIDE_FALLBACK_BETA], fallbacks: 'default' as const };
     const body = JSON.parse(bedrockRequestOf(request).body) as Record<string, unknown>;
     expect(body).not.toHaveProperty('fallbacks');
     expect(body).not.toHaveProperty('betas');
     expect(body['output_config']).toEqual(request.output_config);
   });
 
-  it('refuses a model with no row before any request, as a refusal the paid-call pattern settles at zero', async () => {
+  it('refuses a model with no row (Opus 5 included) before any request, as a refusal the paid-call pattern settles at zero', async () => {
     const fake = fakeSurface({});
     const transport = bedrockTransport(fake.surface);
-    const request = { ...opusRequest(), model: 'claude-unknown-9' };
+    const request = opusRequest();
     const thrown = await transport.create(request).catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(BedrockTransportError);
     expect(providerErrorOf(thrown)).toEqual({ status: 400, type: 'model_unmapped', parameter: null, refused: true });
@@ -225,12 +243,23 @@ describe('the transport', () => {
       [awsError('ModelTimeoutException', 408), { status: 408, type: 'ModelTimeoutException', parameter: null, refused: false }],
       [awsError('InternalServerException', 500), { status: 500, type: 'InternalServerException', parameter: null, refused: false }],
       [awsError('ServiceUnavailableException', 503), { status: 503, type: 'ServiceUnavailableException', parameter: null, refused: false }],
+      // By name, not status (review BR1R, finding 2): a 424 is a failure while the model ran.
+      [
+        Object.assign(awsError('ModelErrorException', 424), { originalStatusCode: 500 }),
+        { status: 424, type: 'ModelErrorException', parameter: null, refused: false },
+      ],
+      [awsError('ModelStreamErrorException', 424), { status: 424, type: 'ModelStreamErrorException', parameter: null, refused: false }],
+      [awsError('ResourceNotFoundException', 404), { status: 404, type: 'ResourceNotFoundException', parameter: null, refused: true }],
+      [awsError('ServiceQuotaExceededException', 400), { status: 400, type: 'ServiceQuotaExceededException', parameter: null, refused: true }],
+      // An unknown name falls back to the status rule.
+      [awsError('SomeNewException', 409), { status: 409, type: 'SomeNewException', parameter: null, refused: true }],
+      [awsError('SomeNewException', 502), { status: 502, type: 'SomeNewException', parameter: null, refused: false }],
       [Object.assign(new Error('socket hang up'), { name: 'Error' }), { status: null, type: null, parameter: null, refused: false }],
       [Object.assign(new Error('timed out'), { name: 'TimeoutError', $metadata: {} }), { status: null, type: null, parameter: null, refused: false }],
     ];
     for (const [thrown, expected] of cases) {
       const fake = fakeSurface({ invoke: async () => await Promise.reject(thrown) });
-      const caught = await bedrockTransport(fake.surface).create(opusRequest()).catch((error: unknown) => error);
+      const caught = await bedrockTransport(fake.surface).create(haikuRequest()).catch((error: unknown) => error);
       expect(caught).toBeInstanceOf(BedrockTransportError);
       expect(providerErrorOf(caught), String((thrown as Error).name)).toEqual(expected);
     }
@@ -240,7 +269,7 @@ describe('the transport', () => {
     const canary = 'Tuesday works. Send an invite.';
     for (const [name, status] of [['InternalServerException', 500], ['ValidationException', 400], ['AccessDeniedException', 403]] as const) {
       const fake = fakeSurface({ invoke: async () => await Promise.reject(awsError(name, status, `boom near "${canary}"`)) });
-      const caught = await bedrockTransport(fake.surface).create(opusRequest()).catch((error: unknown) => error);
+      const caught = await bedrockTransport(fake.surface).create(haikuRequest()).catch((error: unknown) => error);
       expect((caught as Error).message).not.toContain(canary);
       // Only a 400 invalid_request_error keeps its message, for the leading parameter path, and
       // providerErrorOf keeps nothing of it here because it does not start with one.
@@ -251,7 +280,7 @@ describe('the transport', () => {
 
   it('reads a 200 whose body is not JSON as ambiguous, never as an answer', async () => {
     const fake = fakeSurface({ invoke: async () => await Promise.resolve(new TextEncoder().encode('<html>')) });
-    const caught = await bedrockTransport(fake.surface).create(opusRequest()).catch((error: unknown) => error);
+    const caught = await bedrockTransport(fake.surface).create(haikuRequest()).catch((error: unknown) => error);
     expect(providerErrorOf(caught)).toEqual({ status: null, type: null, parameter: null, refused: false });
   });
 });
@@ -279,8 +308,8 @@ describe('token counting', () => {
   it('substitutes the body byte length, an upper bound, for a model Bedrock cannot count, and calls nothing', async () => {
     const fake = fakeSurface({});
     const request = opusRequest();
-    const counted = await bedrockTransport(fake.surface).countTokens(request);
-    expect(counted).toBe(Buffer.byteLength(bedrockRequestOf(request).body, 'utf8'));
+    const counted = await bedrockTransport(fake.surface, TEST_TABLE).countTokens(request);
+    expect(counted).toBe(Buffer.byteLength(bedrockRequestOf(request, TEST_TABLE).body, 'utf8'));
     expect(fake.counted).toEqual([]);
     // Larger than any tokenizer's count of the same body: at least one byte per token.
     expect(counted).toBeGreaterThan(JSON.stringify(request.messages).length);
@@ -310,10 +339,11 @@ describe('who pays, and at what price', () => {
     const usage = { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 };
     expect(classifierCallCents('claude-haiku-4-5', usage)).toBe(600);
     expect(classifierCallCents('claude-haiku-4-5', usage, 'bedrock')).toBe(660);
-    expect(classifierCallCents('claude-opus-5', usage, 'bedrock')).toBe(3_300);
+    // A model with no row cannot be priced on Bedrock (and is never routed there).
+    expect(() => classifierCallCents('claude-opus-5', usage, 'bedrock')).toThrow(UnmappedBedrockModelError);
     expect(callSummaryCents('claude-haiku-4-5-20251001', usage)).toBe(600);
     expect(callSummaryCents('claude-haiku-4-5-20251001', usage, 'bedrock')).toBe(660);
-    expect(callSummaryCents('claude-sonnet-5-5', usage, 'bedrock')).toBe(1_320);
+    expect(() => callSummaryCents('claude-sonnet-5-5', usage, 'bedrock')).toThrow(UnmappedBedrockModelError);
     // Research, with its cache multipliers.
     expect(centsOf('claude-haiku-4-5', { inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 1_000_000, cacheReadTokens: 1_000_000 }, 'bedrock')).toBe(
       Math.ceil(110 + 110 * 1.25 + 110 * 0.1),

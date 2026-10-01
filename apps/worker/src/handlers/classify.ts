@@ -7,7 +7,8 @@ import {
 } from '@fss/domain/classification/anthropicClient.ts';
 import { loadBedrockTransport } from '@fss/domain/classification/bedrockClient.ts';
 import { classifyReplyHandler, type ClassifyHandlerOptions } from '@fss/domain/classification/handler.ts';
-import { MODEL_TRANSPORT_VARIABLE, readModelTransport } from '@fss/domain/classification/modelTransport.ts';
+import { MODEL_TRANSPORT_VARIABLE, bedrockModelRoute, readModelTransport } from '@fss/domain/classification/modelTransport.ts';
+import { routeOfTransport, routedTransport } from '@fss/domain/classification/routedTransport.ts';
 import { listPendingModelClassifications } from '@fss/domain/classification/store.ts';
 import type { ClassifierSettings } from '@fss/domain/classification/types.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -74,7 +75,7 @@ export function classifyHandlers(options: ClassifyWorkerOptions | undefined): re
     });
   return [
     classifyReplyHandler(
-      { classifierFor, processEnabled: options.processEnabled, transport: options.transport.kind ?? 'anthropic' },
+      { classifierFor, processEnabled: options.processEnabled, route: routeOfTransport(options.transport) },
       {
         ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
         ...(options.leaseSeconds === undefined ? {} : { leaseSeconds: options.leaseSeconds }),
@@ -96,18 +97,34 @@ const LIVE_LOADERS: TransportLoaders = { anthropic: loadAnthropicTransport, bedr
  * Which model transport this deployment builds, or why none (slice BR1).
  *
  * `FSS_MODEL_TRANSPORT=bedrock` builds the Bedrock transport from `AWS_REGION` and the task
- * role, and needs no key; the classifier key is not read at all, so a deployment that holds
- * one cannot fall back to the direct API. Unset or `anthropic` is the direct API, and needs
- * the key, as before. Any other value builds nothing.
+ * role, and routes by model (review BR1R, finding 1): a model Bedrock can serve for this
+ * account (`BEDROCK_MODEL_TABLE`) goes to Bedrock, any other to the direct API with the
+ * classifier key when the deployment holds one — the path it had before, cash — and with no
+ * key it has no route. The route is per model and fixed, never a fallback after a failure.
+ * Unset or `anthropic` is the direct API for every model, and needs the key, as before. Any
+ * other value builds nothing.
  */
 export async function readModelTransportComposition(
   environment: Readonly<Record<string, string | undefined>>,
   loaders: TransportLoaders = LIVE_LOADERS,
+  log?: ClassifyHandlerOptions['log'],
 ): Promise<{ readonly transport: AnthropicMessagesTransport | null; readonly problem: string | null }> {
   const problem = modelTransportProblem(environment);
   if (problem !== null) return { transport: null, problem };
   if (readModelTransport(environment).kind === 'bedrock') {
-    return { transport: await loaders.bedrock({ region: (environment['AWS_REGION'] ?? '').trim() }), problem: null };
+    const secrets = environmentClassifierSecrets(environment);
+    const anthropic = secrets.names().length === 0 ? null : await loaders.anthropic({ secrets });
+    const bedrock = await loaders.bedrock({ region: (environment['AWS_REGION'] ?? '').trim() });
+    return {
+      transport: routedTransport({
+        route: bedrockModelRoute({ directAvailable: anthropic !== null }),
+        bedrock,
+        anthropic,
+        // The model id and the transport, nothing else.
+        onRoute: (model, transport) => log?.('model_route', { model: model.slice(0, 64), transport }),
+      }),
+      problem: null,
+    };
   }
   return { transport: await loaders.anthropic({ secrets: environmentClassifierSecrets(environment) }), problem: null };
 }
@@ -138,7 +155,7 @@ export async function classifyWorkerOptions(
   log?: ClassifyHandlerOptions['log'],
   loaders: TransportLoaders = LIVE_LOADERS,
 ): Promise<ClassifyWorkerOptions | undefined> {
-  const composed = await readModelTransportComposition(environment, loaders);
+  const composed = await readModelTransportComposition(environment, loaders, log);
   if (composed.transport === null) return undefined;
   return {
     transport: composed.transport,

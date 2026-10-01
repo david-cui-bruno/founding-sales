@@ -13,6 +13,7 @@ import {
   type TransportLoaders,
 } from '../src/handlers/classify.ts';
 import { readCallSummaryComposition } from '../src/handlers/callSummarize.ts';
+import { routeOfTransport } from '@fss/domain/classification/routedTransport.ts';
 import { composeResearch } from '../src/bootstrap/main.ts';
 import { anthropicExtraction } from '../src/research/anthropicExtraction.ts';
 
@@ -88,25 +89,49 @@ describe('the worker builds the transport FSS_MODEL_TRANSPORT names, and only th
   // A generated value: nothing in this repository is a credential.
   const key = randomBytes(24).toString('base64url');
 
-  it('builds Bedrock from AWS_REGION with no key, and never loads the direct API even when a key is present', async () => {
+  it('routes by model under bedrock: a mapped model to Bedrock, an unmapped one to the direct API with the key, nowhere without it', async () => {
     const direct = directCanary();
+    const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
     const recording = recordingLoaders({ anthropic: direct.transport, bedrock: failingBedrock() });
     const options = await classifyWorkerOptions(
       { FSS_MODEL_TRANSPORT: 'bedrock', AWS_REGION: 'us-east-1', FSS_LLM_CLASSIFIER_API_KEY: key },
-      undefined,
+      (event, fields) => logs.push({ event, fields }),
       recording.loaders,
     );
-    expect(recording.asked).toEqual(['bedrock']);
+    if (options === undefined) throw new Error('no options');
+    expect(recording.asked.sort()).toEqual(['anthropic', 'bedrock']);
     expect(recording.regions).toEqual(['us-east-1']);
-    expect(options?.transport.kind).toBe('bedrock');
+    const route = routeOfTransport(options.transport);
+    expect(route('claude-haiku-4-5')).toBe('bedrock');
+    expect(route('claude-haiku-4-5-20251001')).toBe('bedrock');
+    // The production classifier default, which this account cannot call on Bedrock: its path is unchanged.
+    expect(route('claude-opus-5')).toBe('anthropic');
+    expect(route('claude-sonnet-5-5')).toBe('anthropic');
     expect(describeClassifier(options)).toEqual({ classifier_configured: true, classifier_enabled: true, model_transport: 'bedrock' });
     expect(JSON.stringify(describeClassifier(options))).not.toContain(key);
 
+    // An Opus 5 request reaches the direct client; a Haiku request reaches Bedrock and not it.
+    await anthropicReplyClassifier({ transport: options.transport, model: 'claude-opus-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
+    expect(direct.requests()).toBe(1);
+    const haiku = await anthropicReplyClassifier({ transport: options.transport, model: 'claude-haiku-4-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
+    expect(haiku.provider).toMatchObject({ status: 503, type: 'ServiceUnavailableException' });
+    expect(direct.requests()).toBe(1);
+    // Each route is logged as the model id and the transport, nothing else.
+    expect(logs.filter(entry => entry.event === 'model_route').map(entry => entry.fields)).toEqual([
+      { model: 'claude-opus-5', transport: 'anthropic' },
+      { model: 'claude-haiku-4-5', transport: 'bedrock' },
+    ]);
+
     const keyless = await classifyWorkerOptions({ FSS_MODEL_TRANSPORT: 'bedrock', AWS_REGION: 'us-east-1' }, undefined, recording.loaders);
-    expect(keyless?.transport.kind).toBe('bedrock');
+    if (keyless === undefined) throw new Error('no options');
+    expect(routeOfTransport(keyless.transport)('claude-haiku-4-5')).toBe('bedrock');
+    expect(routeOfTransport(keyless.transport)('claude-opus-5')).toBeNull();
+    const unrouted = await anthropicReplyClassifier({ transport: keyless.transport, model: 'claude-opus-5', effort: 'low', maxOutputTokens: 512 }).classify(MESSAGE);
+    expect(unrouted.provider).toMatchObject({ refused: true, type: 'model_unrouted' });
+    expect(direct.requests()).toBe(1);
   });
 
-  it('has no automatic fallback: a Bedrock failure is the paid-call pattern’s ambiguous failure, and the direct API is never asked', async () => {
+  it('has no automatic fallback: a Bedrock failure is the paid-call pattern’s ambiguous failure, and the direct API is never asked for that model', async () => {
     const direct = directCanary();
     const recording = recordingLoaders({ anthropic: direct.transport, bedrock: failingBedrock() });
     const options = await classifyWorkerOptions(
@@ -123,7 +148,6 @@ describe('the worker builds the transport FSS_MODEL_TRANSPORT names, and only th
     // The research count fails too, and is not answered by anybody else.
     await expect(options.transport.countTokens({ ...MESSAGE_REQUEST })).rejects.toThrow();
     expect(direct.requests()).toBe(0);
-    expect(recording.asked).toEqual(['bedrock']);
   });
 
   it('builds the direct API from the key when unset or anthropic, as before', async () => {
@@ -159,9 +183,16 @@ describe('the transport decides the key and the price of every model call the wo
   const bedrock = bedrockTransport({ invokeModel: async () => await Promise.resolve(new Uint8Array()), countTokens: async () => await Promise.resolve(1) });
   const classifier = { transport: bedrock, processEnabled: true } as const;
 
-  it('hands the summary composition the transport kind', () => {
-    expect(readCallSummaryComposition(classifier, {}).options?.transport).toBe('bedrock');
-    expect(readCallSummaryComposition({ transport: directCanary().transport, processEnabled: true }, {}).options?.transport).toBe('anthropic');
+  it('hands the summary composition the transport’s route', () => {
+    expect(readCallSummaryComposition(classifier, {}).options?.route?.('claude-haiku-4-5-20251001')).toBe('bedrock');
+    expect(readCallSummaryComposition({ transport: directCanary().transport, processEnabled: true }, {}).options?.route?.('claude-haiku-4-5-20251001')).toBe('anthropic');
+  });
+
+  it('refuses, before sending, a research request whose model is not routed like the port', async () => {
+    const extraction = anthropicExtraction({ transport: bedrock });
+    const request = { sources: [{ sourceReference: 'https://northgate.example.test/', blocks: [{ id: 'b1', text: 'We manage 40 buildings.' }] }], firmName: 'Northgate', modelName: 'claude-opus-5', maxOutputTokens: 600 };
+    expect(await extraction.extract(request)).toEqual({ ok: false, failureCode: 'provider_refused', costCents: 0 });
+    await expect(extraction.countInputTokens(request)).rejects.toThrow();
   });
 
   it('files research extraction under aws_bedrock.extraction and prices it at the Bedrock rate', async () => {

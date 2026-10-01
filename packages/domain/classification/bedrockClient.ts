@@ -1,5 +1,5 @@
 import type { AnthropicMessageResponse, AnthropicMessagesTransport } from './anthropicClient.ts';
-import { bedrockModelOf } from './modelTransport.ts';
+import { BEDROCK_MODEL_TABLE, type BedrockModel } from './modelTransport.ts';
 import type { ClassifierRequest } from './prompt.ts';
 import { SERVER_SIDE_FALLBACK_BETA } from './types.ts';
 
@@ -34,14 +34,25 @@ import { SERVER_SIDE_FALLBACK_BETA } from './types.ts';
  *
  * ## Errors
  *
- * Thrown in the shape `providerError.ts` reads — `status` and `error.error.type` — and never
- * carrying the request: an AWS `ValidationException` (400) is reported as the Messages API's
- * `invalid_request_error`, which is what its message is (Bedrock forwards the API's own
- * "output_config.effort: Extra inputs are not permitted"), so a 400's leading parameter path
- * reaches the log as it does on the direct API. Every other AWS error keeps its own name as
- * the type. A 4xx other than 408 is a refusal before generation (settled at 0, not retried),
- * anything else — a 5xx, Bedrock's 408 `ModelTimeoutException`, a dropped connection, a
- * timeout, an unreadable 200 — is ambiguous and estimated, exactly as on the direct API.
+ * Thrown in the shape `providerError.ts` reads — `status`, `error.error.type` and
+ * `refusedBeforeGeneration` — and never carrying the request: an AWS `ValidationException`
+ * (400) is reported as the Messages API's `invalid_request_error`, which is what its message
+ * is (Bedrock forwards the API's own "output_config.effort: Extra inputs are not permitted"),
+ * so a 400's leading parameter path reaches the log as it does on the direct API. Every other
+ * AWS error keeps its own name as the type.
+ *
+ * Refused or ambiguous is decided by the exception's **name**, not only its status, because
+ * Bedrock's statuses do not mean what the direct API's do (review BR1R, finding 2):
+ *
+ *   * refused before generation (settled at 0, not retried): `ValidationException` (400),
+ *     `AccessDeniedException` (403), `ResourceNotFoundException` (404), and — mirroring the
+ *     direct API, where a 429 is a 4xx and so refused — `ThrottlingException` and
+ *     `ServiceQuotaExceededException`;
+ *   * ambiguous (estimated, one bounded retry): `ModelErrorException` (424, a failure while the
+ *     model ran, possibly billed), `ModelTimeoutException` (408), `ModelStreamErrorException`,
+ *     `InternalServerException` (500), `ServiceUnavailableException` (503);
+ *   * any other name falls back to the status rule; no status at all (a dropped connection, a
+ *     client timeout, an unreadable 200) is ambiguous.
  *
  * ## Retries
  *
@@ -68,11 +79,19 @@ export interface BedrockRuntimeSurface {
 export class BedrockTransportError extends Error {
   readonly status: number | null;
   readonly error: { readonly error: { readonly type: string | null; readonly message?: string | undefined } };
-  constructor(input: { readonly status: number | null; readonly type: string | null; readonly message?: string | undefined }) {
+  /** Present when the exception's name decided it; `providerErrorOf` prefers it to the status rule. */
+  readonly refusedBeforeGeneration?: boolean;
+  constructor(input: {
+    readonly status: number | null;
+    readonly type: string | null;
+    readonly message?: string | undefined;
+    readonly refusedBeforeGeneration?: boolean | undefined;
+  }) {
     super(`bedrock request failed${input.status === null ? '' : ` (${String(input.status)})`}`);
     this.name = 'BedrockTransportError';
     this.status = input.status;
     this.error = { error: { type: input.type, ...(input.message === undefined ? {} : { message: input.message }) } };
+    if (input.refusedBeforeGeneration !== undefined) this.refusedBeforeGeneration = input.refusedBeforeGeneration;
   }
 }
 
@@ -80,6 +99,25 @@ export class BedrockTransportError extends Error {
 const AWS_TO_MESSAGES_TYPE: Readonly<Record<string, string>> = Object.freeze({
   ValidationException: 'invalid_request_error',
 });
+
+/** Refused before any generation: nothing billed, and the same request would be refused again. */
+export const BEDROCK_REFUSED_EXCEPTIONS: ReadonlySet<string> = new Set([
+  'ValidationException',
+  'AccessDeniedException',
+  'ResourceNotFoundException',
+  // The direct API's 429 is refused (`isRefusedBeforeGeneration`); Bedrock's throttles mirror it.
+  'ThrottlingException',
+  'ServiceQuotaExceededException',
+]);
+
+/** Failed while, or possibly after, the model ran: may have been billed, so estimated and retried once. */
+export const BEDROCK_AMBIGUOUS_EXCEPTIONS: ReadonlySet<string> = new Set([
+  'ModelErrorException',
+  'ModelTimeoutException',
+  'ModelStreamErrorException',
+  'InternalServerException',
+  'ServiceUnavailableException',
+]);
 
 /** An AWS SDK throw, as a `BedrockTransportError`. Nothing but status, name and (for a 400) its message. */
 export function bedrockErrorOf(error: unknown): BedrockTransportError {
@@ -95,7 +133,9 @@ export function bedrockErrorOf(error: unknown): BedrockTransportError {
   // The message travels only where `providerErrorOf` reads a parameter path out of it, a 400
   // `invalid_request_error`; it reads the path and nothing after its colon.
   const message = status === 400 && type === 'invalid_request_error' && typeof record.message === 'string' ? record.message : undefined;
-  return new BedrockTransportError({ status, type, message });
+  const refusedBeforeGeneration =
+    name === null ? undefined : BEDROCK_REFUSED_EXCEPTIONS.has(name) ? true : BEDROCK_AMBIGUOUS_EXCEPTIONS.has(name) ? false : undefined;
+  return new BedrockTransportError({ status, type, message, refusedBeforeGeneration });
 }
 
 /**
@@ -104,13 +144,16 @@ export function bedrockErrorOf(error: unknown): BedrockTransportError {
  * Throws `BedrockTransportError` (400, `model_unmapped`) for a model with no row in the
  * table: refused here, before any request, as the service would refuse an unknown id.
  */
-export function bedrockRequestOf(request: ClassifierRequest): {
+export function bedrockRequestOf(
+  request: ClassifierRequest,
+  table: Readonly<Record<string, BedrockModel>> = BEDROCK_MODEL_TABLE,
+): {
   readonly inferenceProfileId: string;
   readonly foundationModelId: string;
   readonly countTokens: boolean;
   readonly body: string;
 } {
-  const model = bedrockModelOf(request.model);
+  const model = Object.hasOwn(table, request.model) ? table[request.model] : undefined;
   if (model === undefined) throw new BedrockTransportError({ status: 400, type: 'model_unmapped' });
   // `model` goes to the URL; `betas` and `fallbacks` are the server-side fallback, which
   // Bedrock refuses. Any other beta flag is passed on as `anthropic_beta`.
@@ -130,11 +173,15 @@ export function bedrockRequestOf(request: ClassifierRequest): {
 }
 
 /** The transport over a surface. `loadBedrockTransport` is the only caller with a real one. */
-export function bedrockTransport(surface: BedrockRuntimeSurface): AnthropicMessagesTransport {
+export function bedrockTransport(
+  surface: BedrockRuntimeSurface,
+  /** The model table; a test may pass its own, production always uses `BEDROCK_MODEL_TABLE`. */
+  table: Readonly<Record<string, BedrockModel>> = BEDROCK_MODEL_TABLE,
+): AnthropicMessagesTransport {
   return {
     kind: 'bedrock',
     create: async request => {
-      const prepared = bedrockRequestOf(request);
+      const prepared = bedrockRequestOf(request, table);
       let bytes: Uint8Array;
       try {
         bytes = await surface.invokeModel({ modelId: prepared.inferenceProfileId, body: prepared.body });
@@ -153,7 +200,7 @@ export function bedrockTransport(surface: BedrockRuntimeSurface): AnthropicMessa
       return parsed as AnthropicMessageResponse;
     },
     countTokens: async request => {
-      const prepared = bedrockRequestOf(request);
+      const prepared = bedrockRequestOf(request, table);
       if (!prepared.countTokens) {
         // No count endpoint for this model: the request's UTF-8 byte length, which no
         // tokenizer exceeds, so whatever is admitted on it is still inside its reservation.

@@ -4,18 +4,23 @@
  *
  * Two transports, one request shape. The reply classifier, the after-call summary and
  * research's extraction all build a Messages API request (`ClassifierRequest`) and hand it
- * to an `AnthropicMessagesTransport`; this file decides which one a worker builds:
+ * to an `AnthropicMessagesTransport`; this file decides which one carries each request:
  *
- *   * `FSS_MODEL_TRANSPORT=bedrock` — Amazon Bedrock `InvokeModel`, with the worker task
- *     role as the credential (`bedrockClient.ts`). Paid from the AWS account's credits.
- *     Production sets it (`infra/modules/stack`).
+ *   * `FSS_MODEL_TRANSPORT=bedrock` — **by model** (review BR1R, finding 1). A model in
+ *     `BEDROCK_MODEL_TABLE` (the models this AWS account can call) goes through Amazon
+ *     Bedrock `InvokeModel` with the worker task role (`bedrockClient.ts`), paid from
+ *     credits. Any other model goes through the direct API with the classifier key, exactly
+ *     as before: cash, the cash keys, the cash ceiling. With no key, such a model has no
+ *     route and nothing is reserved for it. Production sets it (`infra/modules/stack`).
  *   * `FSS_MODEL_TRANSPORT=anthropic`, or unset — the direct Anthropic API with the
  *     classifier key (`anthropicClient.ts`). Paid in cash.
  *
  * Anything else is a configuration problem named by the variable, and the worker builds no
- * transport at all. **There is no automatic fallback from one to the other**: a Bedrock
- * failure is the paid-call pattern's ordinary failure (refused, or ambiguous and estimated),
- * never a second request to the direct API, which would be cash the ceiling did not plan.
+ * transport at all. The route is a function of the model alone, decided before the
+ * reservation, and the reservation's `provider_key` records it. **There is no automatic
+ * fallback from one to the other**: a Bedrock failure is the paid-call pattern's ordinary
+ * failure (refused, or ambiguous and estimated), never a second request to the direct API,
+ * which would be cash the ceiling did not plan.
  *
  * ## Who pays, in the ledger
  *
@@ -112,29 +117,31 @@ const HAIKU_4_5: BedrockModel = Object.freeze({
 });
 
 /**
- * Every Claude model id a Callie request builder may send, and its Bedrock identity. A model
- * with no row here cannot be sent over Bedrock: the transport refuses it before any request
- * (`test/classification/bedrockTransport.test.ts` asserts that every classifier, summary and
- * research model has a row).
+ * The Claude models this AWS account can call on Bedrock, and their Bedrock identity: Claude
+ * Haiku 4.5 only, of the models a Callie request builder sends. Measured 1 October 2026:
+ * Opus 5, Opus 5.5, Sonnet 5.5, Sonnet 5 and Fable 5.1 are listed in us-east-1 but every
+ * call answers 403 "not available for this account". A model with no row is routed to the
+ * direct API (`modelRoute`), never to Bedrock, so adding a row is what moves a model to
+ * credits — after the account can call it.
  */
 export const BEDROCK_MODEL_TABLE: Readonly<Record<string, BedrockModel>> = Object.freeze({
   'claude-haiku-4-5': HAIKU_4_5,
   'claude-haiku-4-5-20251001': HAIKU_4_5,
-  'claude-opus-5': Object.freeze({
-    inferenceProfileId: 'us.anthropic.claude-opus-5',
-    foundationModelId: 'anthropic.claude-opus-5',
-    countTokens: false,
-    inputCentsPerMillion: 550,
-    outputCentsPerMillion: 2_750,
-  }),
-  'claude-sonnet-5-5': Object.freeze({
-    inferenceProfileId: 'us.anthropic.claude-sonnet-5-5',
-    foundationModelId: 'anthropic.claude-sonnet-5-5',
-    countTokens: false,
-    inputCentsPerMillion: 220,
-    outputCentsPerMillion: 1_100,
-  }),
 });
+
+/** Which transport carries a model's requests, or null when this deployment has none for it. */
+export type ModelRoute = (model: string) => ModelTransportKind | null;
+
+/** Every model through the direct API: a deployment without Bedrock. */
+export const DIRECT_ROUTE: ModelRoute = () => 'anthropic';
+
+/**
+ * The route under `FSS_MODEL_TRANSPORT=bedrock`: a mapped model to Bedrock, any other to the
+ * direct API when the deployment holds its key, and otherwise nowhere.
+ */
+export function bedrockModelRoute(options: { readonly directAvailable: boolean }): ModelRoute {
+  return model => (bedrockModelOf(model) !== undefined ? 'bedrock' : options.directAvailable ? 'anthropic' : null);
+}
 
 export function bedrockModelOf(model: string): BedrockModel | undefined {
   return Object.hasOwn(BEDROCK_MODEL_TABLE, model) ? BEDROCK_MODEL_TABLE[model] : undefined;

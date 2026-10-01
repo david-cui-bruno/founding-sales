@@ -623,7 +623,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
   it('BR1: through Bedrock a summary is reserved and ledgered under aws_bedrock.call_summary, at Bedrock’s price, past a spent cash ceiling', async () => {
     mode = 'answer';
     const id = await transcribedCall();
-    const bedrock = { ...options, transport: 'bedrock' as const };
+    const bedrock = { ...options, route: () => 'bedrock' as const };
     const cashBefore = await monthSpent();
     await setting('monthly_cash_ceiling_cents', { cents: 0 });
     try {
@@ -661,7 +661,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
   it('BR1: a direct-API reservation a Bedrock worker finds is released, never called, and reserved again under Bedrock', async () => {
     mode = 'answer';
     const id = await transcribedCall();
-    const bedrock = { ...options, transport: 'bedrock' as const };
+    const bedrock = { ...options, route: () => 'bedrock' as const };
     const before = requests;
     const begun = await withTransaction(session, async () => await beginCallSummary(system(), options, { sessionId: id, retry: false }));
     if (begun.kind !== 'reserved') throw new Error(begun.reason);

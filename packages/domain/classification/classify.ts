@@ -11,7 +11,7 @@ import {
   type ClassificationRow,
 } from './store.ts';
 import { lockClassifierSwitch, readClassifierSettings } from './settings.ts';
-import { transportOfProviderKey, type ModelTransportKind } from './modelTransport.ts';
+import { DIRECT_ROUTE, transportOfProviderKey, type ModelRoute } from './modelTransport.ts';
 import {
   classifierCallCeilingCents,
   classifierCallCents,
@@ -84,12 +84,14 @@ export interface ClassifyReplyDeps {
    */
   readonly processEnabled?: boolean | undefined;
   /**
-   * The transport `classifierFor`'s adapters send through (slice BR1): which `provider_key`
-   * an attempt is reserved under, which price table bounds it, and whether the month's cash
-   * ceiling applies (`aws_bedrock.classifier` is credit-funded, so it does not). Absent is
-   * the direct API.
+   * Which transport carries each model (slice BR1, `modelTransport.ts`): the same route the
+   * transport behind `classifierFor` follows. Decided from the model before the attempt is
+   * reserved, it gives the `provider_key`, the price table and whether the month's cash
+   * ceiling applies (`aws_bedrock.classifier` is credit-funded, so it does not). Null for a
+   * model this deployment cannot call: nothing is reserved and the attempt records
+   * `disabled`. Absent is every model through the direct API.
    */
-  readonly transport?: ModelTransportKind | undefined;
+  readonly route?: ModelRoute | undefined;
 }
 
 function deterministicOf(rows: readonly ClassificationRow[]): ClassificationRow | undefined {
@@ -318,7 +320,8 @@ export async function beginClassification(
   const zone = await workspaceBusinessZone(context);
   const today = await classifierRequestsOn(context, localDate(at, zone));
   if (settings.dailyCallCap === 0 || today >= settings.dailyCallCap) return await done('capped');
-  const transport = deps.transport ?? 'anthropic';
+  const transport = (deps.route ?? DIRECT_ROUTE)(settings.modelName);
+  if (transport === null) return await done('disabled');
   const providerKey = classifierProviderKey(transport);
   const cents = classifierCallCeilingCents(settings, prepared.input, transport);
   // The month's cash ceiling is for cash (slice BR1): a credit-funded attempt is not cleared
@@ -377,7 +380,8 @@ export async function ensureClassificationCalling(
     await settleAttempt(context, { reservationId: row.id, at: await databaseNow(context), outcome: { kind: 'released' } });
   };
   // Never one transport against money reserved — and priced, and funded — for the other.
-  if (row.providerKey !== classifierProviderKey(deps.transport ?? 'anthropic')) {
+  const route = (deps.route ?? DIRECT_ROUTE)(row.modelName);
+  if (route === null || row.providerKey !== classifierProviderKey(route)) {
     await release();
     return { kind: 'retry' };
   }

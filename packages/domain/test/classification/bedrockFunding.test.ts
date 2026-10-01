@@ -3,6 +3,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { beginClassification, classifyReplyWithModel, ensureClassificationCalling } from '../../classification/classify.ts';
 import { readCreditSpend, readSpend, workspaceBusinessZone } from '../../research/ledger.ts';
 import { databaseNow } from '../../policy/clock.ts';
+import { bedrockModelRoute } from '../../classification/modelTransport.ts';
 import { REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import { createClassifierWorld, type ClassifierWorld } from './support/classifierWorld.ts';
 
@@ -25,7 +26,11 @@ afterAll(async () => {
 
 const session = () => world.mail.database.session;
 const workspaceId = () => world.mail.seeded.alpha.workspaceId;
-const bedrockDeps = () => ({ ...world.deps, transport: 'bedrock' as const });
+const bedrockDeps = () => ({ ...world.deps, route: () => 'bedrock' as const });
+/** The model Bedrock can serve for this account; the world's default is Opus 5, which it cannot. */
+const useHaiku = async (): Promise<void> => {
+  await session().query("UPDATE classifier_settings SET model_name = 'claude-haiku-4-5' WHERE workspace_id = $1", [workspaceId()]);
+};
 
 beforeEach(async () => {
   await session().query("DELETE FROM mail_message_classifications WHERE workspace_id = $1 AND layer = 'model'", [workspaceId()]);
@@ -33,6 +38,7 @@ beforeEach(async () => {
   await session().query('DELETE FROM provider_ledger WHERE workspace_id = $1', [workspaceId()]);
   await session().query("DELETE FROM provider_reservations WHERE workspace_id = $1 AND subject_kind = 'reply_classification'", [workspaceId()]);
   await session().query("DELETE FROM workspace_settings WHERE workspace_id = $1 AND setting_key = 'monthly_cash_ceiling_cents'", [workspaceId()]);
+  await session().query("UPDATE classifier_settings SET model_name = 'claude-opus-5' WHERE workspace_id = $1", [workspaceId()]);
 });
 
 async function noCashHeadroom(): Promise<void> {
@@ -71,6 +77,7 @@ describe('a Bedrock classification is credit-funded', () => {
   });
 
   it('through Bedrock it is asked anyway, reserved and ledgered under aws_bedrock.classifier, and counted as credits, not cash', async () => {
+    await useHaiku();
     await noCashHeadroom();
     const before = world.transport.calls.length;
     const report = await classifyReplyWithModel(world.systemContext(), bedrockDeps(), { messageId: world.messageIdOf(CASE) });
@@ -91,6 +98,7 @@ describe('a Bedrock classification is credit-funded', () => {
 
 describe('a reservation is only ever called through the transport it was made for', () => {
   it('releases a direct-API reservation that a Bedrock worker finds, and reserves again under Bedrock', async () => {
+    await useHaiku();
     const messageId = world.messageIdOf(CASE);
     const begun = await withTransaction(session(), async () => await beginClassification(world.systemContext(), world.deps, { messageId, retry: false }));
     expect(begun.kind).toBe('reserved');
@@ -107,5 +115,43 @@ describe('a reservation is only ever called through the transport it was made fo
       [1, 'anthropic_classifier', 'released'],
       [2, 'aws_bedrock.classifier', 'reserved'],
     ]);
+  });
+});
+
+describe('the route is decided by the model, before the reservation (review BR1R, finding 1)', () => {
+  const route = bedrockModelRoute({ directAvailable: true });
+  const setModel = async (model: string): Promise<void> => {
+    await session().query('UPDATE classifier_settings SET model_name = $2 WHERE workspace_id = $1', [workspaceId(), model]);
+  };
+
+  it('an unmapped model (the production default, Opus 5) reserves under the cash key and is held by the cash ceiling', async () => {
+    await setModel('claude-opus-5');
+    const messageId = world.messageIdOf(CASE);
+    const begun = await withTransaction(session(), async () => await beginClassification(world.systemContext(), { ...world.deps, route }, { messageId, retry: false }));
+    expect(begun.kind).toBe('reserved');
+    expect((await reservations()).map(row => row.provider_key)).toEqual(['anthropic_classifier']);
+    await session().query("DELETE FROM provider_reservations WHERE workspace_id = $1 AND subject_kind = 'reply_classification'", [workspaceId()]);
+    // And the cash ceiling still binds it, as before BR1.
+    await noCashHeadroom();
+    const capped = await classifyReplyWithModel(world.systemContext(), { ...world.deps, route }, { messageId });
+    expect(capped.outcome).toBe('capped');
+  });
+
+  it('a mapped model (Haiku 4.5) reserves under aws_bedrock.classifier and passes a spent cash ceiling', async () => {
+    await setModel('claude-haiku-4-5');
+    await noCashHeadroom();
+    const report = await classifyReplyWithModel(world.systemContext(), { ...world.deps, route }, { messageId: world.messageIdOf(CASE) });
+    expect(report.outcome).not.toBe('capped');
+    expect((await reservations()).map(row => row.provider_key)).toEqual(['aws_bedrock.classifier']);
+  });
+
+  it('a model with no route reserves nothing and records disabled', async () => {
+    const report = await classifyReplyWithModel(
+      world.systemContext(),
+      { ...world.deps, route: bedrockModelRoute({ directAvailable: false }) },
+      { messageId: world.messageIdOf(CASE) },
+    );
+    expect(report.outcome).toBe('disabled');
+    expect(await reservations()).toEqual([]);
   });
 });

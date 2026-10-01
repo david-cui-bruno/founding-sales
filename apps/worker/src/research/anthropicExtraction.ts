@@ -19,6 +19,8 @@ import type {
 } from '@fss/domain/research/providers.ts';
 import { MAX_EXTRACTION_OUTPUT_TOKENS, centsOf } from '@fss/domain/research/pricing.ts';
 import { modelProviderKey } from '@fss/domain/classification/modelTransport.ts';
+import { routeOfTransport } from '@fss/domain/classification/routedTransport.ts';
+import { DEFAULT_RESEARCH_SETTINGS } from '@fss/domain/research/settings.ts';
 
 /**
  * The live extraction: one model call per run, over the transport the reply
@@ -147,9 +149,14 @@ export interface AnthropicExtractionOptions {
 export { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_PROMPT_VERSION, EXTRACTION_SYSTEM_TEXT, extractionUserText };
 
 export function anthropicExtraction(options: AnthropicExtractionOptions): ExtractionProvider {
-  // Slice BR1: the transport decides the key (`anthropic_extraction`, cash, or
+  // Slice BR1: the research model's route decides the key (`anthropic_extraction`, cash, or
   // `aws_bedrock.extraction`, credits) and the price table every cent below is computed at.
-  const transport = options.transport.kind ?? 'anthropic';
+  // One key per port, because the reservation is made before a request exists: research
+  // admits one model (`research_settings_model_known`), so its route is the port's. A request
+  // naming a model whose route differs is refused below before anything is sent.
+  const route = routeOfTransport(options.transport);
+  const transport = route(DEFAULT_RESEARCH_SETTINGS.modelName) ?? 'anthropic';
+  const sameRoute = (input: ExtractionRequest): boolean => route(input.modelName) === transport;
   /**
    * Exactly what `extract` would send, so a count is a count of the real request.
    *
@@ -184,9 +191,14 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
      * Built from the same function, so what is counted and what is sent cannot drift:
      * the whole value of an exact count is that it is a count of *this* request.
      */
-    countInputTokens: async (input: ExtractionRequest): Promise<number> =>
-      await options.transport.countTokens(requestFor(input)),
+    countInputTokens: async (input: ExtractionRequest): Promise<number> => {
+      // A count that cannot be taken is a call that is not made (the caller releases).
+      if (!sameRoute(input)) throw new Error('the model is not routed through this extraction port');
+      return await options.transport.countTokens(requestFor(input));
+    },
     extract: async (input: ExtractionRequest): Promise<ProviderOutcome<ExtractionAnswer>> => {
+      // Never one transport against money reserved for the other: refused, nothing sent.
+      if (!sameRoute(input)) return { ok: false, failureCode: 'provider_refused', costCents: 0 };
       let response: AnthropicMessageResponse;
       try {
         response = await options.transport.create(requestFor(input));

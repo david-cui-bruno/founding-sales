@@ -262,8 +262,6 @@ run "the_bedrock_worker_invokes_only_the_mapped_profiles_and_their_routed_models
         Action = ["bedrock:InvokeModel"]
         Resource = [
           "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
-          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5",
         ]
       },
       {
@@ -272,19 +270,11 @@ run "the_bedrock_worker_invokes_only_the_mapped_profiles_and_their_routed_models
         Action = ["bedrock:InvokeModel"]
         Resource = [
           "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
-          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5",
-          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-5",
           "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
-          "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-opus-5",
-          "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-5-5",
           "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
-          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-5",
-          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5-5",
         ]
         Condition = { StringEquals = { "bedrock:InferenceProfileArn" = [
           "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
-          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5",
         ] } }
       },
       {
@@ -294,7 +284,7 @@ run "the_bedrock_worker_invokes_only_the_mapped_profiles_and_their_routed_models
         Resource = ["arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"]
       },
     ]
-    error_message = "The worker's Bedrock grant is InvokeModel on the three US profiles, on their routed models only through them, and CountTokens on Haiku 4.5 here."
+    error_message = "The worker's Bedrock grant is InvokeModel on the Haiku 4.5 US profile, on their routed models only through them, and CountTokens on Haiku 4.5 here."
   }
 
   assert {

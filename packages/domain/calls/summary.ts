@@ -13,7 +13,7 @@ import {
 } from '../research/reservations.ts';
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
 import { providerFunding } from '../settings/funding.ts';
-import { transportOfProviderKey, type ModelTransportKind } from '../classification/modelTransport.ts';
+import { DIRECT_ROUTE, transportOfProviderKey, type ModelRoute } from '../classification/modelTransport.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { settingLockName } from '../settings/store.ts';
 import { localDate } from '../src/rules/localClock.ts';
@@ -197,10 +197,12 @@ export interface CallSummaryDeps {
   /** The deployment's model (`FSS_CALL_SUMMARY_MODEL`); Haiku 4.5 unless set. */
   readonly model: CallSummaryModel;
   /**
-   * The transport `summarizer` sends through (slice BR1): the attempt's `provider_key`, its
-   * price table and whether the month's cash ceiling applies. Absent is the direct API.
+   * Which transport carries each model (slice BR1): the route the `summarizer`'s transport
+   * follows, asked before the reservation for its `provider_key`, its price table and
+   * whether the month's cash ceiling applies. Null for a model this deployment cannot call:
+   * nothing is reserved. Absent is every model through the direct API.
    */
-  readonly transport?: ModelTransportKind | undefined;
+  readonly route?: ModelRoute | undefined;
 }
 
 export type BeginSummaryOutcome =
@@ -209,7 +211,7 @@ export type BeginSummaryOutcome =
 
 export async function beginCallSummary(
   context: RepositoryContext,
-  deps: Pick<CallSummaryDeps, 'model' | 'transport'>,
+  deps: Pick<CallSummaryDeps, 'model' | 'route'>,
   input: { readonly sessionId: string; readonly retry: boolean },
 ): Promise<BeginSummaryOutcome> {
   await lockSummary(context, input.sessionId);
@@ -239,7 +241,8 @@ export async function beginCallSummary(
   const maxOutputTokens = CALL_SUMMARY_MODEL_TABLE[deps.model].maxOutputTokens;
   const request = buildCallSummaryRequest({ model: deps.model, maxOutputTokens, call: prepared.call });
   const maxInputTokens = callSummaryInputTokenBound(request);
-  const transport = deps.transport ?? 'anthropic';
+  const transport = (deps.route ?? DIRECT_ROUTE)(deps.model);
+  if (transport === null) return { kind: 'done', reason: 'disabled' };
   const providerKey = callSummaryProviderKey(transport);
   const cents = callSummaryCeilingCents(deps.model, maxInputTokens, maxOutputTokens, transport);
   // The month's cash ceiling is for cash: a credit-funded summary is not cleared against it (slice BR1).
@@ -281,7 +284,7 @@ export type EnsureSummaryOutcome =
 export async function ensureCallSummaryCalling(
   context: RepositoryContext,
   input: { readonly sessionId: string; readonly attempt: number },
-  deps: Pick<CallSummaryDeps, 'transport'> = {},
+  deps: Pick<CallSummaryDeps, 'route'> = {},
 ): Promise<EnsureSummaryOutcome> {
   await lockSummary(context, input.sessionId);
   const row = await readAttempt(context, { ...subjectOf(input.sessionId), attempt: input.attempt });
@@ -290,7 +293,8 @@ export async function ensureCallSummaryCalling(
     await settleAttempt(context, { reservationId: row.id, at: await databaseNow(context), outcome: { kind: 'released' } });
   };
   // Never one transport against money reserved — and priced, and funded — for the other.
-  if (row.providerKey !== callSummaryProviderKey(deps.transport ?? 'anthropic')) {
+  const route = (deps.route ?? DIRECT_ROUTE)(row.modelName);
+  if (route === null || row.providerKey !== callSummaryProviderKey(route)) {
     await release();
     return { kind: 'retry' };
   }

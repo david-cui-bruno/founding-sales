@@ -520,7 +520,9 @@ the month's cash ceiling and shown apart; a kind not listed is cash.
 | `anthropic_extraction` | research model calls | cash |
 | `anthropic_classifier` | reply classifier calls | cash |
 | `anthropic_call_summary` | after-call summaries (slice C3b) | cash |
-| `aws_bedrock.classifier`, `aws_bedrock.call_summary`, `aws_bedrock.extraction` | the same three model calls through Amazon Bedrock (slice BR1, `FSS_MODEL_TRANSPORT=bedrock`, production) | credits (AWS) |
+| `aws_bedrock.classifier`, `aws_bedrock.call_summary`, `aws_bedrock.extraction` | the same three model calls through Amazon Bedrock, for the models Bedrock serves this account (Haiku 4.5; slice BR1, `FSS_MODEL_TRANSPORT=bedrock`, production); any other model stays on the direct API's cash keys | credits (AWS) |
+
+**Rolling back below BR1:** a worker without BR1 would settle an open `aws_bedrock.*` reservation through the direct API under that credit key, so before rolling back wait for, or release, every open (`reserved` or `calling`) `aws_bedrock.*` reservation.
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script

@@ -85,7 +85,8 @@ locals {
   )
 
   # Slice BR1: the Claude models the worker may reach on Bedrock, as each US system-defined
-  # inference profile and the foundation model it routes to. The same pairs as
+  # inference profile and the foundation model it routes to — only the models this account
+  # can call (Haiku 4.5; review BR1R, finding 1). The same pairs as
   # `BEDROCK_MODEL_TABLE` in packages/domain/classification/modelTransport.ts
   # (test/ops/terraformCrossChecks.check.ts holds them equal). A US profile routes to its
   # model in us-east-1, us-east-2 and us-west-2 (`aws bedrock list-inference-profiles`),
@@ -94,12 +95,9 @@ locals {
   # (docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html).
   bedrock_models = {
     "us.anthropic.claude-haiku-4-5-20251001-v1:0" = "anthropic.claude-haiku-4-5-20251001-v1:0"
-    "us.anthropic.claude-opus-5"                  = "anthropic.claude-opus-5"
-    "us.anthropic.claude-sonnet-5-5"              = "anthropic.claude-sonnet-5-5"
   }
   bedrock_routed_regions = ["us-east-1", "us-east-2", "us-west-2"]
-  # CountTokens takes the foundation model in this region; only Haiku 4.5 answers it (the
-  # code substitutes a byte bound for the others and never calls it for them).
+  # CountTokens takes the foundation model in this region; Haiku 4.5 answers it.
   bedrock_counted_models = ["anthropic.claude-haiku-4-5-20251001-v1:0"]
 
   bedrock_profile_arns = [for id in sort(keys(local.bedrock_models)) : "arn:aws:bedrock:${var.aws_region}:${var.aws_account_id}:inference-profile/${id}"]

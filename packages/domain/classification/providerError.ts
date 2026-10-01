@@ -63,7 +63,7 @@ export function isRefusedBeforeGeneration(status: number | null): boolean {
 /** Read an error the SDK threw: `status` and the response body's `error.type` / `error.message`. */
 export function providerErrorOf(error: unknown): ProviderErrorDetail {
   if (typeof error !== 'object' || error === null) return { status: null, type: null, parameter: null, refused: false };
-  const record = error as { status?: unknown; type?: unknown; error?: unknown };
+  const record = error as { status?: unknown; type?: unknown; error?: unknown; refusedBeforeGeneration?: unknown };
   const status = typeof record.status === 'number' && Number.isInteger(record.status) ? record.status : null;
   const body = typeof record.error === 'object' && record.error !== null ? (record.error as { error?: unknown }).error : undefined;
   const inner = typeof body === 'object' && body !== null ? (body as { type?: unknown; message?: unknown }) : {};
@@ -71,5 +71,8 @@ export function providerErrorOf(error: unknown): ProviderErrorDetail {
   const kind = type === null ? null : type.replace(/[^A-Za-z0-9_]/gu, '').slice(0, 64) || null;
   const parameter =
     status === 400 && kind === 'invalid_request_error' && typeof inner.message === 'string' ? leadingParameter(inner.message) : null;
-  return { status, type: kind, parameter, refused: isRefusedBeforeGeneration(status) };
+  // A transport that knows better than the status says so (slice BR1: Bedrock's 424
+  // ModelErrorException is a failure *while the model ran*, not a refusal before it).
+  const refused = typeof record.refusedBeforeGeneration === 'boolean' ? record.refusedBeforeGeneration : isRefusedBeforeGeneration(status);
+  return { status, type: kind, parameter, refused };
 }
