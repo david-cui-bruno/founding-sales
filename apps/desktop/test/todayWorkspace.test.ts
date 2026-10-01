@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CallSessionDto } from '@fss/contracts';
-import { callProgress, latestCall, RECORDING_GRACE_MS, TRANSCRIPT_GRACE_MS } from '../src/renderer/today/callProgress.ts';
+import { CALL_SESSION_STATUSES, type CallSessionDto } from '@fss/contracts';
+import { callProgress, latestCall, LIVE_POLL_MS, RECORDING_GRACE_MS, TRANSCRIPT_GRACE_MS } from '../src/renderer/today/callProgress.ts';
 import { blockerLine, nextToCall, queueGroups, queueLine, queueOrder, stepFrom } from '../src/renderer/today/queueView.ts';
 import type { TodayCard } from '../src/renderer/todayContract.ts';
 
@@ -115,6 +115,25 @@ describe('a call’s steps', () => {
       analysis: { state: 'skipped' },
       polling: false,
     });
+  });
+
+  it('stops reading a call of any status once it is old: a lost end callback does not poll for ever', () => {
+    // S2 review, finding 5: a session stuck in ringing or in_progress polled every 4 s at any age.
+    const month = new Date(NOW - 30 * 86_400_000).toISOString();
+    for (const status of CALL_SESSION_STATUSES) {
+      for (const answeredAt of [null, month]) {
+        for (const extra of [{}, { hasRecording: true }, { hasRecording: true, hasTranscript: true }]) {
+          const progress = callProgress(call({ status, startedAt: month, answeredAt, endedAt: null, ...extra }), NOW);
+          expect({ status, answeredAt, extra, polling: progress.polling }).toEqual({ status, answeredAt, extra, polling: false });
+        }
+      }
+    }
+    const stuck = callProgress(call({ status: 'ringing', startedAt: new Date(NOW - LIVE_POLL_MS).toISOString(), answeredAt: null, endedAt: null }), NOW);
+    expect(stuck).toMatchObject({ polling: false, call: { word: 'ringing' } });
+    expect(stuck.sentence).toContain('has not been told this call ended');
+    expect(callProgress(call({ status: 'ringing', startedAt: null, answeredAt: null, endedAt: null }), NOW).polling).toBe(false);
+    // Inside the bound a live call is still read.
+    expect(callProgress(call({ status: 'ringing', startedAt: new Date(NOW - LIVE_POLL_MS + 1000).toISOString(), answeredAt: null, endedAt: null }), NOW).polling).toBe(true);
   });
 
   it('reads the latest call by when it started', () => {

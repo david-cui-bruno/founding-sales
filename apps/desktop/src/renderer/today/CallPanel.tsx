@@ -224,13 +224,20 @@ export function CallPanel(props: CallPanelProps): JSX.Element {
   const { state, view, actions, call, status, firmId, blockers, progress, hasNext } = props;
   const phase = call.state;
   const here = 'firmId' in phase && phase.firmId === firmId;
-  const live = here && (phase.phase === 'starting' || phase.phase === 'ringing' || phase.phase === 'connected');
+  const onCall = phase.phase === 'starting' || phase.phase === 'ringing' || phase.phase === 'connected';
+  const live = here && onCall;
+  // A live call's controls never depend on which firm is open (S2 review, finding 4): a
+  // read that lands mid-call and opens another firm leaves Hang up and Mute where they
+  // were, for the call's own firm, while Today brings that firm back.
+  const liveElsewhere = !here && onCall && 'firmId' in phase ? phase.firmId : null;
   const ended = here && phase.phase === 'ended';
   const cadence = status.view?.cadence ?? null;
   const parked = cadence?.parked === true;
 
   let body: JSX.Element;
-  if (firmId === null || state.expanded === null) {
+  if (liveElsewhere !== null) {
+    body = <LiveCall call={call} firmId={liveElsewhere} />;
+  } else if (firmId === null || state.expanded === null) {
     body = <p className="text-sm text-muted-foreground">No firm selected.</p>;
   } else if (live) {
     body = <LiveCall call={call} firmId={firmId} />;

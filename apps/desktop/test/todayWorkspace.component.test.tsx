@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import type { CallControl } from '../src/renderer/calling/useCall.ts';
@@ -252,6 +253,49 @@ describe('Log incoming call', () => {
       outcome: 'callback_requested',
       note: 'Try Tuesday',
     });
+  });
+
+  it('keeps the firm a draft was started on: typed on A, closed, reopened on B, it still logs A', async () => {
+    // S2 review, finding 3: the firm used to be an unstored fallback to the selection, so
+    // A's note and outcome were saved against B.
+    const B = '44444444-4444-4444-8444-444444444444';
+    const two = [...cards, { ...cards[0]!, firmId: B, firmName: 'Cedar Hollow Test Homes' }];
+    const log = vi.fn(async () => ({ logged: true, reason: null }));
+    const dialog = (open: boolean, firmId: string): JSX.Element => (
+      <DraftsProvider>
+        <LogIncomingDialog open={open} cards={two} firmId={firmId} contactsFor={() => []} enabled onClose={vi.fn()} onLogged={vi.fn()} log={log} />
+      </DraftsProvider>
+    );
+    // One provider across the rerenders, as the shell holds it above the route.
+    const { rerender } = render(dialog(true, FIRM_ID));
+    fireEvent.change(screen.getByTestId('incoming-outcome'), { target: { value: 'interested' } });
+    fireEvent.change(screen.getByTestId('incoming-note'), { target: { value: 'Asked about the demo' } });
+    rerender(dialog(false, FIRM_ID));
+    rerender(dialog(true, B));
+    expect((screen.getByTestId('incoming-firm') as HTMLSelectElement).value).toBe(FIRM_ID);
+    expect(screen.getByTestId('incoming-draft-firm').textContent).toContain('Elm Fork Test Rentals');
+    fireEvent.click(screen.getByTestId('log-incoming-save'));
+    await waitFor(() => expect(log).toHaveBeenCalled());
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ firmId: FIRM_ID, note: 'Asked about the demo', outcome: 'interested' }));
+  });
+
+  it('follows the firm on screen until something is typed, and Discard draft lets it go', () => {
+    const B = '44444444-4444-4444-8444-444444444444';
+    const two = [...cards, { ...cards[0]!, firmId: B, firmName: 'Cedar Hollow Test Homes' }];
+    const dialog = (firmId: string): JSX.Element => (
+      <DraftsProvider>
+        <LogIncomingDialog open cards={two} firmId={firmId} contactsFor={() => []} enabled onClose={vi.fn()} onLogged={vi.fn()} log={vi.fn()} />
+      </DraftsProvider>
+    );
+    const { rerender } = render(dialog(FIRM_ID));
+    rerender(dialog(B));
+    expect((screen.getByTestId('incoming-firm') as HTMLSelectElement).value).toBe(B);
+    fireEvent.change(screen.getByTestId('incoming-note'), { target: { value: 'Typed on B' } });
+    rerender(dialog(FIRM_ID));
+    expect((screen.getByTestId('incoming-firm') as HTMLSelectElement).value).toBe(B);
+    fireEvent.click(screen.getByTestId('incoming-discard'));
+    expect((screen.getByTestId('incoming-firm') as HTMLSelectElement).value).toBe(FIRM_ID);
+    expect((screen.getByTestId('incoming-note') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('refuses a time in the future before anything is sent, and says a refusal in words', async () => {

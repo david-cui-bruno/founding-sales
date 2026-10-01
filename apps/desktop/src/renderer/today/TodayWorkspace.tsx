@@ -248,6 +248,23 @@ export function TodayWorkspace({
     [actions, firmId, live, callFirm],
   );
 
+  // A live call's firm stays the open firm (S2 review, finding 4). The guard in `select`
+  // runs when a navigation starts; a read already on the wire when Call was pressed lands
+  // afterwards and opens its firm. So when the open firm is not the call's, the call's is
+  // opened again — once for each firm that displaced it — and the call panel keeps its
+  // controls in the meantime.
+  const recalled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!live || callFirm === null || actions === null || firmId === callFirm) {
+      recalled.current = null;
+      return;
+    }
+    const key = `${callFirm}:${firmId ?? ''}`;
+    if (recalled.current === key) return;
+    recalled.current = key;
+    actions.expand(callFirm);
+  }, [live, callFirm, firmId, actions]);
+
   // The first firm of the queue, when nothing is selected: the morning starts on a card.
   const tried = useRef<string | null>(null);
   useEffect(() => {
@@ -436,6 +453,7 @@ export function TodayWorkspace({
               selected={firmId}
               done={memory.done}
               locked={live}
+              callFirm={live ? callFirm : null}
               scrollTop={memory.queueScroll.current}
               onScroll={top => {
                 memory.queueScroll.current = top;

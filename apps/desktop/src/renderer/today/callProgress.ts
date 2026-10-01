@@ -40,6 +40,17 @@ export const RECORDING_GRACE_MS = 5 * 60_000;
 export const TRANSCRIPT_GRACE_MS = 20 * 60_000;
 export const SUMMARY_GRACE_MS = 30 * 60_000;
 
+/**
+ * How long a session the server still reports as live is read again (S2 review, finding
+ * 5). A terminal callback that never arrived leaves a session `ringing` or `in_progress`
+ * for good — the telephony sweep settles its money, not its status — and polling it every
+ * few seconds for as long as the firm is open would be ~900 reads an hour for nothing. So
+ * a live session is polled for its first 15 minutes from the start and then left: a call
+ * this Mac placed is read again the moment it ends (`TodayWorkspace`), whatever its length,
+ * and a session with no start time is not polled at all.
+ */
+export const LIVE_POLL_MS = 15 * 60_000;
+
 const LIVE = new Set(['authorized', 'ringing', 'in_progress']);
 
 const step = (state: StepState, word: string): CallStep => ({ state, word });
@@ -53,14 +64,16 @@ function endedAt(call: CallSessionDto): number | null {
 
 export function callProgress(call: CallSessionDto, now: number): CallProgress {
   if (LIVE.has(call.status)) {
+    const started = call.startedAt === null ? Number.NaN : Date.parse(call.startedAt);
+    const recent = Number.isFinite(started) && now - started < LIVE_POLL_MS;
     return {
       sessionId: call.sessionId,
       call: step('pending', call.status === 'in_progress' ? 'connected' : 'ringing'),
       recording: step('waiting', 'waiting'),
       transcription: step('waiting', 'waiting'),
       analysis: step('waiting', 'waiting'),
-      sentence: null,
-      polling: true,
+      sentence: recent ? null : 'Callie has not been told this call ended. It is read again when you open the firm or refresh.',
+      polling: recent,
     };
   }
   const answered = call.answeredAt !== null;

@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type JSX } from 'react';
 import { reasonSentence } from '@fss/contracts';
 import { INCOMING_CALL_OUTCOMES, type IncomingCallAnswer, type OperationInput } from '../../shared/operations.ts';
-import { useClearDrafts, useDraft } from '../app/drafts.tsx';
+import { useClearDrafts, useDraft, useDrafts } from '../app/drafts.tsx';
 import type { TodayCard } from '../todayContract.ts';
 import { Button } from '../ui/button.tsx';
 import { Dialog } from '../ui/dialog.tsx';
@@ -9,6 +9,7 @@ import { Input } from '../ui/input.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { dense } from '../v2/parts.tsx';
+import { cn } from '../lib/utils.ts';
 import { noticeSentence } from '../todayView.ts';
 
 /**
@@ -21,7 +22,10 @@ import { noticeSentence } from '../todayView.ts';
  * (migration 0034): the same assignment rule, the same outcome effects, and never a
  * cadence attempt. When is required (it defaults to now) and so is what happened, because
  * every call log carries one of 9.1's outcomes; the length and the note are optional.
- * The form is a draft, so closing it or moving to another firm keeps what was typed.
+ * The form is a draft, so closing it or moving to another firm keeps what was typed — and
+ * the firm it was typed about (S2 review, finding 3): the first edit writes the firm into
+ * the draft, so a draft started on A still names A when the dialog is opened again on B,
+ * until it is saved or discarded. Before any edit the form follows the firm on screen.
  */
 
 const OUTCOME_LABELS: Readonly<Record<(typeof INCOMING_CALL_OUTCOMES)[number], string>> = Object.freeze({
@@ -71,23 +75,37 @@ export function LogIncomingDialog({
   readonly now?: () => number;
 }): JSX.Element | null {
   const prefix = 'incoming:';
-  const [firmId, setFirmId] = useDraft(`${prefix}firm`, initialFirmId ?? cards[0]?.firmId ?? '');
+  const firmKey = `${prefix}firm`;
+  const drafts = useDrafts();
+  const started = drafts.values[firmKey] !== undefined;
+  const [openedAt, setOpenedAt] = useState(() => now());
+  const [firmId, setFirmId] = useDraft(firmKey, initialFirmId ?? cards[0]?.firmId ?? '');
+  // Any edit pins the firm the form shows into the draft first, so what is typed stays
+  // with that firm whatever is selected next.
+  const pinned = (set: (value: string) => void) => (value: string): void => {
+    if (!started) {
+      drafts.set(firmKey, firmId);
+      drafts.set(`${prefix}firmName`, cards.find(card => card.firmId === firmId)?.firmName ?? '');
+    }
+    set(value);
+  };
   const [contactId, setContactId] = useDraft(`${prefix}contact`);
-  const [when, setWhen] = useDraft(`${prefix}when`);
+  const [when, setWhen] = useDraft(`${prefix}when`, localDateTime(openedAt));
   const [minutes, setMinutes] = useDraft(`${prefix}minutes`);
   const [outcome, setOutcome] = useDraft(`${prefix}outcome`);
   const [note, setNote] = useDraft(`${prefix}note`);
+  const draftFirmName = drafts.values[`${prefix}firmName`] ?? '';
   const clear = useClearDrafts();
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const ids = { firm: useId(), contact: useId(), when: useId(), minutes: useId(), outcome: useId(), note: useId() };
 
-  // Opening it starts at the firm on screen and at the current minute, unless a draft says otherwise.
+  // Opening it starts at the firm on screen and at the current minute, unless a draft says
+  // otherwise; nothing is written to the draft until somebody edits a field.
   useEffect(() => {
     if (!open) return;
     setRefusal(null);
-    if (initialFirmId !== null && firmId === '') setFirmId(initialFirmId);
-    if (when === '') setWhen(localDateTime(now()));
+    setOpenedAt(now());
     // Only when it opens: the draft owns the fields afterwards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -137,6 +155,19 @@ export function LogIncomingDialog({
       data-testid="log-incoming-dialog"
       footer={
         <>
+          {started ? (
+            <Button
+              variant="ghost"
+              data-testid="incoming-discard"
+              className={cn(dense.md, 'mr-auto text-muted-foreground')}
+              onClick={() => {
+                clear(prefix);
+                setRefusal(null);
+              }}
+            >
+              Discard draft
+            </Button>
+          ) : null}
           <Button variant="ghost" className={dense.md} onClick={onClose}>
             Cancel
           </Button>
@@ -147,6 +178,11 @@ export function LogIncomingDialog({
       }
     >
       <div className="flex flex-col gap-3">
+        {started && initialFirmId !== null && firmId !== initialFirmId ? (
+          <p data-testid="incoming-draft-firm" className="rounded-md bg-warn-soft px-2.5 py-1.5 text-xs text-warn-ink">
+            This draft is for {draftFirmName === '' ? 'another firm' : draftFirmName}, where you started it — not the firm on screen. Change the firm below or discard the draft.
+          </p>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           A callback that reached your mobile. It goes on the firm’s history as an incoming call, and never counts as one of your call attempts.
         </p>
@@ -160,10 +196,14 @@ export function LogIncomingDialog({
               value={firmId}
               onChange={event => {
                 setFirmId(event.target.value);
+                drafts.set(`${prefix}firmName`, cards.find(card => card.firmId === event.target.value)?.firmName ?? '');
                 setContactId('');
               }}
             >
-              {cards.length === 0 ? <option value="">No firm on today’s list</option> : null}
+              {cards.length === 0 && !started ? <option value="">No firm on today’s list</option> : null}
+              {started && !cards.some(card => card.firmId === firmId) ? (
+                <option value={firmId}>{draftFirmName === '' ? 'The firm this draft was started on' : draftFirmName}</option>
+              ) : null}
               {cards.map(card => (
                 <option key={card.firmId} value={card.firmId}>
                   {card.firmName}
@@ -178,7 +218,7 @@ export function LogIncomingDialog({
               data-testid="incoming-contact"
               className="h-7 border-strong text-sm font-normal text-foreground"
               value={contactId}
-              onChange={event => setContactId(event.target.value)}
+              onChange={event => pinned(setContactId)(event.target.value)}
             >
               <option value="">Not sure / the office</option>
               {contacts.map(contact => (
@@ -196,7 +236,7 @@ export function LogIncomingDialog({
               type="datetime-local"
               className="h-7 border-strong text-sm font-normal"
               value={when}
-              onChange={event => setWhen(event.target.value)}
+              onChange={event => pinned(setWhen)(event.target.value)}
             />
           </label>
           <label htmlFor={ids.minutes} className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
@@ -210,7 +250,7 @@ export function LogIncomingDialog({
               className="h-7 border-strong text-sm font-normal"
               value={minutes}
               placeholder="5"
-              onChange={event => setMinutes(event.target.value)}
+              onChange={event => pinned(setMinutes)(event.target.value)}
             />
           </label>
         </div>
@@ -221,7 +261,7 @@ export function LogIncomingDialog({
             data-testid="incoming-outcome"
             className="h-7 border-strong text-sm font-normal text-foreground"
             value={chosen ?? ''}
-            onChange={event => setOutcome(event.target.value)}
+            onChange={event => pinned(setOutcome)(event.target.value)}
           >
             <option value="">Choose one…</option>
             {INCOMING_CALL_OUTCOMES.map(value => (
@@ -243,7 +283,7 @@ export function LogIncomingDialog({
             value={note}
             maxLength={2000}
             placeholder="Wants to move the demo to Wednesday"
-            onChange={event => setNote(event.target.value)}
+            onChange={event => pinned(setNote)(event.target.value)}
           />
         </label>
         {chosen === 'callback_requested' ? (

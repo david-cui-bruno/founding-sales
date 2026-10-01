@@ -30,6 +30,7 @@ export function QueuePanel({
   selected,
   done,
   locked,
+  callFirm = null,
   scrollTop,
   onScroll,
   onSelect,
@@ -41,6 +42,8 @@ export function QueuePanel({
   readonly done: ReadonlySet<string>;
   /** A call is live: the queue cannot move the selection away from it. */
   readonly locked: boolean;
+  /** The live call's firm, which stays reachable from the queue whatever is open. */
+  readonly callFirm?: string | null;
   readonly scrollTop: number;
   onScroll(top: number): void;
   onSelect(firmId: string): void;
@@ -92,6 +95,8 @@ export function QueuePanel({
                   const isSelected = card.firmId === selected;
                   const finished = done.has(card.firmId);
                   const note = (drafts.values[`today:outcome:${card.firmId}:note`] ?? '').trim() !== '';
+                  // During a call only the call's own firm can be opened (S2 review, finding 4).
+                  const held = locked && card.firmId !== (callFirm ?? selected);
                   return (
                     <li key={card.firmId}>
                       <button
@@ -99,8 +104,8 @@ export function QueuePanel({
                         data-testid="queue-row"
                         data-firm={card.firmId}
                         aria-current={isSelected ? 'true' : undefined}
-                        disabled={locked && !isSelected}
-                        title={locked && !isSelected ? 'On a call: hang up first' : card.firmName}
+                        disabled={held}
+                        title={held ? 'On a call: hang up first' : card.firmName}
                         onClick={() => onSelect(card.firmId)}
                         className={cn(
                           'group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 [&_svg]:mt-0.5 [&_svg]:size-3.5 [&_svg]:shrink-0',
