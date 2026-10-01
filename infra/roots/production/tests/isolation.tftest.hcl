@@ -206,7 +206,7 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
 
   assert {
     condition = (
-      module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "transcription", "twilio-voice"])
+      module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "calcom", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key", "twilio-voice"])
       && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice"])
       && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
     )

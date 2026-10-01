@@ -8,7 +8,6 @@ type RecordingLogger = ReturnType<typeof recordingLogger>;
 import { createApiServer } from '../../src/server.ts';
 import { calcom, calcomSignature, readIntegrationSecrets, CALCOM_SECRET_VARIABLE, TWILIO_SECRET_VARIABLE, twilioSignature, twilioVoice, type RecordingHttp } from '../../src/integrations/providers.ts';
 import type { AuthFixture } from './authFixture.ts';
-import { TRANSCRIPTION_SECRET_VARIABLE } from '@fss/domain/calls/transcriptionSecret.ts';
 import { testRequestPool } from './poolFixture.ts';
 
 /**
@@ -60,13 +59,7 @@ export async function startIntegrationServer(
      * Slice S1: build the integrations from these task secrets exactly as production does
      * (`readIntegrationSecrets`), so a test can leave a field out or plant sentinel values.
      */
-    readonly secretBundles?: {
-      readonly twilioVoice?: Record<string, unknown>;
-      readonly calcom?: Record<string, unknown>;
-      readonly transcription?: Record<string, unknown>;
-    };
-    /** Slice C2: whether the `transcription` key is in place (without `secretBundles`). */
-    readonly transcriptionConfigured?: boolean;
+    readonly secretBundles?: { readonly twilioVoice?: Record<string, unknown>; readonly calcom?: Record<string, unknown> };
   } = {},
 ): Promise<IntegrationServer> {
   const authToken = hex(20);
@@ -85,9 +78,6 @@ export async function startIntegrationServer(
             ? {}
             : { [TWILIO_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.twilioVoice) }),
           ...(options.secretBundles.calcom === undefined ? {} : { [CALCOM_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.calcom) }),
-          ...(options.secretBundles.transcription === undefined
-            ? {}
-            : { [TRANSCRIPTION_SECRET_VARIABLE]: JSON.stringify(options.secretBundles.transcription) }),
         });
   const server = createApiServer({
     connections: poolConnections(pool, log),
@@ -98,7 +88,6 @@ export async function startIntegrationServer(
     integrations: {
       publicOrigin: PUBLIC_ORIGIN,
       ...(fromEnvironment === null ? {} : { missing: fromEnvironment.missing }),
-      transcriptionConfigured: fromEnvironment !== null ? fromEnvironment.transcriptionConfigured : options.transcriptionConfigured === true,
       twilio: fromEnvironment !== null
         ? fromEnvironment.twilio
         : configured

@@ -13,7 +13,7 @@ import {
   readVoicemailScript,
 } from '@fss/domain/settings/integrations.ts';
 import { telephonySpentToday } from '@fss/domain/calls/sessions.ts';
-import { transcriptionSpentToday } from '@fss/domain/calls/transcription.ts';
+import { transcriptionSpentToday, transcriptionWorkerAvailable } from '@fss/domain/calls/transcription.ts';
 import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
 import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
 import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
@@ -96,7 +96,9 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
           ? {
               transcription: {
                 setting: await readCallTranscription(scoped.context),
-                configured: configured(integrations?.transcriptionConfigured === true, named?.transcription),
+                // From a live worker's heartbeat: the API is not given the key. No field
+                // names: the worker reports whether it can transcribe, not why not.
+                configured: configured(await transcriptionWorkerAvailable(options.session), []),
                 spentTodayCents: await transcriptionSpentToday(scoped.context),
               },
             }

@@ -29,8 +29,8 @@ locals {
     "twilio-voice",
     "calcom",
     # Call transcription (slice C2): `{"provider": "deepgram", "api_key": "..."}`. The
-    # worker uses the key (`apps/worker/src/transcription/deepgramClient.ts`); the API
-    # reads only whether it is in place. `{}` until a key exists.
+    # worker alone reads it (`apps/worker/src/transcription/deepgramClient.ts`); the API
+    # learns from the worker's heartbeat whether it is in place. `{}` until a key exists.
     "transcription",
     # The two database identities (G12h, David's condition of 21 September).
     # Separate entries because the point is that the identity which may read one

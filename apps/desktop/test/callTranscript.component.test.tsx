@@ -6,7 +6,7 @@ import { CallHistory, transcriptTime } from '../src/renderer/calling/CallHistory
 
 /**
  * Slice C2 on the firm page: a "Transcript" disclosure under each call that has one; the
- * speakers as "You" and "Them" (or numbered when that cannot be told), times in grey;
+ * speakers numbered ("Speaker 1", "Speaker 2"), times in grey;
  * nothing at all when there is no transcript; a refusal as a sentence. Fictional data only.
  */
 
@@ -73,7 +73,8 @@ describe('the Transcript disclosure', () => {
       expect(screen.getAllByTestId('call-transcript-line')).toHaveLength(2);
     });
     expect(read).toHaveBeenCalledWith(SESSION_ID);
-    expect(screen.getAllByTestId('call-transcript-speaker').map(node => node.textContent)).toEqual(['Them', 'You']);
+    // Numbered, never "You" and "Them": diarization tells voices apart, not roles.
+    expect(screen.getAllByTestId('call-transcript-speaker').map(node => node.textContent)).toEqual(['Speaker 1', 'Speaker 2']);
     expect(screen.getAllByTestId('call-transcript-time').map(node => node.textContent)).toEqual(['0:00', '1:05']);
     expect(screen.getAllByTestId('call-transcript-time')[0]?.className).toContain('text-muted-foreground');
     // Opening it again reads nothing more.
@@ -81,7 +82,7 @@ describe('the Transcript disclosure', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it('numbers the speakers when it cannot tell who is who', async () => {
+  it('numbers three speakers too', async () => {
     render(
       <CallHistory
         firmId={FIRM_ID}

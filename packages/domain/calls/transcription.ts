@@ -10,6 +10,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../db
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { readFirm } from '../crm/firms.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
+import { HEARTBEAT_GRACE_SECONDS } from '../jobs/heartbeats.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
@@ -17,6 +18,7 @@ import { markCalling, settleAttempt, type ReservationState } from '../research/r
 import { readCallTranscription } from '../settings/integrations.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import type { TwilioRecordingFetcher } from './twilioRecording.ts';
+import { boundMp3 } from './mp3Bound.ts';
 
 /**
  * Call transcription (slice C2, migration 0030).
@@ -75,6 +77,12 @@ export const TRANSCRIPTION_SUBJECT_KIND = 'call_transcription';
 export const TRANSCRIPTION_MAX_ATTEMPTS = 2;
 /** A reservation older than this has outlived every lease that could still be using it. */
 export const TRANSCRIPTION_SWEEP_MINUTES = 30;
+/**
+ * Seconds added to Twilio's recording duration before it is priced (review fold 1, P1):
+ * Twilio reports whole seconds, and the audio a provider measures can run a fraction past
+ * them. The reserved minutes are the bound; the audio is cut to them before upload.
+ */
+export const TRANSCRIPTION_DURATION_MARGIN_SECONDS = 2;
 /** The longest call the reservation shape admits (`provider_reservations_priced_shape`). */
 const MAX_PRICED_MINUTES = 240;
 
@@ -143,6 +151,35 @@ export async function transcriptionSpentCents(context: RepositoryContext, busine
 export async function transcriptionSpentToday(context: RepositoryContext): Promise<number> {
   const zone = await workspaceBusinessZone(context);
   return await transcriptionSpentCents(context, localDate(await databaseNow(context), zone));
+}
+
+// ---------------------------------------------------------------------------
+// Whether a worker can transcribe (review fold 1, P2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The key in a worker heartbeat's `detail` that says the beating runner has
+ * `call.transcribe` registered — which it has only when its task was given both the
+ * `transcription` key and the Twilio recording credentials. The API reads this instead of
+ * the secret: the Deepgram key reaches the worker's process and no other.
+ */
+export const TRANSCRIPTION_HEARTBEAT_FLAG = 'call_transcribe';
+
+/**
+ * Whether some worker that is alive now (its heartbeat fresh, as `heartbeatIsFresh`
+ * defines it) can run `call.transcribe`. The recording callback asks this before it
+ * queues a transcription, and Settings asks it for "the key is in place".
+ */
+export async function transcriptionWorkerAvailable(db: Queryable): Promise<boolean> {
+  const { rows } = await db.query<{ available: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM heartbeats
+        WHERE component = 'worker' AND detail ->> $1 = 'true'
+          AND observed_at + make_interval(secs => expected_interval_seconds + $2) >= now()
+     ) AS available`,
+    [TRANSCRIPTION_HEARTBEAT_FLAG, HEARTBEAT_GRACE_SECONDS.worker],
+  );
+  return rows[0]?.available === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,11 +289,20 @@ interface AttemptRow {
   readonly state: ReservationState;
   readonly cents: number;
   readonly unitPriceMicros: number;
+  /** The minutes this attempt was priced at: the most audio it may send and be settled at. */
+  readonly maxUnits: number;
 }
 
 async function listTranscriptionAttempts(context: RepositoryContext, sessionId: string): Promise<readonly AttemptRow[]> {
-  const { rows } = await context.db.query<{ id: string; attempt: number; state: ReservationState; cents: number; unit_price_micros: number | null }>(
-    `SELECT id, attempt, state, cents, unit_price_micros FROM provider_reservations
+  const { rows } = await context.db.query<{
+    id: string;
+    attempt: number;
+    state: ReservationState;
+    cents: number;
+    unit_price_micros: number | null;
+    max_units: number | null;
+  }>(
+    `SELECT id, attempt, state, cents, unit_price_micros, max_units FROM provider_reservations
       WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
       ORDER BY attempt DESC`,
     [context.scope.workspaceId, TRANSCRIPTION_SUBJECT_KIND, sessionId],
@@ -267,6 +313,7 @@ async function listTranscriptionAttempts(context: RepositoryContext, sessionId: 
     state: row.state,
     cents: Number(row.cents),
     unitPriceMicros: Number(row.unit_price_micros ?? 0),
+    maxUnits: Number(row.max_units ?? 0),
   }));
 }
 
@@ -279,11 +326,35 @@ async function transcribed(context: RepositoryContext, sessionId: string): Promi
   return rows.length > 0;
 }
 
-/** Close every open attempt from outside a claim: `reserved` is released, `calling` estimated. */
-async function finaliseOpenAttempts(context: RepositoryContext, sessionId: string, at: string): Promise<{ released: number; estimated: number }> {
+/**
+ * Close open attempts from outside a claim: `reserved` is released, `calling` estimated.
+ * `olderThanMinutes` (the sweep) closes only rows written at least that long ago, read
+ * under the session's lock: a fresh retry a recovering claim wrote after the sweep chose
+ * the session is a live attempt, not a lost one (review fold 1, P2).
+ */
+async function finaliseOpenAttempts(
+  context: RepositoryContext,
+  sessionId: string,
+  at: string,
+  options: { readonly olderThanMinutes?: number } = {},
+): Promise<{ released: number; estimated: number }> {
   let released = 0;
   let estimated = 0;
+  const old =
+    options.olderThanMinutes === undefined
+      ? null
+      : new Set(
+          (
+            await context.db.query<{ id: string }>(
+              `SELECT id FROM provider_reservations
+                WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
+                  AND created_at + make_interval(mins => $4) <= clock_timestamp()`,
+              [context.scope.workspaceId, TRANSCRIPTION_SUBJECT_KIND, sessionId, options.olderThanMinutes],
+            )
+          ).rows.map(row => row.id),
+        );
   for (const row of await listTranscriptionAttempts(context, sessionId)) {
+    if (old !== null && !old.has(row.id)) continue;
     if (row.state === 'reserved') {
       if ((await settleAttempt(context, { reservationId: row.id, at, outcome: { kind: 'released' } })) !== null) released += 1;
     } else if (row.state === 'calling') {
@@ -291,6 +362,20 @@ async function finaliseOpenAttempts(context: RepositoryContext, sessionId: strin
     }
   }
   return { released, estimated };
+}
+
+/**
+ * Whether a paid call is still authorized now: the switch on, a ceiling above 0, the key
+ * in place. Asked again immediately before the provider is called, so a reservation made
+ * while it was on does not outlive a later "off" or a $0 ceiling (review fold 1, P2).
+ */
+async function stillAuthorized(
+  context: RepositoryContext,
+  keyConfigured: boolean,
+): Promise<TranscriptionRefusalCode | null> {
+  const setting = await readCallTranscription(context);
+  if (!setting.enabled || setting.dailyCeilingCents <= 0) return 'transcription_off';
+  return keyConfigured ? null : 'transcription_unconfigured';
 }
 
 type Clearance =
@@ -316,7 +401,8 @@ async function clearAttempt(
   ]);
   const zone = await workspaceBusinessZone(context);
   const businessDate = localDate(input.at, zone);
-  const minutes = transcriptionMinutes(facts.recordingSeconds);
+  // Priced with the margin; these minutes are the bound the audio is cut to before upload.
+  const minutes = transcriptionMinutes(facts.recordingSeconds + TRANSCRIPTION_DURATION_MARGIN_SECONDS);
   const cents = transcriptionCents(minutes, setting.unitPriceMicros);
   if (setting.dailyCeilingCents <= 0) return { ok: false, reason: 'transcription_budget_exhausted' };
   const spent = await transcriptionSpentCents(context, businessDate);
@@ -402,19 +488,22 @@ export async function ensureTranscriptionCalling(
   }
   const rows = await listTranscriptionAttempts(context, input.sessionId);
   const reserved = rows.find(row => row.state === 'reserved');
-  if (reserved !== undefined && input.keyConfigured) {
+  const withdrawn = await stillAuthorized(context, input.keyConfigured);
+  if (withdrawn !== null) {
+    // Turned off, set to $0 or without a key since the reservation was made: every open
+    // attempt is closed — `reserved` released (nothing was called), `calling` estimated.
+    await finaliseOpenAttempts(context, input.sessionId, input.at);
+    return { kind: 'closed', reason: withdrawn };
+  }
+  if (reserved !== undefined) {
     await markCalling(context, reserved.id);
     return { kind: 'calling', attempt: reserved.attempt };
   }
   for (const row of rows) {
     if (row.state === 'calling') {
       await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'estimated' } });
-    } else if (row.state === 'reserved') {
-      // Only reachable without a key: no call can be made, so the cents go back.
-      await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'released' } });
     }
   }
-  if (!input.keyConfigured) return { kind: 'closed', reason: 'transcription_unconfigured' };
   if (rows.length >= TRANSCRIPTION_MAX_ATTEMPTS) return { kind: 'closed', reason: 'transcription_failed' };
   const clearance = await clearAttempt(context, input);
   if (!clearance.ok) return { kind: 'closed', reason: clearance.reason };
@@ -459,10 +548,19 @@ export async function finishCallTranscription(
     await releaseNotCalled();
     return { kind: 'done', reason: 'already_transcribed' };
   }
+  // Under the session's lock, which the deletion workflow takes for every session it
+  // removes before it reads anything (review fold 1, P1): a session that is gone, or has
+  // stopped qualifying, sends nothing.
   const facts = await sessionFacts(context, input.sessionId);
   if (!eligible(facts)) {
     await releaseNotCalled();
     return { kind: 'done', reason: 'transcription_not_eligible' };
+  }
+  // And still authorized: a reservation does not outlive "off", $0 or a missing key.
+  const withdrawn = await stillAuthorized(context, true);
+  if (withdrawn !== null) {
+    await releaseNotCalled();
+    return { kind: 'done', reason: withdrawn };
   }
 
   const recording = await input.recordings.fetchRecording(facts.recordingPath);
@@ -473,9 +571,22 @@ export async function finishCallTranscription(
     return { kind: 'done', reason: 'transcription_failed', code: `recording_${recording.reason}` };
   }
 
+  // The bound made real: the provider is sent at most the minutes this attempt was priced
+  // at, cut at a frame boundary, so what it can bill is what was cleared. Audio that cannot
+  // be read as MP3 is not sent at all.
+  const bounded = boundMp3(recording.bytes, reservation.maxUnits * 60);
+  if (bounded === null) {
+    await releaseNotCalled();
+    return { kind: 'done', reason: 'transcription_failed', code: 'recording_unreadable' };
+  }
+  if ((await sessionFacts(context, input.sessionId)) === null) {
+    await releaseNotCalled();
+    return { kind: 'done', reason: 'transcription_not_eligible' };
+  }
+
   let outcome: TranscriptionOutcome;
   try {
-    outcome = await input.provider.transcribe({ audio: recording.bytes, contentType: recording.contentType });
+    outcome = await input.provider.transcribe({ audio: bounded.bytes, contentType: recording.contentType });
   } catch {
     // A port that throws is a port whose call may have gone out. Never the error's text:
     // it is the provider adapter's, and the adapter is the one place a key could be.
@@ -509,7 +620,10 @@ export async function finishCallTranscription(
       JSON.stringify(utterances),
     ],
   );
-  const cents = transcriptionCents(transcriptionMinutes(outcome.durationSeconds), reservation.unitPriceMicros);
+  // Settled at the provider's duration, never past the minutes that were cleared: the audio
+  // was cut to them, so a longer report is the provider's rounding, not more audio.
+  const minutes = Math.min(transcriptionMinutes(outcome.durationSeconds), Math.max(1, reservation.maxUnits));
+  const cents = transcriptionCents(minutes, reservation.unitPriceMicros);
   const settled = await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents } });
   return { kind: 'transcribed', settledCents: settled?.recordedCents ?? 0, utterances: utterances.length };
 }
@@ -538,7 +652,7 @@ export async function sweepTranscriptionReservations(
   const at = new Date().toISOString();
   for (const row of rows) {
     if (!(await tryLockTranscription(context, row.subject_id))) continue;
-    const closed = await finaliseOpenAttempts(context, row.subject_id, at);
+    const closed = await finaliseOpenAttempts(context, row.subject_id, at, { olderThanMinutes: TRANSCRIPTION_SWEEP_MINUTES });
     released += closed.released;
     estimated += closed.estimated;
   }
@@ -558,9 +672,27 @@ export async function workspacesOwingTranscriptionSweep(db: Queryable): Promise<
 }
 
 /**
- * The deletion workflow's step for the sessions it is about to remove: each session's
- * lock (a claim mid-call finishes first), then its open attempts finalised as the sweep
- * does it. The transcripts themselves are deleted by the workflow (and would cascade).
+ * The deletion workflow's lock on the sessions it is about to remove (review fold 1,
+ * P1): **every** one of them, with or without a transcription yet — each session's
+ * transcription lock in id order (a claim mid-call finishes first; a claim that has not
+ * begun waits, and then finds the session gone), then the session rows themselves. Taken
+ * after the send gate and before anything is measured, and held to the commit.
+ */
+export async function lockSessionsForDeletion(context: RepositoryContext, sessionIds: readonly string[]): Promise<void> {
+  const sorted = [...new Set(sessionIds)].sort();
+  for (const sessionId of sorted) await lockTranscription(context, sessionId);
+  if (sorted.length > 0) {
+    await context.db.query('SELECT id FROM call_sessions WHERE workspace_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE', [
+      context.scope.workspaceId,
+      sorted,
+    ]);
+  }
+}
+
+/**
+ * The deletion workflow's step for the sessions it is about to remove, under the locks
+ * `lockSessionsForDeletion` took: their open attempts finalised as the sweep does it. The
+ * transcripts themselves are deleted by the workflow (and would cascade).
  */
 export async function finaliseTranscriptionsOfSessions(
   context: RepositoryContext,

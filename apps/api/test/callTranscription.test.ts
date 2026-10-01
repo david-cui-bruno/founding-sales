@@ -9,6 +9,7 @@ import { PUBLIC_ORIGIN, startIntegrationServer, type IntegrationServer } from '.
 import { runOnce } from '../../worker/src/runner/jobRunner.ts';
 import { callTranscribeJobHandler } from '../../worker/src/handlers/callTranscribe.ts';
 import { deepgramTranscription, type DeepgramHttp } from '../../worker/src/transcription/deepgramClient.ts';
+import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 
 /**
  * Slice C2 end to end, with fakes for the two providers only: three calls placed through
@@ -19,7 +20,8 @@ import { deepgramTranscription, type DeepgramHttp } from '../../worker/src/trans
  */
 
 const CALLER_ID = '+14015550100';
-const AUDIO = Buffer.from('ID3 a recording, as far as this test is concerned');
+// Three minutes of silent MP3 frames: what Twilio would hand back for the answered call.
+const AUDIO = silentMp3(180);
 // Assembled at runtime so no scanner mistakes a fixture for a credential.
 const FAKE_KEY = ['FAKE', 'dg', 'key', '0123456789'].join('-');
 
@@ -177,7 +179,7 @@ describe('call transcription, end to end (slice C2)', () => {
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
-    server = await startIntegrationServer(fixture, { callerIdE164: CALLER_ID, transcriptionConfigured: true });
+    server = await startIntegrationServer(fixture, { callerIdE164: CALLER_ID });
     adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
     for (const [settingKey, value] of [
@@ -191,6 +193,13 @@ describe('call transcription, end to end (slice C2)', () => {
     const identity = await post('/calling-identities/register', salespersonToken, command({ e164: CALLER_ID }));
     identityId = String((resultOf(identity)['identity'] as { id?: string } | undefined)?.id);
     expect((await post('/postures/allow', adminToken, command({ states: ['RI'], confirmed: true }))).status).toBe(200);
+
+    // The API is not given the key (review fold 1, P2): until a worker that can transcribe
+    // has beaten, Settings says the key is not in place. One idle pass of the worker that
+    // has it publishes `call_transcribe` in its heartbeat.
+    const before = await get('/settings/integrations?include=transcription', adminToken);
+    expect(before.body['transcription']).toMatchObject({ configured: { ok: false, missing: [] } });
+    await runOnce(fixture.db, { registry: registry(), owner: 'transcription-test', limit: 1 });
 
     answered = await placeCall('Answered', { answered: true, seconds: 180, phone: '+14015550187' });
     short = await placeCall('Short', { answered: true, seconds: 15, phone: '+14015550186' });
@@ -230,13 +239,13 @@ describe('call transcription, end to end (slice C2)', () => {
     expect(deepgramRequests[0]?.contentType).toBe('audio/mpeg');
     expect(deepgramRequests[0]?.bytes).toBe(AUDIO.byteLength);
 
-    // Reserved at three minutes (12 900 micro-dollars, 2 cents), settled at Deepgram's
-    // 180.4 seconds: four started minutes, 17 200 micro-dollars, 2 cents.
+    // Reserved at (180 + 2) s, four minutes (17 200 micro-dollars, 2 cents) — the bound the
+    // audio was cut to — and settled at Deepgram's 180.4 s, four started minutes, 2 cents.
     const { rows: reservations } = await fixture.db.query<{ state: string; cents: number; settled_cents: number; max_units: number }>(
       "SELECT state, cents, settled_cents, max_units FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1",
       [answered.sessionId],
     );
-    expect(reservations).toEqual([{ state: 'settled', cents: 2, settled_cents: 2, max_units: 3 }]);
+    expect(reservations).toEqual([{ state: 'settled', cents: 2, settled_cents: 2, max_units: 4 }]);
 
     const transcript = await get(`/calls/transcript?callSessionId=${answered.sessionId}`, salespersonToken);
     expect(transcript.status, transcript.text).toBe(200);

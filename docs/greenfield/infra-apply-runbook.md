@@ -215,7 +215,7 @@ Terraform creates seven **empty** Secrets Manager application entries, and two m
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
 | `fss-prod/twilio-voice` | Twilio Voice, as in [calling.md](calling.md); `{}` until calling is set up |
 | `fss-prod/calcom` | Cal.com webhook secret, as in [meetings.md](meetings.md); `{}` until bookings are set up |
-| `fss-prod/transcription` | Call transcription, `{"provider": "deepgram", "api_key": "..."}`, as in [calling.md](calling.md); `{}` until a key exists. It must hold `{}` before the apply that adds it to the API and worker tasks |
+| `fss-prod/transcription` | Call transcription, `{"provider": "deepgram", "api_key": "..."}`, as in [calling.md](calling.md); `{}` until a key exists. It must hold `{}` before the apply that adds it to the worker task |
 
 Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). Neither is an input any more: the topic is the `gmail_push_topic` literal in `infra/roots/production`, which `infra/roots/production-google` owns and outputs, and the domain is the `google_hosted_domain` literal `usecallie.com` in `infra/modules/stack`. See [`docs/archive/release-first.md`](../archive/release-first.md) 1.6.
 

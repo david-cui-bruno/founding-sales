@@ -259,7 +259,7 @@ export interface ApiDeployment {
    */
   readonly integrations: IntegrationDeps;
   /** Which of the two entries parsed, or why not — a field *name*, never a value. */
-  readonly integrationSources: { readonly twilio: string; readonly calcom: string; readonly transcription: string };
+  readonly integrationSources: { readonly twilio: string; readonly calcom: string };
 }
 
 /**
@@ -333,12 +333,10 @@ export async function readApiDeployment(
       twilio: integrationSecrets.twilio,
       calcom: integrationSecrets.calcom,
       missing: integrationSecrets.missing,
-      transcriptionConfigured: integrationSecrets.transcriptionConfigured,
     },
     integrationSources: {
       twilio: integrationSecrets.twilioProblem ?? 'configured',
       calcom: integrationSecrets.calcomProblem ?? 'configured',
-      transcription: integrationSecrets.transcriptionProblem ?? 'configured',
     },
   };
 
@@ -525,7 +523,6 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
     // its switch on; the route answers 503 and logs `integration_unconfigured` until then.
     twilio_voice_config: deployment.integrationSources.twilio,
     calcom_config: deployment.integrationSources.calcom,
-    transcription_config: deployment.integrationSources.transcription,
     public_origin_configured: deployment.integrations.publicOrigin !== null,
   };
 }

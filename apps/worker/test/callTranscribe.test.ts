@@ -10,8 +10,11 @@ import {
   beginCallTranscription,
   enqueueCallTranscription,
   ensureTranscriptionCalling,
+  finishCallTranscription,
   readCallTranscript,
   sweepTranscriptionReservations,
+  transcriptionSpentCents,
+  transcriptionWorkerAvailable,
   workspacesOwingTranscriptionSweep,
   type TranscriptionOutcome,
   type TranscriptionProvider,
@@ -27,6 +30,10 @@ import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
 import { readTranscriptionComposition, registerHandlers } from '../src/bootstrap/main.ts';
+import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
+import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
+import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
+import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
@@ -47,7 +54,8 @@ import {
 
 // Assembled at runtime so no scanner mistakes a fixture for a credential.
 const FAKE_KEY = ['FAKE', 'dg', 'key', '0123456789'].join('-');
-const AUDIO = Buffer.from('ID3 a recording, as far as this test is concerned');
+// Fifteen seconds of silent MP3 frames: inside every reserved bound below.
+const AUDIO = silentMp3(15);
 
 const answer = (duration: number): unknown => ({
   metadata: { request_id: 'request-1', duration, models: ['nova-3'] },
@@ -296,9 +304,9 @@ describe('the call.transcribe job', () => {
     ],
   });
 
-  async function drain(provider: TranscriptionProvider): Promise<void> {
+  async function drain(provider: TranscriptionProvider, fetcher: TwilioRecordingFetcher = recordings): Promise<void> {
     const registry = new HandlerRegistry().register(
-      callTranscribeJobHandler({ provider, recordings, log: (event, fields) => logs.push({ event, fields }) }),
+      callTranscribeJobHandler({ provider, recordings: fetcher, log: (event, fields) => logs.push({ event, fields }) }),
     );
     for (let pass = 0; pass < 5; pass += 1) {
       const report = await runOnce(database.session, { registry, owner: 'transcribe-test', limit: 10 });
@@ -346,8 +354,9 @@ describe('the call.transcribe job', () => {
     const provider = scripted([ok(301)]);
     await drain(provider);
     expect(provider.calls).toBe(1);
-    // Three minutes reserved (12 900 µ$ → 2 ¢); 301 s is six started minutes (25 800 µ$ → 3 ¢).
-    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 3 }]);
+    // (150 + 2) s is three minutes reserved (12 900 µ$ → 2 ¢), and three is the bound: a
+    // report of 301 s settles at the three minutes that were cleared, not six.
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
     const transcript = await readCallTranscript(salesperson(), sessionId);
     expect(transcript).toMatchObject({ callSessionId: sessionId, provider: 'deepgram', model: 'nova-3', language: 'en', durationSeconds: 301 });
     expect(transcript?.utterances).toHaveLength(2);
@@ -355,8 +364,8 @@ describe('the call.transcribe job', () => {
       'SELECT cost_cents FROM provider_ledger WHERE workspace_id = $1 AND provider_key = $2',
       [seeded.alpha.workspaceId, DEEPGRAM_PROVIDER_KEY],
     );
-    expect(rows.reduce((total, row) => total + Number(row.cost_cents), 0)).toBeGreaterThanOrEqual(3);
-    expect(logs.find(line => line.event === 'call_transcription')?.fields).toMatchObject({ settled_cents: 3, utterances: 2 });
+    expect(rows.reduce((total, row) => total + Number(row.cost_cents), 0)).toBeGreaterThanOrEqual(2);
+    expect(logs.find(line => line.event === 'call_transcription')?.fields).toMatchObject({ settled_cents: 2, utterances: 2 });
   });
 
   it('refuses with transcription_budget_exhausted when the day’s ceiling would be passed, and calls nobody', async () => {
@@ -446,6 +455,157 @@ describe('the call.transcribe job', () => {
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 1, settled_cents: 0 }]);
   });
 
+  // ------------------------------------------------------------------ review fold 1
+  const today = async (): Promise<number> =>
+    await withTransaction(database.session, async () => {
+      const { rows } = await database.session.query<{ date: string }>(
+        "SELECT (now() AT TIME ZONE 'America/New_York')::date::text AS date",
+      );
+      return await transcriptionSpentCents(system(), rows[0]?.date ?? '');
+    });
+
+  it('never records more than the ceiling: two 120 s calls against a 2¢ ceiling, Deepgram hearing 120.4 s (P1)', async () => {
+    const spentBefore = await today();
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: spentBefore + 2, unitPriceMicros: 4_300 });
+    try {
+      const first = await call(120);
+      const second = await call(120);
+      expect((await enqueue(first)).enqueued).toBe(true);
+      expect((await enqueue(second)).enqueued).toBe(true);
+      await drain(scripted([ok(120.4), ok(120.4)]), {
+        fetchRecording: async () => await Promise.resolve({ ok: true as const, contentType: 'audio/mpeg' as const, bytes: silentMp3(120) }),
+      });
+      // (120 + 2) s is three minutes, 2 ¢: the first fits the ceiling and the second is refused.
+      expect(await today()).toBeLessThanOrEqual(spentBefore + 2);
+      expect(await attempts(first)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+      expect(await attempts(second)).toEqual([]);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  it('settles at the reserved minutes when the provider reports more than was cleared (P1)', async () => {
+    const spentBefore = await today();
+    // A cent a minute, so a minute more shows as a cent more.
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: spentBefore + 6, unitPriceMicros: 10_000 });
+    try {
+      const first = await call(120);
+      const second = await call(120);
+      expect((await enqueue(first)).enqueued).toBe(true);
+      expect((await enqueue(second)).enqueued).toBe(true);
+      await drain(scripted([ok(200), ok(200)]));
+      expect((await attempts(first))[0]).toMatchObject({ cents: 3, settled_cents: 3 });
+      expect((await attempts(second))[0]).toMatchObject({ cents: 3, settled_cents: 3 });
+      expect(await today()).toBe(spentBefore + 6);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  it('sends the provider at most the reserved minutes of audio, and nothing it cannot read as MP3 (P1)', async () => {
+    const sessionId = await call(60);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    const sent: number[] = [];
+    const base = scripted([ok(60)]);
+    // Twilio said 60 s and hands back ten minutes: only the two reserved minutes go out.
+    await drain(
+      {
+        ...base,
+        transcribe: async input => {
+          sent.push(boundMp3(input.audio, Number.MAX_SAFE_INTEGER)?.seconds ?? -1);
+          return await base.transcribe(input);
+        },
+      },
+      { fetchRecording: async () => await Promise.resolve({ ok: true as const, contentType: 'audio/mpeg' as const, bytes: silentMp3(600) }) },
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBeLessThanOrEqual(120);
+    expect(sent[0]).toBeGreaterThan(119);
+
+    const unreadable = await call(60);
+    expect((await enqueue(unreadable)).enqueued).toBe(true);
+    const provider = scripted([ok(60)]);
+    await drain(provider, {
+      fetchRecording: async () => await Promise.resolve({ ok: true as const, contentType: 'audio/mpeg' as const, bytes: Buffer.from('not audio') }),
+    });
+    expect(provider.calls).toBe(0);
+    expect(await attempts(unreadable)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+  });
+
+  it('releases a reservation, and calls nobody, when transcription is turned off or set to $0 after it was made (P2)', async () => {
+    const at = new Date().toISOString();
+    // Off between chunk 1 and chunk 2: the unused reservation is released by the next claim.
+    const off = await call(90);
+    expect((await enqueue(off)).enqueued).toBe(true);
+    const common = { sessionId: off, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    expect(await withTransaction(database.session, async () => await beginCallTranscription(system(), common))).toEqual({ kind: 'reserved', attempt: 1 });
+    await setting('call_transcription', { enabled: false, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    try {
+      const provider = scripted([ok(90)]);
+      await drain(provider);
+      expect(provider.calls).toBe(0);
+      expect(await attempts(off)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+
+    // $0 between chunk 2 and chunk 3: the claim that marked it releases it, uncalled.
+    const zero = await call(90);
+    const zeroCommon = { ...common, sessionId: zero };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), zeroCommon));
+    expect(await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), zeroCommon))).toEqual({ kind: 'calling', attempt: 1 });
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: 0, unitPriceMicros: 4_300 });
+    try {
+      const provider = scripted([ok(90)]);
+      const finished = await withTransaction(database.session, async () =>
+        await finishCallTranscription(system(), { sessionId: zero, attempt: 1, at, recordings, provider }),
+      );
+      expect(finished).toEqual({ kind: 'done', reason: 'transcription_off' });
+      expect(provider.calls).toBe(0);
+      expect(await attempts(zero)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  it('closes only the attempts that are themselves old, leaving a fresh retry alone (P2)', async () => {
+    const sessionId = await call(90);
+    const at = new Date().toISOString();
+    const common = { sessionId, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common));
+    await database.session.query(
+      "UPDATE provider_reservations SET created_at = now() - INTERVAL '31 minutes' WHERE subject_kind = 'call_transcription' AND subject_id = $1",
+      [sessionId],
+    );
+    // A recovering claim's fresh attempt 2, written after the sweep chose the session by
+    // attempt 1's age and before it took the lock.
+    await database.session.query(
+      `INSERT INTO provider_reservations
+         (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+          cents, priced_unit, max_units, unit_price_micros, state)
+       VALUES ($1, $2, 'call_transcription', $3, 2, (now() AT TIME ZONE 'America/New_York')::date, 'America/New_York', 1, 'minute', 2, 4300, 'calling')`,
+      [seeded.alpha.workspaceId, DEEPGRAM_PROVIDER_KEY, sessionId],
+    );
+    expect(await withTransaction(database.session, async () => await sweepTranscriptionReservations(system()))).toEqual({ released: 0, estimated: 1 });
+    expect((await attempts(sessionId)).map(row => `${String(row.attempt)}:${row.state}`)).toEqual(['1:estimated', '2:calling']);
+    // Leave nothing open for the tests after this one.
+    await database.session.query("UPDATE provider_reservations SET state = 'estimated', settled_cents = cents, settled_at = now() WHERE subject_id = $1 AND state = 'calling'", [sessionId]);
+  });
+
+  it('says a worker can transcribe only while a fresh worker heartbeat says so (P2)', async () => {
+    await database.session.query("DELETE FROM heartbeats WHERE component = 'worker'");
+    expect(await transcriptionWorkerAvailable(database.session)).toBe(false);
+    // A worker without the handler beats: still no.
+    await runOnce(database.session, { registry: new HandlerRegistry(), owner: 'no-key-worker', limit: 1 });
+    expect(await transcriptionWorkerAvailable(database.session)).toBe(false);
+    await drain(scripted([]));
+    expect(await transcriptionWorkerAvailable(database.session)).toBe(true);
+    // A beat older than its interval is not a live worker.
+    await database.session.query("UPDATE heartbeats SET observed_at = now() - INTERVAL '2 minutes' WHERE component = 'worker'");
+    expect(await transcriptionWorkerAvailable(database.session)).toBe(false);
+  });
+
   it('finalises a lost lease in the sweep, and leaves alone a session a live claim holds', async () => {
     const sessionId = await call(90);
     const at = new Date().toISOString();
@@ -479,5 +639,57 @@ describe('the call.transcribe job', () => {
     );
     await runOnce(database.session, { registry, owner: 'sweep-test', limit: 5 });
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 1, settled_cents: 1 }]);
+  });
+
+  // Last, because it deletes the firm every call above was placed at.
+  it('sends no audio once the session is deleted, even for a transcription that begins during the deletion (P1)', async () => {
+    const sessionId = await call(90);
+    const admin = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    const preview = await previewDeletion(admin, { targetKind: 'firm', firmId: crm.alpha.firmId });
+    // The deletion runs, uncommitted, before the session has any reservation.
+    await database.session.query('BEGIN');
+    let committed = false;
+    try {
+      const outcome = await commitDeletion(admin, {
+        requestId: preview.value?.requestId ?? '',
+        previewHash: preview.value?.previewHash ?? '',
+        commandId: 'deletion-during-transcription',
+        journal: recordingSuppressionJournal(),
+      });
+      expect(outcome.ok, outcome.ok ? '' : outcome.reason).toBe(true);
+
+      // Meanwhile a worker, on its own connection, begins this call's transcription.
+      const other = await database.appRuntimeSession();
+      const worker = repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), other);
+      const provider = scripted([ok(90)]);
+      const at = new Date().toISOString();
+      const common = { sessionId, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      let settledWorker = false;
+      const run = (async () => {
+        const begun = await withTransaction(other, async () => await beginCallTranscription(worker, common));
+        if (begun.kind !== 'reserved') return begun;
+        const calling = await withTransaction(other, async () => await ensureTranscriptionCalling(worker, common));
+        if (calling.kind !== 'calling') return calling;
+        return await withTransaction(other, async () =>
+          await finishCallTranscription(worker, { sessionId, attempt: calling.attempt, at, recordings, provider }),
+        );
+      })().finally(() => {
+        settledWorker = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      // It waits on the session's lock the deletion holds, and has sent nothing.
+      expect(settledWorker).toBe(false);
+      expect(provider.calls).toBe(0);
+      await database.session.query('COMMIT');
+      committed = true;
+      expect(await run).toMatchObject({ kind: 'done', reason: 'transcription_not_eligible' });
+      expect(provider.calls).toBe(0);
+      expect(await attempts(sessionId)).toEqual([]);
+    } finally {
+      if (!committed) await database.session.query('ROLLBACK');
+    }
   });
 });

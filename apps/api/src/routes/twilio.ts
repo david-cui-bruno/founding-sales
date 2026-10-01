@@ -6,7 +6,7 @@ import {
   workspaceOfCallSession,
 } from '@fss/domain/calls/sessions.ts';
 import { workspacesWithIntegration } from '@fss/domain/settings/integrations.ts';
-import { enqueueCallTranscription } from '@fss/domain/calls/transcription.ts';
+import { enqueueCallTranscription, transcriptionWorkerAvailable } from '@fss/domain/calls/transcription.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -183,13 +183,15 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
       ...(recordingDuration === undefined ? {} : { durationSeconds: recordingDuration }),
     });
     // Slice C2: the transcription is queued from here, in the same transaction, when the
-    // workspace turned it on, the key is in place, the call was answered and the
+    // workspace turned it on, a worker with the key is up, the call was answered and the
     // recording lasts at least twenty seconds (`calls/transcription.ts`).
     if (recorded.recorded !== undefined && (recordingStatus === undefined || recordingStatus === 'completed')) {
       const queued = await enqueueCallTranscription(session, {
         workspaceId: recorded.recorded.workspaceId,
         sessionId: recorded.recorded.sessionId,
-        keyConfigured: options.integrations?.transcriptionConfigured === true,
+        // The key is the worker's alone; a live worker that can transcribe says so in its
+        // heartbeat (review fold 1, P2), and that is what "configured" means here.
+        keyConfigured: await transcriptionWorkerAvailable(session),
       });
       if (!queued.enqueued && queued.reason !== 'transcription_off') {
         options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });

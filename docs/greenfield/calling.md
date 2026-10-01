@@ -233,8 +233,8 @@ day, 4 300 micro-dollars a minute. It is an integration key like the four above:
 with `{ setting, configured: {ok, missing}, spentTodayCents }` (only when asked for, because
 a desktop built with slice S1 parses that answer strictly). Settings → Calling & calendar
 has "Transcribe calls" (on/off) and "Daily transcription budget" in dollars; both are
-disabled, with a sentence, while the key is missing, and the switch stays off while the
-budget is $0.
+disabled, with a sentence, while the key is missing (no live worker says it can
+transcribe), and the switch stays off while the budget is $0.
 
 **Which calls.** The final recording callback (`RecordingStatus=completed`, or none)
 queues `call.transcribe` in its own transaction only when transcription is enabled with a
@@ -259,20 +259,33 @@ A three-minute call is about 1.3 cents, rounded up to 2. The paid-call pattern, 
 and telephony apply it — `provider_reservations`, subject `call_transcription`, provider
 `deepgram.nova-3`, priced by the minute — in three committed chunks:
 
-1. reserve `ceil(recording seconds / 60) × unitPriceMicros` against the day's
-   transcription ceiling (settled plus open transcription reservations of the business
-   date, serialised per workspace), or refuse `transcription_budget_exhausted`
-   ("Transcription paused: today’s transcription budget is used…");
-2. mark the reservation `calling`, and nothing else;
-3. read the recording, call Deepgram, store the utterances and settle by id at the
-   duration Deepgram reports (started minutes). A 4xx answer is a refusal Deepgram did not
-   process: settled at 0, not retried. A timeout, a dropped connection, a 5xx or an
-   unreadable answer is ambiguous: **estimated** at its reservation first, then **one**
-   bounded retry, a fresh reservation cleared against the ceiling again. Two attempts at most.
+1. reserve `ceil((recording seconds + 2) / 60)` minutes × `unitPriceMicros` against the
+   day's transcription ceiling (settled plus open transcription reservations of the
+   business date, serialised per workspace), or refuse `transcription_budget_exhausted`
+   ("Transcription paused: today’s transcription budget is used…"). **These minutes are the
+   bound**: the two seconds absorb Twilio's whole-second rounding;
+2. mark the reservation `calling`, and nothing else; if transcription was turned off, set
+   to $0 or lost its key since chunk 1, the reservation is released instead;
+3. under the session's lock, ask again that the session exists, still qualifies and is
+   still authorized (on, above $0, key); read the recording and **cut it to the reserved
+   minutes at an MP3 frame boundary** (`packages/domain/calls/mp3Bound.ts`; audio that is
+   not readable as MPEG Layer III is not sent at all); call Deepgram with what is left;
+   store the utterances and settle by id at `min(Deepgram's duration, the reserved
+   minutes)`. So the day's recorded spend never passes the ceiling that cleared it. A 4xx
+   answer is a refusal Deepgram did not process: settled at 0, not retried. A timeout, a
+   dropped connection, a 5xx or an unreadable answer is ambiguous: **estimated** at its
+   reservation first, then **one** bounded retry, a fresh reservation cleared against the
+   ceiling again. Two attempts at most.
 
 A lost lease is finalised by the sweep: `telephony.sweep` also releases (`reserved`) or
 estimates (`calling`) a transcription reservation still open 30 minutes after it was
-written, skipping a session whose per-session lock a live claim holds.
+written, skipping a session whose per-session lock a live claim holds, and, under the
+lock, closing only the rows that are themselves that old (a fresh retry is left alone).
+
+**Deletion** takes every targeted session's transcription lock and row lock right after the
+send gate, before it measures anything, and holds them to the commit: a transcription that
+has not begun waits and then finds the session gone, so no audio of a deleted call reaches
+Deepgram.
 
 **The key never leaves the worker's closure**: not in an outcome, an error, a job row or a
 log line (failures are words like `deepgram_http_401`), and `apps/worker/test/callTranscribe.test.ts`
@@ -280,16 +293,20 @@ plants it in every failure the client can meet to prove it.
 
 **Reading it.** `GET /calls/transcript?callSessionId=` (the firm's assigned salesperson or
 an admin; anything else is 404, like a call with no transcript). The history row's
-`hasTranscript` offers a "Transcript" disclosure; the speakers are "Them" (speaker 0, who
-spoke first — on a call placed from Callie, the person who answered) and "You" when there
-are exactly two, and "Speaker 1", "Speaker 2", … otherwise; times are grey. A read that
+`hasTranscript` offers a "Transcript" disclosure; the speakers are always "Speaker 1",
+"Speaker 2", … in the order they first speak — diarization tells voices apart, not who is
+who, so Callie does not guess which one is David; times are grey. A read that
 fails is a sentence from `reasonSentence`.
 
 **The secret.** Secrets Manager entry `<prefix>/transcription`, one JSON object,
-`{"provider": "deepgram", "api_key": "..."}`. The worker reads it (and `twilio-voice`, for the
-recording); the API reads it only to know whether it is in place, by field name. `{}` —
+`{"provider": "deepgram", "api_key": "..."}`. Only the worker is given it (and `twilio-voice`,
+for the recording). The API never holds the key: a worker that has it registers
+`call.transcribe`, and says so in its heartbeat (`detail.call_transcribe = true`); the
+recording callback and Settings read "the key is in place" from a fresh worker heartbeat
+(`transcriptionWorkerAvailable`). So Settings also reads "not set up" while no worker is
+running. `{}` —
 what the rehearsal fills and what the release puts in production before the deploy that
-adds the entry to the tasks — reads as not configured, and nothing is transcribed.
+adds the entry to the worker task — reads as not configured, and nothing is transcribed.
 
 ### The voicemail script
 

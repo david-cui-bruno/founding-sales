@@ -3,7 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { finaliseTranscriptionsOfSessions } from '../calls/transcription.ts';
+import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
@@ -640,6 +640,18 @@ export async function commitDeletion(
   if (row.state === 'committed') return refuse('already_committed');
 
   const scope: Scope = { firmId: row.firm_id, contactId: row.contact_id };
+  // Slice C2 (review fold 1, P1): every call session this deletion removes is locked now,
+  // after the gate and before anything is measured — its transcription lock and its row —
+  // and held to the commit. A transcription that has not begun waits and then finds the
+  // session gone; one that is mid-call finishes first and its transcript is removed below.
+  const { rows: targetedSessions } = await context.db.query<{ id: string }>(
+    `SELECT id FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    [context.scope.workspaceId, scope.contactId, scope.firmId],
+  );
+  await lockSessionsForDeletion(
+    context,
+    targetedSessions.map(session => session.id),
+  );
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's

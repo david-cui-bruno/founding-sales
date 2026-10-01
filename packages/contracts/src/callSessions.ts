@@ -267,19 +267,12 @@ export const TRANSCRIPTION_REFUSAL_CODES = [
 export type TranscriptionRefusalCode = (typeof TRANSCRIPTION_REFUSAL_CODES)[number];
 
 /**
- * The name each speaker index is shown under. Deepgram numbers speakers in the order they
- * first speak, so speaker 0 is whoever spoke first. On a call placed from Callie that is
- * the person who answered — "Them" — and the other voice is "You". That is only a
- * reading of the order, so it is used only when the transcript has exactly two speakers
- * and speaker 0 speaks first; anything else (one voice, three, a gap in the numbering) is
- * "Speaker 1", "Speaker 2", … rather than a guess.
+ * The name each speaker index is shown under: "Speaker 1", "Speaker 2", … in the order
+ * Deepgram numbers them, which is the order they first speak. Diarization tells voices
+ * apart, not who is who — the caller often speaks first on a call placed from Callie, and
+ * sometimes the prospect does — so no voice is named "You" or "Them" (review fold 1, P2).
  */
 export function transcriptSpeakerLabels(utterances: readonly CallTranscriptUtterance[]): ReadonlyMap<number, string> {
   const speakers = [...new Set(utterances.map(utterance => utterance.speaker))].sort((left, right) => left - right);
-  const labels = new Map<number, string>();
-  const sure = speakers.length === 2 && speakers[0] === 0 && speakers[1] === 1 && utterances[0]?.speaker === 0;
-  for (const speaker of speakers) {
-    labels.set(speaker, sure ? (speaker === 0 ? 'Them' : 'You') : `Speaker ${String(speaker + 1)}`);
-  }
-  return labels;
+  return new Map(speakers.map(speaker => [speaker, `Speaker ${String(speaker + 1)}`]));
 }

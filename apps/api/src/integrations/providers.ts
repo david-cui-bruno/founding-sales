@@ -2,7 +2,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { VOICE_ACCESS_TOKEN_SECONDS } from '@fss/contracts';
 import { twilioRecordingFetcher, type RecordingFetch, type RecordingHttp } from '@fss/domain/calls/twilioRecording.ts';
 import { CALCOM_SECRET_VARIABLE, readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
-import { TRANSCRIPTION_SECRET_VARIABLE, readTranscriptionSecret } from '@fss/domain/calls/transcriptionSecret.ts';
 
 /**
  * The two provider integrations of the call-to-booking milestone, as the API holds them
@@ -69,16 +68,7 @@ export interface IntegrationDeps {
    * Names only, never a value. Absent (a test's fakes) reads as "none missing" when the
    * integration is configured.
    */
-  readonly missing?:
-    | { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[]; readonly transcription?: readonly string[] | undefined }
-    | undefined;
-  /**
-   * Slice C2: whether the `transcription` entry holds a key of a known provider. The API
-   * never uses the key — the worker does — and keeps only this answer, so the recording
-   * callback queues no transcription while it is missing and Settings can say so. Absent
-   * reads as not configured.
-   */
-  readonly transcriptionConfigured?: boolean | undefined;
+  readonly missing?: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] } | undefined;
   /**
    * The instant the dial decision is taken at, for a test that must be inside the calling
    * window whatever the wall clock says. Production passes none: database time.
@@ -204,12 +194,9 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
   readonly calcom: Calcom | null;
   readonly twilioProblem: string | null;
   readonly calcomProblem: string | null;
-  readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[]; readonly transcription: readonly string[] };
+  readonly missing: { readonly twilioVoice: readonly string[]; readonly calcom: readonly string[] };
   /** Whether the optional reconciliation key is there: `configured`, `absent` or `field:api_key`. */
   readonly calcomApiKey: string;
-  /** Slice C2: whether the transcription key is in place; the key itself is not kept. */
-  readonly transcriptionConfigured: boolean;
-  readonly transcriptionProblem: string | null;
 } {
   let twilioMissing: readonly string[] = TWILIO_FIELD_NAMES;
   let calcomMissing: readonly string[] = CALCOM_FIELD_NAMES;
@@ -256,16 +243,12 @@ export function readIntegrationSecrets(environment: Readonly<Record<string, stri
     calcomProblem = calcomReading.problem;
   }
   if (twilio !== null) twilioMissing = [];
-  // Slice C2. Read for its shape only: the reading's key is dropped here, on purpose.
-  const transcription = readTranscriptionSecret(environment[TRANSCRIPTION_SECRET_VARIABLE]);
   return {
     twilio,
     calcom: calcomDeps,
     twilioProblem,
     calcomProblem,
-    missing: { twilioVoice: twilioMissing, calcom: calcomMissing, transcription: transcription.ok ? [] : transcription.missing },
+    missing: { twilioVoice: twilioMissing, calcom: calcomMissing },
     calcomApiKey,
-    transcriptionConfigured: transcription.ok,
-    transcriptionProblem: transcription.ok ? null : transcription.problem,
   };
 }

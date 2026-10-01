@@ -12,6 +12,7 @@ import {
   type JobHandler,
 } from '@fss/domain/jobs/handlerRegistry.ts';
 import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
+import { TRANSCRIPTION_HEARTBEAT_FLAG } from '@fss/domain/calls/transcription.ts';
 import {
   chunkBookkeepingOf,
   claimJobs,
@@ -368,7 +369,9 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
     component: 'worker',
     instanceKey: options.instanceKey ?? options.owner,
     expectedIntervalSeconds: 60,
-    detail: { claimed: claims.length, completed, failed },
+    // Slice C2: whether this runner can transcribe, for the API, which is not given the
+    // transcription key and reads this instead (`transcriptionWorkerAvailable`).
+    detail: { claimed: claims.length, completed, failed, [TRANSCRIPTION_HEARTBEAT_FLAG]: options.registry.get('call.transcribe') !== undefined },
   });
 
   return { reclaimed, claimed: claims.length, completed, failed, leaseLost, requeued, claimedClass };
