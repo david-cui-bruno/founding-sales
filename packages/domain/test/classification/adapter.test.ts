@@ -322,6 +322,11 @@ describe('a request the API refuses', () => {
     expect(dropped.provider).toEqual({ status: null, type: null, parameter: null, refused: false });
     expect(dropped.call.outcome).toBe('provider_error');
     expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).parameter).toBeNull();
+    // A leading word that is not a request parameter keeps nothing, even when it looks like a path.
+    for (const message of ['marisol: please call back', 'tuesday.at.two: confirmed', 'okafor[0]: yes']) {
+      expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message } })).parameter).toBeNull();
+    }
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: must be at most 8192' } })).parameter).toBe('max_tokens');
   });
 });
 

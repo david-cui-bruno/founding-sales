@@ -36,9 +36,23 @@ export interface ProviderErrorDetail {
 /** A parameter path at the very start of a message, up to its colon. */
 const LEADING_PARAMETER = /^([a-z_][a-z0-9_.[\]]{0,80}):/u;
 
+/**
+ * The Messages API's top-level request parameters. A leading path counts only when it starts
+ * with one of these, so a message that happens to begin with a word from the request text
+ * ("marisol: …") keeps nothing.
+ */
+const REQUEST_PARAMETERS: ReadonlySet<string> = new Set([
+  'model', 'messages', 'system', 'max_tokens', 'output_config', 'tools', 'tool_choice',
+  'temperature', 'top_p', 'top_k', 'stop_sequences', 'metadata', 'thinking', 'stream',
+  'service_tier',
+]);
+
 /** The parameter path a 400 `invalid_request_error` message starts with, or null. */
 export function leadingParameter(message: string): string | null {
-  return LEADING_PARAMETER.exec(message)?.[1] ?? null;
+  const path = LEADING_PARAMETER.exec(message)?.[1];
+  if (path === undefined) return null;
+  const head = /^[a-z_]+/u.exec(path)?.[0] ?? '';
+  return REQUEST_PARAMETERS.has(head) ? path : null;
 }
 
 /** A 4xx other than 408 (a timeout) is a refusal before generation; everything else is ambiguous. */
