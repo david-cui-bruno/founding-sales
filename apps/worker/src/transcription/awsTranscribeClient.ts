@@ -126,7 +126,7 @@ export async function loadAwsTranscribeSdk(): Promise<AwsTranscribeSdk> {
   const s3Specifier = '@aws-sdk/client-s3';
   const transcribeSpecifier = '@aws-sdk/client-transcribe';
   const s3 = (await import(s3Specifier)) as Pick<AwsTranscribeSdk, 'S3Client' | 'PutObjectCommand' | 'DeleteObjectCommand'>;
-  const transcribe = (await import(transcribeSpecifier)) as Pick<
+  const transcribeSdk = (await import(transcribeSpecifier)) as Pick<
     AwsTranscribeSdk,
     'TranscribeClient' | 'StartTranscriptionJobCommand' | 'GetTranscriptionJobCommand' | 'DeleteTranscriptionJobCommand'
   >;
@@ -134,10 +134,10 @@ export async function loadAwsTranscribeSdk(): Promise<AwsTranscribeSdk> {
     S3Client: s3.S3Client,
     PutObjectCommand: s3.PutObjectCommand,
     DeleteObjectCommand: s3.DeleteObjectCommand,
-    TranscribeClient: transcribe.TranscribeClient,
-    StartTranscriptionJobCommand: transcribe.StartTranscriptionJobCommand,
-    GetTranscriptionJobCommand: transcribe.GetTranscriptionJobCommand,
-    DeleteTranscriptionJobCommand: transcribe.DeleteTranscriptionJobCommand,
+    TranscribeClient: transcribeSdk.TranscribeClient,
+    StartTranscriptionJobCommand: transcribeSdk.StartTranscriptionJobCommand,
+    GetTranscriptionJobCommand: transcribeSdk.GetTranscriptionJobCommand,
+    DeleteTranscriptionJobCommand: transcribeSdk.DeleteTranscriptionJobCommand,
   };
 }
 
@@ -322,12 +322,12 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? ((): number => Date.now());
   const timeoutMs = options.timeoutMs ?? AWS_TRANSCRIBE_TIMEOUT_MS;
-  type Clients = { readonly sdk: AwsTranscribeSdk; readonly s3: AwsSdkClient; readonly transcribe: AwsSdkClient };
+  type Clients = { readonly sdk: AwsTranscribeSdk; readonly s3: AwsSdkClient; readonly jobs: AwsSdkClient };
   let clients: Promise<Clients> | null = null;
   const connect = async (): Promise<Clients> => {
     clients ??= (async () => {
       const sdk = options.sdk ?? (await loadAwsTranscribeSdk());
-      return { sdk, s3: new sdk.S3Client({ region: options.region }), transcribe: new sdk.TranscribeClient({ region: options.region }) };
+      return { sdk, s3: new sdk.S3Client({ region: options.region }), jobs: new sdk.TranscribeClient({ region: options.region }) };
     })();
     return await clients;
   };
@@ -348,7 +348,7 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
       // Without a subject (a caller from before C3a) the attempt is unique by a random tag.
       const sessionId = input.subject?.sessionId ?? crypto.randomUUID();
       const attempt = input.subject?.attempt ?? 1;
-      const { sdk, s3, transcribe } = await connect();
+      const { sdk, s3, jobs } = await connect();
       const key = callAudioObjectKey(sessionId, attempt);
       const jobName = transcriptionJobName(options.jobPrefix, sessionId, attempt);
       const signal = (): AbortSignal => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
@@ -362,7 +362,7 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
       };
       const deleteJob = async (name: string, quiet: boolean): Promise<void> => {
         try {
-          await transcribe.send(new sdk.DeleteTranscriptionJobCommand({ TranscriptionJobName: name }), { abortSignal: signal() });
+          await jobs.send(new sdk.DeleteTranscriptionJobCommand({ TranscriptionJobName: name }), { abortSignal: signal() });
         } catch (error) {
           // An earlier attempt usually has no job left: not found is the expected answer.
           if (!quiet || statusOf(error) !== 400) log('aws_transcribe_cleanup_failed', { what: 'job', error: nameOf(error) });
@@ -407,7 +407,7 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
       // 3. The job. From here on Transcribe may have accepted it.
       const deadline = now() + timeoutMs;
       try {
-        await transcribe.send(
+        await jobs.send(
           new sdk.StartTranscriptionJobCommand({
             TranscriptionJobName: jobName,
             LanguageCode: AWS_TRANSCRIBE_LANGUAGE_CODE,
@@ -440,7 +440,7 @@ export function awsTranscribeTranscription(options: AwsTranscribeOptions): Trans
         let job: Record<string, unknown> | null;
         try {
           const answer = record(
-            await transcribe.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: jobName }), { abortSignal: signal() }),
+            await jobs.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: jobName }), { abortSignal: signal() }),
           );
           job = record(answer?.['TranscriptionJob']);
         } catch {

@@ -74,7 +74,8 @@ describe('Settings → Calling & calendar (slice S1)', () => {
     expect((await get('/settings/integrations', adminToken)).body).not.toHaveProperty('month');
     const asked = await get('/settings/integrations?include=month', salespersonToken);
     expect(asked.status, asked.text).toBe(200);
-    expect(asked.body['month']).toEqual({ ceilingCents: 2_500, spentMonthCents: 0 });
+    // Slice C3a: the month's credit-funded cost (Amazon Transcribe) beside its cash.
+    expect(asked.body['month']).toEqual({ ceilingCents: 2_500, spentMonthCents: 0, creditsMonthCents: 0 });
 
     const refused = await update(salespersonToken, 'monthly_cash_ceiling_cents', { cents: 1_000 });
     expect(refused.text).toContain('admin_only');
@@ -88,6 +89,7 @@ describe('Settings → Calling & calendar (slice S1)', () => {
     expect((await get('/settings/integrations?include=transcription&include=month', adminToken)).body['month']).toEqual({
       ceilingCents: 4_000,
       spentMonthCents: 0,
+      creditsMonthCents: 0,
     });
     // Not in the settings snapshot, for the reason none of the integration keys is.
     const snapshot = await get('/settings', adminToken);

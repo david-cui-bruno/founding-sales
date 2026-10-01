@@ -87,8 +87,9 @@ const LEASE_MARGIN_SECONDS = 90;
  * spare — at least C2's 240 s (Deepgram's two minutes). Amazon Transcribe's upload, job and
  * poll (slice C3a) take longer than Deepgram's one request, so its lease is longer.
  */
-export function callTranscribeLeaseSeconds(provider: TranscriptionProvider): number {
-  return Math.max(240, RECORDING_READ_SECONDS + Math.ceil(provider.maxCallSeconds ?? 120) + LEASE_MARGIN_SECONDS);
+export function callTranscribeLeaseSeconds(provider: Pick<TranscriptionProvider, 'maxCallSeconds'> | undefined): number {
+  // Read defensively: a registry listing (`fss admin release idle-check`) builds handlers without ports.
+  return Math.max(240, RECORDING_READ_SECONDS + Math.ceil(provider?.maxCallSeconds ?? 120) + LEASE_MARGIN_SECONDS);
 }
 
 export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHandler {

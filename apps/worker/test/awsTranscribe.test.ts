@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { RECORDING_CHANNEL_ROLES } from '@fss/contracts';
-import type { TranscriptionOutcome } from '@fss/domain/calls/transcription.ts';
+import {
+  PER_MINUTE_PRICING,
+  reservationUnitPriceMicros,
+  transcriptionSettledCents,
+  type TranscriptionOutcome,
+} from '@fss/domain/calls/transcription.ts';
+import { CREDIT_FUNDED_PROVIDER_KINDS, providerFunding } from '@fss/domain/settings/funding.ts';
 import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import {
   AWS_TRANSCRIBE_PROVIDER_KEY,
@@ -116,6 +122,34 @@ describe('the recording channels', () => {
     expect(speakerOfChannel(0)).toBe(RECORDING_CHANNEL_ROLES.you);
     expect(speakerOfChannel(1)).toBe(RECORDING_CHANNEL_ROLES.them);
     expect(speakerOfChannel(2)).toBeNull();
+  });
+});
+
+describe('the money', () => {
+  it('prices Transcribe at its own $0.006 a minute, whatever the setting says, and Deepgram at the setting for each channel', () => {
+    expect(reservationUnitPriceMicros({ unitPriceMicros: 6_000, billedChannels: 1, perSecondMinimumSeconds: 15 }, 4_300)).toBe(6_000);
+    expect(reservationUnitPriceMicros({ unitPriceMicros: null, billedChannels: 2, perSecondMinimumSeconds: null }, 4_300)).toBe(8_600);
+    expect(reservationUnitPriceMicros(PER_MINUTE_PRICING, 4_300)).toBe(4_300);
+  });
+
+  it('settles by the second with a 15-second minimum, never past the reserved minutes, when a duration is reported', () => {
+    const pricing = { unitPriceMicros: 6_000, billedChannels: 1, perSecondMinimumSeconds: 15 };
+    const reservation = { maxUnits: 3, unitPriceMicros: 6_000 };
+    // 100 µ$ a second: 5 s bills 15 s (0.15 ¢ → 1 ¢); 150.2 s bills 151 s (1.51 ¢ → 2 ¢);
+    // 400 s is cut to the reserved 180 s (1.8 ¢ → 2 ¢).
+    expect(transcriptionSettledCents(pricing, 5, reservation)).toBe(1);
+    expect(transcriptionSettledCents(pricing, 150.2, reservation)).toBe(2);
+    expect(transcriptionSettledCents(pricing, 400, { maxUnits: 3, unitPriceMicros: 600_000 })).toBe(180);
+    // By the minute, as C2 did.
+    expect(transcriptionSettledCents(PER_MINUTE_PRICING, 61, { maxUnits: 5, unitPriceMicros: 4_300 })).toBe(1);
+  });
+
+  it('funds Transcribe from credits and every other provider kind, known or not, in cash', () => {
+    expect(providerFunding(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe('credits');
+    expect(CREDIT_FUNDED_PROVIDER_KINDS).toEqual(['aws_transcribe']);
+    for (const key of ['twilio.voice', 'deepgram.nova-3', 'anthropic_classifier', 'anthropic_extraction', 'google_places.text-search', 'unknown.kind']) {
+      expect(providerFunding(key)).toBe('cash');
+    }
   });
 });
 

@@ -242,7 +242,37 @@ ceiling above 0, the key is in place, the call was **answered** (`answered_at` s
 recording lasts **at least 20 seconds**. A short or unanswered call is never transcribed
 and never reaches a provider. The job is keyed `call-transcribe:{session}`.
 
-**The provider: Deepgram Nova-3, pre-recorded.** `POST https://api.deepgram.com/v1/listen`
+**The primary provider since slice C3a (1 October 2026): Amazon Transcribe.** Standard
+batch, en-US, `ChannelIdentification` on, paid from AWS credits (the account has an
+AI-services opt-out policy). `apps/worker/src/transcription/awsTranscribeClient.ts`, selected
+by `FSS_TRANSCRIPTION_PROVIDER=aws_transcribe` (both roots set it); no secret, the worker's
+task role is the credential. In chunk 3: the bounded recording is put in the private
+call-audio bucket (`infra/modules/recordings`: four public-access blocks, SSE-S3, TLS only,
+unversioned, **every object expires after one day**) at `calls/<session>/attempt-<n>.mp3`;
+the final settings read (the pause boundary) runs **after the upload and immediately before
+`StartTranscriptionJob`** (`<prefix>-<session>-a<n>`, service-managed output); the job is
+polled (3 s, × 1.5, at most 15 s, seven minutes overall — the job's lease is sized from it);
+the transcript is read once from `TranscriptFileUri` over HTTPS; then the object and the job
+are deleted (best effort, logged; the lifecycle rule is the backstop), and a retry first
+deletes the earlier attempt's job and object. Upload failure, a 4xx on Start and a FAILED
+job are refused (settled at 0); a 5xx or network failure on Start, a timeout, or a
+transcript that cannot be read or does not have exactly the two channels is ambiguous.
+Priced at $0.0001 a second ($0.006 a minute) by the started minute of the bound; the job
+reports no media duration, so the attempt **settles at its reservation**.
+
+**Channels, not diarization.** `<Dial record="record-from-answer-dual">` puts the parent call
+in the first channel (https://www.twilio.com/docs/voice/twiml/dial), and the parent is the
+Mac's Voice SDK leg, so channel 0 is David and channel 1 the prospect
+(`RECORDING_CHANNEL_ROLES` in `packages/contracts/src/callSessions.ts`, the one place that
+mapping is written). Both adapters label each utterance by its channel; Deepgram now asks for
+`multichannel=true` instead of `diarize=true`, and a diarizer's speaker number never becomes
+a role. The first real test call verifies the mapping.
+
+**The comparison provider: Deepgram Nova-3, pre-recorded** (as slice C2 built it, with C3a's
+multichannel change; `FSS_TRANSCRIPTION_PROVIDER=deepgram` or unset). Deepgram's pricing page
+does not say whether multichannel audio is billed per channel, so its reservation counts both
+channels (twice `unitPriceMicros`), and its transcripts are stored as model
+`nova-3-multichannel`. `POST https://api.deepgram.com/v1/listen`
 with the recording's bytes (read from Twilio by the worker, with the same authed fetch as
 the playback proxy, `packages/domain/calls/twilioRecording.ts`) and `model=nova-3`,
 `diarize=true`, `punctuate=true`, `utterances=true` and **`mip_opt_out=true` on every
@@ -293,9 +323,10 @@ plants it in every failure the client can meet to prove it.
 
 **Reading it.** `GET /calls/transcript?callSessionId=` (the firm's assigned salesperson or
 an admin; anything else is 404, like a call with no transcript). The history row's
-`hasTranscript` offers a "Transcript" disclosure; the speakers are always "Speaker 1",
-"Speaker 2", … in the order they first speak — diarization tells voices apart, not who is
-who, so Callie does not guess which one is David; times are grey. A read that
+`hasTranscript` offers a "Transcript" disclosure. A channel-labelled transcript
+(`aws_transcribe/standard`, `deepgram/nova-3-multichannel`) names its legs "You" and "Them";
+a diarized one from before C3a keeps "Speaker 1", "Speaker 2", … in the order they first
+speak, because diarization tells voices apart, not who is who; times are grey. A read that
 fails is a sentence from `reasonSentence`.
 
 **The secret.** Secrets Manager entry `<prefix>/transcription`, one JSON object,
@@ -319,7 +350,7 @@ provider request starts. The last check runs immediately before each provider ca
 | --- | --- | --- |
 | Gmail send | `outbound/send.ts` `dispatchOutboundMessage` → `gmail.sendMessage` | `recheckAndClaim`: both switches and the attestation, under the send gate SHARED, in the claiming transaction. Every writer of either switch takes the gate EXCLUSIVE, so a turn-off waits for an open claim and every later claim reads it and holds the fence; a held fence sends exactly once when the switch is back on. |
 | Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages` (each robots.txt and page request), `countInputTokens` (each pass of the trim loop), `extract` | `research_settings.enabled`, read again immediately before each request: the fetcher asks a `shouldContinue` predicate before every robots.txt and page request and stops there. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
-| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt, and the call is held: see below. |
+| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before the provider's request (for Amazon Transcribe, after the upload and immediately before `StartTranscriptionJob`). Off releases the attempt, and the call is held: see below. |
 | Reply classifier | `classification/classify.ts` `finishClassification` → `classify` (chunk 3 of `classify.reply`) | `classifier_settings.enabled`, read in chunk 2 after the request is built and after the monthly lock, under the classifier switch lock (shared; every settings write takes it exclusive), in the transaction that marks the attempt `calling`. Chunk 3 sends before any database read. Off releases the attempt, records `disabled`, and the reply is held: see below. |
 
 No paid SDK retries behind these checks: the Anthropic client is built with `maxRetries: 0`
@@ -381,8 +412,12 @@ when a call session, a transcription attempt or a research run reserves its cent
 workspace monthly lock taken last, inside that provider's own budget lock (telephony,
 transcription, research), so it is atomic with the daily check and every path takes the
 locks in one order.
-Month-to-date spend is every provider's settled cost plus its open reservations, on the
-calendar month of the workspace business time zone (`readSpend`). A refusal is
+Month-to-date spend is every **cash-funded** provider's settled cost plus its open
+reservations, on the calendar month of the workspace business time zone (`readSpend`).
+Credit-funded spend (Amazon Transcribe, slice C3a; `packages/domain/settings/funding.ts`) is
+excluded from it and from every ceiling that reads it; it still counts against the day's
+transcription cap, and Settings shows it as "Credits this month" (`creditsMonthCents` in
+`?include=month`). A refusal is
 `monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
 of $y" (`GET /settings/integrations?include=month`). Research keeps its own monthly ceiling and
 is also refused by this one (`monthly_cash_ceiling`).
@@ -448,15 +483,17 @@ session's `billed_price_cents` takes the latest one, and a closed reservation is
 it (`settled`), with the ledger row of its own date moved by the difference, under the
 monthly lock. The same price again changes nothing.
 
-**Funding labels** (documentation only; nothing enforces or reads them). Eligible provider
-credits are tracked outside Callie; the ceiling counts every cent at its price whatever pays it.
+**Funding** (slice C3a, David's decision of 1 October 2026; `packages/domain/settings/funding.ts`,
+by the provider key's kind, the part before the first dot). Credit-funded spend is left out of
+the month's cash ceiling and shown apart; a kind not listed is cash.
 
 | `provider_key` | What | Funding |
 | --- | --- | --- |
+| `aws_transcribe.standard` | transcription (primary) | credits (AWS) |
 | `twilio.voice` | Twilio minutes | cash |
-| `deepgram.nova-3` | transcription | credits-eligible (confirm against the account) |
-| `anthropic_extraction` | research model calls | credits-eligible (confirm against the account) |
-| `anthropic_classifier` | reply classifier calls | credits-eligible (confirm against the account) |
+| `deepgram.nova-3` | transcription (comparison) | cash |
+| `anthropic_extraction` | research model calls | cash |
+| `anthropic_classifier` | reply classifier calls | cash |
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script
