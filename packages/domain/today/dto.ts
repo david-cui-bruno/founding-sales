@@ -504,7 +504,7 @@ export async function readFirmBasics(
     `SELECT f.id, f.locality, f.region_code, f.time_zone,
             EXISTS (SELECT 1 FROM phone_routes r
                      WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
-                       AND r.eligibility IN ('usable', 'candidate')) AS has_phone
+                       AND r.eligibility = 'usable') AS has_phone
        FROM firms f
       WHERE f.workspace_id = $1 AND f.id = ANY($2::uuid[])`,
     [context.scope.workspaceId, [...firmIds]],
