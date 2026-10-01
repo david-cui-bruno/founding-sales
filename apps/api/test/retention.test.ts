@@ -151,4 +151,56 @@ describe('the deletion request routes', () => {
     );
     expect(Number(rows[0]?.count)).toBe(0);
   });
+
+  it('answers a committed deletion without waiting for a stalled call-audio delete, holding no session', async () => {
+    const otherFirm = await seedFirm(fixture, {
+      name: 'Stalled Bucket Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    // A recorded transcription job whose call session is gone: its objects are the deletion's.
+    const gone = randomUUID();
+    await fixture.db.query(
+      `INSERT INTO transcription_provider_jobs
+         (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key)
+       VALUES ($1, $2, $3, 1, $4, 'aws_transcribe', $5, $6)`,
+      [fixture.alpha.workspaceId, `fss-test-${gone}-1`, gone, randomUUID(), `calls/${gone}/attempt-1.mp3`, `calls/${gone}/attempt-1.json`],
+    );
+    const preview = await post('/retention/deletions/preview', adminToken, command({ targetKind: 'firm', firmId: otherFirm }));
+    expect(preview.status).toBe(200);
+    const shown = resultOf(preview);
+
+    let queries = 0;
+    const session = {
+      query: async (...args: Parameters<typeof fixture.db.query>) => {
+        queries += 1;
+        return await fixture.db.query(...args);
+      },
+    } as typeof fixture.db;
+    const asked: string[][] = [];
+    const callAudio = {
+      // S3 that never answers.
+      deleteObjects: async (keys: readonly string[]) => {
+        asked.push([...keys]);
+        return await new Promise<{ deleted: number; failed: number }>(() => undefined);
+      },
+    };
+    const request: ApiRequest = {
+      method: 'POST',
+      path: '/retention/deletions/commit',
+      query: new URLSearchParams(),
+      headers: { authorization: `Bearer ${adminToken}` },
+      body: command({ requestId: shown['requestId'], previewHash: shown['previewHash'] }),
+    };
+    const answer = await Promise.race([
+      dispatch(request, { ...options(), session, callAudio }),
+      new Promise<'held'>(resolve => setTimeout(() => resolve('held'), 3_000)),
+    ]);
+    expect(answer === 'held' ? 'held' : answer.status).toBe(200);
+    expect(asked).toEqual([[`calls/${gone}/attempt-1.mp3`, `calls/${gone}/attempt-1.json`]]);
+    const after = queries;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(queries).toBe(after);
+  });
 });
