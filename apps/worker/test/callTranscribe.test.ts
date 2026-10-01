@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   consumeCallSession,
@@ -44,6 +44,7 @@ import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
+import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import {
   DEEPGRAM_PROVIDER_KEY,
   deepgramTranscription,
@@ -945,7 +946,7 @@ describe('the call.transcribe job', () => {
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
     expect(await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe(centsBefore + 2);
     expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
-    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 3 }]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 4 }]);
     // Nothing more is due: another round asks nothing and changes nothing.
     expect(await collectRound(fake.provider)).toBe(0);
     expect(fake.state.looks).toBe(4);
@@ -970,6 +971,55 @@ describe('the call.transcribe job', () => {
     expect(enqueuedKeys).toHaveLength(3);
     for (const key of enqueuedKeys) expect(key).toMatch(/^call-transcribe-collect:[0-9a-f-]{36}:[0-9]+$/u);
     expect((await attempts(sessionId))[0]?.state).toBe('settled');
+  });
+
+  it('lets no dead look job starve the rest: fifty rows whose looks died, and row 51 is still scheduled and collected (C3-N #2)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 0 });
+    const healthy = await call(150);
+    expect((await enqueue(healthy)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(healthy)).toEqual([{ state: 'started', looks: 0 }]);
+    await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [healthy]);
+    // Fifty recorded jobs ahead of it in the window, each with its look job dead.
+    const dead: string[] = [];
+    for (let index = 0; index < 50; index += 1) {
+      const session = randomUUID();
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO transcription_provider_jobs
+           (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key, state, started_at, next_look_at)
+         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, 'started', now(), now() - interval '1 hour')
+         RETURNING id`,
+        [seeded.alpha.workspaceId, `fss-test-${session}-a1`, session, randomUUID(), AWS_TRANSCRIBE_PROVIDER_KEY, `calls/${session}/attempt-1.mp3`, `calls/${session}/attempt-1.json`],
+      );
+      const rowId = rows[0]?.id ?? '';
+      dead.push(rowId);
+      const queued = await enqueueJob(database.session, {
+        workspaceId: seeded.alpha.workspaceId,
+        kind: 'call.transcribe',
+        idempotencyKey: `call-transcribe-collect:${rowId}:0`,
+        payload: { callSessionId: session },
+        maxAttempts: 1,
+      });
+      await database.session.query("UPDATE jobs SET state = 'dead', dead_at = now() WHERE id = $1", [queued.jobId]);
+    }
+    try {
+      // Two scheduler passes, as production runs them: the enqueue and the look schedule in
+      // one transaction. The first takes the fifty; the second reaches row 51.
+      const source = transcriptionJobsSource({ enabled: true });
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+      await drain(fake.provider);
+      expect(await providerJobs(healthy)).toEqual([{ state: 'collected', looks: 1 }]);
+      expect((await attempts(healthy))[0]?.state).toBe('settled');
+      // The dead rows' next looks are scheduled after their backoff, not left at the front.
+      const { rows: moved } = await database.session.query<{ looks: number; later: boolean }>(
+        'SELECT looks, next_look_at > now() AS later FROM transcription_provider_jobs WHERE id = ANY($1::uuid[])',
+        [dead],
+      );
+      expect(moved.every(row => Number(row.looks) === 1 && row.later)).toBe(true);
+    } finally {
+      await database.session.query('DELETE FROM transcription_provider_jobs WHERE id = ANY($1::uuid[])', [dead]);
+    }
   });
 
   it('after a crash between Start and its commit, collects the job it started instead of starting another (C3-R1 #1)', async () => {
@@ -1017,10 +1067,10 @@ describe('the call.transcribe job', () => {
     const sessionId = await call(150);
     expect((await enqueue(sessionId)).enqueued).toBe(true);
     await drain(fake.provider);
-    // Past the deadline: the next look gives up, estimated, terminal.
+    // Past the deadline: the next look (the source counted it) gives up, estimated, terminal.
     await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
     await collectRound(fake.provider);
-    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 0 }]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
     // Any later claim for the call — a resume, a stray enqueue — buys nothing.
     await withTransaction(database.session, async () =>

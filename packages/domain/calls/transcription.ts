@@ -1066,7 +1066,8 @@ export type CollectTranscriptionOutcome =
  * configured, whichever provider new attempts use: a deployment that switched to Deepgram
  * still collects the jobs Transcribe already has.
  *
- *   * running, or the look failed: looked at again after `transcriptionPollDelaySeconds`;
+ *   * running, or the look failed: looked at again when the collect source's schedule says
+ *     (`scheduleTranscriptionLooks`, `transcriptionPollDelaySeconds` apart);
  *     after `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` the attempt is estimated and the job
  *     `failed` — terminal, never retried;
  *   * completed: the transcript stored and the attempt settled, once, by id;
@@ -1123,11 +1124,8 @@ export async function collectCallTranscription(
     case 'running':
     case 'unknown': {
       if (job.expired) return await terminal('provider_job_deadline');
-      await context.db.query(
-        `UPDATE transcription_provider_jobs SET looks = looks + 1, next_look_at = now() + make_interval(secs => $3)
-          WHERE workspace_id = $1 AND job_name = $2`,
-        [context.scope.workspaceId, job.jobName, transcriptionPollDelaySeconds(job.looks + 1)],
-      );
+      // The next look is already scheduled: the collect source moved `looks` and
+      // `next_look_at` on when it emitted this look (review C3-N), so nothing to write.
       return { kind: 'pending' };
     }
     case 'not_found':
@@ -1163,22 +1161,42 @@ export function transcriptionCollectJobKey(rowId: string, look: number): string 
   return `call-transcribe-collect:${rowId}:${String(Math.trunc(look))}`;
 }
 
+/** How many recorded jobs one scheduler pass emits a look for. */
+export const TRANSCRIPTION_LOOKS_PER_PASS = 50;
+
 /**
- * The recorded jobs due a look now (slice C3a): `submitting` past its grace, or `started`,
- * with `next_look_at` passed. Each look moves `looks` on, so the next look's key is new
- * however long the job runs and whatever the retention sweep did to older job rows.
+ * The recorded jobs due a look now (slice C3a), with their next look scheduled in the same
+ * statement (review C3-N): `submitting` past its grace, or `started`, with `next_look_at`
+ * passed. Each emitted look moves `looks` on and sets `next_look_at` to the backoff after it,
+ * in the scheduler pass's transaction with the enqueue, so a look job that dies (attempts
+ * exhausted, a handler that throws) neither blocks that row's next look after its backoff nor
+ * keeps the row at the front of the window: the window moves on to the next due rows. The
+ * look's key is the row id and the look number before the move, so every look is a new job
+ * however long the job runs. `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` still ends a job: the
+ * first look claimed past it marks the job `failed`. Rows a live claim holds are skipped
+ * this pass, not waited for.
  */
-export async function listTranscriptionJobsDue(db: Queryable): Promise<readonly TranscriptionJobDue[]> {
-  const { rows } = await db.query<{ id: string; workspace_id: string; call_session_id: string; looks: number }>(
-    `SELECT id, workspace_id, call_session_id, looks FROM transcription_provider_jobs
-      WHERE state IN ('submitting', 'started') AND next_look_at <= now()
-      ORDER BY next_look_at, id
-      LIMIT 50`,
+export async function scheduleTranscriptionLooks(db: Queryable): Promise<readonly TranscriptionJobDue[]> {
+  const { rows } = await db.query<{ id: string; workspace_id: string; call_session_id: string; look: number }>(
+    `WITH due AS (
+       SELECT workspace_id, job_name, looks FROM transcription_provider_jobs
+        WHERE state IN ('submitting', 'started') AND next_look_at <= now()
+        ORDER BY next_look_at, id
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+     )
+     UPDATE transcription_provider_jobs j
+        SET looks = due.looks + 1,
+            next_look_at = now() + make_interval(secs => LEAST(300, 20 * power(2, LEAST(due.looks + 1, 8))))
+       FROM due
+      WHERE j.workspace_id = due.workspace_id AND j.job_name = due.job_name
+      RETURNING j.id, j.workspace_id, j.call_session_id, due.looks AS look`,
+    [TRANSCRIPTION_LOOKS_PER_PASS],
   );
   return rows.map(row => ({
     workspaceId: row.workspace_id,
     sessionId: row.call_session_id,
-    idempotencyKey: transcriptionCollectJobKey(row.id, Number(row.looks)),
+    idempotencyKey: transcriptionCollectJobKey(row.id, Number(row.look)),
   }));
 }
 

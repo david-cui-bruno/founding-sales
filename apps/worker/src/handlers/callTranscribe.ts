@@ -8,7 +8,7 @@ import {
   ensureTranscriptionCalling,
   finishCallTranscription,
   listHeldTranscriptions,
-  listTranscriptionJobsDue,
+  scheduleTranscriptionLooks,
   type TranscriptionProvider,
 } from '@fss/domain/calls/transcription.ts';
 import type { TwilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
@@ -234,16 +234,17 @@ export function heldTranscriptionSource(options: { readonly enabled: boolean }):
 
 /**
  * The source that keeps recorded Transcribe jobs moving (slice C3a): one `call.transcribe`
- * per look at each recorded job that is due one (`listTranscriptionJobsDue`), keyed by the
- * job row's id and its look number, so no key is ever reused. Materializes nothing without
- * a collector (the call-audio bucket not configured).
+ * per look at each recorded job that is due one, keyed by the job row's id and its look
+ * number, so no key is ever reused. `scheduleTranscriptionLooks` also schedules each row's
+ * next look in the pass's transaction (review C3-N), so a dead look job starves nobody.
+ * Materializes nothing without a collector (the call-audio bucket not configured).
  */
 export function transcriptionJobsSource(options: { readonly enabled: boolean }): DueWorkSource {
   return {
     name: 'call-transcribe-collect',
     find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
       if (!options.enabled) return [];
-      return (await listTranscriptionJobsDue(session)).map(due => ({
+      return (await scheduleTranscriptionLooks(session)).map(due => ({
         workspaceId: due.workspaceId,
         kind: 'call.transcribe' as const,
         idempotencyKey: due.idempotencyKey,
