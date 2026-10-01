@@ -2,6 +2,7 @@ import { localDate } from '../src/rules/localClock.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { incrementDailyCounter, readDailyCounter } from '../jobs/counters.ts';
 import { readSpend, workspaceBusinessZone } from './ledger.ts';
+import { clearMonthlyCash, readMonthlyCashCeiling } from '../settings/cashCeiling.ts';
 import {
   isPricedModel,
   worstCaseInputTokens,
@@ -182,6 +183,13 @@ export async function claimResearchClearance(
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
   }
+  // And the workspace's one cash ceiling across every paid kind (slice P1, invariant I2),
+  // under its monthly lock — taken after the research budget lock, the order every
+  // reservation keeps (own budget lock first, the monthly lock last). The caller inserts
+  // the reservation in this transaction, so the lock covers it.
+  if (!(await clearMonthlyCash(context, { at: input.at, zone: businessTimeZone, cents: worstCaseCents }))) {
+    return refuse('monthly_cash_ceiling');
+  }
 
   return accept({
     settings,
@@ -271,6 +279,9 @@ export async function researchClearanceAvailable(
   if (spend.todayCents + worstCaseCents > settings.dailyCostCeilingCents) return refuse('daily_cost_ceiling');
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
+  }
+  if (spend.monthToDateCents + worstCaseCents > (await readMonthlyCashCeiling(context))) {
+    return refuse('monthly_cash_ceiling');
   }
   return accept({ remaining });
 }

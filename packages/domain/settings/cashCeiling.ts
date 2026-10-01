@@ -61,6 +61,33 @@ export async function clearMonthlyCash(
   return spend.monthToDateCents + Math.max(0, Math.trunc(input.cents)) <= ceiling;
 }
 
+/**
+ * Whether a request of at most `cents`, made outside any reservation, fits this month —
+ * for the reply classifier, which has no reservation row.
+ *
+ * The same monthly lock serialises the check with every reservation, but it is a
+ * **session** lock released before the call: the classifier runs inside its job's
+ * transaction, and an xact lock would be held across the provider request, blocking every
+ * call and transcription reservation for as long as the model takes. The cost is a bounded
+ * overshoot: between this check and the ledger write after the call, a reservation may
+ * spend the headroom too, so the month can pass its ceiling by at most the cost of the
+ * classifier calls in flight — one per classifier job slot, each at most `cents`.
+ */
+export async function monthFitsUnreserved(
+  context: RepositoryContext,
+  input: { readonly at: string; readonly zone: string; readonly cents: number },
+): Promise<boolean> {
+  const key = monthlyCashLockName(context.scope.workspaceId);
+  await context.db.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+  try {
+    const ceiling = await readMonthlyCashCeiling(context);
+    const spend = await readSpend(context, { businessTimeZone: input.zone, at: input.at });
+    return spend.monthToDateCents + Math.max(0, Math.trunc(input.cents)) <= ceiling;
+  } finally {
+    await context.db.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]);
+  }
+}
+
 /** What Settings → Calling & calendar shows: "this month: $x of $y". */
 export async function monthlyCashStatus(
   context: RepositoryContext,

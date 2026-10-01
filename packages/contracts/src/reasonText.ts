@@ -47,6 +47,14 @@ const OPPORTUNITY_MANUAL = 'This firm is yours to work by hand, so Callie will n
 // Holds (specification 15)
 // ---------------------------------------------------------------------------
 
+/**
+ * Slice P1: the month-to-date cash ceiling. One sentence for every map that carries the
+ * code (call sessions, transcription, research), because the flat lookup keeps one per
+ * spelling.
+ */
+const MONTHLY_CASH_CEILING_SENTENCE =
+  'This month’s spending limit is reached, so Callie starts no new paid calls, transcriptions or research until next month. An administrator can raise it in Settings, under Calling & calendar.';
+
 export const HOLD_REASON_SENTENCES: Readonly<Record<HoldReasonCode, string>> = Object.freeze({
   scoped_pause: 'Sending and calling are paused for this firm. Resume it when you are ready.',
   mailbox_disconnected: 'The sales mailbox is not connected, so Callie cannot send. Connect it in Settings, under Mailbox.',
@@ -177,6 +185,7 @@ export const RESEARCH_REFUSAL_SENTENCES: Readonly<Record<(typeof RESEARCH_REFUSA
   daily_firm_ceiling: 'Today’s limit on researched firms has been reached. Research continues tomorrow.',
   daily_cost_ceiling: 'Today’s research budget is spent. Research continues tomorrow, or an administrator can raise the limit in Settings.',
   monthly_cost_ceiling: 'This month’s research budget is spent. An administrator can raise the limit in Settings.',
+  monthly_cash_ceiling: MONTHLY_CASH_CEILING_SENTENCE,
   ceiling_reached: 'A research limit has been reached. An administrator can raise it in Settings.',
   firm_unknown: FIRM_UNKNOWN,
   firm_merged: FIRM_MERGED,
@@ -253,13 +262,6 @@ export const MAIL_REFUSAL_SENTENCES: Readonly<Record<GrantRefusalCode | 'mailbox
 // ---------------------------------------------------------------------------
 // Call-session refusals (callSessions.ts, call-to-booking slices W and C1)
 // ---------------------------------------------------------------------------
-
-/**
- * Slice P1: the month-to-date cash ceiling. One sentence for both maps that carry the code
- * (call sessions and transcription), because the flat lookup keeps one per spelling.
- */
-const MONTHLY_CASH_CEILING_SENTENCE =
-  'This month’s spending limit is reached, so new calls and transcriptions wait until next month. An administrator can raise it in Settings, under Calling & calendar.';
 
 export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
   call_attempts_exhausted:

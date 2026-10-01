@@ -11,6 +11,10 @@ import {
   type ClassificationRow,
 } from './store.ts';
 import { readClassifierSettings } from './settings.ts';
+import { CLASSIFIER_PROVIDER_KEY, classifierCallCeilingCents, classifierCallCents } from './pricing.ts';
+import { databaseNow } from '../policy/clock.ts';
+import { recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
+import { monthFitsUnreserved } from '../settings/cashCeiling.ts';
 import {
   CLASSIFIER_PROMPT_VERSION,
   MODEL_CAPABILITIES,
@@ -180,8 +184,43 @@ export async function classifyReplyWithModel(
     deterministicSignals: deterministic.signals.map(signal => signal.rule),
   };
 
-  const attempt = await deps.classifierFor(settings).classify(classifierInput);
+  // The final pause read (slice P1, invariant I1): the switch again, after the last
+  // database await before the request. The read above came before the daily count and
+  // the body, and a switch turned off during either is seen here.
+  const latest = await readClassifierSettings(context);
+  if (!latest.enabled) {
+    const call = unsentCall(latest, 'disabled');
+    await recordClassifierCall(context, { messageId: input.messageId, call });
+    return { messageId: input.messageId, classification: merged(null), outcome: 'disabled', recorded: false, call };
+  }
+
+  // The month's cash ceiling (slice P1, invariant I2), for a request with no reservation:
+  // its upper bound must fit what the month has left. Refused as `capped`.
+  const at = await databaseNow(context);
+  const zone = await workspaceBusinessZone(context);
+  const ceilingCents = classifierCallCeilingCents(latest, classifierInput);
+  if (!(await monthFitsUnreserved(context, { at, zone, cents: ceilingCents }))) {
+    const call = unsentCall(latest, 'capped');
+    await recordClassifierCall(context, { messageId: input.messageId, call });
+    return { messageId: input.messageId, classification: merged(null), outcome: 'capped', recorded: false, call };
+  }
+
+  const attempt = await deps.classifierFor(latest).classify(classifierInput);
   await recordClassifierCall(context, { messageId: input.messageId, call: attempt.call });
+  if (attempt.call.requestSent) {
+    // The cost, into the same ledger the month-to-date total reads. A request that did
+    // not answer may still have been billed, so it is charged its upper bound.
+    await recordProviderCall(context, {
+      providerKey: CLASSIFIER_PROVIDER_KEY,
+      at,
+      businessTimeZone: zone,
+      costCents:
+        attempt.call.outcome === 'provider_error'
+          ? ceilingCents
+          : classifierCallCents(latest.modelName, attempt.call),
+      ...(attempt.call.outcome === 'provider_error' ? { failureCode: 'provider_error' } : {}),
+    });
+  }
 
   if (!attempt.ok) {
     // Appendix G 34: "Malformed output becomes uncertain." So does a refusal, a
