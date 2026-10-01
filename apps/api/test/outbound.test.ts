@@ -156,6 +156,30 @@ describe('the outbound admin routes', () => {
     );
   });
 
+  it('slice P1: unchecking automated sending on a passing checklist turns the switch off (the pause control)', async () => {
+    const passing = { domain: DOMAIN, spfPass: true, dkimPass: true, dmarcPass: true, postmasterReviewed: true };
+    const on = await post('/outbound/authentication', adminToken, command({ ...passing, automatedSendingEnabled: true }));
+    expect(on.status).toBe(200);
+    const read = async (): Promise<boolean | undefined> =>
+      (
+        await fixture.db.query<{ automated_sending_enabled: boolean }>(
+          'SELECT automated_sending_enabled FROM sending_domains WHERE workspace_id = $1 AND domain = $2',
+          [fixture.alpha.workspaceId, DOMAIN],
+        )
+      ).rows[0]?.automated_sending_enabled;
+    expect(await read()).toBe(true);
+
+    const paused = await post('/outbound/authentication', adminToken, command({ ...passing, automatedSendingEnabled: false }));
+    expect(paused.status, JSON.stringify(paused.body)).toBe(200);
+    expect((paused.body['result'] as Record<string, unknown>)['automatedSendingEnabled']).toBe(false);
+    // Committed, not only answered.
+    expect(await read()).toBe(false);
+
+    // And back on, for the tests that follow.
+    await post('/outbound/authentication', adminToken, command({ ...passing, automatedSendingEnabled: true }));
+    expect(await read()).toBe(true);
+  });
+
   it('12.7: refuses a raise above 75 rather than clamping it, and one the mailbox has not earned', async () => {
     const mailbox = await fixture.db.query<{ id: string }>(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address)

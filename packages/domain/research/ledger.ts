@@ -58,13 +58,30 @@ export interface RecordProviderCallInput {
 }
 
 /**
+ * The workspace's monthly spend lock (slice P1): a transaction lock, re-entrant within one
+ * transaction. Every clearance against the month's cash ceiling takes it, and so does
+ * **every write to a `provider_ledger` row**, before the row: a transaction that holds a
+ * ledger row therefore always holds this lock, so ledger rows can never be part of a lock
+ * cycle with it (fix round 2, finding 4). The full order is in `docs/greenfield/calling.md`:
+ * routing → send gate → firm → the subject's own lock → its kind's budget lock → this lock →
+ * ledger rows. Nothing that holds this lock waits for a subject or budget lock.
+ */
+export async function lockMonthlySpend(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `${context.scope.workspaceId}:monthly_cash_ceiling`,
+  ]);
+}
+
+/**
  * Record one call. One statement: the row is created on the first call of the day and
- * incremented after that, so two workers finishing at once cannot lose a cent.
+ * incremented after that, so two workers finishing at once cannot lose a cent. Under the
+ * monthly spend lock, like every ledger write.
  */
 export async function recordProviderCall(
   context: RepositoryContext,
   input: RecordProviderCallInput,
 ): Promise<void> {
+  await lockMonthlySpend(context);
   const businessDate = localDate(input.at, input.businessTimeZone);
   const failed = input.failureCode !== undefined;
   const cents = Math.max(0, Math.trunc(input.costCents));

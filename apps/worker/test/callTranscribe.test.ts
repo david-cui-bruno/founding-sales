@@ -26,6 +26,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS } from '@fss/domain/jobs/jobKinds.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
+import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
@@ -34,7 +35,9 @@ import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource } from '../src/handlers/callTranscribe.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
 import {
@@ -203,7 +206,7 @@ describe('the call.transcribe job', () => {
   const system = (): RepositoryContext =>
     repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), database.session);
 
-  async function setting(settingKey: 'call_transcription' | 'telephony_budget', value: unknown): Promise<void> {
+  async function setting(settingKey: 'call_transcription' | 'telephony_budget' | 'monthly_cash_ceiling_cents', value: unknown): Promise<void> {
     const saved = await withTransaction(database.session, async () => await updateSetting(admin(), { settingKey, value }));
     if (!saved.ok) throw new Error(saved.reason);
   }
@@ -565,6 +568,190 @@ describe('the call.transcribe job', () => {
       expect(await attempts(zero)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
     } finally {
       await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  it('calls nobody when transcription is turned off while the recording is read from Twilio (slice P1)', async () => {
+    const at = new Date().toISOString();
+    const late = await call(90);
+    const common = { sessionId: late, at, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    expect(await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common))).toEqual({ kind: 'calling', attempt: 1 });
+    // Settings' finishing line counts it while its request may be in flight.
+    expect((await readFinishing(system())).transcriptionFinishing).toBe(1);
+    // The switch goes off during the Twilio read: after the first re-check, before Deepgram.
+    // Written in the chunk's own transaction, so the next read in it sees the write.
+    const turnsOff: TwilioRecordingFetcher = {
+      fetchRecording: async () => {
+        const saved = await updateSetting(admin(), {
+          settingKey: 'call_transcription',
+          value: { enabled: false, dailyCeilingCents: 500, unitPriceMicros: 4_300 },
+        });
+        if (!saved.ok) throw new Error(saved.reason);
+        return { ok: true as const, contentType: 'audio/mpeg' as const, bytes: AUDIO };
+      },
+    };
+    try {
+      const provider = scripted([ok(90)]);
+      const finished = await withTransaction(database.session, async () =>
+        await finishCallTranscription(system(), { sessionId: late, attempt: 1, at, recordings: turnsOff, provider }),
+      );
+      expect(finished).toEqual({ kind: 'done', reason: 'transcription_off' });
+      expect(provider.calls).toBe(0);
+      expect(await attempts(late)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+      expect((await readFinishing(system())).transcriptionFinishing).toBe(0);
+    } finally {
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
+  it('holds a transcription turned off mid-flight, and runs it exactly once when turned back on (slice P1, finding 6)', async () => {
+    const held = await call(90);
+    expect((await enqueue(held)).enqueued).toBe(true);
+    // Off during the Twilio read: the final check before Deepgram finds it, and the job completes.
+    const turnsOff: TwilioRecordingFetcher = {
+      fetchRecording: async () => {
+        await setting('call_transcription', { enabled: false, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+        return { ok: true as const, contentType: 'audio/mpeg' as const, bytes: AUDIO };
+      },
+    };
+    const source = heldTranscriptionSource({ enabled: true });
+    const owed = async () =>
+      (await source.find(database.session, new Date().toISOString())).filter(spec => spec.payload['callSessionId'] === held);
+    const resume = async (): Promise<readonly string[]> => {
+      const specs = await owed();
+      for (const spec of specs) await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+      return specs.map(spec => spec.idempotencyKey);
+    };
+    const first = scripted([ok(90)]);
+    await drain(first, turnsOff);
+    expect(first.calls).toBe(0);
+    expect(await attempts(held)).toEqual([{ attempt: 1, state: 'released', cents: 1, settled_cents: 0 }]);
+    // Still off: nothing is owed. A worker without the handler never materializes one.
+    expect(await owed()).toEqual([]);
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    expect(await heldTranscriptionSource({ enabled: false }).find(database.session, new Date().toISOString())).toEqual([]);
+    // Turned off mid-flight a second time: a held attempt cost nothing, so it is no reason to give up.
+    expect(await resume()).toEqual([`call-transcribe:${held}:r1`]);
+    await drain(first, turnsOff);
+    expect(first.calls).toBe(0);
+    await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    expect(await resume()).toEqual([`call-transcribe:${held}:r2`]);
+    const second = scripted([ok(90), ok(90)]);
+    await drain(second);
+    expect(second.calls).toBe(1);
+    // One paid attempt: the held ones cost nothing, the resumed one is settled once.
+    expect(await attempts(held)).toEqual([
+      { attempt: 1, state: 'released', cents: 1, settled_cents: 0 },
+      { attempt: 2, state: 'released', cents: 1, settled_cents: 0 },
+      { attempt: 3, state: 'settled', cents: 1, settled_cents: 1 },
+    ]);
+    expect(await readCallTranscript(salesperson(), held)).not.toBeNull();
+    // And never again: the source owes nothing more, and a re-enqueue of a key runs nothing.
+    expect(await owed()).toEqual([]);
+    await withTransaction(database.session, async () =>
+      await enqueueJob(database.session, {
+        workspaceId: seeded.alpha.workspaceId,
+        kind: 'call.transcribe',
+        idempotencyKey: `call-transcribe:${held}:r2`,
+        payload: { callSessionId: held },
+        maxAttempts: 3,
+      }),
+    );
+    await drain(second);
+    expect(second.calls).toBe(1);
+  });
+
+  /** This calendar month's spend, on the business calendar, as of the fixture's call instant. */
+  const monthSpent = async (): Promise<number> =>
+    (await readSpend(system(), { businessTimeZone: await workspaceBusinessZone(system()), at: policy.insideWindow })).monthToDateCents;
+  /** A call session's reservation at the budget above: thirty minutes at 1.4¢, rounded up. */
+  const CALL_RESERVATION_CENTS = 42;
+  const createSession = async (session: typeof database.session, commandId: string) =>
+    await createCallSession(
+      repositoryContext(
+        workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.salesperson.userId, role: 'salesperson' }),
+        session,
+      ),
+      {
+        firmId: crm.alpha.firmId,
+        routeId: policy.alpha.phoneRouteId,
+        routeVersion: policy.alpha.phoneRouteVersion,
+        callingIdentityId: policy.alpha.callingIdentityId,
+        deviceId: seeded.alpha.salesperson.deviceId,
+        commandId,
+        configuredCallerIdE164: '+14015550100',
+        at: policy.insideWindow,
+      },
+    );
+
+  it('refuses a call session or a transcription that would pass the month’s cash ceiling (slice P1)', async () => {
+    const eligible = await call(90);
+    try {
+      // One cent short of a call's reservation: the call is refused, before any ticket.
+      await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS - 1 });
+      const refused = await withTransaction(database.session, async () => await createSession(database.session, 'month-refused'));
+      expect(refused).toEqual({ ok: false, reason: 'monthly_cash_ceiling' });
+
+      // No headroom at all: the transcription is refused at its reservation, and calls nobody.
+      await setting('monthly_cash_ceiling_cents', { cents: await monthSpent() });
+      const common = { sessionId: eligible, at: policy.insideWindow, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      expect(await withTransaction(database.session, async () => await beginCallTranscription(system(), common))).toEqual({
+        kind: 'done',
+        reason: 'monthly_cash_ceiling',
+      });
+      expect(await attempts(eligible)).toEqual([]);
+
+      // Exactly enough: the call fits.
+      await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS });
+      const fits = await withTransaction(database.session, async () => await createSession(database.session, 'month-fits'));
+      expect(fits.ok).toBe(true);
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
+    }
+  });
+
+  it('serialises two reservations at the edge of the month: a call holding the last cents makes a transcription wait, then refuses it (slice P1)', async () => {
+    const eligible = await call(90);
+    const other = await database.appRuntimeSession();
+    const worker = repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }), other);
+    // Room for the call or the transcription, not both.
+    await setting('monthly_cash_ceiling_cents', { cents: (await monthSpent()) + CALL_RESERVATION_CENTS });
+    await database.session.query('BEGIN');
+    let open = true;
+    try {
+      // The call reserves the last cents, uncommitted.
+      const created = await createSession(database.session, 'month-edge-call');
+      expect(created.ok).toBe(true);
+
+      // Meanwhile a worker, on its own connection, clears the transcription's reservation.
+      const common = { sessionId: eligible, at: policy.insideWindow, keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      let settled = false;
+      const begun = withTransaction(other, async () => await beginCallTranscription(worker, common)).finally(() => {
+        settled = true;
+      });
+      // It waits on the monthly lock the call's transaction holds.
+      let waiting = false;
+      for (let attempt = 0; attempt < 200 && !waiting; attempt += 1) {
+        const { rows } = await database.session.query<{ waiting: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                           WHERE NOT l.granted AND l.locktype = 'advisory' AND a.pid <> pg_backend_pid()
+                             AND a.datname = current_database()) AS waiting`,
+        );
+        waiting = rows[0]?.waiting === true;
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(waiting).toBe(true);
+      expect(settled).toBe(false);
+
+      await database.session.query('COMMIT');
+      open = false;
+      // It then reads the committed call and refuses: the month would be passed.
+      expect(await begun).toEqual({ kind: 'done', reason: 'monthly_cash_ceiling' });
+      expect(await attempts(eligible)).toEqual([]);
+    } finally {
+      if (open) await database.session.query('ROLLBACK');
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
     }
   });
 

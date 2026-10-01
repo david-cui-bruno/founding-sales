@@ -6,7 +6,7 @@ import { validateFactSelections, type AdmittedFact, type FactSource } from './fa
 import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
 import { parsePageText } from './pageText.ts';
-import { claimResearchClearance, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
+import { claimResearchClearance, lockResearchBudget, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
 import { recordProviderCall, workspaceBusinessZone } from './ledger.ts';
 import {
   listAttempts,
@@ -364,6 +364,9 @@ export async function ensureResearchCalling(
   // otherwise reserve a fresh attempt against a finished run and call the model for it.
   const run = await lockRun(context, input.runId);
   if (run === null || run.outcome !== 'running') return { kind: 'closed' };
+  // The budget lock before any settlement below (slice P1, fix round 2): settling takes
+  // the monthly spend lock, and a retry's clearance takes this one, so it must come first.
+  await lockResearchBudget(context);
 
   const rows = await listAttempts(context, subject);
   const reserved = rows.find(row => row.state === 'reserved');
@@ -474,8 +477,32 @@ export async function finishFirmResearch(
   context: RepositoryContext,
   input: FinishResearchInput,
 ): Promise<ResearchResult<ResearchRunReport>> {
+  // The page fetch's ledger row is written at the end of the chunk, not after the fetch
+  // (slice P1, fix round 2): every ledger write takes the workspace's monthly spend lock,
+  // and taken after the fetch it would be held across the token count and the model call,
+  // stopping every call and transcription clearance for as long as the model takes.
+  const deferred: (() => Promise<void>)[] = [];
+  const result = await finishFirmResearchBody(context, input, deferred);
+  for (const write of deferred) await write();
+  return result;
+}
+
+async function finishFirmResearchBody(
+  context: RepositoryContext,
+  input: FinishResearchInput,
+  deferred: (() => Promise<void>)[],
+): Promise<ResearchResult<ResearchRunReport>> {
   const { runId } = input;
   const subject = { subjectKind: 'research_run' as const, subjectId: runId };
+
+  // The firm before the run (slice P1, final round, #5): this chunk's evidence and facts
+  // reference the firm, and the deletion workflow takes the firm row first and then every
+  // active run of it. Taking the firm's KEY SHARE here first keeps one order — firm, then
+  // run — so a page-only run and a firm deletion wait for each other instead of deadlocking.
+  await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR KEY SHARE', [
+    context.scope.workspaceId,
+    input.firmId,
+  ]);
 
   // First, before anything: the run row's lock, and then its state. A run that is not
   // `running` is finished, and a stale cursor pointing at one must not fetch a page,
@@ -544,6 +571,34 @@ export async function finishFirmResearch(
    * the job complete.
    */
   const closedElsewhere = (): ResearchResult<ResearchRunReport> => accept(replayed(input.firmId, input.revision));
+  /**
+   * The final pause check (slice P1, invariant I1): the research switch, read again
+   * immediately before a provider request — the page fetch, the token count and the model
+   * call. Null while research is on.
+   *
+   * Off is a hold, not a failure. Nothing has been asked of the model, so this attempt's
+   * cents go back (`released_not_called`, which this claim may write because it holds the
+   * run's lock and knows first-hand it did not call), and the run closes `refused` with
+   * `research_disabled` — the same answer chunk 1 gives a run that starts while research
+   * is off. That refusal is not a look at the firm (`selectFirmsForSweep` counts only
+   * completed, failed and `no_sources` runs), so the firm is exactly as due as it was
+   * before this run, and the sweep — which runs only while research is on — picks it up
+   * again as a new revision when the switch comes back.
+   */
+  const pausedBeforeCall = async (): Promise<ResearchResult<ResearchRunReport> | null> => {
+    if ((await readResearchSettings(context)).enabled) return null;
+    await release();
+    const cost = await totalCost();
+    const closed = await refuseRun(context, {
+      runId,
+      at: input.at,
+      refusalCode: 'research_disabled',
+      costCents: cost.cents,
+      costEstimated: cost.estimated,
+    });
+    if (!closed) return closedElsewhere();
+    return refuse('research_disabled');
+  };
   /** Everything this run has been recorded as costing, across every attempt. */
   const totalCost = async (): Promise<{ readonly cents: number; readonly estimated: boolean }> => {
     const rows = await listAttempts(context, subject);
@@ -590,6 +645,10 @@ export async function finishFirmResearch(
     return refuse('no_sources');
   }
 
+  // Research turned off since chunk 2: no page is fetched (slice P1).
+  const pausedBeforeFetch = await pausedBeforeCall();
+  if (pausedBeforeFetch !== null) return pausedBeforeFetch;
+
   // A provider that throws is a provider that failed, and a failure after a consumed
   // clearance is a committed `failed` run rather than a rollback. `providerAttempt`
   // is the only place either of them is turned into a value.
@@ -600,17 +659,25 @@ export async function finishFirmResearch(
       links,
       maxPagesPerFirm: settings.maxPagesPerFirm,
       maxBytes: settings.maxPageBytes,
+      // The final pause check before each request the fetcher makes (slice P1).
+      shouldContinue: async () => (await readResearchSettings(context)).enabled,
     }),
   );
+  // Research turned off during the fetch: the fetcher stopped asking, and the run is held
+  // here rather than judged on the pages it happened to have.
+  const pausedDuringFetch = await pausedBeforeCall();
+  if (pausedDuringFetch !== null) return pausedDuringFetch;
   // The fetch is free, so its ledger row is a count and a failure code rather than
   // money. It is recorded anyway: "what refused research today" is the question the
   // ledger exists to answer, and a fetch that fails every morning is the answer.
-  await recordProviderCall(context, {
-    providerKey: input.pageFetch.providerKey,
-    at: input.at,
-    businessTimeZone,
-    costCents: fetched.costCents,
-    ...(fetched.ok ? {} : { failureCode: fetched.failureCode }),
+  deferred.push(async () => {
+    await recordProviderCall(context, {
+      providerKey: input.pageFetch.providerKey,
+      at: input.at,
+      businessTimeZone,
+      costCents: fetched.costCents,
+      ...(fetched.ok ? {} : { failureCode: fetched.failureCode }),
+    });
   });
   if (!fetched.ok) {
     // No model call was made, so this attempt's cents go back.
@@ -696,6 +763,10 @@ export async function finishFirmResearch(
     let counted: number | null = null;
     let countFailed = false;
     for (let drop = 0; drop <= MAX_BUDGET_DROPS; drop += 1) {
+      // The final pause check before every count request, the retries after a drop
+      // included: a switch turned off during one count stops the next (slice P1).
+      const pausedBeforeCount = await pausedBeforeCall();
+      if (pausedBeforeCount !== null) return pausedBeforeCount;
       let count: number;
       try {
         count = await extraction.countInputTokens({
@@ -748,6 +819,11 @@ export async function finishFirmResearch(
       bump('extraction_over_budget');
       extractionOutcome = 'over_budget';
     } else {
+      // The final pause check, immediately before the one paid request (slice P1,
+      // invariant I1). The token count above is a network round trip, and a switch turned
+      // off during it is read here; nothing but this read stands between it and the call.
+      const pausedBeforeModel = await pausedBeforeCall();
+      if (pausedBeforeModel !== null) return pausedBeforeModel;
       const answer = await providerAttempt(async () =>
         await extraction.extract({
           sources: offered.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),

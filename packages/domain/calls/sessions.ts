@@ -19,8 +19,9 @@ import { openHold, releaseHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { authorizeDial } from '../dial/authorize.ts';
 import { workspaceBusinessZone } from '../research/ledger.ts';
-import { markCalling, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
+import { correctSettledCents, markCalling, settleAttempt, type SettleOutcome } from '../research/reservations.ts';
 import { readTelephonyBudget, readVoicemailScript } from '../settings/integrations.ts';
+import { clearMonthlyCash, lockMonthlyCash } from '../settings/cashCeiling.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { localDate, localParts } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -147,6 +148,10 @@ export async function createCallSession(
   const cents = telephonyReservationCents(budget.maxMinutesPerCall, budget.unitPriceMicros);
   const spentCents = await telephonySpentCents(context, businessDate);
   if (spentCents + cents > budget.dailyCeilingCents) return refuse('telephony_budget_exhausted');
+  // And the month's cash ceiling (slice P1, invariant I2), under the workspace's monthly
+  // lock taken inside the daily one, so the reservation inserted below is the one both
+  // checks were made against.
+  if (!(await clearMonthlyCash(context, { at: now, zone, cents }))) return refuse('monthly_cash_ceiling');
 
   // The whole dial decision, and the ticket.
   const ticket = await authorizeDialCommand(context, {
@@ -937,10 +942,11 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
       [session.workspace_id, session.id, status, input.providerStatus, input.dialCallSid ?? null, terminal, duration, priceCents],
     );
   } else if (terminal && (duration !== null || priceCents !== null)) {
-    // A late or repeated terminal callback may carry what the first did not.
+    // A late or repeated terminal callback may carry what the first did not — and a price
+    // is Twilio's final word, so a later one replaces an earlier one (slice P1).
     await db.query(
       `UPDATE call_sessions SET duration_seconds = COALESCE(duration_seconds, $3::integer),
-              billed_price_cents = COALESCE(billed_price_cents, $4::integer), updated_at = now()
+              billed_price_cents = COALESCE($4::integer, billed_price_cents), updated_at = now()
         WHERE workspace_id = $1 AND id = $2`,
       [session.workspace_id, session.id, duration, priceCents],
     );
@@ -968,11 +974,20 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
 
   let settlement: 'settled' | 'estimated' | null = null;
   if (terminal) {
+    // Every change to what the month has spent is serialised with the clearances that
+    // read it (slice P1): the monthly lock, last, after this callback's other locks.
+    await lockMonthlyCash(context);
     const { rows: reservations } = await db.query<{ unit_price_micros: number | null; state: string }>(
       'SELECT unit_price_micros, state FROM provider_reservations WHERE workspace_id = $1 AND id = $2',
       [session.workspace_id, session.reservation_id],
     );
     const reservation = reservations[0];
+    if (reservation !== undefined && (reservation.state === 'settled' || reservation.state === 'estimated') && priceCents !== null) {
+      // Already closed — from the duration, or from an earlier price — and this callback
+      // carries Twilio's price: the ledger is corrected to it, by the difference, once.
+      const corrected = await correctSettledCents(context, { reservationId: session.reservation_id, cents: priceCents });
+      if (corrected !== null) settlement = 'settled';
+    }
     if (reservation !== undefined && (reservation.state === 'reserved' || reservation.state === 'calling')) {
       const { rows: known } = await db.query<{ duration_seconds: number | null; billed_price_cents: number | null }>(
         'SELECT duration_seconds, billed_price_cents FROM call_sessions WHERE workspace_id = $1 AND id = $2',

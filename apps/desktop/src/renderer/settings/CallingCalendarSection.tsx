@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import {
+  MONTHLY_CASH_CEILING_MAX_CENTS,
   TRANSCRIPTION_DAILY_CEILING_MAX_CENTS,
   VOICEMAIL_PLACEHOLDERS,
   VOICEMAIL_TEMPLATE_MAX_CHARACTERS,
@@ -7,6 +8,7 @@ import {
   type IntegrationsSettingsResponse,
 } from '@fss/contracts';
 import type { AdminState, SaveIntegrationInput } from '../settingsContract.ts';
+import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
@@ -27,6 +29,8 @@ import { Textarea } from '../ui/textarea.tsx';
  *   * **Transcribe calls** and its **daily transcription budget** (slice C2) — present when
  *     the server answers them (`?include=transcription`). Off, and $0, until David sets
  *     them; it cannot be turned on while the transcription key is missing on the server.
+ *   * **Monthly spending limit** (slice P1) — "This month: $x of $y", and the limit, $0 to
+ *     $50 ($25 until David changes it). Present when the server answers it (`?include=month`).
  *
  * The section names no secret field, value or length: the read carries field *names* only
  * and this section says the account "is not set up" without listing them. Every refusal is
@@ -43,6 +47,18 @@ export const MINUTES_RANGE = 'Enter a whole number of minutes from 1 to 240.';
 export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription key to be set up on the server first.';
 export const TRANSCRIPTION_NEEDS_BUDGET = 'Transcription stays off until a daily transcription budget is set.';
 export const TRANSCRIPTION_BUDGET_RANGE = 'Enter an amount from $0 to $5.';
+export const MONTH_RANGE = 'Enter an amount from $0 to $50.';
+
+/** Dollars typed → cents, or null when it is not an amount from 0 to 50. */
+export function monthCentsFromDollars(typed: string): number | null {
+  const cents = centsFromDollars(typed);
+  return cents !== null && cents <= MONTHLY_CASH_CEILING_MAX_CENTS ? cents : null;
+}
+
+/** "This month: $3.40 of $25.00." — what the month has cost against its limit. */
+export function monthLine(month: { readonly ceilingCents: number; readonly spentMonthCents: number }): string {
+  return `This month: ${money(month.spentMonthCents)} of ${money(month.ceilingCents)}. Calls, transcription, research and reply reading stop when the limit is reached.`;
+}
 
 /** Dollars typed → cents, or null when it is not an amount from 0 to 5. */
 export function transcriptionCentsFromDollars(typed: string): number | null {
@@ -95,8 +111,17 @@ export function CallingCalendarSection({
   return (
     <Loaded
       // A new server answer (after a save) resets the drafts to what is now in force.
-      key={JSON.stringify([integrations.telephonyBudget, integrations.voicemailScript, integrations.transcription?.setting ?? null])}
+      key={JSON.stringify([
+        integrations.telephonyBudget,
+        integrations.voicemailScript,
+        integrations.transcription?.setting ?? null,
+        integrations.month?.ceilingCents ?? null,
+      ])}
       integrations={integrations}
+      finishingLines={[
+        finishingSentence('transcription', state.paidFinishing?.transcription),
+        finishingSentence('classification', state.paidFinishing?.classification),
+      ].filter((line): line is string => line !== null)}
       editable={state.mayMutate}
       notice={state.integrationsNotice ?? null}
       busy={busy}
@@ -107,12 +132,15 @@ export function CallingCalendarSection({
 
 function Loaded({
   integrations,
+  finishingLines,
   editable,
   notice,
   busy,
   onSave,
 }: {
   readonly integrations: IntegrationsSettingsResponse;
+  /** Slice P1: "Transcription is off. 1 transcription already sent is finishing.", and the classifier's. */
+  readonly finishingLines: readonly string[];
   readonly editable: boolean;
   readonly notice: string | null;
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
@@ -277,6 +305,15 @@ function Loaded({
           <TranscriptionRows transcription={integrations.transcription} editable={editable} busy={busy} onSave={onSave} />
         )}
 
+        {integrations.month === undefined ? null : (
+          <MonthRow month={integrations.month} editable={editable} busy={busy} onSave={onSave} />
+        )}
+        {finishingLines.map(line => (
+          <p key={line} data-testid="paid-finishing" className="py-1 text-sm text-muted-foreground">
+            {line}
+          </p>
+        ))}
+
         <Row data-testid="row-calcom">
           <RowMain
             line="Cal.com bookings"
@@ -403,5 +440,62 @@ function TranscriptionRows({
         </span>
       </Row>
     </>
+  );
+}
+
+/** Slice P1: the month-to-date cash limit, with what the month has cost so far. */
+function MonthRow({
+  month,
+  editable,
+  busy,
+  onSave,
+}: {
+  readonly month: NonNullable<IntegrationsSettingsResponse['month']>;
+  readonly editable: boolean;
+  busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
+  onSave(input: SaveIntegrationInput): void;
+}): JSX.Element {
+  const [dollars, setDollars] = useState((month.ceilingCents / 100).toFixed(2));
+  const cents = monthCentsFromDollars(dollars);
+  const saving = busy('monthly_cash_ceiling_cents');
+  return (
+    <Row data-testid="row-month" className="items-start">
+      <RowMain line="Monthly spending limit" detail={<span data-testid="month-detail">{monthLine(month)}</span>} />
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <span className="flex items-center gap-1 text-sm">
+          $
+          <Input
+            data-testid="month-dollars"
+            aria-label="Dollars per month"
+            inputMode="decimal"
+            autoComplete="off"
+            className="h-7 w-20 text-right text-xs"
+            disabled={!editable || saving}
+            aria-invalid={cents === null}
+            value={dollars}
+            onChange={event => {
+              setDollars(event.target.value);
+            }}
+          />
+          <span className="text-xs text-muted-foreground">a month</span>
+          <Button
+            size="sm"
+            data-testid="month-save"
+            disabled={!editable || saving || cents === null || cents === month.ceilingCents}
+            onClick={() => {
+              if (cents === null) return;
+              onSave({ settingKey: 'monthly_cash_ceiling_cents', value: { cents } });
+            }}
+          >
+            Save
+          </Button>
+        </span>
+        {cents === null ? (
+          <span data-testid="month-issue" className="text-xs text-destructive">
+            {MONTH_RANGE}
+          </span>
+        ) : null}
+      </span>
+    </Row>
   );
 }

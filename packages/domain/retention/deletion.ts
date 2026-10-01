@@ -5,6 +5,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
+import { lockMonthlySpend } from '../research/ledger.ts';
 import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts';
@@ -640,6 +641,24 @@ export async function commitDeletion(
   if (row.state === 'committed') return refuse('already_committed');
 
   const scope: Scope = { firmId: row.firm_id, contactId: row.contact_id };
+  // Slice P1, final round (#4, #5): the one lock order — the firm row (and the contact's),
+  // then every subject lock this deletion meets (call sessions and their transcriptions,
+  // the firm's active research runs), then the workspace's monthly spend lock — all before
+  // any row is deleted or settled. A paid path that touches this firm takes the firm first
+  // too (research chunk 3), and one that writes a message's rows takes the monthly lock
+  // before them (the classifier), so neither can hold what this waits for while waiting for
+  // what this holds. The order is in `docs/greenfield/calling.md`.
+  await context.db.query('SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+    context.scope.workspaceId,
+    scope.firmId,
+  ]);
+  if (scope.contactId !== null) {
+    await context.db.query('SELECT id FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE', [
+      context.scope.workspaceId,
+      scope.contactId,
+      scope.firmId,
+    ]);
+  }
   // Slice C2 (review fold 1, P1): every call session this deletion removes is locked now,
   // after the gate and before anything is measured — its transcription lock and its row —
   // and held to the commit. A transcription that has not begun waits and then finds the
@@ -652,6 +671,28 @@ export async function commitDeletion(
     context,
     targetedSessions.map(session => session.id),
   );
+  // And, for a firm, every active research run — running, or still holding an open
+  // reservation — before the monthly lock and before any deletion (fix rounds 2 and 3). A run
+  // lock waited for after the monthly lock would be a cycle with a chunk 3 settling its own
+  // call; one waited for after a firm row was deleted, with a page-only chunk 3 writing
+  // evidence. The finalisation further down takes them again.
+  if (scope.contactId === null) {
+    const { rows: runsToLock } = await context.db.query<{ id: string }>(
+      `SELECT r.id FROM research_runs r
+        WHERE r.workspace_id = $1 AND r.firm_id = $2
+          AND (r.outcome = 'running'
+               OR EXISTS (
+                 SELECT 1 FROM provider_reservations p
+                  WHERE p.workspace_id = r.workspace_id
+                    AND p.subject_kind = 'research_run' AND p.subject_id = r.id
+                    AND p.state IN ('reserved', 'calling')))
+        ORDER BY r.started_at, r.id`,
+      [context.scope.workspaceId, scope.firmId],
+    );
+    for (const run of runsToLock) await lockRun(context, run.id);
+  }
+  // Then the month: every settlement and every message deletion below comes after it.
+  await lockMonthlySpend(context);
   const measured = await measure(context, scope);
   const currentHash = hashOf(scope, measured);
   // Both comparisons. The presented hash catches a client approving somebody else's

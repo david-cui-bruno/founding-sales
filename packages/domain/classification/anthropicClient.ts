@@ -181,10 +181,12 @@ export async function loadAnthropicTransport(options: {
   };
   const client = new sdk.default({
     apiKey: await options.secrets.read('llm_classifier_api_key'),
-    // Two retries is the SDK default and the right one here: a classification is
-    // idempotent from the provider's point of view and a transient 429 costs
-    // nothing but latency. The job's own ladder is what handles the rest.
-    maxRetries: options.maxRetries ?? 2,
+    // No automatic retries (slice P1). The SDK's default of two would re-send a paid
+    // request after a timeout or a 5xx without asking the pause switch again and without
+    // a reservation for the second request. Every caller owns its retry instead: research
+    // and transcription through the paid-call pattern's bounded, estimated retry, the
+    // classifier through its job's ladder, each re-checking its switch first.
+    maxRetries: options.maxRetries ?? 0,
     // Milliseconds in the TypeScript SDK. A classification that has taken half a
     // minute is one the worker should give the lease back for.
     timeout: options.timeoutMilliseconds ?? 30_000,

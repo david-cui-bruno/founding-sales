@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { ResearchSettingsEdit, ResearchState } from '../researchContract.ts';
 import { dollars, researchNotice, spendLine } from '../researchView.ts';
+import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Section } from '../ui/layout.tsx';
@@ -43,6 +44,7 @@ export function ResearchSettingsSection({
   const settings = state?.settings ?? null;
   if (settings === null) return null;
   const spend = spendLine(state as ResearchState);
+  const finishingLine = finishingSentence('research', state?.finishing);
 
   const numberOf = (key: string, current: number): number => {
     const typed = draft[key];
@@ -71,6 +73,11 @@ export function ResearchSettingsSection({
         />
         Read each firm’s own website
       </label>
+      {finishingLine === null ? null : (
+        <p data-testid="research-finishing" className="py-1 text-sm text-muted-foreground">
+          {finishingLine}
+        </p>
+      )}
 
       <div className="mt-2 flex flex-col gap-2">
         {FIELDS.map(field => (

@@ -162,12 +162,13 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
           postmasterReviewed: body.postmasterReviewed,
         });
         if (!recorded.ok) return { ok: false, reason: recorded.reason };
-        if (!body.automatedSendingEnabled) {
-          return { ok: true, value: describeDomain(recorded.domain) };
-        }
+        // The switch is written either way (slice P1): unchecking "automated sending" is the
+        // production pause control, and the checklist alone keeps the previous enable
+        // whenever every leg still passes. Both writers take the send gate EXCLUSIVE, in
+        // this one transaction, so the turn-off is ordered against every in-flight claim.
         const enabled = await setAutomatedSendingEnabled(context, {
           domain: body.domain,
-          enabled: true,
+          enabled: body.automatedSendingEnabled,
         });
         if (!enabled.ok) return { ok: false, reason: enabled.reason };
         return { ok: true, value: describeDomain(enabled.domain) };

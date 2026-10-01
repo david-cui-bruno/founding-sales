@@ -5,6 +5,7 @@ import {
   callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
+  finishingResponseSchema,
   integrationsSettingsResponseSchema,
   outboundStatusResponseSchema,
   pipelineStagesResponseSchema,
@@ -15,6 +16,7 @@ import {
   statePostureListResponseSchema,
   statePostureViewSchema,
   type CallingIdentityDto,
+  type FinishingResponse,
 } from '@fss/contracts';
 import type {
   ActiveSettingKey,
@@ -31,6 +33,7 @@ import type {
   SaveSettingInput,
   SetSendingCapInput,
 } from '../renderer/settingsContract.ts';
+import type { ApiOutcome } from './apiClient.ts';
 import type { AuthedClient } from './authedClient.ts';
 
 /**
@@ -78,12 +81,23 @@ export const POSTURE_API_PATHS = {
 export const SETTINGS_READ_PATH = '/settings?include=postal_address';
 
 /**
- * The call-to-booking settings, with slice C2's transcription asked for by name: the API
+ * The call-to-booking settings, with slice C2's transcription and slice P1's month asked
+ * for by name: the API
  * leaves it out unless asked, because a desktop built with slice S1 parses this answer
  * with its own strict schema. An API from before C2 ignores the parameter, and the
  * section then has no transcription row.
  */
-export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription';
+export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription&include=month';
+
+/**
+ * Slice P1's read of what is still finishing after a switch went off. A path of its own,
+ * so no answer an installed build parses strictly gains a field; an API from before P1
+ * answers 404 and the sections show no finishing line.
+ */
+export const FINISHING_READ_PATH = '/settings/finishing';
+
+/** The integration settings whose change can leave paid requests finishing (P1 final round, #7). */
+const PAID_SWITCH_KEYS: ReadonlySet<string> = new Set(['call_transcription']);
 
 /*
  * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
@@ -180,6 +194,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let postures: PosturesState | null = null;
   let integrations: AdminState['integrations'] = null;
   let integrationsNotice: string | null = null;
+  let paidFinishing: AdminState['paidFinishing'] = null;
   /** The role the state above was read under, or null before the first read. */
   let roleSeen: AdminState['role'] | null = null;
   const window = defaultWindow(clock());
@@ -204,6 +219,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       dashboard = null;
       integrations = null;
       integrationsNotice = null;
+      paidFinishing = null;
     }
     roleSeen = role;
     return { role, online: session.online, mayMutate: session.mayMutate };
@@ -228,10 +244,22 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       postures,
       integrations,
       integrationsNotice,
+      paidFinishing,
     };
   };
 
   const isAdmin = async (): Promise<boolean> => (await currentRole()).role === 'admin';
+
+  /** Transcription and reply reading from a `/settings/finishing` answer, or null when it did not answer. */
+  const paidFinishingOf = (
+    finishing: ApiOutcome<FinishingResponse>,
+  ): AdminState['paidFinishing'] =>
+    finishing.ok
+      ? {
+          ...(finishing.value.transcription === undefined ? {} : { transcription: finishing.value.transcription }),
+          ...(finishing.value.classification === undefined ? {} : { classification: finishing.value.classification }),
+        }
+      : null;
 
   /**
    * G7-2's sending posture, in three reads, for an admin only.
@@ -306,7 +334,15 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
               automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
             },
       ramps: collected,
+      finishing: null,
     };
+    // Slice P1: "Sending is off. 1 message already submitted is finishing." A failed read is
+    // no line, never a notice: the section above already read.
+    const finishing = await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value));
+    if (finishing.ok) sendingAdmin = { ...sendingAdmin, finishing: finishing.value.sending };
+    // The same answer carries transcription and reply reading (fix round 2), for the
+    // Calling & calendar section: no second request.
+    paidFinishing = paidFinishingOf(finishing);
     sendingReadError = null;
   };
 
@@ -486,6 +522,11 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       }
       integrationsNotice = null;
       await loadIntegrations();
+      if (PAID_SWITCH_KEYS.has(input.settingKey)) {
+        // A paid switch changed (P1 final round, #7): what it still has in flight is read
+        // again now, so turning it off shows the finishing line at once.
+        paidFinishing = paidFinishingOf(await deps.api.read(FINISHING_READ_PATH, value => finishingResponseSchema.parse(value)));
+      }
       return await snapshot();
     },
 

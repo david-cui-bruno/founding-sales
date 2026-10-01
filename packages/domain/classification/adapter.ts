@@ -37,9 +37,17 @@ import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
  * caught inventing a sentence. See `docs/decisions/g7b-a-fabricated-quote-voids-the-answer.md`.
  */
 
-export type ClassifierAttempt =
+export type ClassifierAttempt = (
   | { readonly ok: true; readonly suggestion: ModelSuggestion; readonly call: ClassifierCallRecord }
-  | { readonly ok: false; readonly call: ClassifierCallRecord };
+  | { readonly ok: false; readonly call: ClassifierCallRecord }
+) & {
+  /**
+   * Whether the provider reported the input and output counts (slice P1). False for a
+   * throw and for a response with no usage or an incomplete one: then nobody said what the
+   * request cost, and the attempt is settled at its reservation, never at a computed zero.
+   */
+  readonly usageReported: boolean;
+};
 
 /** The port the pipeline depends on. One method; the fake and the real one both fit. */
 export interface ReplyClassifierPort {
@@ -115,6 +123,7 @@ export function anthropicReplyClassifier(options: AnthropicClassifierOptions): R
         // message can quote a request body, and a request body is somebody's email.
         return {
           ok: false,
+          usageReported: false,
           call: {
             ...base,
             outcome: 'provider_error',
@@ -129,38 +138,43 @@ export function anthropicReplyClassifier(options: AnthropicClassifierOptions): R
       }
       const latencyMs = Math.max(0, Math.round(clock() - started));
       const usage = usageOf(response);
+      const usageReported = typeof response.usage?.input_tokens === 'number' && typeof response.usage.output_tokens === 'number';
       const stopReason = response.stop_reason ?? null;
       const spent = { ...usage, latencyMs, stopReason } as const;
+      const reported = { usageReported } as const;
 
       // Before `content`, always. A refusal is an HTTP 200 whose content is not the
       // answer, and reading it first is how a refusal becomes a label.
       if (stopReason === 'refusal') {
         return {
           ok: false,
+          ...reported,
           call: { ...base, ...spent, outcome: 'refusal', refusalCategory: response.stop_details?.category ?? null },
         };
       }
 
       const text = textOf(response);
       if (text === null) {
-        return { ok: false, call: { ...base, ...spent, outcome: 'malformed', refusalCategory: null } };
+        return { ok: false, ...reported, call: { ...base, ...spent, outcome: 'malformed', refusalCategory: null } };
       }
 
       const read = readModelSuggestion(text);
       if (!read.ok) {
-        return { ok: false, call: { ...base, ...spent, outcome: read.failure, refusalCategory: null } };
+        return { ok: false, ...reported, call: { ...base, ...spent, outcome: read.failure, refusalCategory: null } };
       }
 
       const excerpt = read.suggestion.supportingExcerpt;
       if (excerpt !== null && !excerptIsVerbatim(excerpt, input.bodyText)) {
         return {
           ok: false,
+          ...reported,
           call: { ...base, ...spent, outcome: 'excerpt_unverified', refusalCategory: null },
         };
       }
 
       return {
         ok: true,
+        ...reported,
         // The model's own `model_version` and `prompt_version` are advisory: it is
         // being asked about a fact the caller already knows, and recording its
         // answer would be trusting it about the identity of the thing that produced

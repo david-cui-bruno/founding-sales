@@ -308,6 +308,157 @@ running. `{}` —
 what the rehearsal fills and what the release puts in production before the deploy that
 adds the entry to the worker task — reads as not configured, and nothing is transcribed.
 
+### Pausing, and the month's cash ceiling (slice P1)
+
+**A switch turned off (invariant I1).** When a sending switch (the attestation
+`sending_enabled`, or the domain's `automated_sending_enabled` with its DNS checklist), the
+research switch, or `call_transcription.enabled` is off, queued work is held and no new
+provider request starts. The last check runs immediately before each provider call:
+
+| Provider call | Final boundary | Final switch check |
+| --- | --- | --- |
+| Gmail send | `outbound/send.ts` `dispatchOutboundMessage` → `gmail.sendMessage` | `recheckAndClaim`: both switches and the attestation, under the send gate SHARED, in the claiming transaction. Every writer of either switch takes the gate EXCLUSIVE, so a turn-off waits for an open claim and every later claim reads it and holds the fence; a held fence sends exactly once when the switch is back on. |
+| Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages` (each robots.txt and page request), `countInputTokens` (each pass of the trim loop), `extract` | `research_settings.enabled`, read again immediately before each request: the fetcher asks a `shouldContinue` predicate before every robots.txt and page request and stops there. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
+| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt, and the call is held: see below. |
+| Reply classifier | `classification/classify.ts` `finishClassification` → `classify` (chunk 3 of `classify.reply`) | `classifier_settings.enabled`, read in chunk 2 after the request is built and after the monthly lock, under the classifier switch lock (shared; every settings write takes it exclusive), in the transaction that marks the attempt `calling`. Chunk 3 sends before any database read. Off releases the attempt, records `disabled`, and the reply is held: see below. |
+
+No paid SDK retries behind these checks: the Anthropic client is built with `maxRetries: 0`
+for both the classifier and research, so one checked request is one HTTP request.
+
+**Held, not completed.** A job that meets "off" completes (the job store ignores a
+second enqueue of the same key), so held work is re-owed from the rows under a new revision
+key once the switch is back on, and runs once:
+
+* a transcription — `call-transcribe-resume` (registered only where `call.transcribe` is)
+  owes `call-transcribe:{session}:r{n}` for an eligible call of the last seven days with no
+  transcript, its earlier jobs finished, no open reservation, fewer than two paid attempts,
+  and a `call_transcription` setting written after the last job finished. An attempt
+  released before any provider request is not a paid attempt; six rows is the cap.
+* a reply — `classify-reply` owes `classify-reply:{message}:resume-{hold}` for a reply whose
+  LATEST attempt was held (recorded `disabled`, or a reservation released without a request)
+  once `classifier_settings` was written after that hold, for replies of the last seven days,
+  never with an open reservation and never past two paid attempts. The key names the hold,
+  not the settings write, so a second save owes nothing new; and chunk 1 refuses, without
+  paying, any obligation while the reply has an open attempt or after its latest attempt was
+  paid.
+
+A request already submitted may finish and its result is recorded; nothing recalls a sent
+message or reverses a charge. `GET /settings/finishing` answers each switch and how much is
+still finishing (fences `dispatching`; research runs under way, reservations `calling`;
+transcriptions and reply classifications whose request may be in flight — their reservations
+`calling`), and Settings shows "Sending is off. 1 message already submitted is finishing.",
+"Research is off. 1 research run already under way is finishing." and, under Calling &
+calendar, "Transcription is off. 1 transcription already sent is finishing." and "Reply
+reading is off. 1 reply already sent to the model is finishing." while a switch is off and
+something is.
+
+**What the pause guarantees** (the boundaries, decided in the P1 final round). Each paid
+path has one point after which a request counts as already submitted; a turn-off that
+commits after that point lets that one request go, and one that commits before it stops it:
+
+* Gmail — the claim's COMMIT. A turn-off that commits after it (it has waited on the gate for
+  exactly that commit) lets that one message go. `dispatching` has no edge back to `held`
+  (migration 0010), so there is no re-check after the commit.
+* the reply classifier — chunk 2's COMMIT that marks the attempt `calling`, taken under the
+  classifier switch lock. Between that commit and the request the runner issues nothing but
+  the next chunk's `BEGIN` (its clock comes from the progress write, not a query) and chunk 3
+  sends before any read.
+* research and transcription — the final settings read immediately before each request. A
+  turn-off that commits while that read is in flight is equivalent to one committed just
+  after it: the request counts as already submitted.
+
+A `calling` classifier attempt whose claim is gone (a lost lease, a requeue between chunk 2
+and chunk 3) is estimated at its reservation by the job's next claim or by the sweep, by
+design: nobody can know whether its request left. A reply holds at most two paid attempts,
+so a reply loses at most two estimates this way and is then left with its deterministic
+classification.
+
+**The month's cash ceiling (invariant I2).** Daily ceilings are not a monthly guarantee:
+$1.25 of calling and $0.50 of transcription a day already allow $38.50 over twenty-two
+weekdays. `monthly_cash_ceiling_cents` (`{ "cents": 0..5000 }`, $25 by default, migration
+0031; admin-written through `POST /settings/update`, not in the settings snapshot) is checked
+when a call session, a transcription attempt or a research run reserves its cents, under a
+workspace monthly lock taken last, inside that provider's own budget lock (telephony,
+transcription, research), so it is atomic with the daily check and every path takes the
+locks in one order.
+Month-to-date spend is every provider's settled cost plus its open reservations, on the
+calendar month of the workspace business time zone (`readSpend`). A refusal is
+`monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
+of $y" (`GET /settings/integrations?include=month`). Research keeps its own monthly ceiling and
+is also refused by this one (`monthly_cash_ceiling`).
+
+**The reply classifier on the paid-call pattern (fix round 2).** `classify.reply` is chunked
+like `research.firm` and `call.transcribe`, with `provider_reservations` subject
+`reply_classification` (0031), one row per attempt:
+
+1. chunk 1 (`beginClassification`), committed — the switch, the lifetime bound (two paid
+   attempts, six rows), the daily call cap (today's paid reservations), and the month's cash
+   ceiling, then the attempt reserved at the request's upper bound: its UTF-8 bytes as input
+   tokens at the cache-write price plus `max_output_tokens`, doubled when the server may fall
+   back. One open reservation per reply (`provider_reservations_one_open_reply`). The daily
+   count is the classifier's paid reservations dated today plus today's sent requests with no
+   reservation for their reply (those made before 0031), both on the same business date.
+2. chunk 2 (`ensureClassificationCalling`), committed — the request built, the month and the
+   switch read last, the attempt marked `calling`; off or over the month releases it.
+3. chunk 3 (`finishClassification`) — the request, then the settlement by id at the answer's
+   cost (`anthropic_classifier` in the ledger). An ambiguous failure, or an answer that does
+   not report its input and output counts, keeps the reservation as its estimate — never a
+   computed zero (research's extraction applies the same rule; transcription settles only on
+   a duration the answer reports). An ambiguous failure, under two paid attempts, goes back
+   to chunk 1 for the one retry.
+
+So spend is durable whatever the handler does after the request: a rolled-back chunk 3
+leaves the attempt `calling`, which `readSpend` counts, and the job's next claim (or the
+sweep, after half an hour) estimates it. There is no overshoot beyond the reservations.
+
+**One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
+
+routing → send gate → firm (and contact) → the subject's own lock (call session row,
+transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
+`transcription_budget`, research `RSCH`, `classifier_budget`) → the workspace monthly lock →
+rows: reservations, ledger, and the rows that reference a message (classifier attempts).
+
+The deletion workflow follows it whole (P1 final round): after the send gate it locks the
+firm (and the contact), then every call session and its transcription, then every active
+research run of the firm (running, or holding an open reservation), then the monthly lock —
+all before it deletes or settles anything. Research chunk 3 takes the firm's KEY SHARE before
+its run, so a page-only run and a firm deletion wait for each other in that order; the
+classifier's chunk 3 takes the monthly lock before it records its attempt, as its chunk 2
+already does. `packages/domain/test/retention/deletionLockOrder.test.ts` drives both of the
+verification's interleavings (deletion against a paused classification, and against a
+page-only research run); both now finish.
+
+Every write to a `provider_ledger` row takes the monthly lock first (`lockMonthlySpend`,
+inside `recordProviderCall`, the settlement and the correction), so a transaction that holds
+a ledger row always holds the monthly lock and ledger rows cannot be part of a cycle; the
+kind order among ledger rows then does not matter. The places that used to settle first and
+lock later now lock first: transcription and research chunk 2 take their budget lock before
+estimating an earlier attempt; the research sweep and the deletion workflow lock every run
+before settling any; the telephony sweep locks its call sessions in one statement and takes
+transcription and reply subjects only by try-lock. Research's page-fetch ledger row is
+written at the end of chunk 3, so the monthly lock is never held across the model call. The
+classifier switch lock is a leaf after the monthly lock (its exclusive holder, the settings
+write, takes nothing else). `apps/worker/test/spendLockOrder.test.ts` drives the review's
+three transactions (sweep, recovery, callback) into the interleaving that deadlocked; all
+three now commit.
+
+**A later telephony price.** Twilio's terminal callback may settle a call from its duration
+(an estimate) before a later callback carries the final price. The price is the cost: the
+session's `billed_price_cents` takes the latest one, and a closed reservation is corrected to
+it (`settled`), with the ledger row of its own date moved by the difference, under the
+monthly lock. The same price again changes nothing.
+
+**Funding labels** (documentation only; nothing enforces or reads them). Eligible provider
+credits are tracked outside Callie; the ceiling counts every cent at its price whatever pays it.
+
+| `provider_key` | What | Funding |
+| --- | --- | --- |
+| `twilio.voice` | Twilio minutes | cash |
+| `deepgram.nova-3` | transcription | credits-eligible (confirm against the account) |
+| `anthropic_extraction` | research model calls | credits-eligible (confirm against the account) |
+| `anthropic_classifier` | reply classifier calls | credits-eligible (confirm against the account) |
+| `company_page` | firms' own websites | free (a count, no cents) |
+
 ### The voicemail script
 
 `{contactFirstName}`, `{firmName}`, `{callerName}` and `{callbackNumber}` (David's verified

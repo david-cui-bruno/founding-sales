@@ -204,6 +204,52 @@ describe('call sessions', () => {
     expect(await reservationOf(created.value.sessionId)).toMatchObject({ state: 'settled', settled_cents: 3 });
   });
 
+  it('corrects the ledger to a later callback\'s price, once (slice P1, finding 5)', async () => {
+    const created = await create('alpha');
+    if (!created.ok) throw new Error(created.reason);
+    const sid = callSid();
+    expect((await consume('alpha', created.value.sessionId, sid)).ok).toBe(true);
+    const reservationId = (
+      await database.session.query<{ reservation_id: string }>('SELECT reservation_id FROM call_sessions WHERE id = $1', [
+        created.value.sessionId,
+      ])
+    ).rows[0]?.reservation_id;
+    const ledgerCents = async (): Promise<number> => {
+      const { rows } = await database.session.query<{ cents: string }>(
+        `SELECT COALESCE(sum(l.cost_cents), 0)::text AS cents FROM provider_ledger l
+           JOIN provider_reservations r ON r.workspace_id = l.workspace_id AND r.provider_key = l.provider_key
+                                        AND r.business_date = l.business_date
+          WHERE r.id = $1`,
+        [reservationId],
+      );
+      return Number(rows[0]?.cents ?? 0);
+    };
+    const before = await ledgerCents();
+    const status = async (extra: { durationSeconds?: number; priceDollars?: number }) =>
+      await withTransaction(database.session, async () =>
+        await recordCallStatus(database.session, { callSid: sid, providerStatus: 'completed', ...extra }),
+      );
+    // The first terminal callback has only the duration: an estimate of 5 cents.
+    expect(await status({ durationSeconds: 125 })).toMatchObject({ settlement: 'estimated' });
+    expect(await reservationOf(created.value.sessionId)).toMatchObject({ state: 'estimated', settled_cents: 5 });
+    expect(await ledgerCents()).toBe(before + 5);
+    // A later one carries Twilio's price, higher than the estimate: the price is the cost.
+    expect(await status({ durationSeconds: 125, priceDollars: -0.09 })).toMatchObject({ settlement: 'settled' });
+    expect(await reservationOf(created.value.sessionId)).toMatchObject({ state: 'settled', settled_cents: 9 });
+    expect(await ledgerCents()).toBe(before + 9);
+    // The same callback again changes nothing; a different final price moves it again.
+    expect(await status({ durationSeconds: 125, priceDollars: -0.09 })).toMatchObject({ settlement: null });
+    expect(await ledgerCents()).toBe(before + 9);
+    expect(await status({ priceDollars: -0.07 })).toMatchObject({ settlement: 'settled' });
+    expect(await reservationOf(created.value.sessionId)).toMatchObject({ state: 'settled', settled_cents: 7 });
+    expect(await ledgerCents()).toBe(before + 7);
+    const { rows } = await database.session.query<{ billed_price_cents: number }>(
+      'SELECT billed_price_cents FROM call_sessions WHERE id = $1',
+      [created.value.sessionId],
+    );
+    expect(rows[0]?.billed_price_cents).toBe(7);
+  });
+
   it('acknowledges a callback for an unknown SID without writing', async () => {
     const outcome = await withTransaction(database.session, async () =>
       await recordCallStatus(database.session, { callSid: callSid(), providerStatus: 'completed' }),

@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { localDate } from '../src/rules/localClock.ts';
+import { lockMonthlySpend } from './ledger.ts';
 
 /**
  * One row per paid attempt, from authorized to settled (`provider_reservations`).
@@ -104,9 +105,12 @@ const toRow = (row: ReservationDbRow): ReservationRow => ({
   settledCents: Number(row.settled_cents),
 });
 
+/** The subjects priced by model and tokens: research runs and, since slice P1, replies. */
+export type TokenPricedSubjectKind = 'research_run' | 'reply_classification';
+
 export interface ReserveInput {
   readonly providerKey: string;
-  readonly subjectKind: 'research_run';
+  readonly subjectKind: TokenPricedSubjectKind;
   readonly subjectId: string;
   readonly attempt: number;
   /** Database time. The reservation's own business date is derived from it here. */
@@ -167,7 +171,7 @@ export async function reserveAttempt(
 /** One attempt's reservation, or null. */
 export async function readAttempt(
   context: RepositoryContext,
-  input: { readonly subjectKind: 'research_run'; readonly subjectId: string; readonly attempt: number },
+  input: { readonly subjectKind: TokenPricedSubjectKind; readonly subjectId: string; readonly attempt: number },
 ): Promise<ReservationRow | null> {
   const { rows } = await context.db.query<ReservationDbRow>(
     `SELECT ${COLUMNS} FROM provider_reservations
@@ -187,7 +191,7 @@ export async function readAttempt(
  */
 export async function listAttempts(
   context: RepositoryContext,
-  input: { readonly subjectKind: 'research_run'; readonly subjectId: string },
+  input: { readonly subjectKind: TokenPricedSubjectKind; readonly subjectId: string },
 ): Promise<readonly ReservationRow[]> {
   const { rows } = await context.db.query<ReservationDbRow>(
     `SELECT ${COLUMNS} FROM provider_reservations
@@ -317,6 +321,56 @@ export async function settleAttempt(
 }
 
 /**
+ * Replace a closed reservation's recorded cost with the provider's own figure, and move the
+ * ledger by the difference (slice P1, finding 5).
+ *
+ * Telephony's terminal callback may settle a call from its duration (an estimate) or from
+ * a first price, and a later callback can carry Twilio's final price. The provider's
+ * figure is the cost, so the row becomes `settled` at it and the ledger row of the
+ * reservation's own date moves by `new − previous`. Idempotent: a figure already recorded
+ * changes nothing. The caller holds the workspace's monthly lock.
+ */
+export async function correctSettledCents(
+  context: RepositoryContext,
+  input: { readonly reservationId: string; readonly cents: number },
+): Promise<{ readonly previous: number; readonly recorded: number } | null> {
+  const cents = Math.max(0, Math.trunc(input.cents));
+  await lockMonthlySpend(context);
+  const { rows } = await context.db.query<{
+    previous: number;
+    business_date: string;
+    business_time_zone: string;
+    provider_key: string;
+  }>(
+    `WITH old AS (
+       SELECT id, settled_cents FROM provider_reservations
+        WHERE workspace_id = $1 AND id = $2 AND state IN ('settled', 'estimated')
+        FOR UPDATE
+     )
+     UPDATE provider_reservations p
+        SET state = 'settled', settled_cents = $3
+       FROM old
+      WHERE p.workspace_id = $1 AND p.id = old.id AND (p.settled_cents <> $3 OR p.state <> 'settled')
+      RETURNING old.settled_cents AS previous, p.business_date::text AS business_date, p.business_time_zone, p.provider_key`,
+    [context.scope.workspaceId, input.reservationId, cents],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  const delta = cents - Number(row.previous);
+  if (delta !== 0) {
+    await context.db.query(
+      `INSERT INTO provider_ledger
+         (workspace_id, provider_key, business_date, business_time_zone, calls, failures, cost_cents, updated_at)
+       VALUES ($1, $2, $3::date, $4, 0, 0, greatest(0, $5::integer), now())
+       ON CONFLICT (workspace_id, provider_key, business_date) DO UPDATE
+          SET cost_cents = greatest(0, provider_ledger.cost_cents + $5::integer), updated_at = now()`,
+      [context.scope.workspaceId, row.provider_key, row.business_date, row.business_time_zone, delta],
+    );
+  }
+  return { previous: Number(row.previous), recorded: cents };
+}
+
+/**
  * Add invoiced cents to one ledger row, by an explicit date.
  *
  * Separate from `recordProviderCall` because a settlement is not a call: the call was
@@ -332,6 +386,8 @@ async function addLedgerCost(
     readonly cents: number;
   },
 ): Promise<void> {
+  // The monthly spend lock before the ledger row, as every ledger write takes it.
+  await lockMonthlySpend(context);
   await context.db.query(
     `INSERT INTO provider_ledger
        (workspace_id, provider_key, business_date, business_time_zone, calls, failures, cost_cents, updated_at)
@@ -352,7 +408,7 @@ async function addLedgerCost(
  */
 export async function finaliseSubjectReservations(
   context: RepositoryContext,
-  input: { readonly subjectKind: 'research_run'; readonly subjectId: string; readonly at: string },
+  input: { readonly subjectKind: TokenPricedSubjectKind; readonly subjectId: string; readonly at: string },
 ): Promise<{ readonly cents: number; readonly estimated: boolean }> {
   let cents = 0;
   let estimated = false;
@@ -373,7 +429,7 @@ export async function finaliseSubjectReservations(
 /** Everything one subject has been recorded as costing, settled rows only. */
 export async function subjectSettledCents(
   context: RepositoryContext,
-  input: { readonly subjectKind: 'research_run'; readonly subjectId: string },
+  input: { readonly subjectKind: TokenPricedSubjectKind; readonly subjectId: string },
 ): Promise<number> {
   const { rows } = await context.db.query<{ cents: string | null }>(
     `SELECT sum(settled_cents)::text AS cents FROM provider_reservations

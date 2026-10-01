@@ -2,6 +2,7 @@ import { localDate } from '../src/rules/localClock.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { incrementDailyCounter, readDailyCounter } from '../jobs/counters.ts';
 import { readSpend, workspaceBusinessZone } from './ledger.ts';
+import { clearMonthlyCash, readMonthlyCashCeiling } from '../settings/cashCeiling.ts';
 import {
   isPricedModel,
   worstCaseInputTokens,
@@ -130,6 +131,19 @@ export interface ResearchClearanceInput {
   readonly attemptKind: 'first' | 'retry';
 }
 
+/**
+ * The workspace's research budget lock, a transaction lock, re-entrant. Taken by every
+ * clearance, and by chunk 2 before it settles an earlier attempt (slice P1, fix round 2):
+ * a settlement takes the monthly spend lock, which comes after this one in the one lock
+ * order (`docs/greenfield/calling.md`).
+ */
+export async function lockResearchBudget(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [
+    BUDGET_LOCK_NAMESPACE,
+    hashOfWorkspace(context.scope.workspaceId),
+  ]);
+}
+
 /** Price and clear exactly one reservation, or say why not. */
 export async function claimResearchClearance(
   context: RepositoryContext,
@@ -151,10 +165,7 @@ export async function claimResearchClearance(
   // The budget lock, before anything is read. Every number below is a sum over rows
   // another claim could be inserting, so reading them without it is the read-then-write
   // that ceilings exist to avoid.
-  await context.db.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [
-    BUDGET_LOCK_NAMESPACE,
-    hashOfWorkspace(context.scope.workspaceId),
-  ]);
+  await lockResearchBudget(context);
 
   const counted =
     input.attemptKind === 'first'
@@ -181,6 +192,13 @@ export async function claimResearchClearance(
   if (spend.todayCents + worstCaseCents > settings.dailyCostCeilingCents) return refuse('daily_cost_ceiling');
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
+  }
+  // And the workspace's one cash ceiling across every paid kind (slice P1, invariant I2),
+  // under its monthly lock — taken after the research budget lock, the order every
+  // reservation keeps (own budget lock first, the monthly lock last). The caller inserts
+  // the reservation in this transaction, so the lock covers it.
+  if (!(await clearMonthlyCash(context, { at: input.at, zone: businessTimeZone, cents: worstCaseCents }))) {
+    return refuse('monthly_cash_ceiling');
   }
 
   return accept({
@@ -271,6 +289,9 @@ export async function researchClearanceAvailable(
   if (spend.todayCents + worstCaseCents > settings.dailyCostCeilingCents) return refuse('daily_cost_ceiling');
   if (spend.monthToDateCents + worstCaseCents > settings.monthlyCostCeilingCents) {
     return refuse('monthly_cost_ceiling');
+  }
+  if (spend.monthToDateCents + worstCaseCents > (await readMonthlyCashCeiling(context))) {
+    return refuse('monthly_cash_ceiling');
   }
   return accept({ remaining });
 }

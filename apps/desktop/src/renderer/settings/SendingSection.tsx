@@ -101,6 +101,11 @@ export function SendingSection({
       <p data-testid="sending-domain" className="py-1 text-sm">
         {section.domainLine}
       </p>
+      {section.finishingLine === null ? null : (
+        <p data-testid="sending-finishing" className="py-1 text-sm text-muted-foreground">
+          {section.finishingLine}
+        </p>
+      )}
 
       {domain === null ? null : (
         <>

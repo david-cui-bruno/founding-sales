@@ -100,6 +100,12 @@ export const sendingAdminViewSchema = z.object({
       lastHealthFailure: z.string().max(40).nullable(),
     }),
   ),
+  /**
+   * Slice P1: whether sending is on and how many messages already submitted to Gmail are
+   * still finishing (`GET /settings/finishing`). Null when the read did not answer — an
+   * API from before P1 — and the section then shows no finishing line.
+   */
+  finishing: z.object({ on: z.boolean(), finishing: z.number().int().min(0) }).nullable().optional(),
 });
 export type SendingAdminView = z.infer<typeof sendingAdminViewSchema>;
 
@@ -163,6 +169,18 @@ export const adminStateSchema = z.strictObject({
   integrations: integrationsSettingsResponseSchema.nullable().optional(),
   /** The last refusal of an integrations save, as the code, for the section to put in a sentence. */
   integrationsNotice: z.string().max(80).nullable().optional(),
+  /**
+   * Slice P1: transcription and reply classification still finishing after their switch
+   * went off (`GET /settings/finishing`), for Settings → Calling & calendar. Null when the
+   * read did not answer, and each part absent when the server does not report it.
+   */
+  paidFinishing: z
+    .object({
+      transcription: z.object({ on: z.boolean(), finishing: z.number().int().min(0) }).optional(),
+      classification: z.object({ on: z.boolean(), finishing: z.number().int().min(0) }).optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type AdminState = z.infer<typeof adminStateSchema>;
 

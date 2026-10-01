@@ -196,10 +196,15 @@ and which have no model row yet, and enqueues `classify.reply` with idempotency 
 `classify-reply:<messageId>` under `business_uniqueness` protection. A partial index,
 `mail_message_classifications_uncertain_deterministic`, is what makes that sweep cheap.
 
-The handler throws only on `provider_error`, so a refusal, a malformed answer or a
-fabricated quotation is a recorded attempt and not a retry loop. `maxAttempts` is 2 and
-the lease is 120 seconds; the stolen-lease probe asserts that two workers running the
-same job produce one model row.
+Since slice P1 (fix round 2) the handler is chunked on the paid-call pattern — reserve,
+mark `calling`, call and settle, three commits, `provider_reservations` subject
+`reply_classification`; `docs/greenfield/calling.md` ("The reply classifier on the paid-call
+pattern") has the details. A refusal, a malformed answer or a fabricated quotation is a
+recorded, settled attempt; a provider error is an estimated one, retried once through
+chunk 1, and never thrown. A reply holds at most one open reservation and at most two paid
+attempts in its lifetime. `maxAttempts` is 2 (a poison payload or a lost lease) and the lease
+is 120 seconds; the stolen-lease probe asserts that two workers running the same job produce
+one model row.
 
 ## Two workspaces, one model
 

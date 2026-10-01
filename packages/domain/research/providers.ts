@@ -70,6 +70,14 @@ export interface PageFetchRequest {
   readonly links: readonly string[];
   readonly maxPagesPerFirm: number;
   readonly maxBytes: number;
+  /**
+   * The pause predicate (slice P1, invariant I1): asked immediately before every request
+   * the adapter makes — each robots.txt read, each redirect hop, each page. False means
+   * the research switch went off: the adapter makes no further request and answers with
+   * the pages it already has, and the caller reads the switch itself and holds the run.
+   * Absent means never paused, which is what a direct caller and a test without one want.
+   */
+  readonly shouldContinue?: (() => Promise<boolean>) | undefined;
 }
 
 export interface FetchedPage {

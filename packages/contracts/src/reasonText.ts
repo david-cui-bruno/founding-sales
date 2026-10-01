@@ -47,6 +47,14 @@ const OPPORTUNITY_MANUAL = 'This firm is yours to work by hand, so Callie will n
 // Holds (specification 15)
 // ---------------------------------------------------------------------------
 
+/**
+ * Slice P1: the month-to-date cash ceiling. One sentence for every map that carries the
+ * code (call sessions, transcription, research), because the flat lookup keeps one per
+ * spelling.
+ */
+const MONTHLY_CASH_CEILING_SENTENCE =
+  'This month’s spending limit is reached, so Callie starts no new paid calls, transcriptions or research until next month. An administrator can raise it in Settings, under Calling & calendar.';
+
 export const HOLD_REASON_SENTENCES: Readonly<Record<HoldReasonCode, string>> = Object.freeze({
   scoped_pause: 'Sending and calling are paused for this firm. Resume it when you are ready.',
   mailbox_disconnected: 'The sales mailbox is not connected, so Callie cannot send. Connect it in Settings, under Mailbox.',
@@ -177,6 +185,7 @@ export const RESEARCH_REFUSAL_SENTENCES: Readonly<Record<(typeof RESEARCH_REFUSA
   daily_firm_ceiling: 'Today’s limit on researched firms has been reached. Research continues tomorrow.',
   daily_cost_ceiling: 'Today’s research budget is spent. Research continues tomorrow, or an administrator can raise the limit in Settings.',
   monthly_cost_ceiling: 'This month’s research budget is spent. An administrator can raise the limit in Settings.',
+  monthly_cash_ceiling: MONTHLY_CASH_CEILING_SENTENCE,
   ceiling_reached: 'A research limit has been reached. An administrator can raise it in Settings.',
   firm_unknown: FIRM_UNKNOWN,
   firm_merged: FIRM_MERGED,
@@ -262,6 +271,7 @@ export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalC
     'The last call was at about this time of day. Try at least two hours earlier or later in their day.',
   telephony_budget_disabled: 'Calling from Callie has no budget set. An administrator can set one in Settings, under Calling.',
   telephony_budget_exhausted: 'Calling paused: today’s calling budget is used.',
+  monthly_cash_ceiling: MONTHLY_CASH_CEILING_SENTENCE,
   caller_id_mismatch: 'Your calling number is not the one Callie’s calling service presents. Ask an administrator to check it.',
 });
 
@@ -381,6 +391,7 @@ export const TRANSCRIPTION_REFUSAL_SENTENCES: Readonly<Record<TranscriptionRefus
   transcription_off: 'Call transcription is off. An administrator can turn it on in Settings, under Calling & calendar.',
   transcription_unconfigured: 'Call transcription is not set up on the server yet, so this call was not transcribed.',
   transcription_budget_exhausted: 'Transcription paused: today’s transcription budget is used. Calls are transcribed again tomorrow.',
+  monthly_cash_ceiling: MONTHLY_CASH_CEILING_SENTENCE,
   transcription_not_eligible: 'Only answered calls of at least twenty seconds are transcribed.',
   transcription_failed: 'This call could not be transcribed.',
   transcript_unavailable: 'Callie could not read this transcript just now. Try again in a minute.',

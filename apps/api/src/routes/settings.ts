@@ -1,4 +1,5 @@
 import {
+  finishingResponseSchema,
   integrationsSettingsResponseSchema,
   settingHistoryRequestSchema,
   updateSettingCommandSchema,
@@ -15,6 +16,9 @@ import {
 import { telephonySpentToday } from '@fss/domain/calls/sessions.ts';
 import { transcriptionSpentToday, transcriptionWorkerAvailable } from '@fss/domain/calls/transcription.ts';
 import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
+import { monthlyCashStatus } from '@fss/domain/settings/cashCeiling.ts';
+import { readFinishing } from '@fss/domain/settings/finishing.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
 import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
@@ -58,13 +62,59 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * its sections. 1.0.14 knows the key, so the filter and its `?include=` parameter are
  * gone.
  */
-export const SETTINGS_PATHS: readonly string[] = ['/settings', '/settings/update', '/settings/history', '/settings/integrations'];
+export const SETTINGS_PATHS: readonly string[] = [
+  '/settings',
+  '/settings/update',
+  '/settings/history',
+  '/settings/integrations',
+  '/settings/finishing',
+];
+
+/**
+ * 16.2's attestation half of "sending is on", as this API can judge it: the deployment
+ * flag, the stored attestation, and the record it names binding to this API's own image —
+ * the same three facts `GET /settings` ANDs into `effectiveSendingEnabled`.
+ */
+async function attestationOn(context: RepositoryContext, options: RoutingOptions): Promise<boolean> {
+  const sendingSetting = (await readSetting(context, 'sending_enabled')).value;
+  return (
+    effectiveSendingEnabled(options.sendingEnabled, sendingSetting) &&
+    (
+      await attestedReleaseBinding(context, sendingSetting, 'api', options.imageDigest, {
+        production: options.production ?? true,
+      })
+    )?.ok === true
+  );
+}
 
 export async function routeSettings(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!SETTINGS_PATHS.includes(request.path)) return null;
   const prepared = await policyRouteDeps(request, options);
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
+
+  if (request.path === '/settings/finishing') {
+    // Slice P1: what is still finishing after a switch went off. Any signed-in member may
+    // read it; it carries four booleans and four counts, nothing about any firm.
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+    }
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    const counts = await readFinishing(scoped.context);
+    return {
+      status: 200,
+      body: finishingResponseSchema.parse({
+        sending: {
+          on: counts.sendingDomainOn && (await attestationOn(scoped.context, options)),
+          finishing: counts.sendingFinishing,
+        },
+        research: { on: counts.researchOn, finishing: counts.researchFinishing },
+        transcription: { on: await transcriptionOn(scoped.context), finishing: counts.transcriptionFinishing },
+        classification: { on: counts.classificationOn, finishing: counts.classificationFinishing },
+      }),
+    };
+  }
 
   if (request.path === '/settings/integrations') {
     // Slice S1. Any signed-in member may read it (a salesperson sees why a call went to
@@ -102,6 +152,10 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
                 spentTodayCents: await transcriptionSpentToday(scoped.context),
               },
             }
+          : {}),
+        // Slice P1, only when asked for, for the same reason: the month's cash ceiling.
+        ...(request.query.getAll('include').includes('month')
+          ? { month: await monthlyCashStatus(scoped.context) }
           : {}),
       }),
     };
@@ -175,4 +229,10 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     // is a record of what this command did.
     return outcome.ok ? { ok: true, value: outcome.value } : { ok: false, reason: outcome.reason };
   });
+}
+
+/** Whether call transcription is on for the finishing line: the switch, and a ceiling above 0. */
+async function transcriptionOn(context: RepositoryContext): Promise<boolean> {
+  const setting = await readCallTranscription(context);
+  return setting.enabled && setting.dailyCeilingCents > 0;
 }

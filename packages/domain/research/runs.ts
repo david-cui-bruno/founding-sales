@@ -382,11 +382,16 @@ export async function finaliseAbandonedRuns(
   );
 
   let finalised = 0;
-  for (const row of rows) {
+  // Every run's lock first, then the settlements (slice P1, fix round 2): a settlement
+  // takes the monthly spend lock, and a run lock waited for after it would put this sweep
+  // in a cycle with a chunk 3 that holds that run and is settling its own call.
+  const lockedRuns: { readonly id: string; readonly locked: Awaited<ReturnType<typeof lockRun>> }[] = [];
+  for (const row of rows) lockedRuns.push({ id: row.id, locked: await lockRun(context, row.id) });
+  for (const { id, locked } of lockedRuns) {
+    const row = { id };
     // The lock first, and then the state again: between the select above and here a
     // claim may have taken the run, called, and closed it. A row that is no longer
     // `running` is somebody else's answer and is left exactly as it is.
-    const locked = await lockRun(context, row.id);
     if (locked === null || locked.outcome !== 'running') continue;
     // And the lease again, from the job row rather than from the select's snapshot: a
     // claim that reclaimed the expired job and committed chunk 2 while this loop was

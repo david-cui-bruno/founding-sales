@@ -457,6 +457,16 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
        * not a name whose earlier answer can be reused.
        */
       const robotsByHost = new Map<string, RobotsAnswer>();
+      /**
+       * Slice P1: once the caller's pause predicate says no, no further request is made
+       * for this run. Asked before each robots read, each redirect hop and each page.
+       */
+      let paused = false;
+      const mayRequest = async (): Promise<boolean> => {
+        if (paused) return false;
+        if (input.shouldContinue !== undefined && !(await input.shouldContinue())) paused = true;
+        return !paused;
+      };
 
       const robotsFor = async (hostname: string, address: string): Promise<RobotsAnswer> => {
         const cacheKey = `${hostname}|${address}`;
@@ -472,6 +482,8 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
         let address = firstAddress;
         let followed = 0;
         for (;;) {
+          // Paused: unread, so the host's pages are not fetched, and the run stops below.
+          if (!(await mayRequest())) return { kind: 'unreadable' };
           let response: RawResponse;
           try {
             response = await request({
@@ -545,6 +557,10 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
 
       for (let index = 0; index < queue.length; index += 1) {
         const initial = queue[index] ?? '';
+        if (paused) {
+          skips.bump('paused');
+          continue;
+        }
         if (pages.length >= pageBudget) {
           // Nothing is wrong with the rest of the queue; there is no budget left.
           skips.bump('page_budget_reached');
@@ -558,6 +574,10 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
         let permission: UrlPermission = permittedResearchUrl({ ...input, discovered }, url);
         let followed = 0;
         for (;;) {
+          if (paused) {
+            skips.bump('paused');
+            break;
+          }
           if (permission === 'blocked') {
             skips.bump('url_not_permitted');
             break;
@@ -569,6 +589,13 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             break;
           }
           const robots = await robotsFor(hostname, address);
+          if (paused) {
+            // A robots answer cut short by the pause is not a fact about the host: it is
+            // not kept for another URL of this run, and nothing more is requested.
+            robotsByHost.clear();
+            skips.bump('paused');
+            break;
+          }
           if (robots.kind === 'unreadable') {
             skips.bump('robots_unreadable');
             break;
@@ -578,6 +605,10 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             break;
           }
 
+          if (!(await mayRequest())) {
+            skips.bump('paused');
+            break;
+          }
           let response: RawResponse;
           try {
             response = await request({

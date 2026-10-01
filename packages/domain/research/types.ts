@@ -14,6 +14,8 @@ export const RESEARCH_REFUSAL_CODES = [
   'daily_firm_ceiling',
   'daily_cost_ceiling',
   'monthly_cost_ceiling',
+  // The workspace's month-to-date cash ceiling, across every paid kind (slice P1).
+  'monthly_cash_ceiling',
   // The firm.
   'firm_unknown',
   'firm_merged',

@@ -188,6 +188,15 @@ describe('the answer', () => {
 
     const stripped = await anthropicExtraction({ transport: transportOf({ content: [{ type: 'text', text: '{"selections":[],"questions":["a?","b?"],"opening":"hi"}' }] }) }).extract(request);
     expect(stripped).toMatchObject({ ok: true, costCents: 0, costEstimated: true });
+
+    // Slice P1: usage with a count missing is no invoice either — never zero tokens.
+    const partial = await anthropicExtraction({
+      transport: transportOf({
+        content: [{ type: 'text', text: '{"selections":[],"questions":["a?","b?"],"opening":"hi"}' }],
+        usage: { output_tokens: 40 },
+      }),
+    }).extract(request);
+    expect(partial).toMatchObject({ ok: true, costEstimated: true });
   });
 
   it('sends no cache_control, because every run’s pages are a different firm’s', async () => {

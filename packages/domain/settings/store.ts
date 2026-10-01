@@ -299,6 +299,16 @@ export async function updateSetting(
     await lockSendGateForStopFact(context);
   }
 
+  // Pause semantics (slice P1, invariant I1): the attestation is one of the two sending
+  // switches, and the dispatch claim reads it under the send gate SHARED. A write of it —
+  // on or off, and a change of the record it names — takes the gate EXCLUSIVE before the
+  // setting's own lock, so a turn-off is ordered against every in-flight claim: a claim
+  // that took the gate first commits (and its message is the one "already submitted" and
+  // finishing), and every claim after the write reads it and holds.
+  if (input.settingKey === 'sending_enabled') {
+    await lockSendGateForStopFact(context);
+  }
+
   // The same name a reader may hold SHARED (`lockSettingForRead`), so a send's claim and
   // an admin's save of the slice it is about to use are serialised.
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [

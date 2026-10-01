@@ -55,9 +55,37 @@ export const SENDING_CHECK_NAMES = [
 ] as const;
 export type SendingCheckName = (typeof SENDING_CHECK_NAMES)[number];
 
+/**
+ * Slice P1's "finishing" line: a switch is off, and provider requests already submitted
+ * before it went off are still finishing. Null while the switch is on (work in flight is
+ * then simply work) and when nothing is finishing. Nothing is recalled or reversed, and
+ * the sentence promises neither.
+ */
+export function finishingSentence(
+  kind: 'sending' | 'research' | 'transcription' | 'classification',
+  finishing: { readonly on: boolean; readonly finishing: number } | null | undefined,
+): string | null {
+  if (finishing == null || finishing.on || finishing.finishing <= 0) return null;
+  const count = String(finishing.finishing);
+  const one = finishing.finishing === 1;
+  const verb = one ? 'is' : 'are';
+  switch (kind) {
+    case 'sending':
+      return `Sending is off. ${count} ${one ? 'message' : 'messages'} already submitted ${verb} finishing.`;
+    case 'research':
+      return `Research is off. ${count} ${one ? 'research run' : 'research runs'} already under way ${verb} finishing.`;
+    case 'transcription':
+      return `Transcription is off. ${count} ${one ? 'transcription' : 'transcriptions'} already sent ${verb} finishing.`;
+    case 'classification':
+      return `Reply reading is off. ${count} ${one ? 'reply' : 'replies'} already sent to the model ${verb} finishing.`;
+  }
+}
+
 export interface SendingAdminSectionView {
   /** The checklist as one sentence, naming what is still missing. */
   readonly domainLine: string;
+  /** Slice P1: "Sending is off. 1 message already submitted is finishing.", or null. */
+  readonly finishingLine: string | null;
   readonly domain: string | null;
   /**
    * The checklist as the server has it recorded, which is what the form starts from.
@@ -483,6 +511,7 @@ function sendingAdminSection(state: AdminState, reason: string | null): SendingA
 
   return {
     domainLine,
+    finishingLine: finishingSentence('sending', posture.finishing),
     domain: domain?.domain ?? null,
     checks: {
       spfPass: domain?.spfPass === true,
