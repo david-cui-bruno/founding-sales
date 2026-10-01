@@ -1,3 +1,4 @@
+import type { CallAudioRemover } from './integrations/callAudio.ts';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
@@ -105,6 +106,8 @@ export interface ApiOptions {
    * discarded audit trail.
    */
   readonly suppressionJournal?: SuppressionJournal;
+  /** Slice C3a: the deletion workflow's best-effort delete of a deleted call's S3 objects. */
+  readonly callAudio?: CallAudioRemover | undefined;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log; the safety metric filters read it. Absent in unit tests. */
@@ -159,6 +162,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.log === undefined ? {} : { log: options.log }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
+    ...(options.callAudio === undefined ? {} : { callAudio: options.callAudio }),
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
     ...(options.production === undefined ? {} : { production: options.production }),
     ...(options.integrations === undefined ? {} : { integrations: options.integrations }),

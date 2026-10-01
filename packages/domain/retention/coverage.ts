@@ -238,12 +238,12 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'The summary, suggested next steps and quoted commitments of one transcribed call; removed with its call session, the firm or the person.',
   ),
 
-  // ------------------------------------------------ transcription jobs (0032, slice C3a fix round)
-  // Ids, a provider job name and an object key: what is owed to AWS after a call. Kept
-  // past a deletion on purpose, so the job and its object are still deleted at AWS.
+  // ------------------------------------------------ transcription jobs (0032, slice C3a)
+  // Ids, a provider job name and two object keys: what collecting a Transcribe job needs.
+  // Kept past a deletion on purpose, so the workflow can still name the call's objects.
   transcription_provider_jobs: coverage(
     ['operational'],
-    'One provider-side transcription job per attempt and the deletes still owed for it; ids and names, no prospect identity; outlives a deleted session so the AWS copies are still removed.',
+    'One Amazon Transcribe job per attempt and how far collecting it got; ids, a job name and object keys, no prospect identity; outlives a deleted session so its S3 objects can still be named and deleted.',
   ),
 });
 

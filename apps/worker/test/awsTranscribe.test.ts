@@ -15,13 +15,12 @@ import {
   AWS_TRANSCRIBE_PROVIDER_KEY,
   awsTranscribeTranscription,
   callAudioObjectKey,
-  isServiceTranscriptUri,
+  callTranscriptObjectKey,
   parseAwsTranscript,
   readAwsTranscribeProvider,
   speakerOfChannel,
   transcriptionJobName,
   type AwsTranscribeSdk,
-  type TranscriptHttp,
 } from '../src/transcription/awsTranscribeClient.ts';
 import { readSelectedTranscriptionProvider } from '../src/transcription/selectProvider.ts';
 import { readTranscriptionComposition, registerHandlers } from '../src/bootstrap/main.ts';
@@ -40,7 +39,6 @@ const fixture = (name: string): unknown =>
 const AUDIO = silentMp3(15);
 const SESSION = '0f6b7a52-5d43-4c3e-9b8a-2a0d1e3f4c5b';
 const BUCKET = 'fss-test-call-audio-123456789012';
-const URI = 'https://s3.us-east-1.amazonaws.com/aws-transcribe-us-east-1-prod/123456789012/job/asrOutput.json?X-Amz-Signature=x';
 
 interface Sent {
   readonly command: string;
@@ -71,10 +69,10 @@ function fakeSdk(answers: Partial<Record<string, Answer>>): { sdk: AwsTranscribe
       S3Client: Client,
       PutObjectCommand: command('PutObject'),
       DeleteObjectCommand: command('DeleteObject'),
+      GetObjectCommand: command('GetObject'),
       TranscribeClient: Client,
       StartTranscriptionJobCommand: command('StartTranscriptionJob'),
       GetTranscriptionJobCommand: command('GetTranscriptionJob'),
-      DeleteTranscriptionJobCommand: command('DeleteTranscriptionJob'),
     },
   };
 }
@@ -82,23 +80,19 @@ function fakeSdk(answers: Partial<Record<string, Answer>>): { sdk: AwsTranscribe
 /** An SDK error the way the v3 clients throw one: a name and the HTTP status. */
 const awsError = (name: string, status: number): Error => Object.assign(new Error(`${name}: details`), { name, $metadata: { httpStatusCode: status } });
 
-const completed = (): unknown => ({ TranscriptionJob: { TranscriptionJobStatus: 'COMPLETED', Transcript: { TranscriptFileUri: URI } } });
+const OUTPUT = `calls/${SESSION}/attempt-1.json`;
+const completed = (): unknown => ({ TranscriptionJob: { TranscriptionJobStatus: 'COMPLETED', Transcript: { TranscriptFileUri: `https://s3.us-east-1.amazonaws.com/${BUCKET}/${OUTPUT}` } } });
+/** An S3 GetObject answer the way the v3 client gives one: a body with `transformToByteArray`. */
+const objectBody = (value: unknown): unknown => ({ Body: { transformToByteArray: async () => await Promise.resolve(new TextEncoder().encode(JSON.stringify(value))) } });
 
-function harness(options: { readonly answers?: Partial<Record<string, Answer>>; readonly http?: TranscriptHttp }) {
-  const { sdk, sent } = fakeSdk({ GetTranscriptionJob: completed, ...options.answers });
+function harness(options: { readonly answers?: Partial<Record<string, Answer>> }) {
+  const { sdk, sent } = fakeSdk({ GetTranscriptionJob: completed, GetObject: () => objectBody(fixture('c1')), ...options.answers });
   const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
-  const fetched: string[] = [];
   const provider = awsTranscribeTranscription({
     bucket: BUCKET,
     region: 'us-east-1',
     jobPrefix: 'fss-test',
     sdk,
-    http:
-      options.http ??
-      (async url => {
-        fetched.push(url);
-        return await Promise.resolve(new Response(JSON.stringify(fixture('c1')), { status: 200 }));
-      }),
     log: (event, fields) => logs.push({ event, fields }),
   });
   const jobs = provider.jobs;
@@ -106,8 +100,11 @@ function harness(options: { readonly answers?: Partial<Record<string, Answer>>; 
   const commands = (): string[] => sent.map(entry => entry.command);
   const run = async (attempt = 1, finalCheck?: () => Promise<'transcription_off' | null>): Promise<TranscriptionOutcome> =>
     await provider.transcribe({ audio: AUDIO, contentType: 'audio/mpeg', subject: { sessionId: SESSION, attempt }, finalCheck });
-  return { provider, jobs, sent, logs, fetched, commands, run };
+  const collect = async (): Promise<unknown> => await jobs.collect({ jobName: JOB, outputKey: OUTPUT });
+  return { provider, jobs, sent, logs, commands, run, collect };
 }
+
+const JOB = `fss-test-${SESSION}-a1`;
 
 describe('the recording channels', () => {
   it('maps channel 0 (the parent leg, the Mac) to you and channel 1 (the dialled number) to them', () => {
@@ -192,31 +189,33 @@ describe('the Transcribe transcript', () => {
 });
 
 describe('the Amazon Transcribe provider', () => {
-  const JOB = `fss-test-${SESSION}-a1`;
-
-  it('uploads the audio and starts an en-US mp3 job with channel identification and no output bucket — and waits for nothing', async () => {
+  it('uploads the audio and starts an en-US mp3 job with channel identification, its output in our bucket — and waits for nothing', async () => {
     const h = harness({});
     expect(await h.run(1)).toEqual({ ok: false, kind: 'started', code: 'started' });
-    // Two requests and no status read: the job is collected by later claims (C3a fix round).
+    // Two requests and no status read: the job is collected by later claims.
     expect(h.commands()).toEqual(['PutObject', 'StartTranscriptionJob']);
     const key = callAudioObjectKey(SESSION, 1);
     expect(key).toBe(`calls/${SESSION}/attempt-1.mp3`);
-    expect(h.jobs.names({ sessionId: SESSION, attempt: 1 })).toEqual({ jobName: JOB, objectKey: key });
+    expect(callTranscriptObjectKey(SESSION, 1)).toBe(OUTPUT);
+    expect(h.jobs.names({ sessionId: SESSION, attempt: 1 })).toEqual({ jobName: JOB, inputKey: key, outputKey: OUTPUT });
     expect(transcriptionJobName('fss-test', SESSION, 2)).toBe(`fss-test-${SESSION}-a2`);
     expect(h.sent[0]?.input).toMatchObject({ Bucket: BUCKET, Key: key, ContentType: 'audio/mpeg', ServerSideEncryption: 'AES256' });
+    // Review C3-F: the transcript is written to our bucket, beside its input, where the
+    // one-day lifecycle expires both; nothing stays in service-managed storage.
     expect(h.sent[1]?.input).toEqual({
       TranscriptionJobName: JOB,
       LanguageCode: 'en-US',
       MediaFormat: 'mp3',
       Media: { MediaFileUri: `s3://${BUCKET}/${key}` },
+      OutputBucketName: BUCKET,
+      OutputKey: OUTPUT,
       Settings: { ChannelIdentification: true },
     });
-    expect(h.sent[1]?.input).not.toHaveProperty('OutputBucketName');
     expect(h.provider.providerKey).toBe(AWS_TRANSCRIBE_PROVIDER_KEY);
     expect(h.provider.pricing).toEqual({ unitPriceMicros: 6_000, billedChannels: 1, perSecondMinimumSeconds: 15 });
   });
 
-  it('collects with one status read per look: running, then the transcript by channel, settled at the reservation', async () => {
+  it('collects with one status read and one GetObject of our own output object, by channel, settled at the reservation', async () => {
     let gets = 0;
     const h = harness({
       answers: {
@@ -226,55 +225,44 @@ describe('the Amazon Transcribe provider', () => {
         },
       },
     });
-    expect(await h.jobs.collect(JOB)).toEqual({ kind: 'running' });
-    const done = await h.jobs.collect(JOB);
+    expect(await h.collect()).toEqual({ kind: 'running' });
+    const done = (await h.collect()) as { kind: string; utterances: { speaker: number; text: string }[]; billedSeconds: null; durationSeconds: number };
     expect(done.kind).toBe('completed');
-    if (done.kind !== 'completed') return;
     expect(done.utterances[0]).toMatchObject({ speaker: 0, text: 'Hi, is this Marisol Lockerfor? This is David calling from Calais.' });
     expect(done.billedSeconds).toBeNull();
     expect(done.durationSeconds).toBeGreaterThan(100);
-    expect(h.commands()).toEqual(['GetTranscriptionJob', 'GetTranscriptionJob']);
-    expect(h.fetched).toEqual([URI]);
+    expect(h.commands()).toEqual(['GetTranscriptionJob', 'GetTranscriptionJob', 'GetObject']);
+    expect(h.sent[2]?.input).toEqual({ Bucket: BUCKET, Key: OUTPUT });
+    // No delete of anything, ever, while collecting.
+    expect(h.commands().some(command => command.startsWith('Delete'))).toBe(false);
   });
 
-  it('reads a FAILED job as failed, a missing one as not found, a failed read as unknown, and an unreadable transcript as unreadable', async () => {
+  it('reads a FAILED job as failed, a missing one as not found, a failed read as unknown, and an unreadable or expired output as unreadable', async () => {
     expect(
-      await harness({ answers: { GetTranscriptionJob: () => ({ TranscriptionJob: { TranscriptionJobStatus: 'FAILED', FailureReason: 'Unsupported audio' } }) } }).jobs.collect(JOB),
+      await harness({ answers: { GetTranscriptionJob: () => ({ TranscriptionJob: { TranscriptionJobStatus: 'FAILED', FailureReason: 'Unsupported audio' } }) } }).collect(),
     ).toEqual({ kind: 'failed', code: 'aws_transcribe_job_failed' });
-    const missing = harness({
-      answers: {
-        GetTranscriptionJob: () => {
-          throw awsError('BadRequestException', 400);
-        },
-      },
+    const thrower = (error: Error): Answer => () => {
+      throw error;
+    };
+    expect(await harness({ answers: { GetTranscriptionJob: thrower(awsError('BadRequestException', 400)) } }).collect()).toEqual({ kind: 'not_found' });
+    expect(await harness({ answers: { GetTranscriptionJob: thrower(awsError('ThrottlingException', 400)) } }).collect()).toEqual({
+      kind: 'unknown',
+      code: 'aws_transcribe_status_unknown',
     });
-    expect(await missing.jobs.collect(JOB)).toEqual({ kind: 'not_found' });
-    const throttled = harness({
-      answers: {
-        GetTranscriptionJob: () => {
-          throw awsError('ThrottlingException', 400);
-        },
-      },
+    expect(await harness({ answers: { GetObject: () => objectBody({ results: {} }) } }).collect()).toEqual({
+      kind: 'unreadable',
+      code: 'aws_transcribe_transcript_unreadable',
     });
-    expect(await throttled.jobs.collect(JOB)).toEqual({ kind: 'unknown', code: 'aws_transcribe_status_unknown' });
-    const unreadable = harness({ http: async () => await Promise.resolve(new Response('{"results": {}}', { status: 200 })) });
-    expect(await unreadable.jobs.collect(JOB)).toEqual({ kind: 'unreadable', code: 'aws_transcribe_transcript_unreadable' });
-    // A transcript read that failed is a look to repeat, not a verdict.
-    const expired = harness({ http: async () => await Promise.resolve(new Response('denied', { status: 403 })) });
-    expect(await expired.jobs.collect(JOB)).toEqual({ kind: 'unknown', code: 'aws_transcribe_transcript_unavailable' });
-    // A transcript URL that is not the service's is never fetched.
-    let fetched = 0;
-    const foreign = harness({
-      answers: { GetTranscriptionJob: () => ({ TranscriptionJob: { TranscriptionJobStatus: 'COMPLETED', Transcript: { TranscriptFileUri: 'http://example.com/t.json' } } }) },
-      http: async () => {
-        fetched += 1;
-        return await Promise.resolve(new Response('{}'));
-      },
+    // The output expired with the bucket's lifecycle (a day): a billed job whose result is gone.
+    expect(await harness({ answers: { GetObject: thrower(awsError('NoSuchKey', 404)) } }).collect()).toEqual({
+      kind: 'unreadable',
+      code: 'aws_transcribe_output_missing',
     });
-    expect((await foreign.jobs.collect(JOB)).kind).toBe('unreadable');
-    expect(fetched).toBe(0);
-    expect(isServiceTranscriptUri(URI)).toBe(true);
-    expect(isServiceTranscriptUri('https://amazonaws.com.example.com/x')).toBe(false);
+    // Any other read failure is a look to repeat.
+    expect(await harness({ answers: { GetObject: thrower(awsError('InternalError', 500)) } }).collect()).toEqual({
+      kind: 'unknown',
+      code: 'aws_transcribe_output_unavailable',
+    });
   });
 
   it('calls a Start that Transcribe refused refused (object deleted), and one that may have been accepted started — the status decides', async () => {
@@ -321,24 +309,6 @@ describe('the Amazon Transcribe provider', () => {
     const h = harness({});
     await expect(h.run(1, async () => await Promise.reject(new Error('connection terminated')))).rejects.toThrow('connection terminated');
     expect(h.commands()).toEqual(['PutObject', 'DeleteObject']);
-  });
-
-  it('cleans up idempotently: an already-deleted job is done, a failed delete is not, and nothing done is asked again', async () => {
-    let jobDeletes = 0;
-    const h = harness({
-      answers: {
-        DeleteTranscriptionJob: () => {
-          jobDeletes += 1;
-          if (jobDeletes === 1) throw awsError('InternalFailureException', 500);
-          throw awsError('BadRequestException', 400);
-        },
-      },
-    });
-    const item = { jobName: JOB, objectKey: callAudioObjectKey(SESSION, 1), jobDone: false, objectDone: false };
-    expect(await h.jobs.cleanUp(item)).toEqual({ objectDone: true, jobDone: false });
-    expect(h.logs).toEqual([{ event: 'aws_transcribe_cleanup_failed', fields: { what: 'job', error: 'InternalFailureException' } }]);
-    expect(await h.jobs.cleanUp({ ...item, objectDone: true })).toEqual({ objectDone: true, jobDone: true });
-    expect(h.commands()).toEqual(['DeleteObject', 'DeleteTranscriptionJob', 'DeleteTranscriptionJob']);
   });
 
   it('refuses empty or oversized audio without a request', async () => {
@@ -403,8 +373,8 @@ describe('choosing the provider from the task environment', () => {
     expect(chosen.problem).toBeNull();
     expect(chosen.provider?.providerKey).toBe('aws_transcribe.standard');
     expect(chosen.provider?.provider).toBe('aws_transcribe');
-    // One upload and one Start: the job's wait is never inside a claim (C3a fix round).
-    expect(chosen.provider?.maxCallSeconds).toBe(40);
+    // One upload, one Start and at most one delete: the job's wait is never inside a claim.
+    expect(chosen.provider?.maxCallSeconds).toBe(60);
   });
 
   it('names the missing variable, never a value', () => {

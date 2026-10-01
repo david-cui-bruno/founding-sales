@@ -151,7 +151,7 @@ export type CollectOutcome =
   | { readonly kind: 'unknown'; readonly code: string }
   /** The job ended FAILED: terminal, not billed. */
   | { readonly kind: 'failed'; readonly code: string }
-  /** The job COMPLETED but its transcript cannot be read or is not two channels: it was billed. */
+  /** The job COMPLETED but its transcript is missing, cannot be read or is not two channels: it was billed. */
   | { readonly kind: 'unreadable'; readonly code: string }
   | {
       readonly kind: 'completed';
@@ -163,23 +163,21 @@ export type CollectOutcome =
 
 /**
  * The asynchronous half of a provider whose paid request starts a job it finishes later
- * (slice C3a fix round). With it, chunk 3 records the job's names and commits BEFORE the
+ * (Amazon Transcribe, slice C3a). Chunk 3 records the job's names and commits BEFORE the
  * request (`submitting`), commits the start right after it (`started`), and never waits:
- * the job is collected by later, short claims, and what is owed to the provider afterwards
- * (the input object, the job and its stored transcript) is deleted by a retried sweep.
+ * the job is collected by later, short claims. Nothing is owed to the provider afterwards:
+ * the job writes its transcript next to its input, where the bucket's one-day lifecycle
+ * expires both.
  */
 export interface TranscriptionJobs {
-  /** The job name and the input object key an attempt's job will have, before anything is sent. */
-  names(subject: { readonly sessionId: string; readonly attempt: number }): { readonly jobName: string; readonly objectKey: string | null };
-  /** One status read (and, when it completed, the transcript): never a wait. */
-  collect(jobName: string): Promise<CollectOutcome>;
-  /** Delete what is still owed; idempotent. Says which of the two are now gone. */
-  cleanUp(item: {
+  /** The job name and the input and output object keys an attempt's job will have, before anything is sent. */
+  names(subject: { readonly sessionId: string; readonly attempt: number }): {
     readonly jobName: string;
-    readonly objectKey: string | null;
-    readonly jobDone: boolean;
-    readonly objectDone: boolean;
-  }): Promise<{ readonly jobDone: boolean; readonly objectDone: boolean }>;
+    readonly inputKey: string;
+    readonly outputKey: string;
+  };
+  /** One status read and, once it completed, one read of its output object: never a wait. */
+  collect(job: { readonly jobName: string; readonly outputKey: string }): Promise<CollectOutcome>;
 }
 
 /**
@@ -696,6 +694,12 @@ export async function ensureTranscriptionCalling(
   // A provider job still being collected owns its attempt: nothing here estimates it or
   // buys another (slice C3a fix round). The collect claims settle it.
   if ((await reservationsBeingCollected(context, input.sessionId)).size > 0) return { kind: 'collecting' };
+  // A terminal outcome is terminal (review C3-F, finding 4): a job that FAILED or was given
+  // up at its deadline closes the call; no later claim buys another.
+  if (await providerJobFailed(context, input.sessionId)) {
+    await finaliseOpenAttempts(context, input.sessionId, input.at);
+    return { kind: 'closed', reason: 'transcription_failed' };
+  }
   let rows = await listTranscriptionAttempts(context, input.sessionId);
   // A reservation made for another provider (the deployment switched between Amazon
   // Transcribe and Deepgram) is never called with this one: it is released — nothing was
@@ -749,44 +753,46 @@ export type FinishOutcome =
   | { readonly kind: 'started'; readonly code: string }
   | { readonly kind: 'done'; readonly reason: TranscriptionRefusalCode | 'already_transcribed' | 'not_calling'; readonly code?: string };
 
-/** How long after a job's start the next look is, by the number of looks so far. */
-export function transcriptionPollDelaySeconds(polls: number): number {
-  return Math.min(300, 20 * 2 ** Math.max(0, Math.trunc(polls)));
+/** How long after a look the next one is, by the number of looks so far: 20 s, doubling, at most 5 min. */
+export function transcriptionPollDelaySeconds(looks: number): number {
+  return Math.min(300, 20 * 2 ** Math.max(0, Math.trunc(looks)));
 }
-/** A recorded job still unfinished this long after it was written is given up on (estimated). */
+/** A recorded job still unfinished this long after it was written is given up on: estimated, terminal. */
 export const TRANSCRIPTION_COLLECT_DEADLINE_MINUTES = 120;
+/**
+ * The grace a `submitting` row has before a collect look may judge it: long enough for the
+ * claim that wrote it to send the request in its very next chunk.
+ */
+export const TRANSCRIPTION_SUBMIT_GRACE_SECONDS = 300;
+
+type ProviderJobState = 'submitting' | 'started' | 'collected' | 'estimated' | 'failed';
 
 interface ProviderJobRow {
+  readonly id: string;
   readonly jobName: string;
   readonly attempt: number;
   readonly reservationId: string;
   readonly providerKey: string;
-  readonly objectKey: string | null;
-  readonly state: 'submitting' | 'started' | 'collected' | 'abandoned';
-  readonly polls: number;
+  readonly outputKey: string;
+  readonly state: ProviderJobState;
+  readonly looks: number;
   readonly expired: boolean;
-  readonly jobDeleted: boolean;
-  readonly objectDeleted: boolean;
-  readonly cleanupAttempts: number;
 }
 
-const PROVIDER_JOB_COLUMNS = `job_name, attempt, reservation_id, provider_key, object_key, state, polls, cleanup_attempts,
-  created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) <= now() AS expired,
-  job_deleted_at IS NOT NULL AS job_deleted, object_deleted_at IS NOT NULL AS object_deleted`;
+const PROVIDER_JOB_COLUMNS = `id, job_name, attempt, reservation_id, provider_key, output_key, state, looks,
+  created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) <= now() AS expired`;
 
 function providerJobOf(row: Record<string, unknown>): ProviderJobRow {
   return {
+    id: String(row['id']),
     jobName: String(row['job_name']),
     attempt: Number(row['attempt']),
     reservationId: String(row['reservation_id']),
     providerKey: String(row['provider_key']),
-    objectKey: row['object_key'] === null ? null : String(row['object_key']),
-    state: row['state'] as ProviderJobRow['state'],
-    polls: Number(row['polls']),
+    outputKey: String(row['output_key']),
+    state: row['state'] as ProviderJobState,
+    looks: Number(row['looks']),
     expired: row['expired'] === true,
-    jobDeleted: row['job_deleted'] === true,
-    objectDeleted: row['object_deleted'] === true,
-    cleanupAttempts: Number(row['cleanup_attempts']),
   };
 }
 
@@ -806,20 +812,25 @@ async function reservationsBeingCollected(context: RepositoryContext, sessionId:
   );
 }
 
+/** Whether a recorded job of this call ended terminally (FAILED, or given up at the deadline). */
+async function providerJobFailed(context: RepositoryContext, sessionId: string): Promise<boolean> {
+  return (await providerJobsOf(context, sessionId)).some(job => job.state === 'failed');
+}
+
 async function markProviderJob(
   context: RepositoryContext,
   jobName: string,
-  change: { readonly state: ProviderJobRow['state']; readonly pollInSeconds?: number },
+  change: { readonly state: ProviderJobState; readonly lookInSeconds?: number },
 ): Promise<void> {
-  const finished = change.state === 'collected' || change.state === 'abandoned';
+  const finished = change.state === 'collected' || change.state === 'estimated' || change.state === 'failed';
   await context.db.query(
     `UPDATE transcription_provider_jobs
         SET state = $3,
             started_at = CASE WHEN $3 = 'started' THEN COALESCE(started_at, now()) ELSE started_at END,
             finished_at = CASE WHEN $4 THEN COALESCE(finished_at, now()) ELSE NULL END,
-            next_poll_at = now() + make_interval(secs => $5)
+            next_look_at = now() + make_interval(secs => $5)
       WHERE workspace_id = $1 AND job_name = $2`,
-    [context.scope.workspaceId, jobName, change.state, finished, change.pollInSeconds ?? 0],
+    [context.scope.workspaceId, jobName, change.state, finished, change.lookInSeconds ?? 0],
   );
 }
 
@@ -896,8 +907,8 @@ export async function finishCallTranscription(
   if (recorded !== undefined && recorded.state !== 'submitting') return { kind: 'done', reason: 'not_calling' };
   const releaseNotCalled = async (): Promise<void> => {
     await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'released_not_called' } });
-    // What may have been uploaded is still owed a delete; the job never started.
-    if (recorded !== undefined) await markProviderJob(context, recorded.jobName, { state: 'abandoned' });
+    // The job never started; what may have been uploaded expires with the bucket's lifecycle.
+    if (recorded !== undefined) await markProviderJob(context, recorded.jobName, { state: 'estimated' });
   };
   // Reserved and priced for another provider (the deployment switched): never called or
   // settled under this one's key. Released — nothing was sent — and chunk 2 reserves again.
@@ -930,10 +941,20 @@ export async function finishCallTranscription(
     const names = jobs.names({ sessionId: input.sessionId, attempt: input.attempt });
     await context.db.query(
       `INSERT INTO transcription_provider_jobs
-         (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, object_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key, next_look_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))
        ON CONFLICT DO NOTHING`,
-      [context.scope.workspaceId, names.jobName, input.sessionId, input.attempt, reservation.id, input.provider.providerKey, names.objectKey],
+      [
+        context.scope.workspaceId,
+        names.jobName,
+        input.sessionId,
+        input.attempt,
+        reservation.id,
+        input.provider.providerKey,
+        names.inputKey,
+        names.outputKey,
+        TRANSCRIPTION_SUBMIT_GRACE_SECONDS,
+      ],
     );
     return { kind: 'prepared' };
   }
@@ -992,10 +1013,10 @@ export async function finishCallTranscription(
     }
     if (!outcome.ok && outcome.kind === 'refused') {
       await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
-      await markProviderJob(context, recorded.jobName, { state: 'abandoned' });
+      await markProviderJob(context, recorded.jobName, { state: 'failed' });
       return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
     }
-    await markProviderJob(context, recorded.jobName, { state: 'started', pollInSeconds: transcriptionPollDelaySeconds(0) });
+    await markProviderJob(context, recorded.jobName, { state: 'started', lookInSeconds: transcriptionPollDelaySeconds(0) });
     return { kind: 'started', code: outcome.ok ? 'started' : outcome.code };
   }
 
@@ -1019,7 +1040,7 @@ export async function finishCallTranscription(
 }
 
 // ---------------------------------------------------------------------------
-// Collecting a recorded provider job, and deleting what is owed (C3a fix round)
+// Collecting a recorded provider job (slice C3a)
 // ---------------------------------------------------------------------------
 
 export type CollectTranscriptionOutcome =
@@ -1028,29 +1049,35 @@ export type CollectTranscriptionOutcome =
   /** Still running: looked at again later, by another short claim. */
   | { readonly kind: 'pending' }
   | { readonly kind: 'transcribed'; readonly settledCents: number; readonly utterances: number }
-  /** The attempt is closed and estimated, and may be retried (chunk 2 decides). */
+  /** Ambiguous: the attempt is estimated, and may be retried once within the cap (chunk 2 decides). */
   | { readonly kind: 'retry'; readonly code: string }
+  /** Terminal: nothing more is bought for this call. */
   | { readonly kind: 'done'; readonly reason: TranscriptionRefusalCode | 'already_transcribed'; readonly code: string };
 
 /**
  * One look at the call's recorded provider job, under the session's lock, in a short
- * transaction: a status read and, once it completed, the transcript — never a wait. This
- * is what a claim does first, whoever started the job: a crash or a lost lease after the
- * request resumes here, so the job is collected, not estimated and bought again.
+ * transaction: one status read and, once it completed, one read of its output object, then
+ * the commit — nothing else, so the claim is bounded (`callTranscribeLeaseSeconds`). This is
+ * what a claim does first, whoever started the job, so a crash or a lost lease after the
+ * request resumes here: the job is collected, not estimated and bought again. If the commit
+ * fails, the next look reads the same output again (it lives a day).
+ *
+ * `collector` is the Amazon Transcribe adapter, present whenever the call-audio bucket is
+ * configured, whichever provider new attempts use: a deployment that switched to Deepgram
+ * still collects the jobs Transcribe already has.
  *
  *   * running, or the look failed: looked at again after `transcriptionPollDelaySeconds`;
- *     after `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` the attempt is estimated and given up;
+ *     after `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` the attempt is estimated and the job
+ *     `failed` — terminal, never retried;
  *   * completed: the transcript stored and the attempt settled, once, by id;
- *   * FAILED: settled at 0 (not billed), not retried;
- *   * no such job (the request never left — the claim died between the two commits):
- *     estimated, as every `calling` attempt nobody can vouch for is, and retried;
- *   * completed but unreadable: estimated, and retried within the two paid attempts;
- *   * recorded under another provider (the deployment switched): estimated and closed; it
- *     is never collected or settled under this provider's key.
+ *   * FAILED: settled at 0 (not billed), `failed` — terminal;
+ *   * no such job (the request never left — the claim died between the two commits), or
+ *     completed but unreadable: estimated, as every attempt nobody can vouch for is, and
+ *     retried once within the two paid attempts — the ordinary ambiguous rule.
  */
 export async function collectCallTranscription(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly provider: TranscriptionProvider },
+  input: { readonly sessionId: string; readonly at: string; readonly collector: TranscriptionProvider },
 ): Promise<CollectTranscriptionOutcome> {
   await lockTranscription(context, input.sessionId);
   const job = (await providerJobsOf(context, input.sessionId)).find(row => row.state === 'submitting' || row.state === 'started');
@@ -1065,46 +1092,51 @@ export async function collectCallTranscription(
       await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'estimated' } });
     }
   };
-  const giveUp = async (code: string, retry: boolean): Promise<CollectTranscriptionOutcome> => {
+  const terminal = async (code: string): Promise<CollectTranscriptionOutcome> => {
     await estimate();
-    await markProviderJob(context, job.jobName, { state: 'abandoned' });
-    if (!retry) return { kind: 'done', reason: 'transcription_failed', code };
+    await markProviderJob(context, job.jobName, { state: 'failed' });
+    return { kind: 'done', reason: 'transcription_failed', code };
+  };
+  const ambiguous = async (code: string): Promise<CollectTranscriptionOutcome> => {
+    await estimate();
+    await markProviderJob(context, job.jobName, { state: 'estimated' });
     if (paidAttempts(rows) >= TRANSCRIPTION_MAX_ATTEMPTS || rows.length >= TRANSCRIPTION_MAX_ROWS) {
       return { kind: 'done', reason: 'transcription_failed', code };
     }
     return { kind: 'retry', code };
   };
-  if (job.providerKey !== input.provider.providerKey || input.provider.jobs === undefined) return await giveUp('provider_changed', false);
+  const jobs = input.collector.jobs;
+  if (job.providerKey !== input.collector.providerKey || jobs === undefined) return await terminal('provider_unknown');
   if (reservation === undefined || reservation.state !== 'calling') {
-    // Closed already (a deletion, the sweep): nothing to settle; the job is still deleted.
-    await markProviderJob(context, job.jobName, { state: 'abandoned' });
+    // Closed already (a deletion, the sweep): nothing to settle.
+    await markProviderJob(context, job.jobName, { state: 'estimated' });
     return { kind: 'done', reason: 'transcription_failed', code: 'attempt_closed' };
   }
 
   let seen: CollectOutcome;
   try {
-    seen = await input.provider.jobs.collect(job.jobName);
+    seen = await jobs.collect({ jobName: job.jobName, outputKey: job.outputKey });
   } catch {
     seen = { kind: 'unknown', code: 'collect_threw' };
   }
   switch (seen.kind) {
     case 'running':
     case 'unknown': {
-      if (job.expired) return await giveUp('provider_job_deadline', false);
+      if (job.expired) return await terminal('provider_job_deadline');
       await context.db.query(
-        `UPDATE transcription_provider_jobs SET polls = polls + 1, next_poll_at = now() + make_interval(secs => $3)
+        `UPDATE transcription_provider_jobs SET looks = looks + 1, next_look_at = now() + make_interval(secs => $3)
           WHERE workspace_id = $1 AND job_name = $2`,
-        [context.scope.workspaceId, job.jobName, transcriptionPollDelaySeconds(job.polls + 1)],
+        [context.scope.workspaceId, job.jobName, transcriptionPollDelaySeconds(job.looks + 1)],
       );
       return { kind: 'pending' };
     }
     case 'not_found':
-      return await giveUp('provider_job_not_started', true);
+      return await ambiguous('provider_job_not_started');
     case 'unreadable':
-      return await giveUp(seen.code, true);
+      return await ambiguous(seen.code);
     case 'failed':
       await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
-      await markProviderJob(context, job.jobName, { state: 'collected' });
+      await markProviderJob(context, job.jobName, { state: 'failed' });
       return { kind: 'done', reason: 'transcription_failed', code: seen.code };
     case 'completed': {
       await markProviderJob(context, job.jobName, { state: 'collected' });
@@ -1112,95 +1144,59 @@ export async function collectCallTranscription(
         await estimate();
         return { kind: 'done', reason: 'already_transcribed', code: 'already_transcribed' };
       }
-      const stored = await storeAndSettle(context, { sessionId: input.sessionId, at: input.at, provider: input.provider, reservation, result: seen });
+      const stored = await storeAndSettle(context, { sessionId: input.sessionId, at: input.at, provider: input.collector, reservation, result: seen });
       return stored.kind === 'transcribed' ? stored : { kind: 'done', reason: 'transcription_failed', code: 'not_settled' };
     }
   }
 }
 
-/** How long after a failed delete the next is tried, by the attempts so far: 1 min up to 6 h. */
-export function transcriptionCleanupDelaySeconds(attempts: number): number {
-  return Math.min(6 * 60 * 60, 60 * 2 ** Math.max(0, Math.trunc(attempts)));
-}
-
-/**
- * Delete what the call's finished provider jobs still owe (slice C3a fix round): the input
- * object and the job — whose service-managed transcript AWS otherwise keeps for up to 90
- * days. Each success is marked; a failure is tried again later, so a transcription's
- * success never depends on a best-effort delete. Only jobs of this provider: another's
- * wait for a worker that has it.
- */
-export async function cleanUpTranscriptionJobs(
-  context: RepositoryContext,
-  input: { readonly sessionId: string; readonly provider: TranscriptionProvider; readonly due?: boolean },
-): Promise<{ readonly cleaned: number; readonly owed: number }> {
-  const jobs = input.provider.jobs;
-  if (jobs === undefined) return { cleaned: 0, owed: 0 };
-  const { rows } = await context.db.query<Record<string, unknown>>(
-    `SELECT ${PROVIDER_JOB_COLUMNS} FROM transcription_provider_jobs
-      WHERE workspace_id = $1 AND call_session_id = $2 AND provider_key = $3
-        AND state IN ('collected', 'abandoned') AND (job_deleted_at IS NULL OR object_deleted_at IS NULL)
-        AND ($4::boolean IS FALSE OR next_poll_at <= now())
-      ORDER BY attempt`,
-    [context.scope.workspaceId, input.sessionId, input.provider.providerKey, input.due === true],
-  );
-  let cleaned = 0;
-  let owed = 0;
-  for (const job of rows.map(providerJobOf)) {
-    let result: { readonly jobDone: boolean; readonly objectDone: boolean };
-    try {
-      result = await jobs.cleanUp({ jobName: job.jobName, objectKey: job.objectKey, jobDone: job.jobDeleted, objectDone: job.objectDeleted || job.objectKey === null });
-    } catch {
-      result = { jobDone: job.jobDeleted, objectDone: job.objectDeleted };
-    }
-    const done = result.jobDone && (result.objectDone || job.objectKey === null);
-    await context.db.query(
-      `UPDATE transcription_provider_jobs
-          SET job_deleted_at = CASE WHEN $3 THEN COALESCE(job_deleted_at, now()) ELSE job_deleted_at END,
-              object_deleted_at = CASE WHEN $4 THEN COALESCE(object_deleted_at, now()) ELSE object_deleted_at END,
-              cleanup_attempts = cleanup_attempts + CASE WHEN $5 THEN 0 ELSE 1 END,
-              next_poll_at = now() + make_interval(secs => CASE WHEN $5 THEN 0 ELSE $6 END)
-        WHERE workspace_id = $1 AND job_name = $2`,
-      [context.scope.workspaceId, job.jobName, result.jobDone, result.objectDone || job.objectKey === null, done, transcriptionCleanupDelaySeconds(job.cleanupAttempts)],
-    );
-    if (done) cleaned += 1;
-    else owed += 1;
-  }
-  return { cleaned, owed };
-}
-
-/** A call whose recorded provider job is due a look, or whose finished one still owes a delete. */
+/** A recorded job due a look, with the key of its next `call.transcribe`. */
 export interface TranscriptionJobDue {
   readonly workspaceId: string;
   readonly sessionId: string;
-  /** The `call.transcribe` jobs the call already has: the next one's revision key. */
-  readonly revision: number;
+  /** `call-transcribe-collect:<row id>:<look>`: one job per look, never a key reused. */
+  readonly idempotencyKey: string;
+}
+
+/** The key of one look's `call.transcribe`: the row's id and its look number. */
+export function transcriptionCollectJobKey(rowId: string, look: number): string {
+  return `call-transcribe-collect:${rowId}:${String(Math.trunc(look))}`;
 }
 
 /**
- * The calls a `call.transcribe` should run for now on account of their provider jobs
- * (slice C3a fix round): a recorded job due a look (any provider: a job of another is
- * closed by the look), or a finished one of `providerKey` still owing a delete — and no
- * `call.transcribe` of the call queued, running or retryable. Sessions the deletion
- * workflow removed are included: their deletes are still owed.
+ * The recorded jobs due a look now (slice C3a): `submitting` past its grace, or `started`,
+ * with `next_look_at` passed. Each look moves `looks` on, so the next look's key is new
+ * however long the job runs and whatever the retention sweep did to older job rows.
  */
-export async function listTranscriptionJobsDue(db: Queryable, providerKey: string): Promise<readonly TranscriptionJobDue[]> {
-  const { rows } = await db.query<{ workspace_id: string; call_session_id: string; jobs: string }>(
-    `SELECT d.workspace_id, d.call_session_id,
-            (SELECT count(*) FROM jobs WHERE workspace_id = d.workspace_id AND kind = 'call.transcribe'
-                AND payload ->> 'callSessionId' = d.call_session_id::text)::text AS jobs
-       FROM (SELECT DISTINCT workspace_id, call_session_id FROM transcription_provider_jobs
-              WHERE next_poll_at <= now()
-                AND (state IN ('submitting', 'started')
-                     OR (provider_key = $1 AND (job_deleted_at IS NULL OR object_deleted_at IS NULL)))) d
-      WHERE NOT EXISTS (
-        SELECT 1 FROM jobs WHERE workspace_id = d.workspace_id AND kind = 'call.transcribe'
-           AND payload ->> 'callSessionId' = d.call_session_id::text AND state NOT IN ('done', 'dead'))
-      ORDER BY d.workspace_id, d.call_session_id
+export async function listTranscriptionJobsDue(db: Queryable): Promise<readonly TranscriptionJobDue[]> {
+  const { rows } = await db.query<{ id: string; workspace_id: string; call_session_id: string; looks: number }>(
+    `SELECT id, workspace_id, call_session_id, looks FROM transcription_provider_jobs
+      WHERE state IN ('submitting', 'started') AND next_look_at <= now()
+      ORDER BY next_look_at, id
       LIMIT 50`,
-    [providerKey],
   );
-  return rows.map(row => ({ workspaceId: row.workspace_id, sessionId: row.call_session_id, revision: Number(row.jobs) }));
+  return rows.map(row => ({
+    workspaceId: row.workspace_id,
+    sessionId: row.call_session_id,
+    idempotencyKey: transcriptionCollectJobKey(row.id, Number(row.looks)),
+  }));
+}
+
+/**
+ * The S3 objects of this workspace's calls that no longer exist (slice C3a), for the
+ * deletion workflow to delete after its commit, best effort: the input audio and the
+ * transcript of every recorded attempt of a deleted call written in the last two days. Older
+ * objects are already gone (the bucket's one-day lifecycle), so nothing is marked or owed.
+ */
+export async function callAudioKeysOfDeletedCalls(db: Queryable, workspaceId: string): Promise<readonly string[]> {
+  const { rows } = await db.query<{ input_key: string; output_key: string }>(
+    `SELECT j.input_key, j.output_key FROM transcription_provider_jobs j
+      WHERE j.workspace_id = $1 AND j.created_at > now() - interval '2 days'
+        AND NOT EXISTS (SELECT 1 FROM call_sessions s WHERE s.workspace_id = j.workspace_id AND s.id = j.call_session_id)
+      ORDER BY j.input_key`,
+    [workspaceId],
+  );
+  return rows.flatMap(row => [row.input_key, row.output_key]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,7 +1280,7 @@ export async function listHeldTranscriptions(db: Queryable): Promise<readonly He
         AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at
         AND NOT EXISTS (SELECT 1 FROM call_transcripts t WHERE t.workspace_id = cs.workspace_id AND t.call_session_id = cs.id)
         AND NOT EXISTS (SELECT 1 FROM transcription_provider_jobs pj
-                         WHERE pj.workspace_id = cs.workspace_id AND pj.call_session_id = cs.id AND pj.state IN ('submitting', 'started'))
+                         WHERE pj.workspace_id = cs.workspace_id AND pj.call_session_id = cs.id AND pj.state IN ('submitting', 'started', 'failed'))
         AND NOT EXISTS (
           SELECT 1 FROM provider_reservations r
            WHERE r.workspace_id = cs.workspace_id AND r.subject_kind = $3 AND r.subject_id = cs.id
@@ -1348,11 +1344,11 @@ export async function finaliseTranscriptionsOfSessions(
   for (const sessionId of [...sessionIds].sort()) {
     await lockTranscription(context, sessionId);
     await finaliseOpenAttempts(context, sessionId, at);
-    // A provider job of a deleted call is never collected; what it owes AWS (the input
-    // object, the job and its stored transcript) is still deleted, by the cleanup source:
-    // these rows outlive the session on purpose (slice C3a fix round).
+    // A provider job of a deleted call is never collected. Its rows outlive the session on
+    // purpose, so the workflow can name the call's S3 objects after its commit
+    // (`callAudioKeysOfDeletedCalls`); the bucket's one-day lifecycle is the backstop.
     await context.db.query(
-      `UPDATE transcription_provider_jobs SET state = 'abandoned', finished_at = COALESCE(finished_at, now()), next_poll_at = now()
+      `UPDATE transcription_provider_jobs SET state = 'estimated', finished_at = COALESCE(finished_at, now())
         WHERE workspace_id = $1 AND call_session_id = $2 AND state IN ('submitting', 'started')`,
       [context.scope.workspaceId, sessionId],
     );

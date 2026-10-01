@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { removeDeletedCallAudio } from '../integrations/callAudio.ts';
 import { runPolicyCommand } from './dialSupport.ts';
 import { requirePrincipal } from './routeSupport.ts';
 import { commandResultOf } from './retentionSupport.ts';
@@ -86,8 +87,8 @@ export async function routeRetention(request: ApiRequest, options: RoutingOption
             }),
           ),
       );
-    case '/retention/deletions/commit':
-      return await runPolicyCommand(
+    case '/retention/deletions/commit': {
+      const committed = await runPolicyCommand(
         { auth, request, principal, journal: options.suppressionJournal },
         commitSchema,
         'deletion.commit',
@@ -105,6 +106,14 @@ export async function routeRetention(request: ApiRequest, options: RoutingOption
             }),
           ),
       );
+      // Slice C3a: after the commit, never inside it, the deleted calls' audio and
+      // transcript objects are deleted, best effort; the bucket's one-day lifecycle is the
+      // guarantee. Never changes the answer.
+      if (committed.status === 200 && options.callAudio !== undefined) {
+        await removeDeletedCallAudio({ session: options.session, workspaceId: principal.workspaceId, remover: options.callAudio, log: options.log });
+      }
+      return committed;
+    }
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }

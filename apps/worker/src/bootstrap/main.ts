@@ -33,6 +33,7 @@ import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileO
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
 import { callTranscribeJobHandler, heldTranscriptionSource, transcriptionJobsSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
 import { readSelectedTranscriptionProvider } from '../transcription/selectProvider.ts';
+import { readAwsTranscribeProvider } from '../transcription/awsTranscribeClient.ts';
 import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
 import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
@@ -349,9 +350,13 @@ export function readTranscriptionComposition(
   if (provider.provider === null) return { options: null, problem: `transcription:${provider.problem ?? 'absent'}` };
   const twilio = readTwilioRecordingCredentials(environment);
   if (twilio.credentials === null) return { options: null, problem: `twilio:${twilio.problem ?? 'absent'}` };
+  // The collector: Amazon Transcribe whenever the call-audio bucket is configured, whichever
+  // provider new attempts use, so recorded jobs are collected after a switch (review C3-F, #3).
+  const collector = provider.provider.jobs !== undefined ? provider.provider : readAwsTranscribeProvider(environment, log === undefined ? {} : { log }).provider;
   return {
     options: {
       provider: provider.provider,
+      ...(collector === null ? {} : { collector }),
       recordings: twilioRecordingFetcher(twilio.credentials, { timeoutMs: 30_000 }),
       ...(log === undefined ? {} : { log }),
     },
@@ -375,8 +380,8 @@ export function workerDueWorkSources(
     readonly calcomReconcile?: boolean;
     readonly transcription?: boolean;
     readonly summary?: boolean;
-    /** Slice C3a fix round: the provider whose recorded jobs are collected and cleaned up, when it has jobs. */
-    readonly transcriptionJobsProviderKey?: string | null;
+    /** Slice C3a: whether recorded Transcribe jobs are collected (the call-audio bucket is configured). */
+    readonly transcriptionCollector?: boolean;
   } = {},
 ): readonly DueWorkSource[] {
   return [
@@ -394,7 +399,7 @@ export function workerDueWorkSources(
     calcomReconcileSource({ enabled: options.calcomReconcile === true }),
     // Slice P1. Like Cal.com's: listed always, materializing only where `call.transcribe` is registered.
     heldTranscriptionSource({ enabled: options.transcription === true }),
-    transcriptionJobsSource({ providerKey: options.transcriptionJobsProviderKey ?? null }),
+    transcriptionJobsSource({ enabled: options.transcriptionCollector === true }),
     // Slice C3b. Listed always, materializing only where `call.summarize` is registered.
     callSummarySource({ enabled: options.summary === true }),
     ...mailSources(),
@@ -508,7 +513,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
       sources: workerDueWorkSources({
         calcomReconcile: composition.calcom !== undefined,
         transcription: composition.transcription !== undefined,
-        transcriptionJobsProviderKey: composition.transcription?.provider.jobs === undefined ? null : composition.transcription.provider.providerKey,
+        transcriptionCollector: composition.transcription?.collector !== undefined,
         summary: composition.summary !== undefined,
       }),
       sink,

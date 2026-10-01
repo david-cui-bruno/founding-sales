@@ -5,6 +5,7 @@ import type { MailGrantDeps } from '@fss/domain/mail/oauth.ts';
 import type { PushTokenVerifier } from '@fss/domain/mail/pushToken.ts';
 import type { AuthDeps } from '../auth/config.ts';
 import type { Logger } from '../bootstrap/log.ts';
+import type { CallAudioRemover } from '../integrations/callAudio.ts';
 import type { IntegrationDeps } from '../integrations/providers.ts';
 
 /**
@@ -66,6 +67,11 @@ export interface RoutingOptions {
    * deployment has no bucket, so a route never has to decide what to do without one.
    */
   readonly suppressionJournal: SuppressionJournal;
+  /**
+   * Slice C3a: the call-audio bucket's best-effort delete after a committed deletion.
+   * Absent where the bucket is not configured; the bucket's one-day lifecycle is the guarantee.
+   */
+  readonly callAudio?: CallAudioRemover | undefined;
   /**
    * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
    *

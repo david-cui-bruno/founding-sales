@@ -4,7 +4,6 @@ import { databaseNow } from '@fss/domain/policy/clock.ts';
 import {
   CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
   beginCallTranscription,
-  cleanUpTranscriptionJobs,
   collectCallTranscription,
   ensureTranscriptionCalling,
   finishCallTranscription,
@@ -45,7 +44,14 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  */
 
 export interface CallTranscribeOptions {
+  /** The provider new attempts use. */
   readonly provider: TranscriptionProvider;
+  /**
+   * The Amazon Transcribe adapter, present whenever the call-audio bucket is configured,
+   * whichever provider new attempts use (review C3-F, finding 3): recorded jobs are always
+   * collected, so switching to Deepgram strands nothing.
+   */
+  readonly collector?: TranscriptionProvider | undefined;
   readonly recordings: TwilioRecordingFetcher;
   /** The line a run leaves: a code and counts, never a transcript, a URL or a key. */
   readonly log?: ((event: string, fields: Readonly<Record<string, string | number | boolean | null>>) => void) | undefined;
@@ -91,6 +97,12 @@ const LEASE_MARGIN_SECONDS = 90;
  * spare — at least C2's 240 s (Deepgram's two minutes). Amazon Transcribe's upload, job and
  * poll (slice C3a) take longer than Deepgram's one request, so its lease is longer.
  */
+/**
+ * A collection claim (slice C3a) is one status read and one output read, each bounded by
+ * `AWS_REQUEST_TIMEOUT_MS` (20 s), and a commit: at most about 40 s plus database time,
+ * well inside the 240 s lease. A submitting claim is the recording read (30 s), the upload
+ * and Start (20 s each) and at most one best-effort delete (20 s): about 90 s.
+ */
 export function callTranscribeLeaseSeconds(provider: Pick<TranscriptionProvider, 'maxCallSeconds'> | undefined): number {
   // Read defensively: a registry listing (`fss admin release idle-check`) builds handlers without ports.
   return Math.max(240, RECORDING_READ_SECONDS + Math.ceil(provider?.maxCallSeconds ?? 120) + LEASE_MARGIN_SECONDS);
@@ -117,21 +129,20 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
       };
       const carried = parseTranscribeProgress(input.job.payload['progress']);
 
-      // Slice C3a fix round. A claim that is not continuing its own cursor looks first at the
-      // call's recorded provider job, whoever started it: a crash or a lost lease after the
-      // request resumes collecting that job, never estimates it and buys another. One status
-      // read per claim, in this chunk's short transaction; a job still running is looked at
-      // again by a later `call.transcribe` (`transcriptionJobsSource`), never waited for.
+      // Slice C3a. A claim that is not continuing its own cursor looks first at the call's
+      // recorded provider job, whoever started it: a crash or a lost lease after the request
+      // resumes collecting that job, never estimates it and buys another. One status read and
+      // at most one output read, then the commit; a job still running is looked at again by
+      // a later `call.transcribe` (`transcriptionJobsSource`), never waited for.
       const ownCursor = carried !== null && carried.fencing === fencing;
-      if (!ownCursor && options.provider.jobs !== undefined) {
-        const collected = await collectCallTranscription(context, { sessionId, at, provider: options.provider });
+      if (!ownCursor && options.collector !== undefined) {
+        const collected = await collectCallTranscription(context, { sessionId, at, collector: options.collector });
+        if (collected.kind === 'retry') {
+          // The ordinary ambiguous rule: chunk 2 may reserve the one retry within the cap.
+          log('call_transcription_retry', { code: collected.code });
+          return { progress: { attempt: 1, step: 'retry', fencing }, done: false };
+        }
         if (collected.kind !== 'none') {
-          // And what the finished jobs of this call still owe AWS, tried now and recorded.
-          await cleanUpTranscriptionJobs(context, { sessionId, provider: options.provider });
-          if (collected.kind === 'retry') {
-            log('call_transcription_retry', { code: collected.code });
-            return { progress: { attempt: 1, step: 'retry', fencing }, done: false };
-          }
           if (collected.kind === 'transcribed') {
             log('call_transcription', { settled_cents: collected.settledCents, utterances: collected.utterances });
           } else if (collected.kind === 'pending') {
@@ -139,10 +150,9 @@ export function callTranscribeJobHandler(options: CallTranscribeOptions): JobHan
           } else {
             log('call_transcription_skipped', { reason: collected.reason, code: collected.code });
           }
+          // Terminal or pending: this claim buys nothing (review C3-F, finding 4).
           return { progress: { step: collected.kind }, done: true };
         }
-        const cleaned = await cleanUpTranscriptionJobs(context, { sessionId, provider: options.provider, due: true });
-        if (cleaned.owed > 0) log('call_transcription_cleanup_owed', { owed: cleaned.owed });
       }
 
       if (carried === null) {
@@ -223,20 +233,20 @@ export function heldTranscriptionSource(options: { readonly enabled: boolean }):
 }
 
 /**
- * The source that keeps an asynchronous provider's jobs moving (slice C3a fix round): one
- * `call.transcribe` under a new revision key for each call whose recorded job is due a
- * look, or whose finished job still owes AWS a delete (`listTranscriptionJobsDue`).
- * Materializes nothing without a provider that has jobs.
+ * The source that keeps recorded Transcribe jobs moving (slice C3a): one `call.transcribe`
+ * per look at each recorded job that is due one (`listTranscriptionJobsDue`), keyed by the
+ * job row's id and its look number, so no key is ever reused. Materializes nothing without
+ * a collector (the call-audio bucket not configured).
  */
-export function transcriptionJobsSource(options: { readonly providerKey: string | null }): DueWorkSource {
+export function transcriptionJobsSource(options: { readonly enabled: boolean }): DueWorkSource {
   return {
     name: 'call-transcribe-collect',
     find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
-      if (options.providerKey === null) return [];
-      return (await listTranscriptionJobsDue(session, options.providerKey)).map(due => ({
+      if (!options.enabled) return [];
+      return (await listTranscriptionJobsDue(session)).map(due => ({
         workspaceId: due.workspaceId,
         kind: 'call.transcribe' as const,
-        idempotencyKey: jobIdempotencyKey.callTranscribe(due.sessionId, due.revision),
+        idempotencyKey: due.idempotencyKey,
         payload: { callSessionId: due.sessionId },
         maxAttempts: CALL_TRANSCRIBE_JOB_MAX_ATTEMPTS,
       }));

@@ -1,23 +1,25 @@
-# FSS call audio: the private bucket Amazon Transcribe reads a call's recording from
-# (slice C3a, David's decision of 1 October 2026).
+# FSS call audio: the private bucket Amazon Transcribe reads a call's recording from and
+# writes its transcript to (slice C3a, David's decision of 1 October 2026).
 #
-# The worker's `call.transcribe` job copies one call's Twilio recording here, starts a
-# Transcribe job on it, and deletes the object as soon as the job has ended
-# (`apps/worker/src/transcription/awsTranscribeClient.ts`). Nothing else reads or writes
-# it. A recording is the prospect's voice, personal data, so the bucket keeps nothing:
+# The worker's `call.transcribe` job copies one call's Twilio recording here
+# (`calls/<session>/attempt-<n>.mp3`) and starts a Transcribe job whose output is written
+# beside it (`calls/<session>/attempt-<n>.json`); a later short claim reads that output
+# (`apps/worker/src/transcription/awsTranscribeClient.ts`). A recording and its transcript
+# are the prospect's voice and words, personal data, so the bucket keeps nothing:
 #
-#   * every object expires one day after it was written — the backstop for a worker
-#     that died before its own delete;
+#   * every object expires one day after it was written — the one guarantee; nothing is
+#     owed or tracked beyond it. The deletion workflow deletes a deleted call's objects
+#     sooner, best effort;
 #   * versioning is never turned on (no `aws_s3_bucket_versioning`): a deleted or
 #     expired object leaves no noncurrent version behind, and nothing replicates;
-#   * SSE-S3 (AES256), so Transcribe can read an object with the caller's permissions
-#     alone and no KMS key grant is needed;
+#   * SSE-S3 (AES256), so Transcribe reads and writes with the caller's permissions alone
+#     and no KMS key grant is needed;
 #   * the four public-access blocks, bucket-owner-enforced ownership (no ACLs), and a
 #     bucket policy denying every request that is not over TLS.
 #
-# The worker task role's grant on `calls/*` is in `infra/modules/cluster`. Transcribe's
-# output is service-managed (no output bucket), read once over HTTPS and deleted with
-# the job.
+# The grants are in `infra/modules/cluster`: the worker task role's put, get and delete on
+# `calls/*` (Transcribe writes the output with that put), its Start only with this bucket
+# as the output, and the API task role's delete on `calls/*` for the deletion workflow.
 
 locals {
   bucket_name = "${var.name_prefix}-call-audio-${var.aws_account_id}"

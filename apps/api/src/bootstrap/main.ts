@@ -1,3 +1,4 @@
+import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
@@ -204,6 +205,10 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
           log,
         };
 
+  const callAudioBucket = environment[CALL_AUDIO_BUCKET_VARIABLE]?.trim() ?? '';
+  const callAudioRegion = environment['AWS_REGION']?.trim() ?? '';
+  const callAudio =
+    callAudioBucket === '' || callAudioRegion === '' ? undefined : await loadCallAudioRemover({ bucket: callAudioBucket, region: callAudioRegion });
   const server = createApiServer({
     connections: poolConnections(pool, log),
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
@@ -218,6 +223,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     production: isProductionEnvironmentName(deployment.environmentName),
     // 10.2: a live deployment has a durable one or `readApiDeployment` refused above.
     suppressionJournal: deployment.suppressionJournal,
+    // Slice C3a: the deletion workflow's best-effort delete in the call-audio bucket.
+    ...(callAudio === undefined ? {} : { callAudio }),
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
     // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.
     upgradeUrl: deployment.upgradeUrl,
