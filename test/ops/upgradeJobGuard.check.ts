@@ -137,6 +137,7 @@ function guard(
       GITHUB_OUTPUT: outputFile,
       RUNNER_TEMP: mkdtempSync(join(tmpdir(), 'fss-runner-temp-')),
       PROD_COMMIT: repository.deployed,
+      PROD_SOURCE: 'health',
       ...environment,
     },
   });
@@ -250,6 +251,31 @@ describe('the upgrade job decides what to run from what production runs, not fro
     const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('origin/main');
+  });
+
+  it('R0: a same-schema production commit that is not an ancestor does not turn the pull request red', () => {
+    // A code-only deploy landed while this run was in flight: production's commit is
+    // newer than anything this checkout can reach, and nothing needs rebasing.
+    const tree = { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } };
+    const repository = repositoryOf(tree, { ...tree, migrations: { ...tree.migrations } });
+    git(repository.path, 'checkout', '--quiet', '--orphan', 'elsewhere');
+    git(repository.path, 'commit', '--quiet', '--allow-empty', '-m', 'unrelated');
+    git(repository.path, 'update-ref', 'refs/remotes/origin/main', git(repository.path, 'rev-parse', 'HEAD'));
+    git(repository.path, 'checkout', '--quiet', 'main');
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
+    expect(outcome.status, outcome.out).toBe(0);
+    expect(outcome.outputs['run']).toBe('no');
+  });
+
+  it('R0: an upgrade whose base did not come from production\'s /health is refused', () => {
+    const repository = repositoryOf(
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 3, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO, '0003_c.sql': THREE } },
+    );
+    const outcome = guard(repository, { PROD_SCHEMA: '2', PROD_SOURCE: 'variables' });
+    expect(outcome.status, outcome.out).not.toBe(0);
+    expect(outcome.out).toContain("not from its /health");
+    expect(outcome.outputs['run']).toBeUndefined();
   });
 
   it('P0-2: warns, and still runs, when the deployed commit is behind main at the same schema', () => {

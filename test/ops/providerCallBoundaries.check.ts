@@ -1,69 +1,85 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
+import ts from 'typescript';
 import { afterAll, describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/repository.ts';
 
 /**
  * Slice R0: static bypass checks for the final provider-call boundaries.
  *
- * Each outside call is made at ONE authoritative site, after every gate that decides
- * whether it may happen (suppression, switches, clearance, budget, the paid-call
- * reservation). A second call site is a way around those gates, and nothing else in the
- * suite notices one. This reads the source (tests excluded) and fails when a call
- * expression for a boundary appears anywhere but its site.
+ * Each outside call is made at ONE authoritative site, inside one function, after every
+ * gate that decides whether it may happen (suppression, switches, clearance, budget, the
+ * paid-call reservation). A second call, a helper, or a detached reference to the method
+ * is a way around those gates, and nothing else in the suite notices one.
  *
- * What is matched: call expressions on a member (`x.sendMessage(`, `x?.sendMessage(`,
- * `x['sendMessage'](`, `x.sendMessage.call(`), after comments are blanked. Not matched:
- * the definitions and type declarations (`sendMessage(access: ...): Promise<...>` has no
- * receiver), and bare calls of an unrelated local function of the same name
- * (`crm/import.ts` has its own `classify(`). Not caught, by the nature of a text check:
- * a method pulled off its object first (`const { sendMessage } = gmail`) and called bare.
- * Review still looks for that; the member form is how every call today is written.
+ * This parses every non-test source file with the TypeScript compiler (syntax only, no
+ * type check) and reports every REFERENCE to a provider method that is not lexically
+ * inside its owner function:
+ *
+ *   - property access, called or not (`x.m(`, `x?.m(`, `x.m`, `f(x.m)`, `const a = x.m`);
+ *   - element access with a string literal (`x['m'](`);
+ *   - a destructuring binding (`const { m } = x`, `const { m: a } = x`).
+ *
+ * Definitions are not references and are never matched, structurally: method and
+ * property declarations, interface and type members, object-literal members
+ * (`m(...) {}`, `m: ...`) and indexed-access types are different syntax kinds from the
+ * three above, so the adapters and the interfaces need no file-level exemption.
+ *
+ * Inside the owner, the number of references must be exactly the expected number of
+ * calls (all of them call expressions), so a second call or an alias inside the owner
+ * fails too.
+ *
+ * Not caught, by the nature of a syntactic check: calling the provider through a name
+ * this table does not list (a new method), or reflection (`Reflect.get(x, name)`).
  */
 
 interface Boundary {
   /** What the boundary is, for the failure message. */
   readonly name: string;
-  /** The method names whose member calls are the provider call. */
-  readonly methods: readonly string[];
-  /** The one file allowed to call them, repository-relative. */
+  /** The one file allowed to touch the methods, repository-relative. */
   readonly site: string;
-  /** The function in that file that owns the call. */
+  /** The function in that file that owns them (declaration, method or const arrow). */
   readonly owner: string;
+  /** Each provider method and the number of call sites expected inside the owner. */
+  readonly methods: Readonly<Record<string, number>>;
 }
 
+/**
+ * The one table. A change to an owner function's name, or to how many calls it makes,
+ * is a one-line change here.
+ */
 export const BOUNDARIES: readonly Boundary[] = [
   {
     name: 'Gmail send',
-    methods: ['sendMessage'],
     site: 'packages/domain/outbound/send.ts',
     owner: 'dispatchOutboundMessage',
+    methods: { sendMessage: 1 },
   },
   {
     name: 'research provider calls (page fetch, token count, extraction)',
-    methods: ['fetchPages', 'countInputTokens', 'extract'],
     site: 'packages/domain/research/enrichment.ts',
     owner: 'finishFirmResearch',
+    methods: { fetchPages: 1, countInputTokens: 1, extract: 1 },
   },
   {
     name: 'reply classifier provider',
-    methods: ['classify'],
     site: 'packages/domain/classification/classify.ts',
     owner: 'classifyReplyWithModel',
+    methods: { classify: 1 },
   },
   {
     name: 'call transcription provider',
-    methods: ['transcribe'],
     site: 'packages/domain/calls/transcription.ts',
     owner: 'finishCallTranscription',
+    methods: { transcribe: 1 },
   },
 ];
 
 /**
- * A call site allowed somewhere else. Each entry needs a REASON that says why the call
- * cannot go through the boundary and what gates it instead; "it is convenient" is not
- * one. There are none today. Adding an entry is a review decision, not a way to make this
+ * A reference allowed somewhere else. Each entry needs a REASON that says why it cannot
+ * go through the boundary and what gates it instead; "it is convenient" is not one.
+ * There are none today. Adding an entry is a review decision, not a way to make this
  * check green.
  */
 export interface Allowed {
@@ -72,7 +88,7 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
-  // { file: 'packages/domain/x/y.ts', method: 'sendMessage', reason: 'why, and what gates it' },
+  // { file: 'packages/domain/x/y.ts', method: 'sendMessage', reason: 'why, and what gates it instead' },
 ];
 
 const ROOTS = ['apps', 'packages', 'tools', 'scripts'];
@@ -80,28 +96,66 @@ const SKIPPED_DIRECTORIES = new Set(['node_modules', 'dist', 'build', 'coverage'
 const SOURCE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/u;
 const TEST_FILE = /\.(?:test|check|spec)\.[a-z]+$/u;
 
-/** Blank comments, keeping offsets and newlines, so a commented-out call is not a call. */
-export function blankComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//gu, block => block.replace(/[^\n]/gu, ' '))
-    .replace(/(^|[^:'"`\\])\/\/[^\n]*/gu, (whole, lead: string) => lead + ' '.repeat(whole.length - lead.length));
+export interface Reference {
+  readonly method: string;
+  readonly line: number;
+  /** Whether the reference is the callee of a call expression. */
+  readonly called: boolean;
+  /** The enclosing named functions, innermost first. */
+  readonly enclosing: readonly string[];
 }
 
-/** Member-call expressions of `method` in `text`: the line numbers. */
-export function callLines(text: string, method: string): number[] {
-  const code = blankComments(text);
-  const patterns = [
-    new RegExp(`\\??\\.\\s*${method}\\s*\\(`, 'gu'),
-    new RegExp(`\\??\\.\\s*${method}\\s*\\??\\.\\s*(?:call|apply)\\s*\\(`, 'gu'),
-    new RegExp(`\\[\\s*['"\`]${method}['"\`]\\s*\\]\\s*\\??\\.?\\s*\\(`, 'gu'),
-  ];
-  const lines = new Set<number>();
-  for (const pattern of patterns) {
-    for (const match of code.matchAll(pattern)) {
-      lines.add(code.slice(0, match.index).split('\n').length);
-    }
+const isStringLike = (node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
+  ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+
+/** The names a function-like node answers to: its own, or its variable's. */
+function functionName(node: ts.Node): string | undefined {
+  if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name !== undefined && ts.isIdentifier(node.name)) {
+    return node.name.text;
   }
-  return [...lines].sort((a, b) => a - b);
+  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name)) {
+    return node.parent.name.text;
+  }
+  return undefined;
+}
+
+function enclosingFunctions(node: ts.Node): string[] {
+  const names: string[] = [];
+  for (let current: ts.Node | undefined = node.parent; current !== undefined; current = current.parent) {
+    const name = functionName(current);
+    if (name !== undefined) names.push(name);
+  }
+  return names;
+}
+
+/** Every reference to one of `methods` in `text` (see the header for what counts). */
+export function referencesIn(text: string, methods: ReadonlySet<string>, fileName = 'file.ts'): Reference[] {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, /\.[cm]?[jt]sx$/u.test(fileName) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const found: Reference[] = [];
+  const lineOf = (node: ts.Node): number => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+  const calleeOf = (node: ts.Node): boolean => {
+    let outer: ts.Node = node;
+    // `x.m!(...)`, `(x.m)(...)` and `x.m?.(...)` are still calls of the reference.
+    while (outer.parent !== undefined && (ts.isNonNullExpression(outer.parent) || ts.isParenthesizedExpression(outer.parent))) outer = outer.parent;
+    return outer.parent !== undefined && ts.isCallExpression(outer.parent) && outer.parent.expression === outer;
+  };
+  const add = (node: ts.Node, method: string, called: boolean): void => {
+    found.push({ method, line: lineOf(node), called, enclosing: enclosingFunctions(node) });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(node) && methods.has(node.name.text)) {
+      add(node, node.name.text, calleeOf(node));
+    } else if (ts.isElementAccessExpression(node) && isStringLike(node.argumentExpression) && methods.has(node.argumentExpression.text)) {
+      add(node, node.argumentExpression.text, calleeOf(node));
+    } else if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+      const key = node.propertyName ?? node.name;
+      const name = ts.isIdentifier(key) || isStringLike(key) ? key.text : undefined;
+      if (name !== undefined && methods.has(name)) add(node, name, false);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
 }
 
 function sourceFiles(root: string): string[] {
@@ -131,44 +185,90 @@ export interface Violation {
   readonly file: string;
   readonly line: number;
   readonly method: string;
+  readonly kind: 'outside-owner' | 'owner-calls' | 'owner-missing';
+  readonly detail: string;
 }
 
-/** Every call of a boundary's method outside its site and the allow-list, under `root`. */
+/** Every breach of a boundary under `root`: references outside the owner, a wrong count inside it. */
 export function findViolations(
   root: string,
   boundaries: readonly Boundary[] = BOUNDARIES,
   allowed: readonly Allowed[] = ALLOWED_ELSEWHERE,
 ): Violation[] {
   const violations: Violation[] = [];
+  const all = new Set(boundaries.flatMap(boundary => Object.keys(boundary.methods)));
+  const ownerCalls = new Map<string, number>();
+  const ownerReferences = new Map<string, number>();
   for (const top of ROOTS) {
     for (const path of sourceFiles(join(root, top))) {
       const file = relative(root, path).split('\\').join('/');
-      const text = readFileSync(path, 'utf8');
-      for (const boundary of boundaries) {
-        for (const method of boundary.methods) {
-          if (file === boundary.site) continue;
-          if (allowed.some(entry => entry.file === file && entry.method === method)) continue;
-          for (const line of callLines(text, method)) {
-            violations.push({ boundary: boundary.name, file, line, method });
+      for (const reference of referencesIn(readFileSync(path, 'utf8'), all, path)) {
+        for (const boundary of boundaries) {
+          if (!(reference.method in boundary.methods)) continue;
+          const key = `${boundary.name}\0${reference.method}`;
+          if (file === boundary.site && reference.enclosing.includes(boundary.owner)) {
+            ownerReferences.set(key, (ownerReferences.get(key) ?? 0) + 1);
+            if (reference.called) ownerCalls.set(key, (ownerCalls.get(key) ?? 0) + 1);
+            continue;
           }
+          if (allowed.some(entry => entry.file === file && entry.method === reference.method)) continue;
+          violations.push({
+            boundary: boundary.name,
+            file,
+            line: reference.line,
+            method: reference.method,
+            kind: 'outside-owner',
+            detail: `${file}:${String(reference.line)} references .${reference.method}, the ${boundary.name} boundary, outside ${boundary.owner} in ${boundary.site}`,
+          });
         }
+      }
+    }
+  }
+  for (const boundary of boundaries) {
+    let ownerSeen = true;
+    try {
+      ownerSeen = new RegExp(`\\b${boundary.owner}\\b`, 'u').test(readFileSync(join(root, boundary.site), 'utf8'));
+    } catch {
+      ownerSeen = false;
+    }
+    if (!ownerSeen) {
+      violations.push({
+        boundary: boundary.name,
+        file: boundary.site,
+        line: 0,
+        method: '',
+        kind: 'owner-missing',
+        detail: `${boundary.site} no longer has ${boundary.owner}; the boundary moved, so update BOUNDARIES in this check`,
+      });
+      continue;
+    }
+    for (const [method, expected] of Object.entries(boundary.methods)) {
+      const key = `${boundary.name}\0${method}`;
+      const calls = ownerCalls.get(key) ?? 0;
+      const references = ownerReferences.get(key) ?? 0;
+      if (calls !== expected || references !== expected) {
+        violations.push({
+          boundary: boundary.name,
+          file: boundary.site,
+          line: 0,
+          method,
+          kind: 'owner-calls',
+          detail: `${boundary.owner} in ${boundary.site} has ${String(calls)} call(s) and ${String(references)} reference(s) to .${method}, expected exactly ${String(expected)} call(s) and no other reference`,
+        });
       }
     }
   }
   return violations;
 }
 
-function describeViolations(violations: readonly Violation[], boundaries: readonly Boundary[] = BOUNDARIES): string {
+function describeViolations(violations: readonly Violation[]): string {
   return violations
-    .map(violation => {
-      const boundary = boundaries.find(candidate => candidate.name === violation.boundary);
-      return (
-        `${violation.file}:${String(violation.line)} calls .${violation.method}(, the ${violation.boundary} boundary. ` +
-        `That call is made only in ${boundary?.site ?? '?'} (${boundary?.owner ?? '?'}), after every gate; ` +
-        'new call sites must go through it. If this one truly cannot, add it to ALLOWED_ELSEWHERE in ' +
-        'test/ops/providerCallBoundaries.check.ts with the reason and what gates it instead.'
-      );
-    })
+    .map(violation =>
+      violation.kind === 'outside-owner'
+        ? `${violation.detail}. Every call goes through that function, after every gate; new call sites must go through it. ` +
+          'If this one truly cannot, add it to ALLOWED_ELSEWHERE in test/ops/providerCallBoundaries.check.ts with the reason and what gates it instead.'
+        : `${violation.boundary}: ${violation.detail}. New call sites must go through the boundary; if the owner legitimately changed, update BOUNDARIES in test/ops/providerCallBoundaries.check.ts.`,
+    )
     .join('\n');
 }
 
@@ -178,16 +278,10 @@ afterAll(() => {
   for (const directory of temporary) rmSync(directory, { recursive: true, force: true });
 });
 
-/** A scratch tree: a copy of each boundary's site plus the given extra files. */
-function scratch(extra: Readonly<Record<string, string>>): string {
+function scratch(files: Readonly<Record<string, string>>): string {
   const root = mkdtempSync(join(tmpdir(), 'fss-boundaries-'));
   temporary.push(root);
-  for (const boundary of BOUNDARIES) {
-    const target = join(root, boundary.site);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, readFileSync(join(REPOSITORY, boundary.site), 'utf8'), 'utf8');
-  }
-  for (const [file, text] of Object.entries(extra)) {
+  for (const [file, text] of Object.entries(files)) {
     const target = join(root, file);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, text, 'utf8');
@@ -195,89 +289,133 @@ function scratch(extra: Readonly<Record<string, string>>): string {
   return root;
 }
 
-describe('each provider call is made at its one authoritative site', () => {
-  it('has no call to any boundary outside its site', () => {
+const real = (file: string): string => readFileSync(join(REPOSITORY, file), 'utf8');
+
+describe('each provider call is made at its one authoritative site, inside its owner', () => {
+  it('has no reference outside an owner, and exactly the expected calls inside it', () => {
     const violations = findViolations(REPOSITORY);
     expect(violations, describeViolations(violations)).toEqual([]);
-  });
-
-  it('is not vacuous: every boundary method is still called at its site', () => {
-    for (const boundary of BOUNDARIES) {
-      const text = readFileSync(join(REPOSITORY, boundary.site), 'utf8');
-      expect(text, `${boundary.site} no longer defines ${boundary.owner}`).toMatch(
-        new RegExp(`function\\s+${boundary.owner}\\b`, 'u'),
-      );
-      for (const method of boundary.methods) {
-        expect(
-          callLines(text, method).length,
-          `${boundary.site} no longer calls .${method}(; the boundary moved, so update this check's table`,
-        ).toBeGreaterThan(0);
-      }
-    }
   });
 
   it('keeps each allow-list entry reasoned and real', () => {
     for (const entry of ALLOWED_ELSEWHERE) {
       expect(entry.reason.trim().length, `${entry.file} (${entry.method}) is allowed without a reason`).toBeGreaterThan(20);
-      expect(readFileSync(join(REPOSITORY, entry.file), 'utf8')).toContain(entry.method);
+      expect(real(entry.file)).toContain(entry.method);
     }
   });
 });
 
 describe('the check itself', () => {
-  const second = (call: string): string => `export async function sneaky(x: any) {\n  return await ${call};\n}\n`;
+  // A one-boundary table over a scratch site, so each bypass is a few lines.
+  const TABLE: readonly Boundary[] = [{ name: 'Fixture send', site: 'packages/domain/site.ts', owner: 'sendOnce', methods: { sendMessage: 1 } }];
+  const SITE = 'export async function sendOnce(gmail: G) {\n  return await gmail.sendMessage(a, b);\n}\n';
+  const withSite = (extra: string, other: Readonly<Record<string, string>> = {}): Violation[] =>
+    findViolations(scratch({ 'packages/domain/site.ts': SITE + extra, ...other }), TABLE);
+  const kinds = (violations: readonly Violation[]): string[] => violations.map(v => `${v.kind}:${v.method}`);
 
-  it('fails on a second call to each boundary in a scratch file, naming the boundary', () => {
-    const cases: readonly [string, string, string][] = [
-      ['Gmail send', 'sendMessage', 'gmail.sendMessage(grant, request)'],
-      ['research provider calls (page fetch, token count, extraction)', 'fetchPages', 'deps.pageFetch.fetchPages({ urls })'],
-      ['research provider calls (page fetch, token count, extraction)', 'countInputTokens', 'extraction.countInputTokens(request)'],
-      ['research provider calls (page fetch, token count, extraction)', 'extract', 'extraction.extract(request)'],
-      ['reply classifier provider', 'classify', 'deps.classifierFor(settings).classify(input)'],
-      ['call transcription provider', 'transcribe', 'provider.transcribe({ audio })'],
-    ];
-    for (const [boundary, method, call] of cases) {
-      const root = scratch({ 'apps/worker/src/sneaky.ts': second(call) });
-      const violations = findViolations(root);
-      expect(violations.map(v => [v.boundary, v.file, v.method])).toEqual([[boundary, 'apps/worker/src/sneaky.ts', method]]);
-      const message = describeViolations(violations);
-      expect(message).toContain(boundary);
-      expect(message).toContain('new call sites must go through it');
+  it('passes the clean fixture', () => {
+    expect(withSite('')).toEqual([]);
+  });
+
+  it('fails on a helper in the same file that calls the provider (the review’s case)', () => {
+    const found = withSite('export async function sendWithoutGates(gmail: G) {\n  return gmail.sendMessage(a, b);\n}\n');
+    expect(kinds(found)).toEqual(['outside-owner:sendMessage']);
+    expect(found[0]?.line).toBe(5);
+    expect(describeViolations(found)).toContain('new call sites must go through it');
+  });
+
+  it('fails on a helper that is an arrow function or a method in the same file', () => {
+    expect(kinds(withSite('const viaArrow = (g: G) => g.sendMessage(a, b);\n'))).toEqual(['outside-owner:sendMessage']);
+    expect(kinds(withSite('class Helper {\n  run(g: G) { return g.sendMessage(a, b); }\n}\n'))).toEqual(['outside-owner:sendMessage']);
+  });
+
+  it('fails on destructuring, in the same file and elsewhere', () => {
+    for (const code of ['const { sendMessage } = gmail;', 'const { sendMessage: send } = gmail;', "const { 'sendMessage': send } = gmail;", 'function f({ sendMessage }: G) { return sendMessage; }']) {
+      expect(kinds(withSite(`${code}\n`)), code).toEqual(['outside-owner:sendMessage']);
+      expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': SITE, 'apps/worker/src/x.ts': `${code}\n` }), TABLE)), code).toEqual(['outside-owner:sendMessage']);
     }
   });
 
-  it('fails on a second call inside the boundary file’s own package, and on the other spellings', () => {
-    for (const call of [
-      'gmail?.sendMessage(grant, request)',
-      "gmail['sendMessage'](grant, request)",
-      'gmail.sendMessage.call(gmail, grant, request)',
-      'gmail\n    .sendMessage(grant, request)',
-    ]) {
-      const root = scratch({ 'packages/domain/outbound/other.ts': second(call) });
-      expect(findViolations(root).map(v => v.method), call).toEqual(['sendMessage']);
+  it('fails on an alias, an argument to a wrapper, and an uncalled reference', () => {
+    for (const code of ['const send = gmail.sendMessage;', 'withRetry(gmail.sendMessage, 3);', 'const bound = gmail.sendMessage.bind(gmail);', 'export const table = [gmail.sendMessage];']) {
+      expect(kinds(withSite(`${code}\n`)), code).toEqual(['outside-owner:sendMessage']);
     }
   });
 
-  it('does not fail on definitions, types, comments, tests or an unrelated bare function', () => {
-    const root = scratch({
-      'packages/domain/mail/client.ts': 'export interface C {\n  sendMessage(access: A, request: R): Promise<O>;\n}\n',
-      'packages/domain/crm/import.ts': 'async function classify(a: A) { return a; }\nawait classify(context);\n',
-      'apps/api/src/note.ts': '// gmail.sendMessage(grant, request) is only made in send.ts\n/* x.transcribe(y) */\nexport const a = 1;\n',
-      'apps/api/test/second.test.ts': second('gmail.sendMessage(grant, request)'),
-      'packages/domain/test/helper.ts': second('gmail.sendMessage(grant, request)'),
-      'apps/worker/src/fake.check.ts': second('provider.transcribe(x)'),
+  it('fails on optional calls and element access', () => {
+    for (const code of ['gmail.sendMessage?.(a, b);', 'gmail?.sendMessage(a, b);', "gmail['sendMessage'](a, b);", 'gmail["sendMessage"]?.(a, b);', 'gmail.sendMessage!(a, b);', '(gmail.sendMessage)(a, b);', 'gmail.sendMessage.call(gmail, a, b);']) {
+      expect(kinds(withSite(`${code}\n`)), code).toEqual(['outside-owner:sendMessage']);
+    }
+  });
+
+  it('fails inside the owner on a second call, an alias, or a missing call', () => {
+    const twice = SITE.replace('  return await gmail.sendMessage(a, b);', '  await gmail.sendMessage(a, b);\n  return await gmail.sendMessage(a, b);');
+    expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': twice }), TABLE))).toEqual(['owner-calls:sendMessage']);
+    const alias = SITE.replace('  return await gmail.sendMessage(a, b);', '  const send = gmail.sendMessage;\n  return await gmail.sendMessage(a, b);');
+    expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': alias }), TABLE))).toEqual(['owner-calls:sendMessage']);
+    const none = SITE.replace('gmail.sendMessage(a, b)', 'gmail.other(a, b)');
+    expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': none }), TABLE))).toEqual(['owner-calls:sendMessage']);
+    const renamed = SITE.replace('sendOnce', 'sendTwice');
+    expect(kinds(findViolations(scratch({ 'packages/domain/site.ts': renamed }), TABLE)).sort()).toEqual(['outside-owner:sendMessage', 'owner-missing:'].sort());
+  });
+
+  it('accepts a call inside a closure of the owner, as the real research and send paths make them', () => {
+    const closure = 'export async function sendOnce(gmail: G) {\n  return await attempt(async () => await gmail.sendMessage(a, b));\n}\n';
+    expect(findViolations(scratch({ 'packages/domain/site.ts': closure }), TABLE)).toEqual([]);
+  });
+
+  it('does not fail on definitions, types and implementations, with no file exempted', () => {
+    const definitions = [
+      'export interface Client {\n  sendMessage(access: A, request: R): Promise<O>;\n}',
+      'export interface Client2 {\n  readonly sendMessage: (access: A) => Promise<O>;\n}',
+      "export type Narrow = Pick<Client, 'sendMessage'>;",
+      "export type Member = Client['sendMessage'];",
+      'export class Http implements Client {\n  async sendMessage(access: A, request: R) { return post(access, request); }\n}',
+      'export const adapter = {\n  sendMessage: async (access: A) => post(access),\n  async fetchPages() {},\n};',
+      'export const shorthand = { sendMessage };',
+    ].join('\n');
+    expect(findViolations(scratch({ 'packages/domain/adapter.ts': definitions, 'packages/domain/site.ts': SITE }), TABLE)).toEqual([]);
+    // And the same definitions placed in the site file itself, beside the owner.
+    expect(withSite(`${definitions}\n`)).toEqual([]);
+  });
+
+  it('does not fail on comments, strings, tests, or an unrelated bare function', () => {
+    const found = withSite('', {
+      'apps/api/src/note.ts': "// gmail.sendMessage(grant, request) is only made in site.ts\n/* x.sendMessage(y) */\nexport const a = 'x.sendMessage(y)';\n",
+      'packages/domain/crm/import.ts': 'async function sendMessage(a: A) { return a; }\nawait sendMessage(context);\n',
+      'apps/api/test/second.test.ts': 'gmail.sendMessage(a, b);\n',
+      'packages/domain/test/helper.ts': 'gmail.sendMessage(a, b);\n',
+      'apps/worker/src/fake.check.ts': 'gmail.sendMessage(a, b);\n',
     });
-    expect(findViolations(root)).toEqual([]);
+    expect(found).toEqual([]);
   });
 
   it('honours an allow-list entry, and only for that file and method', () => {
-    const root = scratch({ 'apps/worker/src/sneaky.ts': second('gmail.sendMessage(g, r); provider.transcribe(x)') });
-    const allowed: readonly Allowed[] = [{ file: 'apps/worker/src/sneaky.ts', method: 'sendMessage', reason: 'fixture reason that is long enough' }];
-    expect(findViolations(root, BOUNDARIES, allowed).map(v => v.method)).toEqual(['transcribe']);
+    const root = scratch({ 'packages/domain/site.ts': SITE, 'apps/worker/src/x.ts': 'a.sendMessage(1);\nb.other(2);\n' });
+    const allowed: readonly Allowed[] = [{ file: 'apps/worker/src/x.ts', method: 'sendMessage', reason: 'fixture reason that is long enough' }];
+    expect(findViolations(root, TABLE, allowed)).toEqual([]);
+    const elsewhere: readonly Allowed[] = [{ file: 'apps/worker/src/y.ts', method: 'sendMessage', reason: 'fixture reason that is long enough' }];
+    expect(kinds(findViolations(root, TABLE, elsewhere))).toEqual(['outside-owner:sendMessage']);
   });
 
-  it('blanks comments without hiding the call after them', () => {
-    expect(callLines('// a.sendMessage(x)\nb.sendMessage(y);\n/* c.sendMessage(z) */', 'sendMessage')).toEqual([2]);
-    expect(callLines("const url = 'https://x.example/'; a.sendMessage(y);", 'sendMessage')).toEqual([1]);
+  it('fails the real files on the review’s bypasses, appended to a copy of each site', () => {
+    const cases: readonly [string, string][] = [
+      ['packages/domain/outbound/send.ts', 'export async function sendWithoutGates(g: any) {\n  return g.sendMessage(1, 2);\n}\n'],
+      ['packages/domain/outbound/send.ts', 'const { sendMessage } = deps.gmail;\n'],
+      ['packages/domain/outbound/send.ts', 'withRetry(deps.gmail.sendMessage, 3);\n'],
+      ['packages/domain/outbound/send.ts', 'const alias = deps.gmail.sendMessage;\n'],
+      ['packages/domain/outbound/send.ts', 'deps.gmail.sendMessage?.(1, 2);\n'],
+      ['packages/domain/research/enrichment.ts', 'export const helper = (e: any) => e.extract(1);\n'],
+      ['packages/domain/classification/classify.ts', 'export const helper = (c: any) => c.classify(1);\n'],
+      ['packages/domain/calls/transcription.ts', 'export const helper = (p: any) => p.transcribe(1);\n'],
+    ];
+    for (const [file, extra] of cases) {
+      const files: Record<string, string> = {};
+      for (const boundary of BOUNDARIES) files[boundary.site] = real(boundary.site);
+      files[file] = `${files[file] ?? ''}\n${extra}`;
+      const found = findViolations(scratch(files));
+      expect(found.map(v => v.kind), `${file}: ${extra}`).toContain('outside-owner');
+      expect(found.every(v => v.file === file), `${file}: ${extra}`).toBe(true);
+    }
   });
 });

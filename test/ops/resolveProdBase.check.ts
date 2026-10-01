@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,6 +98,7 @@ async function resolve(
           FSS_PRODUCTION_ORIGIN: origin ?? base,
           VAR_PROD_COMMIT: '',
           VAR_PROD_SCHEMA: '',
+          HEAD_SCHEMA: '30',
           ...environment,
         },
       });
@@ -125,6 +126,7 @@ async function resolve(
 
 const VARIABLES = { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: '29' };
 
+
 describe('the upgrade base is what production says it runs', () => {
   it('takes the commit and the schema from /health, with no variables set', async () => {
     const outcome = await resolve(health());
@@ -148,79 +150,126 @@ describe('the upgrade base is what production says it runs', () => {
     expect(outcome.out).not.toContain('stale');
   });
 
-  it('falls back to the variables, with a warning, on garbage', async () => {
-    for (const body of ['not json at all', '{}', '[]']) {
-      const outcome = await resolve({ status: 200, body }, VARIABLES);
-      expect(outcome.status, `${body}: ${outcome.out}`).toBe(0);
-      expect(outcome.outputs).toEqual({ commit: OTHER, schema: '29', source: 'variables' });
-      expect(outcome.out).toContain('::warning title=Using the repository variables');
+  // The variables describe a lagging production (29) while production is on 30. A branch
+  // declaring 31 runs an upgrade, so none of these may certify it from the variables.
+  const LAGGING = { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: '29', HEAD_SCHEMA: '31' };
+  // A branch that declares the schema the variables say: no upgrade, fallback allowed.
+  const NO_UPGRADE = { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: '29', HEAD_SCHEMA: '29' };
+
+  const unusable: readonly [string, Answer][] = [
+    ['garbage', { status: 200, body: 'not json at all' }],
+    ['an empty object', { status: 200, body: '{}' }],
+    ['an array', { status: 200, body: '[]' }],
+    ['a short commit', health({ build: { commit: 'abc123' } })],
+    ['the zero commit', health({ build: { commit: '0'.repeat(40) } })],
+    ['a null commit', health({ build: { commit: null } })],
+    ['a missing build', health({ build: undefined })],
+    ['an upper-case commit', health({ build: { commit: COMMIT.toUpperCase() } })],
+    ['schema zero', health({ schema: { databaseVersion: 0, accepted: true } })],
+    ['a non-numeric schema', health({ schema: { databaseVersion: 'thirty', accepted: true } })],
+    ['a degraded service', health({ status: 'degraded' })],
+    ['a schema it does not accept', health({ schema: { databaseVersion: 30, accepted: false } })],
+    ['a redirect', { status: 302, body: health()?.body ?? '', location: 'https://elsewhere.example/health' }],
+    ['a server error', { status: 503, body: health()?.body ?? '' }],
+    ['nothing listening', null],
+  ];
+
+  it('never certifies an upgrade from the variables: every unusable /health fails', async () => {
+    for (const [what, answer] of unusable) {
+      const outcome = await resolve(answer, LAGGING);
+      expect(outcome.status, `${what}: ${outcome.out}`).not.toBe(0);
+      expect(outcome.out, what).toContain('would run an upgrade');
+      expect(outcome.outputs['commit'], what).toBeUndefined();
     }
   });
 
-  it('refuses garbage with no variables rather than guessing', async () => {
-    for (const body of ['not json at all', '{}', JSON.stringify({ status: 'serving', schema: { databaseVersion: 30, accepted: true } })]) {
-      const outcome = await resolve({ status: 200, body });
-      expect(outcome.status, `${body}: ${outcome.out}`).not.toBe(0);
-      expect(outcome.outputs['commit']).toBeUndefined();
+  it('fails with no variables at all, whatever /health says', async () => {
+    for (const [what, answer] of unusable) {
+      const outcome = await resolve(answer, { HEAD_SCHEMA: '29' });
+      expect(outcome.status, `${what}: ${outcome.out}`).not.toBe(0);
+      expect(outcome.outputs['commit'], what).toBeUndefined();
     }
   });
 
-  it('does not take a /health that cannot be trusted: a bad commit, a bad schema, not serving, not accepted', async () => {
-    const untrusted = [
-      health({ build: { commit: 'abc123' } }),
-      health({ build: { commit: '0'.repeat(40) } }),
-      health({ build: { commit: null } }),
-      health({ build: { commit: COMMIT.toUpperCase() } }),
-      health({ schema: { databaseVersion: 0, accepted: true } }),
-      health({ schema: { databaseVersion: 'thirty', accepted: true } }),
-      health({ status: 'degraded' }),
-      health({ schema: { databaseVersion: 30, accepted: false } }),
-    ];
-    for (const answer of untrusted) {
-      const outcome = await resolve(answer, VARIABLES);
-      expect(outcome.outputs['source'], `${answer?.body ?? ''}: ${outcome.out}`).toBe('variables');
-      const alone = await resolve(answer);
-      expect(alone.status, `${answer?.body ?? ''}: ${alone.out}`).not.toBe(0);
+  it('falls back, with a warning, only where there is no upgrade to test', async () => {
+    for (const [what, answer] of unusable) {
+      const outcome = await resolve(answer, NO_UPGRADE);
+      expect(outcome.status, `${what}: ${outcome.out}`).toBe(0);
+      expect(outcome.outputs, what).toEqual({ commit: OTHER, schema: '29', source: 'variables' });
+      expect(outcome.out, what).toContain('::warning title=Using the repository variables');
     }
   });
 
-  it('falls back on a redirect and on a server error, and follows no redirect', async () => {
-    const redirect = await resolve({ status: 302, body: health()?.body ?? '', location: 'https://elsewhere.example/health' }, VARIABLES);
-    expect(redirect.outputs['source']).toBe('variables');
-    const failing = await resolve({ status: 503, body: health()?.body ?? '' }, VARIABLES);
-    expect(failing.outputs['source']).toBe('variables');
-  });
-
-  it('falls back, bounded and with retries, when production is unreachable', async () => {
-    const outcome = await resolve(null, VARIABLES);
-    expect(outcome.status, outcome.out).toBe(0);
-    expect(outcome.outputs).toEqual({ commit: OTHER, schema: '29', source: 'variables' });
-    expect(outcome.out).toContain('::warning title=Using the repository variables');
-    // Three attempts, so two waits.
+  it('retries an unreachable production, bounded, before giving up', async () => {
+    const outcome = await resolve(null, NO_UPGRADE);
     expect(outcome.sleeps).toEqual(['5', '5']);
   });
 
-  it('fails closed when production is unreachable and the variables are empty or half set', async () => {
-    for (const environment of [{}, { VAR_PROD_COMMIT: OTHER }, { VAR_PROD_SCHEMA: '29' }]) {
-      const outcome = await resolve(null, environment);
-      expect(outcome.status, outcome.out).not.toBe(0);
-      expect(outcome.out).toContain('::error::');
-      expect(outcome.outputs['commit']).toBeUndefined();
-    }
-    const unset = await resolve(null, {}, '');
-    expect(unset.status, unset.out).not.toBe(0);
-  });
-
-  it('refuses unusable variables on the fallback', async () => {
+  it('refuses half-set variables and unusable variables on the fallback', async () => {
     for (const environment of [
-      { VAR_PROD_COMMIT: 'abc', VAR_PROD_SCHEMA: '29' },
-      { VAR_PROD_COMMIT: '0'.repeat(40), VAR_PROD_SCHEMA: '29' },
-      { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: 'two' },
-      { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: '0' },
+      { VAR_PROD_COMMIT: OTHER, HEAD_SCHEMA: '29' },
+      { VAR_PROD_SCHEMA: '29', HEAD_SCHEMA: '29' },
+      { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: 'two', HEAD_SCHEMA: '29' },
+      { VAR_PROD_COMMIT: OTHER, VAR_PROD_SCHEMA: '0', HEAD_SCHEMA: '29' },
+      { VAR_PROD_COMMIT: 'abc', VAR_PROD_SCHEMA: '29', HEAD_SCHEMA: '29' },
+      { VAR_PROD_COMMIT: '0'.repeat(40), VAR_PROD_SCHEMA: '29', HEAD_SCHEMA: '29' },
     ]) {
       const outcome = await resolve(null, environment);
       expect(outcome.status, outcome.out).not.toBe(0);
     }
+    const unset = await resolve(null, NO_UPGRADE, '');
+    expect(unset.outputs['source']).toBe('variables');
+  });
+
+  it('fails closed when the schema the branch declares cannot be read', async () => {
+    const outcome = await resolve(health(), { HEAD_SCHEMA: 'x' });
+    expect(outcome.status, outcome.out).not.toBe(0);
+  });
+
+  it('requires a clean transfer as well as a 200: a 200 whose transfer fails is not an answer', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fss-resolve-curl-'));
+    temporary.push(directory);
+    const bin = join(directory, 'bin');
+    mkdirSync(bin, { recursive: true });
+    // A curl that writes a complete healthy body, prints 200, and exits 28 (timeout).
+    writeFileSync(
+      join(bin, 'curl'),
+      `#!/bin/sh\nwhile [ "$#" -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\nprintf '%s' ${JSON.stringify(health()?.body ?? '')} > "$out"\nprintf 200\nexit 28\n`,
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\n', { encoding: 'utf8', mode: 0o755 });
+    const outputFile = join(directory, 'out');
+    writeFileSync(outputFile, '', 'utf8');
+    const run = (head: string): { status: number; out: string } => {
+      const result = spawnSync('bash', [SCRIPT], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+          GITHUB_OUTPUT: outputFile,
+          FSS_PRODUCTION_ORIGIN: 'http://127.0.0.1:9',
+          VAR_PROD_COMMIT: OTHER,
+          VAR_PROD_SCHEMA: '29',
+          HEAD_SCHEMA: head,
+        },
+      });
+      return { status: result.status ?? -1, out: `${result.stdout}${result.stderr}` };
+    };
+    const upgrade = run('30');
+    expect(upgrade.status, upgrade.out).not.toBe(0);
+    expect(upgrade.out).toContain('curl exit 28');
+    expect(readFileSync(outputFile, 'utf8')).not.toContain('source=health');
+  });
+
+  it('puts nothing from /health into an annotation that could forge another', async () => {
+    const hostile = 'serving\n::error::forged\r::set-output name=x::y';
+    const outcome = await resolve(health({ status: hostile }), LAGGING);
+    expect(outcome.status, outcome.out).not.toBe(0);
+    for (const line of outcome.out.split('\n')) {
+      if (line.startsWith('::')) expect(line.match(/::/gu)?.length, line).toBe(2);
+    }
+    expect(outcome.out).not.toMatch(/^::error::forged/mu);
+    expect(outcome.out).not.toMatch(/^::set-output/mu);
   });
 });
 

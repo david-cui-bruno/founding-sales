@@ -124,8 +124,10 @@ jobs:
         # /health (build.commit and schema.databaseVersion), no credential. The repository
         # variables FSS_PROD_COMMIT / FSS_PROD_SCHEMA go stale after every autodeploy
         # (they broke PR 344 and again during releases 0028-0030), so they are only the
-        # fallback, with a warning, when /health cannot be reached or parsed; with neither
-        # the step fails closed. Bounded curl, three attempts. The logic lives in
+        # fallback, with a warning, and only on a branch that runs no upgrade (it declares
+        # the schema the variables say): an upgrade needs /health attested (200, serving,
+        # schema accepted, 40-hex build.commit) and otherwise fails closed, as the old
+        # attestation step did. Bounded curl, three attempts. The logic lives in
         # tools/ci/resolve-prod-base.sh and is run by test/ops/resolveProdBase.check.ts.
         id: prod
         env:
@@ -137,6 +139,7 @@ jobs:
         env:
           PROD_SCHEMA: ${{ steps.prod.outputs.schema }}
           PROD_COMMIT: ${{ steps.prod.outputs.commit }}
+          PROD_SOURCE: ${{ steps.prod.outputs.source }}
         run: |
           set -euo pipefail
           range_file=packages/domain/db/schemaRange.ts
@@ -154,13 +157,8 @@ jobs:
             0000000000000000000000000000000000000000) fail 'FSS_PROD_COMMIT is the zero commit' ;;
           esac
           git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null || fail "FSS_PROD_COMMIT $PROD_COMMIT is not a commit in this repository"
-          git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
-            || fail "FSS_PROD_COMMIT $PROD_COMMIT is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
           git rev-parse --verify --quiet origin/main >/dev/null \
             || git fetch --no-tags --depth=0 origin main:refs/remotes/origin/main >/dev/null 2>&1 || true
-          git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so FSS_PROD_COMMIT cannot be cross-checked against the released line'
-          git merge-base --is-ancestor "$PROD_COMMIT" origin/main \
-            || fail "FSS_PROD_COMMIT $PROD_COMMIT is not an ancestor of origin/main; production would be running a commit that was never released"
 
           required_schema() {
             git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
@@ -173,12 +171,32 @@ jobs:
             || fail "the deployed commit declares REQUIRED_SCHEMA $from but FSS_PROD_SCHEMA says $PROD_SCHEMA; one of the two is stale"
           echo "production runs schema $from at $PROD_COMMIT (resolved by the previous step); this branch declares $to"
 
+          # An upgrade is never based on the variables (the resolver refuses that too).
+          if [ "$from" != "$to" ] && [ "$PROD_SOURCE" != health ]; then
+            fail "this branch would upgrade schema $from to $to but production's base came from '$PROD_SOURCE', not from its /health"
+          fi
+          # The ancestry of what production runs matters when there is an upgrade to
+          # test: the branch must contain it and main must have released it. With equal
+          # schemas there is nothing to rebase onto, and a code-only deploy that landed
+          # while this run was in flight must not turn an ordinary pull request red.
+          if [ "$from" != "$to" ]; then
+            git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
+              || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
+            git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so the production commit cannot be cross-checked against the released line'
+            git merge-base --is-ancestor "$PROD_COMMIT" origin/main \
+              || fail "the commit production runs, $PROD_COMMIT, is not an ancestor of origin/main; production would be running a commit that was never released"
+          fi
+
           # Normally PROD_COMMIT is production's own build.commit, so nothing is behind.
           # On the variable fallback it can lag: any commit deployed at schema `from` has
           # byte-identical migrations 1..from, so a lagging value degrades only the code
           # that writes the fixture, never the migration comparison below. Say so.
           newest_at_from="$PROD_COMMIT"
-          for candidate in $(git rev-list --reverse "$PROD_COMMIT..origin/main"); do
+          lag_range=''
+          if git rev-parse --verify --quiet origin/main >/dev/null && git merge-base --is-ancestor "$PROD_COMMIT" origin/main; then
+            lag_range="$PROD_COMMIT..origin/main"
+          fi
+          for candidate in $([ -z "$lag_range" ] || git rev-list --reverse "$lag_range"); do
             [ "$(required_schema "$candidate")" = "$from" ] || break
             newest_at_from="$candidate"
           done
