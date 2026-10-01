@@ -1,8 +1,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { GmailClient, GmailOAuthConfig } from '../../mail/gmailClient.ts';
-import { classifyStatus, createGmailHttpClient, readBodyText } from '../../mail/gmailClientHttp.ts';
+import { GmailClientError, type GmailClient, type GmailOAuthConfig } from '../../mail/gmailClient.ts';
+import {
+  classifyStatus,
+  createGmailHttpClient,
+  readBodyText,
+  type HttpResponse,
+} from '../../mail/gmailClientHttp.ts';
 import { GMAIL_SCOPES, METADATA_HEADERS } from '../../mail/types.ts';
 
 /**
@@ -467,7 +472,7 @@ describe('the Gmail HTTP client', () => {
     expect(lastRequest().url).toBe('/gmail/v1/users/me/stop');
   });
 
-  it('revokes against the revocation endpoint and survives a refusal, because revocation is best effort', async () => {
+  it('revokes against the revocation endpoint and reads an already-revoked token as revoked', async () => {
     answer('/revoke', 400, { error: 'invalid_token' });
     await expect(client.revokeRefreshToken(config, 'a-refresh-token')).resolves.toBeUndefined();
     expect(lastRequest().url).toBe('/revoke');
@@ -492,5 +497,78 @@ describe('the Gmail HTTP client', () => {
     expect(text).toContain('Please stop emailing me.');
     expect(text).not.toContain('<');
     expect(text).not.toContain('x()');
+  });
+});
+
+/**
+ * Google's token revocation answer, through a fake HTTP layer (no socket): 200 is
+ * revoked, 400 `invalid_token` is already revoked, and anything else is a typed
+ * failure that carries the status and never the body.
+ */
+describe('the Gmail HTTP client revocation', () => {
+  // Assembled at run time so no token-shaped literal sits in the repository.
+  const refreshToken = ['1', '/', randomBytes(18).toString('base64url')].join('');
+  const marker = `body-marker-${randomBytes(6).toString('hex')}`;
+  const config: GmailOAuthConfig = {
+    clientId: 'fss-greenfield-gmail.apps.googleusercontent.test',
+    clientSecret: randomBytes(24).toString('base64url'),
+    redirectUri: 'https://api.example.test/oauth/gmail/callback',
+    authorizationEndpoint: 'https://accounts.example.test/o/oauth2/v2/auth',
+    tokenEndpoint: 'https://oauth2.example.test/token',
+    revocationEndpoint: 'https://oauth2.example.test/revoke',
+    apiBaseUrl: 'https://gmail.example.test',
+  };
+  const sent: { url: string; body: string | undefined }[] = [];
+  const revokeAnswering = (answer: () => Promise<HttpResponse>): GmailClient =>
+    createGmailHttpClient({
+      apiBaseUrl: 'https://gmail.example.test',
+      fetch: async (url, request) => {
+        sent.push({ url, body: request?.body });
+        return await answer();
+      },
+    });
+  const answering = (status: number, body: unknown): GmailClient =>
+    revokeAnswering(async () => await Promise.resolve({ status, headers: {}, body: JSON.stringify(body) }));
+
+  it('200 is revoked, and the token travels in the POST body', async () => {
+    await expect(answering(200, {}).revokeRefreshToken(config, refreshToken)).resolves.toBeUndefined();
+    const last = sent.at(-1);
+    expect(last?.url).toBe(config.revocationEndpoint);
+    expect(new URLSearchParams(last?.body ?? '').get('token')).toBe(refreshToken);
+  });
+
+  it('400 invalid_token is already revoked, which is success', async () => {
+    const client = answering(400, { error: 'invalid_token', error_description: marker });
+    await expect(client.revokeRefreshToken(config, refreshToken)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [400, { error: 'invalid_request', error_description: marker }],
+    [401, { error: 'unauthorized_client', error_description: marker }],
+    [500, { error: 'internal', error_description: marker }],
+    [503, marker],
+  ])('%i otherwise is a typed failure with the status and without the body', async (status, body) => {
+    const failure: unknown = await answering(status, body)
+      .revokeRefreshToken(config, refreshToken)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(GmailClientError);
+    expect(failure).toMatchObject({ code: 'unexpected_status', status });
+    const error = failure as GmailClientError;
+    expect(`${error.message} ${error.stack ?? ''} ${JSON.stringify(error)}`).not.toContain(marker);
+    expect(`${error.message} ${error.stack ?? ''} ${JSON.stringify(error)}`).not.toContain(refreshToken);
+  });
+
+  it('a transport failure is a typed failure too, without the transport message', async () => {
+    const client = revokeAnswering(async () => await Promise.reject(new Error(marker)));
+    const failure: unknown = await client.revokeRefreshToken(config, refreshToken).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(GmailClientError);
+    expect(failure).toMatchObject({ code: 'transport' });
+    expect((failure as GmailClientError).message).not.toContain(marker);
   });
 });
