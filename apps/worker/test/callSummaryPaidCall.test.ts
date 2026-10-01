@@ -79,7 +79,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
   let policy: SeededPolicy;
   let counter = 0;
 
-  let mode: 'answer' | 'fail' | 'no_usage' | 'two_sentences' | 'invalid_then_answer' = 'answer';
+  let mode: 'answer' | 'fail' | 'no_usage' | 'two_sentences' | 'invalid_then_answer' | 'reject_400' = 'answer';
   let delayMs = 0;
   let requests = 0;
   let onRequest: (() => Promise<void>) | null = null;
@@ -90,6 +90,13 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       if (onRequest !== null) await onRequest();
       if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
       if (mode === 'fail') throw new Error('socket hang up');
+      if (mode === 'reject_400') {
+        // The SDK's APIError shape: status, the parsed body.
+        throw Object.assign(new Error('400 invalid_request_error'), {
+          status: 400,
+          error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Invalid schema' } },
+        });
+      }
       const usage = { input_tokens: 900, output_tokens: 300 };
       if (mode === 'no_usage') return { model: 'claude-haiku-4-5-20251001', stop_reason: 'end_turn', content: [{ type: 'text', text: GOOD }], usage: {} };
       const invalid = mode === 'two_sentences' || (mode === 'invalid_then_answer' && requests % 2 === 1);
@@ -98,7 +105,8 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     },
   };
   const summarizer = anthropicCallSummarizer({ transport });
-  const options = { summarizer, model: 'claude-haiku-4-5-20251001' as const };
+  const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
+  const options = { summarizer, model: 'claude-haiku-4-5-20251001' as const, log: (event: string, fields: Readonly<Record<string, unknown>>) => logs.push({ event, fields }) };
 
   const admin = (db: SessionQueryable = session): RepositoryContext =>
     repositoryContext(workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }), db);
@@ -477,6 +485,28 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       mode = 'answer';
       await transcriptionOn(true);
     }
+  });
+
+  it('a 400 invalid_request is refused before generation: one request, settled at 0, no retry, the API’s words in the log', async () => {
+    mode = 'reject_400';
+    const id = await transcribedCall();
+    await enqueue(id, `call-summarize:${id}`);
+    const before = requests;
+    logs.length = 0;
+    try {
+      await drain();
+    } finally {
+      mode = 'answer';
+    }
+    expect(requests - before).toBe(1);
+    expect(await attempts(id)).toEqual([{ attempt: 1, state: 'settled', cents: C, settled_cents: 0 }]);
+    expect(logs.find(line => line.event === 'call_summary_skipped' && line.fields['call_session_id'] === id)?.fields).toMatchObject({
+      reason: 'provider_refused',
+      provider_status: 400,
+      provider_error_type: 'invalid_request_error',
+      provider_message: 'output_config.format.schema: Invalid schema',
+    });
+    expect(JSON.stringify(logs)).not.toContain('Marisol');
   });
 
   it('an answer that reports no usage settles at the reservation, never at zero', async () => {

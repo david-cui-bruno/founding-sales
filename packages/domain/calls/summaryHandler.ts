@@ -10,6 +10,7 @@ import {
   type CallSummaryDeps,
   type CallSummaryPlan,
 } from './summary.ts';
+import type { ProviderErrorDetail } from './summaryAdapter.ts';
 
 /**
  * The `call.summarize` job (slice C3b): one transcribed call's summary and suggested next
@@ -32,6 +33,12 @@ import {
  */
 
 export const CALL_SUMMARIZE_LEASE_SECONDS = 120;
+
+/** The API's own words about a request it refused or failed: status, type, message. Never transcript text. */
+function providerFields(provider: ProviderErrorDetail | undefined): Readonly<Record<string, string | number | null>> {
+  if (provider === undefined) return {};
+  return { provider_status: provider.status, provider_error_type: provider.type, provider_message: provider.message };
+}
 
 type Step = 'reserved' | 'calling' | 'retry';
 
@@ -111,7 +118,7 @@ export function callSummarizeJobHandler(options: CallSummarizeOptions): JobHandl
       }
       const finished = await finishCallSummary(context, options, { sessionId, attempt: carried.attempt, plan });
       if (finished.kind === 'retry') {
-        log('call_summary_retry', { attempt: carried.attempt, outcome: finished.outcome });
+        log('call_summary_retry', { attempt: carried.attempt, outcome: finished.outcome, ...providerFields(finished.provider) });
         return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
       }
       if (finished.kind === 'summarized') {
@@ -124,7 +131,7 @@ export function callSummarizeJobHandler(options: CallSummarizeOptions): JobHandl
           dropped_commitments: finished.droppedCommitments,
         });
       } else {
-        log('call_summary_skipped', { reason: finished.outcome });
+        log('call_summary_skipped', { reason: finished.outcome, ...providerFields(finished.provider) });
       }
       return { progress: { ...carried }, done: true };
     },

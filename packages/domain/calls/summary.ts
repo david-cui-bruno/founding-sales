@@ -15,7 +15,7 @@ import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts
 import { readCallTranscription } from '../settings/integrations.ts';
 import { settingLockName } from '../settings/store.ts';
 import { localDate } from '../src/rules/localClock.ts';
-import type { CallSummaryAttempt, CallSummaryOutcome, CallSummaryPort } from './summaryAdapter.ts';
+import type { CallSummaryAttempt, CallSummaryOutcome, CallSummaryPort, ProviderErrorDetail } from './summaryAdapter.ts';
 import {
   CALL_SUMMARY_MAX_TRANSCRIPT_BYTES,
   CALL_SUMMARY_MODEL_TABLE,
@@ -318,8 +318,12 @@ export async function ensureCallSummaryCalling(
 
 export type FinishSummaryOutcome =
   | { readonly kind: 'summarized'; readonly settledCents: number; readonly nextSteps: number; readonly commitments: number; readonly droppedCommitments: number }
-  | { readonly kind: 'retry'; readonly outcome: CallSummaryOutcome }
-  | { readonly kind: 'done'; readonly outcome: CallSummaryOutcome | 'session_gone' | 'not_calling' };
+  | { readonly kind: 'retry'; readonly outcome: CallSummaryOutcome; readonly provider?: ProviderErrorDetail | undefined }
+  | {
+      readonly kind: 'done';
+      readonly outcome: CallSummaryOutcome | 'session_gone' | 'not_calling';
+      readonly provider?: ProviderErrorDetail | undefined;
+    };
 
 /** Ambiguous (may have been billed, nobody said what) or unusable (billed, nothing to keep): one more attempt is allowed. */
 const RETRYABLE: ReadonlySet<CallSummaryOutcome> = new Set(['provider_error', 'malformed', 'schema_invalid']);
@@ -348,14 +352,17 @@ export async function finishCallSummary(
   const at = await databaseNow(context);
   let settledCents = 0;
   if (row !== null) {
-    // Missing usage (or no answer at all) is the estimate, never zero.
+    // A 4xx refusal billed nothing (refused before generation, as C2 settles Deepgram's 4xx);
+    // missing usage (or no answer at all) is the estimate, never zero.
     const settled = await settleAttempt(context, {
       reservationId: row.id,
       at,
       outcome:
-        attempt.usage === null
-          ? { kind: 'estimated' }
-          : { kind: 'settled', cents: callSummaryCents(input.plan.model, attempt.usage) },
+        attempt.outcome === 'provider_refused'
+          ? { kind: 'settled', cents: 0 }
+          : attempt.usage === null
+            ? { kind: 'estimated' }
+            : { kind: 'settled', cents: callSummaryCents(input.plan.model, attempt.usage) },
     });
     settledCents = settled?.recordedCents ?? 0;
     await recordProviderCall(context, {
@@ -368,13 +375,14 @@ export async function finishCallSummary(
   }
 
   if (attempt.outcome !== 'accepted' || attempt.content === null) {
+    const provider = attempt.provider === undefined ? {} : { provider: attempt.provider };
     if (RETRYABLE.has(attempt.outcome) && live.length > 0) {
       const rows = await listAttempts(context, subjectOf(input.sessionId));
       if (paidAttempts(rows) < CALL_SUMMARY_MAX_PAID_ATTEMPTS && rows.length < CALL_SUMMARY_MAX_ROWS) {
-        return { kind: 'retry', outcome: attempt.outcome };
+        return { kind: 'retry', outcome: attempt.outcome, ...provider };
       }
     }
-    return { kind: 'done', outcome: attempt.outcome };
+    return { kind: 'done', outcome: attempt.outcome, ...provider };
   }
   if (live.length === 0) return { kind: 'done', outcome: 'session_gone' };
 

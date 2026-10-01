@@ -18,14 +18,51 @@ import {
  * | `refusal` | `stop_reason === 'refusal'`, read before `content`. | its usage |
  * | `malformed` | No text, or text that is not JSON. | its usage |
  * | `schema_invalid` | JSON outside the schema (e.g. two sentences). | its usage |
- * | `provider_error` | The transport threw: nobody knows what was billed. | the estimate |
+ * | `provider_refused` | The API answered 4xx (not 408): the request was refused before any generation. Terminal. | 0 |
+ * | `provider_error` | A 5xx, a 408, a timeout or a dropped connection: nobody knows what was billed. | the estimate |
+ *
+ * A refused or failed request carries `provider`: the HTTP status and the API's own error
+ * type and message (its text about the request — a schema it rejected, a key it refused —
+ * never the transcript, which no error body quotes back). A 4xx `invalid_request_error`
+ * used to be read as an ambiguous failure and retried at an estimate; it is the API saying
+ * no, before generation, and the next attempt would say no too.
  *
  * `usage` is null when the answer did not say what it cost; the caller settles that at the
  * reservation's estimate, never at zero. The SDK's error is never carried: its text can
  * quote the request body, and the request body is what a prospect said.
  */
 
-export type CallSummaryOutcome = 'accepted' | 'refusal' | 'malformed' | 'schema_invalid' | 'provider_error';
+export type CallSummaryOutcome = 'accepted' | 'refusal' | 'malformed' | 'schema_invalid' | 'provider_refused' | 'provider_error';
+
+/** What the API said when it did not answer: status, its error type, its message (bounded). */
+export interface ProviderErrorDetail {
+  readonly status: number | null;
+  readonly type: string | null;
+  readonly message: string | null;
+}
+
+/** The longest provider message kept: enough for a schema complaint, not a body. */
+const PROVIDER_MESSAGE_MAX = 300;
+
+/**
+ * Read an error the SDK threw: `status` and the response body's `error.type` /
+ * `error.message` (an `APIError`), or nothing for a connection failure or a timeout.
+ */
+export function providerErrorOf(error: unknown): ProviderErrorDetail {
+  if (typeof error !== 'object' || error === null) return { status: null, type: null, message: null };
+  const record = error as { status?: unknown; type?: unknown; error?: unknown };
+  const status = typeof record.status === 'number' && Number.isInteger(record.status) ? record.status : null;
+  const body = typeof record.error === 'object' && record.error !== null ? (record.error as { error?: unknown }).error : undefined;
+  const inner = typeof body === 'object' && body !== null ? (body as { type?: unknown; message?: unknown }) : {};
+  const type = typeof inner.type === 'string' ? inner.type : typeof record.type === 'string' ? record.type : null;
+  const message = typeof inner.message === 'string' ? inner.message.slice(0, PROVIDER_MESSAGE_MAX) : null;
+  return { status, type: type === null ? null : type.slice(0, 64), message };
+}
+
+/** A 4xx other than 408 (a timeout) is a refusal before generation; everything else is ambiguous. */
+export function refusedBeforeGeneration(detail: ProviderErrorDetail): boolean {
+  return detail.status !== null && detail.status >= 400 && detail.status < 500 && detail.status !== 408;
+}
 
 export interface CallSummaryAttempt {
   readonly outcome: CallSummaryOutcome;
@@ -34,6 +71,8 @@ export interface CallSummaryAttempt {
   readonly content: CallSummaryContent | null;
   /** The server's word for the model that answered (a fallback may differ). */
   readonly answeredBy: string | null;
+  /** For `provider_refused` and `provider_error`: what the API said, when it said anything. */
+  readonly provider?: ProviderErrorDetail | undefined;
 }
 
 export interface CallSummaryPort {
@@ -75,8 +114,15 @@ export function anthropicCallSummarizer(options: { readonly transport: Anthropic
       let response: AnthropicMessageResponse;
       try {
         response = await options.transport.create(request);
-      } catch {
-        return { outcome: 'provider_error', usage: null, content: null, answeredBy: null };
+      } catch (error) {
+        const provider = providerErrorOf(error);
+        return {
+          outcome: refusedBeforeGeneration(provider) ? 'provider_refused' : 'provider_error',
+          usage: null,
+          content: null,
+          answeredBy: null,
+          provider,
+        };
       }
       const usage = usageOfSummary(response);
       const answeredBy = typeof response.model === 'string' ? response.model.slice(0, 64) : null;
