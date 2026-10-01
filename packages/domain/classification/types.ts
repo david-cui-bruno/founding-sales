@@ -26,8 +26,12 @@ import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS, type ClassifierEffort, type Clas
  * a non-user actor.
  */
 
-/** The prompt this package sends. Bumped whenever a byte of the system prompt moves. */
-export const CLASSIFIER_PROMPT_VERSION = 'g7b.replies.1';
+/**
+ * The prompt this package sends. Bumped whenever a byte of the system prompt or the output
+ * schema moves (`.2`: the schema's nullable enums became `anyOf`, and its numeric and length
+ * keywords moved into the reader, after the API refused the first).
+ */
+export const CLASSIFIER_PROMPT_VERSION = 'g7b.replies.2';
 
 /**
  * What each model will accept, so the adapter never sends a parameter that is a 400.

@@ -53,6 +53,13 @@ export const CLASSIFY_LEASE_SECONDS = 120;
 export interface ClassifyHandlerOptions {
   readonly maxAttempts?: number | undefined;
   readonly leaseSeconds?: number | undefined;
+  /**
+   * Where the job says what the API said about a request it refused or failed
+   * (`classify_reply_provider_failed`): status, error type, a bounded message, and whether
+   * it was a refusal (settled at 0, terminal) or ambiguous (estimated, one retry). Never
+   * message text.
+   */
+  readonly log?: ((event: string, fields: Readonly<Record<string, string | number | boolean | null>>) => void) | undefined;
 }
 
 type Step = 'reserved' | 'calling' | 'retry';
@@ -129,6 +136,18 @@ export function classifyReplyHandler(deps: ClassifyReplyDeps, options: ClassifyH
         return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
       }
       const finished = await finishClassification(context, deps, { messageId, attempt: carried.attempt, plan });
+      const provider = finished.report.provider;
+      if (provider !== undefined) {
+        options.log?.('classify_reply_provider_failed', {
+          workspace_id: input.scope.workspaceId,
+          mail_message_id: messageId,
+          reason: provider.refused ? 'provider_refused' : 'provider_error',
+          will_retry: finished.kind === 'retry',
+          provider_status: provider.status,
+          provider_error_type: provider.type,
+          provider_message: provider.message,
+        });
+      }
       if (finished.kind === 'retry') return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
       return { progress: { ...carried }, done: true };
     },

@@ -5,7 +5,7 @@ import {
   loadAnthropicTransport,
   type AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
-import { classifyReplyHandler } from '@fss/domain/classification/handler.ts';
+import { classifyReplyHandler, type ClassifyHandlerOptions } from '@fss/domain/classification/handler.ts';
 import { listPendingModelClassifications } from '@fss/domain/classification/store.ts';
 import type { ClassifierSettings } from '@fss/domain/classification/types.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -57,6 +57,8 @@ export interface ClassifyWorkerOptions {
   readonly processEnabled: boolean;
   readonly maxAttempts?: number | undefined;
   readonly leaseSeconds?: number | undefined;
+  /** The worker's logger, for what the API said about a refused request. */
+  readonly log?: ClassifyHandlerOptions['log'];
 }
 
 export function classifyHandlers(options: ClassifyWorkerOptions | undefined): readonly JobHandler[] {
@@ -74,6 +76,7 @@ export function classifyHandlers(options: ClassifyWorkerOptions | undefined): re
       {
         ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
         ...(options.leaseSeconds === undefined ? {} : { leaseSeconds: options.leaseSeconds }),
+        ...(options.log === undefined ? {} : { log: options.log }),
       },
     ),
   ];
@@ -89,12 +92,14 @@ export function classifyHandlers(options: ClassifyWorkerOptions | undefined): re
  */
 export async function classifyWorkerOptions(
   environment: Readonly<Record<string, string | undefined>>,
+  log?: ClassifyHandlerOptions['log'],
 ): Promise<ClassifyWorkerOptions | undefined> {
   const secrets = environmentClassifierSecrets(environment);
   if (secrets.names().length === 0) return undefined;
   return {
     transport: await loadAnthropicTransport({ secrets }),
     processEnabled: (environment['FSS_CLASSIFIER'] ?? 'on').trim().toLowerCase() !== 'off',
+    ...(log === undefined ? {} : { log }),
   };
 }
 

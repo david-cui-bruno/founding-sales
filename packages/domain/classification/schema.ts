@@ -28,7 +28,22 @@ import type { CallbackProposal, ModelSuggestion } from './types.ts';
  * is checked against the same constant.
  */
 
-/** JSON Schema draft the provider accepts: object, closed, every field required. */
+/**
+ * JSON Schema the provider accepts: object, closed, every field required, and only what
+ * structured outputs support.
+ *
+ * Three things the API refuses, each learned from a real 400 (1 Oct 2026: every production
+ * classification request was refused with `Enum value 'interested' does not match declared
+ * type '['string', 'null']'`):
+ *
+ *   * a nullable enum written as a type list beside an enum is `anyOf` an enum string and
+ *     `{ type: 'null' }`;
+ *   * no `minimum`, `maximum`, `minLength` or `maxLength`: those limits are enforced by
+ *     `readModelSuggestion` below, after the answer, and the schema says them in words;
+ *   * every object closed and requiring every property.
+ *
+ * `test/classification/adapter.test.ts` walks the schema each request carries for these rules.
+ */
 export const MODEL_SUGGESTION_JSON_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -49,42 +64,41 @@ export const MODEL_SUGGESTION_JSON_SCHEMA: Readonly<Record<string, unknown>> = O
         'What kind of message this is. A suggestion only: FSS decides, and it never releases a message on this field alone.',
     },
     disposition: {
-      type: ['string', 'null'],
-      enum: [...REPLY_DISPOSITIONS, null],
+      anyOf: [{ type: 'string', enum: [...REPLY_DISPOSITIONS] }, { type: 'null' }],
       description: 'The standard disposition a salesperson would most likely pick, or null.',
     },
     confidence: {
       type: 'number',
-      minimum: 0,
-      maximum: 1,
       description: 'How sure you are, from 0 to 1.',
     },
     supporting_excerpt: {
-      type: ['string', 'null'],
-      maxLength: 500,
+      anyOf: [{ type: 'string' }, { type: 'null' }],
       description:
-        'A short verbatim substring of the message that supports the answer, copied exactly, or null. Never paraphrase: the text is checked against the message and a quote that is not in it is discarded.',
+        'A short verbatim substring of the message that supports the answer (at most 500 characters), copied exactly, or null. Never paraphrase: the text is checked against the message and a quote that is not in it is discarded.',
     },
     callback_proposal: {
-      type: ['object', 'null'],
-      additionalProperties: false,
-      required: ['local_date_time', 'time_zone'],
-      properties: {
-        local_date_time: {
-          type: 'string',
-          maxLength: 120,
-          description: 'The local date and time the sender proposed, in their own words.',
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['local_date_time', 'time_zone'],
+          properties: {
+            local_date_time: {
+              type: 'string',
+              description: 'The local date and time the sender proposed, in their own words (at most 120 characters).',
+            },
+            time_zone: {
+              anyOf: [{ type: 'string' }, { type: 'null' }],
+              description: 'An IANA time zone if the message named one, otherwise null.',
+            },
+          },
         },
-        time_zone: {
-          type: ['string', 'null'],
-          maxLength: 64,
-          description: 'An IANA time zone if the message named one, otherwise null.',
-        },
-      },
+        { type: 'null' },
+      ],
       description: 'A callback the sender proposed. A proposal only; FSS never commits it without a person.',
     },
-    model_version: { type: 'string', maxLength: 64, description: 'The model answering.' },
-    prompt_version: { type: 'string', maxLength: 64, description: 'The prompt version you were given.' },
+    model_version: { type: 'string', description: 'The model answering.' },
+    prompt_version: { type: 'string', description: 'The prompt version you were given.' },
   },
 });
 
@@ -160,7 +174,8 @@ export function readModelSuggestion(raw: string): SuggestionRead {
 
   const modelVersion = parsed['model_version'];
   const promptVersion = parsed['prompt_version'];
-  if (typeof modelVersion !== 'string' || typeof promptVersion !== 'string') {
+  // The provider schema no longer says `maxLength: 64` (structured outputs refuses it), so the bound is here.
+  if (typeof modelVersion !== 'string' || typeof promptVersion !== 'string' || modelVersion.length > 64 || promptVersion.length > 64) {
     return { ok: false, failure: 'schema_invalid' };
   }
 

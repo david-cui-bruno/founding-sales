@@ -1,5 +1,6 @@
 import type { AnthropicMessageResponse, AnthropicMessagesTransport } from './anthropicClient.ts';
 import { buildClassifierRequest, type ClassifierInput, type ClassifierRequest } from './prompt.ts';
+import { providerErrorOf, type ProviderErrorDetail } from './providerError.ts';
 import { excerptIsVerbatim, readModelSuggestion } from './schema.ts';
 import {
   CLASSIFIER_PROMPT_VERSION,
@@ -19,7 +20,7 @@ import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
  * second case: 13.4 shows drift, and drift is a rising count of refusals and schema
  * failures long before it is a wrong label.
  *
- * Five ways an answer fails, and every one of them leaves the message exactly as the
+ * Six ways an answer fails, and every one of them leaves the message exactly as the
  * deterministic layer left it:
  *
  * | Outcome | What happened |
@@ -28,7 +29,11 @@ import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
  * | `malformed` | No text block, or text that is not JSON. |
  * | `schema_invalid` | JSON that does not satisfy the strict schema. |
  * | `excerpt_unverified` | A quote that is not in the message. A fabricated citation discredits the answer that rests on it, so the whole suggestion goes. |
- * | `provider_error` | The SDK threw. |
+ * | `provider_error` | The SDK threw. `attempt.provider.refused` says whether the API answered 4xx (not 408): refused before generation, settled at 0 and not retried. Any other throw (5xx, 408, a dropped connection) is ambiguous: estimated, one retry. |
+ *
+ * The call record keeps `provider_error` for both, because `mail_classification_calls_outcome_known`
+ * is a CHECK constraint and this fix carries no migration; the difference travels on `attempt.provider`
+ * (status, error type, a bounded message) to the settlement and the log.
  *
  * `excerpt_unverified` is the one that is a judgement rather than a mechanism, and
  * it is the conservative reading of the brief's "verbatim substring of the input,
@@ -47,6 +52,8 @@ export type ClassifierAttempt = (
    * request cost, and the attempt is settled at its reservation, never at a computed zero.
    */
   readonly usageReported: boolean;
+  /** For a `provider_error` call: what the API said, when it said anything. Never message text. */
+  readonly provider?: ProviderErrorDetail | undefined;
 };
 
 /** The port the pipeline depends on. One method; the fake and the real one both fit. */
@@ -118,12 +125,14 @@ export function anthropicReplyClassifier(options: AnthropicClassifierOptions): R
       let response: AnthropicMessageResponse;
       try {
         response = await options.transport.create(request);
-      } catch {
-        // The error is deliberately not carried into the record. An SDK error
-        // message can quote a request body, and a request body is somebody's email.
+      } catch (error) {
+        // The SDK error itself is deliberately not carried. Its message can quote a
+        // request body, and a request body is somebody's email; what is kept is the API's
+        // own status, error type and a bounded message about the request.
         return {
           ok: false,
           usageReported: false,
+          provider: providerErrorOf(error),
           call: {
             ...base,
             outcome: 'provider_error',

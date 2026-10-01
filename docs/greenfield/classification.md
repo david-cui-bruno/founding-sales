@@ -34,7 +34,7 @@ those, and the tests that say so are the point of the lane.
 | Domain | `packages/domain/classification/**` |
 | Model seam | `classification/anthropicClient.ts` (transport interface + lazy SDK import), `adapter.ts` (the port implementation), `recorded.ts` (the fake with a real prefix cache) |
 | Secret seam | `classification/anthropicClient.ts` — `CLASSIFIER_SECRET_NAMES`, mirroring `mail/secretProvider.ts` |
-| The prompt | `classification/prompt.ts` — frozen, versioned `g7b.replies.1` |
+| The prompt | `classification/prompt.ts` — frozen, versioned `g7b.replies.2` |
 | The output schema | `classification/schema.ts` — `MODEL_SUGGESTION_JSON_SCHEMA` and the reader that distrusts it |
 | Rules the model may not break | `classification/classify.ts`, `confirmations.ts` |
 | The card | `classification/cards.ts` |

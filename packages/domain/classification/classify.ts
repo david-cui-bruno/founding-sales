@@ -3,6 +3,7 @@ import { readMessage, readMessageBody } from '../mail/messages.ts';
 import { applyModelSuggestion, authoredText, type ReplyClassification } from '../src/rules/replyClassification.ts';
 import type { ReplyClassifierPort } from './adapter.ts';
 import type { ClassifierInput } from './prompt.ts';
+import type { ProviderErrorDetail } from './providerError.ts';
 import {
   listClassifications,
   recordClassifierCall,
@@ -68,6 +69,8 @@ export interface ClassifyReplyOutcome {
   /** True when this call was the one that wrote the model row. */
   readonly recorded: boolean;
   readonly call: ClassifierCallRecord | null;
+  /** For a `provider_error`: what the API said (status, type, bounded message), when it said anything. */
+  readonly provider?: ProviderErrorDetail | undefined;
 }
 
 export interface ClassifyReplyDeps {
@@ -416,14 +419,20 @@ export async function finishClassification(
   const row = await readAttempt(context, { ...subjectOf(input.messageId), attempt: input.attempt });
   await recordClassifierCall(context, { messageId: input.messageId, call: attempt.call });
   const at = await databaseNow(context);
-  const ambiguous = attempt.call.outcome === 'provider_error';
+  const failed = attempt.call.outcome === 'provider_error';
+  // A 4xx other than 408 is the API refusing the request before generation: it billed
+  // nothing and would refuse the next one the same way. Settled at 0, terminal.
+  const refused = failed && attempt.provider?.refused === true;
+  const ambiguous = failed && !refused;
   if (row !== null) {
     await settleAttempt(context, {
       reservationId: row.id,
       at,
       outcome: !attempt.call.requestSent
         ? { kind: 'released_not_called' }
-        : ambiguous || !attempt.usageReported
+        : refused
+          ? { kind: 'settled', cents: 0 }
+          : ambiguous || !attempt.usageReported
           ? // No reported counts: the reservation is the cost, never a computed zero.
             { kind: 'estimated' }
           : { kind: 'settled', cents: classifierCallCents(input.plan.settings.modelName, attempt.call) },
@@ -435,7 +444,7 @@ export async function finishClassification(
         at,
         businessTimeZone: row.businessTimeZone,
         costCents: 0,
-        ...(ambiguous ? { failureCode: 'provider_error' } : {}),
+        ...(refused ? { failureCode: 'provider_refused' } : ambiguous ? { failureCode: 'provider_error' } : {}),
       });
     }
   }
@@ -452,6 +461,7 @@ export async function finishClassification(
       outcome: attempt.call.outcome,
       recorded: false,
       call: attempt.call,
+      ...(attempt.provider === undefined ? {} : { provider: attempt.provider }),
     };
     if (ambiguous) {
       const rows = await listAttempts(context, subjectOf(input.messageId));

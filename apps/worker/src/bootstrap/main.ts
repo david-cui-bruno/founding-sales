@@ -430,7 +430,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // in which case `classify.reply` stays unclaimed in the queue; the source still
   // runs, so the backlog is truthful about what is owed. `describeClassifier` says
   // whether a key is configured and never what it is.
-  const classifier = await classifyWorkerOptions(environment);
+  const classifier = await classifyWorkerOptions(environment, (event, fields) => log.log('info', event, fields));
   // Lane g71: which worker image this is, from the ECS task metadata (or
   // FSS_IMAGE_DIGEST outside ECS), once. Public, so it is in the startup line.
   const identity = await discoverImageDigest(environment);

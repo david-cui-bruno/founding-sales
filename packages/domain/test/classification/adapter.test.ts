@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { CLASSIFIER_MODELS } from '@fss/contracts';
+import { schemaProblems } from '../support/structuredOutputsSchema.ts';
+import { providerErrorOf } from '../../classification/providerError.ts';
 import { anthropicReplyClassifier } from '../../classification/adapter.ts';
 import {
   CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES,
@@ -256,6 +259,92 @@ describe('an answer that cannot be used', () => {
     if (!attempt.ok) return;
     expect(attempt.suggestion.modelVersion).toBe('claude-opus-4-8');
     expect(attempt.suggestion.promptVersion).toBe(CLASSIFIER_PROMPT_VERSION);
+  });
+});
+
+/** An SDK `APIError` as the SDK builds it: status, the parsed body, its own message. */
+class FakeApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly error: unknown,
+  ) {
+    super(`${String(status)} ${JSON.stringify(error)}`);
+  }
+}
+
+describe('a request the API refuses', () => {
+  const throwing = (error: unknown) =>
+    anthropicReplyClassifier({
+      transport: { countTokens: async () => await Promise.resolve(0), create: async () => await Promise.reject(error) },
+      model: 'claude-opus-5',
+      effort: 'low',
+      maxOutputTokens: 512,
+    });
+
+  it('calls a 400 invalid_request_error refused before generation, with the API’s own type and message', async () => {
+    const message = "output_config.format.schema: Invalid schema: Enum value 'interested' does not match declared type '['string', 'null']'";
+    const attempt = await throwing(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message } })).classify(MESSAGE);
+    expect(attempt.ok).toBe(false);
+    expect(attempt.call.outcome).toBe('provider_error');
+    expect(attempt.usageReported).toBe(false);
+    expect(attempt.provider).toEqual({ status: 400, type: 'invalid_request_error', message, refused: true });
+  });
+
+  it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps a long message bounded', async () => {
+    const overloaded = await throwing(new FakeApiError(529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })).classify(MESSAGE);
+    expect(overloaded.provider).toMatchObject({ status: 529, refused: false });
+    const timeout = await throwing(new FakeApiError(408, { type: 'error', error: { type: 'timeout_error', message: 'x' } })).classify(MESSAGE);
+    expect(timeout.provider).toMatchObject({ status: 408, refused: false });
+    const dropped = await throwing(new Error('socket hang up')).classify(MESSAGE);
+    expect(dropped.provider).toEqual({ status: null, type: null, message: null, refused: false });
+    expect(dropped.call.outcome).toBe('provider_error');
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(300);
+  });
+});
+
+describe('the output schema the request carries', () => {
+  it('keeps every structured-outputs rule, for every classifier model', () => {
+    for (const model of CLASSIFIER_MODELS) {
+      const request = buildClassifierRequest({ model, effort: 'low', maxOutputTokens: 512, message: MESSAGE });
+      expect(schemaProblems(request.output_config.format.schema), model).toEqual([]);
+    }
+  });
+
+  it('finds the shapes the API refused', () => {
+    const refused = { type: 'object', additionalProperties: false, required: ['d'], properties: { d: { type: ['string', 'null'], enum: ['interested', null] } } };
+    expect(schemaProblems(refused)).toContain('$.properties.d: enum beside a type list ["string","null"]');
+    expect(schemaProblems({ type: 'number', minimum: 0, maximum: 1 })).toEqual(['$: minimum is not supported', '$: maximum is not supported']);
+    expect(schemaProblems({ type: 'string', maxLength: 5 })).toEqual(['$: maxLength is not supported']);
+    expect(schemaProblems(MODEL_SUGGESTION_JSON_SCHEMA)).toEqual([]);
+  });
+
+  it('is pinned with the prompt version: a changed schema needs a new version', () => {
+    // Editing the schema without bumping CLASSIFIER_PROMPT_VERSION makes two corpora comparable
+    // when they answered different questions. Update the digest and the version together.
+    expect(createHash('sha256').update(JSON.stringify(MODEL_SUGGESTION_JSON_SCHEMA)).digest('hex')).toBe('3f6c46478ca448c8c45d23d5350577a68c5aa378757fed4dd15b849d96318ff1');
+    expect(CLASSIFIER_PROMPT_VERSION).toBe('g7b.replies.2');
+  });
+});
+
+describe('the limits the provider schema no longer states', () => {
+  const base = JSON.parse(ANSWER) as Record<string, unknown>;
+  const read = (patch: Record<string, unknown>) => readModelSuggestion(JSON.stringify({ ...base, ...patch }));
+
+  it('are enforced when the answer is read', () => {
+    expect(read({ confidence: 1 }).ok).toBe(true);
+    expect(read({ confidence: 0 }).ok).toBe(true);
+    expect(read({ confidence: 1.01 }).ok).toBe(false);
+    expect(read({ confidence: -0.01 }).ok).toBe(false);
+    expect(read({ supporting_excerpt: 'x'.repeat(500) }).ok).toBe(true);
+    expect(read({ supporting_excerpt: 'x'.repeat(501) }).ok).toBe(false);
+    const callback = (local: string, zone: string | null) => ({ callback_proposal: { local_date_time: local, time_zone: zone } });
+    expect(read(callback('t'.repeat(120), null)).ok).toBe(true);
+    expect(read(callback('t'.repeat(121), null)).ok).toBe(false);
+    expect(read(callback('Tuesday', 'z'.repeat(64))).ok).toBe(true);
+    expect(read(callback('Tuesday', 'z'.repeat(65))).ok).toBe(false);
+    expect(read({ model_version: 'm'.repeat(64) }).ok).toBe(true);
+    expect(read({ model_version: 'm'.repeat(65) }).ok).toBe(false);
+    expect(read({ prompt_version: 'p'.repeat(65) }).ok).toBe(false);
   });
 });
 
