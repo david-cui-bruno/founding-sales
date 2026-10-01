@@ -136,7 +136,8 @@ describe('the money', () => {
 
   it('funds Transcribe from credits and every other provider kind, known or not, in cash', () => {
     expect(providerFunding(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe('credits');
-    expect(CREDIT_FUNDED_PROVIDER_KINDS).toEqual(['aws_transcribe']);
+    // Slice BR1 adds Claude through Amazon Bedrock, the other credit-funded kind.
+    expect(CREDIT_FUNDED_PROVIDER_KINDS).toEqual(['aws_bedrock', 'aws_transcribe']);
     for (const key of ['twilio.voice', 'deepgram.nova-3', 'anthropic_classifier', 'anthropic_extraction', 'google_places.text-search', 'unknown.kind']) {
       expect(providerFunding(key)).toBe('cash');
     }
