@@ -318,15 +318,33 @@ provider request starts. The last check runs immediately before each provider ca
 | Provider call | Final boundary | Final switch check |
 | --- | --- | --- |
 | Gmail send | `outbound/send.ts` `dispatchOutboundMessage` → `gmail.sendMessage` | `recheckAndClaim`: both switches and the attestation, under the send gate SHARED, in the claiming transaction. Every writer of either switch takes the gate EXCLUSIVE, so a turn-off waits for an open claim and every later claim reads it and holds the fence; a held fence sends exactly once when the switch is back on. |
-| Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages`, `countInputTokens`, `extract` | `research_settings.enabled`, read again immediately before each. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
-| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt. |
-| Reply classifier | `classification/classify.ts` `classifyReplyWithModel` → `classify` | `classifier_settings.enabled`; only database reads lie between the check and the call. |
+| Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages` (each robots.txt and page request), `countInputTokens` (each pass of the trim loop), `extract` | `research_settings.enabled`, read again immediately before each request: the fetcher asks a `shouldContinue` predicate before every robots.txt and page request and stops there. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
+| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt, and the call is held: see below. |
+| Reply classifier | `classification/classify.ts` `classifyReplyWithModel` → `classify` | `classifier_settings.enabled`, read again after the message body is read (the last database await) and before the month check; the request is built from that read. Off records `disabled`, and the reply is held: see below. |
+
+No paid SDK retries behind these checks: the Anthropic client is built with `maxRetries: 0`
+for both the classifier and research, so one checked request is one HTTP request.
+
+**Held, not completed.** A job that meets "off" completes (the job store ignores a
+second enqueue of the same key), so held work is re-owed from the rows under a new revision
+key once the switch is back on, and runs once:
+
+* a transcription — `call-transcribe-resume` (registered only where `call.transcribe` is)
+  owes `call-transcribe:{session}:r{n}` for an eligible call of the last seven days with no
+  transcript, its earlier jobs finished, no open reservation, fewer than two paid attempts,
+  and a `call_transcription` setting written after the last job finished. An attempt
+  released before any provider request is not a paid attempt; six rows is the cap.
+* a reply — `classify-reply` owes `classify-reply:{message}:resume-{n}` for a reply whose
+  last attempt was `disabled` once `classifier_settings` was turned on after it, for replies
+  of the last seven days.
 
 A request already submitted may finish and its result is recorded; nothing recalls a sent
-message or reverses a charge. `GET /settings/finishing` answers each switch and how many
-requests are still finishing (fences `dispatching`; research reservations `calling`), and
-Settings shows "Sending is off. 1 message already submitted is finishing." (and the research
-twin) while a switch is off and something is.
+message or reverses a charge. `GET /settings/finishing` answers each switch and how much is
+still finishing (fences `dispatching`; research runs under way, reservations `calling`;
+transcriptions whose Deepgram request may be in flight), and Settings shows "Sending is off.
+1 message already submitted is finishing." and "Research is off. 1 research run already
+under way is finishing." while a switch is off and something is. A classifier request has
+no durable in-flight row, so it has no count.
 
 One window remains on the e-mail path, by design of the fence: the claim's COMMIT is the
 point a message counts as submitted, and a turn-off that commits after it (it has waited on
@@ -337,14 +355,28 @@ the gate for exactly that commit) lets that one message go. `dispatching` has no
 $1.25 of calling and $0.50 of transcription a day already allow $38.50 over twenty-two
 weekdays. `monthly_cash_ceiling_cents` (`{ "cents": 0..5000 }`, $25 by default, migration
 0031; admin-written through `POST /settings/update`, not in the settings snapshot) is checked
-when a call session or a transcription attempt reserves its cents, under a workspace monthly
-lock taken inside that provider's daily budget lock, so it is atomic with the daily check.
+when a call session, a transcription attempt or a research run reserves its cents, under a
+workspace monthly lock taken last, inside that provider's own budget lock (telephony,
+transcription, research), so it is atomic with the daily check and every path takes the
+locks in one order.
 Month-to-date spend is every provider's settled cost plus its open reservations, on the
 calendar month of the workspace business time zone (`readSpend`). A refusal is
 `monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
-of $y" (`GET /settings/integrations?include=month`). Research has its own monthly ceiling and
-is not refused by this one, but its spend counts towards it. The reply classifier records its
-calls in `classifier_calls`, not in the ledger, so it is outside both.
+of $y" (`GET /settings/integrations?include=month`). Research keeps its own monthly ceiling and
+is also refused by this one (`monthly_cash_ceiling`). The reply classifier has no
+reservation: it is refused (`capped`) when month-to-date plus its per-call ceiling (the
+request's UTF-8 bytes as input tokens at the cache-write price plus `max_output_tokens`,
+doubled when the server may fall back) would pass the ceiling, checked under the monthly
+lock, and its cost — from the answer's usage, or the per-call ceiling for an ambiguous
+failure — goes into `provider_ledger` as `anthropic_classifier`. The lock is released before
+the request, so concurrent classifier requests can each pass the same check: the overshoot
+is bounded by one per-call ceiling for each classifier request running at the same time.
+
+**A later telephony price.** Twilio's terminal callback may settle a call from its duration
+(an estimate) before a later callback carries the final price. The price is the cost: the
+session's `billed_price_cents` takes the latest one, and a closed reservation is corrected to
+it (`settled`), with the ledger row of its own date moved by the difference, under the
+monthly lock. The same price again changes nothing.
 
 **Funding labels** (documentation only; nothing enforces or reads them). Eligible provider
 credits are tracked outside Callie; the ceiling counts every cent at its price whatever pays it.
@@ -354,6 +386,7 @@ credits are tracked outside Callie; the ceiling counts every cent at its price w
 | `twilio.voice` | Twilio minutes | cash |
 | `deepgram.nova-3` | transcription | credits-eligible (confirm against the account) |
 | `anthropic_extraction` | research model calls | credits-eligible (confirm against the account) |
+| `anthropic_classifier` | reply classifier calls | credits-eligible (confirm against the account) |
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script
