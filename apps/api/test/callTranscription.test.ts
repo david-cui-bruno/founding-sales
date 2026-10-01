@@ -29,9 +29,10 @@ const DEEPGRAM_ANSWER = {
   metadata: { request_id: 'request-1', duration: 180.4, models: ['nova-3'] },
   results: {
     utterances: [
-      { start: 0.4, end: 1.2, confidence: 0.98, channel: 0, speaker: 0, transcript: 'Hello, Lenox Test Law.' },
-      { start: 1.6, end: 4.9, confidence: 0.97, channel: 0, speaker: 1, transcript: 'Hi, this is David from Callie.' },
-      { start: 5.2, end: 7.0, confidence: 0.95, channel: 0, speaker: 0, transcript: 'Sure, go ahead.' },
+      // Multichannel (slice C3a): the prospect on channel 1, David on channel 0.
+      { start: 0.4, end: 1.2, confidence: 0.98, channel: 1, transcript: 'Hello, Lenox Test Law.' },
+      { start: 1.6, end: 4.9, confidence: 0.97, channel: 0, transcript: 'Hi, this is David from Callie.' },
+      { start: 5.2, end: 7.0, confidence: 0.95, channel: 1, transcript: 'Sure, go ahead.' },
     ],
   },
 };
@@ -230,7 +231,7 @@ describe('call transcription, end to end (slice C2)', () => {
     expect(`${request.origin}${request.pathname}`).toBe('https://api.deepgram.com/v1/listen');
     expect(Object.fromEntries(request.searchParams)).toEqual({
       model: 'nova-3',
-      diarize: 'true',
+      multichannel: 'true',
       punctuate: 'true',
       utterances: 'true',
       mip_opt_out: 'true',
@@ -239,26 +240,27 @@ describe('call transcription, end to end (slice C2)', () => {
     expect(deepgramRequests[0]?.contentType).toBe('audio/mpeg');
     expect(deepgramRequests[0]?.bytes).toBe(AUDIO.byteLength);
 
-    // Reserved at (180 + 2) s, four minutes (17 200 micro-dollars, 2 cents) — the bound the
-    // audio was cut to — and settled at Deepgram's 180.4 s, four started minutes, 2 cents.
+    // Reserved at (180 + 2) s, four minutes, for each of the two channels Deepgram may bill
+    // (slice C3a: 34 400 micro-dollars, 4 cents) — the bound the audio was cut to — and
+    // settled at Deepgram's 180.4 s, four started minutes, 4 cents.
     const { rows: reservations } = await fixture.db.query<{ state: string; cents: number; settled_cents: number; max_units: number }>(
       "SELECT state, cents, settled_cents, max_units FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1",
       [answered.sessionId],
     );
-    expect(reservations).toEqual([{ state: 'settled', cents: 2, settled_cents: 2, max_units: 4 }]);
+    expect(reservations).toEqual([{ state: 'settled', cents: 4, settled_cents: 4, max_units: 4 }]);
 
     const transcript = await get(`/calls/transcript?callSessionId=${answered.sessionId}`, salespersonToken);
     expect(transcript.status, transcript.text).toBe(200);
     expect(transcript.body).toMatchObject({
       callSessionId: answered.sessionId,
       provider: 'deepgram',
-      model: 'nova-3',
+      model: 'nova-3-multichannel',
       language: 'en',
       durationSeconds: 180,
       utterances: [
-        { speaker: 0, start: 0.4, end: 1.2, text: 'Hello, Lenox Test Law.' },
-        { speaker: 1, start: 1.6, end: 4.9, text: 'Hi, this is David from Callie.' },
-        { speaker: 0, start: 5.2, end: 7, text: 'Sure, go ahead.' },
+        { speaker: 1, start: 0.4, end: 1.2, text: 'Hello, Lenox Test Law.' },
+        { speaker: 0, start: 1.6, end: 4.9, text: 'Hi, this is David from Callie.' },
+        { speaker: 1, start: 5.2, end: 7, text: 'Sure, go ahead.' },
       ],
     });
     expect(transcript.text).not.toContain(FAKE_KEY);
@@ -272,7 +274,7 @@ describe('call transcription, end to end (slice C2)', () => {
     expect(settings.body['transcription']).toEqual({
       setting: { enabled: true, dailyCeilingCents: 100, unitPriceMicros: 4_300 },
       configured: { ok: true, missing: [] },
-      spentTodayCents: 2,
+      spentTodayCents: 4,
     });
     // An S1 desktop does not ask, and is not sent a key it would refuse.
     expect((await get('/settings/integrations', adminToken)).body).not.toHaveProperty('transcription');
@@ -303,6 +305,44 @@ describe('call transcription, end to end (slice C2)', () => {
       expect((await get(`/calls/transcript?callSessionId=${answered.sessionId}`, salespersonToken)).status).toBe(404);
       // An admin may read any firm's.
       expect((await get(`/calls/transcript?callSessionId=${answered.sessionId}`, adminToken)).status).toBe(200);
+    } finally {
+      await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.salesperson.userId]);
+    }
+  });
+
+  it('adds a call’s summary to the history only when asked (slice C3b), so an older Mac never meets it', async () => {
+    await fixture.db.query(
+      `INSERT INTO call_summaries (workspace_id, call_session_id, model, prompt_version, summary, next_steps, commitments)
+       VALUES ($1, $2, 'claude-haiku-4-5-20251001', 'c3b.summary.1', $3, $4::jsonb, $5::jsonb)`,
+      [
+        fixture.alpha.workspaceId,
+        answered.sessionId,
+        'You reached the office. They asked for pricing. You agreed to send it.',
+        JSON.stringify([{ action: 'Send pricing', owner: 'you', due: 'by Friday' }]),
+        JSON.stringify([{ speaker: 'you', quote: 'I will send it by Friday' }]),
+      ],
+    );
+    const plain = await get(`/calls/history?firmId=${answered.firmId}`, salespersonToken);
+    expect(plain.status).toBe(200);
+    expect(JSON.stringify(plain.body)).not.toContain('summary');
+    const asked = await get(`/calls/history?firmId=${answered.firmId}&include=summary`, salespersonToken);
+    expect(asked.status, asked.text).toBe(200);
+    expect(asked.body['calls']).toEqual([
+      expect.objectContaining({
+        sessionId: answered.sessionId,
+        summary: {
+          summary: 'You reached the office. They asked for pricing. You agreed to send it.',
+          nextSteps: [{ action: 'Send pricing', owner: 'you', due: 'by Friday' }],
+          commitments: [{ speaker: 'you', quote: 'I will send it by Friday' }],
+          model: 'claude-haiku-4-5-20251001',
+          createdAt: expect.any(String) as unknown,
+        },
+      }),
+    ]);
+    // Another firm's salesperson reads nothing, summary or not.
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.admin.userId]);
+    try {
+      expect((await get(`/calls/history?firmId=${answered.firmId}&include=summary`, salespersonToken)).status).toBe(404);
     } finally {
       await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [answered.firmId, fixture.alpha.salesperson.userId]);
     }

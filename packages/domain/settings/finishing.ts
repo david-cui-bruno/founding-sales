@@ -21,7 +21,10 @@ import { readClassifierSettings } from '../classification/settings.ts';
  *     after half an hour.
  *   * **transcription** — transcription reservations in `calling`: from chunk 2 on a
  *     Deepgram request may be in flight; the final check before it releases one that has
- *     not started.
+ *     not started. And the after-call summaries' (slice C3b), which the same switch
+ *     governs: a `call_summary` reservation in `calling` is a model request that may be in
+ *     flight. A summary held by the switch has no open reservation (chunk 2 released it),
+ *     so it is not "finishing"; it resumes when the switch is back on.
  *   * **classification** — reply-classification reservations in `calling`: chunk 2 marked
  *     the attempt and its request may be in flight (fix round 2).
  *
@@ -46,7 +49,7 @@ export async function readFinishing(context: RepositoryContext): Promise<Finishi
             (SELECT count(*)::int FROM provider_reservations
               WHERE workspace_id = $1 AND subject_kind = 'research_run' AND state = 'calling') AS research,
             (SELECT count(*)::int FROM provider_reservations
-              WHERE workspace_id = $1 AND subject_kind = 'call_transcription' AND state = 'calling') AS transcription,
+              WHERE workspace_id = $1 AND subject_kind IN ('call_transcription', 'call_summary') AND state = 'calling') AS transcription,
             (SELECT count(*)::int FROM provider_reservations
               WHERE workspace_id = $1 AND subject_kind = 'reply_classification' AND state = 'calling') AS classification`,
     [context.scope.workspaceId],

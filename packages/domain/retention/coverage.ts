@@ -229,6 +229,22 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ['deletion_removes'],
     'The transcript of one recorded call (what each side said); removed with its call session, the firm or the person.',
   ),
+
+  // ------------------------------------------------ after-call summaries (0032, slice C3b)
+  // A model's summary of what the prospect said, with quotes of it: personal data, so it
+  // goes with the call it summarizes, exactly as the transcript does.
+  call_summaries: coverage(
+    ['deletion_removes'],
+    'The summary, suggested next steps and quoted commitments of one transcribed call; removed with its call session, the firm or the person.',
+  ),
+
+  // ------------------------------------------------ transcription jobs (0032, slice C3a)
+  // Ids, a provider job name and two object keys: what collecting a Transcribe job needs.
+  // Kept past a deletion on purpose, so the workflow can still name the call's objects.
+  transcription_provider_jobs: coverage(
+    ['operational'],
+    'One Amazon Transcribe job per attempt and how far collecting it got; ids, a job name and object keys, no prospect identity; outlives a deleted session so its S3 objects can still be named and deleted.',
+  ),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

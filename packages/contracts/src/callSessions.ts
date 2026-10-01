@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
+import { callSummaryDtoSchema } from './callSummaries.ts';
 
 /**
  * The call-session wire contract (call-to-booking slice W, migration 0028).
@@ -200,6 +201,11 @@ export const callSessionDtoSchema = z.object({
    * Mac reading an API from before C2 still parses the history, and absent reads as no.
    */
   hasTranscript: z.boolean().optional(),
+  /**
+   * Slice C3b: the call's summary and suggested next steps, only when the read asked for
+   * them (`include=summary`) and the call has one. An older Mac never asks.
+   */
+  summary: callSummaryDtoSchema.optional(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
 
@@ -226,7 +232,35 @@ export const VOICE_ACCESS_TOKEN_SECONDS = 3600;
 /** A call is transcribed only when it was answered and its recording lasts at least this long. */
 export const TRANSCRIPTION_MINIMUM_SECONDS = 20;
 
-/** One stretch of speech: who (Deepgram's speaker index, 0 = whoever spoke first), when, what. */
+/**
+ * Which channel of a call recording is whose (slice C3a). Every call placed from Callie is
+ * recorded by `<Dial record="record-from-answer-dual">` (`apps/api/src/routes/twilio.ts`,
+ * `dialTwiml`), and Twilio documents that "the parent call will always be in the first
+ * channel and the child call will always be in the second channel of a dual-channel
+ * recording" (https://www.twilio.com/docs/voice/twiml/dial, read 1 October 2026). The
+ * `<Dial>` is the answer to the Voice SDK client's own call — the Mac's leg, so the parent —
+ * and the dialled `<Number>` is the child. So channel 0 is the caller (David, "you") and
+ * channel 1 is the prospect ("them"). This is the one place that mapping is written; both
+ * transcription adapters read it, and the first real test call verifies it.
+ */
+export const RECORDING_CHANNEL_ROLES = Object.freeze({ you: 0, them: 1 } as const);
+
+/**
+ * The transcripts whose `speaker` is the recording channel (`RECORDING_CHANNEL_ROLES`),
+ * as `provider/model`. Every other transcript — C2's Deepgram rows, `deepgram/nova-3` — was
+ * diarized: its speaker index says which voice, not whose.
+ */
+export const CHANNEL_LABELLED_TRANSCRIPTS: readonly string[] = Object.freeze(['aws_transcribe/standard', 'deepgram/nova-3-multichannel']);
+
+export function transcriptIsChannelLabelled(transcript: { readonly provider: string; readonly model: string }): boolean {
+  return CHANNEL_LABELLED_TRANSCRIPTS.includes(`${transcript.provider}/${transcript.model}`);
+}
+
+/**
+ * One stretch of speech: who, when, what. `speaker` is the recording channel
+ * (`RECORDING_CHANNEL_ROLES`: 0 you, 1 them) in a channel-labelled transcript, and a
+ * diarizer's index (0 = whoever spoke first) in one written before slice C3a.
+ */
 export const callTranscriptUtteranceSchema = z.strictObject({
   speaker: z.number().int().min(0).max(31),
   /** Seconds from the start of the recording. */
@@ -272,12 +306,29 @@ export const TRANSCRIPTION_REFUSAL_CODES = [
 export type TranscriptionRefusalCode = (typeof TRANSCRIPTION_REFUSAL_CODES)[number];
 
 /**
- * The name each speaker index is shown under: "Speaker 1", "Speaker 2", … in the order
- * Deepgram numbers them, which is the order they first speak. Diarization tells voices
+ * The name each speaker index is shown under.
+ *
+ * A channel-labelled transcript (slice C3a) names the channels: "You" for channel 0 and
+ * "Them" for channel 1, because the channel is the leg, not a guess about a voice.
+ *
+ * Any other transcript was diarized: "Speaker 1", "Speaker 2", … in the order the
+ * diarizer numbers them, which is the order they first speak. Diarization tells voices
  * apart, not who is who — the caller often speaks first on a call placed from Callie, and
- * sometimes the prospect does — so no voice is named "You" or "Them" (review fold 1, P2).
+ * sometimes the prospect does — so no diarized voice is named "You" or "Them" (review
+ * fold 1, P2).
  */
-export function transcriptSpeakerLabels(utterances: readonly CallTranscriptUtterance[]): ReadonlyMap<number, string> {
+export function transcriptSpeakerLabels(
+  utterances: readonly CallTranscriptUtterance[],
+  options: { readonly channelLabelled?: boolean } = {},
+): ReadonlyMap<number, string> {
   const speakers = [...new Set(utterances.map(utterance => utterance.speaker))].sort((left, right) => left - right);
+  if (options.channelLabelled === true) {
+    return new Map(
+      speakers.map(speaker => [
+        speaker,
+        speaker === RECORDING_CHANNEL_ROLES.you ? 'You' : speaker === RECORDING_CHANNEL_ROLES.them ? 'Them' : `Channel ${String(speaker + 1)}`,
+      ]),
+    );
+  }
   return new Map(speakers.map(speaker => [speaker, `Speaker ${String(speaker + 1)}`]));
 }

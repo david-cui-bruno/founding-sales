@@ -7,6 +7,7 @@ import {
 } from '@fss/domain/db/testing/testDatabase.ts';
 import { researchFirmJobHandler } from '../src/handlers/research.ts';
 import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
+import { callSummarizeJobHandler } from '@fss/domain/calls/summaryHandler.ts';
 import { main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands.ts';
 import { CHUNKED_JOB_KINDS } from '../src/tools/fss/releaseIdle.ts';
@@ -198,6 +199,7 @@ describe('fss admin release idle-check', () => {
     const chunked = [
       researchFirmJobHandler({} as Parameters<typeof researchFirmJobHandler>[0]),
       callTranscribeJobHandler({} as Parameters<typeof callTranscribeJobHandler>[0]),
+      callSummarizeJobHandler({} as Parameters<typeof callSummarizeJobHandler>[0]),
     ]
       .filter(h => h.chunked === true)
       .map(h => h.kind);

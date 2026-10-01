@@ -3,6 +3,8 @@ import {
   DEFAULT_INTEGRATION_SETTING_VALUES,
   callTranscriptionSettingSchema,
   integrationsSettingsResponseSchema,
+  RECORDING_CHANNEL_ROLES,
+  transcriptIsChannelLabelled,
   transcriptSpeakerLabels,
   type CallTranscriptUtterance,
 } from '../src/index.ts';
@@ -24,6 +26,19 @@ describe('transcriptSpeakerLabels', () => {
       'Speaker 3',
     ]);
     expect([...transcriptSpeakerLabels([line(1, 0), line(0, 1)])].map(([, label]) => label)).toEqual(['Speaker 1', 'Speaker 2']);
+  });
+
+  it('names the channels of a channel-labelled transcript: channel 0 is you, channel 1 is them (slice C3a)', () => {
+    // Twilio's dual-channel recording puts the parent call (the Mac's Voice SDK leg) first.
+    expect(RECORDING_CHANNEL_ROLES).toEqual({ you: 0, them: 1 });
+    expect([...transcriptSpeakerLabels([line(1, 0), line(0, 1)], { channelLabelled: true })]).toEqual([
+      [0, 'You'],
+      [1, 'Them'],
+    ]);
+    expect(transcriptIsChannelLabelled({ provider: 'aws_transcribe', model: 'standard' })).toBe(true);
+    expect(transcriptIsChannelLabelled({ provider: 'deepgram', model: 'nova-3-multichannel' })).toBe(true);
+    // C2's rows were diarized, so they keep their numbered voices.
+    expect(transcriptIsChannelLabelled({ provider: 'deepgram', model: 'nova-3' })).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import { OutcomeForm } from './OutcomeForm.tsx';
 import { TaskRow } from './TaskRow.tsx';
 import { todayForm, type TodayActions } from './useToday.ts';
 import { CallView } from '../calling/CallView.tsx';
+import { LatestCallSummary } from '../calling/LatestCallSummary.tsx';
 import { attemptLabel } from '../calling/callText.ts';
 import { registryCallPorts, useCall, type CallControl } from '../calling/useCall.ts';
 import { useCallingStatus, type CallingStatus } from '../calling/useCallingStatus.ts';
@@ -213,6 +214,8 @@ function InAppDialPanel({
         </div>
       ))}
       <CallView call={call} />
+      {/* Slice C3b: what the last call with this firm came to, and what was to happen next. */}
+      <LatestCallSummary firmId={firmId} />
     </div>
   );
 }

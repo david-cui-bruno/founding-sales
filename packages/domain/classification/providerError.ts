@@ -1,27 +1,59 @@
 /**
- * What the API said when it did not answer (the reply classifier's copy of C3b's
- * `providerErrorOf`, which lives in `calls/summaryAdapter.ts`).
+ * What the API said when it did not answer — the one helper for every Anthropic call that
+ * logs a provider failure: the reply classifier (`classification/adapter.ts`) and the
+ * after-call summary (`calls/summaryAdapter.ts`).
  *
  * A request the API refuses with a 4xx (not 408) was refused before any generation: it
  * billed nothing, and the next attempt would be refused the same way. That is the
  * difference between a refusal and an ambiguous failure (5xx, 408, a dropped connection),
  * which may have been billed and is estimated and retried once.
  *
- * Only the API's own words about the request are kept — its status, error type and message,
- * bounded. The SDK error object is never carried: its text can quote the request body, and
- * the request body is somebody's email. (A schema complaint is about the schema, not the email.)
+ * ## What may reach a log (C3 review, finding 6; follow-up review)
+ *
+ * **Never the API's free text.** An error message can echo the request — an e-mail, a
+ * transcript — quoted, escaped or bare, so no redaction of it is trusted. What is kept:
+ * the status, the error type (letters, digits and underscores only), and for a 400
+ * `invalid_request_error` at most the parameter path the message starts with
+ * (`output_config.format.schema` from "output_config.format.schema: Invalid schema: …"),
+ * which names a field of the request and none of its contents. Nothing after the colon is
+ * kept, and a message that does not start with such a path keeps nothing. The SDK error
+ * object is never carried.
  */
 
 export interface ProviderErrorDetail {
   readonly status: number | null;
+  /** The API's error type, `[A-Za-z0-9_]` only. */
   readonly type: string | null;
-  readonly message: string | null;
+  /**
+   * For a 400 `invalid_request_error` only: the request parameter path its message starts
+   * with (`output_config.format.schema`), without the colon or anything after it. Else null.
+   */
+  readonly parameter: string | null;
   /** True for a 4xx other than 408: refused before generation, settled at 0, not retried. */
   readonly refused: boolean;
 }
 
-/** The longest provider message kept: enough for a schema complaint, not a body. */
-export const PROVIDER_MESSAGE_MAX = 300;
+/** A parameter path at the very start of a message, up to its colon. */
+const LEADING_PARAMETER = /^([a-z_][a-z0-9_.[\]]{0,80}):/u;
+
+/**
+ * The Messages API's top-level request parameters. A leading path counts only when it starts
+ * with one of these, so a message that happens to begin with a word from the request text
+ * ("marisol: …") keeps nothing.
+ */
+const REQUEST_PARAMETERS: ReadonlySet<string> = new Set([
+  'model', 'messages', 'system', 'max_tokens', 'output_config', 'tools', 'tool_choice',
+  'temperature', 'top_p', 'top_k', 'stop_sequences', 'metadata', 'thinking', 'stream',
+  'service_tier',
+]);
+
+/** The parameter path a 400 `invalid_request_error` message starts with, or null. */
+export function leadingParameter(message: string): string | null {
+  const path = LEADING_PARAMETER.exec(message)?.[1];
+  if (path === undefined) return null;
+  const head = /^[a-z_]+/u.exec(path)?.[0] ?? '';
+  return REQUEST_PARAMETERS.has(head) ? path : null;
+}
 
 /** A 4xx other than 408 (a timeout) is a refusal before generation; everything else is ambiguous. */
 export function isRefusedBeforeGeneration(status: number | null): boolean {
@@ -30,12 +62,14 @@ export function isRefusedBeforeGeneration(status: number | null): boolean {
 
 /** Read an error the SDK threw: `status` and the response body's `error.type` / `error.message`. */
 export function providerErrorOf(error: unknown): ProviderErrorDetail {
-  if (typeof error !== 'object' || error === null) return { status: null, type: null, message: null, refused: false };
+  if (typeof error !== 'object' || error === null) return { status: null, type: null, parameter: null, refused: false };
   const record = error as { status?: unknown; type?: unknown; error?: unknown };
   const status = typeof record.status === 'number' && Number.isInteger(record.status) ? record.status : null;
   const body = typeof record.error === 'object' && record.error !== null ? (record.error as { error?: unknown }).error : undefined;
   const inner = typeof body === 'object' && body !== null ? (body as { type?: unknown; message?: unknown }) : {};
   const type = typeof inner.type === 'string' ? inner.type : typeof record.type === 'string' ? record.type : null;
-  const message = typeof inner.message === 'string' ? inner.message.slice(0, PROVIDER_MESSAGE_MAX) : null;
-  return { status, type: type === null ? null : type.slice(0, 64), message, refused: isRefusedBeforeGeneration(status) };
+  const kind = type === null ? null : type.replace(/[^A-Za-z0-9_]/gu, '').slice(0, 64) || null;
+  const parameter =
+    status === 400 && kind === 'invalid_request_error' && typeof inner.message === 'string' ? leadingParameter(inner.message) : null;
+  return { status, type: kind, parameter, refused: isRefusedBeforeGeneration(status) };
 }

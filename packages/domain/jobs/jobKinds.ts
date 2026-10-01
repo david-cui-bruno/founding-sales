@@ -37,6 +37,7 @@ export const JOB_KINDS = [
   'telephony.sweep',
   'calcom.reconcile',
   'call.transcribe',
+  'call.summarize',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -118,6 +119,10 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // `ON CONFLICT DO NOTHING`, and every cent goes through a `provider_reservations` row
   // per attempt, closed once by a compare-and-set on its state (`calls/transcription.ts`).
   'call.transcribe': 'business_uniqueness',
+  // Slice C3b. One summary per call session (`call_summaries_pkey`), inserted `ON CONFLICT
+  // DO NOTHING`, and every cent goes through a `provider_reservations` row per attempt,
+  // closed once by a compare-and-set on its state (`calls/summary.ts`).
+  'call.summarize': 'business_uniqueness',
 });
 
 /**
@@ -200,6 +205,9 @@ export const jobIdempotencyKey = Object.freeze({
   /** `revision` is the turn-on that re-owes a call the switch held while off (slice P1). */
   callTranscribe: (callSessionId: string, revision = 0): string =>
     revision === 0 ? `call-transcribe:${callSessionId}` : `call-transcribe:${callSessionId}:r${String(revision)}`,
+  /** One summary of one transcribed call (slice C3b); `revision` re-owes a summary the switch held. */
+  callSummarize: (callSessionId: string, revision = 0): string =>
+    revision === 0 ? `call-summarize:${callSessionId}` : `call-summarize:${callSessionId}:r${String(revision)}`,
 });
 
 /** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */
@@ -273,6 +281,8 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'research.sweep': 'bulk',
   // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.
   'call.transcribe': 'bulk',
+  // Slice C3b: nor on its summary, which follows the transcript onto the firm page.
+  'call.summarize': 'bulk',
 });
 
 /** The lane a kind runs in, or `undefined` for a kind no table row classifies. */

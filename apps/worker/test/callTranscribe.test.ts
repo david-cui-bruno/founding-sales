@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   consumeCallSession,
@@ -11,8 +11,11 @@ import {
   enqueueCallTranscription,
   ensureTranscriptionCalling,
   finishCallTranscription,
+  callAudioKeysOfDeletedCalls,
+  finaliseTranscriptionsOfSessions,
   readCallTranscript,
   sweepTranscriptionReservations,
+  transcriptionCollectJobKey,
   transcriptionSpentCents,
   transcriptionWorkerAvailable,
   workspacesOwingTranscriptionSweep,
@@ -26,20 +29,23 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS } from '@fss/domain/jobs/jobKinds.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
-import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
+import { readCreditSpend, readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
+import { localDate } from '@fss/domain/src/rules/localClock.ts';
+import { AWS_TRANSCRIBE_PRICING, AWS_TRANSCRIBE_PROVIDER_KEY } from '../src/transcription/awsTranscribeClient.ts';
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
 import { seedPolicy, type SeededPolicy } from '@fss/domain/test/db/support/policyFixtures.ts';
-import { readTranscriptionComposition, registerHandlers } from '../src/bootstrap/main.ts';
+import { readTranscriptionComposition, registerHandlers, workerDueWorkSources, workerSourceFlags } from '../src/bootstrap/main.ts';
 import { silentMp3 } from '@fss/domain/test/calls/mp3Fixture.ts';
 import { boundMp3 } from '@fss/domain/calls/mp3Bound.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
-import { callTranscribeJobHandler, heldTranscriptionSource } from '../src/handlers/callTranscribe.ts';
+import { callTranscribeJobHandler, callTranscribeStartsNewAttempts, heldTranscriptionSource, transcriptionJobsSource } from '../src/handlers/callTranscribe.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
+import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import {
   DEEPGRAM_PROVIDER_KEY,
   deepgramTranscription,
@@ -64,14 +70,16 @@ const answer = (duration: number): unknown => ({
   metadata: { request_id: 'request-1', duration, models: ['nova-3'] },
   results: {
     utterances: [
-      { start: 0.5, end: 1.5, confidence: 0.9, channel: 0, speaker: 0, transcript: 'Hello?' },
+      // The prospect answers on channel 1; David speaks on channel 0. A diarizer's
+      // `speaker` (here the opposite numbering) is never read (slice C3a).
+      { start: 0.5, end: 1.5, confidence: 0.9, channel: 1, speaker: 0, transcript: 'Hello?' },
       { start: 2, end: 4, confidence: 0.9, channel: 0, speaker: 1, transcript: 'Hi, it is David from Callie.' },
     ],
   },
 });
 
 describe('the Deepgram client', () => {
-  it('posts the audio to /v1/listen with nova-3, diarization, utterances and mip_opt_out', async () => {
+  it('posts the audio to /v1/listen with nova-3, multichannel, utterances and mip_opt_out, and labels by channel', async () => {
     const seen: { url: string; headers: Record<string, string>; body: number }[] = [];
     const provider = deepgramTranscription({
       apiKey: FAKE_KEY,
@@ -85,12 +93,15 @@ describe('the Deepgram client', () => {
       ok: true,
       durationSeconds: 61.2,
       language: 'en',
+      // Channel 1 is them, channel 0 is you (`RECORDING_CHANNEL_ROLES`).
       utterances: [
-        { speaker: 0, start: 0.5, end: 1.5, text: 'Hello?' },
-        { speaker: 1, start: 2, end: 4, text: 'Hi, it is David from Callie.' },
+        { speaker: 1, start: 0.5, end: 1.5, text: 'Hello?' },
+        { speaker: 0, start: 2, end: 4, text: 'Hi, it is David from Callie.' },
       ],
     });
-    expect(seen[0]?.url).toBe('https://api.deepgram.com/v1/listen?model=nova-3&diarize=true&punctuate=true&utterances=true&mip_opt_out=true');
+    expect(seen[0]?.url).toBe('https://api.deepgram.com/v1/listen?model=nova-3&multichannel=true&punctuate=true&utterances=true&mip_opt_out=true');
+    expect(provider.model).toBe('nova-3-multichannel');
+    expect(provider.pricing?.billedChannels).toBe(2);
     expect(seen[0]?.headers).toEqual({ authorization: `Token ${FAKE_KEY}`, 'content-type': 'audio/mpeg', accept: 'application/json' });
     expect(seen[0]?.body).toBe(AUDIO.byteLength);
     expect(provider).not.toHaveProperty('apiKey');
@@ -155,7 +166,11 @@ describe('the Deepgram client', () => {
     expect(parseDeepgramAnswer(answer(10))).not.toBeNull();
     expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: {} })).toEqual({ durationSeconds: 3, utterances: [] });
     expect(parseDeepgramAnswer({ metadata: { duration: -1 }, results: {} })).toBeNull();
-    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, speaker: 'x', transcript: '' }] } })).toBeNull();
+    // No channel, or a channel the two-leg recording does not have, is not the shape.
+    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, speaker: 0, transcript: '' }] } })).toBeNull();
+    expect(parseDeepgramAnswer({ metadata: { duration: 3 }, results: { utterances: [{ start: 0, end: 1, channel: 2, transcript: '' }] } })).toBeNull();
+    // And an answer that heard other than two channels.
+    expect(parseDeepgramAnswer({ metadata: { duration: 3, channels: 1 }, results: {} })).toBeNull();
   });
 
   it('reads the key from the transcription entry, and says what is missing by field name only', () => {
@@ -164,7 +179,7 @@ describe('the Deepgram client', () => {
     expect(readTranscriptionProvider({ transcription: JSON.stringify({ provider: 'deepgram', api_key: 'short' }) }).problem).toBe('field:api_key');
     const configured = readTranscriptionProvider({ transcription: JSON.stringify({ provider: 'deepgram', api_key: FAKE_KEY }) });
     expect(configured.problem).toBeNull();
-    expect(configured.provider?.model).toBe('nova-3');
+    expect(configured.provider?.model).toBe('nova-3-multichannel');
   });
 
   it('composes the job only with both the key and the Twilio recording credentials', () => {
@@ -307,9 +322,18 @@ describe('the call.transcribe job', () => {
     ],
   });
 
-  async function drain(provider: TranscriptionProvider, fetcher: TwilioRecordingFetcher = recordings): Promise<void> {
+  async function drain(
+    provider: TranscriptionProvider,
+    fetcher: TwilioRecordingFetcher = recordings,
+    collector: TranscriptionProvider | undefined = provider.jobs === undefined ? undefined : provider,
+  ): Promise<void> {
     const registry = new HandlerRegistry().register(
-      callTranscribeJobHandler({ provider, recordings: fetcher, log: (event, fields) => logs.push({ event, fields }) }),
+      callTranscribeJobHandler({
+        provider,
+        ...(collector === undefined ? {} : { collector }),
+        recordings: fetcher,
+        log: (event, fields) => logs.push({ event, fields }),
+      }),
     );
     for (let pass = 0; pass < 5; pass += 1) {
       const report = await runOnce(database.session, { registry, owner: 'transcribe-test', limit: 10 });
@@ -711,6 +735,72 @@ describe('the call.transcribe job', () => {
     }
   });
 
+  // Slice C3a: Amazon Transcribe is paid from AWS credits. It needs no cash headroom and
+  // its cost is not cash spend, but the day's transcription cap still counts it.
+  it('reserves and settles a Transcribe transcription with no cash headroom, outside the cash month but inside the daily transcription cap (slice C3a)', async () => {
+    const now = (): string => new Date().toISOString();
+    const zone = await workspaceBusinessZone(system());
+    const cash = async (): Promise<number> => (await readSpend(system(), { businessTimeZone: zone, at: now() })).monthToDateCents;
+    const credits = async (): Promise<number> => (await readCreditSpend(system(), { businessTimeZone: zone, at: now() })).monthToDateCents;
+    const today = async (): Promise<number> => await transcriptionSpentCents(system(), localDate(now(), zone));
+    const transcribe: TranscriptionProvider & { calls: number } = {
+      providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+      provider: 'aws_transcribe',
+      model: 'standard',
+      pricing: AWS_TRANSCRIBE_PRICING,
+      calls: 0,
+      transcribe: async () => {
+        transcribe.calls += 1;
+        return await Promise.resolve({ ...ok(150), billedSeconds: null });
+      },
+    };
+    const sessionId = await call(150);
+    // Placed now: placing a call needs cash headroom, which the test then takes away.
+    const next = await call(150);
+    const cashBefore = await cash();
+    const creditsBefore = await credits();
+    const todayBefore = await today();
+    try {
+      // No cash headroom at all: a Deepgram (cash) transcription would be refused here.
+      await setting('monthly_cash_ceiling_cents', { cents: cashBefore });
+      const deepgram = { sessionId, at: now(), keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+      expect(await withTransaction(database.session, async () => await beginCallTranscription(system(), deepgram))).toEqual({
+        kind: 'done',
+        reason: 'monthly_cash_ceiling',
+      });
+      expect((await enqueue(sessionId)).enqueued).toBe(true);
+      await drain(transcribe);
+      expect(transcribe.calls).toBe(1);
+      // (150 + 2) s is three minutes at Transcribe's $0.006 (18 000 µ$ → 2 ¢), settled at the
+      // reservation: the job reports no media duration.
+      expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+      expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
+      // Not cash: the month's cash spend has not moved; the credits line has.
+      expect(await cash()).toBe(cashBefore);
+      expect(await credits()).toBe(creditsBefore + 2);
+      // But the day's transcription cap counts it.
+      expect(await today()).toBe(todayBefore + 2);
+
+      // So a day whose cap these 2 ¢ used up refuses the next Transcribe call, cash or not.
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: todayBefore + 3, unitPriceMicros: 4_300 });
+      const begun = await withTransaction(
+        database.session,
+        async () =>
+          await beginCallTranscription(system(), {
+            sessionId: next,
+            at: now(),
+            keyConfigured: true,
+            providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+            pricing: AWS_TRANSCRIBE_PRICING,
+          }),
+      );
+      expect(begun).toEqual({ kind: 'done', reason: 'transcription_budget_exhausted' });
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
+      await setting('call_transcription', { enabled: true, dailyCeilingCents: 500, unitPriceMicros: 4_300 });
+    }
+  });
+
   it('serialises two reservations at the edge of the month: a call holding the last cents makes a transcription wait, then refuses it (slice P1)', async () => {
     const eligible = await call(90);
     const other = await database.appRuntimeSession();
@@ -753,6 +843,408 @@ describe('the call.transcribe job', () => {
       if (open) await database.session.query('ROLLBACK');
       await setting('monthly_cash_ceiling_cents', { cents: 5_000 });
     }
+  });
+
+  // ---------------------------------------------------------------- C3a (reviews C3-R1, C3-F)
+  /** An asynchronous provider shaped like Amazon Transcribe, its AWS side in memory. */
+  function fakeTranscribe(options: { readonly runningLooks?: number; readonly verdict?: 'completed' | 'failed' } = {}) {
+    const state = { starts: [] as string[], looks: 0, live: new Set<string>() };
+    const names = (subject: { readonly sessionId: string; readonly attempt: number }) => ({
+      jobName: `fss-test-${subject.sessionId}-a${String(subject.attempt)}`,
+      inputKey: `calls/${subject.sessionId}/attempt-${String(subject.attempt)}.mp3`,
+      outputKey: `calls/${subject.sessionId}/attempt-${String(subject.attempt)}.json`,
+    });
+    const provider: TranscriptionProvider = {
+      providerKey: AWS_TRANSCRIBE_PROVIDER_KEY,
+      provider: 'aws_transcribe',
+      model: 'standard',
+      pricing: AWS_TRANSCRIBE_PRICING,
+      transcribe: async input => {
+        const withdrawn = await input.finalCheck?.();
+        if (withdrawn !== null && withdrawn !== undefined) return { ok: false, kind: 'withdrawn', reason: withdrawn };
+        const { jobName } = names(input.subject ?? { sessionId: 'x', attempt: 1 });
+        state.starts.push(jobName);
+        state.live.add(jobName);
+        return { ok: false, kind: 'started', code: 'started' };
+      },
+      jobs: {
+        names,
+        collect: async ({ jobName }) => {
+          await Promise.resolve();
+          if (!state.live.has(jobName)) return { kind: 'not_found' };
+          state.looks += 1;
+          if (state.looks <= (options.runningLooks ?? 0)) return { kind: 'running' };
+          if (options.verdict === 'failed') return { kind: 'failed', code: 'aws_transcribe_job_failed' };
+          return {
+            kind: 'completed',
+            durationSeconds: 150,
+            billedSeconds: null,
+            language: 'en',
+            utterances: [
+              { speaker: 1, start: 0.5, end: 1.5, text: 'Hello?' },
+              { speaker: 0, start: 2, end: 4, text: 'Hi, it is David.' },
+            ],
+          };
+        },
+      },
+    };
+    return { provider, state };
+  }
+
+  async function providerJobs(sessionId: string): Promise<{ state: string; looks: number }[]> {
+    const { rows } = await database.session.query<{ state: string; looks: number }>(
+      'SELECT state, looks FROM transcription_provider_jobs WHERE call_session_id = $1 ORDER BY attempt',
+      [sessionId],
+    );
+    return rows.map(row => ({ state: row.state, looks: Number(row.looks) }));
+  }
+
+  const enqueuedKeys: string[] = [];
+  /** One later look: what is due is made due now, the source asked, its jobs run. */
+  async function collectRound(provider: TranscriptionProvider, collector?: TranscriptionProvider): Promise<number> {
+    await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second'");
+    const due = await transcriptionJobsSource({ enabled: true }).find(database.session, new Date().toISOString());
+    for (const spec of due) {
+      enqueuedKeys.push(spec.idempotencyKey);
+      await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+    }
+    await drain(provider, recordings, collector ?? (provider.jobs === undefined ? undefined : provider));
+    return due.length;
+  }
+
+  async function ledgerCents(providerKey: string): Promise<number> {
+    const { rows } = await database.session.query<{ cents: string | null }>(
+      'SELECT sum(cost_cents)::text AS cents FROM provider_ledger WHERE workspace_id = $1 AND provider_key = $2',
+      [seeded.alpha.workspaceId, providerKey],
+    );
+    return Number(rows[0]?.cents ?? 0);
+  }
+
+  it('waits for a slow Transcribe job outside any claim: collected by later runs, settled once, never bought again (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 3 });
+    const sessionId = await call(150);
+    const centsBefore = await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    // Started, recorded, and the job is done: no claim is waiting on Transcribe.
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a1`]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 0 }]);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'calling', cents: 2, settled_cents: 0 }]);
+    const { rows: open } = await database.session.query("SELECT 1 FROM jobs WHERE kind = 'call.transcribe' AND state NOT IN ('done', 'dead')");
+    expect(open).toEqual([]);
+    // The sweep leaves an attempt that is being collected alone, however old.
+    await database.session.query("UPDATE provider_reservations SET created_at = now() - interval '2 hours' WHERE subject_id = $1", [sessionId]);
+    await withTransaction(database.session, async () => await sweepTranscriptionReservations(system()));
+    expect((await attempts(sessionId))[0]?.state).toBe('calling');
+    // Three looks find it running; the fourth collects it.
+    for (let round = 0; round < 3; round += 1) {
+      await collectRound(fake.provider);
+      expect((await attempts(sessionId))[0]?.state).toBe('calling');
+    }
+    await collectRound(fake.provider);
+    expect(fake.state.looks).toBe(4);
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+    expect(await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe(centsBefore + 2);
+    expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 4 }]);
+    // Nothing more is due: another round asks nothing and changes nothing.
+    expect(await collectRound(fake.provider)).toBe(0);
+    expect(fake.state.looks).toBe(4);
+  });
+
+  it('keys each look by the job row and its look number, so archived job payloads never stop a look (C3-F #5)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 2 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    enqueuedKeys.length = 0;
+    await collectRound(fake.provider);
+    // The retention sweep archives finished payloads (the call session id goes); the next
+    // look is still keyed afresh and still runs.
+    await database.session.query(
+      "UPDATE jobs SET payload = '{}'::jsonb, payload_archived_at = now() WHERE kind = 'call.transcribe' AND state = 'done' AND payload ->> 'callSessionId' = $1",
+      [sessionId],
+    );
+    await collectRound(fake.provider);
+    await collectRound(fake.provider);
+    expect(new Set(enqueuedKeys).size).toBe(enqueuedKeys.length);
+    expect(enqueuedKeys).toHaveLength(3);
+    for (const key of enqueuedKeys) expect(key).toMatch(/^call-transcribe-collect:[0-9a-f-]{36}:[0-9]+$/u);
+    expect((await attempts(sessionId))[0]?.state).toBe('settled');
+  });
+
+  it('lets no dead look job starve the rest: fifty rows whose looks died, and row 51 is still scheduled and collected (C3-N #2)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 0 });
+    const healthy = await call(150);
+    expect((await enqueue(healthy)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(healthy)).toEqual([{ state: 'started', looks: 0 }]);
+    await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [healthy]);
+    // Fifty recorded jobs ahead of it in the window, each with its look job dead.
+    const dead: string[] = [];
+    for (let index = 0; index < 50; index += 1) {
+      const session = randomUUID();
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO transcription_provider_jobs
+           (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key, state, started_at, next_look_at)
+         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, 'started', now(), now() - interval '1 hour')
+         RETURNING id`,
+        [seeded.alpha.workspaceId, `fss-test-${session}-a1`, session, randomUUID(), AWS_TRANSCRIBE_PROVIDER_KEY, `calls/${session}/attempt-1.mp3`, `calls/${session}/attempt-1.json`],
+      );
+      const rowId = rows[0]?.id ?? '';
+      dead.push(rowId);
+      const queued = await enqueueJob(database.session, {
+        workspaceId: seeded.alpha.workspaceId,
+        kind: 'call.transcribe',
+        idempotencyKey: `call-transcribe-collect:${rowId}:0`,
+        payload: { callSessionId: session },
+        maxAttempts: 1,
+      });
+      await database.session.query("UPDATE jobs SET state = 'dead', dead_at = now() WHERE id = $1", [queued.jobId]);
+    }
+    try {
+      // Two scheduler passes, as production runs them: the enqueue and the look schedule in
+      // one transaction. The first takes the fifty; the second reaches row 51.
+      const source = transcriptionJobsSource({ enabled: true });
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+      await drain(fake.provider);
+      expect(await providerJobs(healthy)).toEqual([{ state: 'collected', looks: 1 }]);
+      expect((await attempts(healthy))[0]?.state).toBe('settled');
+      // The dead rows' next looks are scheduled after their backoff, not left at the front.
+      const { rows: moved } = await database.session.query<{ looks: number; later: boolean }>(
+        'SELECT looks, next_look_at > now() AS later FROM transcription_provider_jobs WHERE id = ANY($1::uuid[])',
+        [dead],
+      );
+      expect(moved.every(row => Number(row.looks) === 1 && row.later)).toBe(true);
+    } finally {
+      await database.session.query('DELETE FROM transcription_provider_jobs WHERE id = ANY($1::uuid[])', [dead]);
+    }
+  });
+
+  it('composes the collector and its source without the Deepgram key or the Twilio credentials, and collects collect-only (C3-N #3)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 0 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 0 }]);
+    await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [sessionId]);
+    const { rows: ids } = await database.session.query<{ id: string }>('SELECT id FROM transcription_provider_jobs WHERE call_session_id = $1', [sessionId]);
+    const lookKey = transcriptionCollectJobKey(ids[0]?.id ?? '', 0);
+
+    const bucket = { FSS_CALL_AUDIO_BUCKET: 'fss-test-call-audio-123456789012', AWS_REGION: 'us-east-1', FSS_NAME_PREFIX: 'fss-test' };
+    const twilio = JSON.stringify({ account_sid: `AC${'a'.repeat(32)}`, api_key_sid: `SK${'b'.repeat(32)}`, api_key_secret: 'c'.repeat(24) });
+    const deepgram = JSON.stringify({ provider: 'deepgram', api_key: FAKE_KEY });
+    const variants: { name: string; environment: Record<string, string>; problem: RegExp }[] = [
+      { name: 'Deepgram chosen, no key', environment: { ...bucket, FSS_TRANSCRIPTION_PROVIDER: 'deepgram', transcription: '{}', 'twilio-voice': twilio }, problem: /^transcription:/u },
+      { name: 'Deepgram key, no Twilio credentials', environment: { ...bucket, transcription: deepgram }, problem: /^twilio:absent$/u },
+      { name: 'Transcribe chosen, no Twilio credentials', environment: { ...bucket, FSS_TRANSCRIPTION_PROVIDER: 'aws_transcribe', transcription: '{}' }, problem: /^twilio:absent$/u },
+    ];
+    for (const variant of variants) {
+      const composed = readTranscriptionComposition(variant.environment);
+      expect(composed.problem, variant.name).toMatch(variant.problem);
+      expect(composed.options?.collector?.providerKey, variant.name).toBe(AWS_TRANSCRIBE_PROVIDER_KEY);
+      expect(composed.options?.provider, variant.name).toBeUndefined();
+      expect(JSON.stringify(composed), variant.name).not.toContain(FAKE_KEY);
+      const composition = { transcription: composed.options ?? undefined };
+      const registry = registerHandlers(new HandlerRegistry(), composition as Parameters<typeof registerHandlers>[1]);
+      expect(registry.get('call.transcribe'), variant.name).toBeDefined();
+      // Registered, but it starts nothing: the heartbeat flag the API reads stays false.
+      expect(callTranscribeStartsNewAttempts(registry.get('call.transcribe')), variant.name).toBe(false);
+      const flags = workerSourceFlags(composition);
+      expect(flags, variant.name).toMatchObject({ transcription: false, transcriptionCollector: true });
+      const source = workerDueWorkSources(flags).find(entry => entry.name === 'call-transcribe-collect');
+      // The source queries (inside a transaction rolled back, so the next variant sees the row due).
+      await database.session.query('BEGIN');
+      try {
+        const specs = (await source?.find(database.session, new Date().toISOString())) ?? [];
+        expect(specs.map(spec => spec.idempotencyKey), variant.name).toContain(lookKey);
+      } finally {
+        await database.session.query('ROLLBACK');
+      }
+    }
+    // Without the bucket there is nothing to collect with, and nothing is composed.
+    expect(readTranscriptionComposition({ transcription: '{}' }).options).toBeNull();
+
+    // A collect-only handler collects the recorded job, and a new call it cannot start is
+    // skipped without reserving anything.
+    const registry = new HandlerRegistry().register(callTranscribeJobHandler({ collector: fake.provider, log: (event, fields) => logs.push({ event, fields }) }));
+    const due = await transcriptionJobsSource({ enabled: true }).find(database.session, new Date().toISOString());
+    for (const spec of due) await withTransaction(database.session, async () => await enqueueJob(database.session, spec));
+    const fresh = await call(150);
+    expect((await enqueue(fresh)).enqueued).toBe(true);
+    for (let pass = 0; pass < 5; pass += 1) {
+      if ((await runOnce(database.session, { registry, owner: 'collect-only-test', limit: 10 })).claimed === 0) break;
+    }
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 1 }]);
+    expect((await attempts(sessionId))[0]?.state).toBe('settled');
+    expect(await attempts(fresh)).toEqual([]);
+    expect(logs.some(line => line.event === 'call_transcription_skipped' && line.fields['reason'] === 'transcription_unconfigured')).toBe(true);
+  });
+
+  it('after a crash between Start and its commit, collects the job it started instead of starting another (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const common = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common));
+    const finish = { sessionId, attempt: 1, at: common.at, recordings, provider: fake.provider };
+    expect(await withTransaction(database.session, async () => await finishCallTranscription(system(), finish))).toEqual({ kind: 'prepared' });
+    // The request goes out, and the process dies before the commit that says so.
+    await database.session.query('BEGIN');
+    expect(await finishCallTranscription(system(), finish)).toEqual({ kind: 'started', code: 'started' });
+    await database.session.query('ROLLBACK');
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'submitting', looks: 0 }]);
+    // The job queued for this call is claimed again: it collects, it does not buy.
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(fake.state.starts).toHaveLength(1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 2 }]);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'collected', looks: 0 }]);
+  });
+
+  it('retries, under a new attempt, only a recorded job the provider never started (C3-R1 #1)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const common = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), common));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), common));
+    // Names committed, and the claim died before the request.
+    await withTransaction(database.session, async () => await finishCallTranscription(system(), { sessionId, attempt: 1, at: common.at, recordings, provider: fake.provider }));
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    // Not found at AWS: attempt 1 estimated (nobody can vouch for it), attempt 2 started.
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a2`]);
+    expect((await attempts(sessionId)).map(row => row.state)).toEqual(['estimated', 'calling']);
+    await collectRound(fake.provider);
+    expect((await attempts(sessionId)).map(row => row.state)).toEqual(['estimated', 'settled']);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('is terminal after the deadline: no later claim reserves or starts another (C3-F #4)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 1_000 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    // Past the deadline: the next look (the source counted it) gives up, estimated, terminal.
+    await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
+    await collectRound(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
+    // Any later claim for the call — a resume, a stray enqueue — buys nothing.
+    await withTransaction(database.session, async () =>
+      await enqueueJob(database.session, { workspaceId: seeded.alpha.workspaceId, kind: 'call.transcribe', idempotencyKey: `call-transcribe:${sessionId}:r9`, payload: { callSessionId: sessionId }, maxAttempts: 3 }),
+    );
+    await drain(fake.provider);
+    expect(await attempts(sessionId)).toHaveLength(1);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('is terminal after a FAILED job: settled at 0, and no later claim buys another (C3-F #4)', async () => {
+    const fake = fakeTranscribe({ verdict: 'failed' });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    await collectRound(fake.provider);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'settled', cents: 2, settled_cents: 0 }]);
+    await withTransaction(database.session, async () =>
+      await enqueueJob(database.session, { workspaceId: seeded.alpha.workspaceId, kind: 'call.transcribe', idempotencyKey: `call-transcribe:${sessionId}:r9`, payload: { callSessionId: sessionId }, maxAttempts: 3 }),
+    );
+    await drain(fake.provider);
+    expect(await attempts(sessionId)).toHaveLength(1);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('still collects a Transcribe job after the deployment switched new attempts to Deepgram (C3-F #3)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 1 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 0 }]);
+    // Now the worker selects Deepgram; the bucket is still configured, so Transcribe collects.
+    const deepgram = scripted([ok(150)]);
+    await collectRound(deepgram, fake.provider);
+    await collectRound(deepgram, fake.provider);
+    expect(deepgram.calls).toBe(0);
+    const { rows } = await database.session.query<{ provider_key: string; state: string }>(
+      "SELECT provider_key, state FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1 ORDER BY attempt",
+      [sessionId],
+    );
+    expect(rows).toEqual([{ provider_key: AWS_TRANSCRIBE_PROVIDER_KEY, state: 'settled' }]);
+    expect((await readCallTranscript(salesperson(), sessionId))?.provider).toBe('aws_transcribe');
+  });
+
+  it('names a deleted call’s audio and transcript objects for the deletion workflow’s best-effort delete', async () => {
+    const fake = fakeTranscribe({ runningLooks: 100 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    expect(await callAudioKeysOfDeletedCalls(database.session, seeded.alpha.workspaceId)).not.toContain(`calls/${sessionId}/attempt-1.mp3`);
+    await withTransaction(database.session, async () => await finaliseTranscriptionsOfSessions(system(), [sessionId], new Date().toISOString()));
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'estimated', looks: 0 }]);
+    await database.session.query('DELETE FROM call_sessions WHERE id = $1', [sessionId]);
+    const keys = await callAudioKeysOfDeletedCalls(database.session, seeded.alpha.workspaceId);
+    expect(keys).toEqual(expect.arrayContaining([`calls/${sessionId}/attempt-1.mp3`, `calls/${sessionId}/attempt-1.json`]));
+    // Nothing is due a look for it any more.
+    expect(await collectRound(fake.provider)).toBe(0);
+  });
+
+  it('never calls one provider against another’s reservation: Deepgram → Transcribe releases and reserves again (C3-R1 #3)', async () => {
+    const fake = fakeTranscribe();
+    const sessionId = await call(150);
+    const deepgramCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: DEEPGRAM_PROVIDER_KEY };
+    // Reserved while the worker ran Deepgram; the deployment then switched to Transcribe.
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), deepgramCommon));
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    await collectRound(fake.provider);
+    const { rows } = await database.session.query<{ attempt: number; provider_key: string; state: string; settled_cents: number }>(
+      "SELECT attempt, provider_key, state, settled_cents FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1 ORDER BY attempt",
+      [sessionId],
+    );
+    expect(rows).toEqual([
+      { attempt: 1, provider_key: DEEPGRAM_PROVIDER_KEY, state: 'released', settled_cents: 0 },
+      { attempt: 2, provider_key: AWS_TRANSCRIBE_PROVIDER_KEY, state: 'settled', settled_cents: 2 },
+    ]);
+    expect(fake.state.starts).toEqual([`fss-test-${sessionId}-a2`]);
+  });
+
+  it('never calls one provider against another’s reservation: Transcribe → Deepgram releases and reserves again (C3-R1 #3)', async () => {
+    const sessionId = await call(150);
+    const awsCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), awsCommon));
+    // And marked calling under Transcribe's key by a claim whose cursor was then lost
+    // between chunk 2 and chunk 3 would be estimated (it may have been sent); a reservation
+    // still reserved is released. Here: reserved.
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    const deepgram = scripted([ok(150)]);
+    await drain(deepgram);
+    expect(deepgram.calls).toBe(1);
+    const { rows } = await database.session.query<{ attempt: number; provider_key: string; state: string }>(
+      "SELECT attempt, provider_key, state FROM provider_reservations WHERE subject_kind = 'call_transcription' AND subject_id = $1 ORDER BY attempt",
+      [sessionId],
+    );
+    expect(rows).toEqual([
+      { attempt: 1, provider_key: AWS_TRANSCRIBE_PROVIDER_KEY, state: 'released' },
+      { attempt: 2, provider_key: DEEPGRAM_PROVIDER_KEY, state: 'settled' },
+    ]);
+  });
+
+  it('releases, in chunk 3, an attempt marked calling for another provider, and reserves again under this one (C3-R1 #3)', async () => {
+    const sessionId = await call(150);
+    const awsCommon = { sessionId, at: new Date().toISOString(), keyConfigured: true, providerKey: AWS_TRANSCRIBE_PROVIDER_KEY, pricing: AWS_TRANSCRIBE_PRICING };
+    await withTransaction(database.session, async () => await beginCallTranscription(system(), awsCommon));
+    await withTransaction(database.session, async () => await ensureTranscriptionCalling(system(), awsCommon));
+    const deepgram = scripted([ok(150)]);
+    const finished = await withTransaction(
+      database.session,
+      async () => await finishCallTranscription(system(), { sessionId, attempt: 1, at: awsCommon.at, recordings, provider: deepgram }),
+    );
+    expect(finished).toEqual({ kind: 'retry', code: 'provider_changed' });
+    expect(deepgram.calls).toBe(0);
+    expect((await attempts(sessionId))[0]?.state).toBe('released');
   });
 
   it('closes only the attempts that are themselves old, leaving a fresh retry alone (P2)', async () => {

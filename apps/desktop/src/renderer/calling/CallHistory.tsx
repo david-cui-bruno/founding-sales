@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import {
   hasReasonSentence,
   reasonSentence,
+  transcriptIsChannelLabelled,
   transcriptSpeakerLabels,
   type CallSessionDto,
   type CallTranscriptResponse,
 } from '@fss/contracts';
+import { CallSummaryBlock } from './CallSummary.tsx';
 import { Button } from '../ui/button.tsx';
 import { callTimer } from './callText.ts';
 import { playRecording, type Playback } from './playRecording.ts';
@@ -17,10 +19,14 @@ import { playRecording, type Playback } from './playRecording.ts';
  * (`playRecording.ts`).
  *
  * Slice C2: a call with a transcript has a "Transcript" disclosure under its row. Opening
- * it reads the transcript once; each utterance is its speaker ("Speaker 1", "Speaker 2", …
- * — `transcriptSpeakerLabels`; diarization tells voices apart, not who is who), its time
+ * it reads the transcript once; each utterance is its speaker — "You" and "Them" for a
+ * channel-labelled transcript (slice C3a: the recording's legs), "Speaker 1", "Speaker 2", …
+ * for C2's diarized ones (`transcriptSpeakerLabels`) — its time
  * in grey, and what was said. A call with no
  * transcript shows nothing; a read that failed is a sentence from `reasonSentence`.
+ *
+ * Slice C3b: a call with a summary shows it under its row, above the transcript: a few
+ * sentences, the suggested next steps and the commitments heard (`CallSummary.tsx`).
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -131,7 +137,8 @@ export function TranscriptDisclosure({
 }
 
 function TranscriptLines({ transcript }: { readonly transcript: CallTranscriptResponse }): JSX.Element {
-  const labels = transcriptSpeakerLabels(transcript.utterances);
+  // Slice C3a: a channel-labelled transcript names its two legs "You" and "Them".
+  const labels = transcriptSpeakerLabels(transcript.utterances, { channelLabelled: transcriptIsChannelLabelled(transcript) });
   return (
     <ol data-testid="call-transcript-lines" className="flex flex-col gap-1 py-1">
       {transcript.utterances.map((utterance, index) => (
@@ -258,6 +265,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
                 <span className="w-12" />
               )}
             </div>
+            {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
             {call.hasTranscript === true && ports.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
             ) : null}

@@ -287,18 +287,46 @@ describe('a request the API refuses', () => {
     expect(attempt.ok).toBe(false);
     expect(attempt.call.outcome).toBe('provider_error');
     expect(attempt.usageReported).toBe(false);
-    expect(attempt.provider).toEqual({ status: 400, type: 'invalid_request_error', message, refused: true });
+    // Only the parameter path the API's sentence starts with (C3 follow-up review).
+    expect(attempt.provider).toEqual({ status: 400, type: 'invalid_request_error', parameter: 'output_config.format.schema', refused: true });
   });
 
-  it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps a long message bounded', async () => {
+  it('never lets the message text through a provider error: no message, only a leading parameter path of a 400', async () => {
+    const CANARY = 'canary reply body 2b9c please call me Tuesday';
+    for (const [status, type, message] of [
+      [400, 'invalid_request_error', `messages.0.content: "${CANARY}" is not allowed`],
+      [400, 'invalid_request_error', `messages.0.content: "she wrote \\"${CANARY}\\"" is not allowed`],
+      [400, 'invalid_request_error', `messages.0.content: ${CANARY}`],
+      [400, 'invalid_request_error', `${CANARY}: bad`],
+      [400, 'invalid_request_error', `bad value '${CANARY}`],
+      [400, 'invalid_request_error', `${'x'.repeat(170)} ${CANARY}`],
+      [413, 'request_too_large', `messages.0.content: ${CANARY}`],
+      [500, 'api_error', CANARY],
+    ] as const) {
+      const attempt = await throwing(new FakeApiError(status, { type: 'error', error: { type, message } })).classify(MESSAGE);
+      expect(JSON.stringify(attempt), `${String(status)} ${type}`).not.toContain('canary');
+      expect(attempt.provider).toMatchObject({
+        status,
+        type,
+        parameter: status === 400 && message.startsWith('messages.0.content:') ? 'messages.0.content' : null,
+      });
+    }
+  });
+
+  it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps no long message', async () => {
     const overloaded = await throwing(new FakeApiError(529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })).classify(MESSAGE);
     expect(overloaded.provider).toMatchObject({ status: 529, refused: false });
     const timeout = await throwing(new FakeApiError(408, { type: 'error', error: { type: 'timeout_error', message: 'x' } })).classify(MESSAGE);
     expect(timeout.provider).toMatchObject({ status: 408, refused: false });
     const dropped = await throwing(new Error('socket hang up')).classify(MESSAGE);
-    expect(dropped.provider).toEqual({ status: null, type: null, message: null, refused: false });
+    expect(dropped.provider).toEqual({ status: null, type: null, parameter: null, refused: false });
     expect(dropped.call.outcome).toBe('provider_error');
-    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(300);
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).parameter).toBeNull();
+    // A leading word that is not a request parameter keeps nothing, even when it looks like a path.
+    for (const message of ['marisol: please call back', 'tuesday.at.two: confirmed', 'okafor[0]: yes']) {
+      expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message } })).parameter).toBeNull();
+    }
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: must be at most 8192' } })).parameter).toBe('max_tokens');
   });
 });
 

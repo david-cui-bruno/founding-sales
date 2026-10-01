@@ -31,6 +31,8 @@ import { Textarea } from '../ui/textarea.tsx';
  *     them; it cannot be turned on while the transcription key is missing on the server.
  *   * **Monthly spending limit** (slice P1) — "This month: $x of $y", and the limit, $0 to
  *     $50 ($25 until David changes it). Present when the server answers it (`?include=month`).
+ *     Below it, "Credits this month: $z" (slice C3a): Amazon Transcribe, paid from AWS
+ *     credits, which the limit does not count (`?include=credits`).
  *
  * The section names no secret field, value or length: the read carries field *names* only
  * and this section says the account "is not set up" without listing them. Every refusal is
@@ -44,7 +46,11 @@ export const CALLING_NEEDS_BUDGET = 'Calling stays off until a daily budget is s
 export const CALCOM_NEEDS_SECRET = 'Cal.com bookings need the Cal.com webhook secret to be set up on the server first.';
 export const BUDGET_RANGE = 'Enter an amount from $0 to $100.';
 export const MINUTES_RANGE = 'Enter a whole number of minutes from 1 to 240.';
-export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription key to be set up on the server first.';
+/**
+ * No running worker can transcribe (slice C3a): with Amazon Transcribe that is the call-audio
+ * bucket and the provider setting, with Deepgram its key — so the sentence names neither.
+ */
+export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription service to be set up on the server first.';
 export const TRANSCRIPTION_NEEDS_BUDGET = 'Transcription stays off until a daily transcription budget is set.';
 export const TRANSCRIPTION_BUDGET_RANGE = 'Enter an amount from $0 to $5.';
 export const MONTH_RANGE = 'Enter an amount from $0 to $50.';
@@ -58,6 +64,14 @@ export function monthCentsFromDollars(typed: string): number | null {
 /** "This month: $3.40 of $25.00." — what the month has cost against its limit. */
 export function monthLine(month: { readonly ceilingCents: number; readonly spentMonthCents: number }): string {
   return `This month: ${money(month.spentMonthCents)} of ${money(month.ceilingCents)}. Calls, transcription, research and reply reading stop when the limit is reached.`;
+}
+
+/**
+ * "Credits this month: $0.12 …" (slice C3a) — what the month's credit-funded transcription
+ * cost, which the limit does not count. Shown when the server answers it.
+ */
+export function creditsLine(creditsMonthCents: number): string {
+  return `Credits this month: ${money(creditsMonthCents)}. Transcription paid from AWS credits is not counted against the limit.`;
 }
 
 /** Dollars typed → cents, or null when it is not an amount from 0 to 5. */
@@ -460,7 +474,15 @@ function MonthRow({
   const saving = busy('monthly_cash_ceiling_cents');
   return (
     <Row data-testid="row-month" className="items-start">
-      <RowMain line="Monthly spending limit" detail={<span data-testid="month-detail">{monthLine(month)}</span>} />
+      <RowMain
+        line="Monthly spending limit"
+        detail={
+          <span className="flex flex-col">
+            <span data-testid="month-detail">{monthLine(month)}</span>
+            {month.creditsMonthCents === undefined ? null : <span data-testid="month-credits">{creditsLine(month.creditsMonthCents)}</span>}
+          </span>
+        }
+      />
       <span className="flex shrink-0 flex-col items-end gap-1">
         <span className="flex items-center gap-1 text-sm">
           $

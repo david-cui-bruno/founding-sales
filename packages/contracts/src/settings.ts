@@ -316,12 +316,18 @@ export const integrationsSettingsResponseSchema = z.strictObject({
   /**
    * Slice P1's month-to-date cash ceiling, answered only to a client that asks with
    * `?include=month`, for the reason `transcription` is. `spentMonthCents` is this calendar
-   * month's settled plus reserved cost across every provider, on the business time zone.
+   * month's settled plus reserved CASH cost across every cash-funded provider, on the
+   * business time zone — what the ceiling is measured against. `creditsMonthCents` (slice
+   * C3a) is the same month's cost of the providers paid from AWS credits (Amazon Transcribe):
+   * shown beside it, never counted against the ceiling. Answered only when the client also
+   * asks `?include=credits`, so a P1 desktop, which parses `month` strictly, never meets
+   * it; optional, so a reader tolerates an API from before it.
    */
   month: z
     .strictObject({
       ceilingCents: z.number().int().min(0).max(MONTHLY_CASH_CEILING_MAX_CENTS),
       spentMonthCents: z.number().int().min(0),
+      creditsMonthCents: z.number().int().min(0).optional(),
     })
     .optional(),
 });

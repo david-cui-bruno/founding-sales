@@ -27,6 +27,8 @@ variables {
   app_runtime_database_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/app-runtime-database-cccccc"
   migration_database_secret_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/migration-database-bbbbbb"
   journal_bucket_arn              = "arn:aws:s3:::fss-test-suppression-journal-123456789012"
+  call_audio_bucket_arn           = "arn:aws:s3:::fss-test-call-audio-123456789012"
+  aws_account_id                  = "123456789012"
   journal_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555551"
   envelope_kms_key_arn            = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555552"
   secrets_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"
@@ -54,7 +56,8 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
       for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] :
       [
         for statement in jsondecode(policy).Statement : statement.Resource
-        if contains(statement.Action, "s3:PutObject")
+        # Slice C3a's call-audio bucket is the worker's other put, asserted below.
+        if contains(statement.Action, "s3:PutObject") && statement.Resource != ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
       ] == [["arn:aws:s3:::fss-test-suppression-journal-123456789012/*"]]
     ])
     error_message = "Both task roles append to the journal, and only on its object prefix."
@@ -68,6 +71,9 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
           for action in statement.Action :
           !startswith(action, "s3:Delete") && !contains(["s3:PutObjectRetention", "s3:PutObjectLegalHold", "s3:BypassGovernanceRetention"], action)
         ]
+        # The one delete either role holds is the worker's, on slice C3a's call audio
+        # (asserted to be exactly that below), never on the journal.
+        if statement.Resource != ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
       ]
     ]))
     error_message = "Neither task role may delete from the journal or weaken an object lock."
@@ -88,6 +94,62 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
       ] == ["FSS/fss-test"]
     ])
     error_message = "Every task role that may publish metrics may publish only into this environment's namespace."
+  }
+}
+
+# Slice C3a: the worker stages call audio for Amazon Transcribe and follows its jobs —
+# objects under calls/ only, a job only when it writes its output to that bucket under
+# calls/, and only this stack's jobs by name. The API may only delete those objects.
+run "the_worker_alone_may_stage_call_audio_and_run_this_stacks_transcription_jobs" {
+  command = plan
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement : statement
+      if anytrue([for resource in statement.Resource : startswith(resource, "arn:aws:s3:::fss-test-call-audio-")])
+      ] == [{
+        Sid      = "StageCallAudioForTranscription"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+    }]
+    error_message = "The worker may put, get and delete call audio under calls/ only, and do nothing else in that bucket."
+  }
+
+  assert {
+    condition = (
+      [
+        for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement : statement.Resource
+        if contains(statement.Action, "transcribe:GetTranscriptionJob")
+      ] == [["arn:aws:transcribe:us-east-1:123456789012:transcription-job/fss-test-*"]]
+      && [
+        for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement : statement.Condition
+        if contains(statement.Action, "transcribe:StartTranscriptionJob")
+        ] == [{
+          StringEquals = { "transcribe:OutputBucketName" = "fss-test-call-audio-123456789012" }
+          StringLike   = { "transcribe:OutputKey" = "calls/*" }
+      }]
+      && !strcontains(aws_iam_role_policy.worker_task.policy, "transcribe:DeleteTranscriptionJob")
+    )
+    error_message = "Get names this stack's jobs; Start (no resource type) only when the job writes its output to the call-audio bucket under calls/; no job delete."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.api_task.policy).Statement : statement
+      if strcontains(jsonencode(statement), "call-audio") || anytrue([for action in statement.Action : startswith(action, "transcribe:")])
+      ] == [{
+        Sid      = "DeleteDeletedCallsAudio"
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject"]
+        Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+    }]
+    error_message = "The API task role may only delete call audio under calls/ (the deletion workflow), and reaches no Transcribe action."
+  }
+
+  assert {
+    condition     = output.api_environment["FSS_CALL_AUDIO_BUCKET"] == "fss-test-call-audio-123456789012"
+    error_message = "The API is told the call-audio bucket, for the deletion workflow's delete."
   }
 }
 

@@ -154,8 +154,10 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
             }
           : {}),
         // Slice P1, only when asked for, for the same reason: the month's cash ceiling.
+        // Slice C3a: its credit-funded figure only to a client that also asks for
+        // `credits` — a P1 desktop parses `month` strictly and must never meet the key.
         ...(request.query.getAll('include').includes('month')
-          ? { month: await monthlyCashStatus(scoped.context) }
+          ? { month: await monthlyCashStatus(scoped.context, { credits: request.query.getAll('include').includes('credits') }) }
           : {}),
       }),
     };

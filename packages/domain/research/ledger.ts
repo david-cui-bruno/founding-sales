@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { CREDIT_FUNDED_PROVIDER_KINDS } from '../settings/funding.ts';
 import { localDate } from '../src/rules/localClock.ts';
 
 /**
@@ -117,7 +118,9 @@ export interface Spend {
 }
 
 /**
- * Everything every provider has cost today and this month, in the workspace's zone.
+ * Everything every cash-funded provider has cost today and this month, in the workspace's
+ * zone. Credit-funded providers (Amazon Transcribe, slice C3a) are left out: see
+ * `readCreditSpend` and `settings/funding.ts`.
  *
  * Across providers on purpose. The ceilings are the workspace's budget, not research's
  * — when lane C starts writing call minutes here, a day that spent its budget on calls
@@ -136,19 +139,42 @@ export async function readSpend(
   context: RepositoryContext,
   input: { readonly businessTimeZone: string; readonly at: string },
 ): Promise<Spend> {
+  return await readFundedSpend(context, input, 'cash');
+}
+
+/**
+ * The same sum for the providers paid from credits (slice C3a, `settings/funding.ts`):
+ * Amazon Transcribe. `readSpend` is cash only — every ceiling that reads it, the month's
+ * cash ceiling included, is a cash ceiling — and this is what Settings shows beside it.
+ */
+export async function readCreditSpend(
+  context: RepositoryContext,
+  input: { readonly businessTimeZone: string; readonly at: string },
+): Promise<Spend> {
+  return await readFundedSpend(context, input, 'credits');
+}
+
+async function readFundedSpend(
+  context: RepositoryContext,
+  input: { readonly businessTimeZone: string; readonly at: string },
+  funding: 'cash' | 'credits',
+): Promise<Spend> {
   const businessDate = localDate(input.at, input.businessTimeZone);
   const monthStart = `${businessDate.slice(0, 7)}-01`;
+  // A provider is credit-funded by its kind, the key's part before the first dot.
+  const credits = `split_part(provider_key, '.', 1) = ANY($4::text[])`;
+  const funded = funding === 'credits' ? credits : `NOT ${credits}`;
   const { rows } = await context.db.query<{ today: string | null; month: string | null }>(
     `WITH spend AS (
-       SELECT business_date, cost_cents AS cents FROM provider_ledger WHERE workspace_id = $1
+       SELECT business_date, cost_cents AS cents FROM provider_ledger WHERE workspace_id = $1 AND ${funded}
        UNION ALL
        SELECT business_date, cents FROM provider_reservations
-        WHERE workspace_id = $1 AND state IN ('reserved', 'calling')
+        WHERE workspace_id = $1 AND state IN ('reserved', 'calling') AND ${funded}
      )
      SELECT sum(cents) FILTER (WHERE business_date = $2::date) AS today,
             sum(cents) FILTER (WHERE business_date >= $3::date AND business_date <= $2::date) AS month
        FROM spend`,
-    [context.scope.workspaceId, businessDate, monthStart],
+    [context.scope.workspaceId, businessDate, monthStart, [...CREDIT_FUNDED_PROVIDER_KINDS]],
   );
   const row = rows[0];
   return { todayCents: Number(row?.today ?? 0), monthToDateCents: Number(row?.month ?? 0) };

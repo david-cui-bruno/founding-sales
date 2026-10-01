@@ -70,6 +70,8 @@ locals {
     PORT            = tostring(var.container_port)
     FSS_HTTP_PORT   = tostring(var.container_port)
     FSS_JOURNAL_ARN = var.journal_bucket_arn
+    # Slice C3a: the deletion workflow's best-effort delete of a deleted call's objects.
+    FSS_CALL_AUDIO_BUCKET = local.call_audio_bucket_name
   })
 
   worker_environment = merge(local.common_environment, var.worker_environment, {
@@ -182,6 +184,13 @@ locals {
   })
 
   journal_object_arn = "${var.journal_bucket_arn}/*"
+
+  # Slice C3a: the call audio the worker hands Amazon Transcribe, under one prefix
+  # (`callAudioObjectKey` in apps/worker/src/transcription/awsTranscribeClient.ts), and the
+  # jobs it starts, named `<name_prefix>-<session>-a<attempt>` (`transcriptionJobName`).
+  call_audio_object_arn      = "${var.call_audio_bucket_arn}/calls/*"
+  call_audio_bucket_name     = trimprefix(var.call_audio_bucket_arn, "arn:aws:s3:::")
+  transcription_job_arn_glob = "arn:aws:transcribe:${var.aws_region}:${var.aws_account_id}:transcription-job/${var.name_prefix}-*"
 
   ecs_assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -391,6 +400,15 @@ resource "aws_iam_role_policy" "api_task" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Slice C3a: the deletion workflow deletes a deleted call's audio and transcript
+        # objects after its commit, best effort (the bucket's one-day lifecycle is the
+        # backstop). Delete only, under calls/ only.
+        Sid      = "DeleteDeletedCallsAudio"
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject"]
+        Resource = [local.call_audio_object_arn]
+      },
+      {
         Sid      = "AppendSuppressionEvents"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
@@ -474,6 +492,39 @@ resource "aws_iam_role_policy" "worker_task" {
         Condition = {
           StringEquals = { "cloudwatch:namespace" = var.metric_namespace }
         }
+      },
+      {
+        # Slice C3a. One call's recording, put for Transcribe, read by Transcribe with
+        # this role's permissions (it reads a job's media as the caller), and deleted
+        # when the job ends. Objects under calls/ only; no list, no bucket action.
+        Sid      = "StageCallAudioForTranscription"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = [local.call_audio_object_arn]
+      },
+      {
+        # StartTranscriptionJob has no resource type in the service authorization
+        # reference (it is authorized against "*"). Its output condition keys narrow it
+        # instead: a job may only write its transcript to this bucket, under calls/, where
+        # the one-day lifecycle expires it with its input — no transcript is left in
+        # service-managed storage (review C3-F). Transcribe writes that output with this
+        # role's permissions: the s3:PutObject on calls/* above.
+        Sid      = "StartTranscriptionJobsWritingToTheCallAudioBucket"
+        Effect   = "Allow"
+        Action   = ["transcribe:StartTranscriptionJob"]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = { "transcribe:OutputBucketName" = local.call_audio_bucket_name }
+          StringLike   = { "transcribe:OutputKey" = "calls/*" }
+        }
+      },
+      {
+        # Get takes the transcription-job resource: only this stack's jobs. No delete: the
+        # job record holds only names, a status and S3 URIs, and nothing is owed to AWS.
+        Sid      = "FollowThisStacksTranscriptionJobs"
+        Effect   = "Allow"
+        Action   = ["transcribe:GetTranscriptionJob"]
+        Resource = [local.transcription_job_arn_glob]
       },
     ]
   })

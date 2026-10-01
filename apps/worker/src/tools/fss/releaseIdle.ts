@@ -40,7 +40,7 @@ export const CALL_SESSION_IN_PROGRESS_STATUS = 'in_progress';
  * Declared by the handler in code and not recorded on the job row, which is why the
  * SQL below has to be given the list.
  */
-export const CHUNKED_JOB_KINDS: readonly string[] = Object.freeze(['research.firm', 'call.transcribe']);
+export const CHUNKED_JOB_KINDS: readonly string[] = Object.freeze(['research.firm', 'call.transcribe', 'call.summarize']);
 
 const iso = (value: unknown): string | null => {
   if (value instanceof Date) return value.toISOString();

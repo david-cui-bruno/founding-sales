@@ -4,6 +4,7 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
+import { finaliseSummariesOfSessions, lockSummariesForDeletion } from '../calls/summary.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockMonthlySpend } from '../research/ledger.ts';
 import { lockRun } from '../research/runs.ts';
@@ -326,6 +327,14 @@ async function measure(
       `SELECT count(*) AS count FROM call_transcripts t
          JOIN call_sessions s ON s.workspace_id = t.workspace_id AND s.id = t.call_session_id
         WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+      byContact,
+    ),
+    // Slice C3b (0032): a call's summary quotes the prospect; counted in its own right too.
+    call_summaries: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_summaries x
+         JOIN call_sessions s ON s.workspace_id = x.workspace_id AND s.id = x.call_session_id
+        WHERE x.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
       byContact,
     ),
     meetings: await countOf(
@@ -667,6 +676,12 @@ export async function commitDeletion(
     `SELECT id FROM call_sessions WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     [context.scope.workspaceId, scope.contactId, scope.firmId],
   );
+  // Slice C3b: their summary locks first — a subject lock, after the firm and before the
+  // sessions' own locks and rows, which a summary's chunk 3 takes in that order too.
+  await lockSummariesForDeletion(
+    context,
+    targetedSessions.map(session => session.id),
+  );
   await lockSessionsForDeletion(
     context,
     targetedSessions.map(session => session.id),
@@ -857,6 +872,32 @@ export async function commitDeletion(
       await databaseNow(context),
     );
   }
+  // Slice C3b: each session's open summary attempts finalised as the sweep does it
+  // (`reserved` released, `calling` estimated), then its summary removed. Its summary lock
+  // was taken above, so a claim finishing its request waits for this deletion and then
+  // finds the session gone.
+  const { rows: summarizedSessions } = await context.db.query<{ id: string }>(
+    `SELECT s.id FROM call_sessions s
+      WHERE s.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}
+        AND EXISTS (SELECT 1 FROM provider_reservations p
+                     WHERE p.workspace_id = s.workspace_id AND p.subject_kind = 'call_summary'
+                       AND p.subject_id = s.id AND p.state IN ('reserved', 'calling'))`,
+    byContact,
+  );
+  if (summarizedSessions.length > 0) {
+    await finaliseSummariesOfSessions(
+      context,
+      summarizedSessions.map(row => row.id),
+      await databaseNow(context),
+    );
+  }
+  await remove(
+    'call_summaries',
+    `DELETE FROM call_summaries x USING call_sessions s
+      WHERE x.workspace_id = $1 AND s.workspace_id = x.workspace_id AND s.id = x.call_session_id
+        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+    byContact,
+  );
   await remove(
     'call_transcripts',
     `DELETE FROM call_transcripts t USING call_sessions s

@@ -31,8 +31,11 @@ import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminal
 import { telephonySweepJobHandler, telephonySweepSource } from '../handlers/telephonySweep.ts';
 import { calcomReconcileJobHandler, calcomReconcileSource, type CalcomReconcileOptions } from '../handlers/calcomReconcile.ts';
 import { readCalcomReconcileClient } from '../calcom/bookingsClient.ts';
-import { callTranscribeJobHandler, heldTranscriptionSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
-import { readTranscriptionProvider } from '../transcription/deepgramClient.ts';
+import { callTranscribeJobHandler, heldTranscriptionSource, transcriptionJobsSource, type CallTranscribeOptions } from '../handlers/callTranscribe.ts';
+import { readSelectedTranscriptionProvider } from '../transcription/selectProvider.ts';
+import { readAwsTranscribeProvider } from '../transcription/awsTranscribeClient.ts';
+import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
+import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -92,11 +95,18 @@ export interface HandlerComposition {
    */
   readonly calcom?: CalcomReconcileOptions | undefined;
   /**
-   * Call transcription (slice C2): present only when the task environment has both the
-   * `transcription` entry's key and the `twilio-voice` entry's recording credentials.
-   * Absent, `call.transcribe` is not registered and its jobs wait in the queue.
+   * Call transcription (slice C2): new attempts only when the task environment has both the
+   * provider (`transcription` entry's key, or Amazon Transcribe's variables) and the
+   * `twilio-voice` entry's recording credentials. Collect-only (no `provider`) when only the
+   * call-audio bucket is configured (review C3-N). Absent, `call.transcribe` is not
+   * registered and its jobs wait in the queue.
    */
   readonly transcription?: CallTranscribeOptions | undefined;
+  /**
+   * After-call summaries (slice C3b): present only when the classifier's Anthropic
+   * transport is. Absent, `call.summarize` is not registered and its source finds nothing.
+   */
+  readonly summary?: CallSummarizeOptions | undefined;
 }
 
 /**
@@ -176,8 +186,11 @@ export function registerHandlers(
   registry.register(telephonySweepJobHandler());
   // Slice M1. The one handler here that calls Cal.com, so only with a key.
   if (composition.calcom !== undefined) registry.register(calcomReconcileJobHandler(composition.calcom));
-  // Slice C2. Calls Twilio for the recording and Deepgram for the transcript, so only with both.
+  // Slice C2. Calls Twilio for the recording and the provider for the transcript; collect-only
+  // (review C3-N) with just the call-audio bucket, and then the heartbeat says it starts nothing.
   if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
+  // Slice C3b. Calls Anthropic, with the classifier's transport, so only with its key.
+  for (const handler of callSummarizeHandlers(composition.summary)) registry.register(handler);
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -328,24 +341,60 @@ export async function composeHandlers(
 }
 
 /**
- * The transcription job's two ports from the task environment (slice C2), or why not, as
- * `transcription:<field>` or `twilio:<field>` — a field name, never a value.
+ * The transcription job's ports from the task environment (slice C2), or why new attempts
+ * cannot start, as `transcription:<field>` or `twilio:<field>` — a field name, never a value.
+ *
+ * The collector (slice C3a) is composed on its own (review C3-N): Amazon Transcribe whenever
+ * the call-audio bucket, the region and the name prefix are configured, whichever provider
+ * new attempts use and whether or not the Deepgram key or the Twilio recording credentials
+ * are present. Without those, the options are collect-only (no `provider`, no `recordings`):
+ * recorded jobs are still collected, no new attempt starts, and `problem` says why.
  */
 export function readTranscriptionComposition(
   environment: Readonly<Record<string, string | undefined>>,
   log?: CallTranscribeOptions['log'],
 ): { readonly options: CallTranscribeOptions | null; readonly problem: string | null } {
-  const provider = readTranscriptionProvider(environment);
-  if (provider.provider === null) return { options: null, problem: `transcription:${provider.problem ?? 'absent'}` };
+  // Slice C3a: Amazon Transcribe or Deepgram, as `FSS_TRANSCRIPTION_PROVIDER` says.
+  const provider = readSelectedTranscriptionProvider(environment, log === undefined ? {} : { aws: { log } });
   const twilio = readTwilioRecordingCredentials(environment);
-  if (twilio.credentials === null) return { options: null, problem: `twilio:${twilio.problem ?? 'absent'}` };
+  // The collector: Amazon Transcribe whenever the call-audio bucket is configured, whichever
+  // provider new attempts use, so recorded jobs are collected after a switch (review C3-F, #3)
+  // and without the credentials new attempts need (review C3-N).
+  const collector =
+    provider.provider?.jobs !== undefined ? provider.provider : readAwsTranscribeProvider(environment, log === undefined ? {} : { log }).provider;
+  const logged = log === undefined ? {} : { log };
+  const collecting = collector === null ? {} : { collector };
+  const collectOnly = (problem: string): { readonly options: CallTranscribeOptions | null; readonly problem: string } => ({
+    options: collector === null ? null : { ...collecting, ...logged },
+    problem,
+  });
+  if (provider.provider === null) return collectOnly(`transcription:${provider.problem ?? 'absent'}`);
+  if (twilio.credentials === null) return collectOnly(`twilio:${twilio.problem ?? 'absent'}`);
   return {
     options: {
       provider: provider.provider,
+      ...collecting,
       recordings: twilioRecordingFetcher(twilio.credentials, { timeoutMs: 30_000 }),
-      ...(log === undefined ? {} : { log }),
+      ...logged,
     },
     problem: null,
+  };
+}
+
+/** Which optional sources materialize work, from what this worker composed. */
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary'>): {
+  readonly calcomReconcile: boolean;
+  readonly transcription: boolean;
+  readonly transcriptionCollector: boolean;
+  readonly summary: boolean;
+} {
+  return {
+    calcomReconcile: composition.calcom !== undefined,
+    // The held-transcription source starts new attempts, so only where they can start.
+    transcription: composition.transcription?.provider !== undefined && composition.transcription.recordings !== undefined,
+    // Slice C3a, review C3-N: whenever the collector is composed, whatever credentials are missing.
+    transcriptionCollector: composition.transcription?.collector !== undefined,
+    summary: composition.summary !== undefined,
   };
 }
 
@@ -361,7 +410,13 @@ export function readTranscriptionComposition(
  * makes running one from a command line safe.
  */
 export function workerDueWorkSources(
-  options: { readonly calcomReconcile?: boolean; readonly transcription?: boolean } = {},
+  options: {
+    readonly calcomReconcile?: boolean;
+    readonly transcription?: boolean;
+    readonly summary?: boolean;
+    /** Slice C3a: whether recorded Transcribe jobs are collected (the call-audio bucket is configured). */
+    readonly transcriptionCollector?: boolean;
+  } = {},
 ): readonly DueWorkSource[] {
   return [
     canarySource(),
@@ -378,6 +433,9 @@ export function workerDueWorkSources(
     calcomReconcileSource({ enabled: options.calcomReconcile === true }),
     // Slice P1. Like Cal.com's: listed always, materializing only where `call.transcribe` is registered.
     heldTranscriptionSource({ enabled: options.transcription === true }),
+    transcriptionJobsSource({ enabled: options.transcriptionCollector === true }),
+    // Slice C3b. Listed always, materializing only where `call.summarize` is registered.
+    callSummarySource({ enabled: options.summary === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -442,12 +500,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const calcomReconcile = readCalcomReconcileClient(environment);
   // Slice C2: the transcription key and the recording credentials, each read once, here.
   const transcription = readTranscriptionComposition(environment, (event, fields) => log.log('info', event, fields));
+  // Slice C3b: the summary rides the classifier's transport; the model is the deployment's.
+  const summary = readCallSummaryComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
   const composition: HandlerComposition = {
     ...composed,
     ...(calcomReconcile.client === null
       ? {}
       : { calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } }),
     ...(transcription.options === null ? {} : { transcription: transcription.options }),
+    ...(summary.options === null ? {} : { summary: summary.options }),
   };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
@@ -464,6 +525,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
     // Whether transcription runs, and if not why, by field name only.
     call_transcription: transcription.problem ?? 'configured',
+    // Whether after-call summaries run, and with which model; never a key.
+    call_summary: summary.problem ?? summary.options?.model ?? 'configured',
   });
 
   const sink = await createSink(config, log);
@@ -481,10 +544,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry(), composition),
-      sources: workerDueWorkSources({
-        calcomReconcile: composition.calcom !== undefined,
-        transcription: composition.transcription !== undefined,
-      }),
+      sources: workerDueWorkSources(workerSourceFlags(composition)),
       sink,
       log,
     });

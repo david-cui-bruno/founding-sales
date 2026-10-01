@@ -242,7 +242,30 @@ ceiling above 0, the key is in place, the call was **answered** (`answered_at` s
 recording lasts **at least 20 seconds**. A short or unanswered call is never transcribed
 and never reaches a provider. The job is keyed `call-transcribe:{session}`.
 
-**The provider: Deepgram Nova-3, pre-recorded.** `POST https://api.deepgram.com/v1/listen`
+**The primary provider since slice C3a (1 October 2026): Amazon Transcribe.** Standard
+batch, en-US, `ChannelIdentification` on, paid from AWS credits (the account has an
+AI-services opt-out policy). `apps/worker/src/transcription/awsTranscribeClient.ts`, selected
+by `FSS_TRANSCRIPTION_PROVIDER=aws_transcribe` (both roots set it); no secret, the worker's
+task role is the credential. In chunk 3, nothing waits for Transcribe, and no request runs inside a long transaction (slice C3a; reviews C3-R1 and C3-F). The first commit records the job's names in `transcription_provider_jobs` (`submitting`) before anything is sent. The next chunk puts the bounded recording in the private call-audio bucket at `calls/<session>/attempt-<n>.mp3`, does the final settings read (the pause boundary, with nothing between it and the request), and sends `StartTranscriptionJob` as `<prefix>-<session>-a<n>`, with its output written to the same bucket at `calls/<session>/attempt-<n>.json`. The client makes exactly one attempt (`maxAttempts: 1`), and `started` is committed right after. The task role may start a job only with that bucket and a `calls/` key as its output. The `call-transcribe-collect` source starts one `call.transcribe` per look at each recorded job that is due one, keyed `call-transcribe-collect:<row id>:<look>`. Each look is one status read and at most one S3 read of the output object, then the commit, about 40 s of a 240 s lease. Looks are spaced 20 s, then doubling up to 5 min. The source schedules each job's next look when it emits one, in the scheduler pass's transaction, so a look job that dies never blocks that job's next look or the 50-job window. The collector is the Transcribe adapter whenever the bucket is configured, whichever provider new attempts use, and even without the Deepgram key or the Twilio recording credentials: such a worker registers `call.transcribe` collect-only, and its heartbeat does not say it can transcribe, so the API queues no new attempts for it. A claim that is not continuing its own cursor collects first, so a crash or a lost lease after Start resumes collecting the recorded job instead of buying another. Completed: the transcript is stored and the attempt settled once, by id, at its reservation. FAILED, a refused Start, or no answer within 120 minutes: terminal, and no later claim buys another for the call. No such job (the request never left), or an output that is missing or unreadable: estimated, and retried once within the two paid attempts. Nothing is deleted at AWS and nothing is owed: the bucket's one-day lifecycle expires the audio and the transcript, no transcript is kept in service-managed storage, and `DeleteTranscriptionJob` is not used. When a call is deleted, the deletion workflow deletes its objects after its commit, best effort and detached from the answer: each delete is bounded at 5 s and all of them at 20 s.
+The call-audio bucket (`infra/modules/recordings`) blocks all four kinds of public access,
+uses SSE-S3 (AES256), refuses non-TLS requests, is unversioned, and expires every object
+after one day.
+Priced at $0.0001 a second ($0.006 a minute) by the started minute of the bound; the job
+reports no media duration, so the attempt **settles at its reservation**.
+
+**Channels, not diarization.** `<Dial record="record-from-answer-dual">` puts the parent call
+in the first channel (https://www.twilio.com/docs/voice/twiml/dial), and the parent is the
+Mac's Voice SDK leg, so channel 0 is David and channel 1 the prospect
+(`RECORDING_CHANNEL_ROLES` in `packages/contracts/src/callSessions.ts`, the one place that
+mapping is written). Both adapters label each utterance by its channel; Deepgram now asks for
+`multichannel=true` instead of `diarize=true`, and a diarizer's speaker number never becomes
+a role. The first real test call verifies the mapping.
+
+**The comparison provider: Deepgram Nova-3, pre-recorded** (as slice C2 built it, with C3a's
+multichannel change; `FSS_TRANSCRIPTION_PROVIDER=deepgram` or unset). Deepgram's pricing page
+does not say whether multichannel audio is billed per channel, so its reservation counts both
+channels (twice `unitPriceMicros`), and its transcripts are stored as model
+`nova-3-multichannel`. `POST https://api.deepgram.com/v1/listen`
 with the recording's bytes (read from Twilio by the worker, with the same authed fetch as
 the playback proxy, `packages/domain/calls/twilioRecording.ts`) and `model=nova-3`,
 `diarize=true`, `punctuate=true`, `utterances=true` and **`mip_opt_out=true` on every
@@ -293,9 +316,10 @@ plants it in every failure the client can meet to prove it.
 
 **Reading it.** `GET /calls/transcript?callSessionId=` (the firm's assigned salesperson or
 an admin; anything else is 404, like a call with no transcript). The history row's
-`hasTranscript` offers a "Transcript" disclosure; the speakers are always "Speaker 1",
-"Speaker 2", … in the order they first speak — diarization tells voices apart, not who is
-who, so Callie does not guess which one is David; times are grey. A read that
+`hasTranscript` offers a "Transcript" disclosure. A channel-labelled transcript
+(`aws_transcribe/standard`, `deepgram/nova-3-multichannel`) names its legs "You" and "Them";
+a diarized one from before C3a keeps "Speaker 1", "Speaker 2", … in the order they first
+speak, because diarization tells voices apart, not who is who; times are grey. A read that
 fails is a sentence from `reasonSentence`.
 
 **The secret.** Secrets Manager entry `<prefix>/transcription`, one JSON object,
@@ -319,7 +343,7 @@ provider request starts. The last check runs immediately before each provider ca
 | --- | --- | --- |
 | Gmail send | `outbound/send.ts` `dispatchOutboundMessage` → `gmail.sendMessage` | `recheckAndClaim`: both switches and the attestation, under the send gate SHARED, in the claiming transaction. Every writer of either switch takes the gate EXCLUSIVE, so a turn-off waits for an open claim and every later claim reads it and holds the fence; a held fence sends exactly once when the switch is back on. |
 | Research page fetch, token count, model call | `research/enrichment.ts` `finishFirmResearch` → `fetchPages` (each robots.txt and page request), `countInputTokens` (each pass of the trim loop), `extract` | `research_settings.enabled`, read again immediately before each request: the fetcher asks a `shouldContinue` predicate before every robots.txt and page request and stops there. Off releases the attempt (`released_not_called`) and closes the run `refused`/`research_disabled`; the sweep researches the firm again once research is back on. |
-| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before Deepgram. Off releases the attempt, and the call is held: see below. |
+| Transcription | `calls/transcription.ts` `finishCallTranscription` → `provider.transcribe` | `call_transcription` (on, above $0), before the Twilio recording read and again immediately before the provider's request (for Amazon Transcribe, after the upload and immediately before `StartTranscriptionJob`). Off releases the attempt, and the call is held: see below. |
 | Reply classifier | `classification/classify.ts` `finishClassification` → `classify` (chunk 3 of `classify.reply`) | `classifier_settings.enabled`, read in chunk 2 after the request is built and after the monthly lock, under the classifier switch lock (shared; every settings write takes it exclusive), in the transaction that marks the attempt `calling`. Chunk 3 sends before any database read. Off releases the attempt, records `disabled`, and the reply is held: see below. |
 
 No paid SDK retries behind these checks: the Anthropic client is built with `maxRetries: 0`
@@ -381,8 +405,13 @@ when a call session, a transcription attempt or a research run reserves its cent
 workspace monthly lock taken last, inside that provider's own budget lock (telephony,
 transcription, research), so it is atomic with the daily check and every path takes the
 locks in one order.
-Month-to-date spend is every provider's settled cost plus its open reservations, on the
-calendar month of the workspace business time zone (`readSpend`). A refusal is
+Month-to-date spend is every **cash-funded** provider's settled cost plus its open
+reservations, on the calendar month of the workspace business time zone (`readSpend`).
+Credit-funded spend (Amazon Transcribe, slice C3a; `packages/domain/settings/funding.ts`) is
+excluded from it and from every ceiling that reads it; it still counts against the day's
+transcription cap, and Settings shows it as "Credits this month" (`creditsMonthCents` in
+`month`, answered only with `?include=month&include=credits`, so a P1 desktop's strict parse
+never meets it). A refusal is
 `monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
 of $y" (`GET /settings/integrations?include=month`). Research keeps its own monthly ceiling and
 is also refused by this one (`monthly_cash_ceiling`).
@@ -411,11 +440,42 @@ So spend is durable whatever the handler does after the request: a rolled-back c
 leaves the attempt `calling`, which `readSpend` counts, and the job's next claim (or the
 sweep, after half an hour) estimates it. There is no overshoot beyond the reservations.
 
+**After-call summaries (slice C3b, migration 0032).** Once a call has a channel-labelled
+transcript, `call.summarize` asks a model (Claude Haiku 4.5 by default; `FSS_CALL_SUMMARY_MODEL`
+may name Claude Sonnet 5.5) for a summary of three to six sentences, up to five suggested next
+steps and the commitments heard, quoted and checked against the side that said them. Suggestions
+only: the Mac shows them under the call (`GET /calls/history?include=summary`) and on the Today
+card, and nothing is sent or scheduled from them. The switch is transcription's own,
+`call_transcription` (on, with a ceiling above 0); there is no second one. The job is the
+classifier's shape with `provider_reservations` subject `call_summary`: chunk 1 the switch, two
+paid attempts per call for life, forty a day (`call_summary_budget`), the month, and a
+reservation at the request's byte bound (one open per call,
+`provider_reservations_one_open_summary`); chunk 2 the month and then the switch's setting lock
+SHARED, held to the commit that marks `calling`; chunk 3 the request, then the session row (KEY
+SHARE), the monthly lock, and the settlement by id at the answer's usage — or its estimate when
+the answer reports none or the transport threw. An unusable or ambiguous answer is retried once
+within the two. Held summaries resume once per change of the setting (`call-summarize` source),
+like transcriptions, and that includes a retry the switch held: a call with no summary and
+fewer than two paid attempts is owed its remaining attempt by whichever job asks (C3 review,
+finding 5), and the lock, the open check and the one-open index keep that to one obligation at a
+time. A summary request in flight (`calling`) counts in transcription's "still finishing" line.
+
+**Provider errors in the logs (C3 review, finding 6).** A request the API refuses with a 4xx
+(not 408) is `provider_refused`: refused before generation, settled at 0, not retried; a 5xx,
+408 or dropped connection is `provider_error`, estimated and retried once. The classifier and the
+summary log failures through one helper (`classification/providerError.ts`): the status and the
+error type always, and for a 400 `invalid_request_error` only the leading request-parameter
+path (e.g. `output_config.format.schema`), and only when it starts with a Messages API
+top-level parameter. No provider free text is ever logged, so a provider error that echoes
+the request cannot copy an e-mail or a transcript into a log. The deletion workflow takes each targeted session's summary lock after the
+firm and before the sessions' own locks.
+
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
 
-routing → send gate → firm (and contact) → the subject's own lock (call session row,
-transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
-`transcription_budget`, research `RSCH`, `classifier_budget`) → the workspace monthly lock →
+routing → send gate → firm (and contact) → the subject's own lock (call summary, call session
+row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
+`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`) → the
+workspace monthly lock →
 rows: reservations, ledger, and the rows that reference a message (classifier attempts).
 
 The deletion workflow follows it whole (P1 final round): after the send gate it locks the
@@ -448,15 +508,18 @@ session's `billed_price_cents` takes the latest one, and a closed reservation is
 it (`settled`), with the ledger row of its own date moved by the difference, under the
 monthly lock. The same price again changes nothing.
 
-**Funding labels** (documentation only; nothing enforces or reads them). Eligible provider
-credits are tracked outside Callie; the ceiling counts every cent at its price whatever pays it.
+**Funding** (slice C3a, David's decision of 1 October 2026; `packages/domain/settings/funding.ts`,
+by the provider key's kind, the part before the first dot). Credit-funded spend is left out of
+the month's cash ceiling and shown apart; a kind not listed is cash.
 
 | `provider_key` | What | Funding |
 | --- | --- | --- |
+| `aws_transcribe.standard` | transcription (primary) | credits (AWS) |
 | `twilio.voice` | Twilio minutes | cash |
-| `deepgram.nova-3` | transcription | credits-eligible (confirm against the account) |
-| `anthropic_extraction` | research model calls | credits-eligible (confirm against the account) |
-| `anthropic_classifier` | reply classifier calls | credits-eligible (confirm against the account) |
+| `deepgram.nova-3` | transcription (comparison) | cash |
+| `anthropic_extraction` | research model calls | cash |
+| `anthropic_classifier` | reply classifier calls | cash |
+| `anthropic_call_summary` | after-call summaries (slice C3b) | cash |
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_VOICEMAIL_TEMPLATE } from '@fss/contracts';
@@ -70,11 +71,33 @@ describe('Settings → Calling & calendar (slice S1)', () => {
     });
   });
 
+  it('answers the month’s credit-funded cost only to a client that asks for credits, and leaves P1’s answers byte-identical (slice C3a)', async () => {
+    const plain = await get('/settings/integrations', adminToken);
+    const month = await get('/settings/integrations?include=transcription&include=month', adminToken);
+    const credits = await get('/settings/integrations?include=transcription&include=month&include=credits', adminToken);
+    expect(credits.status, credits.text).toBe(200);
+    // The default answer has no month and no credits; P1's `month` is exactly its two keys.
+    expect(plain.text).not.toContain('creditsMonthCents');
+    expect(plain.body).not.toHaveProperty('month');
+    expect(month.text).not.toContain('creditsMonthCents');
+    expect(Object.keys(month.body['month'] as object)).toEqual(['ceilingCents', 'spentMonthCents']);
+    // A P1-era strict parse of `month` accepts both of those answers.
+    const p1Month = z.strictObject({ ceilingCents: z.number().int(), spentMonthCents: z.number().int() });
+    expect(p1Month.safeParse(month.body['month']).success).toBe(true);
+    // And the C3a desktop's request gets the credits line, which a strict P1 parse would refuse.
+    expect(credits.body['month']).toEqual({ ceilingCents: expect.any(Number) as unknown, spentMonthCents: 0, creditsMonthCents: 0 });
+    expect(p1Month.safeParse(credits.body['month']).success).toBe(false);
+    // `credits` alone, without `month`, adds nothing.
+    expect((await get('/settings/integrations?include=credits', adminToken)).text).toBe(plain.text);
+  });
+
   it('answers the month’s cash ceiling only when asked, $25 by default, and lets only an admin change it within $0–$50 (slice P1)', async () => {
     expect((await get('/settings/integrations', adminToken)).body).not.toHaveProperty('month');
     const asked = await get('/settings/integrations?include=month', salespersonToken);
     expect(asked.status, asked.text).toBe(200);
+    // P1's shape exactly, byte for byte: a P1 desktop parses `month` strictly (slice C3a).
     expect(asked.body['month']).toEqual({ ceilingCents: 2_500, spentMonthCents: 0 });
+    expect(JSON.stringify(asked.body['month'])).toBe('{"ceilingCents":2500,"spentMonthCents":0}');
 
     const refused = await update(salespersonToken, 'monthly_cash_ceiling_cents', { cents: 1_000 });
     expect(refused.text).toContain('admin_only');

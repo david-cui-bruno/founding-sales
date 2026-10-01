@@ -13,6 +13,7 @@ import {
 } from '@fss/domain/jobs/handlerRegistry.ts';
 import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
 import { TRANSCRIPTION_HEARTBEAT_FLAG } from '@fss/domain/calls/transcription.ts';
+import { callTranscribeStartsNewAttempts } from '../handlers/callTranscribe.ts';
 import {
   chunkBookkeepingOf,
   claimJobs,
@@ -377,8 +378,9 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
     instanceKey: options.instanceKey ?? options.owner,
     expectedIntervalSeconds: 60,
     // Slice C2: whether this runner can transcribe, for the API, which is not given the
-    // transcription key and reads this instead (`transcriptionWorkerAvailable`).
-    detail: { claimed: claims.length, completed, failed, [TRANSCRIPTION_HEARTBEAT_FLAG]: options.registry.get('call.transcribe') !== undefined },
+    // transcription key and reads this instead (`transcriptionWorkerAvailable`). A
+    // collect-only handler (review C3-N) is registered but cannot start one: false.
+    detail: { claimed: claims.length, completed, failed, [TRANSCRIPTION_HEARTBEAT_FLAG]: callTranscribeStartsNewAttempts(options.registry.get('call.transcribe')) },
   });
 
   return { reclaimed, claimed: claims.length, completed, failed, leaseLost, requeued, claimedClass };

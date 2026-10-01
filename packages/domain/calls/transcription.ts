@@ -17,6 +17,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { markCalling, settleAttempt, type ReservationState } from '../research/reservations.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { clearMonthlyCash } from '../settings/cashCeiling.ts';
+import { providerFunding } from '../settings/funding.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import type { TwilioRecordingFetcher } from './twilioRecording.ts';
 import { boundMp3 } from './mp3Bound.ts';
@@ -25,10 +26,13 @@ import { boundMp3 } from './mp3Bound.ts';
  * Call transcription (slice C2, migration 0030).
  *
  * After a connected call of at least `TRANSCRIPTION_MINIMUM_SECONDS` the worker sends its
- * recording to the transcription provider — Deepgram Nova-3, pre-recorded, diarized, with
- * `mip_opt_out=true` — and stores the utterances in `call_transcripts`, one row per call
- * session. The provider sits behind `TranscriptionProvider`, so another one (OpenAI's
- * `gpt-4o-mini-transcribe`) is a second implementation of that port, not a change here.
+ * recording to the transcription provider and stores the utterances in `call_transcripts`,
+ * one row per call session. The provider sits behind `TranscriptionProvider`. Since slice
+ * C3a (1 October 2026) the primary one is Amazon Transcribe with channel identification
+ * (`apps/worker/src/transcription/awsTranscribeClient.ts`), paid from AWS credits;
+ * Deepgram Nova-3, multichannel, stays selectable for comparison. Both label each
+ * utterance by its recording channel (`RECORDING_CHANNEL_ROLES`: 0 you, 1 them), never by
+ * diarization.
  *
  * ## When a call is transcribed
  *
@@ -102,11 +106,24 @@ const MAX_PRICED_MINUTES = 240;
 export type TranscriptionOutcome =
   | {
       readonly ok: true;
-      /** The audio's length as the provider measured it, in seconds. What is settled. */
+      /** The audio's length as the provider measured it, in seconds. Stored with the transcript. */
       readonly durationSeconds: number;
+      /**
+       * The duration the provider's answer reports billing, when it differs from
+       * `durationSeconds` (slice C3a). Absent: `durationSeconds` is what is settled. Null:
+       * the answer reports none (Amazon Transcribe's job carries no media duration), so the
+       * attempt is settled at its reservation — never at a computed figure.
+       */
+      readonly billedSeconds?: number | null | undefined;
       readonly language: string;
       readonly utterances: readonly CallTranscriptUtterance[];
     }
+  /**
+   * The final settings read, immediately before the request (slice C3a: a provider with
+   * work before its request, as Amazon Transcribe's upload is, asks `finalCheck` after it),
+   * said transcription is off: nothing was sent, nothing billed.
+   */
+  | { readonly ok: false; readonly kind: 'withdrawn'; readonly reason: TranscriptionRefusalCode }
   /**
    * The provider answered and refused (an HTTP 4xx): the request was not processed, so
    * nothing was billed. `code` is a word of ours (`deepgram_http_401`), never a body.
@@ -116,7 +133,78 @@ export type TranscriptionOutcome =
    * Nobody knows whether the provider processed it: a timeout, a dropped connection, a
    * 5xx, an answer that could not be read. It may have been billed.
    */
-  | { readonly ok: false; readonly kind: 'ambiguous'; readonly code: string };
+  | { readonly ok: false; readonly kind: 'ambiguous'; readonly code: string }
+  /**
+   * An asynchronous provider (Amazon Transcribe, slice C3a fix round) was asked to start
+   * its job — accepted, or perhaps accepted (`code` says which). Nothing is settled now:
+   * the recorded job is collected later by `collectCallTranscription`, which finds out.
+   */
+  | { readonly ok: false; readonly kind: 'started'; readonly code: string };
+
+/** What one look at a recorded provider job found (`TranscriptionJobs.collect`). */
+export type CollectOutcome =
+  /** Queued or in progress: look again later. */
+  | { readonly kind: 'running' }
+  /** The provider has no job of this name: it was never started. */
+  | { readonly kind: 'not_found' }
+  /** The look itself failed (a timeout, a 5xx): says nothing about the job. */
+  | { readonly kind: 'unknown'; readonly code: string }
+  /** The job ended FAILED: terminal, not billed. */
+  | { readonly kind: 'failed'; readonly code: string }
+  /** The job COMPLETED but its transcript is missing, cannot be read or is not two channels: it was billed. */
+  | { readonly kind: 'unreadable'; readonly code: string }
+  | {
+      readonly kind: 'completed';
+      readonly durationSeconds: number;
+      readonly billedSeconds?: number | null | undefined;
+      readonly language: string;
+      readonly utterances: readonly CallTranscriptUtterance[];
+    };
+
+/**
+ * The asynchronous half of a provider whose paid request starts a job it finishes later
+ * (Amazon Transcribe, slice C3a). Chunk 3 records the job's names and commits BEFORE the
+ * request (`submitting`), commits the start right after it (`started`), and never waits:
+ * the job is collected by later, short claims. Nothing is owed to the provider afterwards:
+ * the job writes its transcript next to its input, where the bucket's one-day lifecycle
+ * expires both.
+ */
+export interface TranscriptionJobs {
+  /** The job name and the input and output object keys an attempt's job will have, before anything is sent. */
+  names(subject: { readonly sessionId: string; readonly attempt: number }): {
+    readonly jobName: string;
+    readonly inputKey: string;
+    readonly outputKey: string;
+  };
+  /** One status read and, once it completed, one read of its output object: never a wait. */
+  collect(job: { readonly jobName: string; readonly outputKey: string }): Promise<CollectOutcome>;
+}
+
+/**
+ * How a provider prices audio (slice C3a). A provider without one is priced as C2's
+ * Deepgram was: the setting's `unitPriceMicros` for every started minute.
+ */
+export interface TranscriptionPricing {
+  /** Micro-dollars per minute of audio, in place of the setting's; null keeps the setting's. */
+  readonly unitPriceMicros: number | null;
+  /**
+   * How many times one minute of recording is billed: 2 for a provider that may bill each
+   * channel of the stereo recording separately. Folded into the reservation's
+   * `unit_price_micros`, so the reservation and its settlement agree.
+   */
+  readonly billedChannels: number;
+  /**
+   * Billed by the second with this minimum (Amazon Transcribe: 15 s), rather than by the
+   * started minute. Null: by the started minute.
+   */
+  readonly perSecondMinimumSeconds: number | null;
+}
+
+export const PER_MINUTE_PRICING: TranscriptionPricing = Object.freeze({
+  unitPriceMicros: null,
+  billedChannels: 1,
+  perSecondMinimumSeconds: null,
+});
 
 export interface TranscriptionProvider {
   /** `provider_reservations.provider_key` and `provider_ledger.provider_key`, e.g. `deepgram.nova-3`. */
@@ -125,7 +213,31 @@ export interface TranscriptionProvider {
   readonly provider: string;
   /** `call_transcripts.model`, e.g. `nova-3`. */
   readonly model: string;
-  transcribe(input: { readonly audio: Buffer; readonly contentType: 'audio/mpeg' }): Promise<TranscriptionOutcome>;
+  /** Slice C3a. Absent: `PER_MINUTE_PRICING`. */
+  readonly pricing?: TranscriptionPricing | undefined;
+  /** Slice C3a fix round: present for a provider whose paid request starts a job (Amazon Transcribe). */
+  readonly jobs?: TranscriptionJobs | undefined;
+  /**
+   * The longest one `transcribe` may take, in seconds, every wait and timeout included
+   * (slice C3a). The job's lease is sized from it. Absent: C2's 120.
+   */
+  readonly maxCallSeconds?: number | undefined;
+  /**
+   * `subject` names the call and the paid attempt, so a provider that stores anything (a
+   * job name, an object key) can make it unique to this attempt (slice C3a).
+   */
+  transcribe(input: {
+    readonly audio: Buffer;
+    readonly contentType: 'audio/mpeg';
+    readonly subject?: { readonly sessionId: string; readonly attempt: number } | undefined;
+    /**
+     * The pause boundary (slice P1, `docs/greenfield/calling.md`, "What the pause
+     * guarantees"): the final settings read. A provider that does anything slow before its
+     * paid request calls this immediately before the request, and on a refusal sends
+     * nothing and answers `withdrawn` with it. Null: still authorized.
+     */
+    readonly finalCheck?: (() => Promise<TranscriptionRefusalCode | null>) | undefined;
+  }): Promise<TranscriptionOutcome>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +252,36 @@ export function transcriptionMinutes(seconds: number): number {
 /** Cents `minutes` cost at `unitPriceMicros` a minute, rounded up. */
 export function transcriptionCents(minutes: number, unitPriceMicros: number): number {
   return Math.ceil((Math.trunc(minutes) * Math.trunc(unitPriceMicros)) / 10_000);
+}
+
+/** The reservation's price per minute of recording: the provider's or the setting's, times its billed channels. */
+export function reservationUnitPriceMicros(pricing: TranscriptionPricing, settingMicros: number): number {
+  const base = pricing.unitPriceMicros ?? settingMicros;
+  return Math.min(10_000_000, Math.trunc(base) * Math.max(1, Math.trunc(pricing.billedChannels)));
+}
+
+/**
+ * What one attempt settles at, from the duration the provider (or the audio sent to it)
+ * measured, never past what was cleared: the audio was cut to the reserved minutes, so a
+ * longer measure is rounding, not more audio.
+ *
+ *   * by the minute (C2): the started minutes, at least one, at most the reservation's;
+ *   * by the second (Amazon Transcribe, C3a): `ceil(seconds)`, at least the provider's
+ *     minimum (15 s), at most the reserved minutes' seconds, at `unitPriceMicros / 60` a
+ *     second, rounded up to the cent.
+ */
+export function transcriptionSettledCents(
+  pricing: TranscriptionPricing,
+  durationSeconds: number,
+  reservation: { readonly maxUnits: number; readonly unitPriceMicros: number },
+): number {
+  const maxMinutes = Math.max(1, Math.trunc(reservation.maxUnits));
+  if (pricing.perSecondMinimumSeconds === null) {
+    return transcriptionCents(Math.min(transcriptionMinutes(durationSeconds), maxMinutes), reservation.unitPriceMicros);
+  }
+  const measured = Math.ceil(Math.max(0, Number.isFinite(durationSeconds) ? durationSeconds : maxMinutes * 60));
+  const seconds = Math.min(maxMinutes * 60, Math.max(Math.trunc(pricing.perSecondMinimumSeconds), measured));
+  return Math.ceil((seconds * Math.trunc(reservation.unitPriceMicros)) / 600_000);
 }
 
 /**
@@ -306,6 +448,8 @@ async function tryLockTranscription(context: RepositoryContext, sessionId: strin
 interface AttemptRow {
   readonly id: string;
   readonly attempt: number;
+  /** The provider the attempt was reserved and priced for (C3a fix round: never settled under another). */
+  readonly providerKey: string;
   readonly state: ReservationState;
   readonly cents: number;
   readonly unitPriceMicros: number;
@@ -317,12 +461,13 @@ async function listTranscriptionAttempts(context: RepositoryContext, sessionId: 
   const { rows } = await context.db.query<{
     id: string;
     attempt: number;
+    provider_key: string;
     state: ReservationState;
     cents: number;
     unit_price_micros: number | null;
     max_units: number | null;
   }>(
-    `SELECT id, attempt, state, cents, unit_price_micros, max_units FROM provider_reservations
+    `SELECT id, attempt, provider_key, state, cents, unit_price_micros, max_units FROM provider_reservations
       WHERE workspace_id = $1 AND subject_kind = $2 AND subject_id = $3
       ORDER BY attempt DESC`,
     [context.scope.workspaceId, TRANSCRIPTION_SUBJECT_KIND, sessionId],
@@ -330,6 +475,7 @@ async function listTranscriptionAttempts(context: RepositoryContext, sessionId: 
   return rows.map(row => ({
     id: row.id,
     attempt: Number(row.attempt),
+    providerKey: row.provider_key,
     state: row.state,
     cents: Number(row.cents),
     unitPriceMicros: Number(row.unit_price_micros ?? 0),
@@ -378,8 +524,12 @@ async function finaliseOpenAttempts(
             )
           ).rows.map(row => row.id),
         );
+  // The sweep leaves alone an attempt whose provider job is still being collected: the
+  // collect claims settle it from the job's own answer (slice C3a fix round).
+  const collecting = old === null ? new Set<string>() : await reservationsBeingCollected(context, sessionId);
   for (const row of await listTranscriptionAttempts(context, sessionId)) {
     if (old !== null && !old.has(row.id)) continue;
+    if (collecting.has(row.id)) continue;
     if (row.state === 'reserved') {
       if ((await settleAttempt(context, { reservationId: row.id, at, outcome: { kind: 'released' } })) !== null) released += 1;
     } else if (row.state === 'calling') {
@@ -413,7 +563,13 @@ type Clearance =
  */
 async function clearAttempt(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<Clearance> {
   const setting = await readCallTranscription(context);
   if (!setting.enabled) return { ok: false, reason: 'transcription_off' };
@@ -426,14 +582,20 @@ async function clearAttempt(
   const businessDate = localDate(input.at, zone);
   // Priced with the margin; these minutes are the bound the audio is cut to before upload.
   const minutes = transcriptionMinutes(facts.recordingSeconds + TRANSCRIPTION_DURATION_MARGIN_SECONDS);
-  const cents = transcriptionCents(minutes, setting.unitPriceMicros);
+  // The provider's price where it has one (Amazon Transcribe, slice C3a), else the setting's.
+  const unitPriceMicros = reservationUnitPriceMicros(input.pricing ?? PER_MINUTE_PRICING, setting.unitPriceMicros);
+  const cents = transcriptionCents(minutes, unitPriceMicros);
   if (setting.dailyCeilingCents <= 0) return { ok: false, reason: 'transcription_budget_exhausted' };
   const spent = await transcriptionSpentCents(context, businessDate);
   if (spent + cents > setting.dailyCeilingCents) return { ok: false, reason: 'transcription_budget_exhausted' };
   // And the month's cash ceiling (slice P1, invariant I2), under the workspace's monthly
   // lock taken inside the daily one; the caller inserts the reservation in this transaction.
-  if (!(await clearMonthlyCash(context, { at: input.at, zone, cents }))) return { ok: false, reason: 'monthly_cash_ceiling' };
-  return { ok: true, cents, minutes, unitPriceMicros: setting.unitPriceMicros, businessDate, zone };
+  // A credit-funded provider (Amazon Transcribe, slice C3a) is not cash: its cents count
+  // against the day's transcription cap above and never against the month's cash.
+  if (providerFunding(input.providerKey) === 'cash' && !(await clearMonthlyCash(context, { at: input.at, zone, cents }))) {
+    return { ok: false, reason: 'monthly_cash_ceiling' };
+  }
+  return { ok: true, cents, minutes, unitPriceMicros, businessDate, zone };
 }
 
 async function reserve(
@@ -476,7 +638,13 @@ export type BeginOutcome =
 /** Chunk 1: the conditions, the ceiling, and attempt 1's reservation. No provider is asked anything. */
 export async function beginCallTranscription(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean; readonly providerKey: string },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<BeginOutcome> {
   await lockTranscription(context, input.sessionId);
   if (await transcribed(context, input.sessionId)) return { kind: 'done', reason: 'already_transcribed' };
@@ -493,6 +661,8 @@ export async function beginCallTranscription(
 
 export type CallingOutcome =
   | { readonly kind: 'calling'; readonly attempt: number }
+  /** A provider job of this call is still being collected (slice C3a fix round). */
+  | { readonly kind: 'collecting' }
   | { readonly kind: 'closed'; readonly reason: TranscriptionRefusalCode | 'already_transcribed' };
 
 /**
@@ -505,7 +675,13 @@ export type CallingOutcome =
  */
 export async function ensureTranscriptionCalling(
   context: RepositoryContext,
-  input: { readonly sessionId: string; readonly at: string; readonly keyConfigured: boolean; readonly providerKey: string },
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly keyConfigured: boolean;
+    readonly providerKey: string;
+    readonly pricing?: TranscriptionPricing | undefined;
+  },
 ): Promise<CallingOutcome> {
   await lockTranscription(context, input.sessionId);
   // The budget lock before any settlement below: an estimate takes the monthly spend lock,
@@ -515,7 +691,25 @@ export async function ensureTranscriptionCalling(
     await finaliseOpenAttempts(context, input.sessionId, input.at);
     return { kind: 'closed', reason: 'already_transcribed' };
   }
-  const rows = await listTranscriptionAttempts(context, input.sessionId);
+  // A provider job still being collected owns its attempt: nothing here estimates it or
+  // buys another (slice C3a fix round). The collect claims settle it.
+  if ((await reservationsBeingCollected(context, input.sessionId)).size > 0) return { kind: 'collecting' };
+  // A terminal outcome is terminal (review C3-F, finding 4): a job that FAILED or was given
+  // up at its deadline closes the call; no later claim buys another.
+  if (await providerJobFailed(context, input.sessionId)) {
+    await finaliseOpenAttempts(context, input.sessionId, input.at);
+    return { kind: 'closed', reason: 'transcription_failed' };
+  }
+  let rows = await listTranscriptionAttempts(context, input.sessionId);
+  // A reservation made for another provider (the deployment switched between Amazon
+  // Transcribe and Deepgram) is never called with this one: it is released — nothing was
+  // sent — and this provider's own attempt is reserved and cleared below.
+  for (const row of rows) {
+    if (row.state === 'reserved' && row.providerKey !== input.providerKey) {
+      await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'released' } });
+    }
+  }
+  rows = await listTranscriptionAttempts(context, input.sessionId);
   const reserved = rows.find(row => row.state === 'reserved');
   const withdrawn = await stillAuthorized(context, input.keyConfigured);
   if (withdrawn !== null) {
@@ -550,7 +744,135 @@ export type FinishOutcome =
   | { readonly kind: 'transcribed'; readonly settledCents: number; readonly utterances: number }
   /** The attempt was ambiguous and is estimated; chunk 2 may reserve the bounded retry. */
   | { readonly kind: 'retry'; readonly code: string }
+  /**
+   * Slice C3a fix round, an asynchronous provider: the job's names are recorded and
+   * committed (`submitting`); the next chunk, from this claim's cursor, sends the request.
+   */
+  | { readonly kind: 'prepared' }
+  /** The job was started (or may have been) and is recorded: later claims collect it. */
+  | { readonly kind: 'started'; readonly code: string }
   | { readonly kind: 'done'; readonly reason: TranscriptionRefusalCode | 'already_transcribed' | 'not_calling'; readonly code?: string };
+
+/** How long after a look the next one is, by the number of looks so far: 20 s, doubling, at most 5 min. */
+export function transcriptionPollDelaySeconds(looks: number): number {
+  return Math.min(300, 20 * 2 ** Math.max(0, Math.trunc(looks)));
+}
+/** A recorded job still unfinished this long after it was written is given up on: estimated, terminal. */
+export const TRANSCRIPTION_COLLECT_DEADLINE_MINUTES = 120;
+/**
+ * The grace a `submitting` row has before a collect look may judge it: long enough for the
+ * claim that wrote it to send the request in its very next chunk.
+ */
+export const TRANSCRIPTION_SUBMIT_GRACE_SECONDS = 300;
+
+type ProviderJobState = 'submitting' | 'started' | 'collected' | 'estimated' | 'failed';
+
+interface ProviderJobRow {
+  readonly id: string;
+  readonly jobName: string;
+  readonly attempt: number;
+  readonly reservationId: string;
+  readonly providerKey: string;
+  readonly outputKey: string;
+  readonly state: ProviderJobState;
+  readonly looks: number;
+  readonly expired: boolean;
+}
+
+const PROVIDER_JOB_COLUMNS = `id, job_name, attempt, reservation_id, provider_key, output_key, state, looks,
+  created_at + make_interval(mins => ${String(TRANSCRIPTION_COLLECT_DEADLINE_MINUTES)}) <= now() AS expired`;
+
+function providerJobOf(row: Record<string, unknown>): ProviderJobRow {
+  return {
+    id: String(row['id']),
+    jobName: String(row['job_name']),
+    attempt: Number(row['attempt']),
+    reservationId: String(row['reservation_id']),
+    providerKey: String(row['provider_key']),
+    outputKey: String(row['output_key']),
+    state: row['state'] as ProviderJobState,
+    looks: Number(row['looks']),
+    expired: row['expired'] === true,
+  };
+}
+
+async function providerJobsOf(context: RepositoryContext, sessionId: string): Promise<readonly ProviderJobRow[]> {
+  const { rows } = await context.db.query<Record<string, unknown>>(
+    `SELECT ${PROVIDER_JOB_COLUMNS} FROM transcription_provider_jobs
+      WHERE workspace_id = $1 AND call_session_id = $2 ORDER BY attempt DESC`,
+    [context.scope.workspaceId, sessionId],
+  );
+  return rows.map(providerJobOf);
+}
+
+/** The reservations whose provider job is recorded and not yet collected. */
+async function reservationsBeingCollected(context: RepositoryContext, sessionId: string): Promise<ReadonlySet<string>> {
+  return new Set(
+    (await providerJobsOf(context, sessionId)).filter(job => job.state === 'submitting' || job.state === 'started').map(job => job.reservationId),
+  );
+}
+
+/** Whether a recorded job of this call ended terminally (FAILED, or given up at the deadline). */
+async function providerJobFailed(context: RepositoryContext, sessionId: string): Promise<boolean> {
+  return (await providerJobsOf(context, sessionId)).some(job => job.state === 'failed');
+}
+
+async function markProviderJob(
+  context: RepositoryContext,
+  jobName: string,
+  change: { readonly state: ProviderJobState; readonly lookInSeconds?: number },
+): Promise<void> {
+  const finished = change.state === 'collected' || change.state === 'estimated' || change.state === 'failed';
+  await context.db.query(
+    `UPDATE transcription_provider_jobs
+        SET state = $3,
+            started_at = CASE WHEN $3 = 'started' THEN COALESCE(started_at, now()) ELSE started_at END,
+            finished_at = CASE WHEN $4 THEN COALESCE(finished_at, now()) ELSE NULL END,
+            next_look_at = now() + make_interval(secs => $5)
+      WHERE workspace_id = $1 AND job_name = $2`,
+    [context.scope.workspaceId, jobName, change.state, finished, change.lookInSeconds ?? 0],
+  );
+}
+
+/** Store the transcript and settle the attempt by id, once: the one place either is written. */
+async function storeAndSettle(
+  context: RepositoryContext,
+  input: {
+    readonly sessionId: string;
+    readonly at: string;
+    readonly provider: TranscriptionProvider;
+    readonly reservation: AttemptRow;
+    readonly result: { readonly durationSeconds: number; readonly billedSeconds?: number | null | undefined; readonly language: string; readonly utterances: readonly CallTranscriptUtterance[] };
+  },
+): Promise<FinishOutcome> {
+  const { reservation, result } = input;
+  const durationSeconds = Math.max(0, Math.min(86_400, Math.round(result.durationSeconds)));
+  const utterances = result.utterances.slice(0, CALL_TRANSCRIPT_MAX_UTTERANCES);
+  await context.db.query(
+    `INSERT INTO call_transcripts (workspace_id, call_session_id, provider, model, language, duration_seconds, utterances)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+     ON CONFLICT ON CONSTRAINT call_transcripts_pkey DO NOTHING`,
+    [
+      context.scope.workspaceId,
+      input.sessionId,
+      input.provider.provider,
+      input.provider.model,
+      result.language,
+      durationSeconds,
+      JSON.stringify(utterances),
+    ],
+  );
+  // Settled at the provider's duration, never past the minutes that were cleared: the audio
+  // was cut to them, so a longer report is the provider's rounding, not more audio. By the
+  // started minute, or by the second for a provider that bills so (slice C3a).
+  // An answer that reports no billed duration is settled at the reservation (slice C3a).
+  const billed = result.billedSeconds === undefined ? result.durationSeconds : result.billedSeconds;
+  const cents =
+    billed === null ? reservation.cents : transcriptionSettledCents(input.provider.pricing ?? PER_MINUTE_PRICING, billed, reservation);
+  // By id, and only from `calling`: a second settlement of one attempt changes nothing.
+  const settled = await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents } });
+  return { kind: 'transcribed', settledCents: settled?.recordedCents ?? 0, utterances: utterances.length };
+}
 
 /**
  * Chunk 3: the recording, the provider call, the utterances, and this attempt's
@@ -559,6 +881,12 @@ export type FinishOutcome =
  * refusal the provider answered with, estimated for an ambiguous attempt. The one exit
  * that closes nothing is a database error, which rolls this chunk back and leaves the row
  * `calling` for the next claim to estimate.
+ *
+ * An asynchronous provider (`provider.jobs`, Amazon Transcribe; slice C3a fix round) takes
+ * two chunks here, and neither waits for the job: the first records the job's names and
+ * commits (`prepared`), so a crash after the request can never forget the job; the second
+ * sends it and commits `started` right after. The job is then collected by later, short
+ * claims (`collectCallTranscription`), and its attempt is settled there, once, by id.
  */
 export async function finishCallTranscription(
   context: RepositoryContext,
@@ -574,9 +902,20 @@ export async function finishCallTranscription(
   const rows = await listTranscriptionAttempts(context, input.sessionId);
   const reservation = rows.find(row => row.attempt === input.attempt);
   if (reservation === undefined || reservation.state !== 'calling') return { kind: 'done', reason: 'not_calling' };
+  const jobs = input.provider.jobs;
+  const recorded = jobs === undefined ? undefined : (await providerJobsOf(context, input.sessionId)).find(job => job.attempt === input.attempt);
+  if (recorded !== undefined && recorded.state !== 'submitting') return { kind: 'done', reason: 'not_calling' };
   const releaseNotCalled = async (): Promise<void> => {
     await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'released_not_called' } });
+    // The job never started; what may have been uploaded expires with the bucket's lifecycle.
+    if (recorded !== undefined) await markProviderJob(context, recorded.jobName, { state: 'estimated' });
   };
+  // Reserved and priced for another provider (the deployment switched): never called or
+  // settled under this one's key. Released — nothing was sent — and chunk 2 reserves again.
+  if (reservation.providerKey !== input.provider.providerKey) {
+    await releaseNotCalled();
+    return { kind: 'retry', code: 'provider_changed' };
+  }
   if (await transcribed(context, input.sessionId)) {
     await releaseNotCalled();
     return { kind: 'done', reason: 'already_transcribed' };
@@ -594,6 +933,30 @@ export async function finishCallTranscription(
   if (withdrawn !== null) {
     await releaseNotCalled();
     return { kind: 'done', reason: withdrawn };
+  }
+
+  if (jobs !== undefined && recorded === undefined) {
+    // The job's names, committed before anything is sent: whatever happens after the
+    // request, the job is known and is collected and deleted, never forgotten.
+    const names = jobs.names({ sessionId: input.sessionId, attempt: input.attempt });
+    await context.db.query(
+      `INSERT INTO transcription_provider_jobs
+         (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key, next_look_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))
+       ON CONFLICT DO NOTHING`,
+      [
+        context.scope.workspaceId,
+        names.jobName,
+        input.sessionId,
+        input.attempt,
+        reservation.id,
+        input.provider.providerKey,
+        names.inputKey,
+        names.outputKey,
+        TRANSCRIPTION_SUBMIT_GRACE_SECONDS,
+      ],
+    );
+    return { kind: 'prepared' };
   }
 
   const recording = await input.recordings.fetchRecording(facts.recordingPath);
@@ -627,46 +990,231 @@ export async function finishCallTranscription(
 
   let outcome: TranscriptionOutcome;
   try {
-    outcome = await input.provider.transcribe({ audio: bounded.bytes, contentType: recording.contentType });
+    outcome = await input.provider.transcribe({
+      audio: bounded.bytes,
+      contentType: recording.contentType,
+      subject: { sessionId: input.sessionId, attempt: input.attempt },
+      // Read again where the provider's request actually leaves (after an upload, say).
+      finalCheck: async () => await stillAuthorized(context, true),
+    });
   } catch {
     // A port that throws is a port whose call may have gone out. Never the error's text:
     // it is the provider adapter's, and the adapter is the one place a key could be.
     outcome = { ok: false, kind: 'ambiguous', code: 'provider_threw' };
   }
 
+  if (recorded !== undefined) {
+    // An asynchronous provider: refused or withdrawn means no job was started. Anything
+    // else — started, or not known either way — is collected: the job's own status says
+    // whether it exists, so an attempt that may have started is never bought twice.
+    if (!outcome.ok && outcome.kind === 'withdrawn') {
+      await releaseNotCalled();
+      return { kind: 'done', reason: outcome.reason };
+    }
+    if (!outcome.ok && outcome.kind === 'refused') {
+      await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
+      await markProviderJob(context, recorded.jobName, { state: 'failed' });
+      return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
+    }
+    await markProviderJob(context, recorded.jobName, { state: 'started', lookInSeconds: transcriptionPollDelaySeconds(0) });
+    return { kind: 'started', code: outcome.ok ? 'started' : outcome.code };
+  }
+
   if (!outcome.ok) {
+    if (outcome.kind === 'withdrawn') {
+      await releaseNotCalled();
+      return { kind: 'done', reason: outcome.reason };
+    }
     if (outcome.kind === 'refused') {
       await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
       return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
     }
-    // Ambiguous: estimated at the reservation first, then the bounded retry (chunk 2).
+    // Ambiguous (or a synchronous provider answering `started`, which none does): estimated
+    // at the reservation first, then the bounded retry (chunk 2).
     await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'estimated' } });
     if (paidAttempts(rows) >= TRANSCRIPTION_MAX_ATTEMPTS || rows.length >= TRANSCRIPTION_MAX_ROWS) return { kind: 'done', reason: 'transcription_failed', code: outcome.code };
     return { kind: 'retry', code: outcome.code };
   }
 
-  const durationSeconds = Math.max(0, Math.min(86_400, Math.round(outcome.durationSeconds)));
-  const utterances = outcome.utterances.slice(0, CALL_TRANSCRIPT_MAX_UTTERANCES);
-  await context.db.query(
-    `INSERT INTO call_transcripts (workspace_id, call_session_id, provider, model, language, duration_seconds, utterances)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-     ON CONFLICT ON CONSTRAINT call_transcripts_pkey DO NOTHING`,
-    [
-      context.scope.workspaceId,
-      input.sessionId,
-      input.provider.provider,
-      input.provider.model,
-      outcome.language,
-      durationSeconds,
-      JSON.stringify(utterances),
-    ],
+  return await storeAndSettle(context, { sessionId: input.sessionId, at: input.at, provider: input.provider, reservation, result: outcome });
+}
+
+// ---------------------------------------------------------------------------
+// Collecting a recorded provider job (slice C3a)
+// ---------------------------------------------------------------------------
+
+export type CollectTranscriptionOutcome =
+  /** No recorded job of this call is waiting to be collected. */
+  | { readonly kind: 'none' }
+  /** Still running: looked at again later, by another short claim. */
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'transcribed'; readonly settledCents: number; readonly utterances: number }
+  /** Ambiguous: the attempt is estimated, and may be retried once within the cap (chunk 2 decides). */
+  | { readonly kind: 'retry'; readonly code: string }
+  /** Terminal: nothing more is bought for this call. */
+  | { readonly kind: 'done'; readonly reason: TranscriptionRefusalCode | 'already_transcribed'; readonly code: string };
+
+/**
+ * One look at the call's recorded provider job, under the session's lock, in a short
+ * transaction: one status read and, once it completed, one read of its output object, then
+ * the commit — nothing else, so the claim is bounded (`callTranscribeLeaseSeconds`). This is
+ * what a claim does first, whoever started the job, so a crash or a lost lease after the
+ * request resumes here: the job is collected, not estimated and bought again. If the commit
+ * fails, the next look reads the same output again (it lives a day).
+ *
+ * `collector` is the Amazon Transcribe adapter, present whenever the call-audio bucket is
+ * configured, whichever provider new attempts use: a deployment that switched to Deepgram
+ * still collects the jobs Transcribe already has.
+ *
+ *   * running, or the look failed: looked at again when the collect source's schedule says
+ *     (`scheduleTranscriptionLooks`, `transcriptionPollDelaySeconds` apart);
+ *     after `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` the attempt is estimated and the job
+ *     `failed` — terminal, never retried;
+ *   * completed: the transcript stored and the attempt settled, once, by id;
+ *   * FAILED: settled at 0 (not billed), `failed` — terminal;
+ *   * no such job (the request never left — the claim died between the two commits), or
+ *     completed but unreadable: estimated, as every attempt nobody can vouch for is, and
+ *     retried once within the two paid attempts — the ordinary ambiguous rule.
+ */
+export async function collectCallTranscription(
+  context: RepositoryContext,
+  input: { readonly sessionId: string; readonly at: string; readonly collector: TranscriptionProvider },
+): Promise<CollectTranscriptionOutcome> {
+  await lockTranscription(context, input.sessionId);
+  const job = (await providerJobsOf(context, input.sessionId)).find(row => row.state === 'submitting' || row.state === 'started');
+  if (job === undefined) return { kind: 'none' };
+  const rows = await listTranscriptionAttempts(context, input.sessionId);
+  const reservation = rows.find(row => row.id === job.reservationId);
+  // The budget lock before any settlement (the one lock order: an estimate takes the
+  // monthly spend lock after it).
+  await lockTranscriptionBudget(context);
+  const estimate = async (): Promise<void> => {
+    if (reservation?.state === 'calling') {
+      await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'estimated' } });
+    }
+  };
+  const terminal = async (code: string): Promise<CollectTranscriptionOutcome> => {
+    await estimate();
+    await markProviderJob(context, job.jobName, { state: 'failed' });
+    return { kind: 'done', reason: 'transcription_failed', code };
+  };
+  const ambiguous = async (code: string): Promise<CollectTranscriptionOutcome> => {
+    await estimate();
+    await markProviderJob(context, job.jobName, { state: 'estimated' });
+    if (paidAttempts(rows) >= TRANSCRIPTION_MAX_ATTEMPTS || rows.length >= TRANSCRIPTION_MAX_ROWS) {
+      return { kind: 'done', reason: 'transcription_failed', code };
+    }
+    return { kind: 'retry', code };
+  };
+  const jobs = input.collector.jobs;
+  if (job.providerKey !== input.collector.providerKey || jobs === undefined) return await terminal('provider_unknown');
+  if (reservation === undefined || reservation.state !== 'calling') {
+    // Closed already (a deletion, the sweep): nothing to settle.
+    await markProviderJob(context, job.jobName, { state: 'estimated' });
+    return { kind: 'done', reason: 'transcription_failed', code: 'attempt_closed' };
+  }
+
+  let seen: CollectOutcome;
+  try {
+    seen = await jobs.collect({ jobName: job.jobName, outputKey: job.outputKey });
+  } catch {
+    seen = { kind: 'unknown', code: 'collect_threw' };
+  }
+  switch (seen.kind) {
+    case 'running':
+    case 'unknown': {
+      if (job.expired) return await terminal('provider_job_deadline');
+      // The next look is already scheduled: the collect source moved `looks` and
+      // `next_look_at` on when it emitted this look (review C3-N), so nothing to write.
+      return { kind: 'pending' };
+    }
+    case 'not_found':
+      return await ambiguous('provider_job_not_started');
+    case 'unreadable':
+      return await ambiguous(seen.code);
+    case 'failed':
+      await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents: 0 } });
+      await markProviderJob(context, job.jobName, { state: 'failed' });
+      return { kind: 'done', reason: 'transcription_failed', code: seen.code };
+    case 'completed': {
+      await markProviderJob(context, job.jobName, { state: 'collected' });
+      if (await transcribed(context, input.sessionId)) {
+        await estimate();
+        return { kind: 'done', reason: 'already_transcribed', code: 'already_transcribed' };
+      }
+      const stored = await storeAndSettle(context, { sessionId: input.sessionId, at: input.at, provider: input.collector, reservation, result: seen });
+      return stored.kind === 'transcribed' ? stored : { kind: 'done', reason: 'transcription_failed', code: 'not_settled' };
+    }
+  }
+}
+
+/** A recorded job due a look, with the key of its next `call.transcribe`. */
+export interface TranscriptionJobDue {
+  readonly workspaceId: string;
+  readonly sessionId: string;
+  /** `call-transcribe-collect:<row id>:<look>`: one job per look, never a key reused. */
+  readonly idempotencyKey: string;
+}
+
+/** The key of one look's `call.transcribe`: the row's id and its look number. */
+export function transcriptionCollectJobKey(rowId: string, look: number): string {
+  return `call-transcribe-collect:${rowId}:${String(Math.trunc(look))}`;
+}
+
+/** How many recorded jobs one scheduler pass emits a look for. */
+export const TRANSCRIPTION_LOOKS_PER_PASS = 50;
+
+/**
+ * The recorded jobs due a look now (slice C3a), with their next look scheduled in the same
+ * statement (review C3-N): `submitting` past its grace, or `started`, with `next_look_at`
+ * passed. Each emitted look moves `looks` on and sets `next_look_at` to the backoff after it,
+ * in the scheduler pass's transaction with the enqueue, so a look job that dies (attempts
+ * exhausted, a handler that throws) neither blocks that row's next look after its backoff nor
+ * keeps the row at the front of the window: the window moves on to the next due rows. The
+ * look's key is the row id and the look number before the move, so every look is a new job
+ * however long the job runs. `TRANSCRIPTION_COLLECT_DEADLINE_MINUTES` still ends a job: the
+ * first look claimed past it marks the job `failed`. Rows a live claim holds are skipped
+ * this pass, not waited for.
+ */
+export async function scheduleTranscriptionLooks(db: Queryable): Promise<readonly TranscriptionJobDue[]> {
+  const { rows } = await db.query<{ id: string; workspace_id: string; call_session_id: string; look: number }>(
+    `WITH due AS (
+       SELECT workspace_id, job_name, looks FROM transcription_provider_jobs
+        WHERE state IN ('submitting', 'started') AND next_look_at <= now()
+        ORDER BY next_look_at, id
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+     )
+     UPDATE transcription_provider_jobs j
+        SET looks = due.looks + 1,
+            next_look_at = now() + make_interval(secs => LEAST(300, 20 * power(2, LEAST(due.looks + 1, 8))))
+       FROM due
+      WHERE j.workspace_id = due.workspace_id AND j.job_name = due.job_name
+      RETURNING j.id, j.workspace_id, j.call_session_id, due.looks AS look`,
+    [TRANSCRIPTION_LOOKS_PER_PASS],
   );
-  // Settled at the provider's duration, never past the minutes that were cleared: the audio
-  // was cut to them, so a longer report is the provider's rounding, not more audio.
-  const minutes = Math.min(transcriptionMinutes(outcome.durationSeconds), Math.max(1, reservation.maxUnits));
-  const cents = transcriptionCents(minutes, reservation.unitPriceMicros);
-  const settled = await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'settled', cents } });
-  return { kind: 'transcribed', settledCents: settled?.recordedCents ?? 0, utterances: utterances.length };
+  return rows.map(row => ({
+    workspaceId: row.workspace_id,
+    sessionId: row.call_session_id,
+    idempotencyKey: transcriptionCollectJobKey(row.id, Number(row.look)),
+  }));
+}
+
+/**
+ * The S3 objects of this workspace's calls that no longer exist (slice C3a), for the
+ * deletion workflow to delete after its commit, best effort: the input audio and the
+ * transcript of every recorded attempt of a deleted call written in the last two days. Older
+ * objects are already gone (the bucket's one-day lifecycle), so nothing is marked or owed.
+ */
+export async function callAudioKeysOfDeletedCalls(db: Queryable, workspaceId: string): Promise<readonly string[]> {
+  const { rows } = await db.query<{ input_key: string; output_key: string }>(
+    `SELECT j.input_key, j.output_key FROM transcription_provider_jobs j
+      WHERE j.workspace_id = $1 AND j.created_at > now() - interval '2 days'
+        AND NOT EXISTS (SELECT 1 FROM call_sessions s WHERE s.workspace_id = j.workspace_id AND s.id = j.call_session_id)
+      ORDER BY j.input_key`,
+    [workspaceId],
+  );
+  return rows.flatMap(row => [row.input_key, row.output_key]);
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +1233,9 @@ export async function sweepTranscriptionReservations(
     `SELECT DISTINCT subject_id FROM provider_reservations
       WHERE workspace_id = $1 AND subject_kind = $2 AND state IN ('reserved', 'calling')
         AND created_at + make_interval(mins => $3) <= now()
+        AND NOT EXISTS (SELECT 1 FROM transcription_provider_jobs j
+                         WHERE j.workspace_id = provider_reservations.workspace_id AND j.reservation_id = provider_reservations.id
+                           AND j.state IN ('submitting', 'started'))
       ORDER BY subject_id`,
     [context.scope.workspaceId, TRANSCRIPTION_SUBJECT_KIND, TRANSCRIPTION_SWEEP_MINUTES],
   );
@@ -746,6 +1297,8 @@ export async function listHeldTranscriptions(db: Queryable): Promise<readonly He
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
         AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at
         AND NOT EXISTS (SELECT 1 FROM call_transcripts t WHERE t.workspace_id = cs.workspace_id AND t.call_session_id = cs.id)
+        AND NOT EXISTS (SELECT 1 FROM transcription_provider_jobs pj
+                         WHERE pj.workspace_id = cs.workspace_id AND pj.call_session_id = cs.id AND pj.state IN ('submitting', 'started', 'failed'))
         AND NOT EXISTS (
           SELECT 1 FROM provider_reservations r
            WHERE r.workspace_id = cs.workspace_id AND r.subject_kind = $3 AND r.subject_id = cs.id
@@ -769,6 +1322,9 @@ export async function workspacesOwingTranscriptionSweep(db: Queryable): Promise<
     `SELECT DISTINCT workspace_id FROM provider_reservations
       WHERE subject_kind = $1 AND state IN ('reserved', 'calling')
         AND created_at + make_interval(mins => $2) <= now()
+        AND NOT EXISTS (SELECT 1 FROM transcription_provider_jobs j
+                         WHERE j.workspace_id = provider_reservations.workspace_id AND j.reservation_id = provider_reservations.id
+                           AND j.state IN ('submitting', 'started'))
       ORDER BY workspace_id`,
     [TRANSCRIPTION_SUBJECT_KIND, TRANSCRIPTION_SWEEP_MINUTES],
   );
@@ -806,6 +1362,14 @@ export async function finaliseTranscriptionsOfSessions(
   for (const sessionId of [...sessionIds].sort()) {
     await lockTranscription(context, sessionId);
     await finaliseOpenAttempts(context, sessionId, at);
+    // A provider job of a deleted call is never collected. Its rows outlive the session on
+    // purpose, so the workflow can name the call's S3 objects after its commit
+    // (`callAudioKeysOfDeletedCalls`); the bucket's one-day lifecycle is the backstop.
+    await context.db.query(
+      `UPDATE transcription_provider_jobs SET state = 'estimated', finished_at = COALESCE(finished_at, now())
+        WHERE workspace_id = $1 AND call_session_id = $2 AND state IN ('submitting', 'started')`,
+      [context.scope.workspaceId, sessionId],
+    );
   }
 }
 

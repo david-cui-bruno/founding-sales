@@ -33,7 +33,7 @@ import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
  *
  * The call record keeps `provider_error` for both, because `mail_classification_calls_outcome_known`
  * is a CHECK constraint and this fix carries no migration; the difference travels on `attempt.provider`
- * (status, error type, a bounded message) to the settlement and the log.
+ * (status, error type, a 400's leading parameter path; never its text) to the settlement and the log.
  *
  * `excerpt_unverified` is the one that is a judgement rather than a mechanism, and
  * it is the conservative reading of the brief's "verbatim substring of the input,
@@ -128,7 +128,7 @@ export function anthropicReplyClassifier(options: AnthropicClassifierOptions): R
       } catch (error) {
         // The SDK error itself is deliberately not carried. Its message can quote a
         // request body, and a request body is somebody's email; what is kept is the API's
-        // own status, error type and a bounded message about the request.
+        // own status, error type and at most a parameter path, never its text.
         return {
           ok: false,
           usageReported: false,

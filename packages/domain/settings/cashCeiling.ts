@@ -1,6 +1,6 @@
 import { monthlyCashCeilingSettingSchema } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { lockMonthlySpend, readSpend, workspaceBusinessZone } from '../research/ledger.ts';
+import { lockMonthlySpend, readCreditSpend, readSpend, workspaceBusinessZone } from '../research/ledger.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { readSetting } from './store.ts';
 
@@ -23,8 +23,9 @@ import { readSetting } from './store.ts';
  *
  * ## What month-to-date spend is
  *
- * `research/ledger.ts`'s `readSpend`: every provider's settled cost (`provider_ledger`)
- * plus every open (`reserved` or `calling`) reservation, whose business date falls in the
+ * `research/ledger.ts`'s `readSpend`: every cash-funded provider's settled cost
+ * (`provider_ledger`) plus every open (`reserved` or `calling`) reservation — never a
+ * credit-funded one (Amazon Transcribe, slice C3a; `funding.ts`), whose business date falls in the
  * calendar month of the workspace business time zone, up to today. The research ceilings
  * already read the same sum, so "what this month cost" has one definition. Research keeps
  * its own monthly ceiling as well.
@@ -79,11 +80,20 @@ export async function monthWithinCeiling(
   return spend.monthToDateCents <= ceiling;
 }
 
-/** What Settings → Calling & calendar shows: "this month: $x of $y". */
+/**
+ * What Settings → Calling & calendar shows: "this month: $x of $y", and beside it the
+ * month's credit-funded cost (slice C3a), which the ceiling does not count.
+ */
 export async function monthlyCashStatus(
   context: RepositoryContext,
-): Promise<{ readonly ceilingCents: number; readonly spentMonthCents: number }> {
+  options: { readonly credits?: boolean } = {},
+): Promise<{ readonly ceilingCents: number; readonly spentMonthCents: number; readonly creditsMonthCents?: number }> {
   const zone = await workspaceBusinessZone(context);
-  const spend = await readSpend(context, { businessTimeZone: zone, at: await databaseNow(context) });
-  return { ceilingCents: await readMonthlyCashCeiling(context), spentMonthCents: spend.monthToDateCents };
+  const at = await databaseNow(context);
+  const spend = await readSpend(context, { businessTimeZone: zone, at });
+  const status = { ceilingCents: await readMonthlyCashCeiling(context), spentMonthCents: spend.monthToDateCents };
+  // Only when asked (`?include=credits`): P1's answer stays exactly P1's shape otherwise.
+  if (options.credits !== true) return status;
+  const credits = await readCreditSpend(context, { businessTimeZone: zone, at });
+  return { ...status, creditsMonthCents: credits.monthToDateCents };
 }

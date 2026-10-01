@@ -1,4 +1,5 @@
 import {
+  CALL_HISTORY_INCLUDE_SUMMARY,
   callHistoryResponseSchema,
   callRecordingResponseSchema,
   callTranscriptResponseSchema,
@@ -17,6 +18,7 @@ import {
 } from '@fss/domain/calls/sessions.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { readCallTranscript } from '@fss/domain/calls/transcription.ts';
+import { readCallSummaries } from '@fss/domain/calls/summary.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -42,6 +44,10 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *   * `GET /calls/recording?sessionId=` — the recording's audio, read from Twilio here
  *     with the account's API key and returned as bytes. Never a Twilio URL. Another
  *     firm's or workspace's session is 404, exactly like an unknown one.
+ *
+ * Slice C3b: `GET /calls/history?firmId=&include=summary` adds each call's summary and
+ * suggested next steps (`summary`, absent when the call has none). Opt-in, so a Mac built
+ * before C3b, which never asks, gets the answer its strict parser expects.
  *
  * Slice C2 adds one more read with the same switch:
  *
@@ -109,7 +115,23 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (firmId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const calls = await listFirmCallSessions(scoped.context, firmId);
     if (calls === null) return notFound;
-    return { status: 200, body: callHistoryResponseSchema.parse({ calls }) };
+    if (!request.query.getAll('include').includes(CALL_HISTORY_INCLUDE_SUMMARY)) {
+      return { status: 200, body: callHistoryResponseSchema.parse({ calls }) };
+    }
+    // The firm was already decided readable by `listFirmCallSessions`; these are its calls.
+    const summaries = await readCallSummaries(
+      scoped.context,
+      calls.map(call => call.sessionId),
+    );
+    return {
+      status: 200,
+      body: callHistoryResponseSchema.parse({
+        calls: calls.map(call => {
+          const summary = summaries.get(call.sessionId);
+          return summary === undefined ? call : { ...call, summary };
+        }),
+      }),
+    };
   }
 
   if (request.path === '/calls/recording') {

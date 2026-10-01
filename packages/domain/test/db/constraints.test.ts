@@ -20,6 +20,8 @@ import { MAILBOX_ACCOUNTS_CONSTRAINT_CASES } from './support/mailboxAccountsCase
 import { CALL_TO_BOOKING_CONSTRAINT_CASES } from './support/callToBookingCases.ts';
 import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from './support/meetingBookingUidsCases.ts';
 import { CALL_TRANSCRIPTS_CONSTRAINT_CASES } from './support/callTranscriptsCases.ts';
+import { CALL_SUMMARIES_CONSTRAINT_CASES } from './support/callSummariesCases.ts';
+import { TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES } from './support/transcriptionProviderJobsCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1367,6 +1369,8 @@ const cases: readonly Case[] = [
   ...CALL_TO_BOOKING_CONSTRAINT_CASES,
   ...MEETING_BOOKING_UIDS_CONSTRAINT_CASES,
   ...CALL_TRANSCRIPTS_CONSTRAINT_CASES,
+  ...CALL_SUMMARIES_CONSTRAINT_CASES,
+  ...TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {
