@@ -37,7 +37,7 @@ export const CALL_SUMMARIZE_LEASE_SECONDS = 120;
 /** The API's own words about a request it refused or failed: status, type, message. Never transcript text. */
 function providerFields(provider: ProviderErrorDetail | undefined): Readonly<Record<string, string | number | null>> {
   if (provider === undefined) return {};
-  return { provider_status: provider.status, provider_error_type: provider.type, provider_message: provider.message };
+  return { provider_status: provider.status, provider_error_type: provider.type, provider_parameter: provider.parameter };
 }
 
 type Step = 'reserved' | 'calling' | 'retry';

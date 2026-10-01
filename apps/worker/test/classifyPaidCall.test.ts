@@ -79,7 +79,7 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
         throw Object.assign(new Error('400 invalid_request_error'), {
           status: 400,
           // The canary: the reply's own words quoted back in the API's message (C3 review, finding 6).
-          error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Invalid schema near "Tuesday works. Send an invite."' } },
+          error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format.schema: Invalid schema near "Tuesday works. Send an invite." and Tuesday works bare' } },
         });
       }
       return await recorded.create(request);
@@ -399,7 +399,7 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
       will_retry: false,
       provider_status: 400,
       provider_error_type: 'invalid_request_error',
-      provider_message: 'output_config.format.schema: Invalid schema near …',
+      provider_parameter: 'output_config.format.schema',
     });
     // The recorded call stays `provider_error`: the CHECK constraint has no other word and this fix has no migration.
     expect(await outcomes(id)).toEqual(['provider_error']);

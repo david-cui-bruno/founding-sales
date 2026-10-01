@@ -162,7 +162,7 @@ describe('the adapter', () => {
       usage: null,
       content: null,
       answeredBy: null,
-      provider: { status: null, type: null, message: null, refused: false },
+      provider: { status: null, type: null, parameter: null, refused: false },
     });
     expect((await respond({ stop_reason: 'refusal', content: [{ type: 'text', text: answer() }], usage }).summarize(input)).outcome).toBe('refusal');
     expect((await respond({ stop_reason: 'end_turn', content: [], usage }).summarize(input)).outcome).toBe('malformed');
@@ -201,44 +201,50 @@ describe('a request the API refuses', () => {
       usage: null,
       content: null,
       answeredBy: null,
-      // The API's sentence, its quoted spans removed (C3 review, finding 6).
+      // Only the parameter path the API's sentence starts with (C3 follow-up review).
       provider: {
         status: 400,
         type: 'invalid_request_error',
-        message: 'output_config.format.schema: Invalid schema: Enum value … does not match declared type …string…null…',
+        parameter: 'output_config.format.schema',
         refused: true,
       },
     });
   });
 
-  it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps a long message bounded', async () => {
+  it('calls a 5xx, a 408 and a dropped connection ambiguous, and keeps no long message', async () => {
     expect((await throwing(new FakeApiError(529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })).summarize(input)).outcome).toBe(
       'provider_error',
     );
     expect((await throwing(new FakeApiError(408, { type: 'error', error: { type: 'timeout_error', message: 'x' } })).summarize(input)).outcome).toBe('provider_error');
     const dropped = await throwing(new Error('socket hang up')).summarize(input);
     expect(dropped.outcome).toBe('provider_error');
-    expect(dropped.provider).toEqual({ status: null, type: null, message: null, refused: false });
-    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).message).toHaveLength(160);
+    expect(dropped.provider).toEqual({ status: null, type: null, parameter: null, refused: false });
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'm'.repeat(1000) } })).parameter).toBeNull();
+    expect(providerErrorOf(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message: `${'m'.repeat(82)}: x` } })).parameter).toBeNull();
   });
 
-  it('never lets transcript text through a provider message: quotes removed, other statuses keep none', async () => {
-    const CANARY = 'Marisol-canary-7f3a says she will sign on Friday';
+  it('never lets transcript text through a provider error: no message, only a leading parameter path of a 400', async () => {
+    const CANARY = 'Marisol canary 7f3a says she will sign on Friday';
     const messages = [
+      // Quoted, with an escaped quote inside, bare, long, and under other statuses.
       [400, 'invalid_request_error', `messages.0.content: text "${CANARY}" is not allowed`],
+      [400, 'invalid_request_error', `messages.0.content: text "she said \\"${CANARY}\\" today" is not allowed`],
+      [400, 'invalid_request_error', `messages.0.content: ${CANARY}`],
+      [400, 'invalid_request_error', `${CANARY}: is not allowed`],
       [400, 'invalid_request_error', `unexpected value '${CANARY}' at messages.0`],
-      [400, 'invalid_request_error', `unbalanced quote: '${CANARY}`],
       [400, 'invalid_request_error', `${'x'.repeat(170)} ${CANARY}`],
-      [413, 'request_too_large', CANARY],
+      [413, 'request_too_large', `messages.0.content: ${CANARY}`],
       [429, 'rate_limit_error', CANARY],
       [500, 'api_error', CANARY],
-      [400, 'not_found_error', CANARY],
+      [400, 'not_found_error', `messages.0.content: ${CANARY}`],
     ] as const;
     for (const [status, type, message] of messages) {
       const attempt = await throwing(new FakeApiError(status, { type: 'error', error: { type, message } })).summarize(input);
       expect(JSON.stringify(attempt), `${String(status)} ${type}`).not.toContain('canary');
       expect(attempt.provider?.status).toBe(status);
       expect(attempt.provider?.type).toBe(type);
+      // A parameter path only for a 400 invalid_request_error that starts with one.
+      expect(attempt.provider?.parameter).toBe(status === 400 && type === 'invalid_request_error' && message.startsWith('messages.0.content:') ? 'messages.0.content' : null);
     }
   });
 });

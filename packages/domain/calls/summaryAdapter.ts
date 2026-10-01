@@ -23,9 +23,9 @@ import {
  * | `provider_error` | A 5xx, a 408, a timeout or a dropped connection: nobody knows what was billed. | the estimate |
  *
  * A refused or failed request carries `provider` (`classification/providerError.ts`, the one
- * helper the classifier shares): the HTTP status and the API's error type, and a message
- * only for a 400 `invalid_request_error`, with its quoted spans removed and cut at 160
- * characters — so no transcript text can reach a log through it. A 4xx `invalid_request_error`
+ * helper the classifier shares): the HTTP status, the API's error type, and for a 400
+ * `invalid_request_error` at most the parameter path its message starts with — never the
+ * message's text, so no transcript can reach a log through it. A 4xx `invalid_request_error`
  * used to be read as an ambiguous failure and retried at an estimate; it is the API saying
  * no, before generation, and the next attempt would say no too.
  *

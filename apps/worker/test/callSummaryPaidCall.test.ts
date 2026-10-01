@@ -98,7 +98,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
         throw Object.assign(new Error('400 invalid_request_error'), {
           status: 400,
           // The canary: a transcript line quoted back in the API's message (C3 review, finding 6).
-          error: { type: 'error', error: { type: 'invalid_request_error', message: "Invalid request near 'Yes, this is Marisol. Who did you say you were with?'" } },
+          error: { type: 'error', error: { type: 'invalid_request_error', message: "messages.0.content: near 'Yes, this is Marisol.' and Marisol unquoted" } },
         });
       }
       const usage = { input_tokens: 900, output_tokens: 300 };
@@ -510,7 +510,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       reason: 'provider_refused',
       provider_status: 400,
       provider_error_type: 'invalid_request_error',
-      provider_message: 'Invalid request near …',
+      provider_parameter: 'messages.0.content',
     });
     expect(JSON.stringify(logs)).not.toContain('Marisol');
   });

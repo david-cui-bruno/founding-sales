@@ -55,7 +55,7 @@ export interface ClassifyHandlerOptions {
   readonly leaseSeconds?: number | undefined;
   /**
    * Where the job says what the API said about a request it refused or failed
-   * (`classify_reply_provider_failed`): status, error type, a bounded message, and whether
+   * (`classify_reply_provider_failed`): status, error type, the leading parameter path of a 400 invalid_request_error, and whether
    * it was a refusal (settled at 0, terminal) or ambiguous (estimated, one retry). Never
    * message text.
    */
@@ -145,7 +145,7 @@ export function classifyReplyHandler(deps: ClassifyReplyDeps, options: ClassifyH
           will_retry: finished.kind === 'retry',
           provider_status: provider.status,
           provider_error_type: provider.type,
-          provider_message: provider.message,
+          provider_parameter: provider.parameter,
         });
       }
       if (finished.kind === 'retry') return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
