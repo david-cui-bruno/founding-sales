@@ -22,6 +22,8 @@ export const PROVIDER_KIND_FUNDING: Readonly<Record<string, ProviderFunding>> = 
   deepgram: 'cash',
   anthropic_extraction: 'cash',
   anthropic_classifier: 'cash',
+  // Slice C3b: after-call summaries, cash like every Anthropic call.
+  anthropic_call_summary: 'cash',
 });
 
 /** The kind a `provider_key` names: everything before its first dot. */

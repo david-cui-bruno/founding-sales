@@ -514,6 +514,7 @@ the month's cash ceiling and shown apart; a kind not listed is cash.
 | `deepgram.nova-3` | transcription (comparison) | cash |
 | `anthropic_extraction` | research model calls | cash |
 | `anthropic_classifier` | reply classifier calls | cash |
+| `anthropic_call_summary` | after-call summaries (slice C3b) | cash |
 | `company_page` | firms' own websites | free (a count, no cents) |
 
 ### The voicemail script

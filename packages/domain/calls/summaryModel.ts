@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  RECORDING_CHANNEL_ROLES,
   CALL_SUMMARY_MAX_COMMITMENTS,
   CALL_SUMMARY_MAX_NEXT_STEPS,
   CALL_SUMMARY_SIDES,
@@ -90,27 +91,15 @@ export const CALL_SUMMARY_MAX_TRANSCRIPT_BYTES = 200_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Which side a stored utterance is, from its `speaker` field: the recording's channel
- * index once slice C3a stores channels (channel 0 = the Twilio parent leg, the Voice SDK
- * client — David; channel 1 = the person called; https://www.twilio.com/docs/voice/twiml/dial,
- * `record-from-answer-dual`). Anything else is not a side this prompt can name, and the
- * line is labelled `them` only if it is channel 1.
+ * Which side a stored utterance is, from its `speaker` field — the recording's channel in a
+ * channel-labelled transcript (`RECORDING_CHANNEL_ROLES`, slice C3a: channel 0 the caller,
+ * channel 1 the person called). Only channel-labelled transcripts are summarized
+ * (`transcriptIsChannelLabelled`); any other channel is no side this prompt can name.
  */
 export function sideOfSpeaker(speaker: number): CallSummarySide | null {
-  if (speaker === 0) return 'you';
-  if (speaker === 1) return 'them';
+  if (speaker === RECORDING_CHANNEL_ROLES.you) return 'you';
+  if (speaker === RECORDING_CHANNEL_ROLES.them) return 'them';
   return null;
-}
-
-/**
- * The transcripts whose `speaker` is the recording channel, as `provider/model` (slice
- * C3a's list). Only these are summarized: a diarized transcript (C2's `deepgram/nova-3`)
- * says which voice, not whose, and a summary of it could not say who promised what.
- */
-export const CHANNEL_LABELLED_TRANSCRIPTS: readonly string[] = Object.freeze(['aws_transcribe/standard', 'deepgram/nova-3-multichannel']);
-
-export function transcriptIsChannelLabelled(transcript: { readonly provider: string; readonly model: string }): boolean {
-  return CHANNEL_LABELLED_TRANSCRIPTS.includes(`${transcript.provider}/${transcript.model}`);
 }
 
 export interface CallSummaryInput {

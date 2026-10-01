@@ -1,4 +1,4 @@
-import type { CallSummaryDto, CallTranscriptUtterance } from '@fss/contracts';
+import { CHANNEL_LABELLED_TRANSCRIPTS, transcriptIsChannelLabelled, type CallSummaryDto, type CallTranscriptUtterance } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -25,9 +25,7 @@ import {
   callSummaryCeilingCents,
   callSummaryCents,
   callSummaryInputTokenBound,
-  CHANNEL_LABELLED_TRANSCRIPTS,
   isCallSummaryModel,
-  transcriptIsChannelLabelled,
   transcriptText,
   type CallSummaryInput,
   type CallSummaryModel,

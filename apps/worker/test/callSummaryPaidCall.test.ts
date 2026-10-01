@@ -22,6 +22,8 @@ import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
+import { providerFunding } from '@fss/domain/settings/funding.ts';
+import { CALL_SUMMARY_PROVIDER_KEY } from '@fss/domain/calls/summaryModel.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { seedCrm, type SeededCrm } from '@fss/domain/test/db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '@fss/domain/test/db/support/fixtures.ts';
@@ -262,6 +264,8 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     expect(C).toBeGreaterThan(0);
     // 900 input and 300 output tokens at Haiku 4.5's $1 / $5: under a cent, rounded up to one.
     expect(rows[0]?.settled_cents).toBe(1);
+    // Cash (slice C3a's funding split): it counts toward the month's cash ceiling.
+    expect(providerFunding(CALL_SUMMARY_PROVIDER_KEY)).toBe('cash');
     const stored = await summaryOf(id);
     expect(stored?.summary).toMatch(/^You reached Marisol/u);
     // The invented quote is dropped; the due phrase not said on the call becomes null.
