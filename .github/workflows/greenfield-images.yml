@@ -53,20 +53,10 @@ name: Greenfield images
 # operator's `images.sh promote`, by digest.
 
 on:
+  # Every pull request: the build job is a required check, and a required check that a
+  # path filter never starts blocks the pull request for good (a workflow-, docs- or
+  # tools-only change, 30 Sep 2026). The repository is public, so the minutes are free.
   pull_request:
-    paths:
-      - 'Dockerfile.api'
-      - 'Dockerfile.worker'
-      - 'Dockerfile.api.dockerignore'
-      - 'Dockerfile.worker.dockerignore'
-      - 'apps/**'
-      - 'packages/**'
-      - 'certs/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/greenfield-images.yml'
-      - 'infra/scripts/images.sh'
-      - 'infra/scripts/lib.sh'
   push:
     branches: [main]
     # Exactly `infra/scripts/images.sh inputs`, in glob form; the release suite
