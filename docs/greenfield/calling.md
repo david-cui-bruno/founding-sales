@@ -417,7 +417,8 @@ reservations, on the calendar month of the workspace business time zone (`readSp
 Credit-funded spend (Amazon Transcribe, slice C3a; `packages/domain/settings/funding.ts`) is
 excluded from it and from every ceiling that reads it; it still counts against the day's
 transcription cap, and Settings shows it as "Credits this month" (`creditsMonthCents` in
-`?include=month`). A refusal is
+`month`, answered only with `?include=month&include=credits`, so a P1 desktop's strict parse
+never meets it). A refusal is
 `monthly_cash_ceiling` with a sentence. Settings → Calling & calendar shows "This month: $x
 of $y" (`GET /settings/integrations?include=month`). Research keeps its own monthly ceiling and
 is also refused by this one (`monthly_cash_ceiling`).

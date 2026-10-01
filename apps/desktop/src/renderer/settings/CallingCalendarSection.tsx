@@ -32,7 +32,7 @@ import { Textarea } from '../ui/textarea.tsx';
  *   * **Monthly spending limit** (slice P1) — "This month: $x of $y", and the limit, $0 to
  *     $50 ($25 until David changes it). Present when the server answers it (`?include=month`).
  *     Below it, "Credits this month: $z" (slice C3a): Amazon Transcribe, paid from AWS
- *     credits, which the limit does not count.
+ *     credits, which the limit does not count (`?include=credits`).
  *
  * The section names no secret field, value or length: the read carries field *names* only
  * and this section says the account "is not set up" without listing them. Every refusal is
@@ -46,7 +46,11 @@ export const CALLING_NEEDS_BUDGET = 'Calling stays off until a daily budget is s
 export const CALCOM_NEEDS_SECRET = 'Cal.com bookings need the Cal.com webhook secret to be set up on the server first.';
 export const BUDGET_RANGE = 'Enter an amount from $0 to $100.';
 export const MINUTES_RANGE = 'Enter a whole number of minutes from 1 to 240.';
-export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription key to be set up on the server first.';
+/**
+ * No running worker can transcribe (slice C3a): with Amazon Transcribe that is the call-audio
+ * bucket and the provider setting, with Deepgram its key — so the sentence names neither.
+ */
+export const TRANSCRIPTION_NEEDS_KEY = 'Call transcription needs the transcription service to be set up on the server first.';
 export const TRANSCRIPTION_NEEDS_BUDGET = 'Transcription stays off until a daily transcription budget is set.';
 export const TRANSCRIPTION_BUDGET_RANGE = 'Enter an amount from $0 to $5.';
 export const MONTH_RANGE = 'Enter an amount from $0 to $50.';

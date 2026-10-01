@@ -86,14 +86,14 @@ export async function monthWithinCeiling(
  */
 export async function monthlyCashStatus(
   context: RepositoryContext,
-): Promise<{ readonly ceilingCents: number; readonly spentMonthCents: number; readonly creditsMonthCents: number }> {
+  options: { readonly credits?: boolean } = {},
+): Promise<{ readonly ceilingCents: number; readonly spentMonthCents: number; readonly creditsMonthCents?: number }> {
   const zone = await workspaceBusinessZone(context);
   const at = await databaseNow(context);
   const spend = await readSpend(context, { businessTimeZone: zone, at });
+  const status = { ceilingCents: await readMonthlyCashCeiling(context), spentMonthCents: spend.monthToDateCents };
+  // Only when asked (`?include=credits`): P1's answer stays exactly P1's shape otherwise.
+  if (options.credits !== true) return status;
   const credits = await readCreditSpend(context, { businessTimeZone: zone, at });
-  return {
-    ceilingCents: await readMonthlyCashCeiling(context),
-    spentMonthCents: spend.monthToDateCents,
-    creditsMonthCents: credits.monthToDateCents,
-  };
+  return { ...status, creditsMonthCents: credits.monthToDateCents };
 }

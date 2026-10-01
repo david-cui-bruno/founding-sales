@@ -319,8 +319,9 @@ export const integrationsSettingsResponseSchema = z.strictObject({
    * month's settled plus reserved CASH cost across every cash-funded provider, on the
    * business time zone — what the ceiling is measured against. `creditsMonthCents` (slice
    * C3a) is the same month's cost of the providers paid from AWS credits (Amazon Transcribe):
-   * shown beside it, never counted against the ceiling. Optional, so a reader tolerates an
-   * API from before it.
+   * shown beside it, never counted against the ceiling. Answered only when the client also
+   * asks `?include=credits`, so a P1 desktop, which parses `month` strictly, never meets
+   * it; optional, so a reader tolerates an API from before it.
    */
   month: z
     .strictObject({

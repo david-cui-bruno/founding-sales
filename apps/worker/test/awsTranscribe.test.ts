@@ -22,6 +22,8 @@ import {
   type TranscriptHttp,
 } from '../src/transcription/awsTranscribeClient.ts';
 import { readSelectedTranscriptionProvider } from '../src/transcription/selectProvider.ts';
+import { readTranscriptionComposition, registerHandlers } from '../src/bootstrap/main.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 
 /**
  * Slice C3a: the Amazon Transcribe adapter against a fake AWS SDK — the request shape, the
@@ -400,6 +402,20 @@ describe('choosing the provider from the task environment', () => {
     expect(readAwsTranscribeProvider({ ...aws, AWS_REGION: '' }).problem).toBe('AWS_REGION');
     expect(readAwsTranscribeProvider({ ...aws, FSS_NAME_PREFIX: 'Bad Prefix' }).problem).toBe('FSS_NAME_PREFIX');
     expect(readSelectedTranscriptionProvider({ ...aws, FSS_TRANSCRIPTION_PROVIDER: 'whisper' }).problem).toBe('FSS_TRANSCRIPTION_PROVIDER');
+  });
+
+  it('registers call.transcribe with Transcribe while the transcription secret is still {} (production today)', () => {
+    const twilio = JSON.stringify({ account_sid: `AC${'a'.repeat(32)}`, api_key_sid: `SK${'b'.repeat(32)}`, api_key_secret: 'c'.repeat(24) });
+    const composed = readTranscriptionComposition({ ...aws, transcription: '{}', 'twilio-voice': twilio });
+    expect(composed.problem).toBeNull();
+    expect(composed.options?.provider.providerKey).toBe('aws_transcribe.standard');
+    // So the worker's heartbeat says call_transcribe, which is all the API reads.
+    const registry = registerHandlers(new HandlerRegistry(), { transcription: composed.options ?? undefined } as Parameters<typeof registerHandlers>[1]);
+    expect(registry.get('call.transcribe')).toBeDefined();
+    // Without the bucket it does not: the problem names the variable.
+    expect(readTranscriptionComposition({ ...aws, FSS_CALL_AUDIO_BUCKET: undefined, transcription: '{}', 'twilio-voice': twilio }).problem).toBe(
+      'transcription:FSS_CALL_AUDIO_BUCKET',
+    );
   });
 
   it('keeps Deepgram selectable, and the default when nothing is chosen', () => {
