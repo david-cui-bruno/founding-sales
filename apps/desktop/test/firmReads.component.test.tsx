@@ -102,6 +102,10 @@ describe('a read in flight when the session ends is discarded', () => {
     });
     expect(screen.getAllByTestId('timeline-row')).toHaveLength(50);
     expect(screen.getByTestId('timeline-more')).toBeTruthy();
+    // And it is not waiting to appear on the next draw either.
+    cleanup();
+    render(<Timeline firmId={FIRM_ID} first={first} timelinePorts={p} />);
+    expect(screen.getAllByTestId('timeline-row')).toHaveLength(50);
   });
 });
 
@@ -123,6 +127,13 @@ describe('a late answer for another firm is never shown here (K7)', () => {
     const keys = screen.getAllByTestId('timeline-row').map(row => row.getAttribute('data-key'));
     expect(keys).toHaveLength(3);
     expect(keys.every(key => key?.startsWith('b:') === true)).toBe(true);
+    // Drawn again, B is still B's; and A's late page is there for A, cached under A.
+    cleanup();
+    render(<Timeline firmId={OTHER_FIRM_ID} first={page(0, 3, null, 'b')} timelinePorts={p} />);
+    expect(screen.getAllByTestId('timeline-row')).toHaveLength(3);
+    cleanup();
+    render(<Timeline firmId={FIRM_ID} first={page(0, 50, at(49), 'a')} timelinePorts={p} />);
+    expect(screen.getAllByTestId('timeline-row')).toHaveLength(60);
   });
 });
 
