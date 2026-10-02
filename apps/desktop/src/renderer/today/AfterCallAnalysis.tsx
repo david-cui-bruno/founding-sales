@@ -413,7 +413,7 @@ function Completed({
                         <>
                           <Select
                             aria-label="What happened"
-                            data-testid="suggestion-outcome"
+                            data-testid="suggestion-outcome-select"
                             className="h-7 w-auto text-xs"
                             value={outcomeDraft === '' ? row.params.outcome : outcomeDraft}
                             onChange={event => setOutcomeDraft(event.target.value)}
