@@ -77,6 +77,9 @@ export interface Replies {
   resolve(input: OperationInput<'replies.resolve'>): void;
 }
 
+/** What the bridge says when a confirmation was recorded: the only answers that finish a reply. */
+const CONFIRM_SUCCESS: ReadonlySet<string> = new Set(['confirmed', 'suggests_lost']);
+
 type Kind = 'read' | 'open' | 'confirm' | 'resolve';
 
 export function useReplies(): Replies {
@@ -94,8 +97,8 @@ export function useReplies(): Replies {
   /** The number of the newest request issued; an answer older than it may not move what is open. */
   const issued = useRef(0);
   const restored = useRef(false);
-  const latest = useRef({ selected, setSelected });
-  latest.current = { selected, setSelected };
+  const latest = useRef({ selected, setSelected, clearDrafts });
+  latest.current = { selected, setSelected, clearDrafts };
 
   const hold = useCallback((form: string | null, by: 1 | -1): void => {
     if (form === null) return;
@@ -119,6 +122,12 @@ export function useReplies(): Replies {
       void next
         .then(
           value => {
+            // A recorded confirmation spends its typed text whether or not the view is still here (K6).
+            if (kind === 'confirm' && form !== null && CONFIRM_SUCCESS.has(value.notice ?? '')) {
+              latest.current.clearDrafts(`replies:m:${form}:`);
+              // And a finished reply is not the one to reopen on coming back.
+              if (latest.current.selected === form) latest.current.setSelected('');
+            }
             if (mine !== generation.current) return;
             setFailed(false);
             const overtaken = number !== issued.current;
@@ -127,11 +136,21 @@ export function useReplies(): Replies {
             if (form !== null && (kind === 'confirm' || kind === 'resolve')) {
               setOutcome(value.notice === null ? null : { messageId: form, code: value.notice });
             }
-            if (!overtaken && kind === 'confirm' && form !== null && value.open === null) {
-              // The next reply is opened for the person, so answering is one motion after another.
-              const following = nextAfter(value.cards, form);
-              latest.current.setSelected(following ?? '');
-              if (following !== null) apply(api()?.read('replies.open', { messageId: following }), 'open', following);
+            if (kind === 'confirm' && form !== null) {
+              // Only a definite success is an answer to move on from (K5), and only a success
+              // spends the typed text (K6). A refusal keeps the reply open with its draft and
+              // the reason beside it; the bridge clears the open card after a refusal, so it
+              // is opened again here rather than left to look finished.
+              const done = CONFIRM_SUCCESS.has(value.notice ?? '');
+              if (!overtaken && value.open === null) {
+                if (done) {
+                  const following = nextAfter(value.cards, form);
+                  latest.current.setSelected(following ?? '');
+                  if (following !== null) apply(api()?.read('replies.open', { messageId: following }), 'open', following);
+                } else if (latest.current.selected === form && value.cards.some(card => card.messageId === form)) {
+                  apply(api()?.read('replies.open', { messageId: form }), 'open', form);
+                }
+              }
             }
           },
           (error: unknown) => {
@@ -236,11 +255,9 @@ export function useReplies(): Replies {
   const confirm = useCallback(
     (input: OperationInput<'replies.confirm'>): void => {
       setOutcome(null);
-      // What was sent is on its way; the typed text is spent, as it always was.
-      clearDrafts(`replies:m:${input.messageId}:note`);
       apply(api()?.command('replies.confirm', input), 'confirm', input.messageId);
     },
-    [apply, clearDrafts],
+    [apply],
   );
 
   const resolve = useCallback(

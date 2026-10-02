@@ -5,7 +5,7 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Unread } from '../ui/layout.tsx';
 import { useKeptMap } from '../replies/kept.ts';
-import { FormNotice } from './FormNotice.tsx';
+import { ChangedElsewhere, FormNotice } from './FormNotice.tsx';
 import { Section } from './Group.tsx';
 
 /**
@@ -65,21 +65,38 @@ export function SendingSection({
   const marker = kept.get('saved', saved);
   const clear = kept.clear;
   const setMarker = kept.set;
+  const elsewhere = kept.get('elsewhere', '') === 'yes';
   useEffect(() => {
     if (section === null || marker === saved) return;
+    // The saved values moved since the typing began. If they now say what was typed it was the
+    // person's own save; otherwise somebody else changed them, and that is said (K2).
+    const sameAsTyped =
+      SENDING_CHECK_NAMES.every(name => {
+        const typed = kept.get(`check:${name}`, '');
+        return typed === '' || typed === (section.checks[name] === true ? 'yes' : 'no');
+      }) &&
+      section.ramps.every(ramp => {
+        const typed = kept.get(`cap:${ramp.mailboxId}`, '');
+        return typed === '' || typed === String(ramp.cap);
+      });
     clear();
     setMarker('saved', saved);
-  }, [section, marker, saved, clear, setMarker]);
+    setMarker('elsewhere', sameAsTyped ? '' : 'yes');
+    // `kept` is new every render; `marker` and `saved` are the guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, marker, saved]);
   const checks: Readonly<Record<string, boolean>> = Object.fromEntries(
     SENDING_CHECK_NAMES.map(name => [name, kept.get(`check:${name}`, section?.checks[name] === true ? 'yes' : 'no') === 'yes']),
   );
   const capText = (mailboxId: string, cap: number): string => kept.get(`cap:${mailboxId}`, String(cap));
   const setCheck = (name: string, on: boolean): void => {
     kept.set('saved', saved);
+    kept.set('elsewhere', '');
     kept.set(`check:${name}`, on ? 'yes' : 'no');
   };
   const setCap = (mailboxId: string, value: string): void => {
     kept.set('saved', saved);
+    kept.set('elsewhere', '');
     kept.set(`cap:${mailboxId}`, value);
   };
 
@@ -104,6 +121,7 @@ export function SendingSection({
         </p>
       )}
 
+      <ChangedElsewhere show={elsewhere} />
       {domain === null ? null : (
         <>
           <div className="mt-2 flex flex-col gap-1">

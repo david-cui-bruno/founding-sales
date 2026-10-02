@@ -55,3 +55,13 @@ export function FormNotice({ forms, exact }: { readonly forms: readonly string[]
     </p>
   );
 }
+
+/** Said where a kept edit was dropped because the saved value changed since it began (K2). */
+export function ChangedElsewhere({ show }: { readonly show: boolean }): JSX.Element | null {
+  if (!show) return null;
+  return (
+    <p data-testid="changed-elsewhere" role="status" className="text-xs text-muted-foreground">
+      Changed elsewhere. Showing the current value.
+    </p>
+  );
+}

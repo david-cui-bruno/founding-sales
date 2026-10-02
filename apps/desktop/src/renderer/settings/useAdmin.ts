@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OperationApi } from '../../shared/operations.ts';
 import type { Generation } from '../app/generation.ts';
+import { useClearDrafts } from '../app/drafts.tsx';
 import { useViewState, type ViewState } from '../app/useViewState.ts';
 import type {
   ActiveSettingKey,
@@ -80,12 +81,22 @@ export function useAdmin(tab: SettingsTab, identity: string | null, generation: 
     },
     [viewRead],
   );
+  const clearDrafts = useClearDrafts();
   const command = useCallback<typeof view.command>(
     (form, next) => {
       setLastForm(form);
-      viewCommand(form, next);
+      viewCommand(form, async api => {
+        const answer = await next(api);
+        // A posture confirmation is spent the moment the server records or already holds the
+        // states it was given for (K6): cleared by the command's own answer, here, so it is gone
+        // whether or not the form is still mounted, and never carried to the next state chosen.
+        if (form === 'postures' && (answer.notice === 'posture_recorded' || answer.notice === 'posture_already_allowed')) {
+          clearDrafts('settings:postures:');
+        }
+        return answer;
+      });
     },
-    [viewCommand],
+    [viewCommand, clearDrafts],
   );
 
   const actions = useMemo<AdminActions>(

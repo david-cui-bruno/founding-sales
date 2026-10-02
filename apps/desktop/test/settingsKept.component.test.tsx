@@ -12,6 +12,8 @@ import { StatusSection } from '../src/renderer/settings/StatusSection.tsx';
 import type { AdminState } from '../src/renderer/settingsContract.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import { adminState } from './e2e/support/adminFixtures.ts';
+import { fireEvent } from '@testing-library/react';
+import { CallingCalendarSection } from '../src/renderer/settings/CallingCalendarSection.tsx';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
 import { SendingSection } from '../src/renderer/settings/SendingSection.tsx';
 
@@ -222,5 +224,125 @@ describe('the sending checklist and caps (criterion 7)', () => {
       expect((screen.getByTestId(`cap-${MAILBOX}`) as HTMLInputElement).value).toBe('50');
     });
     expect((screen.getByTestId('sending-spfPass') as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+describe('a kept edit never resubmits a stale server value (K2)', () => {
+  const integrations = (dollars: number): NonNullable<AdminState['integrations']> => ({
+    callingProvider: 'tel',
+    telephonyBudget: { dailyCeilingCents: dollars * 100, maxMinutesPerCall: 30, unitPriceMicros: 14_000 },
+    calendarIntegration: 'off',
+    voicemailScript: 'Hi {contactFirstName}, it is {callerName}.',
+    configured: { twilioVoice: { ok: true, missing: [] }, calcom: { ok: true, missing: [] } },
+    spentTodayCents: 0,
+  });
+  const state = (dollars: number): AdminState => ({ ...adminState(), integrations: integrations(dollars), integrationsNotice: null });
+
+  it('a saved budget cannot override a newer one when only the minutes are changed later', () => {
+    const onSave = vi.fn();
+    const tree = (on: boolean, dollars: number): JSX.Element => (
+      <DraftsProvider>
+        {on ? <CallingCalendarSection state={state(dollars)} busy={() => false} onSave={onSave} onRetry={() => undefined} /> : null}
+      </DraftsProvider>
+    );
+    const view = render(tree(true, 5));
+    fireEvent.change(screen.getByTestId('budget-dollars'), { target: { value: '10' } });
+    fireEvent.click(screen.getByTestId('budget-save'));
+    view.rerender(tree(true, 10)); // accepted: the saved value now says what was typed
+    expect(screen.queryByTestId('changed-elsewhere')).toBeNull();
+    view.rerender(tree(false, 10));
+    view.rerender(tree(true, 2)); // another admin lowered it while away
+    fireEvent.change(screen.getByTestId('budget-minutes'), { target: { value: '20' } });
+    fireEvent.click(screen.getByTestId('budget-save'));
+    expect((onSave.mock.calls.at(-1)?.[0] as { value: { dailyCeilingCents: number; maxMinutesPerCall: number } }).value).toMatchObject({
+      dailyCeilingCents: 200,
+      maxMinutesPerCall: 20,
+    });
+  });
+
+  it('says it changed elsewhere when an unsaved edit is dropped for a newer server value', () => {
+    const tree = (on: boolean, dollars: number): JSX.Element => (
+      <DraftsProvider>
+        {on ? <CallingCalendarSection state={state(dollars)} busy={() => false} onSave={() => undefined} onRetry={() => undefined} /> : null}
+      </DraftsProvider>
+    );
+    const view = render(tree(true, 5));
+    fireEvent.change(screen.getByTestId('budget-dollars'), { target: { value: '9' } });
+    view.rerender(tree(false, 5));
+    view.rerender(tree(true, 3));
+    expect((screen.getByTestId('budget-dollars') as HTMLInputElement).value).toBe('3.00');
+    expect(screen.getByTestId('changed-elsewhere')).toBeTruthy();
+  });
+
+  it('keeps an unsaved edit while the server value is unchanged', () => {
+    const tree = (on: boolean): JSX.Element => (
+      <DraftsProvider>
+        {on ? <CallingCalendarSection state={state(5)} busy={() => false} onSave={() => undefined} onRetry={() => undefined} /> : null}
+      </DraftsProvider>
+    );
+    const view = render(tree(true));
+    fireEvent.change(screen.getByTestId('budget-dollars'), { target: { value: '9' } });
+    view.rerender(tree(false));
+    view.rerender(tree(true));
+    expect((screen.getByTestId('budget-dollars') as HTMLInputElement).value).toBe('9');
+  });
+});
+
+describe('a consumed posture confirmation is cleared by the success answer (K6)', () => {
+  it('does not authorise another state after the form is mounted again', async () => {
+    const base = adminState();
+    let release: (value: AdminState) => void = () => undefined;
+    state = base;
+    const answer = async (operation: OperationName): Promise<unknown> => {
+      if (operation === 'settings.show' || operation === 'settings.state') return await Promise.resolve(state);
+      if (operation === 'settings.allowStates') {
+        return await new Promise<AdminState>(resolve => {
+          release = resolve;
+        });
+      }
+      return await Promise.reject(new Error(`unscripted ${operation}`));
+    };
+    globalThis.callieApi = { read: answer, command: answer } as unknown as OperationApi;
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (on: boolean): JSX.Element => (
+      <QueryClientProvider client={client}>
+        <DraftsProvider>
+          {on ? (
+            <SettingsView
+              route={{ name: 'settings', tab: 'administration' }}
+              identity="me"
+              generation={0}
+              guard={guard}
+              mailbox={null}
+              mailboxWaiting={false}
+              hasMailboxBridge={false}
+              isAdmin
+              onSwitchMailbox={() => undefined}
+            />
+          ) : (
+            <p>away</p>
+          )}
+        </DraftsProvider>
+      </QueryClientProvider>
+    );
+    const view = render(tree(true));
+    await user.click(await screen.findByTestId('posture-state-AL'));
+    await user.click(screen.getByTestId('posture-confirmed'));
+    await user.type(screen.getByTestId('posture-note'), 'Checked AL');
+    await user.click(screen.getByTestId('posture-record'));
+    view.rerender(tree(false));
+    // The server records it while the form is gone.
+    const afterwards = adminState();
+    release({
+      ...afterwards,
+      notice: 'posture_recorded',
+      postures: afterwards.postures === null ? null : { ...afterwards.postures, records: afterwards.postures.records },
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    view.rerender(tree(true));
+    await user.click(await screen.findByTestId('posture-state-AL'));
+    expect((screen.getByTestId('posture-confirmed') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('posture-note') as HTMLTextAreaElement).value).toBe('');
   });
 });

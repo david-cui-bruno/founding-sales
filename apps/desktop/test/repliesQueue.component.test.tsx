@@ -293,3 +293,75 @@ describe('the states', () => {
     expect((await screen.findByTestId('reply-empty')).textContent).toBe('No replies to read.');
   });
 });
+
+describe('navigation keys never run a command (K4)', () => {
+  it('J then Enter while a command button has focus and the next row is busy sends nothing', async () => {
+    install(replyState({ cards: [waiting(MESSAGE_ID, '2026-09-21T11:00:00.000Z'), waiting(OTHER_MESSAGE_ID, '2026-09-21T10:00:00.000Z')] }));
+    const commands: unknown[] = [];
+    (globalThis.callieApi as unknown as { command: unknown }).command = (_name: unknown, input: unknown) => {
+      commands.push(input);
+      return new Promise(() => undefined);
+    };
+    render(
+      <DraftsProvider>
+        <RepliesRoute column={column} />
+      </DraftsProvider>,
+    );
+    const user = userEvent.setup();
+    const rows = await screen.findAllByTestId('reply-open');
+    await user.click(rows[1] as HTMLElement);
+    await user.click(await screen.findByTestId('confirm')); // the second reply's command is pending
+    await user.click(screen.getAllByTestId('reply-open')[0] as HTMLElement);
+    await screen.findByTestId('confirm');
+    screen.getByTestId('confirm').focus();
+    await user.keyboard('j{Enter}');
+    expect(commands, 'a navigation key must not send another confirmation').toHaveLength(1);
+    expect(document.activeElement?.getAttribute('data-testid')).not.toBe('confirm');
+  });
+});
+
+describe('advance only on definite success (K5, K6)', () => {
+  it('a refused confirmation keeps the same reply open with its draft and the reason, and opens no other', async () => {
+    install(replyState({ cards: [waiting(MESSAGE_ID, '2026-09-21T11:00:00.000Z'), waiting(OTHER_MESSAGE_ID, '2026-09-21T10:00:00.000Z')] }));
+    // The bridge clears the open card after a server refusal, as `replyBridge.ts` does.
+    (globalThis.callieApi as unknown as { command: unknown }).command = async () => {
+      lane = { ...lane, open: null, notice: 'suppression_failed' };
+      return await Promise.resolve(replyWire(lane));
+    };
+    render(
+      <DraftsProvider>
+        <RepliesRoute column={column} />
+      </DraftsProvider>,
+    );
+    const user = userEvent.setup();
+    await user.click((await screen.findAllByTestId('reply-open'))[0] as HTMLElement);
+    await user.type(await screen.findByTestId('note'), 'checked by phone');
+    await user.click(screen.getByTestId('confirm'));
+    await screen.findByText('Callie could not record the do-not-contact. Nothing was changed.');
+    expect(opened()).toEqual([MESSAGE_ID, MESSAGE_ID]);
+    expect(screen.getByTestId('card-firm').textContent).toBe(`Firm ${MESSAGE_ID.slice(0, 2)}`);
+    expect((screen.getByTestId('note') as HTMLTextAreaElement).value).toBe('checked by phone');
+  });
+
+  it('a recorded confirmation spends its note even when the view was left before the answer', async () => {
+    install(replyState({ cards: [waiting(MESSAGE_ID, '2026-09-21T11:00:00.000Z')] }));
+    let answer: (state: ReplyState) => void = () => undefined;
+    (globalThis.callieApi as unknown as { command: unknown }).command = () =>
+      new Promise<ReplyState>(resolve => {
+        answer = resolve;
+      });
+    const tree = (on: boolean): JSX.Element => <DraftsProvider>{on ? <RepliesRoute column={column} /> : <p>away</p>}</DraftsProvider>;
+    const user = userEvent.setup();
+    const view = render(tree(true));
+    await user.click(await screen.findByTestId('reply-open'));
+    await user.type(await screen.findByTestId('note'), 'spent');
+    await user.click(screen.getByTestId('confirm'));
+    view.rerender(tree(false));
+    answer(replyWire({ ...lane, open: null, notice: 'confirmed' }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    view.rerender(tree(true));
+    await user.click(await screen.findByTestId('reply-open'));
+    expect(opened().at(-1)).toBe(MESSAGE_ID);
+    expect((await screen.findByTestId('note') as HTMLTextAreaElement).value).toBe('');
+  });
+});

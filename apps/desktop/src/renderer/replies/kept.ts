@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useClearDrafts, useDraft, useDraftStoreAvailable, useDrafts } from '../app/drafts.tsx';
 
 /**
@@ -51,6 +51,57 @@ export function useKeptMap(prefix: string): {
     clear: () => {
       if (available) clearDrafts(prefix);
       else setLocal({});
+    },
+  };
+}
+
+const NONE = '\u0000';
+
+/**
+ * A kept edit of a value the server holds (K2). It records the server value it was started
+ * from, and:
+ *
+ * - shows the typed value only while the server still says what it said then;
+ * - when the server value has moved, drops the edit — silently if the server now holds what
+ *   was typed (the person's own save), with `elsewhere` set if somebody else changed it — and
+ *   shows the current server value;
+ * - reports `touched`, so a save sends only what was actually changed: an untouched field is
+ *   filled from the CURRENT server value by the caller, never from a kept one.
+ */
+export function useKeptBased(
+  key: string,
+  server: string | null,
+  same: (typed: string, saved: string) => boolean = (typed, saved) => typed === saved,
+): { readonly value: string; set(next: string): void; clear(): void; readonly touched: boolean; readonly elsewhere: boolean } {
+  const [raw, setRaw] = useKept(key, NONE);
+  const [base, setBase] = useKept(`${key}#base`, NONE);
+  const [flag, setFlag] = useKept(`${key}#elsewhere`, '');
+  const has = raw !== NONE;
+  // Before the server has answered there is no value to compare with, and nothing is dropped.
+  // An edit begun before the server had answered has no base to compare with: it stands.
+  const stale = server !== null && has && base !== NONE && base !== server;
+  useEffect(() => {
+    if (!stale || server === null) return;
+    const own = same(raw, server);
+    setRaw(NONE);
+    setBase(NONE);
+    setFlag(own ? '' : 'yes');
+  }, [stale, raw, server, same, setRaw, setBase, setFlag]);
+  const live = has && !stale;
+  return {
+    value: live ? raw : (server ?? ''),
+    touched: live,
+    elsewhere: flag === 'yes' && !live,
+    set: next => {
+      setRaw(next);
+      setBase(server ?? NONE);
+      setFlag('');
+    },
+    // The edit is spent (it was sent): the field is the saved value again.
+    clear: () => {
+      setRaw(NONE);
+      setBase(NONE);
+      setFlag('');
     },
   };
 }
