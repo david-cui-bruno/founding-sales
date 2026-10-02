@@ -1,8 +1,8 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { CALL_ANALYZE_JOB_MAX_ATTEMPTS, listOwedAnalyses } from '@fss/domain/calls/analysisPaid.ts';
+import { CALL_ANALYZE_JOB_MAX_ATTEMPTS, listOwedAnalyses, listResumeSweeps } from '@fss/domain/calls/analysisPaid.ts';
 import { messagesCallAnalyzer } from '@fss/domain/calls/analysisAdapter.ts';
 import { DEFAULT_CALL_ANALYSIS_MODEL, isCallAnalysisModel } from '@fss/domain/calls/analysisModel.ts';
-import { callAnalyzeJobHandler, type CallAnalyzeOptions } from '@fss/domain/calls/analysisHandler.ts';
+import { callAnalyzeJobHandler, callAnalyzeSweepJobHandler, type CallAnalyzeOptions } from '@fss/domain/calls/analysisHandler.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -43,13 +43,12 @@ export function readCallAnalysisComposition(
 }
 
 export function callAnalyzeHandlers(options: CallAnalyzeOptions | undefined): readonly JobHandler[] {
-  return options === undefined ? [] : [callAnalyzeJobHandler(options)];
+  return options === undefined ? [] : [callAnalyzeJobHandler(options), callAnalyzeSweepJobHandler(options)];
 }
 
 /**
- * One `call.analyze` per transcribed call owed an analysis (`listOwedAnalyses`), under a
- * revision key once the call already has jobs: the first analysis of an `analysis`-path
- * call, or a version the switch held, once per change of the setting.
+ * One `call.analyze` per transcribed call owed its first analysis (`listOwedAnalyses`). A held
+ * version is never re-offered here (S3A2F): see `callAnalysisSweepSource`.
  */
 export function callAnalysisSource(options: { readonly enabled: boolean }): DueWorkSource {
   return {
@@ -62,6 +61,27 @@ export function callAnalysisSource(options: { readonly enabled: boolean }): DueW
         idempotencyKey: jobIdempotencyKey.callAnalyze(owed.sessionId, owed.revision),
         payload: { callSessionId: owed.sessionId },
         maxAttempts: CALL_ANALYZE_JOB_MAX_ATTEMPTS,
+      }));
+    },
+  };
+}
+
+/**
+ * One `call.analyze_sweep` per settings write that resumes held analyses — the transcription
+ * switch turned on, or the monthly cash ceiling raised (`listResumeSweeps`) — keyed by the
+ * write's own row, so each write is swept exactly once.
+ */
+export function callAnalysisSweepSource(options: { readonly enabled: boolean }): DueWorkSource {
+  return {
+    name: 'call-analyze-sweep',
+    find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
+      if (!options.enabled) return [];
+      return (await listResumeSweeps(session)).map(sweep => ({
+        workspaceId: sweep.workspaceId,
+        kind: 'call.analyze_sweep' as const,
+        idempotencyKey: jobIdempotencyKey.callAnalyzeSweep(sweep.writeId),
+        payload: { writeId: sweep.writeId },
+        maxAttempts: 3,
       }));
     },
   };

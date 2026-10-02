@@ -8,6 +8,7 @@ import {
   estimateAbandonedAnalysis,
   finishCallAnalysis,
   releaseUnsentAnalysis,
+  sweepHeldAnalyses,
   type CallAnalysisDeps,
   type CallAnalysisPlan,
 } from './analysisPaid.ts';
@@ -70,6 +71,8 @@ export function callAnalyzeJobHandler(options: CallAnalyzeOptions): JobHandler {
       }
       const requested = input.job.payload['reason'];
       const reason = requested === 'retry' || requested === 'reanalysis' ? requested : 'transcript';
+      const named = input.job.payload['analysisId'];
+      const analysisId = typeof named === 'string' && /^[0-9a-f-]{36}$/iu.test(named) ? named : undefined;
       const context = repositoryContext(input.scope, input.session);
       const fencing = input.job.fencingToken;
       const log = (event: string, fields: Readonly<Record<string, string | number | boolean | null>>): void => {
@@ -78,7 +81,7 @@ export function callAnalyzeJobHandler(options: CallAnalyzeOptions): JobHandler {
       const carried = parseAnalysisProgress(input.job.payload['progress']);
 
       if (carried === null || carried.step === 'retry') {
-        const begun = await beginCallAnalysis(context, options, { sessionId, reason });
+        const begun = await beginCallAnalysis(context, options, { sessionId, reason, analysisId });
         if (begun.kind === 'done') {
           log('call_analysis_skipped', { reason: begun.reason });
           return;
@@ -127,6 +130,25 @@ export function callAnalyzeJobHandler(options: CallAnalyzeOptions): JobHandler {
         log('call_analysis_skipped', { reason: finished.outcome, failure: finished.failure ?? null, ...providerFields(finished.provider) });
       }
       return { progress: { ...carried }, done: true };
+    },
+  };
+}
+
+/**
+ * `call.analyze_sweep` (slice 3a, S3A2F): one settings write's resumption of the workspace's
+ * held analyses (`sweepHeldAnalyses`). One short transaction that only enqueues jobs.
+ */
+export function callAnalyzeSweepJobHandler(options: Pick<CallAnalyzeOptions, 'log'> = {}): JobHandler {
+  return {
+    kind: 'call.analyze_sweep',
+    protection: 'business_uniqueness',
+    maxAttempts: 3,
+    leaseSeconds: 60,
+    handle: async input => {
+      const writeId = input.job.payload['writeId'];
+      if (typeof writeId !== 'string' || !/^[0-9a-f-]{36}$/iu.test(writeId)) throw new Error('a call.analyze_sweep payload names a settings write');
+      const queued = await sweepHeldAnalyses(repositoryContext(input.scope, input.session), writeId);
+      options.log?.('call_analysis_resumed', { workspace_id: input.scope.workspaceId, queued });
     },
   };
 }

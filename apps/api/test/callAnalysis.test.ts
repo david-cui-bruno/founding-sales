@@ -236,7 +236,7 @@ describe('the post-call analysis API (slice 3a, A-6)', () => {
     expect(queued.body).toMatchObject({ status: 'accepted', replayed: false, result: { callSessionId: fresh.sessionId, queued: true } });
     const replay = await post('/calls/analysis/retry', salespersonToken, body);
     expect(replay.body).toMatchObject({ status: 'accepted', replayed: true, result: { callSessionId: fresh.sessionId, queued: true } });
-    expect(await jobsOf(fresh.sessionId)).toEqual([`call-analyze:${fresh.sessionId}:v1:j0`]);
+    expect(await jobsOf(fresh.sessionId)).toEqual([`call-analyze:${fresh.sessionId}:v1:c${String(body['commandId'])}`]);
     // A second command, another id, before the worker starts: in flight, and one job (S3A2, P2).
     const second = await post('/calls/analysis/retry', salespersonToken, command({ callSessionId: fresh.sessionId, reason: 'retry' }));
     expect(second.body).toMatchObject({ status: 'refused', reason: 'analysis_in_flight' });

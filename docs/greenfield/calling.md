@@ -490,16 +490,21 @@ SHARED to the commit that marks `calling`; chunk 3 the request, then the settlem
 A1's `completeCallAnalysis` in the same transaction — there is no second completion path. An
 unreadable or ambiguous answer is retried once within the two. The switch is transcription's,
 `call_transcription`: off, a version is created and held (pending, nothing reserved). A held
-version — by the switch, the day's cap or the cash ceiling — is offered again by the
-`call-analyze` source whenever it is runnable now (the switch on, no open reservation, no live
-job), whatever its transcript's age: at once after a write of the switch or of the monthly cash
-ceiling, otherwise fifteen minutes after its last job (`CALL_ANALYSIS_REOFFER_MINUTES`), so a
-version still capped finishes cheaply as held again and cannot spin. The model is the
+version resumes only on an **explicit** trigger, never by a periodic re-offer (review S3A2F): a
+settings write that turns `call_transcription` on, or that raises `monthly_cash_ceiling_cents`,
+is swept once (`call-analyze-sweep`, keyed by the write's own row), and the sweep queues every
+held version that has no open reservation and no live job, naming it in the payload; or David's
+Retry, keyed by its command and naming the held version. Chunk 1, under the analysis lock, does
+nothing for a named version that is no longer pending, so a sweep and a retry racing buy at
+most one reading. **A version held by the day's cap (forty) is not resumed the next day**: it
+stays pending, shown as held with Retry, and resumes on Retry (or on the next qualifying
+settings write). The model is the
 deployment's (`FSS_CALL_ANALYSIS_MODEL`, Haiku 4.5 unless set; not set in the infrastructure).
 David's `POST /calls/analysis/retry` (reason `retry` or `reanalysis`), under the call's analysis
 lock: a live `call.analyze` job is `analysis_in_flight`; a held version is queued again; a
 historical call, or one with a completed model reading of its current transcript, needs
-`reanalysis` (`reanalysis_required`); otherwise one job keyed by the version it will work on.
+`reanalysis` (`reanalysis_required`) — and chunk 1 enforces that too; otherwise one job, keyed
+by the version and the command (`call-analyze:<session>:v<N>:c<command>`).
 David's notes count for none of this, nor for the path below (review S3A2).
 
 **The summary cutover.** `postCallModelPath(session)` is `analysis` for a call with a model

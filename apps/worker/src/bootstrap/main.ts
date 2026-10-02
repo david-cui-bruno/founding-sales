@@ -37,7 +37,7 @@ import { readSelectedTranscriptionProvider } from '../transcription/selectProvid
 import { readAwsTranscribeProvider } from '../transcription/awsTranscribeClient.ts';
 import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
 import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
-import { callAnalysisSource, callAnalyzeHandlers, readCallAnalysisComposition } from '../handlers/callAnalyze.ts';
+import { callAnalysisSource, callAnalysisSweepSource, callAnalyzeHandlers, readCallAnalysisComposition } from '../handlers/callAnalyze.ts';
 import type { CallAnalyzeOptions } from '@fss/domain/calls/analysisHandler.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
@@ -452,6 +452,7 @@ export function workerDueWorkSources(
     callSummarySource({ enabled: options.summary === true }),
     // Slice 3a. Listed always, materializing only where `call.analyze` is registered.
     callAnalysisSource({ enabled: options.analysis === true }),
+    callAnalysisSweepSource({ enabled: options.analysis === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
