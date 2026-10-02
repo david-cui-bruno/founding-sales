@@ -43,6 +43,8 @@ export const BRIEF_FILE_FILTERS = Object.freeze([
 
 export interface BriefImportDeps {
   readonly api: AuthedClient;
+  /** The session's transition counter: a commit stops when it moves. Absent in tests that never sign out. */
+  readonly sessionGeneration?: () => number;
   openDialog(): Promise<FileChoice>;
   readonly read?: (path: string) => Promise<string>;
 }
@@ -51,7 +53,8 @@ export interface BriefImportHost {
   state(): Promise<BriefImportView>;
   /** Ask macOS for a file, read and preview it. Cancelling is the state unchanged. */
   choose(): Promise<BriefImportView>;
-  commit(): Promise<BriefImportView>;
+  /** Sends the rows of the preview `previewId` names, and only while it is the one shown. */
+  commit(input: { readonly previewId: number }): Promise<BriefImportView>;
   reset(): Promise<BriefImportView>;
   forget(): Promise<BriefImportView>;
 }
@@ -100,25 +103,44 @@ export function parseBriefFile(text: string): ParsedBriefFile {
   };
 }
 
-const EMPTY: BriefImportView = Object.freeze({ fileName: null, fileError: null, reason: null, rows: [] });
+const EMPTY: BriefImportView = Object.freeze({ previewId: 0, fileName: null, fileError: null, reason: null, rows: [] });
+
+type PendingRow = { readonly row: PreparedBriefImportRow; readonly firmId: string; readonly commandId: string };
 
 export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
   const read = deps.read ?? (async (path: string) => (await import('node:fs/promises')).readFile(path, 'utf8'));
+  const sessionGeneration = deps.sessionGeneration ?? (() => 0);
   let view: BriefImportView = EMPTY;
-  /** The rows to send, by preview index, and the id each one is sent under. */
-  let pending = new Map<number, { readonly row: PreparedBriefImportRow; readonly firmId: string; readonly commandId: string }>();
+  /**
+   * The rows to send for the preview on screen, by preview index, and the id each one is
+   * sent under. Replaced whole by each preview, never merged (review PB, finding 3).
+   */
+  let pending = new Map<number, PendingRow>();
+  /** The id the next preview takes; the view carries the id of the one it shows. */
+  let lastPreviewId = 0;
+  /**
+   * Advanced by `forget()` and `reset()`: a preview or a commit that began under an older value
+   * writes nothing and sends nothing more (review PB, finding 2).
+   */
+  let epoch = 0;
 
   const clear = (): BriefImportView => {
+    epoch += 1;
     view = EMPTY;
     pending = new Map();
     return view;
   };
 
   async function preview(fileName: string, text: string): Promise<BriefImportView> {
-    pending = new Map();
+    lastPreviewId += 1;
+    const previewId = lastPreviewId;
+    const began = epoch;
+    /** Still the latest preview, and nothing was forgotten since it began. */
+    const current = (): boolean => previewId === lastPreviewId && began === epoch;
     const parsed = parseBriefFile(text);
     if (!parsed.ok) {
-      view = { fileName, fileError: parsed.error, reason: null, rows: [] };
+      view = { previewId, fileName, fileError: parsed.error, reason: null, rows: [] };
+      pending = new Map();
       return view;
     }
     const valid = parsed.rows.flatMap((entry, index) => (entry.ok ? [{ index, row: entry.row }] : []));
@@ -131,14 +153,19 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
           ...(row.firm_name === undefined ? {} : { firmName: row.firm_name }),
         })),
       });
+      // A newer preview, or a forget, owns the state now: this answer writes nothing.
+      if (!current()) return view;
       if (!answer.ok) {
-        view = { fileName, fileError: null, reason: answer.reason.slice(0, 80), rows: [] };
+        view = { previewId, fileName, fileError: null, reason: answer.reason.slice(0, 80), rows: [] };
+        pending = new Map();
         return view;
       }
       matches = answer.value.rows;
     }
     const matchOf = new Map(valid.map(({ index }, position) => [index, matches[position]] as const));
-    view = {
+    const rows = new Map<number, PendingRow>();
+    const shown: BriefImportView = {
+      previewId,
       fileName,
       fileError: null,
       reason: null,
@@ -148,7 +175,7 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
         }
         const match = matchOf.get(index) ?? { status: 'unmatched' as const };
         const label = entry.row.firm_name ?? entry.row.external_id ?? entry.row.website ?? `Row ${String(index + 1)}`;
-        if (match.status === 'matched') pending.set(index + 1, { row: entry.row, firmId: match.firmId, commandId: randomUUID() });
+        if (match.status === 'matched') rows.set(index + 1, { row: entry.row, firmId: match.firmId, commandId: randomUUID() });
         return {
           index: index + 1,
           label,
@@ -162,6 +189,9 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
         };
       }),
     };
+    if (!current()) return view;
+    view = shown;
+    pending = rows;
     return view;
   }
 
@@ -181,11 +211,19 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
       }
       return await preview(path.split('/').at(-1) ?? path, text);
     },
-    async commit() {
-      const results = new Map<number, string>();
-      for (const [index, entry] of pending) {
-        const current = view.rows.find(row => row.index === index);
-        if (current?.result === 'saved') continue;
+    async commit(input) {
+      // Exactly the rows of the preview the window shows: a commit for any other sends nothing.
+      if (input.previewId !== view.previewId || view.previewId === 0) return view;
+      const previewId = view.previewId;
+      const rows = pending;
+      const began = epoch;
+      const session = sessionGeneration();
+      /** Checked before every submission: a sign-out, a forget or a newer preview stops the loop. */
+      const live = (): boolean => began === epoch && session === sessionGeneration() && previewId === view.previewId;
+      for (const [index, entry] of rows) {
+        if (!live()) return view;
+        const shown = view.rows.find(row => row.index === index);
+        if (shown?.result === 'saved') continue;
         const answer = await deps.api.command(
           '/firms/brief/set',
           {
@@ -198,9 +236,10 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
           value => preparedBriefSetResultSchema.parse(value),
           { commandId: entry.commandId },
         );
-        results.set(index, answer.ok ? 'saved' : answer.reason.slice(0, 80));
+        if (!live()) return view;
+        const result = answer.ok ? 'saved' : answer.reason.slice(0, 80);
+        view = { ...view, rows: view.rows.map(row => (row.index === index ? { ...row, result } : row)) };
       }
-      view = { ...view, rows: view.rows.map(row => (results.has(row.index) ? { ...row, result: results.get(row.index) ?? null } : row)) };
       return view;
     },
     async reset() {

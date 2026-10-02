@@ -334,7 +334,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
             setPreparedBrief: async (input: unknown) => await handlers['firms.setPreparedBrief'](input as never),
             clearPreparedBrief: async (input: unknown) => await handlers['firms.clearPreparedBrief'](input as never),
             briefImportState: async () => await withBriefs['firms.briefImportState'](undefined as never),
-            briefImportCommit: async () => await withBriefs['firms.briefImportCommit'](undefined as never),
+            briefImportCommit: async () => await withBriefs['firms.briefImportCommit']({ previewId: (await briefImport.state()).previewId } as never),
             briefImportReset: async () => await withBriefs['firms.briefImportReset'](undefined as never),
             briefImportChoose: async () => await briefImport.choose(),
           } as Host;

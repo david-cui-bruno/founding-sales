@@ -74,7 +74,8 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
     setBusy(true);
     void work()
       .then(answer => {
-        if (mounted.current) setView(answer);
+        // An answer about an older preview never replaces a newer one (review PB, finding 3).
+        if (mounted.current) setView(shown => (shown !== null && answer.previewId !== 0 && answer.previewId < shown.previewId ? shown : answer));
       })
       .finally(() => {
         if (mounted.current) setBusy(false);
@@ -129,7 +130,7 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
             ))}
           </Rows>
           <div className="mt-4 flex items-center gap-2">
-            <Button data-testid="brief-import-commit" disabled={!enabled || busy || toSend === 0} onClick={() => run(async () => await api.command('firms.briefImportCommit', {}))}>
+            <Button data-testid="brief-import-commit" disabled={!enabled || busy || toSend === 0} onClick={() => run(async () => await api.command('firms.briefImportCommit', { previewId: view?.previewId ?? 0 }))}>
               {toSend === 1 ? 'Import 1 brief' : `Import ${String(toSend)} briefs`}
             </Button>
             {saved + refused === 0 ? null : (

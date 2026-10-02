@@ -98,12 +98,20 @@ export function PreparedBrief({
   readonly canEdit: boolean;
   readonly enabled: boolean;
   /** A command landed: the view reads its own state again. */
-  onChanged(): void;
+  /**
+   * A command on `savedFirmId` landed. The view refreshes that firm only if it is still the one
+   * on screen (read from shell memory, rule K7); it never opens it again (review PB, finding 4).
+   */
+  onChanged(savedFirmId: string): void;
   readonly setBrief?: SetBrief;
   readonly clearBrief?: ClearBrief;
 }): JSX.Element | null {
   const drafts = useDrafts();
   const session = useSessionEpoch() ?? FALLBACK_SESSION;
+  const keysOf = (target: string) => {
+    const at = `prepared-brief:${target}:`;
+    return { text: `${at}text`, base: `${at}base`, open: `${at}open`, pending: `${at}pending`, feedback: `${at}feedback` };
+  };
   const prefix = `prepared-brief:${firmId}:`;
   const key = {
     text: `${prefix}text`,
@@ -118,7 +126,17 @@ export function PreparedBrief({
   const pending = (drafts.values[key.pending] ?? '') !== '';
   const feedback = drafts.values[key.feedback] ?? '';
   const [expanded, setExpanded] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
+  /** The firm whose Clear is waiting for its confirmation (K1: keyed by firm, reset when it changes). */
+  const [confirmFor, setConfirmFor] = useState<string | null>(null);
+  const confirmClear = confirmFor === firmId;
+
+  // A firm change ends any confirmation and takes focus off this section's controls, so a key
+  // pressed next (J, then Enter) cannot reach a command meant for the firm before (K1/K4).
+  useEffect(() => {
+    setConfirmFor(null);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest('[data-prepared-brief]') !== null) active.blur();
+  }, [firmId]);
   const current = brief?.brief ?? null;
 
   // K2: the server's text moved since the edit began. The kept edit is dropped, not sent.
@@ -154,14 +172,15 @@ export function PreparedBrief({
     drafts.set(key.open, '1');
   };
 
-  const send = (run: () => Promise<string>, onSuccess: () => void): void => {
+  const send = (target: string, run: () => Promise<string>, onSuccess: () => void): void => {
+    const keys = keysOf(target);
     nextToken += 1;
     const token = String(nextToken);
     const commands = latestCommand.get(session) ?? new Map<string, string>();
     latestCommand.set(session, commands);
-    commands.set(firmId, token);
-    drafts.set(key.pending, token);
-    drafts.set(key.feedback, '');
+    commands.set(target, token);
+    drafts.set(keys.pending, token);
+    drafts.set(keys.feedback, '');
     void run()
       .then(
         code => code,
@@ -169,13 +188,13 @@ export function PreparedBrief({
       )
       .then(code => {
         // K3: only this firm's latest command settles it; an older answer is dropped.
-        if (commands.get(firmId) !== token) return;
-        commands.delete(firmId);
-        drafts.set(key.pending, '');
-        drafts.set(key.feedback, code);
+        if (commands.get(target) !== token) return;
+        commands.delete(target);
+        drafts.set(keys.pending, '');
+        drafts.set(keys.feedback, code);
         if (code === 'saved' || code === 'cleared') {
           onSuccess();
-          onChanged();
+          onChanged(target);
         }
       });
   };
@@ -191,40 +210,46 @@ export function PreparedBrief({
     }
     if (text === base || text.trim() === '') return;
     const sent = text;
+    const target = firmId;
+    const keys = key;
     send(
+      target,
       async () => {
-        const answer = await setBrief({ firmId, brief: sent });
+        const answer = await setBrief({ firmId: target, brief: sent });
         return answer.saved === null ? (answer.reason ?? 'offline') : 'saved';
       },
       () => {
         // K5: the draft goes only now. The editor is read-only while the save is in flight,
         // so the draft is still the text that was sent.
-        drafts.set(key.text, '');
-        drafts.set(key.base, '');
-        drafts.set(key.open, '');
+        drafts.set(keys.text, '');
+        drafts.set(keys.base, '');
+        drafts.set(keys.open, '');
       },
     );
   };
 
-  const clear = (): void => {
-    if (pending) return;
-    setConfirmClear(false);
+  /** The confirmation's own firm, carried on its button: the command names that firm and no other. */
+  const clear = (target: string | undefined): void => {
+    setConfirmFor(null);
+    if (pending || target === undefined || target === '') return;
+    const keys = keysOf(target);
     send(
+      target,
       async () => {
-        const answer = await clearBrief({ firmId });
+        const answer = await clearBrief({ firmId: target });
         return answer.reason === null ? 'cleared' : answer.reason;
       },
       () => {
-        drafts.set(key.text, '');
-        drafts.set(key.base, '');
-        drafts.set(key.open, '');
+        drafts.set(keys.text, '');
+        drafts.set(keys.base, '');
+        drafts.set(keys.open, '');
       },
     );
   };
 
   if (brief === null) {
     return (
-      <section data-testid="prepared-brief" className="py-2">
+      <section data-testid="prepared-brief" data-prepared-brief="" className="py-2">
         <p data-testid="prepared-brief-feedback" className="text-xs text-muted-foreground">
           {feedbackSentence('cleared')}
         </p>
@@ -238,7 +263,7 @@ export function PreparedBrief({
   const dirty = text !== undefined && base !== undefined && base !== '' && text !== base && text.trim() !== '';
 
   return (
-    <section data-testid="prepared-brief" className="group/prepared">
+    <section data-testid="prepared-brief" data-prepared-brief="" className="group/prepared">
       <Label
         actions={
           canEdit ? (
@@ -255,10 +280,17 @@ export function PreparedBrief({
               </Button>
               {confirmClear ? (
                 <>
-                  <Button variant="ghost" data-testid="prepared-brief-clear-confirm" className="h-6 rounded-md px-2 text-xs" disabled={!enabled || pending} onClick={clear}>
+                  <Button
+                    variant="ghost"
+                    data-testid="prepared-brief-clear-confirm"
+                    data-firm-id={firmId}
+                    className="h-6 rounded-md px-2 text-xs"
+                    disabled={!enabled || pending}
+                    onClick={event => clear(event.currentTarget.dataset['firmId'])}
+                  >
                     Clear brief
                   </Button>
-                  <Button variant="ghost" data-testid="prepared-brief-clear-cancel" className="h-6 rounded-md px-2 text-xs text-muted-foreground" onClick={() => setConfirmClear(false)}>
+                  <Button variant="ghost" data-testid="prepared-brief-clear-cancel" className="h-6 rounded-md px-2 text-xs text-muted-foreground" onClick={() => setConfirmFor(null)}>
                     Keep
                   </Button>
                 </>
@@ -268,7 +300,7 @@ export function PreparedBrief({
                   data-testid="prepared-brief-clear"
                   className="h-6 rounded-md px-2 text-xs text-muted-foreground"
                   disabled={!enabled || pending}
-                  onClick={() => setConfirmClear(true)}
+                  onClick={() => setConfirmFor(firmId)}
                 >
                   Clear
                 </Button>

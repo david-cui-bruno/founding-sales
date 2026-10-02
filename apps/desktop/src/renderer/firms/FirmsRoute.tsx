@@ -135,6 +135,16 @@ export function FirmsRoute({
   const firmId = onFirm && state.firm !== null ? state.firm.read.firm.id : null;
   useColumnScroll(firmId, firmId !== null, memory.pageScroll);
 
+  // Lane PB (review finding 4): which firm is on screen, in shell memory, so a late answer
+  // about another firm never opens it again (K7).
+  const shownFirmId = firmId ?? (onPipelineRow && state?.firm?.read.firm.id === panelFirmId ? panelFirmId : null);
+  useEffect(() => {
+    memory.shownFirmId = shownFirmId;
+    return () => {
+      memory.shownFirmId = null;
+    };
+  }, [memory, shownFirmId]);
+
   if (!crm.available) {
     return (
       <Page className="callie-v2">
@@ -263,13 +273,16 @@ export function FirmsRoute({
           {firm.visibility === 'assigned_or_admin' ? (
             <div className="mb-4">
               <PreparedBrief
+                key={firm.read.firm.id}
                 firmId={firm.read.firm.id}
                 brief={firm.preparedBrief}
                 canEdit={state.role === 'admin'}
                 enabled={view.actionsEnabled}
-                onChanged={() => {
-                  if (variant === 'page') crm.actions.openFirm(firm.read.firm.id);
-                  else crm.actions.openPanel(firm.read.firm.id);
+                onChanged={saved => {
+                  // Only the firm still on screen is read again; a late answer never reopens one.
+                  if (memory.shownFirmId !== saved) return;
+                  if (variant === 'page') crm.actions.openFirm(saved);
+                  else crm.actions.openPanel(saved);
                 }}
               />
             </div>

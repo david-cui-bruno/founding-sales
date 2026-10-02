@@ -1593,7 +1593,7 @@ export const OPERATIONS = {
   'firms.briefImportCommit': {
     kind: 'command',
     calls: [{ method: 'POST', path: '/firms/brief/set' }],
-    input: nothing,
+    input: z.strictObject({ previewId: z.number().int().min(1) }),
     output: briefImportViewSchema,
     transform: 'one set command per matched row not yet saved, under the id minted at the preview, so a second press replays',
   },

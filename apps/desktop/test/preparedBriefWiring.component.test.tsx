@@ -27,6 +27,9 @@ const BRIEF: PreparedBriefDto = {
 
 const source = createGeneration();
 let calls: { name: string; input: unknown }[] = [];
+/** When set, the save waits for the test to answer it. */
+let heldSave: ((value: unknown) => void) | null = null;
+let holdSave = false;
 
 function install(role: 'admin' | 'salesperson', brief: PreparedBriefDto | null): void {
   calls = [];
@@ -40,6 +43,7 @@ function install(role: 'admin' | 'salesperson', brief: PreparedBriefDto | null):
       case 'crm.openFirm':
         return state;
       case 'firms.setPreparedBrief':
+        if (holdSave) return new Promise(resolve => (heldSave = resolve));
         return { saved: { firmId: FIRM_ID, created: false, briefLength: 6, sourceCount: 1, updatedAt: BRIEF.updatedAt }, reason: null };
       case 'research.open':
         return { firm: null, settings: null, worstCaseRunCents: null, spend: null, notice: null, mayMutate: true, role };
@@ -54,7 +58,7 @@ function install(role: 'admin' | 'salesperson', brief: PreparedBriefDto | null):
   };
   globalThis.callieApi = {
     read: async (name: string, input: unknown) => await Promise.resolve(answer(name, input)),
-    command: async (name: string, input: unknown) => await Promise.resolve(answer(name, input)),
+    command: async (name: string, input: unknown) => await answer(name, input),
   } as unknown as OperationApi;
 }
 
@@ -70,6 +74,8 @@ const mount = () => {
 };
 
 beforeEach(() => {
+  holdSave = false;
+  heldSave = null;
   resetCrmMemory();
   source.note(0);
 });
@@ -104,5 +110,22 @@ describe('the firm page and the prepared brief', () => {
     mount();
     await screen.findByTestId('firms');
     expect(screen.queryByTestId('prepared-brief')).toBeNull();
+  });
+
+  it('a save answering after David left the firm page reads nothing and opens nothing (finding 4)', async () => {
+    const user = userEvent.setup();
+    install('admin', BRIEF);
+    holdSave = true;
+    const { unmount } = mount();
+    await user.click(await screen.findByTestId('prepared-brief-edit'));
+    await user.clear(screen.getByTestId('prepared-brief-text-input'));
+    await user.type(screen.getByTestId('prepared-brief-text-input'), 'Late');
+    await user.click(screen.getByTestId('prepared-brief-save'));
+    await waitFor(() => expect(heldSave).not.toBeNull());
+    unmount();
+    const before = calls.filter(call => call.name === 'crm.openFirm').length;
+    heldSave?.({ saved: { firmId: FIRM_ID, created: false, briefLength: 4, sourceCount: 1, updatedAt: BRIEF.updatedAt }, reason: null });
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect(calls.filter(call => call.name === 'crm.openFirm').length).toBe(before);
   });
 });

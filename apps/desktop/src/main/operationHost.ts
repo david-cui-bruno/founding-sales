@@ -381,7 +381,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok ? { cleared: answer.value.cleared, reason: null } : { cleared: false, reason: answer.reason.slice(0, 80) };
     },
     'firms.briefImportState': async () => await deps.briefImport.state(),
-    'firms.briefImportCommit': async () => await deps.briefImport.commit(),
+    'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
     'firms.briefImportReset': async () => await deps.briefImport.reset(),
     'calls.logIncoming': async (input: OperationInput<'calls.logIncoming'>) => {
       const answer = await deps.api.command(

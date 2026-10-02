@@ -12,6 +12,7 @@ import type { ImportBridge, OperationApi, OperationName } from '../src/shared/op
  */
 
 const PREVIEW: BriefImportView = {
+  previewId: 1,
   fileName: 'dfw-batch-1-briefs.json',
   fileError: null,
   reason: null,
@@ -34,9 +35,11 @@ describe('the prepared-brief import screen', () => {
   it('shows the preview, imports the matched rows, and says which row was refused', async () => {
     const user = userEvent.setup();
     const asked: string[] = [];
-    let held: BriefImportView = { fileName: null, fileError: null, reason: null, rows: [] };
-    const answer = async (operation: OperationName): Promise<unknown> => {
+    let held: BriefImportView = { previewId: 0, fileName: null, fileError: null, reason: null, rows: [] };
+    const commits: unknown[] = [];
+    const answer = async (operation: OperationName, input?: unknown): Promise<unknown> => {
       asked.push(operation);
+      if (operation === 'firms.briefImportCommit') commits.push(input);
       if (operation === 'firms.briefImportState') return await Promise.resolve(held);
       if (operation === 'firms.briefImportCommit') {
         held = { ...PREVIEW, rows: PREVIEW.rows.map(row => (row.index === 1 ? { ...row, result: 'saved' } : row.index === 2 ? { ...row, result: 'not_assigned' } : row)) };
@@ -67,6 +70,8 @@ describe('the prepared-brief import screen', () => {
     expect(screen.getAllByTestId('brief-import-row')[1]?.textContent).not.toContain('not_assigned');
     expect(screen.getByTestId('brief-import-commit').textContent).toBe('Import 1 brief');
     expect(asked).toEqual(['firms.briefImportState', 'firms.briefImportCommit']);
+    // The commit names the preview it was pressed on.
+    expect(commits).toEqual([{ previewId: 1 }]);
   });
 
   it('reads the held preview when it mounts again, so leaving the screen loses nothing', async () => {

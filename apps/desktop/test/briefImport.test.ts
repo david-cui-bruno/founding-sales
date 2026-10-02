@@ -114,7 +114,8 @@ describe('the prepared-brief import', () => {
     const { api, calls } = fakeApi(FIRM_B);
     const host = importer(api, JSON.stringify(FILE));
     await host.choose();
-    const committed = await host.commit();
+    const preview = await host.choose();
+    const committed = await host.commit({ previewId: preview.previewId });
     const sets = calls.filter(call => call.kind === 'command');
     expect(sets.map(call => [call.path, (call.body as { firmId: string }).firmId])).toEqual([
       ['/firms/brief/set', FIRM_A],
@@ -132,7 +133,7 @@ describe('the prepared-brief import', () => {
 
     // A second press sends only the refused row, under the id it was first sent with.
     calls.length = 0;
-    await host.commit();
+    await host.commit({ previewId: preview.previewId });
     expect(calls.map(call => [(call.body as { firmId: string }).firmId, call.commandId])).toEqual([[FIRM_B, sets[1]?.commandId]]);
   });
 
@@ -142,13 +143,104 @@ describe('the prepared-brief import', () => {
     await host.choose();
     expect((await host.forget()).rows).toEqual([]);
     const cancelled = createBriefImport({ api, openDialog: async () => await Promise.resolve({ canceled: true, filePaths: [] }) });
-    expect(await cancelled.choose()).toEqual({ fileName: null, fileError: null, reason: null, rows: [] });
+    expect(await cancelled.choose()).toEqual({ previewId: 0, fileName: null, fileError: null, reason: null, rows: [] });
   });
 
   it('says why a file could not be read as a whole', async () => {
     const { api, calls } = fakeApi();
     expect((await importer(api, '{"not":"an array"}').choose()).fileError).toBe('not_array');
     expect(calls).toEqual([]);
+  });
+});
+
+describe('the prepared-brief import, under review PB', () => {
+  /** An API whose set commands wait until the test releases them, one by one. */
+  function heldApi(matchAnswers: (() => Promise<unknown>)[] = []) {
+    const sent: string[] = [];
+    const releases: (() => void)[] = [];
+    let match = 0;
+    const api = {
+      read: async <T>(_path: string, parse: (value: unknown) => T, body?: unknown): Promise<ApiOutcome<T>> => {
+        const scripted = matchAnswers[match];
+        match += 1;
+        if (scripted !== undefined) return { ok: true as const, value: parse(await scripted()) };
+        const rows = (body as { rows: unknown[] }).rows;
+        return {
+          ok: true as const,
+          value: parse({ rows: rows.map((_row, i) => ({ status: 'matched', firmId: i === 0 ? FIRM_A : FIRM_B, firmName: 'Test Co', matchedOn: 'external_id' })) }),
+        };
+      },
+      command: async <T>(_path: string, body: Record<string, unknown>, parse: (value: unknown) => T): Promise<ApiOutcome<T>> => {
+        sent.push(String(body['firmId']));
+        await new Promise<void>(resolve => releases.push(resolve));
+        return { ok: true as const, value: parse({ firmId: body['firmId'], created: true, briefLength: 1, sourceCount: 1, updatedAt: '2026-10-02T15:00:00.000Z' }) };
+      },
+    };
+    return { api: api as unknown as AuthedClient, sent, releases };
+  }
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  };
+  const twoRows = JSON.stringify([row({ external_id: 'dfw-20261002-e01' }), row({ external_id: 'dfw-20261002-w01' })]);
+
+  it('finding 2: a session change while row 1 is in flight sends nothing more', async () => {
+    let session = 1;
+    const { api, sent, releases } = heldApi();
+    const host = createBriefImport({ api, sessionGeneration: () => session, openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/x/a.json'] }), read: async () => await Promise.resolve(twoRows) });
+    const preview = await host.choose();
+    const running = host.commit({ previewId: preview.previewId });
+    await settle();
+    expect(sent).toEqual([FIRM_A]);
+    session = 2;
+    releases[0]?.();
+    await running;
+    expect(sent).toEqual([FIRM_A]);
+  });
+
+  it('finding 2: forget() aborts a running commit', async () => {
+    const { api, sent, releases } = heldApi();
+    const host = createBriefImport({ api, openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/x/a.json'] }), read: async () => await Promise.resolve(twoRows) });
+    const preview = await host.choose();
+    const running = host.commit({ previewId: preview.previewId });
+    await settle();
+    expect((await host.forget()).rows).toEqual([]);
+    releases[0]?.();
+    expect((await running).rows).toEqual([]);
+    expect(sent).toEqual([FIRM_A]);
+  });
+
+  it('finding 3: an older preview answering late writes nothing, and commit sends only the shown preview’s rows', async () => {
+    let releaseA: (value: unknown) => void = () => undefined;
+    const aAnswer = new Promise<unknown>(resolve => {
+      releaseA = resolve;
+    });
+    const { api, sent, releases } = heldApi([
+      async () => await aAnswer,
+      async () => await Promise.resolve({ rows: [{ status: 'matched', firmId: FIRM_B, firmName: 'Bravo Test Co', matchedOn: 'external_id' }] }),
+    ]);
+    let file = twoRows;
+    const host = createBriefImport({ api, openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/x/f.json'] }), read: async () => await Promise.resolve(file) });
+    const pendingA = host.choose();
+    await settle();
+    file = JSON.stringify([row({ external_id: 'dfw-20261002-w01' })]);
+    const b = await host.choose();
+    releaseA({
+      rows: [
+        { status: 'matched', firmId: FIRM_A, firmName: 'Alpha Test Co', matchedOn: 'external_id' },
+        { status: 'matched', firmId: FIRM_B, firmName: 'Bravo Test Co', matchedOn: 'external_id' },
+      ],
+    });
+    await pendingA;
+    expect((await host.state()).rows).toHaveLength(1);
+    expect((await host.state()).previewId).toBe(b.previewId);
+    // A commit naming the abandoned preview sends nothing.
+    await host.commit({ previewId: b.previewId - 1 });
+    expect(sent).toEqual([]);
+    const running = host.commit({ previewId: b.previewId });
+    await settle();
+    releases[0]?.();
+    await running;
+    expect(sent).toEqual([FIRM_B]);
   });
 });
 

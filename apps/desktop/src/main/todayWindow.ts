@@ -99,6 +99,7 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   const briefImport = guard(
     createBriefImport({
       api: deps.today.api,
+      sessionGeneration: generation,
       openDialog: deps.openBriefDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
       ...(deps.readBriefFile === undefined ? {} : { read: deps.readBriefFile }),
     }),
