@@ -1302,8 +1302,25 @@ export interface CallLogRow {
   readonly actorUserId: string;
   /** Appendix F: only the assigned salesperson and admins see this. */
   readonly note: string | null;
+  /** S3X (RESET C): which way the call went (migration 0034). */
+  readonly direction: 'outbound' | 'inbound';
+  /** An incoming call's length, when David said; null otherwise. */
+  readonly durationSeconds: number | null;
+  /**
+   * The call session whose `call_log_id` is this log, consumed or not (a log may link to a
+   * session that was never consumed); null for a form or incoming log with none.
+   */
+  readonly callSessionId: string | null;
 }
 
+/**
+ * Every call log of one firm, newest first, from the database alone (`GET /calls?firmId=`).
+ *
+ * S3X (RESET C): the read the firm page's call history uses to show — and correct, by call
+ * log id — every log, including the ones no session row shows: a form or incoming log with no
+ * session, a log linked to an unconsumed session, and every log while the calling provider is
+ * not Twilio. No provider gate; the route decides who may read the note.
+ */
 export async function listCallLogs(
   context: RepositoryContext,
   options: { readonly firmId: string; readonly limit?: number },
@@ -1317,11 +1334,18 @@ export async function listCallLogs(
     occurred_at: Date;
     actor_user_id: string;
     note: string | null;
+    direction: 'outbound' | 'inbound';
+    duration_seconds: number | null;
+    call_session_id: string | null;
   }>(
-    `SELECT id, firm_id, contact_id, outcome, step_effect, occurred_at, actor_user_id, note
-       FROM call_logs
-      WHERE workspace_id = $1 AND firm_id = $2
-      ORDER BY occurred_at DESC, id
+    `SELECT l.id, l.firm_id, l.contact_id, l.outcome, l.step_effect, l.occurred_at, l.actor_user_id, l.note,
+            l.direction, l.duration_seconds,
+            (SELECT s.id FROM call_sessions s
+              WHERE s.workspace_id = l.workspace_id AND s.call_log_id = l.id
+              ORDER BY s.created_at, s.id LIMIT 1) AS call_session_id
+       FROM call_logs l
+      WHERE l.workspace_id = $1 AND l.firm_id = $2
+      ORDER BY l.occurred_at DESC, l.id
       LIMIT $3`,
     [context.scope.workspaceId, options.firmId, Math.trunc(options.limit ?? 100)],
   );
@@ -1334,5 +1358,8 @@ export async function listCallLogs(
     occurredAt: row.occurred_at.toISOString(),
     actorUserId: row.actor_user_id,
     note: row.note,
+    direction: row.direction,
+    durationSeconds: row.duration_seconds,
+    callSessionId: row.call_session_id,
   }));
 }

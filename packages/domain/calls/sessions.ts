@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   CALL_CADENCE,
+  CALL_OUTCOME_CORRECTED_ACTION,
   type CallCadence,
+  type CallCorrectionReason,
+  type CallLogCorrection,
   type CallOutcome,
   type CallSessionDto,
   type CallSessionRefusalCode,
@@ -285,23 +288,34 @@ export async function readCallCadence(
    * Consumption passes `clock_timestamp()` read after its locks (review of C1, fold 3).
    */
   countThrough?: string,
+  /**
+   * The cadence as if this one call log had this outcome (S3X, review S3XD 6): an outcome
+   * correction asks whether an automatic park would still be justified after it. The
+   * override applies to **both** halves of the count — the last resetting outcome, and the
+   * classification of each counted session's attempt — so the preview and the command,
+   * which both ask this, cannot disagree with each other or with the count after the save.
+   */
+  override?: { readonly callLogId: string; readonly outcome: CallOutcome } | undefined,
 ): Promise<CallCadenceState> {
   const workspaceId = context.scope.workspaceId;
+  // The log's outcome, or the override's for the one log it names (`$logParam`, `$logParam+1`).
+  const outcomeOf = (alias: string, logParam: number): string =>
+    `CASE WHEN ${alias}id = $${String(logParam)}::uuid THEN $${String(logParam + 1)}::text ELSE ${alias}outcome END`;
   const { rows: resets } = await context.db.query<{ reset_at: string | null }>(
     `SELECT ${isoMicroseconds('max(t)')} AS reset_at FROM (
        SELECT occurred_at AS t FROM call_logs
-        WHERE workspace_id = $1 AND firm_id = $2 AND outcome = ANY($3::text[])
+        WHERE workspace_id = $1 AND firm_id = $2 AND (${outcomeOf('', 5)}) = ANY($3::text[])
        UNION ALL
        SELECT released_at AS t FROM active_holds
         WHERE workspace_id = $1 AND scope_kind = 'firm' AND scope_key = ($2::uuid)::text
           AND source_event_kind = $4 AND released_at IS NOT NULL
      ) AS resets`,
-    [workspaceId, firmId, [...RESETTING_OUTCOMES], CALL_CADENCE_PARKED_SOURCE],
+    [workspaceId, firmId, [...RESETTING_OUTCOMES], CALL_CADENCE_PARKED_SOURCE, override?.callLogId ?? null, override?.outcome ?? null],
   );
   const resetAt = resets[0]?.reset_at ?? null;
 
   const { rows: sessions } = await context.db.query<{ id: string; consumed_at: Date; outcome: CallOutcome | null }>(
-    `SELECT s.id, s.consumed_at, l.outcome
+    `SELECT s.id, s.consumed_at, ${outcomeOf('l.', 7)} AS outcome
        FROM call_sessions s
        LEFT JOIN call_logs l ON l.workspace_id = s.workspace_id AND l.id = s.call_log_id
       WHERE s.workspace_id = $1 AND s.firm_id = $2 AND s.consumed_at IS NOT NULL
@@ -309,7 +323,7 @@ export async function readCallCadence(
         AND s.consumed_at <= GREATEST($3::timestamptz, COALESCE($6::timestamptz, $3::timestamptz))
         AND ($5::timestamptz IS NULL OR s.consumed_at > $5::timestamptz)
       ORDER BY s.consumed_at, s.id`,
-    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt, countThrough ?? null],
+    [workspaceId, firmId, at, CALL_CADENCE.windowDays, resetAt, countThrough ?? null, override?.callLogId ?? null, override?.outcome ?? null],
   );
   const attempts = sessions.filter(row => row.outcome === null || !RESETTING_OUTCOMES.includes(row.outcome));
   const last = attempts.at(-1) ?? null;
@@ -590,6 +604,47 @@ export async function readCallLogOutcomes(
     [context.scope.workspaceId, [...callLogIds]],
   );
   return new Map(rows.map(row => [row.id, row.outcome]));
+}
+
+/**
+ * S3X (`GET /calls?firmId=&include=corrections`): every correction of each named call log,
+ * oldest first, from its `call.outcome_corrected` audit rows — the outcome it was changed
+ * from and to, when, by whom, and the reason when one was required. The caller has already
+ * decided the firm readable and names only its logs. Codes and ids only.
+ */
+export async function readCallLogCorrections(
+  context: RepositoryContext,
+  callLogIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly CallLogCorrection[]>> {
+  if (callLogIds.length === 0) return new Map();
+  const { rows } = await context.db.query<{
+    subject_id: string;
+    from_outcome: CallOutcome;
+    to_outcome: CallOutcome;
+    occurred_at: Date;
+    actor_user_id: string | null;
+    reason: CallCorrectionReason | null;
+  }>(
+    `SELECT subject_id, detail->>'from' AS from_outcome, detail->>'to' AS to_outcome, occurred_at, actor_user_id,
+            detail->>'reason' AS reason
+       FROM audit_events
+      WHERE workspace_id = $1 AND action = $2 AND subject_kind = 'call_log' AND subject_id = ANY($3::text[])
+      ORDER BY subject_id, (detail->>'revision')::int, occurred_at, id`,
+    [context.scope.workspaceId, CALL_OUTCOME_CORRECTED_ACTION, [...callLogIds]],
+  );
+  const byLog = new Map<string, CallLogCorrection[]>();
+  for (const row of rows) {
+    const list = byLog.get(row.subject_id) ?? [];
+    list.push({
+      from: row.from_outcome,
+      to: row.to_outcome,
+      at: row.occurred_at.toISOString(),
+      byUserId: row.actor_user_id,
+      reason: row.reason,
+    });
+    byLog.set(row.subject_id, list);
+  }
+  return byLog;
 }
 
 /**

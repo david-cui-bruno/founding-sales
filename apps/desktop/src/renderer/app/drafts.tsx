@@ -20,6 +20,8 @@ interface DraftStore {
   readonly values: Readonly<Record<string, string>>;
   set(key: string, value: string): void;
   clear(prefix: string): void;
+  /** Forget each key whose text is still exactly what it was: an edit made since stays. */
+  clearUnchanged(expected: Readonly<Record<string, string>>): void;
 }
 
 const DraftContext = createContext<DraftStore | null>(null);
@@ -39,7 +41,14 @@ export function DraftsProvider({ children }: { readonly children: ReactNode }): 
     });
   }, []);
 
-  const store = useMemo<DraftStore>(() => ({ epoch, values, set, clear }), [epoch, values, set, clear]);
+  const clearUnchanged = useCallback((expected: Readonly<Record<string, string>>): void => {
+    setValues(current => {
+      const next = Object.fromEntries(Object.entries(current).filter(([key, value]) => expected[key] !== value));
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, []);
+
+  const store = useMemo<DraftStore>(() => ({ epoch, values, set, clear, clearUnchanged }), [epoch, values, set, clear, clearUnchanged]);
   return <DraftContext.Provider value={store}>{children}</DraftContext.Provider>;
 }
 
@@ -99,6 +108,21 @@ export function useClearDrafts(): (prefix: string) => void {
   return useCallback(
     (prefix: string): void => {
       store?.clear(prefix);
+    },
+    [store],
+  );
+}
+
+/**
+ * Forget the drafts a command was sent with, once it has been answered, keeping any key somebody
+ * has typed in since (kept-state rules K5/K6): an answer that lands late must not take an edit
+ * made after it was sent. Used by "Change outcome" (`calling/ChangeOutcome.tsx`).
+ */
+export function useClearUnchangedDrafts(): (expected: Readonly<Record<string, string>>) => void {
+  const store = useContext(DraftContext);
+  return useCallback(
+    (expected: Readonly<Record<string, string>>): void => {
+      store?.clearUnchanged(expected);
     },
     [store],
   );

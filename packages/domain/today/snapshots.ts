@@ -288,6 +288,33 @@ export async function completeTodayItemsByKey(
 }
 
 /**
+ * Reopen one task a refresh cancelled (S3X, review S3XD 5).
+ *
+ * `today_upsert_item` never reopens a terminal row (migration 0008), which is right for a
+ * rebuild: a finished task stays finished. One case needs the opposite: an outcome
+ * correction that makes a call a "call me back" again, on a day an earlier correction's
+ * refresh already cancelled its "Callback — needs a time" task. The correction calls this
+ * before `refreshTodayForFirm`, which then refreshes the task's due time and the card.
+ *
+ * Only a **cancelled** row on that business date: a completed one means a later call
+ * fulfilled the request, and it is never reopened. Returns the reopened task's id, or null.
+ */
+export async function reopenCancelledTodayItem(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly itemKey: string; readonly businessDate: string },
+): Promise<string | null> {
+  const { rows } = await context.db.query<{ id: string }>(
+    `UPDATE today_items
+        SET status = 'open', snooze_until = NULL, updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND firm_id = $2 AND item_key = $3 AND snapshot_date = $4::date
+        AND status = 'cancelled'
+      RETURNING id`,
+    [context.scope.workspaceId, input.firmId, input.itemKey, input.businessDate],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
  * Cancel the tasks a rebuild no longer produced.
  *
  * Only the source kinds the build actually enumerated: a reply the classification

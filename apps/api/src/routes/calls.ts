@@ -1,4 +1,15 @@
-import { callFollowUpCommandSchema, followUpPreviewRequestSchema, logCallOutcomeCommandSchema } from '@fss/contracts';
+import {
+  CALL_LOGS_INCLUDE_CORRECTIONS,
+  callFollowUpCommandSchema,
+  callLogsResponseSchema,
+  correctCallOutcomeCommandSchema,
+  correctionPreviewRequestSchema,
+  correctionPreviewResponseSchema,
+  followUpPreviewRequestSchema,
+  logCallOutcomeCommandSchema,
+} from '@fss/contracts';
+import { correctCallOutcome, previewOutcomeCorrection } from '@fss/domain/calls/correctOutcome.ts';
+import { readCallLogCorrections } from '@fss/domain/calls/sessions.ts';
 import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { readFirm } from '@fss/domain/crm/firms.ts';
 import { listCallLogs, logCallOutcome, recordCallFollowUp } from '@fss/domain/dial/calls.ts';
@@ -21,6 +32,9 @@ export const CALL_PATHS: readonly string[] = [
   '/calls/log',
   '/calls/follow-up-preview',
   '/calls/follow-up',
+  // S3X lane X2: correcting a logged outcome, by call log id.
+  '/calls/logs/correction-preview',
+  '/calls/logs/correct',
 ];
 
 /**
@@ -59,9 +73,29 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
     if (firm === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
     const visibility = decideFirmRead(scoped.context, firm);
     const logs = await listCallLogs(scoped.context, { firmId });
+    // S3X (RESET C): every log of the firm from the database alone — no provider gate — with
+    // `direction`, `durationSeconds` and `callSessionId`; `include=corrections` (repeated or
+    // comma-separated) adds each log's corrections, so an older reader never meets the key.
+    const includes = new Set(
+      request.query
+        .getAll('include')
+        .flatMap(value => value.split(','))
+        .map(value => value.trim()),
+    );
+    const corrections = includes.has(CALL_LOGS_INCLUDE_CORRECTIONS)
+      ? await readCallLogCorrections(
+          scoped.context,
+          logs.map(log => log.id),
+        )
+      : null;
     return {
       status: 200,
-      body: { calls: logs.map(log => (visibility === 'assigned_or_admin' ? log : { ...log, note: null })) },
+      body: callLogsResponseSchema.parse({
+        calls: logs.map(log => ({
+          ...(visibility === 'assigned_or_admin' ? log : { ...log, note: null }),
+          ...(corrections === null ? {} : { corrections: corrections.get(log.id) ?? [] }),
+        })),
+      }),
     };
   }
 
@@ -101,6 +135,40 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
         callLogId: body.callLogId,
         followUpPermission: body.followUpPermission,
         commandId: body.commandId,
+      }),
+    );
+  }
+  // S3X lane X2: what correcting a logged outcome would meet. A read (no receipt), a POST for
+  // its body. A log this caller cannot see — or that does not exist — is `not_found`; every
+  // other refusal is a 409 carrying the code.
+  if (request.path === '/calls/logs/correction-preview') {
+    const parsed = correctionPreviewRequestSchema.safeParse(request.body);
+    if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    const preview = await previewOutcomeCorrection(scoped.context, parsed.data);
+    if (!preview.ok) {
+      return preview.reason === 'call_log_unknown'
+        ? { status: REFUSAL_STATUS.not_found, body: redactError('not_found') }
+        : { status: 409, body: { status: 'refused', reason: preview.reason } };
+    }
+    return { status: 200, body: correctionPreviewResponseSchema.parse(preview.value) };
+  }
+  // The correction: a command with a receipt (a retry with the same id is answered from it),
+  // atomic, and carrying the journal for a correction to `do_not_call` (a lost journal write is
+  // the 503 `runPolicyCommand` answers).
+  if (request.path === '/calls/logs/correct') {
+    return await runPolicyCommand(deps, correctCallOutcomeCommandSchema, 'correct_call_outcome', async (repository, body) =>
+      await correctCallOutcome(repository, {
+        callLogId: body.callLogId,
+        expectedOutcome: body.expectedOutcome,
+        outcome: body.outcome,
+        ...(body.reason === undefined ? {} : { reason: body.reason }),
+        ...(body.doNotCall === undefined ? {} : { doNotCall: body.doNotCall }),
+        ...(body.callback === undefined ? {} : { callback: body.callback }),
+        effects: body.effects,
+        commandId: body.commandId,
+        journal: deps.journal,
       }),
     );
   }

@@ -118,6 +118,10 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'calling.pendingDismiss': { callSessionId: UUID },
   'review.stageResolve': { itemId: UUID },
   'suppressions.firmStop': { firmId: UUID },
+  'suppressions.supersede': { eventId: 'stop-event-1', commandId: UUID },
+  'calling.logs': { firmId: UUID },
+  'calling.correctionPreview': { callLogId: UUID, outcome: 'interested' },
+  'calling.correctOutcome': { commandId: UUID, callLogId: UUID, expectedOutcome: 'no_answer', outcome: 'interested', effects: [] },
   'today.completeTask': { taskId: UUID },
   'research.open': { firmId: UUID },
   'research.run': { firmId: UUID },
@@ -260,7 +264,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     // Slice C1: the calling operations are the Today bridge's dial path, under their own names.
     calling: {
       ...Object.fromEntries(
-        ['analysis', 'analysisRetry', 'analysisEdit', 'proposalsApply', 'proposalsDecline', 'pendingDismiss', 'recap', 'acceptance', 'trial'].map(method => [
+        ['analysis', 'analysisRetry', 'analysisEdit', 'proposalsApply', 'proposalsDecline', 'pendingDismiss', 'recap', 'acceptance', 'trial', 'logs', 'correctionPreview', 'correctOutcome'].map(method => [
           method,
           async (input: unknown) => await operationHandlers({ api } as unknown as OperationHostDeps)[`calling.${method}` as OperationName](input as never),
         ]),
@@ -300,7 +304,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       return {
         // Slice 3a, lane C: the after-call analysis and its siblings, straight through the client.
         review: through(['review.list', 'review.stageResolve']),
-        suppressions: through(['suppressions.firmStop']),
+        suppressions: through(['suppressions.firmStop', 'suppressions.supersede']),
         firms: { saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never) },
         calls: { logIncoming: async (input: unknown) => await handlers['calls.logIncoming'](input as never) },
       };

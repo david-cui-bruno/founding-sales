@@ -313,8 +313,9 @@ export async function applyCallProposals(
   // ---- 4. Map, in one savepoint ---------------------------------------------------------
   await context.db.query(`SAVEPOINT ${SAVEPOINT}`);
   let applied: Omit<ApplyCallProposalsResult, 'analysisId' | 'callSessionId'>;
+  let effectIds: ReadonlyMap<string, readonly string[]>;
   try {
-    applied = await mapKeys(context, {
+    ({ applied, effectIds } = await mapKeys(context, {
       sessionId,
       firmId: where.firm_id,
       assignedUserId: firm.assigned_user_id ?? actor.userId,
@@ -327,7 +328,7 @@ export async function applyCallProposals(
       templateVersionId,
       followUpProposal,
       input,
-    });
+    }));
   } catch (error) {
     await context.db.query(`ROLLBACK TO SAVEPOINT ${SAVEPOINT}`);
     await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
@@ -352,7 +353,13 @@ export async function applyCallProposals(
     // and recording it would overwrite the first decision (review S3B, finding 8).
     applied.results
       .filter(entry => entry.result === 'applied')
-      .map(entry => ({ key: entry.key, result: entry.edited ? 'edited' : 'unchanged' })),
+      // S3X (RESET D): the ids of what this key created, so a later outcome correction knows
+      // by exact id which effects came from this applied suggestion.
+      .map(entry => ({
+        key: entry.key,
+        result: entry.edited ? ('edited' as const) : ('unchanged' as const),
+        effectIds: effectIds.get(entry.key) ?? (entry.id === null ? [] : [entry.id]),
+      })),
   );
   // Only when this click changed something: an all-no-op Apply writes nothing (review S3BF).
   if (applied.results.some(entry => entry.result === 'applied')) await refreshTodayForFirm(context, { firmId: where.firm_id });
@@ -379,8 +386,13 @@ type KeyResult = ApplyCallProposalsResult['results'][number];
 async function mapKeys(
   context: RepositoryContext,
   m: MapInput,
-): Promise<Omit<ApplyCallProposalsResult, 'analysisId' | 'callSessionId'>> {
+): Promise<{
+  readonly applied: Omit<ApplyCallProposalsResult, 'analysisId' | 'callSessionId'>;
+  /** Per applied key, the ids of the rows it created, when more than its result's `id`. */
+  readonly effectIds: ReadonlyMap<string, readonly string[]>;
+}> {
   const { input } = m;
+  const effectIds = new Map<string, readonly string[]>();
   const selected = new Set(input.keys);
   const results: KeyResult[] = [];
   const followUps: CallFollowUp[] = [];
@@ -435,6 +447,8 @@ async function mapKeys(
       chosenStops.handle !== proposedStops.handle ||
       chosenStops.firm !== proposedStops.firm;
     push(proposal, 'applied', callLogId, outcomeEdited);
+    // The outcome created the call log and, for a `do_not_call`, its stops.
+    effectIds.set('outcome', [logged.value.callLogId, ...logged.value.suppressionEventIds]);
     if (selected.has('callback')) {
       push(proposalOf('callback'), 'applied', logged.value.callbackId, callbackEdited(proposalOf('callback'), input.edits));
     }
@@ -593,7 +607,7 @@ async function mapKeys(
     push(proposal, task.created ? 'applied' : 'already_created', task.id, edited);
   }
 
-  return { callLogId, results, followUps };
+  return { applied: { callLogId, results, followUps }, effectIds };
 }
 
 /**

@@ -76,6 +76,8 @@ describe('what the API mounts', () => {
       '/calls/follow-up-preview',
       '/calls/history',
       '/calls/log',
+      '/calls/logs/correct',
+      '/calls/logs/correction-preview',
       '/calls/pending/dismiss',
       '/calls/proposals/acceptance',
       '/calls/proposals/apply',

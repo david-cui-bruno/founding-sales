@@ -589,6 +589,12 @@ export function TodayWorkspace({
             waiting={Date.now() - panelSession.endedAt < WAITING_WINDOW_MS}
             logged={loggedSessions.has(panelSession.callSessionId)}
             loggedOutcome={(history.calls ?? []).find(call => call.sessionId === panelSession.callSessionId)?.outcome ?? null}
+            loggedCallLogId={(history.calls ?? []).find(call => call.sessionId === panelSession.callSessionId)?.callLogId ?? null}
+            timeZone={basics?.timeZone ?? null}
+            onCorrected={() => {
+              reload();
+              void queryReload(panelSession.callSessionId);
+            }}
             templates={state?.followUpTemplates ?? []}
             commands={memory.applyCommands}
             onReload={() => {
@@ -906,6 +912,8 @@ export function TodayWorkspace({
                     enabled={todayView.actionsEnabled}
                     researching={actions.busy(todayForm.research(expanded.firmId))}
                     onResearchAgain={() => actions.researchAgain(expanded.firmId)}
+                    timeZone={basics?.timeZone ?? null}
+                    onCorrected={reload}
                   />
                 </div>
               </div>
