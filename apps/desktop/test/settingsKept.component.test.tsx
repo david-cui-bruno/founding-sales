@@ -12,6 +12,8 @@ import { StatusSection } from '../src/renderer/settings/StatusSection.tsx';
 import type { AdminState } from '../src/renderer/settingsContract.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import { adminState } from './e2e/support/adminFixtures.ts';
+import { adminViewOf } from '../src/renderer/settingsView.ts';
+import { SendingSection } from '../src/renderer/settings/SendingSection.tsx';
 
 /**
  * S4R: Settings keeps what was typed and says what happened beside the control that earned it.
@@ -161,5 +163,64 @@ describe('Settings › Status', () => {
     expect(within(section).getAllByRole('listitem')).toHaveLength(2);
     expect(within(section).getByTestId('status-mailbox').getAttribute('data-tone')).toBe('ok');
     expect(within(section).getByTestId('status-sending').textContent).toBe('Sending is paused');
+  });
+});
+
+describe('the sending checklist and caps (criterion 7)', () => {
+  const MAILBOX = '33333333-3333-4333-8333-333333333333';
+  const sendingAdmin = (cap: number): AdminState['sendingAdmin'] => ({
+    domain: {
+      domain: 'sending.example.test',
+      spfPass: false,
+      dkimPass: false,
+      dmarcPass: false,
+      postmasterReviewedAt: null,
+      authenticationPasses: false,
+      automatedSendingEnabled: false,
+    },
+    ramps: [{ mailboxId: MAILBOX, healthySendingDays: 9, effectiveCap: cap, adminDailyCap: cap, raisedDailyCap: null, lastHealthFailure: null }],
+  });
+  const section = (cap: number, on: boolean): JSX.Element => (
+    <DraftsProvider>
+      {on ? (
+        <SendingSection
+          view={adminViewOf(adminState({ sendingAdmin: sendingAdmin(cap) }))}
+          recording={false}
+          capping={false}
+          onRecord={() => undefined}
+          onCap={() => undefined}
+          onRetry={() => undefined}
+        />
+      ) : (
+        <p>away</p>
+      )}
+    </DraftsProvider>
+  );
+
+  it('keeps a ticked box and a typed cap across a visit elsewhere', async () => {
+    const user = userEvent.setup();
+    const view = render(section(40, true));
+    await user.click(screen.getByTestId('sending-spfPass'));
+    await user.clear(screen.getByTestId(`cap-${MAILBOX}`));
+    await user.type(screen.getByTestId(`cap-${MAILBOX}`), '25');
+    // Same provider across the swap: the route changes under the store, as in the shell.
+    view.rerender(section(40, false));
+    expect(screen.queryByTestId('sending-spfPass')).toBeNull();
+    view.rerender(section(40, true));
+    expect((screen.getByTestId('sending-spfPass') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId(`cap-${MAILBOX}`) as HTMLInputElement).value).toBe('25');
+  });
+
+  it('drops the typing when the saved values changed while the person was away', async () => {
+    const user = userEvent.setup();
+    const view = render(section(40, true));
+    await user.click(screen.getByTestId('sending-spfPass'));
+    view.rerender(section(40, false));
+    // Another admin raised the cap meanwhile: the form shows what is saved now, as it always did.
+    view.rerender(section(50, true));
+    await waitFor(() => {
+      expect((screen.getByTestId(`cap-${MAILBOX}`) as HTMLInputElement).value).toBe('50');
+    });
+    expect((screen.getByTestId('sending-spfPass') as HTMLInputElement).checked).toBe(false);
   });
 });

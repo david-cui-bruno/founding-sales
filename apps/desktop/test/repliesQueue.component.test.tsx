@@ -256,7 +256,7 @@ describe('the counts (criterion 5)', () => {
     );
     render(<RepliesRoute column={column} />);
     const counts = await screen.findByTestId('reply-counts');
-    expect(counts.textContent).toBe('Today:1 to answer(+1 with no suggestion)·2 in all');
+    expect(counts.textContent).toBe('Today: 1 to answer (+1 with no suggestion) · 2 in all');
     const user = userEvent.setup();
     await user.click(screen.getByTestId('count-unsure'));
     expect(screen.getAllByTestId('reply-summary')).toHaveLength(1);

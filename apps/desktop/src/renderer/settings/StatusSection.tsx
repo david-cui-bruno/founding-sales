@@ -29,7 +29,7 @@ const TONE_DOT: Readonly<Record<StatusRow['tone'], string>> = Object.freeze({
  */
 export function StatusSection({ rows }: { readonly rows: readonly StatusRow[] }): JSX.Element {
   return (
-    <Section data-testid="settings-status" title="Status">
+    <Section data-testid="settings-status" title="Status" className="mt-5 border-t-0 pt-0">
       <ul className="flex flex-col">
         {rows.map(row => (
           <li

@@ -487,18 +487,18 @@ function Counts({
     </button>
   );
   return (
-    <p data-testid="reply-counts" className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
-      <span>Today:</span>
+    <p data-testid="reply-counts" className="text-xs leading-5 text-muted-foreground">
+      <span>Today:</span>{' '}
       {pill('waiting', counts.waiting, 'count-waiting')}
       {counts.unsure === 0 ? null : (
-        <>
+        <span className="whitespace-nowrap">
+          {' '}
           <span aria-hidden>(+</span>
           {pill('unsure', counts.unsure, 'count-unsure')}
           <span aria-hidden>)</span>
-        </>
-      )}
-      <span aria-hidden>·</span>
-      {pill('all', counts.all, 'count-all')}
+        </span>
+      )}{' '}
+      <span aria-hidden>·</span> {pill('all', counts.all, 'count-all')}
     </p>
   );
 }
