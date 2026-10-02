@@ -6,7 +6,10 @@ import {
   type PreparedBriefDto,
   type PreparedBriefMatch,
   type PreparedBriefMatchRequest,
-  type PreparedBriefSetResult,
+  type PreparedBriefImportResult,
+  type PreparedBriefImportRow,
+  type PreparedBriefImportRowResult,
+  type PreparedBriefSetReceipt,
   type PreparedBriefSource,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -23,7 +26,7 @@ import { accept, actorUserId, refuse, type CrmResult } from './types.ts';
  * Callie's own research brief and never mixed into it: `firm_facts` holds only the firm's
  * own quoted words, and nothing here was read or checked by Callie.
  *
- * Three commands and a read:
+ * Four commands and a read:
  *
  *   * `setPreparedBrief` — an upsert, by the firm's assignee or an admin
  *     (`decideFirmMutation`, after the firm is locked `FOR UPDATE`; that lock is also what
@@ -35,7 +38,10 @@ import { accept, actorUserId, refuse, type CrmResult } from './types.ts';
  *   * `matchPreparedBriefRows` — admin only, read-only: which firm each row of an import
  *     file names, by the CSV importer's own `workspaceIndex` and `matchExisting`, not a
  *     copy of them.
- *   * `readPreparedBrief` — the DTO, or null.
+ *   * `importPreparedBriefs` — admin only: a whole file (at most 100 rows) as one atomic,
+ *     idempotent command, matched with the same matcher (design reset I1);
+ *   * `readPreparedBrief` — the DTO, or null. The set and clear routes answer it after the
+ *     command, so the desktop patches its cache and reads nothing (design reset I2).
  */
 
 export interface SetPreparedBriefInput {
@@ -88,7 +94,7 @@ export async function readPreparedBrief(context: RepositoryContext, firmId: stri
 export async function setPreparedBrief(
   context: RepositoryContext,
   input: SetPreparedBriefInput,
-): Promise<CrmResult<PreparedBriefSetResult>> {
+): Promise<CrmResult<PreparedBriefSetReceipt>> {
   if (!inputValid(input)) return refuse('invalid_input');
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
@@ -141,7 +147,7 @@ export async function setPreparedBrief(
   }
   if (written === undefined) return refuse('invalid_input');
 
-  const result: PreparedBriefSetResult = {
+  const result: PreparedBriefSetReceipt = {
     firmId: input.firmId,
     created: creating,
     briefLength: written.brief.length,
@@ -225,4 +231,102 @@ export async function matchPreparedBriefRows(
       return { status: 'matched', firmId: match.firmId, firmName: match.firmName, matchedOn: match.matchedOn };
     }),
   );
+}
+
+/** Two source lists are the same list: the same links and labels in the same order. */
+function sameSources(a: readonly PreparedBriefSource[], b: readonly PreparedBriefSource[]): boolean {
+  return a.length === b.length && a.every((source, i) => source.url === b[i]?.url && source.label === b[i]?.label);
+}
+
+/**
+ * `POST /firms/brief/import` (design reset I1): a whole prepared-brief file as ONE command.
+ *
+ * Admin only. Every row is matched with `matchPreparedBriefRows` — the CSV importer's
+ * matcher, the same call `/firms/brief/match` answers from — inside the command's own
+ * transaction, so what is written is what matched at that instant. A matched row is
+ * written in full (it is a file of whole briefs, not a patch), or reported `unchanged` when
+ * the stored brief already says exactly that; an unmatched or ambiguous row is skipped with
+ * its reason. Nothing here catches a database error: one failure rolls back every row
+ * (`runCommand`'s transaction), and the receipt makes a replay answer the stored result.
+ * One audit row, with counts only.
+ */
+export async function importPreparedBriefs(
+  context: RepositoryContext,
+  input: { readonly rows: readonly PreparedBriefImportRow[] },
+): Promise<CrmResult<PreparedBriefImportResult>> {
+  const permitted = decideAdminOnly(context);
+  if (!permitted.permitted) return refuse(permitted.reason);
+  for (const row of input.rows) {
+    if (!inputValid({ firmId: '', brief: row.brief, sources: row.sources, observedOn: row.observed_on, preparedBy: row.prepared_by })) {
+      return refuse('invalid_input');
+    }
+  }
+  const matched = await matchPreparedBriefRows(context, {
+    rows: input.rows.map(row => ({
+      ...(row.external_id === undefined ? {} : { externalId: row.external_id }),
+      ...(row.website === undefined ? {} : { website: row.website }),
+      ...(row.firm_name === undefined ? {} : { firmName: row.firm_name }),
+    })),
+  });
+  if (!matched.ok) return refuse(matched.reason);
+
+  const workspaceId = context.scope.workspaceId;
+  const results: PreparedBriefImportRowResult[] = [];
+  for (const [position, row] of input.rows.entries()) {
+    const index = position + 1;
+    const match = matched.value[position] ?? { status: 'unmatched' as const };
+    if (match.status === 'unmatched') {
+      results.push({ index, status: 'unmatched' });
+      continue;
+    }
+    if (match.status === 'ambiguous') {
+      results.push({ index, status: 'ambiguous', column: match.column });
+      continue;
+    }
+    // The firm is locked as every brief write locks it, so a concurrent set waits.
+    const firm = await loadFirmForUpdate(context, match.firmId);
+    if (firm === null || firm.status === 'merged') {
+      results.push({ index, status: 'unmatched' });
+      continue;
+    }
+    const sources = row.sources.map(source => ({ url: source.url, label: source.label }));
+    const stored = await readPreparedBrief(context, match.firmId);
+    if (
+      stored !== null &&
+      stored.brief === row.brief &&
+      stored.observedOn === row.observed_on &&
+      stored.preparedBy === row.prepared_by &&
+      sameSources(stored.sources, sources)
+    ) {
+      results.push({ index, status: 'unchanged', firmId: match.firmId });
+      continue;
+    }
+    await context.db.query(
+      `INSERT INTO firm_prepared_briefs (workspace_id, firm_id, brief, sources, observed_on, prepared_by, updated_by_user_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5::date, $6, $7)
+       ON CONFLICT ON CONSTRAINT firm_prepared_briefs_pkey DO UPDATE
+         SET brief = EXCLUDED.brief,
+             sources = EXCLUDED.sources,
+             observed_on = EXCLUDED.observed_on,
+             prepared_by = EXCLUDED.prepared_by,
+             updated_by_user_id = EXCLUDED.updated_by_user_id,
+             updated_at = GREATEST(now(), firm_prepared_briefs.created_at)`,
+      [workspaceId, match.firmId, row.brief, JSON.stringify(sources), row.observed_on, row.prepared_by, actorUserId(context)],
+    );
+    results.push({ index, status: 'saved', firmId: match.firmId });
+  }
+  const counts = {
+    saved: results.filter(result => result.status === 'saved').length,
+    unchanged: results.filter(result => result.status === 'unchanged').length,
+    unmatched: results.filter(result => result.status === 'unmatched').length,
+    ambiguous: results.filter(result => result.status === 'ambiguous').length,
+  };
+  // Counts only: never a brief, a URL or a firm name.
+  await recordCrmAuditEvent(context, {
+    action: 'firm.prepared_briefs_imported',
+    subjectKind: 'workspace',
+    subjectId: workspaceId,
+    detail: { rows: input.rows.length, ...counts },
+  });
+  return accept({ rows: results, counts });
 }

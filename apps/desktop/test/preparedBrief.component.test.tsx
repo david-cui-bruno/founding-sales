@@ -60,7 +60,6 @@ function Harness({
       brief={brief}
       canEdit={canEdit}
       enabled
-      onChanged={() => undefined}
       {...(setBrief === undefined ? {} : { setBrief })}
       {...(clearBrief === undefined ? {} : { clearBrief })}
     />
@@ -161,7 +160,7 @@ describe('the prepared brief editor, under K1–K7', () => {
     const sent: unknown[] = [];
     const setBrief: SetBrief = async input => {
       sent.push(input);
-      return await Promise.resolve({ saved: { firmId: FIRM, created: false, briefLength: 5, sourceCount: 2, updatedAt: BRIEF.updatedAt }, reason: null });
+      return await Promise.resolve({ saved: { firmId: FIRM, created: false, briefLength: 5, sourceCount: 2, updatedAt: BRIEF.updatedAt, brief: { ...BRIEF, brief: 'Edited' } }, reason: null });
     };
     render(
       <DraftsProvider>

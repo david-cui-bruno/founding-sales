@@ -40,11 +40,6 @@ export interface CrmMemory {
   panelFirmId: string | null;
   /** The panel's own scroll. */
   panelScroll: number;
-  /**
-   * The firm whose page or panel is on screen now, or null (lane PB, review finding 4). A late
-   * answer about another firm reads this and refreshes nothing it would have to open.
-   */
-  shownFirmId: string | null;
   /** Which editor is open on a card, by opportunity. Its draft text is in the drafts. */
   cardEditor: Record<string, CardEditor | undefined>;
   /** The last answer to a stage or value command, by opportunity. */
@@ -81,7 +76,6 @@ const fresh = (): CrmMemory => ({
   board: emptyBoardMemory(),
   panelFirmId: null,
   panelScroll: 0,
-  shownFirmId: null,
   cardEditor: {},
   feedback: {},
   pageScroll: {},

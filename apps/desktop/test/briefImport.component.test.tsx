@@ -16,6 +16,8 @@ const PREVIEW: BriefImportView = {
   fileName: 'dfw-batch-1-briefs.json',
   fileError: null,
   reason: null,
+  committing: false,
+  committed: false,
   rows: [
     { index: 1, label: 'Alpha Test Co', status: 'matched', issue: null, firmName: 'Alpha Test Co', matchedOn: 'external_id', briefLength: 300, sourceCount: 4, result: null },
     { index: 2, label: 'Bravo Test Co', status: 'matched', issue: null, firmName: 'Bravo Test Co', matchedOn: 'external_id', briefLength: 300, sourceCount: 1, result: null },
@@ -35,14 +37,18 @@ describe('the prepared-brief import screen', () => {
   it('shows the preview, imports the matched rows, and says which row was refused', async () => {
     const user = userEvent.setup();
     const asked: string[] = [];
-    let held: BriefImportView = { previewId: 0, fileName: null, fileError: null, reason: null, rows: [] };
+    let held: BriefImportView = { previewId: 0, fileName: null, fileError: null, reason: null, committing: false, committed: false, rows: [] };
     const commits: unknown[] = [];
     const answer = async (operation: OperationName, input?: unknown): Promise<unknown> => {
       asked.push(operation);
       if (operation === 'firms.briefImportCommit') commits.push(input);
       if (operation === 'firms.briefImportState') return await Promise.resolve(held);
       if (operation === 'firms.briefImportCommit') {
-        held = { ...PREVIEW, rows: PREVIEW.rows.map(row => (row.index === 1 ? { ...row, result: 'saved' } : row.index === 2 ? { ...row, result: 'not_assigned' } : row)) };
+        held = {
+          ...PREVIEW,
+          committed: true,
+          rows: PREVIEW.rows.map(row => (row.index === 1 ? { ...row, result: 'saved' } : row.index === 2 ? { ...row, result: 'unchanged' } : row.index === 3 ? { ...row, result: 'unmatched' } : row.index === 4 ? { ...row, result: 'ambiguous' } : row)),
+        };
         return await Promise.resolve(held);
       }
       return await Promise.reject(new Error(`unscripted ${operation}`));
@@ -64,11 +70,11 @@ describe('the prepared-brief import screen', () => {
     expect(screen.getByTestId('brief-import-commit').textContent).toBe('Import 2 briefs');
 
     await user.click(screen.getByTestId('brief-import-commit'));
-    await waitFor(() => expect(screen.getByTestId('brief-import-results').textContent).toBe('1 imported · 1 refused'));
-    expect(screen.getAllByTestId('brief-import-row').map(row => row.getAttribute('data-result'))).toEqual(['saved', 'not_assigned', '', '', '']);
-    // The refused row says why in words, never the code; it is the only one left to send.
-    expect(screen.getAllByTestId('brief-import-row')[1]?.textContent).not.toContain('not_assigned');
-    expect(screen.getByTestId('brief-import-commit').textContent).toBe('Import 1 brief');
+    await waitFor(() => expect(screen.getByTestId('brief-import-results').textContent).toBe('1 imported · 1 unchanged · 2 skipped'));
+    expect(screen.getAllByTestId('brief-import-row').map(row => row.getAttribute('data-result'))).toEqual(['saved', 'unchanged', 'unmatched', 'ambiguous', '']);
+    expect(screen.getAllByTestId('brief-import-row')[2]?.textContent).not.toContain('unmatched;');
+    // Answered: nothing left to press.
+    expect((screen.getByTestId('brief-import-commit') as HTMLButtonElement).disabled).toBe(true);
     expect(asked).toEqual(['firms.briefImportState', 'firms.briefImportCommit']);
     // The commit names the preview it was pressed on.
     expect(commits).toEqual([{ previewId: 1 }]);
@@ -80,5 +86,16 @@ describe('the prepared-brief import screen', () => {
     globalThis.callieImport = { choose: answer, chooseBriefs: answer } as unknown as ImportBridge;
     render(<BriefImport enabled />);
     await waitFor(() => expect(screen.getAllByTestId('brief-import-row')).toHaveLength(5));
+  });
+
+  it('disables choosing another file while the import is on the wire', async () => {
+    const committing: BriefImportView = { ...PREVIEW, committing: true };
+    const answer = async (): Promise<unknown> => await Promise.resolve(committing);
+    globalThis.callieApi = { read: answer, command: answer } as unknown as OperationApi;
+    globalThis.callieImport = { choose: answer, chooseBriefs: answer } as unknown as ImportBridge;
+    render(<BriefImport enabled />);
+    await waitFor(() => expect(screen.getAllByTestId('brief-import-row')).toHaveLength(5));
+    expect((screen.getByTestId('brief-import-choose') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('brief-import-commit') as HTMLButtonElement).disabled).toBe(true);
   });
 });

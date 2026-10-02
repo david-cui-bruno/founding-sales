@@ -79,11 +79,6 @@ export interface TodayMemory {
   readonly sessions: { current: Map<string, { readonly callSessionId: string; readonly endedAt: number }> };
   /** An Apply's command id by call session: it outlives the panel so a lost answer is retried under it. */
   readonly applyCommands: Map<string, ApplyCommand>;
-  /**
-   * The firm open in Today now, or null while Today is not on screen (lane PB, review finding
-   * 4): a late prepared-brief answer about another firm reads this and opens nothing.
-   */
-  readonly shown: { current: string | null };
 }
 
 export interface OpenPanels {
@@ -101,11 +96,10 @@ export function useTodayMemory(): TodayMemory {
   const panels = useRef<OpenPanels>({ firmId: null, editing: null, outcomeOpen: false });
   const sessions = useRef(new Map<string, { readonly callSessionId: string; readonly endedAt: number }>());
   const applyCommands = useRef(new Map<string, ApplyCommand>());
-  const shown = useRef<string | null>(null);
   const markDone = useCallback((firmId: string): void => {
     setDone(current => (current.has(firmId) ? current : new Set([...current, firmId])));
   }, []);
-  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels, sessions, applyCommands: applyCommands.current, shown }), [done, markDone]);
+  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels, sessions, applyCommands: applyCommands.current }), [done, markDone]);
 }
 
 /** A call worth showing the steps of: placed in the last day. Older ones are history. */
@@ -351,13 +345,6 @@ export function TodayWorkspace({
   const cards = useMemo(() => state?.cards ?? [], [state]);
   const expanded = state?.expanded ?? null;
   const firmId = expanded?.firmId ?? null;
-  // Lane PB (review finding 4): the open firm, in shell memory; null while Today is off screen.
-  useEffect(() => {
-    memory.shown.current = firmId;
-    return () => {
-      memory.shown.current = null;
-    };
-  }, [memory, firmId]);
   const card = cards.find(entry => entry.firmId === firmId);
   const basics = expanded?.basics;
   const blockers: readonly TodayCardBlocker[] = basics?.blockers ?? (card === undefined ? [] : blockersOf(card));
@@ -932,10 +919,6 @@ export function TodayWorkspace({
                       brief={expanded.preparedBrief}
                       canEdit={state?.role === 'admin'}
                       enabled={todayView.actionsEnabled}
-                      onChanged={saved => {
-                        // Only the firm still open is read again; a late answer never reopens one (K7).
-                        if (memory.shown.current === saved) actions.expand(saved);
-                      }}
                     />
                   </div>
                 )}

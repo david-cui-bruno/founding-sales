@@ -22,8 +22,8 @@ const FILE_ERRORS: Readonly<Record<NonNullable<BriefImportView['fileError']>, st
   not_json: 'That file is not JSON. Choose the prepared-brief file (a .json array).',
   not_array: 'That JSON is not a list of briefs. The file must be an array of rows.',
   empty: 'That file has no rows.',
-  too_many_rows: 'That file has more than 2,000 rows. Split it and import each part.',
-  too_large: 'That file is too large to import.',
+  too_many_rows: 'That file has more than 100 briefs. Split it and import each part.',
+  too_large: 'That file is too large to import in one go. Split it and import each part.',
 });
 
 const ISSUE_FIELDS: Readonly<Record<string, string>> = Object.freeze({
@@ -45,8 +45,16 @@ export function briefRowDetail(row: BriefImportRow): string {
   if (row.status === 'ambiguous') return `More than one firm matches by ${row.issue === 'external_id' ? 'external id' : row.issue === 'website' ? 'website' : 'name'}; not imported.`;
   const to = `To ${row.firmName ?? 'the firm'} (by ${MATCHED_ON[row.matchedOn ?? ''] ?? 'match'}) · ${String(row.sourceCount)} source${row.sourceCount === 1 ? '' : 's'}`;
   if (row.result === null) return to;
-  return row.result === 'saved' ? `${to} · imported` : `${to} · ${reasonSentence(row.result)}`;
+  return `${to} · ${RESULT_WORDS[row.result] ?? reasonSentence(row.result)}`;
 }
+
+/** The import command's outcome for a row, in words. */
+const RESULT_WORDS: Readonly<Record<string, string>> = Object.freeze({
+  saved: 'imported',
+  unchanged: 'already this brief; nothing changed',
+  unmatched: 'no firm matched when it was imported; not imported',
+  ambiguous: 'more than one firm matched when it was imported; not imported',
+});
 
 const TONE: Readonly<Record<BriefImportRow['status'], 'ok' | 'warn' | 'none'>> = { matched: 'ok', unmatched: 'none', ambiguous: 'warn', invalid: 'warn' };
 const STATUS_LABEL: Readonly<Record<BriefImportRow['status'], string>> = { matched: 'Matched', unmatched: 'Unmatched', ambiguous: 'Ambiguous', invalid: 'To fix' };
@@ -83,9 +91,12 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
   };
 
   const rows = view?.rows ?? [];
-  const toSend = rows.filter(row => row.status === 'matched' && row.result !== 'saved').length;
+  const committing = view?.committing === true;
+  const committed = view?.committed === true;
+  const toSend = committed ? 0 : rows.filter(row => row.status === 'matched').length;
   const saved = rows.filter(row => row.result === 'saved').length;
-  const refused = rows.filter(row => row.result !== null && row.result !== 'saved').length;
+  const unchanged = rows.filter(row => row.result === 'unchanged').length;
+  const skipped = rows.filter(row => row.result === 'unmatched' || row.result === 'ambiguous').length;
   const counts = (['matched', 'unmatched', 'ambiguous', 'invalid'] as const)
     .map(status => [status, rows.filter(row => row.status === status).length] as const)
     .filter(([, count]) => count > 0)
@@ -108,7 +119,7 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
         </Alert>
       )}
       <div className="mt-3 flex items-center gap-2">
-        <Button variant="outline" data-testid="brief-import-choose" disabled={!enabled || busy} onClick={() => run(async () => await files.chooseBriefs())}>
+        <Button variant="outline" data-testid="brief-import-choose" disabled={!enabled || busy || committing} onClick={() => run(async () => await files.chooseBriefs())}>
           Import prepared briefs (JSON)…
         </Button>
         {view?.fileName == null || rows.length === 0 ? null : (
@@ -123,19 +134,19 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
             {rows.map(row => (
               <Row key={row.index} data-testid="brief-import-row" data-status={row.status} data-result={row.result ?? ''}>
                 <RowMain line={`Row ${String(row.index)} · ${row.label}`} detail={<span>{briefRowDetail(row)}</span>} />
-                <Tag tone={row.result !== null && row.result !== 'saved' ? 'warn' : TONE[row.status]}>
-                  {row.result === 'saved' ? 'Imported' : row.result !== null ? 'Refused' : STATUS_LABEL[row.status]}
+                <Tag tone={row.result === 'unmatched' || row.result === 'ambiguous' ? 'warn' : TONE[row.status]}>
+                  {row.result === 'saved' ? 'Imported' : row.result === 'unchanged' ? 'Unchanged' : row.result !== null ? 'Skipped' : STATUS_LABEL[row.status]}
                 </Tag>
               </Row>
             ))}
           </Rows>
           <div className="mt-4 flex items-center gap-2">
-            <Button data-testid="brief-import-commit" disabled={!enabled || busy || toSend === 0} onClick={() => run(async () => await api.command('firms.briefImportCommit', { previewId: view?.previewId ?? 0 }))}>
-              {toSend === 1 ? 'Import 1 brief' : `Import ${String(toSend)} briefs`}
+            <Button data-testid="brief-import-commit" disabled={!enabled || busy || committing || toSend === 0} onClick={() => run(async () => await api.command('firms.briefImportCommit', { previewId: view?.previewId ?? 0 }))}>
+              {committing ? 'Importing…' : committed ? 'Imported' : toSend === 1 ? 'Import 1 brief' : `Import ${String(toSend)} briefs`}
             </Button>
-            {saved + refused === 0 ? null : (
+            {!committed ? null : (
               <span data-testid="brief-import-results" className="text-sm text-muted-foreground">
-                {`${String(saved)} imported${refused === 0 ? '' : ` · ${String(refused)} refused`}`}
+                {[`${String(saved)} imported`, unchanged === 0 ? null : `${String(unchanged)} unchanged`, skipped === 0 ? null : `${String(skipped)} skipped`].filter(Boolean).join(' · ')}
               </span>
             )}
           </div>

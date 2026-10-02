@@ -8,6 +8,7 @@ import { readFirmPage } from '../../crm/firmPage.ts';
 import { mergeFirms } from '../../crm/merges.ts';
 import {
   clearPreparedBrief,
+  importPreparedBriefs,
   matchPreparedBriefRows,
   readPreparedBrief,
   setPreparedBrief,
@@ -281,5 +282,105 @@ describe('the deletion workflow', () => {
     });
     expect(outcome.ok, outcome.ok ? '' : outcome.reason).toBe(true);
     expect(await readPreparedBrief(as('admin'), crm.alpha.firmId)).toBeNull();
+  });
+});
+
+describe('importPreparedBriefs (design reset I1)', () => {
+  const fileRow = (fields: { readonly website?: string; readonly firm_name?: string; readonly external_id?: string; readonly brief?: string }) => ({
+    brief: SECRET_TEXT,
+    sources: [{ url: 'https://firm.example.test/contact', label: 'Phone source' }],
+    observed_on: '2026-10-02',
+    prepared_by: 'Callie research agent (web), verified phones',
+    ...fields,
+  });
+
+  it('is an administrator’s command', async () => {
+    expect(await inTransaction(async () => await importPreparedBriefs(as('salesperson'), { rows: [fileRow({ firm_name: 'Anything' })] }))).toEqual({
+      ok: false,
+      reason: 'admin_only',
+    });
+  });
+
+  it('matches exactly as /firms/brief/match does, writes the matched rows, skips the rest with a reason, and audits counts only', async () => {
+    const one = await newFirm('Import Parity One Test Co', 'salesperson', 'https://parity-one.example.test');
+    const two = await newFirm('Import Parity Two Test Co', 'salesperson', 'https://parity-two.example.test');
+    await newFirm('Import Twin Test Co');
+    await newFirm('Import Twin Test Co');
+    const rows = [
+      fileRow({ website: 'https://www.parity-one.example.test/about' }),
+      fileRow({ firm_name: 'import parity two test co', brief: 'Two brief' }),
+      fileRow({ firm_name: 'Import Twin Test Co' }),
+      fileRow({ external_id: 'dfw-nobody' }),
+    ];
+    const match = await matchPreparedBriefRows(as('admin'), {
+      rows: rows.map(row => ({
+        ...(row.website === undefined ? {} : { website: row.website }),
+        ...(row.firm_name === undefined ? {} : { firmName: row.firm_name }),
+        ...(row.external_id === undefined ? {} : { externalId: row.external_id }),
+      })),
+    });
+    const imported = await inTransaction(async () => await importPreparedBriefs(as('admin'), { rows }));
+    expect(imported).toEqual({
+      ok: true,
+      value: {
+        rows: [
+          { index: 1, status: 'saved', firmId: one },
+          { index: 2, status: 'saved', firmId: two },
+          { index: 3, status: 'ambiguous', column: 'firm_name' },
+          { index: 4, status: 'unmatched' },
+        ],
+        counts: { saved: 2, unchanged: 0, unmatched: 1, ambiguous: 1 },
+      },
+    });
+    // Parity: the same firm, the same status, row by row.
+    if (!match.ok || !imported.ok) throw new Error('refused');
+    expect(imported.value.rows.map(row => (row.status === 'saved' ? 'matched' : row.status))).toEqual(match.value.map(row => row.status));
+    expect(imported.value.rows.map(row => row.firmId ?? null)).toEqual(match.value.map(row => (row.status === 'matched' ? row.firmId : null)));
+    expect((await readPreparedBrief(as('admin'), two))?.brief).toBe('Two brief');
+
+    const { rows: audits } = await database.session.query<{ detail: unknown }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'firm.prepared_briefs_imported'`,
+      [seeded.alpha.workspaceId],
+    );
+    expect(audits.map(row => row.detail)).toEqual([{ rows: 4, saved: 2, unchanged: 0, unmatched: 1, ambiguous: 1 }]);
+    expect(JSON.stringify(audits)).not.toContain('Pat Placeholder');
+
+    // The same file again changes nothing and says so.
+    const again = await inTransaction(async () => await importPreparedBriefs(as('admin'), { rows: rows.slice(0, 2) }));
+    expect(again.ok && again.value.counts).toEqual({ saved: 0, unchanged: 2, unmatched: 0, ambiguous: 0 });
+  });
+
+  it('writes nothing at all when a database failure stops row 2', async () => {
+    const first = await newFirm('Import Atomic One Test Co', 'salesperson', 'https://atomic-one.example.test');
+    const second = await newFirm('Import Atomic Two Test Co', 'salesperson', 'https://atomic-two.example.test');
+    await database.session.query(`
+      CREATE FUNCTION refuse_second_import() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.brief = 'FAIL HERE' THEN RAISE EXCEPTION 'forced failure on row 2'; END IF;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER refuse_second_import BEFORE INSERT OR UPDATE ON firm_prepared_briefs
+        FOR EACH ROW EXECUTE FUNCTION refuse_second_import();`);
+    const importAudits = async (): Promise<number> =>
+      Number(
+        (await database.session.query<{ n: string }>(`SELECT count(*) AS n FROM audit_events WHERE workspace_id = $1 AND action = 'firm.prepared_briefs_imported'`, [seeded.alpha.workspaceId]))
+          .rows[0]?.n,
+      );
+    const auditsBefore = await importAudits();
+    try {
+      await expect(
+        inTransaction(
+          async () =>
+            await importPreparedBriefs(as('admin'), {
+              rows: [fileRow({ website: 'https://atomic-one.example.test' }), fileRow({ website: 'https://atomic-two.example.test', brief: 'FAIL HERE' })],
+            }),
+        ),
+      ).rejects.toThrow('forced failure on row 2');
+      expect(await readPreparedBrief(as('admin'), first)).toBeNull();
+      expect(await readPreparedBrief(as('admin'), second)).toBeNull();
+      expect(await importAudits()).toBe(auditsBefore);
+    } finally {
+      await database.session.query('DROP TRIGGER refuse_second_import ON firm_prepared_briefs; DROP FUNCTION refuse_second_import();');
+    }
   });
 });

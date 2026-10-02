@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type JSX } from 'react';
+import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PreparedBriefDto } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
@@ -79,9 +79,13 @@ const home = {
 } as unknown as HomeView;
 const control: CallControl = { state: { phase: 'idle' }, muted: false, seconds: 0, place: vi.fn(), toggleMute: vi.fn(), hangUp: vi.fn(), dismiss: vi.fn() };
 
-/** Today on A, where `expand` moves the open firm as the bridge would. */
-function world() {
+/**
+ * Today on A, its state held in the request cache under `today` as `useToday` holds it, where
+ * `expand` moves the open firm as the bridge would — at once, or when the test lets it.
+ */
+function world(options: { readonly slowExpand?: boolean } = {}) {
   const expanded: string[] = [];
+  const expansions: (() => void)[] = [];
   const commands: { name: string; input: unknown }[] = [];
   const answers: ((value: unknown) => void)[] = [];
   globalThis.callieApi = {
@@ -92,7 +96,8 @@ function world() {
     },
   } as unknown as OperationApi;
   function Shell(): JSX.Element {
-    const [state, setState] = useState<TodayState>(stateOn(A));
+    const client = useQueryClient();
+    const state = useQuery({ queryKey: ['today', 'me', 0], queryFn: () => stateOn(A), initialData: stateOn(A), staleTime: Number.POSITIVE_INFINITY }).data;
     const memory = useTodayMemory();
     const actions = {
       busy: () => false,
@@ -100,7 +105,11 @@ function world() {
       previewFollowUp: vi.fn(),
       expand: (firmId: string) => {
         expanded.push(firmId);
-        setState(stateOn(firmId));
+        const land = (): void => {
+          client.setQueryData(['today', 'me', 0], stateOn(firmId));
+        };
+        if (options.slowExpand === true) expansions.push(land);
+        else land();
       },
     } as unknown as TodayActions;
     const today: Today = { state, pending: 0, commands: 0, refreshAnswered: true, now: Date.parse('2026-10-02T14:00:00.000Z'), refresh: vi.fn(), actions, autoRefresh: vi.fn() };
@@ -114,7 +123,7 @@ function world() {
       </DraftsProvider>
     </QueryClientProvider>,
   );
-  return { expanded, commands, answers };
+  return { expanded, commands, answers, expansions };
 }
 
 describe('the prepared brief in Today', () => {
@@ -136,28 +145,33 @@ describe('the prepared brief in Today', () => {
     expect(screen.queryByTestId('prepared-brief-clear-confirm')).toBeNull();
   });
 
-  it('finding 4: A’s save answering after David moved to B never opens A again', async () => {
+  it('PBF finding 1: A’s save answering before B has loaded patches A and leaves the destination B', async () => {
     const user = userEvent.setup();
-    const { expanded, commands, answers } = world();
+    const { expanded, commands, answers, expansions } = world({ slowExpand: true });
     await user.click(await screen.findByTestId('prepared-brief-edit'));
     await user.clear(screen.getByTestId('prepared-brief-text-input'));
     await user.type(screen.getByTestId('prepared-brief-text-input'), 'Alpha edited');
     await user.click(screen.getByTestId('prepared-brief-save'));
     expect(commands).toEqual([{ name: 'firms.setPreparedBrief', input: { firmId: A, brief: 'Alpha edited' } }]);
-    // David moves on to B (the shortcut; the editor's own text area is not focused).
+    // David asks for B; B has not loaded yet.
     act(() => {
       (document.activeElement as HTMLElement | null)?.blur();
     });
     await user.keyboard('j');
-    await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Bravo brief'));
-    await act(async () => {
-      answers[0]?.({ saved: { firmId: A, created: false, briefLength: 12, sourceCount: 1, updatedAt: '2026-10-02T15:00:00.000Z' }, reason: null });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
     expect(expanded).toEqual([B]);
-    expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Bravo brief');
+    // A's save lands first: A's cached brief is patched in place, nothing is read or opened.
+    await act(async () => {
+      answers[0]?.({ saved: { firmId: A, created: false, briefLength: 12, sourceCount: 1, updatedAt: '2026-10-02T16:00:00.000Z', brief: brief('Alpha edited') }, reason: null });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Alpha edited'));
+    expect(expanded).toEqual([B]);
+    // Then B loads, and B is where David is.
+    await act(async () => {
+      expansions[0]?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Bravo brief'));
+    expect(expanded).toEqual([B]);
   });
 });

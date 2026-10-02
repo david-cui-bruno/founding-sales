@@ -6,6 +6,7 @@ import { shortDate } from '../researchView.ts';
 import { Button } from '../ui/button.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { Label } from '../v2/parts.tsx';
+import { usePatchPreparedBrief } from './patchPreparedBrief.ts';
 
 /**
  * A firm's prepared brief (lane PB, migration 0038), on the firm page and on the Today card.
@@ -30,7 +31,10 @@ import { Label } from '../v2/parts.tsx';
  *   * **K3** — a command's answer is keyed by firm and by its own token: a late answer
  *     updates the feedback only, and never reopens an editor David closed;
  *   * **K5** — the editor closes and the draft goes only on a success answer; a refusal
- *     keeps both, with the reason next to the editor.
+ *     keeps both, with the reason next to the editor;
+ *   * **K7 (design reset I2)** — a success answers the firm's stored brief, which is patched
+ *     into the cached data of that firm only (`patchPreparedBrief.ts`); nothing is read again
+ *     and no firm is opened, so a late answer cannot undo a navigation.
  *
  * Escape, or a second press of Edit, closes the editor and keeps the draft (UI criterion 2).
  */
@@ -87,7 +91,6 @@ export function PreparedBrief({
   brief,
   canEdit,
   enabled,
-  onChanged,
   setBrief = defaultSet,
   clearBrief = defaultClear,
 }: {
@@ -97,17 +100,12 @@ export function PreparedBrief({
   /** Administrators edit and clear. */
   readonly canEdit: boolean;
   readonly enabled: boolean;
-  /** A command landed: the view reads its own state again. */
-  /**
-   * A command on `savedFirmId` landed. The view refreshes that firm only if it is still the one
-   * on screen (read from shell memory, rule K7); it never opens it again (review PB, finding 4).
-   */
-  onChanged(savedFirmId: string): void;
   readonly setBrief?: SetBrief;
   readonly clearBrief?: ClearBrief;
 }): JSX.Element | null {
   const drafts = useDrafts();
   const session = useSessionEpoch() ?? FALLBACK_SESSION;
+  const patch = usePatchPreparedBrief();
   const keysOf = (target: string) => {
     const at = `prepared-brief:${target}:`;
     return { text: `${at}text`, base: `${at}base`, open: `${at}open`, pending: `${at}pending`, feedback: `${at}feedback` };
@@ -172,7 +170,8 @@ export function PreparedBrief({
     drafts.set(key.open, '1');
   };
 
-  const send = (target: string, run: () => Promise<string>, onSuccess: () => void): void => {
+  /** `run` answers its code, and on success the firm's stored brief, which is patched in (I2). */
+  const send = (target: string, run: () => Promise<{ readonly code: string; readonly brief?: PreparedBriefDto | null }>, onSuccess: () => void): void => {
     const keys = keysOf(target);
     nextToken += 1;
     const token = String(nextToken);
@@ -183,10 +182,10 @@ export function PreparedBrief({
     drafts.set(keys.feedback, '');
     void run()
       .then(
-        code => code,
-        () => 'offline',
+        answer => answer,
+        (): { readonly code: string; readonly brief?: PreparedBriefDto | null } => ({ code: 'offline' }),
       )
-      .then(code => {
+      .then(({ code, brief: stored }) => {
         // K3: only this firm's latest command settles it; an older answer is dropped.
         if (commands.get(target) !== token) return;
         commands.delete(target);
@@ -194,7 +193,8 @@ export function PreparedBrief({
         drafts.set(keys.feedback, code);
         if (code === 'saved' || code === 'cleared') {
           onSuccess();
-          onChanged(target);
+          // Design reset I2: a pure patch of THAT firm's cached data. No read, no expand, no open.
+          if (stored !== undefined) patch(target, stored);
         }
       });
   };
@@ -216,7 +216,7 @@ export function PreparedBrief({
       target,
       async () => {
         const answer = await setBrief({ firmId: target, brief: sent });
-        return answer.saved === null ? (answer.reason ?? 'offline') : 'saved';
+        return answer.saved === null ? { code: answer.reason ?? 'offline' } : { code: 'saved', brief: answer.saved.brief };
       },
       () => {
         // K5: the draft goes only now. The editor is read-only while the save is in flight,
@@ -237,7 +237,7 @@ export function PreparedBrief({
       target,
       async () => {
         const answer = await clearBrief({ firmId: target });
-        return answer.reason === null ? 'cleared' : answer.reason;
+        return answer.reason === null ? { code: 'cleared', brief: null } : { code: answer.reason };
       },
       () => {
         drafts.set(keys.text, '');

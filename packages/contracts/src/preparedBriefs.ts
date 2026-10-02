@@ -25,6 +25,8 @@ export const PREPARED_BRIEF_LIMITS = Object.freeze({
   labelCharacters: 200,
   preparedByCharacters: 200,
   importRows: 2000,
+  /** Rows one `POST /firms/brief/import` command takes (design reset I1). */
+  importCommandRows: 100,
 });
 
 const notBlank = (value: string): boolean => value.trim().length > 0;
@@ -77,16 +79,24 @@ export const setPreparedBriefCommandSchema = z.strictObject({
 export type SetPreparedBriefCommand = z.infer<typeof setPreparedBriefCommandSchema>;
 
 /**
- * What the set command answers, and what its receipt keeps: never the text, so a
- * receipt and an audit row say that a brief was written, not what it says.
+ * What the set command's receipt keeps: never the text, so a receipt and an audit row say
+ * that a brief was written, not what it says.
  */
-export const preparedBriefSetResultSchema = z.object({
+export const preparedBriefSetReceiptSchema = z.object({
   firmId: uuid,
   created: z.boolean(),
   briefLength: z.number().int().min(1),
   sourceCount: z.number().int().min(0),
   updatedAt: instant,
 });
+export type PreparedBriefSetReceipt = z.infer<typeof preparedBriefSetReceiptSchema>;
+
+/**
+ * What the set command answers (design reset I2): the receipt's fields and the brief as it is
+ * stored now, read after the command committed and never kept on the receipt. The desktop
+ * patches that firm's cached data with it and reads nothing.
+ */
+export const preparedBriefSetResultSchema = preparedBriefSetReceiptSchema.extend({ brief: preparedBriefDtoSchema.nullable() });
 export type PreparedBriefSetResult = z.infer<typeof preparedBriefSetResultSchema>;
 
 /** `POST /firms/brief/clear`. Clearing a firm with no brief is accepted with `cleared: false`. */
@@ -96,7 +106,9 @@ export const clearPreparedBriefCommandSchema = z.strictObject({
   firmId: uuid,
 });
 
-export const preparedBriefClearResultSchema = z.object({ firmId: uuid, cleared: z.boolean() });
+export const preparedBriefClearReceiptSchema = z.object({ firmId: uuid, cleared: z.boolean() });
+/** What clear answers (design reset I2): the stored brief afterwards, which is none. */
+export const preparedBriefClearResultSchema = preparedBriefClearReceiptSchema.extend({ brief: z.null() });
 
 /**
  * `POST /firms/brief/match`, admin only and read-only: which firm each row of a prepared
@@ -153,3 +165,39 @@ export type PreparedBriefImportRow = z.infer<typeof preparedBriefImportRowSchema
 
 /** The file: an array, each element checked on its own so one bad row is one bad row. */
 export const preparedBriefImportFileSchema = z.array(z.unknown()).min(1).max(PREPARED_BRIEF_LIMITS.importRows);
+
+/**
+ * `POST /firms/brief/import` (design reset I1): one atomic, idempotent command for a whole
+ * prepared-brief file of at most 100 rows. Admin only. In one transaction every row is
+ * matched with the CSV importer's matcher (as `/firms/brief/match` does) and every matched
+ * row is written; unmatched and ambiguous rows are skipped with their reason. A database
+ * failure on any row writes nothing; a replay of the command id answers the stored result.
+ */
+export const preparedBriefImportCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  rows: z.array(preparedBriefImportRowSchema).min(1).max(PREPARED_BRIEF_LIMITS.importCommandRows),
+});
+export type PreparedBriefImportCommand = z.infer<typeof preparedBriefImportCommandSchema>;
+
+export const preparedBriefImportRowResultSchema = z.object({
+  /** 1-based position in the command's `rows`. */
+  index: z.number().int().min(1),
+  status: z.enum(['saved', 'unchanged', 'unmatched', 'ambiguous']),
+  firmId: uuid.optional(),
+  /** For `ambiguous`: the key that named more than one firm. */
+  column: z.enum(['external_id', 'website', 'firm_name']).optional(),
+});
+export type PreparedBriefImportRowResult = z.infer<typeof preparedBriefImportRowResultSchema>;
+
+/** The command's answer and its receipt: ids, statuses and counts, never the text. */
+export const preparedBriefImportResultSchema = z.object({
+  rows: z.array(preparedBriefImportRowResultSchema),
+  counts: z.object({
+    saved: z.number().int().min(0),
+    unchanged: z.number().int().min(0),
+    unmatched: z.number().int().min(0),
+    ambiguous: z.number().int().min(0),
+  }),
+});
+export type PreparedBriefImportResult = z.infer<typeof preparedBriefImportResultSchema>;

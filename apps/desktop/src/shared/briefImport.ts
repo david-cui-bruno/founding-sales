@@ -18,7 +18,7 @@ export const briefImportRowSchema = z.strictObject({
   matchedOn: z.enum(['external_id', 'domain', 'name']).nullable(),
   briefLength: z.number().int().min(0),
   sourceCount: z.number().int().min(0),
-  /** After a commit: `saved`, or the refusal code. Null before, and for rows never sent. */
+  /** After the import command: the server's outcome for the row (`saved`, `unchanged`, `unmatched`, `ambiguous`). */
   result: z.string().max(80).nullable(),
 });
 export type BriefImportRow = z.infer<typeof briefImportRowSchema>;
@@ -28,8 +28,12 @@ export const briefImportViewSchema = z.strictObject({
   previewId: z.number().int().min(0),
   fileName: z.string().max(500).nullable(),
   fileError: z.enum(['not_json', 'not_array', 'empty', 'too_many_rows', 'too_large']).nullable(),
-  /** The match read did not answer: its code. */
+  /** The match read or the import command did not answer: its code. */
   reason: z.string().max(80).nullable(),
+  /** The import command is on the wire: choosing or resetting is refused until it answers. */
+  committing: z.boolean(),
+  /** The import command answered; its outcomes are on the rows. */
+  committed: z.boolean(),
   rows: z.array(briefImportRowSchema).max(2000),
 });
 export type BriefImportView = z.infer<typeof briefImportViewSchema>;

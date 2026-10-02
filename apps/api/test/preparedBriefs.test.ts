@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { firmPageResponseSchema, preparedBriefMatchResponseSchema, todayFirmResponseSchema } from '@fss/contracts';
+import {
+  firmPageResponseSchema,
+  preparedBriefClearResultSchema,
+  preparedBriefImportResultSchema,
+  preparedBriefMatchResponseSchema,
+  preparedBriefSetResultSchema,
+  todayFirmResponseSchema,
+} from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { buildTodaySnapshot } from '@fss/domain/today/build.ts';
 import { businessDateOf } from '@fss/domain/today/snapshots.ts';
@@ -192,5 +199,58 @@ describe('prepared briefs over the wire', () => {
     const refused = await call(salesToken, '/firms/brief/match', { rows });
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('admin_only');
+  });
+
+  it('answers set and clear with the stored brief, which the receipt never holds (design reset I2)', async () => {
+    const body = { ...full(colleagueFirm), brief: 'Stored after the command' };
+    const set = await call(adminToken, '/firms/brief/set', body);
+    expect(set.status).toBe(200);
+    const result = preparedBriefSetResultSchema.parse(set.body['result']);
+    expect(result.brief).toMatchObject({ brief: 'Stored after the command', observedOn: '2026-10-02' });
+    const receipt = await fixture.db.query<{ result: unknown }>('SELECT result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2', [fixture.alpha.workspaceId, body.commandId]);
+    expect(JSON.stringify(receipt.rows)).not.toContain('Stored after the command');
+    const cleared = await call(adminToken, '/firms/brief/clear', { ...envelope(), firmId: colleagueFirm });
+    expect(preparedBriefClearResultSchema.parse(cleared.body['result'])).toEqual({ firmId: colleagueFirm, cleared: true, brief: null });
+  });
+
+  describe('POST /firms/brief/import (design reset I1)', () => {
+    const fileRow = (fields: Record<string, string>) => ({
+      brief: 'Imported brief text for Robin Placeholder',
+      sources: [{ url: 'https://firm.example.test/contact', label: 'Phone source' }],
+      observed_on: '2026-10-02',
+      prepared_by: 'Callie research agent (web), verified phones',
+      ...fields,
+    });
+
+    it('imports in one command, replays the stored result for the same id, and writes once', async () => {
+      const body = { ...envelope(), rows: [fileRow({ external_id: 'dfw-20261002-e01' }), fileRow({ external_id: 'dfw-20261002-x99' })] };
+      const first = await call(adminToken, '/firms/brief/import', body);
+      expect(first.status, JSON.stringify(first.body)).toBe(200);
+      expect(preparedBriefImportResultSchema.parse(first.body['result'])).toEqual({
+        rows: [
+          { index: 1, status: 'saved', firmId: ownFirm },
+          { index: 2, status: 'unmatched' },
+        ],
+        counts: { saved: 1, unchanged: 0, unmatched: 1, ambiguous: 0 },
+      });
+      const audits = async (): Promise<number> =>
+        (await fixture.db.query(`SELECT 1 FROM audit_events WHERE workspace_id = $1 AND action = 'firm.prepared_briefs_imported'`, [fixture.alpha.workspaceId])).rows.length;
+      const before = await audits();
+      const replay = await call(adminToken, '/firms/brief/import', body);
+      expect(replay.body['replayed']).toBe(true);
+      expect(replay.body['result']).toEqual(first.body['result']);
+      expect(await audits()).toBe(before);
+      const receipt = await fixture.db.query('SELECT result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2', [fixture.alpha.workspaceId, body.commandId]);
+      expect(JSON.stringify(receipt.rows)).not.toContain('Robin Placeholder');
+    });
+
+    it('is an administrator’s command, and takes at most 100 rows', async () => {
+      const refused = await call(salesToken, '/firms/brief/import', { ...envelope(), rows: [fileRow({ external_id: 'dfw-20261002-e01' })] });
+      expect(refused.status).toBe(409);
+      expect(refused.body['reason']).toBe('admin_only');
+      const tooMany = Array.from({ length: 101 }, (_, i) => fileRow({ external_id: `row-${String(i)}` }));
+      expect((await call(adminToken, '/firms/brief/import', { ...envelope(), rows: tooMany })).status).toBe(400);
+      expect((await call(adminToken, '/firms/brief/import', { ...envelope(), rows: [] })).status).toBe(400);
+    });
   });
 });
