@@ -130,7 +130,7 @@ class Refused extends Error {
 // Reading the log and its effects
 // ---------------------------------------------------------------------------
 
-interface LogRow {
+type LogRow = {
   readonly id: string;
   readonly firm_id: string;
   readonly contact_id: string | null;
@@ -144,7 +144,7 @@ interface LogRow {
   readonly agreed_follow_up: string | null;
   readonly agreed_template_version_id: string | null;
   readonly agreed_sequence_version_id: string | null;
-}
+};
 
 const LOG_COLUMNS = `id, firm_id, contact_id, opportunity_id, phone_route_id, outcome, direction, actor_user_id, command_id,
   step_execution_id, agreed_follow_up, agreed_template_version_id, agreed_sequence_version_id`;

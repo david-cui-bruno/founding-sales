@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { correctCallOutcomeCommandSchema, type CallCorrectionEffect } from '@fss/contracts';
 import { taskKey } from '../../calls/analysisPolicy.ts';
 import { correctCallOutcome } from '../../calls/correctOutcome.ts';
+import { createCallSession, listFirmCallSessions } from '../../calls/sessions.ts';
+import { listCallLogs } from '../../dial/calls.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { scheduleCallbackForCall } from '../../dial/callbacks.ts';
 import { consumeFollowUpPermission } from '../../sequences/followUpPermissions.ts';
@@ -368,6 +370,50 @@ describe('X2: correcting a logged outcome', () => {
       expect(await scalar<number>(world, "SELECT count(*)::int AS v FROM audit_events WHERE subject_id = $1 AND action = 'call.outcome_corrected'", [logId])).toBe(0);
     } finally {
       await world.session.query('DROP TRIGGER x2_skip_release ON active_holds; DROP FUNCTION x2_skip_release();');
+    }
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // X2-10: the database-only read, and corrections by call log id
+  // ---------------------------------------------------------------------------------------
+
+  it('X2-10: a form log, an incoming log and a log linked to an unconsumed session are all listed and corrected by call log id', async () => {
+    const firm = await world.newFirm();
+    const form = await logFormCall(world, firm, 'no_answer');
+    const inbound = await logFormCall(world, firm, 'interested', { direction: 'inbound', routeId: undefined, durationSeconds: 60 });
+    const created = await withTransaction(world.session, async () =>
+      await createCallSession(world.salesperson(), {
+        firmId: firm.firmId,
+        contactId: firm.contactId,
+        routeId: firm.routeId,
+        routeVersion: firm.routeVersion,
+        callingIdentityId: world.policy.alpha.callingIdentityId,
+        deviceId: world.seeded.alpha.salesperson.deviceId,
+        commandId: `x2-10-${randomUUID()}`,
+        configuredCallerIdE164: '+14015550100',
+        at: world.policy.insideWindow,
+      }),
+    );
+    if (!created.ok) throw new Error(created.reason);
+    const unconsumed = await logFormCall(world, firm, 'busy', { routeId: undefined, contactId: undefined, callSessionId: created.value.sessionId });
+    // The session read starts from consumed sessions: it never shows this log.
+    expect((await listFirmCallSessions(world.salesperson(), firm.firmId))?.map(session => session.callLogId)).toEqual([]);
+    const rows = await listCallLogs(world.salesperson(), { firmId: firm.firmId });
+    expect(new Map(rows.map(row => [row.id, [row.direction, row.callSessionId]]))).toEqual(
+      new Map([
+        [form, ['outbound', null]],
+        [inbound, ['inbound', null]],
+        [unconsumed, ['outbound', created.value.sessionId]],
+      ]),
+    );
+    for (const [logId, target] of [
+      [form, 'voicemail_left'],
+      [inbound, 'referral_or_wrong_person'],
+      [unconsumed, 'no_answer'],
+    ] as const) {
+      const corrected = await correct(world, logId, target);
+      expect(corrected.ok, `${logId}: ${JSON.stringify(corrected)}`).toBe(true);
+      expect(await outcomeOf(logId)).toBe(target);
     }
   });
 
