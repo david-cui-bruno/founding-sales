@@ -2,10 +2,12 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
 import { readCallBrief, type CallBrief } from '../research/brief.ts';
+import { compareTodayCards } from './lanes.ts';
 import {
   TODAY_ALGORITHM_VERSION,
   TODAY_PAUSE_SOURCE_EVENT_KIND,
   callLogIdOfItemKey,
+  type TodayCardRow,
   type TodayCounts,
   type TodayItemRow,
 } from './types.ts';
@@ -93,6 +95,13 @@ export interface TodayTaskDtoV2 extends TodayTaskDto {
    * what the card shows instead of asking for a review.
    */
   readonly heldDays: number | null;
+  /**
+   * Slice 3a, only with `include=tasks`: the call task behind a `task` item and its words
+   * (null on every other kind). Absent otherwise, because an installed desktop parses the
+   * second version strictly too.
+   */
+  readonly callTaskId?: string | null;
+  readonly taskText?: string | null;
 }
 
 /**
@@ -263,6 +272,7 @@ const PAUSED_ACTION_KIND: Readonly<Record<TodayItemKind, string | null>> = Objec
   email_due: 'email_send',
   call_due: 'call_task',
   new_firm: null,
+  task: null,
 });
 
 /** Which assignee's list a scope may read, or undefined for "every one". */
@@ -359,6 +369,62 @@ function callFirstFirst<Card extends { readonly lane: string; readonly firmId: s
 export interface ReadTodayInput {
   /** Database time. The business date is derived from it in the workspace zone. */
   readonly now: string;
+  /**
+   * Slice 3a: the request negotiated `include=tasks`. Without it a call task (kind `task`)
+   * is in no card, count or expansion — an installed desktop's contract has no such kind.
+   */
+  readonly includeTasks?: boolean | undefined;
+}
+
+/**
+ * The cards as a reader that did not negotiate `include=tasks` must see them: a card's lane
+ * and sort instant recomputed from its open items other than tasks — the rule
+ * `today_refresh_card` applies to all of them (lane precedence, due instant, item key) — and
+ * a card with nothing open but tasks dropped. Counts never include tasks, so they stand.
+ * Only firms with an open task on the date are touched; the order is then 8.2's comparator,
+ * stable, so cards no task touched keep the database's order among themselves.
+ */
+async function withoutCallTasks(
+  context: RepositoryContext,
+  snapshotDate: string,
+  cards: readonly TodayCardRow[],
+): Promise<readonly TodayCardRow[]> {
+  if (cards.length === 0) return cards;
+  const { rows } = await context.db.query<{ firm_id: string; tasks: number; lane: TodayLane | null; due_at: Date | null }>(
+    `SELECT t.firm_id, t.tasks, first.lane, first.due_at
+       FROM (SELECT firm_id, count(*)::int AS tasks
+               FROM today_items
+              WHERE workspace_id = $1 AND snapshot_date = $2::date AND status = 'open' AND kind = 'task'
+              GROUP BY firm_id) t
+       LEFT JOIN LATERAL (
+         SELECT o.lane, o.due_at
+           FROM today_items o
+          WHERE o.workspace_id = $1 AND o.snapshot_date = $2::date AND o.firm_id = t.firm_id
+            AND o.status = 'open' AND o.kind <> 'task'
+          ORDER BY o.lane_precedence, o.due_at, o.item_key
+          LIMIT 1) first ON true`,
+    [context.scope.workspaceId, snapshotDate],
+  );
+  if (rows.length === 0) return cards;
+  const touched = new Map(rows.map(row => [row.firm_id, row]));
+  const kept = cards.flatMap(card => {
+    const row = touched.get(card.firmId);
+    if (row === undefined) return [card];
+    if (row.lane === null || row.due_at === null) return [];
+    return [{ ...card, lane: row.lane, sortAt: row.due_at.toISOString(), openItems: Math.max(0, card.openItems - row.tasks) }];
+  });
+  return [...kept].sort(compareTodayCards);
+}
+
+/** The words of the call tasks behind these items, by task id. */
+async function callTaskTexts(context: RepositoryContext, items: readonly TodayItemRow[]): Promise<ReadonlyMap<string, string>> {
+  const ids = items.flatMap(item => (item.sourceKind === 'call_task' && item.sourceId !== null ? [item.sourceId] : []));
+  if (ids.length === 0) return new Map();
+  const { rows } = await context.db.query<{ id: string; text: string }>(
+    'SELECT id, text FROM call_tasks WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
+    [context.scope.workspaceId, ids],
+  );
+  return new Map(rows.map(row => [row.id, row.text]));
 }
 
 export async function readTodayList(
@@ -368,10 +434,11 @@ export async function readTodayList(
   const businessTimeZone = await workspaceBusinessTimeZone(context);
   const snapshotDate = await businessDateOf(context, input.now);
   const assignedUserId = assigneeFilter(context);
-  const cards = await listTodayCards(context, {
+  const listed = await listTodayCards(context, {
     snapshotDate,
     ...(assignedUserId === undefined ? {} : { assignedUserId }),
   });
+  const cards = input.includeTasks === true ? listed : await withoutCallTasks(context, snapshotDate, listed);
   // Lane 4's order, but only on a date whose every card was built under this
   // algorithm — asked of the date rather than of this viewer's slice of it.
   const ordered = (await snapshotIsCurrent(context, snapshotDate))
@@ -403,18 +470,23 @@ export async function readTodayList(
  */
 export async function readTodayFirm(
   context: RepositoryContext,
-  input: { readonly firmId: string; readonly now: string },
+  input: { readonly firmId: string; readonly now: string; readonly includeTasks?: boolean | undefined },
 ): Promise<TodayFirmDto | null> {
   const snapshotDate = await businessDateOf(context, input.now);
   const assignedUserId = assigneeFilter(context);
-  const cards = await listTodayCards(context, {
+  const listed = await listTodayCards(context, {
     snapshotDate,
     ...(assignedUserId === undefined ? {} : { assignedUserId }),
   });
+  const includeTasks = input.includeTasks === true;
+  const cards = includeTasks ? listed : await withoutCallTasks(context, snapshotDate, listed);
   const card = cards.find(entry => entry.firmId === input.firmId);
   if (card === undefined) return null;
 
-  const items = await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId });
+  const items = (await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId })).filter(
+    item => includeTasks || item.kind !== 'task',
+  );
+  const taskTexts = includeTasks ? await callTaskTexts(context, items) : new Map<string, string>();
   const pauses = await pausesByItem(context, input.firmId, items);
   const held = await heldDaysByExecution(context, items, input.now);
 
@@ -462,6 +534,12 @@ export async function readTodayFirm(
       callLogId: callLogIdOfItemKey(item.itemKey),
       pauseHoldId: pauses.get(item.id) ?? null,
       heldDays: item.sourceKind === 'step_execution' && item.sourceId !== null ? (held.get(item.sourceId) ?? null) : null,
+      ...(includeTasks
+        ? {
+            callTaskId: item.sourceKind === 'call_task' ? item.sourceId : null,
+            taskText: item.sourceKind === 'call_task' && item.sourceId !== null ? (taskTexts.get(item.sourceId) ?? null) : null,
+          }
+        : {}),
     })),
     routes: routes.rows.map(row => ({
       routeId: row.id,

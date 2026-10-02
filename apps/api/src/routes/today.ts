@@ -1,9 +1,10 @@
-import { TODAY_CARD_VERSION, todayFirmRequestSchema } from '@fss/contracts';
+import { TODAY_CARD_VERSION, completeCallTaskCommandSchema, todayFirmRequestSchema } from '@fss/contracts';
+import { completeCallTask } from '@fss/domain/calls/callTasks.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { readCallsPlacedToday } from '@fss/domain/today/callsPlaced.ts';
 import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today/dto.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
-import { policyRouteDeps } from './dialSupport.ts';
+import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -32,7 +33,18 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * from the scope's own role, because 8.2's "Admins see all entries; salespeople see their
  * own" is a property of the read and not of the transport.
  */
-export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed'];
+export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete'];
+
+/**
+ * Slice 3a: `GET /today?include=tasks` (repeated or comma-separated; an unknown value is
+ * ignored) asks for call tasks, kind `task`. Without it a task is in no card, count or
+ * expansion, because an installed desktop's contract has no such kind. `POST /today/firm`
+ * negotiates the same with `include: ['tasks']` in its body. `POST /today/tasks/complete
+ * {taskId}` marks one done (`calls/callTasks.ts`), a command with a receipt.
+ */
+function includesTasks(query: URLSearchParams): boolean {
+  return query.getAll('include').some(value => value.split(',').some(part => part.trim() === 'tasks'));
+}
 
 /*
  * `cardVersion: 2` (`todayFirmRequestSchema` in `@fss/contracts`) asks for the tasks
@@ -61,7 +73,10 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     }
     // Database time, so the business date the Mac caches is the one the 05:00 job
     // built and not the one this task's clock believes in (Appendix D).
-    return { status: 200, body: await readTodayList(context, { now: await databaseNow(context) }) };
+    return {
+      status: 200,
+      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query) }),
+    };
   }
 
   if (request.path === '/today/calls-placed') {
@@ -76,10 +91,19 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   if (request.method !== 'POST') {
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
   }
+  if (request.path === '/today/tasks/complete') {
+    return await runPolicyCommand(deps, completeCallTaskCommandSchema, 'today_task_complete', async (commandContext, body) =>
+      await completeCallTask(commandContext, { taskId: body.taskId }),
+    );
+  }
   const parsed = todayFirmRequestSchema.safeParse(request.body);
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
 
-  const page = await readTodayFirm(context, { firmId: parsed.data.firmId, now: await databaseNow(context) });
+  const page = await readTodayFirm(context, {
+    firmId: parsed.data.firmId,
+    now: await databaseNow(context),
+    includeTasks: parsed.data.include?.includes('tasks') === true,
+  });
   // A firm with no card today and a colleague's firm are the same answer on purpose:
   // telling a salesperson that somebody else's firm has work on it is a read Appendix
   // F's first row does not grant.

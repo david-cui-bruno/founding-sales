@@ -74,6 +74,7 @@ const BLOCKED_KIND_OF_ITEM: Readonly<Record<TodayItemKind, BlockedActionKind | n
   email_due: 'email_send',
   call_due: 'call_task',
   new_firm: null,
+  task: null,
 });
 
 export const SNOOZE_REASON_MAX = 300;

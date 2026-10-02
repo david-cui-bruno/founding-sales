@@ -1,8 +1,21 @@
+/*
+ * FROZEN: `packages/contracts/src/today.ts` exactly as it is at 134dc811 (production, the
+ * installed desktop's contract), with only its imports pointed at `@fss/contracts` — none of
+ * the imported schemas has changed since. Slice 3a's B-10 parses Today's answers with it: an
+ * installed desktop has no `task` kind, so a request that did not negotiate `include=tasks`
+ * must answer what this parses. Never edit it to follow the live contract.
+ */
 import { z } from 'zod';
-import { callBriefSchema } from './research.ts';
-import { blockedActionKindSchema } from './reasonCodes.ts';
-import { routeEligibilitySchema } from './crm.ts';
-import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
+import {
+  blockedActionKindSchema,
+  businessDate,
+  callBriefSchema,
+  e164,
+  ianaTimeZone,
+  instant,
+  routeEligibilitySchema,
+  uuid,
+} from '@fss/contracts';
 
 /**
  * The wire contract of Today: the list, one expanded firm, the snooze answer and the
@@ -26,11 +39,7 @@ import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRow
 export const TODAY_LANES = ['reply', 'callback', 'due_work', 'new_firm'] as const;
 export type TodayLane = (typeof TODAY_LANES)[number];
 
-/**
- * `task` (slice 3a, migration 0036): an open call task — a promise made on a call. Only in a
- * read that negotiated `include=tasks`; an installed desktop never meets the kind.
- */
-export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'new_firm', 'task'] as const;
+export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'new_firm'] as const;
 export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 const firmName = z.string().min(1).max(300);
@@ -125,13 +134,6 @@ const todayTaskDtoSchema = z.object({
    * 1.0.11, whose schema does not name it.
    */
   heldDays: z.number().int().min(0).nullable().optional(),
-  /**
-   * Slice 3a, only in an expansion that negotiated `include=tasks` (an installed desktop
-   * parses the task strictly): the call task behind a `task` item, which
-   * `POST /today/tasks/complete` marks done, and its words. Null on every other kind.
-   */
-  callTaskId: uuid.nullable().optional(),
-  taskText: z.string().min(1).max(300).nullable().optional(),
 });
 export type TodayTaskDto = z.infer<typeof todayTaskDtoSchema>;
 
@@ -145,11 +147,6 @@ export const TODAY_CARD_VERSION = 2;
 export const todayFirmRequestSchema = z.strictObject({
   firmId: uuid,
   cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
-  /**
-   * Slice 3a: `['tasks']` adds the firm's open call tasks (kind `task`). Without it a task
-   * is in no card, count or expansion, so an installed desktop never meets the kind.
-   */
-  include: z.array(z.literal('tasks')).max(1).optional(),
 });
 
 /**

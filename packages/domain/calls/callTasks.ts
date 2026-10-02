@@ -1,5 +1,9 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
+import { callTaskItemKey, lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
+import { completeTodayItemsByKey } from '../today/snapshots.ts';
 
 /**
  * Call tasks (slice 3a, migration 0036): a promise made on a call, or the "Send overview to
@@ -64,4 +68,59 @@ export async function createCallTask(
   const found = existing[0]?.id;
   if (found === undefined) throw new Error('a conflicting call task was not found');
   return { id: found, created: false };
+}
+
+export type CompleteCallTaskOutcome =
+  | { readonly ok: true; readonly value: { readonly taskId: string; readonly completedAt: string } }
+  | { readonly ok: false; readonly reason: 'not_found' | 'not_assigned' | 'invalid_input' };
+
+/**
+ * `POST /today/tasks/complete {taskId}`: the task is done. Today's lock (shared) and then the
+ * firm's, the order of every change that ends in `refreshTodayForFirm`; the firm's assignment
+ * rule; the row to `done` with its instant; every open Today item for it completed, on any
+ * date; the firm's card recomputed. Completing a task already done answers its instant; a
+ * cancelled task is `invalid_input`.
+ */
+export async function completeCallTask(
+  context: RepositoryContext,
+  input: { readonly taskId: string },
+): Promise<CompleteCallTaskOutcome> {
+  if (context.scope.actor.kind !== 'user') return { ok: false, reason: 'invalid_input' };
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_tasks WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.taskId],
+  );
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return { ok: false, reason: 'not_found' };
+  await lockTodayForFirmChange(context);
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return { ok: false, reason: 'not_found' };
+  const decision = decideFirmMutation(context, firm);
+  if (!decision.permitted) return { ok: false, reason: decision.reason === 'not_assigned' ? 'not_assigned' : 'not_found' };
+  const { rows: current } = await context.db.query<{ status: string; completed_at: Date | null }>(
+    'SELECT status, completed_at FROM call_tasks WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE',
+    [context.scope.workspaceId, input.taskId, firmId],
+  );
+  const task = current[0];
+  if (task === undefined) return { ok: false, reason: 'not_found' };
+  if (task.status === 'done' && task.completed_at !== null) {
+    return { ok: true, value: { taskId: input.taskId, completedAt: task.completed_at.toISOString() } };
+  }
+  if (task.status !== 'open') return { ok: false, reason: 'invalid_input' };
+  const { rows } = await context.db.query<{ completed_at: Date }>(
+    `UPDATE call_tasks SET status = 'done', completed_at = now(), updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND id = $2 RETURNING completed_at`,
+    [context.scope.workspaceId, input.taskId],
+  );
+  const completedAt = rows[0]?.completed_at;
+  if (completedAt === undefined) return { ok: false, reason: 'not_found' };
+  await recordCrmAuditEvent(context, {
+    action: 'call_task.completed',
+    subjectKind: 'call_task',
+    subjectId: input.taskId,
+    detail: { firmId },
+  });
+  await completeTodayItemsByKey(context, { firmId, itemKey: callTaskItemKey(input.taskId) });
+  await refreshTodayForFirm(context, { firmId });
+  return { ok: true, value: { taskId: input.taskId, completedAt: completedAt.toISOString() } };
 }

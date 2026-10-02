@@ -157,6 +157,48 @@ export function callbackSource(): TodaySource {
   };
 }
 
+/** The Today item key of a call task (`today_items.item_key`, source kind `call_task`). */
+export function callTaskItemKey(taskId: string): string {
+  return `call-task:${taskId}`;
+}
+
+/**
+ * Due work: open call tasks (slice 3a, migration 0036) — a promise made on a call, or the
+ * "Send overview" an overview request leaves. Every open task due on or before the date
+ * being built; an overdue one is carried, as a callback is. Kind `task`, key
+ * `call-task:<id>`. The list and the expansion show them only to a request that negotiated
+ * `include=tasks` (`today/dto.ts`); the rows exist either way.
+ */
+export function callTaskSource(): TodaySource {
+  return {
+    name: 'call_tasks',
+    sourceKinds: ['call_task'],
+    find: async (context, input) => {
+      const { rows } = await context.db.query<{ id: string; firm_id: string; contact_id: string | null; due_at: Date }>(
+        `SELECT t.id, t.firm_id, t.contact_id, t.due_at
+           FROM call_tasks t
+           JOIN firms f ON f.workspace_id = t.workspace_id AND f.id = t.firm_id
+          WHERE t.workspace_id = $1
+            AND t.status = 'open'
+            AND f.status = 'active'
+            AND (t.due_at AT TIME ZONE $2)::date <= $3::date
+            AND ($4::uuid IS NULL OR t.firm_id = $4::uuid)
+          ORDER BY t.due_at, t.id`,
+        [context.scope.workspaceId, input.businessTimeZone, input.businessDate, input.firmId ?? null],
+      );
+      return rows.map(row => ({
+        firmId: row.firm_id,
+        ...(row.contact_id === null ? {} : { contactId: row.contact_id }),
+        itemKey: callTaskItemKey(row.id),
+        kind: 'task' as const,
+        dueAt: row.due_at.toISOString(),
+        sourceKind: 'call_task' as const,
+        sourceId: row.id,
+      }));
+    },
+  };
+}
+
 /**
  * Lane 4: new firms (8.2).
  *
@@ -223,7 +265,7 @@ export function newFirmSource(): TodaySource {
 
 /** The sources that have a table to read today. G7 and G8 add theirs to this array. */
 export function defaultTodaySources(): readonly TodaySource[] {
-  return [callbackSource(), newFirmSource()];
+  return [callbackSource(), callTaskSource(), newFirmSource()];
 }
 
 export interface BuildTodaySnapshotInput {

@@ -177,6 +177,7 @@ describe('what the API mounts', () => {
       '/today/pause/release',
       '/today/snooze',
       '/today/snooze/cancel',
+      '/today/tasks/complete',
     ]);
     expect([...registry.prefixes()]).toEqual([
       '/auth',

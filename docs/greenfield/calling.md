@@ -584,6 +584,13 @@ park hold, the automatic one included, is open); a task is a `call_tasks` row
 (`already_created` on a repeat). A second outcome for one session — from the form or an
 Apply — is `call_already_logged` in `logCallOutcome` itself.
 
+An open call task is a Today item of kind `task` (due-work lane, key `call-task:<id>`,
+carried until done). The installed desktop's contract has no such kind, so it is negotiated:
+`GET /today?include=tasks` and `include: ['tasks']` on `POST /today/firm`. Without it a task
+is in no card, count or expansion — a card's lane and instant come from its other open items,
+and a firm with nothing else open has no card. `POST /today/tasks/complete {taskId}` marks
+one done (Today → firm, then the firm's card refreshed).
+
 `logCallOutcome` itself now takes the route it retires or suppresses **before** the firm
 (gate → route → firm), the order `retireRoute` and `updateFirmBasics` keep: taken after the
 firm, as it was since S2, a wrong number logged while the same number was being replaced
