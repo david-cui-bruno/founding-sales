@@ -56,6 +56,8 @@ describe('the recorded reads', () => {
     expect(await handlers['review.list'](undefined as never)).toEqual({ items: null, failed: false });
     expect(await handlers['calling.recap'](undefined as never)).toEqual({ recap: null });
     expect(await handlers['calling.acceptance'](undefined as never)).toEqual({ acceptance: null });
+    // Slice S3T: an API before the trial read answers 404; the Trial section hides.
+    expect(await handlers['calling.trial'](undefined as never)).toEqual({ trial: null });
   });
 });
 

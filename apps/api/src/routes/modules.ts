@@ -30,6 +30,8 @@ import { CALL_ANALYSIS_PATHS, routeCallAnalysis } from './callAnalysis.ts';
 import { CALL_PROPOSAL_PATHS, routeCallProposals } from './callProposals.ts';
 // Slice 3a, lane C: the daily recap of a day's analysed calls.
 import { CALL_RECAP_PATHS, routeCallRecap } from './callRecap.ts';
+// Slice S3T: the 10-call shadow trial.
+import { CALL_TRIAL_PATHS, routeCallTrial } from './callTrial.ts';
 import { CALCOM_PATHS, routeCalcom } from './calcom.ts';
 import { MEETING_PATHS, routeMeetings } from './meetings.ts';
 import { TWILIO_PATHS, routeTwilio } from './twilio.ts';
@@ -176,6 +178,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('call-analysis', { paths: CALL_ANALYSIS_PATHS }, routeCallAnalysis, routing),
     moduleOf('call-proposals', { paths: CALL_PROPOSAL_PATHS }, routeCallProposals, routing),
     moduleOf('call-recap', { paths: CALL_RECAP_PATHS }, routeCallRecap, routing),
+    moduleOf('call-trial', { paths: CALL_TRIAL_PATHS }, routeCallTrial, routing),
     moduleOf('twilio', { paths: TWILIO_PATHS }, routeTwilio, routing),
     moduleOf('calcom', { paths: CALCOM_PATHS }, routeCalcom, routing),
     // Slice M1: the firm page's meetings, the bookings to match, and the match. Exact
