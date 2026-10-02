@@ -1,9 +1,12 @@
-import { useState, type JSX } from 'react';
+import type { JSX } from 'react';
 import type { AdminView } from '../settingsView.ts';
 import { inertSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Field, Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
+import { Field, Row, RowActions, RowMain, Rows } from '../ui/layout.tsx';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
+import { useKept } from '../replies/kept.ts';
 import { Textarea } from '../ui/textarea.tsx';
 import { CallingNumberSection } from './CallingNumberSection.tsx';
 import { PosturesSection } from './PosturesSection.tsx';
@@ -42,10 +45,10 @@ function Holidays({
   readonly saving: boolean;
 }): JSX.Element | null {
   const holidays = view.holidays;
-  const [version, setVersion] = useState('');
-  const [dates, setDates] = useState<string | null>(null);
+  // Typed and not yet replaced: kept above the route, with the calendar as the fallback (S4R).
+  const [version, setVersion] = useKept('settings:holidays:version', '');
+  const [text, setDates] = useKept('settings:holidays:dates', holidays?.dates.join('\n') ?? '');
   if (holidays === null) return null;
-  const text = dates ?? holidays.dates.join('\n');
   return (
     <Section data-testid="holidays" title="Workspace holidays" count={holidays.dates.length}>
       <p data-testid="holidays-current" className="py-1 text-sm">
@@ -79,7 +82,7 @@ function Holidays({
             }}
           />
         </Field>
-        <div>
+        <div className="flex items-center gap-3">
           <Button
             size="sm"
             data-testid="holidays-save"
@@ -97,6 +100,7 @@ function Holidays({
           >
             Replace calendar
           </Button>
+          <FormNotice forms={['holidays']} />
         </div>
         {holidays.notEditableBecause === null ? null : (
           <p className="text-xs text-muted-foreground">{inertSentence(holidays.notEditableBecause)}</p>
@@ -185,6 +189,9 @@ export function Administration({
             </Row>
           ))}
         </Rows>
+        <div className="mt-2 empty:hidden">
+          <FormNotice forms={['stage']} />
+        </div>
       </Section>
 
       <Holidays view={view} actions={actions} saving={busy('holidays')} />

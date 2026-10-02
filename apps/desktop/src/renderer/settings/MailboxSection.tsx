@@ -8,7 +8,9 @@ import {
 } from '../viewModel.ts';
 import { Button } from '../ui/button.tsx';
 import { Dialog } from '../ui/dialog.tsx';
-import { Field, Row, RowMain, Rows, Section } from '../ui/layout.tsx';
+import { Field, Row, RowMain, Rows } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { Section } from './Group.tsx';
 import { Input } from '../ui/input.tsx';
 
 /**
@@ -43,7 +45,8 @@ export function MailboxSection({
 }): JSX.Element {
   const view = buildMailboxSection(mailbox, { waiting });
   const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState(DEFAULT_SWITCH_TARGET);
+  // Typed into the switch dialog and not yet sent: kept above the route (S4R, criterion 7).
+  const [target, setTarget] = useKept('settings:mailbox:target', DEFAULT_SWITCH_TARGET);
   const close = useCallback(() => {
     setOpen(false);
   }, []);

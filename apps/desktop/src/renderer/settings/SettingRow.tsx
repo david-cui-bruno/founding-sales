@@ -1,4 +1,5 @@
 import { useState, type JSX } from 'react';
+import { useDraftStoreAvailable, useDrafts } from '../app/drafts.tsx';
 import type { ActiveSettingKey } from '../settingsContract.ts';
 import {
   BUSINESS_ZONE_CHOICES,
@@ -14,6 +15,8 @@ import {
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Field, Row, RowMain, Rows } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { FormNotice } from './FormNotice.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
@@ -107,6 +110,34 @@ function Control({
   );
 }
 
+/**
+ * The typed controls' values, one kept key per field (`settings:row:<setting>:<field>`).
+ * A toggle is stored as `true` or `false`, a text field as itself; until a field is touched
+ * it shows the saved value.
+ */
+function useKeptFields(
+  prefix: string,
+  fields: readonly SettingField[],
+): readonly [Readonly<Record<string, string | boolean>>, (key: string, value: string | boolean) => void] {
+  const drafts = useDrafts();
+  const store = useDraftStoreAvailable();
+  const [local, setLocal] = useState<Readonly<Record<string, string | boolean>>>({});
+  const values = Object.fromEntries(
+    fields.map(field => {
+      const raw = store ? drafts.values[`${prefix}:${field.key}`] : undefined;
+      const typed = store ? raw : (local[field.key] as string | boolean | undefined);
+      if (typed === undefined) return [field.key, field.value];
+      if (typeof field.value === 'boolean') return [field.key, typed === true || typed === 'true'];
+      return [field.key, typeof typed === 'string' ? typed : String(typed)];
+    }),
+  );
+  const set = (key: string, value: string | boolean): void => {
+    if (store) drafts.set(`${prefix}:${key}`, String(value));
+    else setLocal(current => ({ ...current, [key]: value }));
+  };
+  return [values, set];
+}
+
 export function SettingRow({
   row,
   history,
@@ -122,12 +153,19 @@ export function SettingRow({
   onHistory(settingKey: ActiveSettingKey): void;
 }): JSX.Element {
   const fields = settingFields(row.settingKey, row.value);
-  const [values, setValues] = useState<Readonly<Record<string, string | boolean>>>(() =>
-    Object.fromEntries((fields ?? []).map(field => [field.key, field.value])),
-  );
-  const [raw, setRaw] = useState(() => JSON.stringify(row.value, null, 2));
-  const [unreadable, setUnreadable] = useState(false);
-  const [note, setNote] = useState('');
+  // Every edit is kept above the route (S4R, criterion 7): leaving Settings for Today and
+  // coming back finds the field as it was typed, with the saved value as the fallback.
+  const prefix = `settings:row:${row.settingKey}`;
+  const [typed, setTyped] = useKeptFields(prefix, fields ?? []);
+  const values = typed;
+  const setValues = setTyped;
+  const [raw, setRaw] = useKept(`${prefix}:raw`, JSON.stringify(row.value, null, 2));
+  const [unreadableText, setUnreadableText] = useKept(`${prefix}:unreadable`, '');
+  const unreadable = unreadableText === 'yes';
+  const setUnreadable = (next: boolean): void => {
+    setUnreadableText(next ? 'yes' : '');
+  };
+  const [note, setNote] = useKept(`${prefix}:note`, '');
   const summary = settingSummary(row.settingKey, row.value);
   const key = row.settingKey as ActiveSettingKey;
 
@@ -168,7 +206,7 @@ export function SettingRow({
               editable={row.editable && !saving}
               value={values[field.key] ?? field.value}
               onChange={next => {
-                setValues(current => ({ ...current, [field.key]: next }));
+                setValues(field.key, next);
               }}
             />
           ))
@@ -223,6 +261,7 @@ export function SettingRow({
         >
           History
         </Button>
+        <FormNotice forms={[]} exact={`setting:${row.settingKey}`} />
       </div>
 
       {row.notEditableBecause === null ? null : (

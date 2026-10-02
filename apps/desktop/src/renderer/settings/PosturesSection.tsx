@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import { POSTURES_HEADING, POSTURE_CONFIRMATION, POSTURE_HINT, allowStatesIssues, type PosturesSectionView } from '../postureView.ts';
 import type { AllowStatesInput } from '../settingsContract.ts';
 import { Button } from '../ui/button.tsx';
-import { Field, Row, RowActions, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
+import { Field, Row, RowActions, RowMain, Rows, Unread } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
 /**
@@ -34,9 +37,18 @@ export function PosturesSection({
   onRevoke(postureId: string): void;
   onRetry(): void;
 }): JSX.Element {
-  const [chosen, setChosen] = useState<readonly string[]>([]);
-  const [confirmed, setConfirmed] = useState(false);
-  const [note, setNote] = useState('');
+  // What was ticked, confirmed and typed is the person's: kept above the route (S4R).
+  const [chosenText, setChosenText] = useKept('settings:postures:chosen', '');
+  const chosen = chosenText === '' ? [] : chosenText.split(',');
+  const setChosen = (next: (current: readonly string[]) => readonly string[]): void => {
+    setChosenText(next(chosen).join(','));
+  };
+  const [confirmedText, setConfirmedText] = useKept('settings:postures:confirmed', '');
+  const confirmed = confirmedText === 'yes';
+  const setConfirmed = (next: boolean): void => {
+    setConfirmedText(next ? 'yes' : '');
+  };
+  const [note, setNote] = useKept('settings:postures:note', '');
   const [shown, setShown] = useState(false);
 
   /*
@@ -55,10 +67,10 @@ export function PosturesSection({
   useEffect(() => {
     if (allowed === lastAllowed.current) return;
     lastAllowed.current = allowed;
-    setConfirmed(false);
+    setConfirmedText('');
     setNote('');
     setShown(false);
-  }, [allowed]);
+  }, [allowed, setConfirmedText, setNote]);
 
   const issues = allowStatesIssues({ states: selected, confirmed, note });
   const issueFor = (field: 'states' | 'confirmed' | 'note'): readonly { readonly testId: string; readonly text: string }[] =>
@@ -206,6 +218,7 @@ export function PosturesSection({
           </Button>
           <p className="text-xs text-muted-foreground">{POSTURE_HINT}</p>
         </div>
+        <FormNotice forms={['postures', 'posture']} />
         {section.notEditableBecause === null ? null : (
           <p data-testid="posture-inert" className="text-xs text-muted-foreground">
             {section.notEditableBecause}

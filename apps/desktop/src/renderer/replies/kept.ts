@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useDraft, useDraftStoreAvailable } from '../app/drafts.tsx';
+import { useClearDrafts, useDraft, useDraftStoreAvailable, useDrafts } from '../app/drafts.tsx';
 
 /**
  * One piece of the person's own state, kept above the route (criterion 7).
@@ -26,4 +26,31 @@ export function useKept(key: string, fallback: string): readonly [string, (value
     [available, setStored],
   );
   return [available ? stored : (local ?? fallback), set];
+}
+
+/**
+ * Many kept values under one prefix, for a form whose fields are not known until the answer
+ * arrives (a checklist, one cap per mailbox). `get` falls back to what the server says;
+ * `clear` forgets them all. With no store above, plain component state, as in `useKept`.
+ */
+export function useKeptMap(prefix: string): {
+  get(key: string, fallback: string): string;
+  set(key: string, value: string): void;
+  clear(): void;
+} {
+  const available = useDraftStoreAvailable();
+  const drafts = useDrafts();
+  const clearDrafts = useClearDrafts();
+  const [local, setLocal] = useState<Readonly<Record<string, string>>>({});
+  return {
+    get: (key, fallback) => (available ? drafts.values[`${prefix}${key}`] : local[key]) ?? fallback,
+    set: (key, value) => {
+      if (available) drafts.set(`${prefix}${key}`, value);
+      else setLocal(current => ({ ...current, [key]: value }));
+    },
+    clear: () => {
+      if (available) clearDrafts(prefix);
+      else setLocal({});
+    },
+  };
 }

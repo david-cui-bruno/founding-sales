@@ -1,9 +1,10 @@
-import { useMemo, useState, type JSX } from 'react';
+import { useMemo, type JSX } from 'react';
 import type { Generation } from '../app/generation.ts';
 import { useViewState } from '../app/useViewState.ts';
 import { REPLY_MODELS, type ReplyModel, type ReplyModelState } from '../replyContract.ts';
 import { Button } from '../ui/button.tsx';
-import { Section } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { Section } from './Group.tsx';
 import { Select } from '../ui/select.tsx';
 
 /**
@@ -51,7 +52,9 @@ export function ReplyModelSection({
     guard,
     first: useMemo(() => async api => await api.read('replies.model', {}), []),
   });
-  const [choice, setChoice] = useState<ReplyModel | null>(null);
+  // The model picked and not yet saved: kept above the route, '' for none (S4R, criterion 7).
+  const [chosenText, setChosenText] = useKept('settings:reply-model:choice', '');
+  const choice: ReplyModel | null = REPLY_MODELS.find(name => name === chosenText) ?? null;
   if (!isAdmin || !view.available) return null;
 
   const state = view.state;
@@ -81,7 +84,7 @@ export function ReplyModelSection({
           disabled={saving || state?.classifier == null}
           value={shown}
           onChange={event => {
-            setChoice(event.target.value as ReplyModel);
+            setChosenText(event.target.value);
           }}
         >
           {shown === '' ? <option value="">{current ?? '—'}</option> : null}
@@ -100,7 +103,7 @@ export function ReplyModelSection({
             if (choice === null) return;
             const modelName = choice;
             view.command('reply-model', async api => await api.command('replies.saveModel', { modelName }));
-            setChoice(null);
+            setChosenText('');
           }}
         >
           Save

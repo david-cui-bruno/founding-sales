@@ -603,14 +603,16 @@ export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Ele
       <section data-region="reply-queue" aria-label="Replies" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
         <header className="flex shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4 py-2">
           <div className="flex items-center justify-between gap-2">
-            <h1 data-testid="heading" className="text-sm font-semibold">
-              Replies
+            <span className="flex items-baseline gap-2">
+              <h1 data-testid="heading" className="text-sm font-semibold">
+                Replies
+              </h1>
               {state.businessDate === null ? null : (
-                <span data-testid="business-date" className="ml-2 font-normal text-faint tabular">
+                <span data-testid="business-date" className="text-xs text-faint tabular">
                   {state.businessDate}
                 </span>
               )}
-            </h1>
+            </span>
             <span className="flex items-center gap-1">
               <span aria-hidden className="flex items-center gap-1 text-xs text-faint">
                 <Kbd>J</Kbd>
