@@ -262,6 +262,13 @@ async function measure(
         WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
       byContact,
     ),
+    // Lane PB (0038): one prepared brief per firm, about the firm; firm-scoped only.
+    firm_prepared_briefs: await countOf(
+      context,
+      `SELECT count(*) AS count FROM firm_prepared_briefs
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+      byContact,
+    ),
     firm_links: await countOf(
       context,
       `SELECT count(*) AS count FROM firm_links
@@ -1103,6 +1110,11 @@ export async function commitDeletion(
   await remove(
     'research_runs',
     `DELETE FROM research_runs WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+    byContact,
+  );
+  await remove(
+    'firm_prepared_briefs',
+    `DELETE FROM firm_prepared_briefs WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(

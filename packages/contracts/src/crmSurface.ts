@@ -6,6 +6,7 @@ import { holdEnrollmentDtoSchema, holdReasonCodeSchema } from './reasonCodes.ts'
 import { uuid } from './foundationRows.ts';
 import { firmReadDtoSchema } from './crm.ts';
 import { suppressionChannelSchema } from './dial.ts';
+import { preparedBriefDtoSchema } from './preparedBriefs.ts';
 
 /**
  * The wire contract of the CRM surface: admin CSV import and Add firm (specification
@@ -336,8 +337,11 @@ export const firmPageRequestSchema = z.strictObject({
    * Migration 0037 (DESIGN-S3X §2.5, P2): `['stops']` adds `stops`, the channels the firm's
    * and its contacts' stops cover. Negotiated, so the installed 1.0.29, which parses the
    * answer strictly and never asks, never meets the key.
+   *
+   * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief`, the firm's prepared
+   * brief or null. Negotiated for the same reason.
    */
-  include: z.array(z.literal('stops')).max(1).optional(),
+  include: z.array(z.enum(['stops', 'preparedBrief'])).max(2).optional(),
 });
 
 /**
@@ -417,6 +421,11 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
     followUpPermissions: z.array(followUpPermissionDtoSchema),
     /** Present exactly when the request negotiated `include: ['stops']` (migration 0037). */
     stops: firmStopsDtoSchema.optional(),
+    /**
+     * Present exactly when the request negotiated `include: ['preparedBrief']` (lane PB,
+     * migration 0038): the firm's prepared brief, or null when it has none.
+     */
+    preparedBrief: preparedBriefDtoSchema.nullable().optional(),
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

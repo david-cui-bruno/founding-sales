@@ -318,6 +318,20 @@ async function mergeResearch(
     context.scope.workspaceId,
     sourceId,
   ]);
+
+  // Lane PB (0038): the surviving firm keeps its own prepared brief; when it has none it
+  // takes the merged firm's. Whatever is left on the source goes: it is a merged record now.
+  const movedBrief = await context.db.query(
+    `UPDATE firm_prepared_briefs SET firm_id = $3
+      WHERE workspace_id = $1 AND firm_id = $2
+        AND NOT EXISTS (SELECT 1 FROM firm_prepared_briefs t WHERE t.workspace_id = $1 AND t.firm_id = $3)`,
+    parameters,
+  );
+  preserved['firm_prepared_briefs'] = movedBrief.rowCount ?? 0;
+  await context.db.query('DELETE FROM firm_prepared_briefs WHERE workspace_id = $1 AND firm_id = $2', [
+    context.scope.workspaceId,
+    sourceId,
+  ]);
 }
 
 /** The target's primary contact keeps the badge; the source's is demoted first. */

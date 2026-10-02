@@ -45,6 +45,8 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
     // Migration 0037: the stop badges, only when asked for, so the installed 1.0.29's
     // strict parse never meets the key.
     includeStops: parsed.data.include?.includes('stops') === true,
+    // Lane PB (migration 0038): the prepared brief, only when asked for, for the same reason.
+    includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,
   });
   // `firm_unknown` is a 404 with the same redacted sentence every unmounted path
   // gets: a firm in another workspace and a firm that never existed are one answer.

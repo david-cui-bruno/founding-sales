@@ -1,7 +1,14 @@
-import { recordEvidenceCommandSchema, resolveFirmZoneCommandSchema } from '@fss/contracts';
+import {
+  clearPreparedBriefCommandSchema,
+  preparedBriefMatchRequestSchema,
+  recordEvidenceCommandSchema,
+  resolveFirmZoneCommandSchema,
+  setPreparedBriefCommandSchema,
+} from '@fss/contracts';
 import { listFirmsForActor, readFirmForActor } from '@fss/domain/crm/dto.ts';
 import { recordEvidence } from '@fss/domain/crm/evidence.ts';
 import { resolveZoneForFirm } from '@fss/domain/crm/firms.ts';
+import { clearPreparedBrief, matchPreparedBriefRows, setPreparedBrief } from '@fss/domain/crm/preparedBriefs.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -12,6 +19,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * * `GET  /firms` — every firm at identity visibility.
  * * `GET  /firms/:id` — one firm at whatever visibility Appendix F gives this caller.
  * * `POST /firms/resolve-zone`, `/firms/evidence` — commands, through `runCommand`.
+ * * `POST /firms/brief/set`, `/firms/brief/clear` — a firm's prepared brief (lane PB,
+ *   migration 0038), commands through `runCommand`; the answer and the audit row carry a
+ *   length and a count, never the text. `POST /firms/brief/match` — admin only and
+ *   read-only: which firm each row of a prepared-brief file names, by the CSV importer's
+ *   matcher.
  *   (`/firms/create`, `/firms/update` and `/firms/reassign` had no caller and went in
  *   wave 2, S6: the Mac adds a firm through `/crm/firms/add` or an import.)
  *
@@ -71,6 +83,27 @@ export async function routeFirms(request: ApiRequest, options: RoutingOptions): 
           confidence: body.confidence,
         }),
       );
+    case '/firms/brief/set':
+      return await runRouteCommand(deps, setPreparedBriefCommandSchema, 'firm.prepared_brief_set', async (repository, body) =>
+        await setPreparedBrief(repository, {
+          firmId: body.firmId,
+          brief: body.brief,
+          sources: body.sources,
+          observedOn: body.observedOn,
+          preparedBy: body.preparedBy,
+        }),
+      );
+    case '/firms/brief/clear':
+      return await runRouteCommand(deps, clearPreparedBriefCommandSchema, 'firm.prepared_brief_cleared', async (repository, body) =>
+        await clearPreparedBrief(repository, { firmId: body.firmId }),
+      );
+    case '/firms/brief/match': {
+      const parsed = preparedBriefMatchRequestSchema.safeParse(request.body);
+      if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+      const matched = await matchPreparedBriefRows(context, parsed.data);
+      if (!matched.ok) return { status: 409, body: { status: 'refused', reason: matched.reason } };
+      return { status: 200, body: { rows: matched.value } };
+    }
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }

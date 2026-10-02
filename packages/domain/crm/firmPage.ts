@@ -1,9 +1,16 @@
-import { knownBlockedActionKinds, type FirmStopsDto, type FollowUpPermissionDto, type SuppressionChannel } from '@fss/contracts';
+import {
+  knownBlockedActionKinds,
+  type FirmStopsDto,
+  type FollowUpPermissionDto,
+  type PreparedBriefDto,
+  type SuppressionChannel,
+} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { holdEnrollments, type HoldEnrollmentDto } from '../sequences/holdEnrollments.ts';
 import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
+import { readPreparedBrief } from './preparedBriefs.ts';
 import { accept, type CrmResult } from './types.ts';
 
 /**
@@ -78,6 +85,8 @@ export type FirmPageDto =
       readonly followUpPermissions: readonly FollowUpPermissionDto[];
       /** Only when the caller negotiated it (`include: ['stops']`, migration 0037). */
       readonly stops?: FirmStopsDto;
+      /** Only when negotiated (`include: ['preparedBrief']`, lane PB): the brief, or null. */
+      readonly preparedBrief?: PreparedBriefDto | null;
     };
 
 interface StageEventRow {
@@ -120,6 +129,8 @@ export async function readFirmPage(
     readonly routeValidation?: boolean | undefined;
     /** `include: ['stops']` (migration 0037): add the stop badges' facts. */
     readonly includeStops?: boolean | undefined;
+    /** `include: ['preparedBrief']` (lane PB, migration 0038): add the prepared brief. */
+    readonly includePreparedBrief?: boolean | undefined;
   },
 ): Promise<CrmResult<FirmPageDto>> {
   const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation });
@@ -204,6 +215,7 @@ export async function readFirmPage(
       followUpPermissionDto,
     ),
     ...(input.includeStops === true ? { stops: await readFirmStops(context, input.firmId) } : {}),
+    ...(input.includePreparedBrief === true ? { preparedBrief: await readPreparedBrief(context, input.firmId) } : {}),
   });
 }
 

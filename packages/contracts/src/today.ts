@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { callBriefSchema } from './research.ts';
+import { preparedBriefDtoSchema } from './preparedBriefs.ts';
 import { blockedActionKindSchema } from './reasonCodes.ts';
 import { routeEligibilitySchema } from './crm.ts';
 import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
@@ -148,8 +149,11 @@ export const todayFirmRequestSchema = z.strictObject({
   /**
    * Slice 3a: `['tasks']` adds the firm's open call tasks (kind `task`). Without it a task
    * is in no card, count or expansion, so an installed desktop never meets the kind.
+   *
+   * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief` to the card, the
+   * firm's prepared brief or null.
    */
-  include: z.array(z.literal('tasks')).max(1).optional(),
+  include: z.array(z.enum(['tasks', 'preparedBrief'])).max(2).optional(),
 });
 
 /**
@@ -185,6 +189,11 @@ export const todayFirmResponseSchema = z.object({
    * the Macs it serves. Adding it is not a wire break.
    */
   brief: callBriefSchema.nullable().optional(),
+  /**
+   * Lane PB (migration 0038): the firm's prepared brief, or null when it has none. Only
+   * when the request negotiated `include: ['preparedBrief']`.
+   */
+  preparedBrief: preparedBriefDtoSchema.nullable().optional(),
   /**
    * The firm's editable basics (slice S2): what Today's Edit shows and changes. Optional,
    * and only in card version 2, so an installed desktop never sees it.

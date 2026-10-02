@@ -103,6 +103,8 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     firmId: parsed.data.firmId,
     now: await databaseNow(context),
     includeTasks: parsed.data.include?.includes('tasks') === true,
+    // Lane PB (migration 0038): the prepared brief, negotiated like the tasks.
+    includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,
   });
   // A firm with no card today and a colleague's firm are the same answer on purpose:
   // telling a salesperson that somebody else's firm has work on it is a read Appendix
