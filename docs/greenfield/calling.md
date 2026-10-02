@@ -567,21 +567,29 @@ through an existing command, for the analysis he saw (`POST /calls/proposals/app
 (`outcome`, `callback`, `follow_up`, `buying_signal`, `park`, tasks); opening a deal is one
 of those ticks, with no dialog. Its transaction takes, in this order:
 
-Today's lock (shared) → send gate → the dialled route, when a `wrong_number` or
-`do_not_call` **outcome** is applied → firm → `call_analysis:<session>` → the session row
+Today's lock (shared) → send gate → the dialled route, whenever an **outcome** is applied
+(`FOR UPDATE` for `wrong_number` or `do_not_call`, `FOR KEY SHARE` otherwise — the call log's
+insert takes that lock through its foreign key) → firm → `call_analysis:<session>` → the
+session row
 
 then checks freshness under them (the analysis is the newest completed model analysis on the
 current transcript, else `stale_analysis`; the echoed hash is the stored one, else
 `stale_proposal`), then the first-time rules in order (`call_already_logged`,
-`outcome_required`, `callback_exists`; a `follow_up` more than seven days after the call is
-`follow_up_expired`), and maps each key to its command inside one savepoint, so a refusal
-leaves nothing behind. `outcome` (with `callback`, `follow_up` and the "covers all contact"
+`outcome_required`, `callback_exists`; a `follow_up` more than seven days after the call —
+the session's start, never the log's time — is `follow_up_expired`), and maps each key to its
+command inside one savepoint. **The Apply is atomic**: any key refused, or a command that
+fails (a selected follow-up whose permission is not granted is `follow_up_not_granted`),
+rolls the whole batch back and the 409 names the key (`keyReasons`); nothing is applied or
+measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
+none. `outcome` (with `callback`, `follow_up` and the "covers all contact"
 choice) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
 `createCallback`; `follow_up` on a logged call is `confirmCapturedFollowUp` (seven days, not
 `recordCallFollowUp`'s sixty minutes); `buying_signal` is `applyStageEvidence('call.interested')`
-then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` while any
-park hold, the automatic one included, is open); a task is a `call_tasks` row
-(`already_created` on a repeat). A second outcome for one session — from the form or an
+then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` when
+this proposal's park was ever made — a Resume sticks — or any park hold, the automatic one
+included, is open); a task is a `call_tasks` row (`already_created` on a repeat). An overview
+request's "Send overview" task is written once: by the task key with David's edits when he
+selected it, otherwise beside the follow-up as proposed. A second outcome for one session — from the form or an
 Apply — is `call_already_logged` in `logCallOutcome` itself.
 
 An open call task is a Today item of kind `task` (due-work lane, key `call-task:<id>`,
@@ -591,10 +599,11 @@ is in no card, count or expansion — a card's lane and instant come from its ot
 and a firm with nothing else open has no card. `POST /today/tasks/complete {taskId}` marks
 one done (Today → firm, then the firm's card refreshed).
 
-`logCallOutcome` itself now takes the route it retires or suppresses **before** the firm
-(gate → route → firm), the order `retireRoute` and `updateFirmBasics` keep: taken after the
-firm, as it was since S2, a wrong number logged while the same number was being replaced
-could deadlock with the basics edit.
+`logCallOutcome` itself now takes the dialled route **before** the firm (gate → route →
+firm), the order `retireRoute` and `updateFirmBasics` keep — `FOR UPDATE` when it retires or
+suppresses the number, `FOR KEY SHARE` for every other outcome: taken after the firm (the
+route's row for a wrong number since S2, the call log's foreign-key lock for any outcome), a
+call logged while the same number was being replaced could deadlock with the basics edit.
 
 **The pending-review hold.** Both Twilio callbacks take the send gate, then the firm (`FOR NO
 KEY UPDATE`), before the session row — the status callback for **every** status now, not only
@@ -605,7 +614,9 @@ recovery `review_call`, blocking `email_send`, `enrollment_advance` and `call_ta
 dialling) when the call is terminal, answered (`answered_at` or a provider status of
 `completed`), at least 20 seconds long, the transcription switch is on, it has no log, and the
 session never had one (`active_holds_one_pending_review`). It is released at the call's first
-log link, or by `POST /calls/pending/dismiss`, and is never reopened.
+log link, by `POST /calls/pending/dismiss`, or by the deletion that removes its session
+(`commitDeletion`, after the gate, the firm and the sessions' locks), and is never reopened.
+A firm merge carries every `call_tasks` row to the surviving firm, contactless ones included.
 
 **Cadence parking stays automatic.** It is the one automatic writer left (`parkIfCadenceSpent`,
 from the status callback and `logCallOutcome`); the "human click" rule covers analysis effects

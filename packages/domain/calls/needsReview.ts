@@ -63,10 +63,12 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
 
   // ---- 1. Pending holds open three hours or more ------------------------------------
   const { rows: holds } = await context.db.query<{ id: string; session_id: string; firm_id: string; started_at: Date }>(
-    `SELECT h.id, h.source_event_id AS session_id, s.firm_id, h.started_at
+    `SELECT h.id, h.source_event_id AS session_id, f.id AS firm_id, h.started_at
        FROM active_holds h
-       JOIN call_sessions s ON s.workspace_id = h.workspace_id AND s.id::text = h.source_event_id
-       JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
+       LEFT JOIN call_sessions s ON s.workspace_id = h.workspace_id AND s.id::text = h.source_event_id
+       -- A hold whose session is gone is still listed, at the firm it blocks, so Dismiss can
+       -- reach it (review S3B, finding 2).
+       JOIN firms f ON f.workspace_id = h.workspace_id AND f.id::text = coalesce(s.firm_id::text, h.scope_key)
       WHERE h.workspace_id = $1 AND h.source_event_kind = $2 AND h.released_at IS NULL
         AND h.started_at <= now() - make_interval(hours => $3)
         AND ($4::uuid IS NULL OR f.assigned_user_id = $4::uuid)

@@ -156,18 +156,30 @@ export type DismissPendingOutcome =
 /**
  * `POST /calls/pending/dismiss`: David says the call needs no log. Gate → firm → session,
  * the callbacks' order, then the release. A session with no open hold answers null.
+ *
+ * A hold whose session is gone (deletion releases it in the same transaction now, so only a
+ * hold from before that, or one a future path strands) is found by its source id and
+ * released at the firm it blocks, under the same gate → firm order: a hold is never left
+ * with no recovery (review S3B, finding 2).
  */
 export async function dismissPendingHold(
   context: RepositoryContext,
   input: { readonly callSessionId: string },
 ): Promise<DismissPendingOutcome> {
   if (context.scope.actor.kind !== 'user') return { ok: false, reason: 'invalid_input' };
-  const { rows: located } = await context.db.query<{ firm_id: string }>(
-    'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
-    [context.scope.workspaceId, input.callSessionId],
+  const { rows: located } = await context.db.query<{ firm_id: string; session: boolean }>(
+    `SELECT firm_id, true AS session FROM call_sessions WHERE workspace_id = $1 AND id = $2
+     UNION ALL
+     SELECT h.scope_key::uuid, false FROM active_holds h
+      WHERE h.workspace_id = $1 AND h.source_event_kind = $3 AND h.source_event_id = $2::text
+        AND h.released_at IS NULL AND h.scope_kind = 'firm'
+        AND NOT EXISTS (SELECT 1 FROM call_sessions s WHERE s.workspace_id = $1 AND s.id = $2)
+     LIMIT 1`,
+    [context.scope.workspaceId, input.callSessionId, CALL_ANALYSIS_PENDING_SOURCE],
   );
   const firmId = located[0]?.firm_id;
   if (firmId === undefined) return { ok: false, reason: 'not_found' };
+  const sessionExists = located[0]?.session === true;
   await lockSendGateForStopFact(context);
   const firm = await loadFirmForUpdate(context, firmId);
   if (firm === null) return { ok: false, reason: 'not_found' };
@@ -177,7 +189,7 @@ export async function dismissPendingHold(
     'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
     [context.scope.workspaceId, input.callSessionId],
   );
-  if (live[0]?.firm_id !== firmId) return { ok: false, reason: 'not_found' };
+  if (sessionExists ? live[0]?.firm_id !== firmId : live.length > 0) return { ok: false, reason: 'not_found' };
   const released = await releasePendingHold(context, input.callSessionId);
   if (released !== null) {
     await recordCrmAuditEvent(context, {

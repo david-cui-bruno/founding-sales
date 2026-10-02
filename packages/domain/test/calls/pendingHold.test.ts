@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { firmPageResponseSchema, HOLD_REASON_CODES } from '@fss/contracts';
+import { readNeedsReview } from '../../calls/needsReview.ts';
 import { dismissPendingHold } from '../../calls/pendingHold.ts';
 import { recordCallRecording, recordCallStatus } from '../../calls/sessions.ts';
 import { readFirmPage } from '../../crm/firmPage.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { logCallOutcome } from '../../dial/calls.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
+import { commitDeletion, previewDeletion } from '../../retention/deletion.ts';
 import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { lines } from './analysisFixtures.ts';
 import { createApplyWorld, type ApplyWorld, type PlacedCall, type TestFirm } from './support/applyWorld.ts';
@@ -168,5 +170,64 @@ describe('B-7 and B-12: the pending-review hold', () => {
       expect.objectContaining({ id: hold?.id, reasonCode: 'scoped_pause', recoveryAction: 'review_call' }),
     ]);
     expect(HOLD_REASON_CODES).toContain('scoped_pause');
+  });
+
+  // Review S3B, finding 2: the session's deletion releases its hold, in the same transaction.
+  const pendingInReview = async (sessionId: string): Promise<boolean> =>
+    (await readNeedsReview(world.admin())).items.some(item => item.source === 'pending_hold' && item.callSessionId === sessionId);
+  const blocksEmail = async (firmId: string): Promise<boolean> =>
+    (await listApplicableHolds(world.system(), { actionKind: 'email_send', firmId })).length > 0;
+
+  it("deleting the call's contact releases its pending hold: the surviving firm has no blocking hold, and Needs review is clean", async () => {
+    const firm = await world.newFirm();
+    // A second person at the firm, so the firm survives with someone to work.
+    await world.session.query(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name, title, is_primary) VALUES ($1, $2, 'Riley Example', 'Owner', false)`,
+      [world.seeded.alpha.workspaceId, firm.firmId],
+    );
+    const call = await place(firm, [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: false })]);
+    // Open for four hours: Needs review lists it until the deletion.
+    await world.session.query(
+      "UPDATE active_holds SET started_at = now() - interval '4 hours' WHERE source_event_kind = 'call_analysis_pending' AND source_event_id = $1",
+      [call.sessionId],
+    );
+    expect(await pendingInReview(call.sessionId)).toBe(true);
+    expect(await blocksEmail(firm.firmId)).toBe(true);
+
+    const deleted = await withTransaction(world.session, async () => {
+      const preview = await previewDeletion(world.admin(), { targetKind: 'contact', firmId: firm.firmId, contactId: firm.contactId });
+      if (!preview.ok) throw new Error(`preview refused: ${JSON.stringify(preview)}`);
+      return await commitDeletion(world.admin(), {
+        requestId: preview.value.requestId,
+        previewHash: preview.value.previewHash,
+        commandId: `delete-contact-${call.sessionId}`,
+        journal: recordingSuppressionJournal(),
+      });
+    });
+    expect(deleted.ok, JSON.stringify(deleted)).toBe(true);
+    expect((await world.session.query('SELECT 1 FROM call_sessions WHERE id = $1', [call.sessionId])).rows).toHaveLength(0);
+    expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: true })]);
+    expect(await blocksEmail(firm.firmId)).toBe(false);
+    expect(await pendingInReview(call.sessionId)).toBe(false);
+  });
+
+  it('a pending hold whose session is gone is still listed at its firm, and Dismiss releases it', async () => {
+    const firm = await world.newFirm();
+    const { rows } = await world.session.query<{ id: string; ghost: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind,
+                                 source_event_id, recovery_action, started_at)
+       SELECT $1, 'firm', $2, 'scoped_pause', ARRAY['email_send', 'enrollment_advance', 'call_task'], 'call_analysis_pending',
+              g.id::text, 'review_call', now() - interval '4 hours'
+         FROM (SELECT gen_random_uuid() AS id) g
+       RETURNING id, source_event_id AS ghost`,
+      [world.seeded.alpha.workspaceId, firm.firmId],
+    );
+    const ghost = rows[0]?.ghost ?? '';
+    expect(await pendingInReview(ghost)).toBe(true);
+    const dismissed = await withTransaction(world.session, async () => await dismissPendingHold(world.salesperson(), { callSessionId: ghost }));
+    expect(dismissed).toEqual({ ok: true, value: { callSessionId: ghost, releasedHoldId: rows[0]?.id } });
+    expect(await blocksEmail(firm.firmId)).toBe(false);
+    expect(await pendingInReview(ghost)).toBe(false);
   });
 });

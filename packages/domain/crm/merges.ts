@@ -204,6 +204,11 @@ export async function mergeFirms(
           WHERE ff.workspace_id = r.workspace_id AND ff.evidence_id = r.id)`,
   );
   await move('record_aliases', ['contact_id', 'alias_kind', 'alias_value']);
+  // Slice 3a (0036): a call task with a contact has followed it by cascade; one with no
+  // contact ("Send overview" at a firm with nobody named) would stay on the merged source,
+  // where Today never reads it. Every one follows the firm that survives (review S3B,
+  // finding 6). Its unique key is per call, not per firm, so there is no twin to skip.
+  await move('call_tasks');
 
   // The opportunities need care: the target may already have an open one, and only
   // one open opportunity per firm is allowed. The source's open opportunity is closed

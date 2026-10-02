@@ -14,6 +14,7 @@ import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts'
 import { deletionTombstoneKeyOf } from '../meetings/attendee.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
+import { CALL_ANALYSIS_PENDING_SOURCE } from '@fss/contracts';
 import { accept, refuse, type RetentionResult } from './result.ts';
 
 /**
@@ -944,7 +945,18 @@ export async function commitDeletion(
         AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
     byContact,
   );
-  // Slice 3a (0036): before the sessions, whose deletion would only clear the task's link.
+  // Slice 3a (0036): a pending-review hold names its session; the session going takes the
+  // hold's recovery (log it, or Dismiss) with it, so the hold is released here, in this
+  // transaction, after the gate, the firm and the sessions' locks above — never left
+  // blocking e-mail at a firm that survives (review S3B, finding 2). The hold row is kept:
+  // `active_holds` is retained, released or not.
+  await context.db.query(
+    `UPDATE active_holds SET released_at = now()
+      WHERE workspace_id = $1 AND source_event_kind = $2 AND released_at IS NULL
+        AND source_event_id = ANY($3::text[])`,
+    [context.scope.workspaceId, CALL_ANALYSIS_PENDING_SOURCE, targetedSessions.map(session => session.id)],
+  );
+  // Before the sessions, whose deletion would only clear the task's link.
   await remove(
     'call_tasks',
     `DELETE FROM call_tasks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
