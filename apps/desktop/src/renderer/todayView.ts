@@ -200,9 +200,82 @@ export interface TaskView {
   readonly callable: boolean;
 }
 
+/**
+ * Where a command's answer is drawn (slice 3a, C0): beside the control it answers.
+ *
+ * It was one line in the strip under the page header whatever had been pressed, so a
+ * snooze that failed was reported two screens away from the snooze. `outcome` is the Notes
+ * and outcome form, `tasks` the list of tasks, `call` the call panel and `firm` the
+ * firm's own header, which is where an answer about the firm as a whole goes.
+ */
+export type FeedbackZone = 'outcome' | 'tasks' | 'call' | 'firm';
+
+export interface FeedbackView {
+  readonly code: string;
+  readonly zone: FeedbackZone;
+  readonly text: string;
+  /** What a recorded call agreed to, by name, beside the outcome's own line. */
+  readonly agreement: string | null;
+}
+
+const OUTCOME_CODES: readonly string[] = [
+  'agreed_dates_need_preview',
+  'agreement_exists',
+  'call_too_old',
+  'not_call_actor',
+  'version_unknown',
+  'version_not_published',
+  'occurred_at_in_future',
+  'ticket_mismatch',
+  'route_unknown',
+];
+const TASK_CODES: readonly string[] = [
+  'snoozed',
+  'held',
+  'pause_released',
+  'pause_already_released',
+  'pause_unknown',
+  'snooze_return_required',
+  'snooze_cancelled',
+  'item_not_open',
+  'item_unknown',
+  'snooze_reason_required',
+  'snooze_return_not_future',
+  'callback_scheduled',
+  'callback_time_invalid',
+  'callback_already_scheduled',
+  'callback_instant_mismatch',
+];
+const CALL_CODES: readonly string[] = [
+  'dial_opened',
+  'dial_opened_unknown',
+  'no_tel_handler',
+  'handler_changed',
+  'invalid_target',
+  'firm_suppressed',
+  'handle_suppressed',
+  'route_version_stale',
+  'already_consumed',
+  'identity_not_verified',
+];
+
+/** The place a notice code is shown. A code this list does not know belongs to the firm. */
+export function feedbackZoneOf(code: string): FeedbackZone {
+  if (code.startsWith('outcome_recorded') || OUTCOME_CODES.includes(code)) return 'outcome';
+  if (TASK_CODES.includes(code)) return 'tasks';
+  if (CALL_CODES.includes(code)) return 'call';
+  return 'firm';
+}
+
 export interface TodayScreenView {
   readonly heading: string;
+  /**
+   * What is true of the whole list — offline, stale, no calling number. An answer to a
+   * command is not here: it is `feedback`, drawn where the command was pressed.
+   */
   readonly banners: readonly BannerView[];
+  /** The last command's answer, or null. */
+  readonly feedback: FeedbackView | null;
   readonly cards: readonly CardView[];
   readonly tasks: readonly TaskView[];
   /**
@@ -257,11 +330,15 @@ export function buildTodayView(state: TodayState): TodayScreenView {
           : `This list is from an earlier read, at ${state.asOf}. Changes will fail until Callie reconnects.`,
     });
   }
-  if (state.notice !== null) banners.push({ tone: 'info', text: noticeSentence(state.notice) });
   // What the call just recorded agreed to, by name (send-path v2, slice S3). Only beside
   // a recorded call's notice: another command's notice is not about this agreement.
   const agreed = state.notice?.startsWith('outcome_recorded') === true ? agreementSentence(state.agreement) : null;
-  if (agreed !== null) banners.push({ tone: 'info', text: agreed });
+  // `offline` is already the banner above; saying it again beside a control would be the
+  // same sentence twice.
+  const feedback: FeedbackView | null =
+    state.notice === null || (state.notice === 'offline' && !state.online)
+      ? null
+      : { code: state.notice, zone: feedbackZoneOf(state.notice), text: noticeSentence(state.notice), agreement: agreed };
   // A card with a number to dial and no number of the person's own to place it from.
   // Since 1.0.12 that does not stop the call — `POST /dial/check` decides, and it has no
   // opinion about the caller's own line — so it is a line to act on rather than an
@@ -329,6 +406,7 @@ export function buildTodayView(state: TodayState): TodayScreenView {
   return {
     heading: TODAY_HEADING,
     banners,
+    feedback,
     cards,
     tasks,
     outcomeItemId,

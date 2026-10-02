@@ -154,6 +154,8 @@ describe('the operation registry', () => {
       'replies.collapse',
       'replies.confirm',
       'replies.resolve',
+      'replies.model',
+      'replies.saveModel',
     ]);
     expect(Object.values(OPERATION_IPC_CHANNELS)).toEqual(['callie:op:read', 'callie:op:command']);
     expect(Object.values(DIAL_IPC_CHANNELS)).toEqual(['callie:dial:call']);

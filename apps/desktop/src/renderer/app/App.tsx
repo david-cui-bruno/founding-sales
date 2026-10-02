@@ -102,6 +102,7 @@ function Column({
       figures: home.figures,
       callsToday: home.callsToday,
       update: session.update,
+      now: today.now,
     },
     // The session's own lines — offline, stale, a refusal — above Today's.
     buildScreenView(desktop).banners,
@@ -194,6 +195,8 @@ function Column({
             mailbox={session.mailbox}
             mailboxWaiting={session.mailboxWaiting}
             hasMailboxBridge={hasOperations}
+            status={view.status}
+            isAdmin={desktop.device?.role === 'admin'}
             onSwitchMailbox={switchTo => {
               void session.switchMailbox(switchTo);
             }}

@@ -88,7 +88,8 @@ test('Home opens on the business date, a line of counts, and the queue in the pl
     'Copperline Test Holdings',
     'Larkspur Test Foundry',
   ]);
-  await expect(page.getByTestId('queue-line')).toHaveText(['Callback', 'Replied', 'Due: 1 email', 'Not yet contacted']);
+  // Slice 3a (C0): a grey line only where the group heading does not already say it.
+  await expect(page.getByTestId('queue-line')).toHaveText(['1 email']);
 
   // The cached list first, then today's: the morning list is there without a press.
   await settled(page);
@@ -140,9 +141,15 @@ test('the sidebar names the five selling views with their keys, and Settings at 
   expect(called('settings.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }]);
 });
 
-test('the sidebar says what state the system is in, in dots and words', async ({ page }) => {
+test('Settings › Status says what state the system is in, in dots and words, and the sidebar no longer does', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
+  // The routine lines moved out of the sidebar (slice 3a, C0); the update line is the one
+  // row that stays there, and only while there is an update.
+  await expect(page.getByTestId('sidebar').getByTestId('status-mailbox')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar').getByTestId('status-system')).toHaveCount(0);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('settings-status')).toBeVisible();
 
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
   await expect(page.getByTestId('status-calling')).toHaveText('Calling from +1 617 ··· 0100');
@@ -151,6 +158,7 @@ test('the sidebar says what state the system is in, in dots and words', async ({
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
   await expect(page.getByTestId('status-sending')).toHaveAttribute('data-tone', 'warn');
   await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'ok');
+  await expect(page.getByTestId('status-list')).toContainText('Today’s list: updated');
   // Status lives here, not in a banner above the list.
   await expect(page.getByTestId('banners').locator('p')).toHaveCount(0);
 });
@@ -174,9 +182,6 @@ test('Needs you lists only what the bridges say is missing, and each row does it
     'Record the domain checklist',
     '1 alert to acknowledge',
   ]);
-  await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
-  await expect(page.getByTestId('status-domain')).toHaveText('Domain checklist not passing · sending.example.test');
-
   await page.getByTestId('needs-connect').click();
   await expect.poll(() => called('mailbox.connect')).toHaveLength(1);
   await expect(page.getByTestId('needs-label')).toHaveText([
@@ -184,12 +189,15 @@ test('Needs you lists only what the bridges say is missing, and each row does it
     'Record the domain checklist',
     '1 alert to acknowledge',
   ]);
-  await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
 
   // Open goes to Settings in the same window, at the section the row is about.
   await rows.filter({ hasText: 'Add your calling number' }).getByTestId('needs-open').click();
   await expect(page.getByTestId('calling-number')).toBeInViewport();
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
+  // The routine lines are Settings › Status's (slice 3a, C0).
+  await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
+  await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
+  await expect(page.getByTestId('status-domain')).toHaveText('Domain checklist not passing · sending.example.test');
   expect(called('settings.show')).toEqual([{ screen: 'settings' }]);
 });
 
@@ -219,8 +227,6 @@ test('a number an older Callie left unattested is asked for again, in the one ro
   });
   await page.goto(server.url());
 
-  await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
-  await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'warn');
   await expect(page.getByTestId('needs-label')).toHaveText(['Add your calling number']);
   await expect(page.getByTestId('needs-detail')).toHaveText([
     'The number you have was never confirmed, so Callie cannot call from it. Add it again.',
@@ -230,12 +236,15 @@ test('a number an older Callie left unattested is asked for again, in the one ro
   await page.getByTestId('needs-row').getByTestId('needs-open').click();
   await expect(page.getByTestId('calling-number')).toBeInViewport();
   await expect(page.getByTestId('calling-number-summary')).toContainText('None of your numbers is in use');
+  await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
+  await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'warn');
 });
 
 test('with everything in order, Needs you says so in one grey line', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
-  await expect(page.getByTestId('needs-empty')).toHaveText('Nothing needs you.');
+  // Under the queue, "Nothing needs you." is not said at all (slice 3a, C0).
+  await expect(page.getByTestId('needs-empty')).toHaveCount(0);
   await expect(page.getByTestId('needs-row')).toHaveCount(0);
 });
 
@@ -250,26 +259,36 @@ test('a salesperson is never shown the domain, in the sidebar or in Needs you', 
   });
   await page.goto(server.url());
 
+  await expect(page.getByTestId('needs-empty')).toHaveCount(0);
+  await expect(page.getByTestId('needs-row')).toHaveCount(0);
+  await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
   await expect(page.getByTestId('status-domain')).toHaveCount(0);
-  await expect(page.getByTestId('needs-empty')).toHaveText('Nothing needs you.');
 });
 
 test('the last 7 days are read over the last seven days, and a figure not in this build is a dash', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
+  // The numbers are Today › Overview's since slice 3a (C0), and not under the queue.
+  await expect(page.getByTestId('figures')).toHaveCount(0);
+  await page.getByTestId('today-tab-overview').click();
 
-  // The heading is "Numbers" since 29 September 2026: "Calls placed today" joined the
-  // row, and each cell says its own window instead.
+  // The heading is "Numbers" since 29 September 2026: each cell says its own period.
   await expect(page.getByTestId('figures-label')).toHaveText('Numbers');
-  await expect(page.getByTestId('figure-replies')).toHaveText('Replies21 uncertain');
-  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed, 7 days3');
-  await expect(page.getByTestId('figure-meetings')).toHaveText('Meetings booked1');
+  await expect(page.getByTestId('figure-replies')).toContainText('Replies');
+  await expect(page.getByTestId('figure-replies').getByTestId('figure-value')).toHaveText('2');
+  await expect(page.getByTestId('figure-replies').getByTestId('figure-unconfirmed')).toHaveText('(+1 unconfirmed)');
+  await expect(page.getByTestId('figure-calls').getByTestId('figure-value')).toHaveText('3');
+  await expect(page.getByTestId('figure-meetings').getByTestId('figure-value')).toHaveText('1');
   // 2 replies, 1 handled.
-  await expect(page.getByTestId('figure-waiting')).toHaveText('Replies waiting1');
-  await expect(page.getByTestId('figure-holds')).toHaveText('Holds open1');
+  await expect(page.getByTestId('figure-waiting').getByTestId('figure-value')).toHaveText('1');
+  await expect(page.getByTestId('figure-holds').getByTestId('figure-value')).toHaveText('1');
+  await expect(page.getByTestId('figure-holds').getByTestId('figure-period')).toHaveText('now');
+  await expect(page.getByTestId('figure-calls_today').getByTestId('figure-period')).toHaveText('today');
+  await expect(page.getByTestId('figure-calls').getByTestId('figure-period')).toHaveText(/^since \d{1,2} [A-Z][a-z]{2}$/u);
   // `sending: { available: false }`: not a zero, which would be a measurement.
-  await expect(page.getByTestId('figure-emails')).toHaveText('Emails sent—not in this build');
+  await expect(page.getByTestId('figure-emails')).toContainText('not in this build');
+  await expect(page.getByTestId('figure-emails').getByTestId('figure-value')).toHaveText('—');
   await expect(page.getByTestId('figures-line')).toHaveCount(0);
 
   const [window] = called('settings.loadDashboard') as { from: string; to: string }[];
@@ -281,6 +300,7 @@ test('figures that could not be read are dashes and one grey line, never a dialo
   server = await startAppServer({ figuresFail: true });
   const dialogs = dialogsOf(page);
   await page.goto(server.url());
+  await page.getByTestId('today-tab-overview').click();
 
   await expect(page.getByTestId('figures-line')).toHaveText('Callie could not read the last 7 days.');
   // Seven cells since 29 September 2026: "Calls placed today" joined the row, and this
@@ -340,7 +360,8 @@ test('a manual task is snoozed and an automated send is paused, and the server d
   await expect(page.getByTestId('snooze-submit').nth(1)).toBeEnabled();
   await page.getByTestId('snooze-submit').nth(1).click();
 
-  await expect(page.getByTestId('banner-info')).toContainText('Snoozed.');
+  await expect(page.getByTestId('feedback-tasks')).toHaveText('Snoozed.');
+  await expect(page.getByTestId('banners')).toHaveCount(0);
   expect(called('today.snooze')).toEqual([
     { itemId: MANUAL_ITEM_ID, reason: 'Waiting on their board', returnAt: '2026-09-24T09:00' },
   ]);
@@ -355,7 +376,7 @@ test('the same request on an automated send comes back as a pause', async ({ pag
   await expect(page.getByTestId('snooze-submit').nth(2)).toBeEnabled();
   await page.getByTestId('snooze-submit').nth(2).click();
 
-  await expect(page.getByTestId('banner-info')).toContainText('until you press Resume');
+  await expect(page.getByTestId('feedback-tasks')).toContainText('until you press Resume');
   expect(called('today.snooze')).toEqual([
     { itemId: AUTOMATED_ITEM_ID, reason: 'Their office is closed this week', returnAt: '' },
   ]);
@@ -379,7 +400,7 @@ test('a paused send shows Resume where Pause was, and Resume releases it (lane g
   await expect(paused.getByTestId('task-paused')).toHaveText('Paused');
   await expect(paused.getByTestId('snooze-submit')).toHaveCount(0);
   await paused.getByTestId('pause-release').click();
-  await expect(page.getByTestId('banner-info')).toContainText('Resumed.');
+  await expect(page.getByTestId('feedback-tasks')).toContainText('Resumed.');
   expect(called('today.releasePause')).toEqual([{ holdId: HOLD_ID }]);
 });
 
@@ -454,7 +475,7 @@ test('only a usable number is offered, callable because the server just said so'
   await expect(page.getByTestId('dial-reason')).toHaveCount(0);
 
   await page.getByTestId('dial').click();
-  await expect(page.getByTestId('banner-info')).toContainText('Handed to the phone app.');
+  await expect(page.getByTestId('feedback-call')).toContainText('Handed to the phone app.');
   // No version, no ticket, no calling identity: the press is the press, and the server's
   // advice — re-read in the main process — decides whether anything opens.
   expect(called('today.dial')).toEqual([{ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID }]);
@@ -518,7 +539,7 @@ test('an outcome will not record until it has everything it needs', async ({ pag
   await expect(page.getByTestId('callback-resolved')).toHaveText('Callie will put the callback at Thu 24 Sep, 14:00.');
   await expect(page.getByTestId('outcome-submit')).toBeEnabled();
   await page.getByTestId('outcome-submit').click();
-  await expect(page.getByTestId('banner-info')).toContainText('Call recorded.');
+  await expect(page.getByTestId('feedback-outcome')).toContainText('Call recorded.');
   const [recorded] = called('today.recordOutcome') as Record<string, unknown>[];
   expect(recorded).toMatchObject({
     firmId: FIRM_ID,
@@ -600,7 +621,7 @@ test('a callback asked for with no day waits on the card, and its time is set th
   await waiting.getByTestId('schedule-time').fill('10:30');
   await expect(waiting.getByTestId('schedule-resolved')).toHaveText('Callie will put the callback at Thu 24 Sep, 10:30.');
   await waiting.getByTestId('schedule-submit').click();
-  await expect(page.getByTestId('banner-info')).toContainText('Callback scheduled.');
+  await expect(page.getByTestId('feedback-tasks')).toContainText('Callback scheduled.');
   expect(called('today.scheduleCallback')).toEqual([
     { callLogId: CALL_LOG_ID, localDate: '2026-09-24', localTime: '10:30' },
   ]);
@@ -613,7 +634,7 @@ test('a callback recorded with no day says where it is waiting', async ({ page }
   await openOutcome(page);
   await page.getByTestId('outcome-select').selectOption('callback_requested');
   await page.getByTestId('outcome-submit').click();
-  await expect(page.getByTestId('banner-info')).toContainText('“Callback — needs a time” is on today’s list');
+  await expect(page.getByTestId('feedback-outcome')).toContainText('“Callback — needs a time” is on today’s list');
   const [recorded] = called('today.recordOutcome') as Record<string, unknown>[];
   expect(recorded?.['callback']).toBeNull();
 });
@@ -639,10 +660,9 @@ test('an outage is a banner over Home, and nothing on it is disabled for it (wav
   await expect(page.getByTestId('banner-warning').nth(0)).toContainText('cannot reach the server');
   await expect(page.getByTestId('banner-warning').nth(1)).toContainText('from an earlier read');
   await expect(page.getByTestId('banner-warning').nth(1)).toContainText('Changes will fail until Callie reconnects.');
-  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · offline');
 
   await expect(page.getByTestId('queue-row')).toHaveCount(4);
-  await expect(page.getByTestId('queue-line').nth(0)).toHaveText('Callback');
+  await expect(page.getByTestId('queue-line')).toHaveText(['1 email']);
   await expect(page.getByTestId('today-task')).toHaveCount(5);
 
   // Until wave 1 every one of these was greyed out until somebody pressed Refresh.
@@ -651,6 +671,9 @@ test('an outage is a banner over Home, and nothing on it is disabled for it (wav
   await openOutcome(page);
   await expect(page.getByTestId('outcome-select')).toBeEnabled();
   await expect(page.getByTestId('needs-connect')).toBeEnabled();
+  // The routine line is Settings › Status's (slice 3a, C0).
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · offline');
 });
 
 test('an empty list says what to do next in one grey line', async ({ page }) => {
@@ -678,7 +701,9 @@ test('a page built without the operation registry says so wherever an answer wou
   await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');
   await expect(page.getByTestId('queue-row')).toHaveCount(0);
   await expect(page.getByTestId('figures-line')).toHaveText('Unavailable in this build');
+  await expect(page.getByTestId('needs-empty')).toHaveText('Unavailable in this build');
+  // Settings › Status says the same, in its own place.
+  await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('status-calling')).toHaveText('Calling number: unavailable in this build');
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox: unavailable in this build');
-  await expect(page.getByTestId('needs-empty')).toHaveText('Unavailable in this build');
 });

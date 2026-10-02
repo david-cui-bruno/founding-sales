@@ -90,7 +90,7 @@ test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
   await expect(page.getByTestId('refresh')).toHaveCount(0);
 });
 
-test('an outage is said at the top of Home, marked stale, and in the sidebar', async ({ page }) => {
+test('an outage is said at the top of Home, marked stale, and in Settings › Status', async ({ page }) => {
   server = await startAppServer(
     session({
       desktop: signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }),
@@ -104,6 +104,7 @@ test('an outage is said at the top of Home, marked stale, and in the sidebar', a
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
   await expect(page.getByTestId('banner-warning').last()).toContainText('earlier read');
+  await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.4.0 · offline');
   // The lanes' outage — readable, nothing pressable (4.2, 14.2) — is home.spec.ts's.
 });

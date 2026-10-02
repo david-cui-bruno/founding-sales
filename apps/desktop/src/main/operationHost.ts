@@ -112,6 +112,10 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.confirm': async (input: Parameters<ReplyBridgeHost['confirm']>[0]) => await deps.replies.confirm(input),
     'replies.resolve': async (input: Parameters<ReplyBridgeHost['resolve']>[0]) => await deps.replies.resolve(input),
 
+    'replies.model': async () => await deps.replies.model(),
+    'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
+      await deps.replies.saveModel(input),
+
     'research.state': async () => await deps.research.state(),
     'research.open': async (input: { readonly firmId: string }) => await deps.research.open(input),
     'research.run': async (input: { readonly firmId: string }) => await deps.research.run(input),
@@ -269,7 +273,8 @@ export async function answerOperation(
 
   const parsed = declared.input.safeParse(input ?? {});
   if (!parsed.success) {
-    const fallback = FALLBACK[operation.slice(0, operation.indexOf('.'))];
+    // The model setting answers its own shape, not the lane's: a malformed save reads it back.
+    const fallback = operation === 'replies.saveModel' ? 'replies.model' : FALLBACK[operation.slice(0, operation.indexOf('.'))];
     if (fallback === undefined) throw new Error(`${operation} was asked for with a shape it does not accept`);
     return declared.output.parse(await handlers[fallback](undefined as never));
   }

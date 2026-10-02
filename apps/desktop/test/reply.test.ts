@@ -766,18 +766,23 @@ describe('the reply bridge', () => {
       'collapse',
       'confirm',
       'forget',
+      // Slice 3a (C0): the model setting's own read and save. Neither touches the lane.
+      'model',
       'open',
       'refresh',
       'resolve',
+      'saveModel',
       'state',
     ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('replies.')).sort()).toEqual([
       'replies.collapse',
       'replies.confirm',
       'replies.forget',
+      'replies.model',
       'replies.open',
       'replies.refresh',
       'replies.resolve',
+      'replies.saveModel',
       'replies.state',
     ]);
   });

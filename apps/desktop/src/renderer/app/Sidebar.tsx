@@ -75,6 +75,7 @@ export function Sidebar({
   onRestartToUpdate(): void;
 }): JSX.Element {
   const current = sidebarRowOf(route);
+  const updateRows = view.status.filter(row => row.key === 'update');
   return (
     <aside
       data-region="sidebar"
@@ -101,9 +102,14 @@ export function Sidebar({
         ))}
       </nav>
 
-      <p className="mt-5 px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Status</p>
-      <ul data-testid="status" className="flex flex-col gap-px">
-        {view.status.map(row => (
+      {/* Routine status — the mailbox, the number, sending, the version and whether it is
+          online — lives in Settings › Status since slice 3a (C0). What stays here is the one
+          row with a control: an update that is installing or ready to restart. */}
+      {updateRows.length === 0 ? null : (
+        <p className="mt-5 px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Update</p>
+      )}
+      <ul data-testid="status" className="flex flex-col gap-px empty:hidden">
+        {updateRows.map(row => (
           <li
             key={row.key}
             data-testid={`status-${row.key}`}

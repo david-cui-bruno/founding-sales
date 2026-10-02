@@ -294,7 +294,9 @@ test('Log incoming call records a callback taken on the mobile, against the firm
     note: 'Called back about the after-hours line',
   });
   expect(Date.now() - Date.parse(String(logged['occurredAt']))).toBeLessThan(5 * 60_000);
-  await expect(page.getByTestId('banner-info')).toHaveText('Incoming call logged on the firm’s history.');
+  // Beside the firm it was logged against, not in a page banner (slice 3a, C0).
+  await expect(page.getByTestId('feedback-incoming')).toHaveText('Incoming call logged on the firm’s history.');
+  await expect(page.getByTestId('banners')).toHaveCount(0);
 });
 
 test('below 1280 px the queue folds behind a button, and the firm and the call keep their room', async ({ page }) => {
@@ -349,21 +351,37 @@ test('the latest call’s steps refresh in place while they are on their way, an
   expect(reads).toBe(settledReads);
 });
 
-test('the selected firm, the queue and a typed note survive leaving Today and coming back', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+test('the selected firm, the queue, both forms and what was typed survive a round trip through Pipeline and Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 420 });
   server = await startAppServer({ today: withBlocked(), operations: calling(() => []) });
   await page.goto(server.url());
   await settled(page);
+  // The firm that is open when the person leaves is the firm that is open when they return.
+  await page.locator(`[data-testid="queue-row"][data-firm="${REPLY_FIRM_ID}"]`).click();
+  await expect(page.getByTestId('firm-name')).toHaveText('Ashgrove Test Partners');
   await page.getByTestId('firm-outcome').click();
   await page.getByTestId('outcome-note').fill('Ask for Glen on Tuesday');
-  await page.getByTestId('nav-firms').click();
-  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'firms');
-  await page.getByTestId('nav-today').click();
-  await expect(page.getByTestId('firm-name')).toHaveText('Northwind Test Holdings');
-  // The note is a draft above the route, and the queue says this firm has one.
-  await expect(page.getByTestId('queue-note')).toHaveCount(1);
-  await page.getByTestId('firm-outcome').click();
-  await expect(page.getByTestId('outcome-note')).toHaveValue('Ask for Glen on Tuesday');
+  await page.getByTestId('firm-edit').click();
+  await page.getByTestId('basics-locality').fill('Waco');
+  // The queue's scroll: a short window so the list overflows.
+  await page.getByTestId('queue-list').evaluate(list => {
+    list.scrollTop = 90;
+  });
+  const scrolled = await page.getByTestId('queue-list').evaluate(list => list.scrollTop);
+  expect(scrolled).toBeGreaterThan(0);
+
+  for (const away of ['nav-pipeline', 'nav-settings'] as const) {
+    await page.getByTestId(away).click();
+    await expect(page.getByTestId('nav-today')).not.toHaveAttribute('aria-current', 'page');
+    await page.getByTestId('nav-today').click();
+    await expect(page.getByTestId('firm-name')).toHaveText('Ashgrove Test Partners');
+    // Today opens on the Queue, with both forms where they were left and their text in them.
+    await expect(page.getByTestId('today-tab-queue')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('outcome-note')).toHaveValue('Ask for Glen on Tuesday');
+    await expect(page.getByTestId('basics-locality')).toHaveValue('Waco');
+    await expect(page.getByTestId('queue-note')).toHaveCount(1);
+    await expect.poll(() => page.getByTestId('queue-list').evaluate(list => list.scrollTop)).toBe(scrolled);
+  }
 });
 
 test('the card’s numbers come from the server’s advice, as before', async ({ page }) => {

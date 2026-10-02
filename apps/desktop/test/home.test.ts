@@ -12,6 +12,7 @@ import {
   buildHomeView,
   businessDateHeading,
   dueLabel,
+  figureText,
   figuresView,
   figuresWindow,
   laneSections,
@@ -209,6 +210,8 @@ const figures = (input: { admin?: boolean; figures: FiguresRead; callsToday?: nu
     figures: input.figures,
     // An explicit null is "the read has not answered" and must survive the default.
     callsToday: 'callsToday' in input ? (input.callsToday ?? null) : 7,
+    // A fixed zone, so "since 18 Sep" does not depend on the machine the test runs on.
+    zone: 'America/New_York',
   });
 
 function input(overrides: Partial<HomeInput> = {}): HomeInput {
@@ -307,7 +310,7 @@ describe('the lanes and the line of counts', () => {
     expect(view.notices.map(notice => notice.text)).toEqual([
       'Callie cannot reach the server.',
       'This list is from an earlier read, at 2026-09-25T09:05:00.000Z. Changes will fail until Callie reconnects.',
-      'Snoozed.',
+      // Slice 3a (C0): "Snoozed." is the task list's feedback now, not a page banner.
       'It has been thirty days. Sign in with Google again.',
     ]);
   });
@@ -542,6 +545,36 @@ describe('Needs you', () => {
   });
 });
 
+describe('the warnings line (C0 review, P1)', () => {
+  it('names only actionable states: sending off, a mailbox to reconnect, no calling number', () => {
+    const on = { effectiveSendingEnabled: true } as unknown as AdminState['settings'];
+    const healthy = buildHomeView(input({ mailbox: connected, admin: admin({ settings: on, sendingAdmin: null }) }), []);
+    expect(healthy.warnings).toEqual([]);
+    const sendingOff = buildHomeView(input({ admin: admin({ settings: { effectiveSendingEnabled: false } as unknown as AdminState['settings'] }) }), []);
+    expect(sendingOff.warnings).toEqual([{ key: 'sending', text: 'Sending is paused', action: null }]);
+    // Production's pause: the attestation is on and the domain's own switch is off.
+    const domainOff = buildHomeView(
+      input({
+        mailbox: connected,
+        admin: admin({ settings: on, sendingAdmin: { domain: { ...passingDomain, automatedSendingEnabled: false }, ramps: [] } }),
+      }),
+      [],
+    );
+    expect(domainOff.warnings).toEqual([{ key: 'sending', text: 'Sending is paused', action: null }]);
+    const domainOn = buildHomeView(
+      input({
+        mailbox: connected,
+        admin: admin({ settings: on, sendingAdmin: { domain: { ...passingDomain, automatedSendingEnabled: true }, ramps: [] } }),
+      }),
+      [],
+    );
+    expect(domainOn.warnings).toEqual([]);
+    const broken = buildHomeView(input({ mailbox: notConnected, admin: admin({ settings: on, sendingAdmin: null, callingNumbers: [] }) }), []);
+    expect(broken.warnings.map(row => row.key)).toEqual(['mailbox', 'calling']);
+    expect(broken.warnings[0]?.action).toMatchObject({ kind: 'connect_mailbox' });
+  });
+});
+
 describe('the numbers row', () => {
   it('covers exactly seven days, and says so per cell rather than in the heading', () => {
     const window = figuresWindow(new Date('2026-09-25T12:00:00.000Z'));
@@ -559,14 +592,15 @@ describe('the numbers row', () => {
     expect(figures({ figures: read(dashboard()), callsToday: 3 })).toEqual({
       label: 'Numbers',
       cells: [
-        { key: 'calls_today', label: 'Calls placed today', value: '3', note: null },
-        { key: 'calls', label: 'Calls placed, 7 days', value: '5', note: null },
-        { key: 'meetings', label: 'Meetings booked', value: '2', note: null },
-        { key: 'replies', label: 'Replies', value: '4', note: '2 uncertain' },
+        { key: 'calls_today', label: 'Calls placed', value: '3', note: null, period: 'today', unconfirmed: null, link: null },
+        { key: 'calls', label: 'Calls placed', value: '5', note: null, period: 'since 18 Sep', unconfirmed: null, link: null },
+        { key: 'meetings', label: 'Meetings booked', value: '2', note: null, period: 'since 18 Sep', unconfirmed: null, link: null },
+        // Confirmed and unconfirmed are two numbers, never one (slice 3a, C0).
+        { key: 'replies', label: 'Replies', value: '4', note: null, period: 'since 18 Sep', unconfirmed: 2, link: { name: 'replies' } },
         // 4 replies, 3 handled.
-        { key: 'waiting', label: 'Replies waiting', value: '1', note: null },
-        { key: 'holds', label: 'Holds open', value: '3', note: null },
-        { key: 'emails', label: 'Emails sent', value: '—', note: 'not in this build' },
+        { key: 'waiting', label: 'Replies waiting', value: '1', note: null, period: 'since 18 Sep', unconfirmed: null, link: { name: 'replies' } },
+        { key: 'holds', label: 'Holds open', value: '3', note: null, period: 'now', unconfirmed: null, link: null },
+        { key: 'emails', label: 'Emails sent', value: '—', note: 'not in this build', period: 'since 18 Sep', unconfirmed: null, link: null },
       ],
       line: null,
     });
@@ -577,7 +611,43 @@ describe('the numbers row', () => {
     const view = figures({
       figures: read(dashboard({ funnel: { available: false, owner: 'J-facts', reason: 'not in this build' } })),
     });
-    expect(view.cells[2]).toEqual({ key: 'meetings', label: 'Meetings booked', value: '—', note: 'not in this build' });
+    expect(view.cells[2]).toMatchObject({ key: 'meetings', label: 'Meetings booked', value: '—', note: 'not in this build' });
+  });
+
+  it('names a period on every figure, and a link only on a count somebody can act on (slice 3a, C0)', () => {
+    const cells = figures({ figures: read(dashboard()), callsToday: 3 }).cells;
+    expect(cells.map(cell => `${cell.key}: ${cell.period}`)).toEqual([
+      'calls_today: today',
+      'calls: since 18 Sep',
+      'meetings: since 18 Sep',
+      'replies: since 18 Sep',
+      'waiting: since 18 Sep',
+      'holds: now',
+      'emails: since 18 Sep',
+    ]);
+    // Even the dashes name their period, so a figure never loses it when the read fails.
+    expect(figures({ figures: read(null) }).cells.every(cell => cell.period !== '')).toBe(true);
+    // Replies and the replies still waiting lead to the Replies queue.
+    expect(cells.filter(cell => cell.link !== null).map(cell => cell.key)).toEqual(['replies', 'waiting']);
+    // Holds open has no queue that lists the held work, so it is a count and not a link.
+    expect(cells.find(cell => cell.key === 'holds')?.link).toBeNull();
+    // Nothing waiting is not a link to an empty queue.
+    const none = figures({
+      figures: read(dashboard({ replyHandling: { replies: 3, handled: 3, medianSecondsToHandle: null, slowestSecondsToHandle: null } })),
+    });
+    expect(none.cells[4]?.link).toBeNull();
+  });
+
+  it('shows an uncertain count beside the confirmed one, never added into it (slice 3a, C0)', () => {
+    const replies = figures({ figures: read(dashboard()) }).cells[3];
+    expect(replies?.value).toBe('4');
+    expect(replies?.unconfirmed).toBe(2);
+    expect(replies === undefined ? '' : figureText(replies)).toBe('4 (+2 unconfirmed)');
+    const clean = figures({
+      figures: read(dashboard({ messages: { ...dashboard().messages, uncertain: 0 } })),
+    }).cells[3];
+    expect(clean?.unconfirmed).toBeNull();
+    expect(clean === undefined ? '' : figureText(clean)).toBe('4');
   });
 
   it('never shows fewer than no replies waiting', () => {
@@ -591,7 +661,7 @@ describe('the numbers row', () => {
     const view = figures({
       figures: read(dashboard({ sending: { available: true, sent: 12, held: 4 } as unknown as DashboardResponse['sending'] })),
     });
-    expect(view.cells[6]).toEqual({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
+    expect(view.cells[6]).toMatchObject({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
   });
 
   it('is dashes and one grey line when the read failed or answered for another window', () => {
@@ -622,9 +692,10 @@ describe('the numbers row', () => {
   it('is a dash for today’s calls until that read answers, and a zero when it says none', () => {
     // A dash is "Callie could not ask"; a zero is "no calls yet this morning". They must
     // not be the same mark, and neither is the dashboard's to say.
-    expect(figures({ figures: read(dashboard()), callsToday: null }).cells[0]).toEqual({
+    expect(figures({ figures: read(dashboard()), callsToday: null }).cells[0]).toMatchObject({
       key: 'calls_today',
-      label: 'Calls placed today',
+      label: 'Calls placed',
+      period: 'today',
       value: '—',
       note: null,
     });

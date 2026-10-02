@@ -73,8 +73,7 @@ test('an interested call agrees to a sequence, shows its plan, and starts it', a
       previewBasis: { anchorAt: '2026-09-21T14:00:00.000Z', timeZone: 'America/Chicago', calendarVersionId: 'none.1' },
     },
   });
-  await expect(page.getByTestId('banner-info').filter({ hasText: 'agreed sequence started' })).toBeVisible();
-  await expect(
-    page.getByTestId('banner-info').filter({ hasText: 'Agreed on the call: the sequence “After a good call v3”. It has started.' }),
-  ).toBeVisible();
+  // Beside the outcome form that recorded it, not in a page banner (slice 3a, C0).
+  await expect(page.getByTestId('feedback-outcome')).toContainText('agreed sequence started');
+  await expect(page.getByTestId('feedback-outcome')).toContainText('Agreed on the call: the sequence “After a good call v3”. It has started.');
 });
