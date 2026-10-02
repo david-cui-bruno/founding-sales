@@ -78,7 +78,8 @@ export function useKeptBased(
   const [flag, setFlag] = useKept(`${key}#elsewhere`, '');
   const has = raw !== NONE;
   // Before the server has answered there is no value to compare with, and nothing is dropped.
-  const stale = server !== null && has && base !== server;
+  // An edit begun before the server had answered has no base to compare with: it stands.
+  const stale = server !== null && has && base !== NONE && base !== server;
   useEffect(() => {
     if (!stale || server === null) return;
     const own = same(raw, server);
@@ -93,7 +94,7 @@ export function useKeptBased(
     elsewhere: flag === 'yes' && !live,
     set: next => {
       setRaw(next);
-      setBase(server ?? '');
+      setBase(server ?? NONE);
       setFlag('');
     },
     // The edit is spent (it was sent): the field is the saved value again.
