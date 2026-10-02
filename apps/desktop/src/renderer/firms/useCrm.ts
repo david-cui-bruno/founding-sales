@@ -57,9 +57,10 @@ export interface CrmActions {
   addFirm(draft: AddFirmDraft): void;
   commitImport(): void;
   saveContact(edit: ContactEdit): void;
-  changeStage(change: StageChange): void;
+  /** `onAnswer` hears THIS command's own answer, even when the view drops it for a newer one. */
+  changeStage(change: StageChange, onAnswer?: (notice: string | null) => void): void;
   /** A person records an opportunity's monthly value (slice K). */
-  setValue(change: ValueChange): void;
+  setValue(change: ValueChange, onAnswer?: (notice: string | null) => void): void;
   resolveMerge(resolution: MergeResolution): void;
   openOpportunity(): void;
   /** The explicit takeover (P1-1): manual mode with the origin only a person writes. */
@@ -164,13 +165,21 @@ export function useCrm(
       saveContact: edit => {
         command(`contact:${edit.contactId}`, api => api.command('crm.saveContact', edit));
       },
-      changeStage: change => {
+      changeStage: (change, onAnswer) => {
         // Per opportunity, not per board: changing one firm's stage must not disable
         // the control on every other column (P1-4).
-        command(`stage:${change.opportunityId}`, api => api.command('crm.changeStage', change));
+        command(`stage:${change.opportunityId}`, async api => {
+          const answer = await api.command('crm.changeStage', change);
+          onAnswer?.(answer.notice);
+          return answer;
+        });
       },
-      setValue: change => {
-        command(`value:${change.opportunityId}`, api => api.command('crm.setValue', change));
+      setValue: (change, onAnswer) => {
+        command(`value:${change.opportunityId}`, async api => {
+          const answer = await api.command('crm.setValue', change);
+          onAnswer?.(answer.notice);
+          return answer;
+        });
       },
       resolveMerge: resolution => {
         command('merge', api => api.command('crm.resolveMerge', resolution));
