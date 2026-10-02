@@ -267,6 +267,19 @@ describe('what the answers say', () => {
     await waitFor(() => expect(screen.getByTestId('suggestion-note-follow_up').textContent).toBe('Over 7 days: in Needs review.'));
   });
 
+  it.each([
+    ['callback_instant_mismatch', 'callback', 'do not agree'],
+    ['callback_not_created', 'callback', 'could not be created'],
+    ['effects_not_applied', 'outcome', 'nothing was written'],
+    ['route_not_named', 'outcome', 'number is not known'],
+  ])('%s is a per-row refusal: the row says why and every tick and draft stays', async (code, key, words) => {
+    const { props } = await applyOnly(refused(code, { [key]: code }));
+    await waitFor(() => expect(screen.getByTestId(`suggestion-note-${key}`).textContent).toContain(words));
+    expect(check('outcome').checked).toBe(true);
+    expect(props.onReload).not.toHaveBeenCalled();
+    expect(screen.getByTestId('apply-note').textContent).toContain('Nothing was applied');
+  });
+
   it('follow_up_not_granted names the e-mail row and reloads; already_applied is a success on its row', async () => {
     const reloaded = await applyOnly(refused('follow_up_not_granted', { follow_up: 'follow_up_not_granted' }));
     await waitFor(() => expect(screen.getByTestId('suggestion-note-follow_up').textContent).toContain('can no longer be promised'));

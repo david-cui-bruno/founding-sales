@@ -189,6 +189,10 @@ export const REFUSALS: Readonly<Record<string, { readonly text: string; readonly
   outcome_required: { text: 'Tick the outcome as well: a callback or an e-mail needs the call logged.', reload: false },
   callback_exists: { text: 'This call already has a callback.', reload: true },
   follow_up_expired: { text: 'Over 7 days: in Needs review.', reload: true },
+  callback_instant_mismatch: { text: 'The callback’s day, time and zone do not agree. Check them and apply again.', reload: false },
+  callback_not_created: { text: 'The callback could not be created. Nothing was applied.', reload: false },
+  effects_not_applied: { text: 'The outcome could not be fully applied, so nothing was written. Try again.', reload: false },
+  route_not_named: { text: 'This call’s number is not known, so nothing was applied. Log the outcome by hand.', reload: false },
   follow_up_not_granted: { text: 'That e-mail can no longer be promised. Reloaded: choose another and apply again.', reload: true },
 });
 
