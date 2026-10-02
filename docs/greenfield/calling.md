@@ -241,6 +241,82 @@ form stays open on no call, and takes the next call placed only while nothing is
 Needs review stop's answer is kept by item and waits beside it after David moves on; a late
 success closes the confirm that sent it only if he has not touched the editors since.
 
+### Correcting a logged outcome (slice S3X, lane X2)
+
+David decided P3 and P4 on 2 October 2026. No migration and no new table: the outcome is
+updated in place under the call log's row lock (with the agreement columns in the same
+statement when the agreement is undone, so `call_logs_agreement_needs_interest` holds), and
+each correction appends one `audit_events` row, `call.outcome_corrected` (subject the log), with
+`{revision, from, to, reason, callSessionId, agreementCleared, decisions, applied, liftChosen}`.
+The `call.logged` row and the log's own actor and time keep what was recorded first. Every
+reader that derives from the outcome (cadence, dashboard, consent, Apply's callback choice,
+Needs review, history) follows with no change; `scheduleCallbackForCall` re-reads the log after
+the firm's lock, so a schedule that waited behind a correction refuses `call_log_unknown`.
+
+- **`GET /calls?firmId=`** lists every log of the firm from the database alone (no provider
+  gate), with `direction`, `durationSeconds` and `callSessionId`; `include=corrections` adds
+  `corrections: [{from, to, at, byUserId, reason}]`. `/calls/history` is unchanged.
+- **`POST /calls/logs/correction-preview {callLogId, outcome}`** (a read): the effects the
+  correction meets, each `{kind, id, state, conflicts, decisions, appliedKey, facts}`,
+  `outcomeAppliedKey`, `callbackTimeRequired` and the "Also happens" codes.
+- **`POST /calls/logs/correct`** (a command with a receipt): `{callLogId, expectedOutcome,
+  outcome, reason?, doNotCall?, callback?, effects: [{kind, id, state, decision}]}`, with
+  `effects` exactly the conflicting set. Atomic: an inner refusal writes nothing.
+
+| Effect | Found by | Conflicts when the new outcome… | Keep | Undo |
+|---|---|---|---|---|
+| Callback (open) | `callbacks.call_log_id` | is not `callback_requested` | stays | `cancelCallback` (`cancelled`, audited) |
+| Call task (open) | `call_tasks.call_session_id` = the log's session | reached nobody | stays | `cancelCallTask` (audited) |
+| Stop | `<command>:handle`/`:firm`, or an earlier correction's `applied.suppressionEventIds`; not directly superseded | is not `do_not_call` | Keep stop | **Lift stop…**: lifts nothing here; returned in `liftNext` |
+| Permission (unrevoked) | `follow_up_permissions.call_log_id` | reached nobody | not offered | revoke; stop its live enrollment (`admin_stop`) |
+| Agreement alone | the log's `agreed_*`, no unrevoked permission | reached nobody | not offered | cleared by the UPDATE |
+| Automatic park | open `call_cadence_parked` hold at the firm (not the analysis's) | leaves `readCallCadence` with the override below the limit | stays | released, audited `call.cadence_resumed` |
+| Retired number | the log's route, old outcome `wrong_number` | is not `wrong_number` | the only choice | — (re-add it in Basics) |
+
+The analysis's "pause calling", a deal opened from the call, manual mode, ended enrollments
+and the applied step are never changed. The new outcome's own meaning is applied as
+`logCallOutcome` applies it: manual mode for an engaged outcome, the stop a `do_not_call`
+names (`<correction command>:handle|:firm`), the retired route for `wrong_number`, the park if
+an unanswered outcome spends the cadence, and for `callback_requested` the callback (required
+when the log already had one or its needs-a-time task was fulfilled) or the needs-a-time task
+back on Today (`reopenCancelledTodayItem` reopens a row an earlier refresh cancelled).
+
+Refusals, in order: `invalid_input`, `call_log_unknown`, `not_assigned` / `not_call_actor`,
+`stale_outcome`, `outcome_unchanged`, `outcome_not_correctable` (an incoming call to an
+unanswered outcome), `route_not_named`, `effects_changed`, `reason_required` (a reason given
+when not required is `invalid_input`), `stop_needs_admin`, `callback_time_required` /
+`callback_instant_mismatch`, and the 503 of a lost journal write for a correction to
+`do_not_call`.
+
+**A correction never lifts a stop.** After it saves, the Mac opens the existing single-stop
+lift for each stop marked "Lift stop…" as its own confirm (`POST /suppressions/supersede`,
+reason `correction`, admin only). Cancelling or a failed lift leaves the stop in place.
+
+**The reason and the trial (P4).** Apply records `detail.effectIds` on each applied
+`call.proposal_decided` row. An effect came from a suggestion only if its exact id is there; an
+older row without `effectIds` gives the outcome alone. The reason (`original_error` or
+`new_information`) is required iff the outcome has an applied key, or David chose Undo or Lift
+stop… on an effect that has one. For each distinct `(analysisId, key)` contradicted, the
+correction appends one `call.proposal_corrected` row; the decision row is never rewritten, so
+`/calls/proposals/acceptance` is unchanged and the trial counts the pair once.
+
+**Lock order:** Today (shared) → the send gate → the dialled route (`FOR UPDATE`, only for a
+new `wrong_number` or `do_not_call`) → the firm → `call_analysis:<session>` → the session row →
+the call log row → effect rows: Apply's prefix plus the log.
+
+**On the Mac**, "Change" sits beside the outcome on the firm page's call history (which also
+shows every log no session row shows), in Today's previous interactions and on the after-call
+"Logged:" line. One compact review: nothing preselected, unaffected effects collapsed, the
+reason shown exactly when needed, Save once. The draft is kept under `correct:<logId>:…` with
+the outcome David saw when he opened Change as its base. If the history or a preview reports
+another current outcome, the draft is dropped with "Changed elsewhere" and the call is read
+again; Save always sends that base as `expectedOutcome`, never the preview's, so the server's
+stale-outcome check stands. The command, its answer and the pending lift confirms live in the
+session's kept store by log id, and a lost answer offers Retry, which resends the same request
+under the same command id. The firm page's history keeps each read with its firm and read
+generation: another firm's answer is dropped, a row shows only under its own firm, and Change is
+disabled while the shown firm's log read is pending.
+
 ### Recordings
 
 `<Dial record="record-from-answer-dual">` records every call. **`GET /calls/history?firmId=`**

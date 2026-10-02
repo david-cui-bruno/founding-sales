@@ -15,14 +15,11 @@ import { instant, uuid } from './foundationRows.ts';
  */
 
 /**
- * The audit action a later correction of a decided suggestion writes (the outcome-correction
- * slice, S3X): `{analysisId, key, reason: original_error | new_information, priorResult,
- * before, after}`. The decision row it corrects is never rewritten.
- *
- * TODO(S3X lane X2): the action moves to `packages/contracts/src/callCorrections.ts`; import it
- * from there and delete this one.
+ * The audit action a later correction of a decided suggestion writes lives with the
+ * correction's contract (`callCorrections.ts`, S3X lane X2); re-exported here for the trial
+ * read's existing importers.
  */
-export const CALL_PROPOSAL_CORRECTED_ACTION = 'call.proposal_corrected';
+export { CALL_PROPOSAL_CORRECTED_ACTION } from './callCorrections.ts';
 
 /** The 3a release: the trial's default start. */
 export const CALL_TRIAL_DEFAULT_SINCE = '2026-10-02T07:14:00.000Z';

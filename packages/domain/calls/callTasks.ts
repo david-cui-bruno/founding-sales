@@ -124,3 +124,56 @@ export async function completeCallTask(
   await refreshTodayForFirm(context, { firmId });
   return { ok: true, value: { taskId: input.taskId, completedAt: completedAt.toISOString() } };
 }
+
+export type CancelCallTaskOutcome =
+  | { readonly ok: true; readonly value: { readonly taskId: string } }
+  | { readonly ok: false; readonly reason: 'not_found' | 'not_assigned' | 'invalid_input' | 'task_not_open' };
+
+/**
+ * Cancel an open call task (S3X: "Undo" of a task a corrected outcome no longer supports —
+ * a promise or a "Send overview" on a call that, corrected, reached nobody). The first writer
+ * of migration 0036's `cancelled` status.
+ *
+ * The order of `completeCallTask`: Today's lock (shared), then the firm's, the assignment
+ * rule, the row `FOR UPDATE`; then the row to `cancelled`, its open Today tasks cancelled on
+ * any date, audited `call_task.cancelled`. A task that is no longer open is `task_not_open`
+ * and nothing is written. The caller refreshes the firm's card (the correction does, after
+ * everything it changed).
+ */
+export async function cancelCallTask(
+  context: RepositoryContext,
+  input: { readonly taskId: string },
+): Promise<CancelCallTaskOutcome> {
+  if (context.scope.actor.kind !== 'user') return { ok: false, reason: 'invalid_input' };
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_tasks WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.taskId],
+  );
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return { ok: false, reason: 'not_found' };
+  await lockTodayForFirmChange(context);
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return { ok: false, reason: 'not_found' };
+  const decision = decideFirmMutation(context, firm);
+  if (!decision.permitted) return { ok: false, reason: decision.reason === 'not_assigned' ? 'not_assigned' : 'not_found' };
+  const { rows } = await context.db.query<{ id: string }>(
+    `UPDATE call_tasks SET status = 'cancelled', updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 AND status = 'open'
+      RETURNING id`,
+    [context.scope.workspaceId, input.taskId, firmId],
+  );
+  if (rows[0] === undefined) return { ok: false, reason: 'task_not_open' };
+  await context.db.query(
+    `UPDATE today_items
+        SET status = 'cancelled', snooze_until = NULL, updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND firm_id = $2 AND item_key = $3 AND status IN ('open', 'snoozed')`,
+    [context.scope.workspaceId, firmId, callTaskItemKey(input.taskId)],
+  );
+  await recordCrmAuditEvent(context, {
+    action: 'call_task.cancelled',
+    subjectKind: 'call_task',
+    subjectId: input.taskId,
+    detail: { firmId },
+  });
+  return { ok: true, value: { taskId: input.taskId } };
+}

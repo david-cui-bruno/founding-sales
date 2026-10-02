@@ -204,6 +204,55 @@ export async function completeCallback(
   return acceptPolicy(toCallback(row));
 }
 
+/** What a cancelled callback records when an outcome correction undid it (`callbacks.cancelled_reason`). */
+export const CALLBACK_CANCELLED_BY_CORRECTION = 'call outcome corrected';
+
+/**
+ * Cancel an open callback (S3X: "Undo" of a callback a corrected outcome no longer asks for).
+ *
+ * The first writer of the `cancelled` status migration 0006 already allows: the row goes to
+ * `cancelled` with its reason (`callbacks_cancellation_consistent`), only while it is open, and
+ * `callbacks_today_promotion` takes its Today task off the list in the same statement. The
+ * firm is locked and the CRM's assignment rule applied first, as `completeCallback` does.
+ * `callback_not_open` when it was completed or cancelled meanwhile. Audited `callback.cancelled`.
+ */
+export async function cancelCallback(
+  context: RepositoryContext,
+  input: { readonly callbackId: string; readonly reason: string },
+): Promise<PolicyResult<CallbackRow>> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refusePolicy('invalid_input');
+  const reason = input.reason.trim();
+  if (reason.length === 0 || reason.length > 300) return refusePolicy('invalid_input');
+  const existing = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM callbacks WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callbackId],
+  );
+  const found = existing.rows[0];
+  if (found === undefined) return refusePolicy('callback_unknown');
+  const firm = await loadFirmForUpdate(context, found.firm_id);
+  if (firm === null) return refusePolicy('callback_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'callback_unknown');
+  }
+  const { rows } = await context.db.query<CallbackDbRow>(
+    `UPDATE callbacks SET status = 'cancelled', cancelled_reason = $3
+      WHERE workspace_id = $1 AND id = $2 AND status = 'open'
+      RETURNING ${CALLBACK_COLUMNS}`,
+    [context.scope.workspaceId, input.callbackId, reason],
+  );
+  const row = rows[0];
+  if (row === undefined) return refusePolicy('callback_not_open');
+  await recordCrmAuditEvent(context, {
+    action: 'callback.cancelled',
+    subjectKind: 'callback',
+    subjectId: row.id,
+    detail: { firmId: row.firm_id, reason },
+  });
+  return acceptPolicy(toCallback(row));
+}
+
 export interface ScheduleCallbackForCallInput {
   readonly callLogId: string;
   readonly localDate: string;
@@ -222,6 +271,14 @@ export interface ScheduleCallbackForCallInput {
  * created it, with the needs-a-time task finished in the same transaction.
  *
  * Every refusal is decided before the insert.
+ *
+ * **The log is re-read after the firm's lock** (S3X, review S3XD 3). The outcome used to be
+ * read and validated before the lock, so a schedule that waited behind an outcome
+ * correction (`calls/correctOutcome.ts`, which holds the firm) inserted a callback from its
+ * stale read onto a log that no longer asked for one. Now the firm is located unlocked, the
+ * firm is locked, and the log — its firm, its outcome, and that it has no callback yet — is
+ * read again and decided on; a correction to anything but `callback_requested` committed
+ * first is `call_log_unknown`.
  */
 export async function scheduleCallbackForCall(
   context: RepositoryContext,
@@ -230,6 +287,22 @@ export async function scheduleCallbackForCall(
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
 
+  // Where the log is, unlocked: only to know which firm to lock.
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_logs WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return refusePolicy('call_log_unknown');
+
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return refusePolicy('call_log_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'call_log_unknown');
+  }
+
+  // The decision, under the firm's lock: the log as it is now.
   const { rows: logs } = await context.db.query<{
     firm_id: string;
     contact_id: string | null;
@@ -240,13 +313,8 @@ export async function scheduleCallbackForCall(
     [context.scope.workspaceId, input.callLogId],
   );
   const log = logs[0];
-  if (log === undefined || log.outcome !== 'callback_requested') return refusePolicy('call_log_unknown');
-
-  const firm = await loadFirmForUpdate(context, log.firm_id);
-  if (firm === null) return refusePolicy('call_log_unknown');
-  const permitted = decideFirmMutation(context, firm);
-  if (!permitted.permitted) {
-    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'call_log_unknown');
+  if (log === undefined || log.firm_id !== firmId || log.outcome !== 'callback_requested') {
+    return refusePolicy('call_log_unknown');
   }
 
   const already = await context.db.query(

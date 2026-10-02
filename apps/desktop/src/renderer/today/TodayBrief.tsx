@@ -6,6 +6,7 @@ import { cn } from '../lib/utils.ts';
 import { Button } from '../ui/button.tsx';
 import { Block, Chip, Label, Provenance } from '../v2/parts.tsx';
 import { callTimer } from '../calling/callText.ts';
+import { ChangeOutcome } from '../calling/ChangeOutcome.tsx';
 
 /**
  * The 30-second brief, in the v2 layout (slice S2; plan §4 "Brief").
@@ -22,7 +23,8 @@ import { callTimer } from '../calling/callText.ts';
  *   * **Suggested opening** and **Two questions** — a model's words, labelled
  *     "Hypothesis · AI suggestion", never presented as something the firm said;
  *   * **Previous interactions** — the firm's placed calls, newest first, with the summary
- *     when there is one;
+ *     when there is one, and a logged call's outcome with "Change" (S3X lane X2,
+ *     `calling/ChangeOutcome.tsx`);
  *   * **Deeper research** — what changed and every source, expanded in place so reading it
  *     never loses the selected firm.
  */
@@ -62,6 +64,8 @@ export function TodayBrief({
   researching,
   enabled,
   onResearchAgain,
+  timeZone = null,
+  onCorrected,
 }: {
   readonly brief: CallBriefDto | null;
   /** The firm's placed calls, newest first, or null while they are being read. */
@@ -69,6 +73,10 @@ export function TodayBrief({
   readonly researching: boolean;
   readonly enabled: boolean;
   onResearchAgain(): void;
+  /** The firm's zone, for a corrected callback's day and time. */
+  readonly timeZone?: string | null;
+  /** S3X: an outcome was corrected or a stop lifted; absent means no "Change" is offered. */
+  onCorrected?(): void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const again = (
@@ -201,6 +209,16 @@ export function TodayBrief({
                       {when === null ? null : <span className="text-faint"> · {shortDate(when)}</span>}
                     </p>
                     {call.summary === undefined ? null : <p className="text-sm text-muted-foreground">{call.summary.summary}</p>}
+                    {call.callLogId === null || call.outcome == null || onCorrected === undefined ? null : (
+                      <ChangeOutcome
+                        key={call.callLogId}
+                        callLogId={call.callLogId}
+                        currentOutcome={call.outcome}
+                        timeZone={timeZone}
+                        enabled={enabled}
+                        onChanged={onCorrected}
+                      />
+                    )}
                   </div>
                 </li>
               );
