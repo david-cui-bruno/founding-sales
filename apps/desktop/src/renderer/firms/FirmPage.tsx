@@ -15,7 +15,10 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Tag } from '../ui/layout.tsx';
 import { Chip, Group } from '../v2/parts.tsx';
+import type { FirmTaskDto } from '@fss/contracts';
+import type { Generation } from '../app/generation.ts';
 import { currentCrmMemory, useBaseGuard, useKeptText } from './crmMemory.ts';
+import { FirmTimeline, type TimelinePorts } from './FirmTimeline.tsx';
 import { useClearDrafts, useHasDrafts } from '../app/drafts.tsx';
 import { StageEventRow, StageWhy } from './StageWhy.tsx';
 import { Select } from '../ui/select.tsx';
@@ -834,6 +837,39 @@ function NextAction({ card, timeZone }: { readonly card: BoardCard | undefined; 
   );
 }
 
+const TASK_WORDS: Readonly<Record<FirmTaskDto['kind'], string>> = { callback: 'Callback', call_task: 'Task', step: 'Sequence step' };
+
+/**
+ * The firm's open work, soonest first (S4F). Read-only: acting on a task stays where it is
+ * today. A callback and a step carry a code for a label, so they are put in words here.
+ */
+function FirmTasks({ tasks }: { readonly tasks: readonly FirmTaskDto[] }): JSX.Element {
+  const label = (task: FirmTaskDto): string =>
+    task.kind === 'step' ? (task.label === 'linkedin_task' ? 'LinkedIn step' : 'Call step') : task.kind === 'callback' ? 'Callback requested' : task.label;
+  return (
+    <Group data-testid="firm-tasks" title="Tasks" count={tasks.length}>
+      {tasks.length === 0 ? (
+        <p data-testid="tasks-none" className="py-1 text-sm text-muted-foreground">
+          Nothing is waiting on this firm.
+        </p>
+      ) : (
+        <ul className="flex flex-col border-t border-border">
+          {tasks.map(task => (
+            <li key={task.key} data-testid="firm-task" className="flex items-baseline gap-3 border-b border-border py-1 text-sm last:border-b-0">
+              <span className="min-w-0 flex-1 truncate" title={label(task)}>
+                {label(task)}
+              </span>
+              <span className="text-xs text-muted-foreground">{TASK_WORDS[task.kind]}</span>
+              {task.status === 'held' ? <Chip tone="warn">Held</Chip> : null}
+              <span className="w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{shortDayTime(task.dueAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Group>
+  );
+}
+
 /** Contacts without the editing controls: the panel's form, who is there and how to reach them. */
 function ContactsBrief({ detail }: { readonly detail: FirmDetailDto }): JSX.Element {
   const routesOf = (id: string): string[] =>
@@ -880,6 +916,8 @@ export function FirmPage({
   stageName = inWords,
   variant = 'page',
   research = null,
+  guard,
+  timelinePorts,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -907,6 +945,9 @@ export function FirmPage({
   readonly variant?: 'page' | 'panel';
   /** The Research section, mounted by the caller because it has its own read. */
   readonly research?: ReactNode;
+  /** The session's guard, so a timeline page read for a session that ended is dropped. */
+  readonly guard?: Generation;
+  readonly timelinePorts?: TimelinePorts | null;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -965,7 +1006,7 @@ export function FirmPage({
   return (
     <div className="callie-v2 mt-5 grid gap-x-12 gap-y-6 min-[1100px]:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 max-w-[760px]">
-        <NextAction card={card} timeZone={page.read.firm.timeZone} />
+        {page.tasks === undefined ? <NextAction card={card} timeZone={page.read.firm.timeZone} /> : <FirmTasks tasks={page.tasks} />}
         <Opportunity
           page={page}
           card={card}
@@ -975,6 +1016,16 @@ export function FirmPage({
           onTakeOver={onTakeOver}
         />
         <div className="mt-7">{calls}</div>
+        {page.timeline === undefined || guard === undefined ? null : (
+          <FirmTimeline
+            key={page.read.firm.id}
+            firmId={page.read.firm.id}
+            timeline={page.timeline}
+            guard={guard}
+            stageName={stageName}
+            {...(timelinePorts === undefined ? {} : { ports: timelinePorts })}
+          />
+        )}
         {research}
         {sequences === null ? null : (
           <Sequences

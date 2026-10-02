@@ -8,6 +8,7 @@ import {
   type CallSessionDto,
   type CallTranscriptResponse,
 } from '@fss/contracts';
+import { currentCrmMemory } from '../firms/crmMemory.ts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { ChangeOutcome, type CorrectionPorts } from './ChangeOutcome.tsx';
 import { CallSummaryBlock } from './CallSummary.tsx';
@@ -85,6 +86,39 @@ export function registryHistoryPorts(): CallHistoryPorts | null {
     transcript: async callSessionId => await api.read('calling.transcript', { callSessionId }),
     logs: async firmId => await api.read('calling.logs', { firmId }),
   };
+}
+
+/**
+ * The note typed when the call was logged (S4F), two lines of it with the rest behind "Show
+ * more". Whether it is open is kept above the route by call, so it is as it was left.
+ */
+export function CallNote({ sessionId, note }: { readonly sessionId: string; readonly note: string }): JSX.Element {
+  const [, redraw] = useState(0);
+  const key = `note:${sessionId}`;
+  const memory = currentCrmMemory();
+  const open = memory.pageEditors[key] === true;
+  const long = note.length > 140 || note.includes('\n');
+  return (
+    <div data-testid="call-note" className="mt-0.5 text-sm text-muted-foreground">
+      <p data-testid="call-note-text" className={open || !long ? 'whitespace-pre-wrap' : 'line-clamp-2 whitespace-pre-wrap'}>
+        {note}
+      </p>
+      {long ? (
+        <button
+          type="button"
+          data-testid="call-note-toggle"
+          aria-expanded={open}
+          className="text-xs text-faint hover:text-foreground"
+          onClick={() => {
+            memory.pageEditors[key] = !open;
+            redraw(n => n + 1);
+          }}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 /** `m:ss` from the start of the recording. */
@@ -370,6 +404,7 @@ export function CallHistory({
                 <span className="w-12" />
               )}
             </div>
+            {call.note == null ? null : <CallNote sessionId={call.sessionId} note={call.note} />}
             {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
             {call.hasTranscript === true && ports?.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />

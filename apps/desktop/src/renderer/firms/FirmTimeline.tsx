@@ -1,7 +1,6 @@
 import type { FirmTimeline as TimelineDto, FirmTimelineEvent } from '@fss/contracts';
 import { useReducer, useRef, useState, type JSX } from 'react';
 import type { Generation } from '../app/generation.ts';
-import { shortDayTime } from '../dates.ts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { Button } from '../ui/button.tsx';
 import { Group } from '../v2/parts.tsx';
@@ -42,8 +41,8 @@ const KIND_WORDS: Readonly<Record<FirmTimelineEvent['kind'], string>> = {
 const CHANNEL_WORDS: Readonly<Record<string, string>> = { phone: 'Calls', email: 'E-mail', all: 'All contact' };
 const SCOPE_WORDS: Readonly<Record<string, string>> = { firm: 'the firm', handle: 'one contact' };
 
-const outcomeWord = (code: string | null): string =>
-  code === null ? 'unknown' : ((OUTCOME_LABELS as Readonly<Record<string, string>>)[code] ?? code.replaceAll('_', ' '));
+/** An outcome in words; one this build has no word for is "an outcome", never its code. */
+const outcomeWord = (code: string | null): string => (code === null ? 'an outcome' : ((OUTCOME_LABELS as Readonly<Record<string, string>>)[code] ?? 'an outcome'));
 
 /** The one line for an event. Pure, so a test holds it to the codes the API sends. */
 export function timelineSummary(event: FirmTimelineEvent, stageName: (key: string) => string): string {
@@ -62,6 +61,12 @@ export function timelineSummary(event: FirmTimelineEvent, stageName: (key: strin
       return `${CHANNEL_WORDS[event.code ?? ''] ?? 'Contact'} stopped for ${SCOPE_WORDS[event.detail ?? ''] ?? 'the firm'}`;
   }
 }
+
+const WHEN = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const whenOf = (instant: string): string => {
+  const at = new Date(instant);
+  return Number.isFinite(at.getTime()) ? WHEN.format(at) : instant;
+};
 
 export function FirmTimeline({
   firmId,
@@ -133,8 +138,8 @@ export function FirmTimeline({
               data-key={event.key}
               className="flex items-baseline gap-3 border-b border-border py-1 text-sm last:border-b-0"
             >
-              <span data-testid="timeline-at" className="w-32 shrink-0 text-xs text-muted-foreground tabular-nums">
-                {shortDayTime(event.at)}
+              <span data-testid="timeline-at" className="w-28 shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                {whenOf(event.at)}
               </span>
               <span data-testid="timeline-kind" className="w-28 shrink-0 text-xs text-muted-foreground">
                 {KIND_WORDS[event.kind]}

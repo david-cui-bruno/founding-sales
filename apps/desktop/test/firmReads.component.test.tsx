@@ -8,7 +8,8 @@ import type { BoardCard, FirmTimeline as TimelineDto } from '@fss/contracts';
 import { createGeneration } from '../src/renderer/app/generation.ts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { resetCrmMemory } from '../src/renderer/firms/crmMemory.ts';
-import { FirmTimeline, type TimelinePorts } from '../src/renderer/firms/FirmTimeline.tsx';
+import { CallNote } from '../src/renderer/calling/CallHistory.tsx';
+import { FirmTimeline, timelineSummary, type TimelinePorts } from '../src/renderer/firms/FirmTimeline.tsx';
 import { FirmsRoute } from '../src/renderer/firms/FirmsRoute.tsx';
 import type { CrmState } from '../src/renderer/firmWorkspaceContract.ts';
 import type { OperationApi } from '../src/shared/operations.ts';
@@ -159,5 +160,62 @@ describe('J/K then Enter run no command (K4)', () => {
     await userEvent.keyboard('j');
     await userEvent.keyboard('{Enter}');
     expect(calls.filter(name => name === 'crm.changeStage')).toEqual([]);
+  });
+});
+
+describe('what each row says (codes in words, never a body or an address)', () => {
+  const words = (event: Parameters<typeof timelineSummary>[0]): string => timelineSummary(event, key => key.replace('_', ' '));
+  const base = { key: 'k', at: at(0) };
+  it('puts each kind in a line from its codes', () => {
+    expect(words({ ...base, kind: 'call', code: 'interested', detail: null })).toBe('Conversation');
+    expect(words({ ...base, kind: 'outcome_corrected', code: 'interested', detail: 'no_answer' })).toContain('to');
+    expect(words({ ...base, kind: 'email_received', code: null, detail: 'Re: pricing' })).toBe('Re: pricing');
+    expect(words({ ...base, kind: 'stage_change', code: 'demo_booked', detail: 'new' })).toBe('new to demo booked');
+    expect(words({ ...base, kind: 'stop_recorded', code: 'email', detail: 'firm' })).toBe('E-mail stopped for the firm');
+    expect(words({ ...base, kind: 'stop_lifted', code: 'all', detail: 'handle' })).toBe('All contact stopped for one contact');
+  });
+  it('never shows a code it has no word for', () => {
+    expect(words({ ...base, kind: 'call', code: 'brand_new_outcome', detail: null })).toBe('an outcome');
+  });
+});
+
+describe('a failed "Show more" says so next to the button, and Retry works', () => {
+  it('shows the problem beside the control and asks again on the next press', async () => {
+    const first = page(0, 50, at(49));
+    let attempt = 0;
+    const p: TimelinePorts = {
+      more: async () => {
+        attempt += 1;
+        return await Promise.resolve({ timeline: attempt === 1 ? null : page(50, 5, null) });
+      },
+    };
+    render(<Timeline firmId={FIRM_ID} first={first} timelinePorts={p} />);
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    expect((await screen.findByTestId('timeline-problem')).textContent).toContain('could not load more');
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row')).toHaveLength(55);
+    });
+    expect(screen.queryByTestId('timeline-problem')).toBeNull();
+  });
+});
+
+describe('a call note keeps its open state (remount)', () => {
+  const NOTE = 'Wants pricing for 650 doors. '.repeat(8);
+  it('shows two lines, opens on request, and is still open after unmount and remount', async () => {
+    const view = render(<CallNote sessionId="s1" note={NOTE} />);
+    expect(screen.getByTestId('call-note-text').className).toContain('line-clamp-2');
+    await userEvent.click(screen.getByTestId('call-note-toggle'));
+    expect(screen.getByTestId('call-note-text').className).not.toContain('line-clamp-2');
+    view.unmount();
+    render(<CallNote sessionId="s1" note={NOTE} />);
+    expect(screen.getByTestId('call-note-text').className).not.toContain('line-clamp-2');
+    cleanup();
+    render(<CallNote sessionId="s2" note={NOTE} />);
+    expect(screen.getByTestId('call-note-text').className).toContain('line-clamp-2');
+  });
+  it('a short note has no toggle', () => {
+    render(<CallNote sessionId="s3" note="Left a voicemail." />);
+    expect(screen.queryByTestId('call-note-toggle')).toBeNull();
   });
 });
