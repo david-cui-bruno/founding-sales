@@ -63,7 +63,13 @@ const keys = z
  *   * `follow_up_expired` — `follow_up` selected more than 7 days after the call (the
  *     call's own time — the session's start — never when it was logged);
  *   * `follow_up_not_granted` — `follow_up` selected and its single-email permission could
- *     not be granted (the template retired, say).
+ *     not be granted (the template retired, say);
+ *   * `callback_instant_mismatch` — the selected callback's date, time and zone do not name
+ *     its `dueAt` (checked before anything is logged); `callback_not_created` — a selected
+ *     callback the command did not create;
+ *   * `effects_not_applied`, `route_not_named` — the outcome's command recorded the call but
+ *     reported an effect it could not apply. The manual form keeps such history; an Apply
+ *     never does: it refuses, and nothing is written.
  *
  * A command a key maps to may refuse with its own code (e.g. `not_assigned`); that key is
  * named the same way.
@@ -77,6 +83,10 @@ export const CALL_PROPOSAL_REFUSAL_CODES = [
   'callback_exists',
   'follow_up_expired',
   'follow_up_not_granted',
+  'callback_instant_mismatch',
+  'callback_not_created',
+  'effects_not_applied',
+  'route_not_named',
 ] as const;
 export type CallProposalRefusalCode = (typeof CALL_PROPOSAL_REFUSAL_CODES)[number];
 

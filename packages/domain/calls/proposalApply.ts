@@ -16,7 +16,7 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { applyStageEvidence } from '../crm/stageEvidence.ts';
-import { createCallback, scheduleCallbackForCall } from '../dial/callbacks.ts';
+import { createCallback, resolveConfirmedInstant, scheduleCallbackForCall } from '../dial/callbacks.ts';
 import { confirmCapturedFollowUp, logCallOutcome, REACHED_OUTCOMES, withinCapturedFollowUpWindow } from '../dial/calls.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -302,6 +302,14 @@ export async function applyCallProposals(
         })
       : undefined;
 
+  // The selected callback's own fields must agree (date, time and zone name its `dueAt`)
+  // before anything is logged: `logCallOutcome` would record the call and downgrade the
+  // mismatch to a warning, which an Apply may not do (review S3BF).
+  if (has('callback') && callbackParams !== undefined) {
+    const instant = resolveConfirmedInstant(callbackParams);
+    if (!instant.ok) return refuse(instant.reason === 'callback_instant_mismatch' ? 'callback_instant_mismatch' : 'invalid_input', 'callback');
+  }
+
   // ---- 4. Map, in one savepoint ---------------------------------------------------------
   await context.db.query(`SAVEPOINT ${SAVEPOINT}`);
   let applied: Omit<ApplyCallProposalsResult, 'analysisId' | 'callSessionId'>;
@@ -346,7 +354,8 @@ export async function applyCallProposals(
       .filter(entry => entry.result === 'applied')
       .map(entry => ({ key: entry.key, result: entry.edited ? 'edited' : 'unchanged' })),
   );
-  await refreshTodayForFirm(context, { firmId: where.firm_id });
+  // Only when this click changed something: an all-no-op Apply writes nothing (review S3BF).
+  if (applied.results.some(entry => entry.result === 'applied')) await refreshTodayForFirm(context, { firmId: where.firm_id });
   return { ok: true, value: { analysisId: analysis.id, callSessionId: sessionId, ...applied } };
 }
 
@@ -408,8 +417,11 @@ async function mapKeys(
       viaProposalApply: true,
     });
     if (!logged.ok) throw new Refused(logged.reason, 'outcome');
-    // A selected follow-up whose permission was not granted is a refusal of the whole Apply,
-    // never an `applied` key beside a warning (review S3B, finding 4).
+    // The form records history and downgrades what it could not do to warnings; an Apply
+    // refuses instead (review S3B finding 4, S3BF): any warning about a selected key, or a
+    // selected key with no row to show for it, rolls the whole batch back.
+    refuseOnWarnings(logged.value.followUps, selected);
+    if (selected.has('callback') && logged.value.callbackId === null) throw new Refused('callback_not_created', 'callback');
     if (selected.has('follow_up') && logged.value.followUpPermissionId === null) throw notGranted();
     callLogId = logged.value.callLogId;
     followUps.push(...logged.value.followUps);
@@ -448,6 +460,7 @@ async function mapKeys(
         commandId: input.commandId,
       });
       if (!confirmed.ok) throw new Refused(confirmed.reason, 'follow_up');
+      refuseOnWarnings(confirmed.value.followUps, selected);
       if (confirmed.value.followUpPermissionId === null) throw notGranted();
       followUps.push(...confirmed.value.followUps);
       push(proposalOf('follow_up'), 'applied', confirmed.value.followUpPermissionId, false);
@@ -574,6 +587,34 @@ async function mapKeys(
   }
 
   return { callLogId, results, followUps };
+}
+
+/**
+ * The warnings a delegated command reports instead of refusing (it keeps history), as the
+ * Apply's refusals. `callback_time_needed` is a warning only about a selected callback: an
+ * unselected one is the outcome's own "needs a time" task, which is what the outcome means.
+ * `agreed_sequence_enrolled` is a success, not a warning.
+ */
+function refuseOnWarnings(followUps: readonly CallFollowUp[], selected: ReadonlySet<string>): void {
+  for (const entry of followUps) {
+    switch (entry.kind) {
+      case 'effects_not_applied':
+        throw new Refused('effects_not_applied', 'outcome');
+      case 'route_not_named':
+        throw new Refused('route_not_named', 'outcome');
+      case 'callback_time_needed':
+        if (selected.has('callback')) {
+          throw new Refused(entry.reason === 'instant_mismatch' ? 'callback_instant_mismatch' : 'callback_not_created', 'callback');
+        }
+        break;
+      case 'follow_up_not_granted':
+      case 'follow_up_not_enrolled':
+        if (selected.has('follow_up')) throw notGranted();
+        break;
+      case 'agreed_sequence_enrolled':
+        break;
+    }
+  }
 }
 
 /**

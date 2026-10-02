@@ -207,7 +207,15 @@ describe('B-7 and B-12: the pending-review hold', () => {
     });
     expect(deleted.ok, JSON.stringify(deleted)).toBe(true);
     expect((await world.session.query('SELECT 1 FROM call_sessions WHERE id = $1', [call.sessionId])).rows).toHaveLength(0);
-    expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: true })]);
+    const [released] = await holdsOf(call.sessionId);
+    expect(released).toMatchObject({ released: true });
+    // The deletion's audit names the holds it released.
+    const { rows: audit } = await world.session.query<{ ids: string[] }>(
+      `SELECT ARRAY(SELECT jsonb_array_elements_text(detail->'releasedPendingHoldIds')) AS ids
+         FROM audit_events WHERE action = 'deletion.committed' AND subject_id = $1`,
+      [firm.contactId],
+    );
+    expect(audit.map(row => row.ids)).toEqual([[released?.id]]);
     expect(await blocksEmail(firm.firmId)).toBe(false);
     expect(await pendingInReview(call.sessionId)).toBe(false);
   });

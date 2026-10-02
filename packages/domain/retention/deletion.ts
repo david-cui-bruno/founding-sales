@@ -950,10 +950,11 @@ export async function commitDeletion(
   // transaction, after the gate, the firm and the sessions' locks above — never left
   // blocking e-mail at a firm that survives (review S3B, finding 2). The hold row is kept:
   // `active_holds` is retained, released or not.
-  await context.db.query(
+  const { rows: releasedPendingHolds } = await context.db.query<{ id: string }>(
     `UPDATE active_holds SET released_at = now()
       WHERE workspace_id = $1 AND source_event_kind = $2 AND released_at IS NULL
-        AND source_event_id = ANY($3::text[])`,
+        AND source_event_id = ANY($3::text[])
+      RETURNING id`,
     [context.scope.workspaceId, CALL_ANALYSIS_PENDING_SOURCE, targetedSessions.map(session => session.id)],
   );
   // Before the sessions, whose deletion would only clear the task's link.
@@ -1174,7 +1175,15 @@ export async function commitDeletion(
     action: 'deletion.committed',
     subjectKind: row.target_kind,
     subjectId: scope.contactId ?? scope.firmId,
-    detail: { requestId: row.id, removed, redacted, stopped, tombstones: tombstoneEventIds.length },
+    detail: {
+      requestId: row.id,
+      removed,
+      redacted,
+      stopped,
+      tombstones: tombstoneEventIds.length,
+      // The pending-review holds released with their sessions (slice 3a): ids, not personal data.
+      releasedPendingHoldIds: releasedPendingHolds.map(hold => hold.id),
+    },
   });
 
   return accept({ requestId: row.id, removed, redacted, stopped, tombstoneEventIds });
