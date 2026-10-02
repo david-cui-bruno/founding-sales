@@ -23,6 +23,7 @@ import {
   type AdminOutcome,
   type LaunchIdentity,
 } from './fss/admin.ts';
+import { trialExportCommand } from './fss/trialExport.ts';
 import {
   TOOL_ENVIRONMENT_VARIABLES,
   describeToolConfig,
@@ -176,6 +177,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'send-path report': sendPathReportCommand,
   // Slice S3X (CC2b): the contacts migration 0037 made undialable.
   'stop-channels report': stopChannelsReportCommand,
+  // Slice S3T-E: the ten-call trial, encrypted to David's key, READ ONLY.
+  'trial export': invocation => trialExportCommand(invocation),
   // Call-to-booking A2: the mailbox switch's preflight and the per-condition preview.
   'mailbox switch-preflight': mailboxSwitchPreflightCommand,
   'send-path preview': sendPathPreviewCommand,
