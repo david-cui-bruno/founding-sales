@@ -120,15 +120,15 @@ describe('a command holds its own form and nothing else', () => {
     // The only area whose form name is an id rather than a word: one reply card is one
     // form, so its own `messageId` is the name and nothing else can match it.
     const hook = code(await read('replies/useReplies.ts'));
-    expect(hook).toContain('apply(api()?.command(\'replies.confirm\', input), input.messageId)');
-    expect(hook).toContain('apply(api()?.command(\'replies.resolve\', input), input.messageId)');
+    expect(hook).toContain('apply(api()?.command(\'replies.confirm\', input), \'confirm\', input.messageId)');
+    expect(hook).toContain('apply(api()?.command(\'replies.resolve\', input), \'resolve\', input.messageId)');
 
     const view = code(await read('replies/RepliesView.tsx'));
     for (const control of ['confirm', 'candidate-submit', 'reply-open']) {
       expect(view, `the ${control} control does not wait on its own card`).toContain(`data-testid="${control}"`);
     }
     expect(view).toContain('replies.busy(card.messageId)');
-    expect(view).toContain('replies.busy(summary.card.messageId)');
+    expect(view).toContain('replies.busy(summary.messageId)');
   });
 
   it('no view disables itself on the whole view’s pending count', async () => {
