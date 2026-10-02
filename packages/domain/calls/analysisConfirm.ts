@@ -1,55 +1,292 @@
 /**
- * The confirmer (slice 3a, review S3A1): CONFIRM OR REVIEW.
+ * The confirmer (slice 3a, reviews S3A1 and S3A1F): a WHITELIST.
  *
  * An action-critical reading — a stop, a buying signal, a follow-up request or an agreed
- * offer, a callback's agreement, an exact callback time and day — is applied on David's click
- * only when a conservative deterministic check over the **full** speaker line(s), never the
- * model's quote span, confirms it independently. Anything that does not confirm becomes a
- * review item (or, where the words say the opposite, nothing at all). The model's category,
- * quote and agreement pointer say *where* to look; this module decides what the line says.
+ * offer, a callback and its agreement, an exact callback time and day, a promised task — is
+ * confirmed only when the speaker's whole line is made, entirely, of a small set of complete,
+ * simple forms. Anything else is unknown, and unknown is review. Nothing here tries to work
+ * out the polarity or the scope of free text: a line is either built from known pieces, or it
+ * is not confirmed.
  *
- * One function per action kind, used by the reader (`readCallAnalysisAnswer`), whose result
- * records each verdict, and through it by the policy. Every rule here is conservative: when
- * a line is unclear it does not confirm.
+ * ## How a line is read
  *
- * The text is compared lower-cased with typographic apostrophes straightened; punctuation is
- * kept, because a clause ends at it and a negation reaches only to the end of its clause.
+ *   1. Normalised: lower case, straight apostrophes, "a.m."/"p.m." as am/pm, "e-mail" as
+ *      email, and "between X and Y" kept as one piece.
+ *   2. Split into sentences at `.`, `?`, `!` and `;`. A sentence that is, as a whole, one of
+ *      the known harmless sentences (`BENIGN`, `BUSY`) is set aside — one with a negation or
+ *      contrast in it ("Not right now.") only before anything else was said.
+ *   3. Every other sentence is split into clauses at commas, dashes and "and", and **every**
+ *      clause must be one of the action's own templates (or another action's request template,
+ *      or a harmless sentence). One unknown clause — "but…", "unless…", "actually…", "don't…" —
+ *      and the line confirms nothing.
+ *
+ * The templates are anchored at both ends, and their vocabularies hold no negation,
+ * condition or contrast word, so a clause that matches one says what it says and nothing
+ * else. `MARKERS` is checked over every non-harmless clause as well, belt and braces.
  */
 
-/** Lower case, straight apostrophes, single spaces; punctuation kept. */
-export function norm(text: string): string {
-  return text.toLowerCase().replace(/[’‘]/gu, "'").replace(/\s+/gu, ' ').trim();
+// ---------------------------------------------------------------------------
+// Reading a line
+// ---------------------------------------------------------------------------
+
+/** One line as the confirmer reads it: its harmless sentences set aside, its other clauses. */
+export interface ReadLine {
+  /** The clauses of the line's non-harmless sentences, normalised, in order. */
+  readonly clauses: readonly string[];
+  /** The whole line, normalised (for a withdrawal or a stop phrase anywhere in it). */
+  readonly text: string;
 }
 
-/** The words of the clause before `index`: back to the last `.`, `,`, `;`, `!`, `?` or dash. */
-function clausePrefix(text: string, index: number): string {
-  const before = text.slice(0, index);
-  const boundary = Math.max(...['.', ',', ';', '!', '?', ' - ', ' — '].map(mark => before.lastIndexOf(mark)));
-  return before.slice(boundary + 1);
+function normalise(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[’‘`]/gu, "'")
+    .replace(/\b([ap])\.\s?m\b\.?/gu, '$1m')
+    .replace(/\be-?\s?mail/gu, 'email')
+    .replace(/\bbetween (\S+) and (\S+)/gu, 'between $1 to $2')
+    .replace(/[“”"()[\]{}]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
-const NEGATION = /\b(?:not|never|don't|dont|do not|doesn't|didn't|isn't|wasn't|no need to|won't)\b/u;
-const SELF_SUBJECT = /\b(?:i'll|i will|i shall|i can|i'm going to|i am going to|we'll|we will|we can|we're going to|we are going to|let me)\b/u;
-
-function negatedAt(text: string, index: number): boolean {
-  return NEGATION.test(clausePrefix(text, index));
+/** A clause without its edge punctuation and spacing. */
+function tidy(clause: string): string {
+  return clause
+    .replace(/[^a-z0-9':\- ]+/gu, ' ')
+    .replace(/(^|\s)-+(\s|$)/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
+
+/** Words that open or close a clause without changing it. */
+const LEADING_FILLER = /^(?:just|please|so|oh|well|um|uh|hey|ok so|okay so) /u;
+const TRAILING_FILLER = / (?:please|then|thanks|thank you)$/u;
+
+function strip(clause: string): string {
+  let out = clause;
+  for (let i = 0; i < 3; i += 1) {
+    const next = out.replace(LEADING_FILLER, '').replace(TRAILING_FILLER, '');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/** One-word (or two-word) clauses that carry nothing: "No more calls, please." */
+const FILLER_CLAUSES: ReadonlySet<string> = new Set(['please', 'thanks', 'thank you', 'um', 'uh', 'oh', 'so', 'well', 'ok', 'okay', 'yes', 'yeah', 'sure', 'hi', 'hello']);
+
+export function readLine(line: string): ReadLine {
+  const text = normalise(line);
+  const clauses: string[] = [];
+  for (const sentence of text.split(/[.?!;]+/u)) {
+    const whole = tidy(sentence);
+    if (whole.length === 0) continue;
+    // A harmless sentence is set aside; one with a negation or contrast in it ("Not right
+    // now.", "Good timing, actually.") only as a preamble, before anything else was said —
+    // after a request ("Call me Tuesday. Not really.") it is read, and confirms nothing.
+    if (isHarmless(whole) && (clauses.length === 0 || !MARKERS.test(whole))) continue;
+    for (const piece of sentence.split(/,|\s+-+\s+|\s+—\s+|\s+and\s+/u)) {
+      const clause = strip(tidy(piece));
+      if (clause.length > 0 && !FILLER_CLAUSES.has(clause)) clauses.push(clause);
+    }
+  }
+  return { clauses, text: tidy(text) };
+}
+
+// ---------------------------------------------------------------------------
+// Harmless sentences
+// ---------------------------------------------------------------------------
+
+/** Whole sentences that carry no instruction: greetings, acknowledgements, "not now". */
+const BENIGN: ReadonlySet<string> = new Set([
+  'ok',
+  'okay',
+  'sure',
+  'yes',
+  'yeah',
+  'yep',
+  'hi',
+  'hello',
+  'hey',
+  'thanks',
+  'thank you',
+  'thanks bye',
+  'bye',
+  'great',
+  'perfect',
+  'got it',
+  'that works',
+  'sounds good',
+  'huh',
+  'um',
+  'uh',
+  'oh',
+  'it is',
+  'not right now',
+  'not now',
+  'not really',
+  'now is not a good time',
+  "now's not a good time",
+  'good timing',
+  'good timing actually',
+  "i'll be at my desk then",
+  "i'll look at it",
+  "i'll take a look",
+]);
+
+/** "I'm driving right now", "She's out of the office": the speaker cannot talk now. */
+const BUSY =
+  /^(?:sorry )?(?:i'm|i am|we're|we are|she's|she is|he's|he is) (?:busy|slammed|swamped|driving|in a meeting|in the middle of something|on another call|on the other line|out|out of the office|at lunch|with a (?:client|tenant|customer)|about to (?:walk|head|go) into (?:a|an) [a-z]+)(?: right now| today| at the moment| this week)?$/u;
+
+function isHarmless(sentence: string): boolean {
+  const flat = sentence.replace(/,/gu, ' ').replace(/\s+/gu, ' ').trim();
+  return BENIGN.has(flat) || BUSY.test(flat);
+}
+
+/** Negation, condition, contrast and correction words. None is in any template. */
+const MARKERS =
+  /\b(?:not|no|never|nothing|none|nobody|neither|nor|without|refrain|cannot|[a-z]+n't|dont|cant|wont|isnt|arent|doesnt|didnt|wasnt|werent|shouldnt|wouldnt|couldnt|if|unless|provided|providing|assuming|assume|suppose|supposing|whether|depending|depends|maybe|perhaps|might|possibly|probably|only|but|though|although|however|except|instead|rather|actually|otherwise|yet|whereas|anyway|wait|mean|sorry)\b/u;
+
+/** A line with negation, condition or contrast anywhere in it (a commitment's test). */
+export function hasMarkers(line: string): boolean {
+  return MARKERS.test(tidy(normalise(line)));
+}
+
+/** True when every clause matches one of `templates` (and at least one clause does). */
+function builtFrom(read: ReadLine, own: readonly RegExp[], companions: readonly RegExp[] = []): boolean {
+  let ownCount = 0;
+  for (const clause of read.clauses) {
+    if (MARKERS.test(clause)) return false;
+    if (own.some(template => template.test(clause))) ownCount += 1;
+    // A harmless clause with no marker ("I'm driving right now", "I'll look at it").
+    else if (!companions.some(template => template.test(clause)) && !isHarmless(clause)) return false;
+  }
+  return ownCount > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Plain yes and withdrawal
+// ---------------------------------------------------------------------------
+
+const YES = new Set(['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'please', 'yes please', 'sure thing', 'sounds good', 'that works', 'go ahead']);
+
+/**
+ * The plain-yes rule: the WHOLE reply is one or more of `YES`, optionally followed by
+ * "thanks" or "thank you". Nothing else on the line.
+ */
+export function plainYes(line: string): boolean {
+  const pieces = normalise(line)
+    .split(/[.?!;,]+/u)
+    .map(piece => tidy(piece))
+    .filter(piece => piece.length > 0);
+  if (pieces.length === 0) return false;
+  let yes = 0;
+  for (const [index, piece] of pieces.entries()) {
+    const thanks = piece === 'thanks' || piece === 'thank you';
+    if (thanks && index === pieces.length - 1 && yes > 0) continue;
+    const withoutThanks = piece.replace(/ (?:thanks|thank you)$/u, '');
+    if (!YES.has(withoutThanks)) return false;
+    yes += 1;
+  }
+  return yes > 0;
+}
+
+const WITHDRAWAL =
+  /\b(?:never mind|nevermind|forget (?:it|that|about it)|scratch that|on second thought|(?:don't|dont|do not) bother|no need|cancel (?:that|it)|changed my mind|(?:don't|dont|do not) (?:send|email|call)|actually (?:no|don't|dont))\b/u;
+
+/** Whether any of these later lines takes something back. */
+export function withdrawn(laterLines: readonly string[]): boolean {
+  return laterLines.some(line => WITHDRAWAL.test(tidy(normalise(line))));
+}
+
+// ---------------------------------------------------------------------------
+// Request templates (what a prospect asks for)
+// ---------------------------------------------------------------------------
+
+const NUMBER_WORD = '(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)';
+const WHEN_WORD = `(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|tonight|later|sometime|soon|next|this|week|month|morning|afternoon|evening|at|on|in|the|a|an|around|about|after|before|by|ish|noon|midday|half|past|quarter|o'clock|am|pm|again|back|between|to|or|few|couple|of|minutes|hour|hours|days|first|thing|${NUMBER_WORD}|\\d{1,2}(?::\\d{2})?(?:am|pm)?|\\d{1,2}-\\d{1,2})`;
+const WHEN = `${WHEN_WORD}(?: ${WHEN_WORD})*`;
+const ASK = '(?:(?:can|could|would) you |you can |)';
+
+/** Them asks to be called (the call goes to them). */
+const CALLBACK_REQUEST: readonly RegExp[] = [
+  new RegExp(`^${ASK}(?:call|ring|phone) (?:me|us)(?: back)?(?: ${WHEN})?$`, 'u'),
+  new RegExp(`^${ASK}give (?:me|us) a (?:call|ring)(?: back)?(?: ${WHEN})?$`, 'u'),
+  new RegExp(`^${ASK}try (?:me|us)(?: again| back)?(?: ${WHEN})?$`, 'u'),
+  new RegExp(`^try (?:again |back )?(?:${WHEN})$`, 'u'),
+  new RegExp(`^call (?:back )?(?:${WHEN})$`, 'u'),
+];
+
+/** David offers to call (agreed only by a plain yes). */
+const CALLBACK_OFFER: readonly RegExp[] = [
+  new RegExp(`^(?:can|could|may|shall|should) i (?:call|ring|try) you(?: back)?(?: ${WHEN})?$`, 'u'),
+  new RegExp(`^(?:i'll|i will|let me) (?:call|try) you(?: back)?(?: ${WHEN})?$`, 'u'),
+];
+
+const OBJECT =
+  "(?:(?:a|an|the|some|our|your|more) )?(?:(?:short|quick|brief) )?(overview|one pager|one-pager|brochure|deck|info|information|details|pricing|price sheet|link|summary|something)(?: on (?:it|that|this|callie|pricing|you|your product))?";
+
+/** Them asks to be sent something (Them is the recipient). Group 1 is the thing. */
+const FOLLOW_UP_REQUEST: readonly RegExp[] = [
+  new RegExp(`^${ASK}(?:send|email|forward|shoot) (?:me|us) (?:over )?${OBJECT}(?: over)?(?: by email)?(?: to look at)?$`, 'u'),
+  new RegExp(`^${ASK}(?:send|email|forward) ${OBJECT}(?: over)?(?: to (?:me|us))?(?: by email)?$`, 'u'),
+  new RegExp(`^${ASK}(?:send|email) (?:me|us) (it|that|something) over$`, 'u'),
+  /^email (?:me|us)$/u,
+];
+
+/** David offers to send something (agreed only by a plain yes). Group 1 is the thing. */
+const FOLLOW_UP_OFFER: readonly RegExp[] = [
+  new RegExp(`^(?:can|could|may|shall|should) i (?:send|email|forward) you ${OBJECT}(?: by email)?$`, 'u'),
+  new RegExp(`^(?:want me to|would you like me to|do you want me to) (?:send|email) you ${OBJECT}(?: by email)?$`, 'u'),
+  new RegExp(`^(?:i can|i could|let me) (?:send|email) you ${OBJECT}(?: by email)?$`, 'u'),
+];
+
+/** The frozen qualifying forms (Q3): a demo or trial, their own evaluation, how it would fit them. */
+const BUYING: readonly RegExp[] = [
+  /^(?:we're|we are|i'm|i am) (?:currently )?(?:evaluating|comparing|looking at) (?:(?:a couple of|a few|some|two|three|four|several|\d+) )?(?:tools|options|vendors|systems|platforms|solutions)(?: for this)?(?: right now| now| at the moment)?$/u,
+  /^(?:can|could) (?:you|we|i) (?:show|give) (?:us|me) (?:a )?(?:quick )?(?:demo|walkthrough)$/u,
+  /^(?:can|could) (?:we|i) (?:see|get|set up|book|schedule|have) (?:a )?(?:quick )?(?:demo|trial|walkthrough|pilot)$/u,
+  /^(?:i'd|i would|we'd|we would) (?:like|love) (?:to )?(?:see|get|set up|book|schedule|try|have) (?:a |the )?(?:quick )?(?:demo|trial|pilot|walkthrough|it)$/u,
+  /^put (?:us|me) down for (?:a )?(?:demo|trial|pilot)$/u,
+  /^(?:we're|we are) (?:looking at|thinking about|considering) (?:switching|replacing|moving off)(?: (?:our|the) (?:system|portal|software|tool|vendor))?$/u,
+  /^how would (?:our|my) (?:techs|technicians|vendors|tenants|team|owners) (?:get|see|use|submit|receive) (?:work orders|requests|jobs|it)$/u,
+  /^would it replace (?:our|my) (?:portal|system|software)$/u,
+];
+
+/** Every request template: a companion clause that never weakens another request. */
+const REQUESTS: readonly RegExp[] = [...CALLBACK_REQUEST, ...FOLLOW_UP_REQUEST, ...BUYING];
 
 // ---------------------------------------------------------------------------
 // Stop
 // ---------------------------------------------------------------------------
 
-/** Stop phrases, without their own negation guard: the clause decides (`negatedAt`). */
-const STOP_PATTERNS: readonly RegExp[] = [
-  /\b(?:stop|quit) (?:calling|phoning|ringing|contacting)(?: (?:me|us|here|this number|my \w+|our \w+))?\b/gu,
-  /\b(?:don't|dont|do not|never) (?:call|phone|ring|contact) (?:me|us|here|anyone|anybody|this number|again|anymore|my \w+|our \w+)\b/gu,
-  /\btake (?:me|us|my \w+|our \w+|this number) off\b/gu,
-  /\bremove (?:me|us|my \w+|our \w+|this number)\b/gu,
-  /\b(?:don't|dont|do not) want (?:these|your|any|any more|anymore|more) (?:phone )?calls\b/gu,
-  /\bno more calls\b/gu,
-  /\bdo[- ]not[- ]call list\b/gu,
-  /\blose (?:my|our|this) number\b/gu,
+/** The stop forms, whole clauses. `personal` when they name only the speaker or this number. */
+const STOP_FORMS: readonly { readonly form: RegExp; readonly personal: boolean }[] = [
+  { form: /^stop (?:calling|contacting)(?: (?:me|this number))?$/u, personal: true },
+  { form: /^stop (?:calling|contacting) (?:us|here|this office)$/u, personal: false },
+  { form: /^(?:don't|do not) (?:call|contact) (?:me|this number)(?: again| anymore)?$/u, personal: true },
+  { form: /^(?:don't|do not) (?:call|contact) (?:us|here|anyone here|anybody here|anyone|anybody)(?: again| anymore)?$/u, personal: false },
+  { form: /^take (?:me|my number|this number) off (?:your|the) (?:list|call list|calling list)$/u, personal: true },
+  { form: /^take (?:us|our number) off (?:your|the) (?:list|call list|calling list)$/u, personal: false },
+  { form: /^remove (?:me|my number|this number)(?: from (?:your|the) (?:list|call list|calling list))?$/u, personal: true },
+  { form: /^remove (?:us|our number)(?: from (?:your|the) (?:list|call list|calling list))?$/u, personal: false },
+  { form: /^(?:put|add) (?:me|this number) (?:on|to) (?:your|the) do not call list$/u, personal: true },
+  { form: /^(?:i|we) (?:don't|do not) want (?:these|your|any more|any) calls$/u, personal: false },
+  { form: /^no more calls$/u, personal: false },
 ];
+
+/** Sentences beside a stop that do not change it. */
+const STOP_COMPANIONS: readonly RegExp[] = [
+  /^(?:we|i) get too many of these$/u,
+  /^(?:we're|we are|i'm|i am) not interested$/u,
+  /^not interested$/u,
+  /^no thanks?$/u,
+  /^(?:we|i) (?:don't|do not) want any of this$/u,
+];
+
+/** Stop language anywhere in a line (the safety net, which only ever asks for review). */
+const STOP_LANGUAGE =
+  /\b(?:stop (?:calling|contacting)(?: (?:me|us|here|this number))?|(?:don't|dont|do not|never) (?:call|contact|ring|phone) (?:me|us|here|anyone|anybody|this number|again)|take (?:me|us|my number|our number|this number) off|remove (?:me|us|my number|our number|this number)|(?:don't|dont|do not) want (?:these|your|any|any more) (?:phone )?calls|no more calls|do not call list|lose (?:my|our|this) number)\b/u;
 
 export interface StopPhrase {
   readonly quote: string;
@@ -57,294 +294,189 @@ export interface StopPhrase {
   readonly general: boolean;
 }
 
-export interface StopCheck {
-  /** Un-negated stop phrases in the line. */
-  readonly phrases: readonly StopPhrase[];
-  /** Stop phrases the line negates ("don't take me off anything"). */
-  readonly negated: number;
-}
-
-/** The stop phrases of one full Them line, and how many of them it negates. */
-export function checkStop(line: string): StopCheck {
-  const text = norm(line);
-  const phrases: StopPhrase[] = [];
-  let negated = 0;
-  for (const pattern of STOP_PATTERNS) {
-    for (const match of text.matchAll(pattern)) {
-      if (negatedAt(text, match.index)) {
-        negated += 1;
-        continue;
-      }
-      const quote = match[0];
-      const personal = /\b(?:me|my|this number)\b/u.test(quote) && !/\b(?:us|our|anyone|anybody|here|these|your|no more)\b/u.test(quote);
-      phrases.push({ quote, general: !personal });
-    }
-  }
-  return { phrases, negated };
+/** Stop language in a line, negated or not: the net under the model's reading (review only). */
+export function stopLanguageOf(line: string): StopPhrase | null {
+  const text = tidy(normalise(line));
+  const match = STOP_LANGUAGE.exec(text);
+  if (match === null) return null;
+  const quote = match[0];
+  const personal = /\b(?:me|my|this number)\b/u.test(quote) && !/\b(?:us|our|anyone|anybody|here|these|your|no more)\b/u.test(quote);
+  return { quote, general: !personal };
 }
 
 /**
- * A model-read stop, judged on its whole Them line: `confirmed` when the line has an
- * un-negated stop phrase and no negated one; `negated` when it only negates one ("don't take
- * me off anything": no stop at all); `ambiguous` when it has both; `unconfirmed` when it has
- * neither. Only `confirmed` may be applied.
+ * A model-read stop, judged on its whole Them line: confirmed when the line is built only
+ * from stop forms and the sentences that go with a stop, with no e-mail or sending in it.
+ * `general` when a confirmed form names more than the speaker or this number.
  */
-export function confirmStop(line: string): 'confirmed' | 'negated' | 'ambiguous' | 'unconfirmed' {
-  const check = checkStop(line);
-  if (check.phrases.length > 0) return check.negated > 0 ? 'ambiguous' : 'confirmed';
-  return check.negated > 0 ? 'negated' : 'unconfirmed';
+export function confirmStop(line: string): { readonly confirmed: boolean; readonly general: boolean } {
+  const read = readLine(line);
+  if (/\b(?:email|send|mail|text)\b/u.test(read.text)) return { confirmed: false, general: false };
+  let forms = 0;
+  let general = false;
+  for (const clause of read.clauses) {
+    const stop = STOP_FORMS.find(entry => entry.form.test(clause));
+    if (stop !== undefined) {
+      forms += 1;
+      if (!stop.personal) general = true;
+      continue;
+    }
+    if (!STOP_COMPANIONS.some(companion => companion.test(clause))) return { confirmed: false, general: false };
+  }
+  return { confirmed: forms > 0, general };
 }
 
 // ---------------------------------------------------------------------------
 // Buying signal
 // ---------------------------------------------------------------------------
 
-/**
- * The frozen qualifying patterns: a demo or trial, their own evaluation or switching, how it
- * would work in their own operation, their own units or volume. A price question is none of
- * these (Q3, David, 2 October 2026), and neither is a line that addresses the analysis itself.
- */
-const QUALIFYING: readonly RegExp[] = [
-  /\b(?:demo|demonstration|walkthrough|walk-through|trial|pilot|test drive)\b/gu,
-  /\b(?:evaluat\w*|compar\w*|shopping around)\b/gu,
-  /\blooking at (?:options|tools|vendors|software|systems|a few|a couple)\b/gu,
-  /\b(?:switch\w*|replac\w*|migrat\w*|moving off|move off)\b/gu,
-  /\bhow (?:would|does|do|could|will) (?:it|this|that|our|my|we|they)\b[^.?!]*\b(?:techs?|technicians?|tenants?|vendors?|work orders?|units?|doors?|properties|portal|team|owners?|maintenance|requests?)\b/gu,
-  /\b(?:our|my) (?:techs|technicians|tenants|vendors|units|doors|properties|portal|team|owners|work orders)\b/gu,
-  /\b(?:\d+|hundred|thousand|dozen) (?:units|doors|properties|buildings)\b/gu,
-];
-
-const ADDRESSES_THE_ANALYSIS = /\b(?:buying signal|your instructions|ignore (?:your|all|the|previous))\b/u;
-
 const PRICE = /\b(?:cost|costs|price|priced|pricing|how much|charge|fee|fees|per month|per door|rate|rates|expensive|cheap)\b/u;
+const ADDRESSES_THE_ANALYSIS = /\b(?:buying signal|instructions|ignore)\b/u;
 
 /**
- * A qualifying signal, judged on its whole Them line: `confirmed` when an un-negated frozen
- * qualifying pattern is in it; `price_only` when it asks about price and nothing qualifies
- * (Q3: no buying signal at all); otherwise `unconfirmed` (review only).
+ * A qualifying signal, judged on its whole Them line: `confirmed` when the line is built
+ * from the frozen qualifying forms (and other request forms or harmless sentences);
+ * `price_only` when it asks about price and is not; otherwise `unconfirmed` (review only).
  */
 export function confirmBuyingSignal(line: string): 'confirmed' | 'price_only' | 'unconfirmed' {
-  const text = norm(line);
-  if (!ADDRESSES_THE_ANALYSIS.test(text)) {
-    for (const pattern of QUALIFYING) {
-      for (const match of text.matchAll(pattern)) {
-        if (!negatedAt(text, match.index)) return 'confirmed';
-      }
+  const read = readLine(line);
+  if (!ADDRESSES_THE_ANALYSIS.test(read.text) && builtFrom(read, BUYING, REQUESTS)) return 'confirmed';
+  return PRICE.test(read.text) && !read.clauses.some(clause => BUYING.some(template => template.test(clause))) ? 'price_only' : 'unconfirmed';
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up
+// ---------------------------------------------------------------------------
+
+export type FollowUpVerdict =
+  | { readonly kind: 'confirmed'; readonly overview: boolean }
+  | { readonly kind: 'unconfirmed' }
+  | { readonly kind: 'none' };
+
+const SENDING = /\b(?:send|sending|email|mail|forward|shoot)\b/u;
+
+function thingOf(read: ReadLine, templates: readonly RegExp[]): string | null {
+  for (const clause of read.clauses) {
+    for (const template of templates) {
+      const match = template.exec(clause);
+      if (match !== null) return match[1] ?? 'something';
     }
   }
-  return PRICE.test(text) ? 'price_only' : 'unconfirmed';
+  return null;
 }
-
-// ---------------------------------------------------------------------------
-// Agreement, retraction, follow-up
-// ---------------------------------------------------------------------------
-
-/** A plain yes at the start of the line. */
-const AGREES = /^(?:yes|yeah|yep|sure|ok|okay|please|absolutely|definitely|of course|go ahead|sounds good|that works|that would be great|that'd be great|that'd help|please do)\b/u;
-/** A reply that declines or hedges is not agreement, whatever it starts with. */
-const HEDGES = /\b(?:no|not|don't|dont|maybe|we'll see|not sure|i'll think|think about it|later|but|unless|if)\b/u;
-
-/** The plain-yes rule: a whole line that starts with a yes and neither hedges nor declines. */
-export function plainYes(line: string): boolean {
-  const text = norm(line).replace(/^[^a-z0-9']+/u, '');
-  return AGREES.test(text) && !HEDGES.test(text);
-}
-
-const RETRACTS = /\b(?:(?:don't|dont|do not|no need to) (?:send|e-?mail|mail|bother)|never mind|nevermind|scratch that|forget (?:it|that|about it)|on second thought)\b/u;
-
-/** Whether any of these texts takes a request back. */
-export function retracted(texts: readonly string[]): boolean {
-  return texts.some(text => RETRACTS.test(norm(text)));
-}
-
-const SEND = /\b(?:send|sending|e-?mail|email|mail|forward|shoot)\b/gu;
-const REQUEST: readonly RegExp[] = [
-  /\b(?:send|e-?mail|email|mail|forward|shoot)(?: (?:it|that|this|something|one|over|along))? (?:me|us)\b/gu,
-  /\b(?:send|e-?mail|email|forward) (?:an?|the|some|your|over) \w+/gu,
-  /\b(?:send|e-?mail|email|forward|shoot) (?:it|that|this|something|them|those|info|information|details)(?: over| along)?\b/gu,
-];
-
-export type FollowUpVerdict = 'confirmed' | 'refused' | 'unconfirmed';
 
 /**
- * A request Them made, on one full Them line, with the Them lines after it.
- *
- * Confirmed: an un-negated request to be sent something whose clause is not the speaker's own
- * offer, not taken back later in the line or the call. Refused: every sending word in the
- * line is negated or the speaker's own offer, or the request is taken back. Otherwise
- * unconfirmed. A line that names no sending at all is not a request to be sent anything:
- * refused.
+ * Them's request, on its whole line: confirmed when the line is built from request forms
+ * (Them the recipient) and harmless sentences and nothing later takes it back; `none` when
+ * the line names no sending at all; otherwise unconfirmed (review only). `overview` comes
+ * from the words, never from the model's kind.
  */
 export function confirmFollowUpRequest(line: string, laterThemLines: readonly string[]): FollowUpVerdict {
-  const text = norm(line);
-  if (!new RegExp(SEND.source, 'u').test(text)) return 'refused';
-  let requestAt = -1;
-  for (const pattern of REQUEST) {
-    for (const match of text.matchAll(pattern)) {
-      const prefix = clausePrefix(text, match.index);
-      if (NEGATION.test(prefix) || SELF_SUBJECT.test(prefix)) continue;
-      requestAt = requestAt === -1 ? match.index : Math.min(requestAt, match.index);
-    }
-  }
-  if (requestAt !== -1) {
-    return retracted([text.slice(requestAt), ...laterThemLines]) ? 'refused' : 'confirmed';
-  }
-  const sends = [...text.matchAll(SEND)];
-  if (sends.length > 0 && sends.every(match => negatedAt(text, match.index) || SELF_SUBJECT.test(clausePrefix(text, match.index)))) {
-    return 'refused';
-  }
-  return retracted([text, ...laterThemLines]) ? 'refused' : 'unconfirmed';
+  const read = readLine(line);
+  if (!SENDING.test(read.text)) return { kind: 'none' };
+  if (!builtFrom(read, FOLLOW_UP_REQUEST, REQUESTS) || withdrawn(laterThemLines)) return { kind: 'unconfirmed' };
+  return { kind: 'confirmed', overview: thingOf(read, FOLLOW_UP_REQUEST) === 'overview' };
 }
 
 /**
- * David's offer to send, answered by a Them line. Confirmed only when the offer names the
- * sending, the answer passes the plain-yes rule, and nothing from the answer on takes it back.
+ * David's offer to send, answered by a Them line: confirmed only when one clause of the
+ * offer is an offer form, the answer is a plain yes, and no later Them line takes it back.
  */
 export function confirmFollowUpOffer(offer: string, answer: string, laterThemLines: readonly string[]): FollowUpVerdict {
-  const text = norm(offer);
-  const names = [...text.matchAll(SEND)].some(match => !negatedAt(text, match.index));
-  if (!names || !plainYes(answer) || retracted([answer, ...laterThemLines])) return 'refused';
-  return 'confirmed';
+  const read = readLine(offer);
+  const thing = thingOf(read, FOLLOW_UP_OFFER);
+  if (thing === null) return SENDING.test(read.text) ? { kind: 'unconfirmed' } : { kind: 'none' };
+  if (!plainYes(answer) || withdrawn(laterThemLines)) return { kind: 'unconfirmed' };
+  return { kind: 'confirmed', overview: thing === 'overview' };
 }
 
 // ---------------------------------------------------------------------------
-// Exact time and day
+// Callback: the request, its exact time and its day
 // ---------------------------------------------------------------------------
 
-const NUMBER_WORDS: Readonly<Record<string, number>> = Object.freeze({
-  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
-});
-const NUM = '(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
-const MERIDIEM = "(?:\\s*(?:a\\.?m\\.?|p\\.?m\\.?)(?![a-z]))";
-const MINUTES_WORD = "(?:thirty|fifteen|forty[- ]five|o'clock)";
+export interface CallbackCheck {
+  /** Them asked to be called (or agreed plainly to David's offer), and did not take it back. */
+  readonly confirmed: boolean;
+  /** The clauses the time and the day are read from: the request, or the offer and its yes. */
+  readonly clauses: readonly string[];
+}
 
-/** One time expression, longest forms first; matched left to right without overlap. */
-const TIME_EXPRESSION = new RegExp(
-  [
-    `\\b(?:at )?\\d{1,2}:\\d{2}${MERIDIEM}?`,
-    `\\b(?:at )?\\d{1,2}${MERIDIEM}`,
-    '\\b(?:at )?(?:noon|midday)\\b',
-    `\\b(?:half|quarter) past (?:\\d{1,2}|${NUM})\\b`,
-    `\\bat (?:\\d{1,2}|${NUM})(?: ${MINUTES_WORD})?(?![:\\d])\\b${MERIDIEM}?`,
-    `\\b${NUM} ${MINUTES_WORD}\\b${MERIDIEM}?`,
-  ].join('|'),
-  'gu',
-);
-/** A time followed by another: a range or an alternative. */
-const RANGE_AFTER = new RegExp(`^\\s*(?:-|–|to|or|and|through|till|until)\\s*(?:\\d|${NUM}|noon|midday)`, 'u');
+/** A callback Them asked for, on its whole line, with the Them lines after it. */
+export function confirmCallbackRequest(line: string, laterThemLines: readonly string[]): CallbackCheck {
+  const read = readLine(line);
+  const confirmed = builtFrom(read, CALLBACK_REQUEST, REQUESTS) && !withdrawn(laterThemLines);
+  return { confirmed, clauses: read.clauses };
+}
 
-/**
- * A spoken clock time as `HH:MM`, or null. An explicit am/pm wins; otherwise a bare hour
- * 1-6 is afternoon, 7-11 morning, 12 noon (the hours a sales callback is placed at).
- */
-export function parseSpokenTime(words: string): string | null {
-  let text = norm(words)
-    .replace(/[.,!?]/gu, ' ')
-    .replace(/(\d)([a-z])/gu, '$1 $2')
-    .replace(/\bat\b/gu, ' ')
-    .replace(/\s+/gu, ' ')
-    .trim();
-  if (text === 'noon' || text === 'midday') return '12:00';
-  let meridiem: 'am' | 'pm' | null = null;
-  const marker = /\b(a ?m|p ?m|in the morning|in the afternoon|in the evening)\b/u.exec(text.replace(/\./gu, ''));
-  if (marker !== null) {
-    meridiem = marker[1]?.startsWith('a') === true || marker[1] === 'in the morning' ? 'am' : 'pm';
-    text = text.replace(/\./gu, '').replace(marker[0], ' ').replace(/\s+/gu, ' ').trim();
-  }
-  let hour: number | null = null;
-  let minute = 0;
-  const digits = /^(\d{1,2})(?:[: ](\d{2}))?$/u.exec(text);
-  if (digits !== null) {
-    hour = Number(digits[1]);
-    if (digits[2] !== undefined) minute = Number(digits[2]);
-  } else {
-    const past = /^(half|quarter) past (\w+)$/u.exec(text);
-    if (past !== null) {
-      const base = past[2] ?? '';
-      hour = NUMBER_WORDS[base] ?? (/^\d{1,2}$/u.test(base) ? Number(base) : null);
-      minute = past[1] === 'half' ? 30 : 15;
-    } else {
-      const [first, ...rest] = text.split(' ');
-      hour = NUMBER_WORDS[first ?? ''] ?? (first !== undefined && /^\d{1,2}$/u.test(first) ? Number(first) : null);
-      const tail = rest.join(' ').replace('-', ' ');
-      if (tail.length > 0) {
-        const words: Readonly<Record<string, number>> = { "o'clock": 0, oclock: 0, fifteen: 15, thirty: 30, 'forty five': 45 };
-        const m = words[tail] ?? (/^\d{2}$/u.test(tail) ? Number(tail) : undefined);
-        if (m === undefined) return null;
-        minute = m;
-      }
-    }
-  }
-  if (hour === null || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour > 23) return null;
-  if (hour > 12) {
-    if (meridiem === 'am') return null;
+/** A callback David offered, agreed by Them's reply, with the Them lines after the reply. */
+export function confirmCallbackOffer(offer: string, answer: string, laterThemLines: readonly string[]): CallbackCheck {
+  const read = readLine(offer);
+  const clauses = read.clauses.filter(clause => CALLBACK_OFFER.some(template => template.test(clause)));
+  const confirmed = clauses.length > 0 && plainYes(answer) && !withdrawn(laterThemLines);
+  return { confirmed, clauses };
+}
+
+const TIME_TOKEN = /\b(\d{1,2})(?::(\d{2}))?(?: ?(am|pm))?\b/gu;
+const HALF_PAST = /\bhalf past (\d{1,2})\b/gu;
+const NOT_EXACT =
+  /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|half|quarter|ish|about|around|after|before|by|until|till|or|to|between|morning|afternoon|evening|night|tonight|o'clock|actually|wait|instead|mean|sorry)\b|-/u;
+
+function clock(hour: number, minute: number, meridiem: string | undefined): string | null {
+  if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return null;
+  let h = hour;
+  if (h > 12) {
+    if (meridiem !== undefined) return null;
   } else if (meridiem === 'am') {
-    if (hour === 12) hour = 0;
+    if (h === 12) h = 0;
   } else if (meridiem === 'pm') {
-    if (hour !== 12) hour += 12;
-  } else if (hour >= 1 && hour <= 6) hour += 12;
-  else if (hour === 0) return null;
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    if (h !== 12) h += 12;
+  } else if (h >= 1 && h <= 6) h += 12;
+  else if (h === 0) return null;
+  return `${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 /**
- * The exact time the callback's lines name, as `HH:MM`, or null. Exact only when the lines
- * hold **one** complete time expression (h, h:mm, h am/pm, noon …), with no range or
- * alternative ("between", "2 to 4", "2 or 3"), and the model said a time.
+ * The exact time a callback's clauses say, as `HH:MM`, or null. Exact only when they hold
+ * exactly one time token — `h`, `h:mm`, `h am|pm`, `noon`, `half past h` — and no other digit,
+ * number word, approximation, alternative, modifier or correction. A bare hour 1-6 is PM,
+ * 7-11 AM, 12 noon.
  */
-export function confirmedCallbackTime(lines: readonly string[], modelTime: string | null): string | null {
-  if (modelTime === null) return null;
-  const expressions: string[] = [];
-  for (const line of lines) {
-    const text = norm(line);
-    if (/\bbetween\b/u.test(text)) return null;
-    for (const match of text.matchAll(TIME_EXPRESSION)) {
-      if (RANGE_AFTER.test(text.slice(match.index + match[0].length))) return null;
-      expressions.push(match[0]);
-    }
-  }
-  if (expressions.length !== 1) return null;
-  // The line's own expression, minutes kept: the model's words only say a time was meant
-  // ("9" quoted out of "9:30" resolves to 09:30, never 09:00).
-  return parseSpokenTime(expressions[0] ?? '');
+export function exactTimeOf(clauses: readonly string[]): string | null {
+  const text = clauses.join(' | ');
+  const halves = [...text.matchAll(HALF_PAST)];
+  const rest = text.replace(HALF_PAST, ' ');
+  const noon = [...rest.matchAll(/\b(?:noon|midday)\b/gu)];
+  const tokens = [...rest.matchAll(TIME_TOKEN)];
+  if (halves.length + noon.length + tokens.length !== 1) return null;
+  const residue = rest.replace(/\b(?:noon|midday)\b/gu, ' ').replace(TIME_TOKEN, ' ');
+  if (NOT_EXACT.test(residue) || /\d/u.test(residue)) return null;
+  if (noon.length === 1) return '12:00';
+  const half = halves[0];
+  if (half !== undefined) return clock(Number(half[1]), 30, undefined);
+  const token = tokens[0];
+  if (token === undefined) return null;
+  return clock(Number(token[1]), token[2] === undefined ? 0 : Number(token[2]), token[3]);
 }
 
-const WEEKDAY = '(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
-const DAY_EXPRESSION = new RegExp(`\\b(?:${WEEKDAY}|today|tomorrow|tonight)\\b`, 'gu');
-const CORRECTION = /\b(?:no wait|wait no|actually|sorry|i mean|make that|or rather|scratch that|instead)\b/u;
-
-export type DayQualifier = 'next' | 'next_week' | 'this' | 'ambiguous';
+const DAY_WORD = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|tonight)\b/gu;
+const DAY_QUALIFIER = /\b(?:next|this|after|following|week|weeks|in|not|coming|from|other|every|last)\b/u;
 
 /**
- * How the callback's day is qualified in its own lines, read whole. `ambiguous` applies to
- * any day ("tomorrow, no wait, Thursday"); the others to a weekday only.
- *
- *   * `next` — any "next <weekday>" in the lines: which week is ambiguous.
- *   * `ambiguous` — a negation or a correction within three words of a day ("not next week
- *     Tuesday", "Tuesday, no wait, Wednesday"), more than one day said, or "next week" not
- *     beside the weekday.
- *   * `next_week` — "next week <weekday>" / "<weekday> next week", the only day said.
- *   * `this` — "this" or "coming" before the weekday.
- *   * null — a bare weekday.
+ * Whether the callback's clauses name exactly one day — a bare weekday, today or tomorrow,
+ * the one the model chose — with no qualifier word anywhere in them: `null` when they do;
+ * `next` for "next <weekday>"; `ambiguous` for anything else.
  */
-export function dayQualifierOf(day: string | null, lines: readonly string[]): DayQualifier | null {
+export function dayQualifierOf(day: string | null, clauses: readonly string[]): 'next' | 'ambiguous' | null {
   if (day === null) return null;
-  const weekday = new RegExp(`^${WEEKDAY}$`, 'u').test(day);
-  const text = lines.map(norm).join(' \u0000 ');
-  if (weekday && new RegExp(`\\bnext ${WEEKDAY}\\b`, 'u').test(text)) return 'next';
-  const days = new Set([...text.matchAll(DAY_EXPRESSION)].map(match => match[0])).size;
-  // Up to three words apart within one sentence (a comma does not end it; a full stop does).
-  const gap = "[^\\w'.!?\\u0000]+";
-  const near = `(?:${gap}[\\w']+){0,3}?${gap}(?:${WEEKDAY}|today|tomorrow|tonight|next week)\\b`;
-  if (new RegExp(`\\b(?:not|no|don't|dont|never|isn't|can't|cannot|won't)\\b${near}`, 'u').test(text)) return 'ambiguous';
-  if (new RegExp(`${CORRECTION.source}${near}`, 'u').test(text)) return 'ambiguous';
-  if (new RegExp(`\\b(?:${WEEKDAY}|today|tomorrow|tonight)\\b(?:${gap}[\\w']+){0,3}?${gap}${CORRECTION.source}`, 'u').test(text)) return 'ambiguous';
-  if (days > 1) return 'ambiguous';
-  if (!weekday) return null;
-  if (/\bnext week\b/u.test(text)) {
-    const adjacent = new RegExp(`\\bnext week(?: on)? ${day}\\b|\\b${day}(?: of)? next week\\b`, 'u').test(text);
-    return adjacent ? 'next_week' : 'ambiguous';
-  }
-  if (new RegExp(`\\b(?:this|this coming|coming) ${day}\\b`, 'u').test(text)) return 'this';
+  const text = clauses.join(' | ');
+  if (/\bnext (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/u.test(text)) return 'next';
+  const days = [...text.matchAll(DAY_WORD)].map(match => match[0]);
+  if (days.length === 0 || new Set(days).size !== 1 || days[0] !== day) return 'ambiguous';
+  if (DAY_QUALIFIER.test(text)) return 'ambiguous';
   return null;
+}
+
+/** A spoken clock time as `HH:MM`, or null (the same rules as `exactTimeOf`, one token). */
+export function parseSpokenTime(words: string): string | null {
+  return exactTimeOf([tidy(normalise(words))]);
 }

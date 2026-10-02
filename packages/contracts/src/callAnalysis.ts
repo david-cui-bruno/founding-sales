@@ -21,7 +21,7 @@ import { CALL_SUMMARY_SIDES } from './callSummaries.ts';
  */
 
 /** Bumped whenever a byte of the policy table (`analysisPolicy.ts`) changes what it proposes. */
-export const CALL_POLICY_VERSION = 'call_policy.4';
+export const CALL_POLICY_VERSION = 'call_policy.5';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -168,14 +168,18 @@ export const callAnalysisResultSchema = z.strictObject({
       phrase: callAnalysisQuoteRefSchema,
       /** The Them line that agreed to a callback phrase David said; null when Them said it. */
       agreed: callAnalysisLineRefSchema.nullable(),
+      /**
+       * The confirmer found Them asking to be called (or a plain yes to David's offer) on a
+       * whole line of known forms, not taken back later; otherwise it is only ever reviewed.
+       */
+      confirmed: z.boolean(),
       day: z.enum(CALL_ANALYSIS_DAYS).nullable(),
       /**
-       * How the weekday was qualified in the callback's own lines (the phrase's line and the
-       * agreeing line), found by the reader whatever the model quoted: `next` ("next
-       * Tuesday", or any "next" beside a weekday: ambiguous, never resolved), `next_week`
-       * ("next week Tuesday", "Tuesday next week", and the only day said), `this` ("this
-       * Tuesday"), `ambiguous` (a negation or correction near a day, or more than one day
-       * said: never resolved), or null.
+       * How the day was qualified in the callback's own clauses, found by the reader whatever
+       * the model quoted: null only when they name exactly one bare weekday, today or
+       * tomorrow — the model's day — with no qualifier word anywhere in them (call_policy.5);
+       * `next` for "next <weekday>"; `ambiguous` for anything else. Only null resolves.
+       * (`next_week` and `this` are no longer produced; kept in the vocabulary.)
        */
       dayQualifier: z.enum(CALL_ANALYSIS_DAY_QUALIFIERS).nullable(),
       dateText: z.string().min(1).max(120).nullable(),

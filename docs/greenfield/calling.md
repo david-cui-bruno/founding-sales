@@ -464,11 +464,12 @@ time. A summary request in flight (`calling`) counts in transcription's "still f
 model once per **version** (`call_analyses`): one structured reading of the call
 (prompt `call_analysis.3`), checked against the transcript by
 `readCallAnalysisAnswer`, and stored with the proposal set the pure policy computes from it
-(`proposeEffects`, `call_policy.4`) and that set's hash. **Confirm or review:** a stop, a buying
-signal, an e-mail request, a callback's agreement and an exact callback time are offered for
-applying only when a deterministic check over the whole speaker lines confirms them
-(`calls/analysisConfirm.ts`); otherwise they are a review item, or nothing where the words say the
-opposite. Nothing in an analysis acts: every
+(`proposeEffects`, `call_policy.5`) and that set's hash. **A whitelist:** a stop, a buying
+signal, an e-mail request, a callback and its agreement, an exact callback time and day, and a
+promised task are offered for applying only when the speaker's whole line is built entirely from
+a small set of complete, simple forms (`calls/analysisConfirm.ts`); anything else — a negation,
+a condition, a contrast, a correction, a withdrawal later in the call, an unknown phrasing — is a
+review item. Unknown is review; the confirmer never works out polarity or scope. Nothing in an analysis acts: every
 proposal is applied only by David's click, checked against one exact version and its stored
 hash. David's edited notes are a version of their own (origin `user`) and stay the current
 notes whatever model version completes later. Every writer of one call's analysis

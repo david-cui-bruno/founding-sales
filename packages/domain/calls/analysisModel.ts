@@ -20,14 +20,17 @@ import { modelProviderKey, transportPrice, type ModelTransportKind } from '../cl
 import type { ClassifierRequest } from '../classification/prompt.ts';
 import { SERVER_SIDE_FALLBACK_BETA } from '../classification/types.ts';
 import {
-  checkStop,
   confirmBuyingSignal,
-  confirmedCallbackTime,
+  confirmCallbackOffer,
+  confirmCallbackRequest,
   confirmFollowUpOffer,
   confirmFollowUpRequest,
   confirmStop,
   dayQualifierOf,
-  plainYes,
+  exactTimeOf,
+  hasMarkers,
+  stopLanguageOf,
+  type CallbackCheck,
   type FollowUpVerdict,
 } from './analysisConfirm.ts';
 import { fold, sideOfSpeaker, verbatimIn } from './summaryModel.ts';
@@ -414,10 +417,10 @@ function stopPhrasesOf(
     if (sideOfSpeaker(utterance.speaker) !== 'them') return;
     const ref = lineRef(index + 1);
     if (ref === null) return;
-    for (const phrase of checkStop(utterance.text).phrases) {
-      if (found.length >= 10 || !verbatimIn(phrase.quote, utterance.text)) continue;
-      found.push({ general: phrase.general, ref: { ...ref, quote: phrase.quote } });
-    }
+    // Negated or not: the net only ever asks David (review), so it need not judge the words.
+    const phrase = stopLanguageOf(utterance.text);
+    if (phrase === null || found.length >= 10 || !verbatimIn(phrase.quote, utterance.text)) return;
+    found.push({ general: phrase.general, ref: { ...ref, quote: phrase.quote } });
   });
   return found;
 }
@@ -447,12 +450,14 @@ function digitsOf(value: string): string {
  * And its own, from the evaluation runs (C2, 1 October 2026) and review S3A1 (2 October):
  *  * a commitment is a promise: its quote says the speaker will do something (`PROMISE`);
  *  * stop language on any Them line is recorded in `stopPhrases`, whatever the model said;
- *  * CONFIRM OR REVIEW: every action-critical reading is judged by the confirmer
- *    (`analysisConfirm.ts`) on the whole speaker line(s), never the quote. A negated stop,
- *    a refused, negated, self-offered or retracted follow-up, a callback "agreed" by anything
- *    but a plain yes and a price-only "signal" are removed; a stop, a qualifying signal or a
- *    follow-up the lines do not confirm is kept with `confirmed: false`, which the policy
- *    only ever offers for review; a callback resolves only at `confirmedTime`.
+ *  * WHITELIST (reviews S3A1, S3A1F): every action-critical reading is judged by the
+ *    confirmer (`analysisConfirm.ts`) on the whole speaker line(s), never the quote, and is
+ *    confirmed only when the line is built entirely from known simple forms. A stop, a
+ *    qualifying signal, a follow-up or a callback the lines do not confirm is kept with
+ *    `confirmed: false`, which the policy only ever offers for review; a price-only
+ *    "signal" is a pricing question; a callback resolves only at `confirmedTime` and a day
+ *    with no qualifier; a commitment on a line with a negation, condition or contrast is
+ *    dropped.
  */
 export function readCallAnalysisAnswer(
   raw: string,
@@ -547,29 +552,38 @@ export function readCallAnalysisAnswer(
     const themAfter = (line: number): string[] =>
       utterances.filter((utterance, index) => index + 1 > line && sideOfSpeaker(utterance.speaker) === 'them').map(utterance => utterance.text);
     let agreed: CallAnalysisLineRef | null = null;
-    let verdict: FollowUpVerdict = 'refused';
+    let verdict: FollowUpVerdict = { kind: 'none' };
     if (ref !== null && ref.side === 'them') {
-      // Them's request, judged on the whole line: not negated, not Them's own offer, not taken back.
+      // Them's request, on its whole line, built only from request forms (Them the
+      // recipient) and harmless sentences, and not taken back later.
       verdict = confirmFollowUpRequest(utterances[ref.line - 1]?.text ?? '', themAfter(ref.line));
     } else if (ref !== null) {
-      // David's offer naming the sending, answered within two lines by a Them line that
-      // passes the plain-yes rule; a retraction from that answer on takes it back.
+      // David's offer, answered within two lines by a Them line that is a plain yes, and not
+      // taken back later. Without such an answer it is at most a follow-up to review.
       const candidate = lineRef(request.agreed_line);
-      if (candidate !== null && candidate.side === 'them' && candidate.line > ref.line && candidate.line - ref.line <= 2) {
-        verdict = confirmFollowUpOffer(
-          utterances[ref.line - 1]?.text ?? '',
-          utterances[candidate.line - 1]?.text ?? '',
-          themAfter(candidate.line),
-        );
-        if (verdict === 'confirmed') agreed = candidate;
-      }
+      const answered = candidate !== null && candidate.side === 'them' && candidate.line > ref.line && candidate.line - ref.line <= 2;
+      verdict = confirmFollowUpOffer(
+        utterances[ref.line - 1]?.text ?? '',
+        answered ? (utterances[candidate.line - 1]?.text ?? '') : '',
+        answered ? themAfter(candidate.line) : [],
+      );
+      if (verdict.kind === 'confirmed' && answered) agreed = candidate;
     }
-    if (ref === null || verdict === 'refused') drop('follow_up_request');
+    if (ref === null || verdict.kind === 'none') drop('follow_up_request');
     else {
-      // An e-mail that names an overview is an overview (C2 final: "send me an overview by
-      // e-mail" labelled other_email in 2 of 6 runs).
-      const kind = requestKind === 'other_email' && /\boverview\b/u.test(fold(ref.quote)) ? 'overview_email' : requestKind;
-      followUpRequest = { kind, ref, agreed, confirmed: verdict === 'confirmed' };
+      // A confirmed request's kind comes from its words (an overview, or something else by
+      // e-mail), never from the model's label; an unconfirmed one keeps the model's, normalised.
+      const kind =
+        verdict.kind === 'confirmed'
+          ? requestKind === 'other'
+            ? 'other'
+            : verdict.overview
+              ? 'overview_email'
+              : 'other_email'
+          : requestKind === 'other_email' && /\boverview\b/u.test(fold(ref.quote))
+            ? 'overview_email'
+            : requestKind;
+      followUpRequest = { kind, ref, agreed, confirmed: verdict.kind === 'confirmed' };
     }
   }
 
@@ -578,16 +592,20 @@ export function readCallAnalysisAnswer(
     const phrase = quoteRef(answer.callback.phrase, answer.callback.line, null);
     let agreed: CallAnalysisLineRef | null = null;
     let valid = phrase !== null;
+    const themAfter = (line: number): string[] =>
+      utterances.filter((utterance, index) => index + 1 > line && sideOfSpeaker(utterance.speaker) === 'them').map(utterance => utterance.text);
+    let check: CallbackCheck = { confirmed: false, clauses: [] };
     if (phrase !== null && phrase.side === 'you') {
       const candidate = lineRef(answer.callback.agreed_line);
-      // The agreeing line must be a plain yes: "No thanks" never agrees to a callback.
-      valid =
-        candidate !== null &&
-        candidate.side === 'them' &&
-        candidate.line > phrase.line &&
-        candidate.line - phrase.line <= 2 &&
-        plainYes(utterances[candidate.line - 1]?.text ?? '');
+      valid = candidate !== null && candidate.side === 'them' && candidate.line > phrase.line && candidate.line - phrase.line <= 2;
       agreed = valid ? candidate : null;
+      // David's offer is confirmed only by a plain yes, not taken back later.
+      if (candidate !== null && valid) {
+        check = confirmCallbackOffer(utterances[phrase.line - 1]?.text ?? '', utterances[candidate.line - 1]?.text ?? '', themAfter(candidate.line));
+      }
+    } else if (phrase !== null) {
+      // Them asked to be called, on a whole line of request forms, not taken back later.
+      check = confirmCallbackRequest(utterances[phrase.line - 1]?.text ?? '', themAfter(phrase.line));
     }
     if (!valid || phrase === null) drop('callback');
     else {
@@ -602,19 +620,19 @@ export function readCallAnalysisAnswer(
         return found ? words : null;
       };
       const day = answer.callback.day === 'none' ? null : answer.callback.day;
-      const callbackLines = [utterances[phrase.line - 1]?.text ?? '', agreedText ?? ''];
       const time = spoken(trimmed(answer.callback.time), 60, 'time');
       callback = {
         exact: answer.callback.exact,
         phrase,
         agreed,
+        confirmed: check.confirmed,
         day,
-        dayQualifier: dayQualifierOf(day, callbackLines),
+        dayQualifier: dayQualifierOf(day, check.clauses),
         dateText: spoken(trimmed(answer.callback.date_text), 120, 'date_text'),
         time,
-        // The one complete time the whole lines say, minutes kept; none when a range, an
-        // alternative or a second time is there ("between 2 and 4").
-        confirmedTime: confirmedCallbackTime(callbackLines, time),
+        // Exactly one complete time token in the request's clauses, nothing approximate,
+        // alternative or corrected beside it; only for a confirmed callback.
+        confirmedTime: check.confirmed && time !== null ? exactTimeOf(check.clauses) : null,
       };
     }
   }
@@ -622,10 +640,9 @@ export function readCallAnalysisAnswer(
   let stop: CallAnalysisResult['stop'] = null;
   if (answer.stop.requested) {
     const ref = quoteRef(answer.stop.quote, answer.stop.line, 'them');
-    // The whole Them line decides: a negated stop ("don't take me off anything") is none.
-    const verdict = ref === null ? 'negated' : confirmStop(utterances[ref.line - 1]?.text ?? '');
-    if (ref === null || verdict === 'negated') drop('stop');
-    else stop = { scope: answer.stop.scope, ref, confirmed: verdict === 'confirmed' };
+    // The whole Them line decides: confirmed only when it is built from stop forms alone.
+    if (ref === null) drop('stop');
+    else stop = { scope: answer.stop.scope, ref, confirmed: confirmStop(utterances[ref.line - 1]?.text ?? '').confirmed };
   }
 
   let wrongNumber: CallAnalysisResult['wrongNumber'] = null;
@@ -664,7 +681,10 @@ export function readCallAnalysisAnswer(
   for (const commitment of answer.commitments) {
     const ref = quoteRef(commitment.quote, commitment.line, commitment.speaker);
     // A commitment is a promise: an acknowledgement ("Perfect, Thursday at 10") is not one.
-    if (ref === null || !PROMISE.test(fold(ref.quote)) || commitments.length >= LIMITS.commitments) {
+    // A promise, on a whole line with no negation, condition or contrast anywhere in it
+    // (S3A1F: "If you agree, I will send you an overview" is no task).
+    const whole = ref === null ? '' : (utterances[ref.line - 1]?.text ?? '');
+    if (ref === null || !PROMISE.test(fold(ref.quote)) || hasMarkers(whole) || commitments.length >= LIMITS.commitments) {
       drop('commitments');
       continue;
     }

@@ -214,7 +214,7 @@ describe('A-1: reading an answer', () => {
     expect(invented.ok && invented.result.wrongNumber).toMatchObject({ otherNumberGiven: null });
   });
 
-  it('keeps a follow-up request only when it names the sending and is not Them’s own offer to send', () => {
+  it('confirms a follow-up request only from request forms on the whole line; Them’s own offer is kept for review only; a line naming no sending is none', () => {
     const call = lines(
       ['Y', 'Hi Dana.'],
       ['T', "Just send me an overview by e-mail and I'll look at it."],
@@ -222,15 +222,15 @@ describe('A-1: reading an answer', () => {
       ['T', 'Sounds interesting.'],
     );
     const asked = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'overview_email', quote: "Just send me an overview by e-mail and I'll look at it", line: 2 } }), call);
-    expect(asked.ok && asked.result.followUpRequest?.kind).toBe('overview_email');
+    expect(asked.ok && asked.result.followUpRequest).toMatchObject({ kind: 'overview_email', confirmed: true });
     const offer = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'other_email', quote: "I'll send you our unit list", line: 3 } }), call);
-    expect(offer.ok && offer.result.followUpRequest).toBeNull();
+    expect(offer.ok && offer.result.followUpRequest).toMatchObject({ confirmed: false });
     const vague = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'other', quote: 'Sounds interesting', line: 4 } }), call);
     expect(vague.ok && vague.result.followUpRequest).toBeNull();
     expect(vague.ok && vague.result.dropped['follow_up_request']).toBe(1);
   });
 
-  it('records stop language on Them lines itself, negations and You lines excluded, and says when it names more than the speaker', () => {
+  it('records stop language on Them lines itself, negated or not (the net only ever asks David), You lines excluded, and says when it names more than the speaker', () => {
     const call = lines(
       ['Y', 'Should I take you off our list? Stop calling you?'],
       ['T', "Don't take me off anything, just call later."],
@@ -243,33 +243,39 @@ describe('A-1: reading an answer', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.result.stopPhrases.map(phrase => [phrase.ref.line, phrase.ref.quote, phrase.general])).toEqual([
+      [2, 'take me off', false],
+      [3, 'stop calling', true],
       [4, 'take me off', false],
       [5, "don't want these calls", true],
-      [6, 'remove this number', false],
       [6, 'no more calls', true],
     ]);
   });
 
-  it('keeps David’s offer to send only when a Them line within two lines plainly agrees, and nothing later takes it back', () => {
+  it('confirms David’s offer to send only when a Them line within two lines is a plain yes, and nothing later takes it back; otherwise review only', () => {
     const offer = (reply: string, extra: readonly (readonly ['Y' | 'T', string])[] = []) =>
       lines(['Y', 'Can I send you a short overview by e-mail?'], ['T', reply], ...extra);
     const raw = answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you a short overview by e-mail?', line: 1, agreed_line: 2 } });
     const agreed = readCallAnalysisAnswer(raw, offer('Sure, that works.'));
-    expect(agreed.ok && agreed.result.followUpRequest).toMatchObject({ kind: 'overview_email', ref: { line: 1, side: 'you' }, agreed: { line: 2, side: 'them' } });
-    for (const reply of ['No thanks.', "Maybe, we'll see.", 'Sure, but not now.', 'Hmm.']) {
+    expect(agreed.ok && agreed.result.followUpRequest).toMatchObject({
+      kind: 'overview_email',
+      ref: { line: 1, side: 'you' },
+      agreed: { line: 2, side: 'them' },
+      confirmed: true,
+    });
+    for (const reply of ['No thanks.', "Maybe, we'll see.", 'Sure, but not now.', 'Hmm.', 'Please refrain.', 'Sure, provided we agree on price.']) {
       const read = readCallAnalysisAnswer(raw, offer(reply));
-      expect(read.ok && read.result.followUpRequest, reply).toBeNull();
+      expect(read.ok && read.result.followUpRequest, reply).toMatchObject({ confirmed: false, agreed: null });
     }
     const retracted = readCallAnalysisAnswer(raw, offer('Sure.', [['Y', 'How many doors?'], ['T', "About eighty. Actually, don't send anything."]]));
-    expect(retracted.ok && retracted.result.followUpRequest).toBeNull();
-    // No agreement line, or one three lines on, or a You line: no request.
+    expect(retracted.ok && retracted.result.followUpRequest).toMatchObject({ confirmed: false });
+    // No agreement line, or one three lines on, or a You line: review only.
     const call = lines(['Y', 'Can I send you a short overview by e-mail?'], ['Y', 'It is short.'], ['Y', 'Really.'], ['T', 'Sure.']);
     for (const agreedLine of [0, 2, 4]) {
       const read = readCallAnalysisAnswer(
         answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you a short overview by e-mail?', line: 1, agreed_line: agreedLine } }),
         call,
       );
-      expect(read.ok && read.result.followUpRequest).toBeNull();
+      expect(read.ok && read.result.followUpRequest).toMatchObject({ confirmed: false, agreed: null });
     }
     // A You line that names no sending is not an offer.
     const noSend = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'overview_email', quote: 'Is that useful?', line: 1, agreed_line: 2 } }), lines(['Y', 'Is that useful?'], ['T', 'Sure.']));

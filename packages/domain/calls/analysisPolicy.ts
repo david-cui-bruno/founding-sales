@@ -43,10 +43,13 @@ import { fold } from './summaryModel.ts';
  * The rows are tried top to bottom and the first of the first six that applies decides the
  * outcome; a callback, a buying signal and an e-mail request compose.
  *
- * CONFIRM OR REVIEW (review S3A1, 2 October 2026): a stop, a buying signal, an e-mail
- * request, a callback's agreement and an exact callback time are `apply` only when the
- * confirmer (`analysisConfirm.ts`) confirmed them on the whole speaker lines; the reader
- * records its verdicts on the result, and this table reads them.
+ * WHITELIST (reviews S3A1 and S3A1F, 2 October 2026; call_policy.5): a stop, a buying
+ * signal, an e-mail request, a callback and its agreement, an exact callback time and day,
+ * and a promised task are `apply` only when the confirmer (`analysisConfirm.ts`) found the
+ * whole speaker line built from its known simple forms; anything else is review. The reader
+ * records the verdicts on the result, and this table reads them. An unconfirmed callback is
+ * `outcome_unclear` (review); an unconfirmed stop is `outcome_unclear` and `stop_scope`, with
+ * `stop_with_email` beside an e-mail request.
  */
 
 export interface CallPolicyContext {
@@ -91,15 +94,12 @@ export interface ResolvedCallback {
 /**
  * The instant an exact spoken callback names, or null when it does not name one.
  *
- * It resolves only when a day was said in the verified phrase or its agreed line and the
- * confirmer found exactly one complete time in those whole lines (`confirmedTime`, minutes
- * kept, no range or alternative). The rules: a bare weekday or "this <weekday>" is the next
- * one strictly after the call's local date (said on Monday, "Tuesday" is tomorrow); "next
- * <weekday>" anywhere in the callback's lines, a negation or correction near a day, or more
- * than one day said (`ambiguous`) never resolves; "next week <weekday>", the only day said,
- * is that weekday in the Monday-to-Sunday week after the call's, and is not resolved when
- * said on a Sunday; a bare hour 1-6 is PM, 7-11 AM, 12 noon; the instant comes from
- * `callbackInstant`, and must be after the call. Anything else is a vague callback.
+ * It resolves only for a confirmed callback whose clauses name exactly one bare weekday,
+ * today or tomorrow with no qualifier word (`dayQualifier` null) and exactly one complete
+ * time token (`confirmedTime`; call_policy.5). A bare weekday is the next one strictly after
+ * the call's local date (said on Monday, "Tuesday" is tomorrow); a bare hour 1-6 is PM, 7-11
+ * AM, 12 noon; the instant comes from `callbackInstant`, and must be after the call. Anything
+ * else is a vague callback (David sets the time).
  */
 export function resolveSpokenCallback(
   callback: NonNullable<CallAnalysisResult['callback']>,
@@ -108,13 +108,12 @@ export function resolveSpokenCallback(
   const zone = context.firmTimeZone;
   // The model's `exact` flag is not consulted: whether a day and a time were said is decided
   // here from the verified words (C2: "Call me Tuesday at 2" was flagged not exact).
-  if (callback.day === null || callback.dateText === null || callback.confirmedTime === null) return null;
+  if (!callback.confirmed || callback.day === null || callback.dateText === null || callback.confirmedTime === null) return null;
   if (zone === null || !isKnownTimeZone(zone)) return null;
   const dateWords = fold(callback.dateText);
-  // "Next Tuesday" is ambiguous (the coming one, or the one after?) wherever "next" was
-  // said — in the model's date words or anywhere in the callback's own lines.
-  if (callback.dayQualifier === 'next' || callback.dayQualifier === 'ambiguous') return null;
-  if (/\bnext\b/u.test(dateWords) && callback.dayQualifier !== 'next_week') return null;
+  // Only a bare day resolves: any qualifier, in the clauses or the model's date words, does not.
+  if (callback.dayQualifier !== null) return null;
+  if (/\b(?:next|this|after|following|week|weeks|in|not|coming|from)\b/u.test(dateWords)) return null;
   // The day words must name the day the model chose.
   const dayWord = callback.day;
   if (!new RegExp(`\\b${dayWord.slice(0, 3)}`, 'u').test(dateWords)) return null;
@@ -125,18 +124,10 @@ export function resolveSpokenCallback(
   if (dayWord === 'today') localDate = call.date;
   else if (dayWord === 'tomorrow') localDate = addDays(call.date, 1);
   else {
+    // A bare weekday: the next one strictly after the call's date.
     const target = WEEKDAYS.indexOf(dayWord);
-    if (callback.dayQualifier === 'next_week') {
-      // The weekday in the Monday-to-Sunday week after the call's own. Said on a Sunday,
-      // "next week" may mean the week starting tomorrow: ambiguous, so not resolved.
-      if (call.weekday === 0) return null;
-      const toNextMonday = 8 - call.weekday;
-      localDate = addDays(call.date, toNextMonday + ((target + 6) % 7));
-    } else {
-      // A bare weekday or "this <weekday>": the next one strictly after the call's date.
-      const ahead = ((target - call.weekday + 7) % 7) || 7;
-      localDate = addDays(call.date, ahead);
-    }
+    const ahead = ((target - call.weekday + 7) % 7) || 7;
+    localDate = addDays(call.date, ahead);
   }
   const dueAt = callbackInstant(localDate, localTime, zone);
   if (dueAt === null || Date.parse(dueAt) <= Date.parse(context.callStartedAt)) return null;
@@ -292,6 +283,17 @@ export function proposeEffects(
       reason: 'They may have asked not to be called; how far that reaches is unclear.',
       params: { spokenScope: 'unclear', evidence },
     });
+    // With an e-mail request beside it, that too is David's to read, never a follow-up.
+    const request = emailRequest(result);
+    if (request !== null) {
+      proposals.push({
+        key: 'stop_with_email',
+        kind: 'stop_with_email',
+        mode: 'review',
+        reason: 'They may have asked not to be called but to be e-mailed.',
+        params: { requestKind: request.kind, evidence: evidenceOf(result.stop?.ref, request.ref) },
+      });
+    }
   } else if (result.referral !== null) {
     outcome({
       key: 'outcome',
@@ -329,14 +331,19 @@ export function proposeEffects(
     // unanswered objection of the declining kinds (C2: "maybe next year" read as neutral).
     // Never beside anything still to review.
     const declining = result.objections.filter(objection => SOFT_REJECTIONS.has(objection.category) && objection.answered === null);
+    // A callback the confirmer did not confirm is not a callback: it is David's to read.
+    const confirmedCallback = callback !== null && callback.confirmed ? callback : null;
+    const callbackToReview = callback !== null && !callback.confirmed;
     const soft =
       !buying &&
       !buyingToReview &&
+      !callbackToReview &&
       result.followUpRequest === null &&
       ((result.interest.level === 'not_interested' && result.objections.length > 0) ||
         (result.interest.level === 'neutral' && declining.length > 0));
 
-    if (callback !== null) {
+    if (confirmedCallback !== null) {
+      const callback = confirmedCallback;
       outcome({
         key: 'outcome',
         kind: 'outcome',
@@ -358,8 +365,7 @@ export function proposeEffects(
         callback.day !== null &&
         callback.dateText !== null &&
         callback.confirmedTime !== null &&
-        callback.dayQualifier !== 'next' &&
-        callback.dayQualifier !== 'ambiguous'
+        callback.dayQualifier === null
       ) {
         proposals.push({
           key: 'callback_zone_unknown',
@@ -397,8 +403,14 @@ export function proposeEffects(
         key: 'outcome_unclear',
         kind: 'outcome_unclear',
         mode: 'review',
-        reason: 'The call does not say clearly how it went.',
-        params: { evidence: evidenceOf(...result.objections.map(objection => objection.ref), ...result.interest.signals.map(signal => signal.ref)) },
+        reason: callbackToReview ? 'They may have asked to be called back; the words do not confirm it.' : 'The call does not say clearly how it went.',
+        params: {
+          evidence: evidenceOf(
+            callback?.phrase,
+            ...result.objections.map(objection => objection.ref),
+            ...result.interest.signals.map(signal => signal.ref),
+          ),
+        },
       });
     }
 
