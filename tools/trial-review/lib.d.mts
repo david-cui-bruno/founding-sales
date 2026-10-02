@@ -8,8 +8,8 @@ export interface ExportPart {
   readonly part: number;
   readonly of: number;
   readonly wrappedKey?: string;
-  readonly iv?: string;
-  readonly tag?: string;
+  readonly iv: string;
+  readonly tag: string;
   readonly ciphertext: string;
 }
 export interface ReviewVerdict {
@@ -34,6 +34,17 @@ export type ReviewCall = Readonly<Record<string, unknown>> & {
 };
 
 export const EXPORT_ALG: string;
+export const ERROR_CODES: readonly string[];
+export class ToolError extends Error {
+  constructor(code: string, detail?: string);
+  readonly code: string;
+  readonly detail: string;
+}
+export function codeOf(error: unknown, fallback?: string): string;
+export function isProtectedPem(pem: string): boolean;
+export function partAad(part: ExportPart): Buffer;
+export function foldForQuoteCheck(text: string): string;
+export const QUOTE_RUN_CHARACTERS: number;
 export const REVIEW_MODEL: { readonly inferenceProfileId: string; readonly foundationModelId: string; readonly region: string; readonly profile: string };
 export const REVIEW_PRICE: { readonly inputUsdPerMillion: number; readonly outputUsdPerMillion: number };
 export const REVIEW_MAX_OUTPUT_TOKENS: number;
@@ -51,8 +62,12 @@ export function inputTokenBound(body: string): number;
 export function costUsd(inputTokens: number, outputTokens: number): number;
 export function validateVerdicts(answer: unknown, call: ReviewCall): ReviewVerdict[];
 export function answerOf(response: unknown): unknown;
-export function transcriptRuns(calls: readonly ReviewCall[]): Set<string>;
-export function quotedRunCount(text: string, runs: ReadonlySet<string>): number;
+export interface TranscriptRuns {
+  readonly words: ReadonlySet<string>;
+  readonly characters: ReadonlySet<string>;
+}
+export function transcriptRuns(calls: readonly ReviewCall[]): TranscriptRuns;
+export function quotedRunCount(text: string, runs: TranscriptRuns): number;
 export function reviewCalls(input: {
   readonly calls: readonly ReviewCall[];
   readonly invoke: (modelId: string, body: string) => Promise<unknown>;

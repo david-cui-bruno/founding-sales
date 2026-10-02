@@ -4,19 +4,49 @@
 //
 //   node tools/trial-review/review.mjs <folder> [--cap-usd 3] [--keep]
 //
-// Reads <folder>/trial-calls.json; one InvokeModel per call; stops before the estimated total
-// could pass the cap; stops on any error, with no retry and no other provider. Writes
-// <folder>/verdicts.json and prints a table of ids, kinds, verdicts, categories and reasons only,
-// after checking that no 8-word run of any transcript appears in them. Then runs cleanup.sh on the
-// folder (the decrypted calls and the export are removed) unless --keep, success or failure.
+// Reads <folder>/trial-calls.json; one InvokeModel per call; stops before the bounded total could
+// pass the cap; stops on any error, with no retry and no other provider. Writes
+// <folder>/verdicts.json (0600) and prints a table of ids, kinds, verdicts, categories and reasons
+// only, after checking that no run of any transcript appears in them.
+//
+// Cleanup runs on EVERY exit unless --keep: success, any failure (argument errors included), an
+// uncaught error, and SIGINT/SIGTERM/SIGHUP (then exit 130). A failure prints only a fixed code
+// (lib.mjs ERROR_CODES), never an error's message.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REVIEW_DEFAULT_CAP_USD, REVIEW_MODEL, callsOf, quotedRunCount, reviewCalls, transcriptRuns, verdictTable } from './lib.mjs';
+import { REVIEW_DEFAULT_CAP_USD, REVIEW_MODEL, ToolError, callsOf, codeOf, quotedRunCount, reviewCalls, transcriptRuns, verdictTable } from './lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const argv = process.argv.slice(2);
+// Known before anything can fail, so every exit can clean up: the folder is the first word that
+// is not a flag or a flag's value, and --keep is its own word.
+const keep = argv.includes('--keep');
+const folder = argv.find((arg, index) => !arg.startsWith('--') && argv[index - 1] !== '--cap-usd') ?? null;
+
+let cleaned = false;
+/** cleanup.sh on the folder, once, unless --keep. True when nothing is left to remove. */
+function cleanup() {
+  if (cleaned || keep || folder === null) return true;
+  cleaned = true;
+  const result = spawnSync('bash', [join(here, 'cleanup.sh'), folder], { stdio: ['ignore', 'inherit', 'inherit'] });
+  return result.status === 0;
+}
+
+function exitWith(code, exitCode) {
+  if (code !== null) process.stderr.write(`review stopped: ${code}\n`);
+  if (!cleanup()) {
+    process.stderr.write('review stopped: E_CLEANUP\n');
+    if (exitCode === 0) exitCode = 5;
+  }
+  process.exit(exitCode);
+}
+
+process.on('uncaughtException', () => exitWith('E_INTERNAL', 1));
+process.on('unhandledRejection', () => exitWith('E_INTERNAL', 1));
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => exitWith('E_INTERRUPTED', 130));
 
 /** The real client: the only place Bedrock is reached. Overridable for the tests (FSS_TRIAL_REVIEW_STUB). */
 async function bedrockInvoke() {
@@ -28,62 +58,47 @@ async function bedrockInvoke() {
     const answer = await client.send(
       new sdk.InvokeModelCommand({ modelId, contentType: 'application/json', accept: 'application/json', body: new TextEncoder().encode(body) }),
     );
-    return JSON.parse(new TextDecoder().decode(answer.body));
+    try {
+      return JSON.parse(new TextDecoder().decode(answer.body));
+    } catch {
+      throw new ToolError('E_RESPONSE');
+    }
   };
 }
 
-function parseArgs(argv) {
-  const options = { folder: undefined, capUsd: REVIEW_DEFAULT_CAP_USD, keep: false };
+function parseArgs() {
+  let capUsd = REVIEW_DEFAULT_CAP_USD;
+  let seenFolder = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--keep') options.keep = true;
-    else if (arg === '--cap-usd') {
-      options.capUsd = Number(argv[index + 1]);
+    if (arg === '--keep') continue;
+    if (arg === '--cap-usd') {
+      capUsd = Number(argv[index + 1]);
       index += 1;
-      if (!(options.capUsd > 0) || options.capUsd > 50) throw new Error('--cap-usd is a number of dollars above 0 and at most 50');
-    } else if (options.folder === undefined && !arg.startsWith('--')) options.folder = arg;
-    else throw new Error(`unknown argument ${arg}`);
+      if (!(capUsd > 0) || capUsd > 50) throw new ToolError('E_ARGS');
+    } else if (!seenFolder && !arg.startsWith('--')) seenFolder = true;
+    else throw new ToolError('E_ARGS');
   }
-  if (options.folder === undefined) throw new Error('usage: review.mjs <folder> [--cap-usd 3] [--keep]');
-  return options;
+  if (folder === null) throw new ToolError('E_ARGS');
+  return { capUsd };
 }
 
-function cleanup(folder) {
-  const result = spawnSync('bash', [join(here, 'cleanup.sh'), folder], { stdio: 'inherit' });
-  return result.status === 0;
-}
-
-async function main(argv) {
-  let options;
-  try {
-    options = parseArgs(argv);
-  } catch (error) {
-    process.stderr.write(`${error.message}\n`);
-    return 2;
-  }
-  const { folder, capUsd, keep } = options;
+async function run() {
+  const { capUsd } = parseArgs();
   const verdictFile = join(folder, 'verdicts.json');
-  let code;
+  let calls;
   try {
-    code = await run(folder, capUsd, verdictFile);
-  } catch (error) {
-    // The message only. The library's errors name no transcript text, and a JSON parse error of
-    // the model's answer is replaced before it gets here.
-    process.stderr.write(`review stopped: ${error instanceof Error ? error.message : String(error)}\n`);
-    code = 1;
+    calls = callsOf(JSON.parse(readFileSync(join(folder, 'trial-calls.json'), 'utf8')));
+  } catch {
+    throw new ToolError('E_INPUT_PARSE');
   }
-  // Success or failure: the decrypted calls and the export go, unless --keep.
-  if (!keep && !cleanup(folder)) {
-    process.stderr.write('cleanup failed: remove trial-calls.json and the export by hand\n');
-    if (code === 0) code = 5;
-  }
-  return code;
-}
-
-async function run(folder, capUsd, verdictFile) {
-  const calls = callsOf(JSON.parse(readFileSync(join(folder, 'trial-calls.json'), 'utf8')));
   process.stdout.write(`${String(calls.length)} call(s); ${REVIEW_MODEL.inferenceProfileId} in ${REVIEW_MODEL.region}, profile ${REVIEW_MODEL.profile}; cap $${capUsd.toFixed(2)}\n`);
-  const invoke = await bedrockInvoke();
+  let invoke;
+  try {
+    invoke = await bedrockInvoke();
+  } catch {
+    throw new ToolError('E_BEDROCK');
+  }
   const result = await reviewCalls({ calls, invoke, capUsd, log: line => process.stdout.write(`${line}\n`) });
 
   const output = JSON.stringify(
@@ -92,21 +107,28 @@ async function run(folder, capUsd, verdictFile) {
     2,
   );
   const table = verdictTable(result.verdicts);
-  // The final check, before anything is written or printed: no 8-word run of any transcript.
+  // The final check, before anything is written or printed: no run of any transcript.
   const runs = transcriptRuns(calls);
-  const quoted = quotedRunCount(output, runs) + quotedRunCount(table, runs);
-  if (quoted > 0) {
+  if (quotedRunCount(output, runs) + quotedRunCount(table, runs) > 0) {
     rmSync(verdictFile, { force: true });
-    process.stderr.write(`FAIL: the review output repeats transcript wording (${String(quoted)} run(s) of 8 words). Nothing was written or printed.\n`);
-    return 3;
+    throw new ToolError('E_QUOTE');
   }
+  rmSync(verdictFile, { force: true });
   writeFileSync(verdictFile, `${output}\n`, { mode: 0o600 });
+  chmodSync(verdictFile, 0o600);
   process.stdout.write(`${table}\n`);
   process.stdout.write(`reviewed ${String(result.reviewed)} of ${String(calls.length)}; estimated $${result.spentUsd.toFixed(4)}; verdicts in ${verdictFile}\n`);
   // Stopped at the cap: what was reviewed is written, and the exit code says it is not all.
   return result.stoppedAtCap ? 4 : 0;
 }
 
-main(process.argv.slice(2)).then(code => {
-  process.exitCode = code;
-});
+let exitCode;
+let code = null;
+try {
+  exitCode = await run();
+} catch (error) {
+  code = codeOf(error);
+  exitCode = code === 'E_ARGS' ? 2 : code === 'E_QUOTE' || code === 'E_OUTPUT_CHARS' ? 3 : 1;
+} finally {
+  exitWith(code, exitCode ?? 1);
+}

@@ -3,7 +3,6 @@ import { CALL_TRIAL_DEFAULT_SINCE, instant } from '@fss/contracts';
 import { buildTrialExport, type TrialExportPayload } from '@fss/domain/calls/trialExport.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { listWorkspaceIds } from '@fss/domain/restore';
 import type { AdminInvocation, AdminOutcome } from './admin.ts';
 
 /**
@@ -11,7 +10,8 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  * trial, encrypted to David's public key, for a review he runs on his own Mac through AWS
  * Bedrock (`tools/trial-review/`). Read only: one READ ONLY transaction, rolled back.
  *
- * What is selected is what `GET /calls/trial` counts toward ten (`computeCallTrial`), oldest
+ * What is selected is what `GET /calls/trial` counts toward ten (`computeCallTrial`) in ONE
+ * workspace (`--workspace <slug>`, required when the database holds more than one), oldest
  * first, at most `--max-calls` (default 12); what each call carries is `buildTrialExport`'s.
  *
  * ## The envelope
@@ -22,8 +22,9 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  *
  * Printed on stdout, which the operations task's log keeps:
  *
- *   * `{v:1, alg, exportId, part, of, wrappedKey, iv, tag, ciphertext}` — the first part
- *     carries the key, the IV and the tag; every part a slice of the base64 ciphertext;
+ *   * `{v:1, alg, exportId, part, of, wrappedKey?, iv, tag, ciphertext}` — the first part
+ *     carries the wrapped key; each part is its own AES-256-GCM message over a slice of the
+ *     plaintext (its own IV, a 16-byte tag, and `{v, alg, exportId, part, of}` as AAD);
  *   * then the command's answer, `{exported: n}` — the one line about the content.
  *
  * Each line stays under `TRIAL_EXPORT_LINE_LIMIT_BYTES`. CloudWatch keeps events up to
@@ -44,9 +45,10 @@ export interface TrialExportPart {
   readonly exportId: string;
   readonly part: number;
   readonly of: number;
+  /** On the first part only. */
   readonly wrappedKey?: string;
-  readonly iv?: string;
-  readonly tag?: string;
+  readonly iv: string;
+  readonly tag: string;
   readonly ciphertext: string;
 }
 
@@ -72,54 +74,86 @@ export function readTrialExportPublicKey(pemBase64: string | undefined): PublicK
   return { ok: true, key };
 }
 
-/** Encrypt the plaintext to the key, as lines each under the limit. */
+/**
+ * The additional authenticated data of one part: its envelope fields, so a part relabelled
+ * (another export, another index, another total) fails its tag.
+ */
+export function trialExportAad(part: { readonly v: 1; readonly alg: string; readonly exportId: string; readonly part: number; readonly of: number }): Buffer {
+  return Buffer.from(JSON.stringify({ v: part.v, alg: part.alg, exportId: part.exportId, part: part.part, of: part.of }), 'utf8');
+}
+
+export const TRIAL_EXPORT_TAG_BYTES = 16;
+
+/**
+ * Encrypt the plaintext to the key, as lines each under the limit. One random content key,
+ * wrapped once (on the first part); each part is its own AES-256-GCM message over a slice of
+ * the plaintext, with its own 96-bit IV, a 128-bit tag, and its envelope fields as AAD.
+ */
 export function encryptTrialExport(plaintext: Buffer, key: KeyObject, lineLimitBytes = TRIAL_EXPORT_LINE_LIMIT_BYTES): readonly string[] {
   const contentKey = randomBytes(32);
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', contentKey, iv);
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]).toString('base64');
-  const tag = cipher.getAuthTag().toString('base64');
   const wrappedKey = publicEncrypt({ key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, contentKey).toString('base64');
-  contentKey.fill(0);
   const exportId = randomBytes(8).toString('hex');
-  // Room for the envelope around each slice: the key and the IV ride on the first part.
-  const header = JSON.stringify({ v: 1, alg: TRIAL_EXPORT_ALG, exportId, part: 999, of: 999, wrappedKey, iv: iv.toString('base64'), tag, ciphertext: '' });
-  const slice = lineLimitBytes - Buffer.byteLength(header) - 16;
-  if (slice < 1_000) throw new Error('trial export line limit too small for its envelope');
-  const pieces: string[] = [];
-  for (let at = 0; at < ciphertext.length || pieces.length === 0; at += slice) pieces.push(ciphertext.slice(at, at + slice));
-  return pieces.map((piece, index) => {
+  const header = JSON.stringify({
+    v: 1,
+    alg: TRIAL_EXPORT_ALG,
+    exportId,
+    part: 99_999,
+    of: 99_999,
+    wrappedKey,
+    iv: randomBytes(12).toString('base64'),
+    tag: randomBytes(TRIAL_EXPORT_TAG_BYTES).toString('base64'),
+    ciphertext: '',
+  });
+  // Plaintext bytes per part: base64 is 4 characters per 3 bytes.
+  const sliceBytes = Math.floor(((lineLimitBytes - Buffer.byteLength(header) - 16) * 3) / 4);
+  if (sliceBytes < 600) throw new Error('trial export line limit too small for its envelope');
+  const slices: Buffer[] = [];
+  for (let at = 0; at < plaintext.length || slices.length === 0; at += sliceBytes) slices.push(plaintext.subarray(at, at + sliceBytes));
+  const lines = slices.map((slice, index) => {
+    const envelope = { v: 1 as const, alg: TRIAL_EXPORT_ALG as typeof TRIAL_EXPORT_ALG, exportId, part: index + 1, of: slices.length };
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', contentKey, iv, { authTagLength: TRIAL_EXPORT_TAG_BYTES });
+    cipher.setAAD(trialExportAad(envelope));
+    const ciphertext = Buffer.concat([cipher.update(slice), cipher.final()]).toString('base64');
     const part: TrialExportPart = {
-      v: 1,
-      alg: TRIAL_EXPORT_ALG,
-      exportId,
-      part: index + 1,
-      of: pieces.length,
-      ...(index === 0 ? { wrappedKey, iv: iv.toString('base64'), tag } : {}),
-      ciphertext: piece,
+      ...envelope,
+      ...(index === 0 ? { wrappedKey } : {}),
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      ciphertext,
     };
     return JSON.stringify(part);
   });
+  contentKey.fill(0);
+  return lines;
 }
 
 const refuse = (reason: string, detail: string): AdminOutcome => ({ ok: false, reason, detail });
 
-/** The plaintext of every workspace's export, inside the caller's READ ONLY transaction. */
+/**
+ * Which workspace: `--workspace <slug or id>`, or the only one. Never more than one: the trial
+ * is one workspace's (as `send-path report` scopes itself).
+ */
+export async function trialExportWorkspace(
+  session: SessionQueryable,
+  named: string | undefined,
+): Promise<{ readonly ok: true; readonly workspaceId: string } | { readonly ok: false; readonly reason: string; readonly detail: string }> {
+  const { rows } = await session.query<{ id: string; slug: string }>('SELECT id::text AS id, slug FROM workspaces ORDER BY id');
+  if (named === undefined) {
+    if (rows.length !== 1) return { ok: false, reason: 'workspace_ambiguous', detail: `this database holds ${String(rows.length)} workspaces; name one with --workspace <slug>` };
+    return { ok: true, workspaceId: rows[0]?.id ?? '' };
+  }
+  const found = rows.find(row => row.slug === named || row.id === named);
+  return found === undefined ? { ok: false, reason: 'workspace_unknown', detail: 'no workspace on this database has that slug or id' } : { ok: true, workspaceId: found.id };
+}
+
+/** One workspace's export plaintext, inside the caller's READ ONLY transaction. */
 export async function collectTrialExport(
   session: SessionQueryable,
-  options: { readonly since: string; readonly maxCalls: number },
-): Promise<{ readonly workspaces: readonly TrialExportPayload[]; readonly calls: number }> {
-  const workspaces: TrialExportPayload[] = [];
-  let remaining = options.maxCalls;
-  for (const workspaceId of await listWorkspaceIds(session)) {
-    if (remaining <= 0) break;
-    const context = repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), session);
-    const payload = await buildTrialExport(context, { since: options.since, maxCalls: remaining });
-    if (payload.calls.length === 0) continue;
-    workspaces.push(payload);
-    remaining -= payload.calls.length;
-  }
-  return { workspaces, calls: options.maxCalls - remaining };
+  options: { readonly workspaceId: string; readonly since: string; readonly maxCalls: number },
+): Promise<TrialExportPayload> {
+  const context = repositoryContext(workspaceScope(options.workspaceId, { kind: 'system', component: 'worker' }), session);
+  return await buildTrialExport(context, { since: options.since, maxCalls: options.maxCalls });
 }
 
 export async function trialExportCommand(
@@ -143,9 +177,11 @@ export async function trialExportCommand(
   let lines: readonly string[];
   let exported: number;
   try {
-    const collected = await collectTrialExport(session, { since, maxCalls });
-    exported = collected.calls;
-    const plaintext = Buffer.from(JSON.stringify({ format: 'fss.trial-export.v1', since, workspaces: collected.workspaces }), 'utf8');
+    const scope = await trialExportWorkspace(session, invocation.options['--workspace']);
+    if (!scope.ok) return refuse(scope.reason, scope.detail);
+    const payload = await collectTrialExport(session, { workspaceId: scope.workspaceId, since, maxCalls });
+    exported = payload.calls.length;
+    const plaintext = Buffer.from(JSON.stringify({ format: 'fss.trial-export.v1', since, workspaces: [payload] }), 'utf8');
     lines = encryptTrialExport(plaintext, key.key);
     plaintext.fill(0);
   } finally {

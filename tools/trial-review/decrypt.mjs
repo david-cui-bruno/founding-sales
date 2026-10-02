@@ -3,15 +3,38 @@
 //
 //   node tools/trial-review/decrypt.mjs <folder>/trial-export.jsonl <private-key.pem>
 //
-// Asks for the private key's passphrase (typed, never an argument), then writes
-// <folder>/trial-calls.json with mode 0600 beside the export. Prints only how many calls it wrote.
-// The export file must be named trial-export*, so cleanup.sh can find and remove it.
+// The private key must be passphrase-protected (an ENCRYPTED PEM). Asks for the passphrase (typed,
+// never an argument), then writes <folder>/trial-calls.json with mode 0600 beside the export:
+// to a temporary name first, renamed once complete. On any failure every plaintext it could have
+// left (the temporary file, and a trial-calls.json from before) is removed, and only a fixed code
+// is printed. The export file must be named trial-export*, so cleanup.sh can find and remove it.
 
-import { createPrivateKey } from 'node:crypto';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes, createPrivateKey } from 'node:crypto';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { callsOf, decryptExport, readExportParts } from './lib.mjs';
+import { ToolError, callsOf, codeOf, decryptExport, isProtectedPem, readExportParts } from './lib.mjs';
+
+const [exportArg, keyArg] = process.argv.slice(2);
+const folder = exportArg === undefined ? null : dirname(exportArg);
+const target = folder === null ? null : join(folder, 'trial-calls.json');
+const temporary = folder === null ? null : join(folder, `.trial-calls.${randomBytes(6).toString('hex')}.tmp`);
+
+/** Remove every plaintext this run could have left. */
+function removePlaintext() {
+  for (const file of [temporary, target]) if (file !== null) rmSync(file, { force: true });
+}
+
+/** Fail with a code: the plaintext goes, and nothing about the error is printed but the code. */
+function fail(code, exitCode = 1) {
+  removePlaintext();
+  process.stderr.write(`decrypt failed: ${code}\n`);
+  process.exit(exitCode);
+}
+
+process.on('uncaughtException', () => fail('E_INTERNAL'));
+process.on('unhandledRejection', () => fail('E_INTERNAL'));
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => fail('E_INTERRUPTED', 130));
 
 /** The passphrase: hidden on a terminal; one line from stdin otherwise. */
 async function askPassphrase() {
@@ -41,7 +64,7 @@ async function askPassphrase() {
         if (character === '\r' || character === '\n') return done(typed);
         if (character === '\u0003') {
           process.stdin.setRawMode(false);
-          return reject(new Error('cancelled'));
+          return reject(new ToolError('E_INTERRUPTED'));
         }
         if (character === '\u007f' || character === '\b') typed = typed.slice(0, -1);
         else typed += character;
@@ -52,35 +75,42 @@ async function askPassphrase() {
   });
 }
 
-async function main(argv) {
-  const [exportFile, keyFile, ...rest] = argv;
-  if (exportFile === undefined || keyFile === undefined || rest.length > 0) {
-    process.stderr.write('usage: decrypt.mjs <folder>/trial-export*.jsonl <private-key.pem>\n');
-    return 2;
+async function main() {
+  if (exportArg === undefined || keyArg === undefined || process.argv.length !== 4) throw new ToolError('E_ARGS');
+  if (!basename(exportArg).startsWith('trial-export')) throw new ToolError('E_ARGS');
+  let text;
+  let pem;
+  try {
+    text = readFileSync(exportArg, 'utf8');
+    pem = readFileSync(keyArg, 'utf8');
+  } catch {
+    throw new ToolError('E_INPUT_PARSE');
   }
-  if (!basename(exportFile).startsWith('trial-export')) {
-    process.stderr.write('the export file must be named trial-export* (cleanup.sh removes it by that name)\n');
-    return 2;
-  }
-  const parts = readExportParts(readFileSync(exportFile, 'utf8'));
+  if (!isProtectedPem(pem)) throw new ToolError('E_KEY_UNPROTECTED');
+  const parts = readExportParts(text);
   const passphrase = await askPassphrase();
-  const privateKey = createPrivateKey({ key: readFileSync(keyFile, 'utf8'), passphrase });
+  let privateKey;
+  try {
+    privateKey = createPrivateKey({ key: pem, passphrase });
+  } catch {
+    throw new ToolError('E_KEY');
+  }
   const exported = decryptExport(parts, privateKey);
   const calls = callsOf(exported);
-  const out = join(dirname(exportFile), 'trial-calls.json');
-  writeFileSync(out, JSON.stringify(exported), { mode: 0o600 });
-  chmodSync(out, 0o600);
-  process.stdout.write(`${JSON.stringify({ decrypted: calls.length, file: out })}\n`);
-  return 0;
+  try {
+    writeFileSync(temporary, JSON.stringify(exported), { mode: 0o600, flag: 'wx' });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, target);
+    chmodSync(target, 0o600);
+  } catch {
+    throw new ToolError('E_WRITE');
+  }
+  process.stdout.write(`${JSON.stringify({ decrypted: calls.length, file: target })}\n`);
 }
 
-main(process.argv.slice(2)).then(
-  code => {
-    process.exitCode = code;
+main().then(
+  () => {
+    process.exitCode = 0;
   },
-  error => {
-    // The message only: never the plaintext, which is in no error this file raises.
-    process.stderr.write(`decrypt failed: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  },
+  error => fail(codeOf(error), codeOf(error) === 'E_ARGS' ? 2 : 1),
 );

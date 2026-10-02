@@ -312,7 +312,7 @@ fss admin schema-preflight 0019                    the one-off check before migr
 fss admin schema-preflight 0020                    the one-off check before migration 0020
 fss admin release-record put --json <file> | --json-base64 <value>
 fss admin release-record show --reference <releaseGateReference>
-fss admin trial export --public-key-pem-b64 <b64> [--since <instant>] [--max-calls 12]
+fss admin trial export --public-key-pem-b64 <b64> [--workspace <slug>] [--since <instant>] [--max-calls 12]
 ```
 
 Every command takes `--report <path>`, which writes the same JSON the command printed, except

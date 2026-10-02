@@ -16,9 +16,11 @@ import { computeCallTrial } from './trialReport.ts';
  *
  * Never: audio, a recording path, a number, an address, a contact's name, a log's note. Ids
  * stand in for people. In every free-text string (the transcript, quotes, reasons, task text)
- * an e-mail address becomes `[email]`, a run of seven or more digits `[phone]`, the call's
- * contact's name `[contact]` and the firm's name `[firm]`; a spoken number or a referred
- * person's name in a proposal's params is replaced outright.
+ * an e-mail address (written or read out) becomes `[email]`, a web address `[url]`, seven or
+ * more digits (as numerals, words or both) `[phone]`, every person the payload knows of (all
+ * the firm's contacts, every referral named in a proposal) `[name]`, and the firm's name
+ * `[firm]`; a spoken number or a referred person's name in a proposal's params is replaced
+ * outright.
  *
  * It is built in memory only, inside the caller's READ ONLY transaction, and is encrypted by
  * the caller (`fss admin trial export`) before anything leaves the process.
@@ -67,27 +69,72 @@ export interface TrialExportPayload {
 }
 
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+/giu;
+/** An address read out: "dana at example dot com", best effort. */
+const SPOKEN_EMAIL = /\b[\p{L}\p{N}._-]+\s+at\s+[\p{L}\p{N}-]+(?:\s+dot\s+[\p{L}\p{N}-]+)+\b/giu;
+/** A web address: a scheme, `www.`, or a dotted host with a common top-level domain. */
+const URL_LIKE = /\b(?:https?:\/\/\S+|www\.\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.(?:com|net|org|io|co|us|biz|info|app|dev|test)(?:\/\S*)?)\b/giu;
 /** Seven or more digits, with the separators people write numbers with. */
 const PHONE = /\+?\d(?:[\s().-]*\d){6,}/gu;
+/**
+ * Seven or more digits spoken as words, alone or mixed with numerals ("four one zero five five
+ * five oh one four two", "401 five five five 0142"), best effort: a run of digit words and digit
+ * groups, separated by spaces, hyphens, commas or "and", holding seven digits or more.
+ */
+const DIGIT_WORD = '(?:zero|oh|o|one|two|three|four|five|six|seven|eight|nine|double|triple|\\d+)';
+const DIGIT_RUN = new RegExp(`\\b${DIGIT_WORD}(?:(?:[\\s,.-]+|\\s+and\\s+)${DIGIT_WORD})+\\b`, 'giu');
+const DIGIT_VALUE: Readonly<Record<string, number>> = Object.freeze({ double: 1, triple: 2 });
+
+function digitsIn(run: string): number {
+  let count = 0;
+  for (const token of run.toLowerCase().split(/[\s,.-]+/u)) {
+    if (token === 'and' || token === '') continue;
+    if (/^\d+$/u.test(token)) count += token.length;
+    else count += DIGIT_VALUE[token] ?? 1;
+  }
+  return count;
+}
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
-/** The redaction every free-text string goes through. */
-export function redactorFor(names: { readonly contact: string | null; readonly firm: string | null }): (text: string) => string {
-  const firm = names.firm?.trim() ?? '';
-  const contactTokens = (names.contact ?? '')
+const tokensOf = (name: string): string[] =>
+  name
     .split(/\s+/u)
     .map(token => token.replace(/[^\p{L}\p{M}'-]/gu, ''))
-    .filter(token => token.length >= 2)
-    .sort((left, right) => right.length - left.length);
+    .filter(token => token.length >= 2);
+
+/**
+ * The redaction every free-text string goes through. `people` is every person the payload
+ * knows of: every contact at the firm and every name in a proposal's params (a referral); each
+ * full name, then each of its words, becomes `[name]`. The firm's name becomes `[firm]`.
+ */
+export function redactorFor(names: { readonly people: readonly (string | null)[]; readonly firm: string | null }): (text: string) => string {
+  const firm = names.firm?.trim() ?? '';
+  const people = names.people.filter((name): name is string => name !== null && name.trim().length >= 2).map(name => name.trim());
+  const phrases = [...new Set(people.filter(name => /\s/u.test(name)))].sort((left, right) => right.length - left.length);
+  const tokens = [...new Set(people.flatMap(tokensOf))].sort((left, right) => right.length - left.length);
+  const bounded = (alternatives: readonly string[]): RegExp | null =>
+    alternatives.length === 0 ? null : new RegExp(`(?<![\\p{L}])(?:${alternatives.map(escape).join('|')})(?![\\p{L}])`, 'giu');
   const firmPattern = firm.length >= 2 ? new RegExp(escape(firm), 'giu') : null;
-  const contactPattern = contactTokens.length > 0 ? new RegExp(`(?<![\\p{L}])(?:${contactTokens.map(escape).join('|')})(?![\\p{L}])`, 'giu') : null;
+  const phrasePattern = bounded(phrases);
+  const tokenPattern = bounded(tokens);
   return (text: string): string => {
-    let out = text.replace(EMAIL, '[email]').replace(PHONE, '[phone]');
+    let out = text.replace(EMAIL, '[email]').replace(SPOKEN_EMAIL, '[email]').replace(URL_LIKE, '[url]').replace(PHONE, '[phone]');
+    out = out.replace(DIGIT_RUN, run => (digitsIn(run) >= 7 ? '[phone]' : run));
     if (firmPattern !== null) out = out.replace(firmPattern, '[firm]');
-    if (contactPattern !== null) out = out.replace(contactPattern, '[contact]');
+    if (phrasePattern !== null) out = out.replace(phrasePattern, '[name]');
+    if (tokenPattern !== null) out = out.replace(tokenPattern, '[name]');
     return out;
   };
+}
+
+/** Every person's name a proposal's params carry (a referral's `name`). */
+function namesInProposals(proposals: readonly CallProposal[]): string[] {
+  const found: string[] = [];
+  for (const proposal of proposals) {
+    const params = proposal.params as Record<string, unknown>;
+    if (typeof params['name'] === 'string') found.push(params['name']);
+  }
+  return found;
 }
 
 /** Free-text params; every other string param is a code, a date or a zone. */
@@ -143,7 +190,6 @@ export async function buildTrialExport(
     );
     const session = sessions[0];
     if (session === undefined) continue;
-    const redact = redactorFor({ contact: session.contact_name, firm: session.firm_name });
 
     const { rows: transcripts } = await context.db.query<{ provider: string; model: string; utterances: unknown }>(
       'SELECT provider, model, utterances FROM call_transcripts WHERE workspace_id = $1 AND call_session_id = $2',
@@ -168,6 +214,15 @@ export async function buildTrialExport(
     );
     const analysis = analyses[0];
     if (analysis === undefined) continue;
+    // Every person this call's payload knows: the firm's contacts, and the names its proposals carry.
+    const { rows: contacts } = await context.db.query<{ full_name: string | null }>(
+      'SELECT full_name FROM contacts WHERE workspace_id = $1 AND firm_id = $2',
+      [workspaceId, session.firm_id],
+    );
+    const redact = redactorFor({
+      people: [session.contact_name, ...contacts.map(row => row.full_name), ...namesInProposals(analysis.proposals ?? [])],
+      firm: session.firm_name,
+    });
 
     const { rows: decided } = await context.db.query<{ analysis_id: string; key: string; type: string | null; result: string; at: Date }>(
       `SELECT detail->>'analysisId' AS analysis_id, detail->>'key' AS key, detail->>'type' AS type, detail->>'result' AS result,
