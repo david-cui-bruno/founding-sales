@@ -523,6 +523,14 @@ export const logCallOutcomeCommandSchema = z.strictObject({
   /** Omit for "just now": the server's clock is used. Present only for an entered past time. */
   occurredAt: instant.optional(),
   note: z.string().trim().min(1).max(2000).optional(),
+  /**
+   * Which way the call went (migration 0034, slice S2). Omitted is `outbound`, which is
+   * every body an installed desktop sends. `inbound` is "Log incoming call": a callback
+   * David took on his mobile, with no ticket, session, route or calling identity.
+   */
+  direction: z.enum(['outbound', 'inbound']).optional(),
+  /** How long an incoming call lasted. Inbound only; an outbound call's is its session's. */
+  durationSeconds: z.number().int().min(0).max(86_400).optional(),
   /** Accepted for old clients and ignored. The step's frozen configuration decides (9.1). */
   retryBehaviour: callRetryBehaviourSchema.optional(),
   /**

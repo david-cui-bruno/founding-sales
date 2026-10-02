@@ -1,10 +1,18 @@
-import { firmMeetingsResponseSchema, meetingMatchedSchema, unmatchedMeetingsResponseSchema } from '@fss/contracts';
+import {
+  firmBasicsRefusalSchema,
+  firmBasicsResultSchema,
+  firmMeetingsResponseSchema,
+  loggedCallResultSchema,
+  meetingMatchedSchema,
+  unmatchedMeetingsResponseSchema,
+} from '@fss/contracts';
 import {
   DIAL_IPC_CHANNELS,
   OPERATIONS,
   OPERATION_IPC_CHANNELS,
   OPERATION_NAMES,
   operationOf,
+  type OperationInput,
   type OperationName,
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
@@ -211,6 +219,37 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'meetings.match': async (input: { readonly meetingId: string; readonly firmId: string }) => {
       const answer = await deps.api.command('/meetings/match', input, value => meetingMatchedSchema.parse(value));
       return answer.ok ? { matched: answer.value, reason: null } : { matched: null, reason: answer.reason.slice(0, 80) };
+    },
+
+    // Slice S2. Straight through the authenticated client, like Meetings: the view that
+    // asked reads its own state again afterwards.
+    'firms.saveBasics': async (input: OperationInput<'firms.saveBasics'>) => {
+      const answer = await deps.api.command('/crm/firms/basics', input, value => firmBasicsResultSchema.parse(value));
+      if (answer.ok) return { saved: answer.value, reason: null, issues: [] };
+      const refusal = answer.offline ? null : firmBasicsRefusalSchema.safeParse(answer.refusal);
+      return {
+        saved: null,
+        reason: answer.reason.slice(0, 80),
+        issues: refusal?.success === true ? (refusal.data.issues ?? []) : [],
+      };
+    },
+    'calls.logIncoming': async (input: OperationInput<'calls.logIncoming'>) => {
+      const answer = await deps.api.command(
+        '/calls/log',
+        {
+          firmId: input.firmId,
+          ...(input.contactId === null ? {} : { contactId: input.contactId }),
+          outcome: input.outcome,
+          direction: 'inbound',
+          occurredAt: input.occurredAt,
+          ...(input.durationSeconds === null ? {} : { durationSeconds: input.durationSeconds }),
+          ...(input.note.trim() === '' ? {} : { note: input.note.trim() }),
+        },
+        value => loggedCallResultSchema.parse(value),
+      );
+      if (!answer.ok) return { logged: false, reason: answer.reason.slice(0, 80) };
+      const needsTime = answer.value.followUps.some(entry => entry.kind === 'callback_time_needed');
+      return { logged: true, reason: needsTime ? 'outcome_recorded_callback_time_needed' : null };
     },
   } satisfies Readonly<Record<OperationName, (input: never) => Promise<unknown>>>;
   return handlers as Readonly<Record<OperationName, Handler>>;

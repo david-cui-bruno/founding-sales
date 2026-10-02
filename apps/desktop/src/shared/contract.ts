@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   MAILBOX_STATUSES,
   MAILBOX_SYNC_STATES,
+  TODAY_CARD_BLOCKERS,
   TODAY_LANES,
   accessTokenSchema,
   clientVersionRangeSchema,
@@ -124,6 +125,12 @@ export const cachedTodayCardSchema = z.strictObject({
     emailsDue: z.number().int().min(0),
     callsDue: z.number().int().min(0),
   }),
+  /**
+   * Why the firm cannot be called yet (slice S2): two codes, never the number or the
+   * place itself, so the cache still holds nothing personal. Optional: a cache written by
+   * 1.0.25 has none.
+   */
+  blockers: z.array(z.enum(TODAY_CARD_BLOCKERS)).optional(),
 });
 export type CachedTodayCard = z.infer<typeof cachedTodayCardSchema>;
 

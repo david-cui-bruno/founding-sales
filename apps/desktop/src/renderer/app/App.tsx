@@ -7,13 +7,14 @@ import { RepliesRoute } from '../replies/RepliesRoute.tsx';
 import { SequencesRoute } from '../sequences/SequencesRoute.tsx';
 import { SettingsView } from '../settings/SettingsView.tsx';
 import { buildTodayView } from '../todayView.ts';
-import { TodayColumn } from '../today/TodayColumn.tsx';
+import { TodayWorkspace, useTodayMemory } from '../today/TodayWorkspace.tsx';
 import { useToday } from '../today/useToday.ts';
+import { registryCallPorts, useCall } from '../calling/useCall.ts';
 import { holdInert } from '../busy.ts';
 import { routeText, type Route } from '../routes.ts';
 import { buildScreenView } from '../viewModel.ts';
 import { Alert } from '../ui/alert.tsx';
-import { DraftsProvider, useHasDrafts } from './drafts.tsx';
+import { DraftsProvider } from './drafts.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { SignedOutScreen, type SignInDraft } from './SignedOutScreen.tsx';
 import { ThisMac } from './ThisMac.tsx';
@@ -70,15 +71,23 @@ function Column({
   // A page built without the preload has no operations at all; the views say so where a
   // control would have been rather than throwing.
   const hasOperations = operations() !== undefined;
-  const typed = useHasDrafts('today:');
+  // A read Today makes by itself waits while somebody is typing in it. Since slice S2 a
+  // draft left behind does not count: drafts are kept per firm for the whole sitting (a
+  // note on the last firm, an outcome half-entered), the list is keyed so a read never
+  // drops one, and a list that never refreshed while any firm had a draft would be
+  // yesterday's list by lunchtime.
   const isTyping = useCallback((): boolean => {
     const lanes = document.querySelector('[data-region="today"]');
     const active = document.activeElement;
-    const focused =
-      lanes instanceof HTMLElement && active instanceof HTMLElement && lanes.contains(active) && active.matches('input, textarea, select');
-    return focused || typed;
-  }, [typed]);
+    return lanes instanceof HTMLElement && active instanceof HTMLElement && lanes.contains(active) && active.matches('input, textarea, select');
+  }, []);
   const today = useToday(session.identity, session.generation, session.guard, isTyping);
+  // The call and what Today remembers live here, above the route (slice S2): leaving Today
+  // mid-call does not hang up, and coming back finds the queue, the firm and the call as
+  // they were. `useCall` still hangs up when the person signs out (this unmounts).
+  const call = useCall(registryCallPorts());
+  const memory = useTodayMemory();
+  const live = call.state.phase === 'starting' || call.state.phase === 'ringing' || call.state.phase === 'connected';
 
   const todayView = today.state === null ? null : buildTodayView(today.state);
   const view = buildHomeView(
@@ -151,19 +160,25 @@ function Column({
         data-region="column"
         data-testid="column"
         data-route={routeText(route)}
-        className="h-screen overflow-y-auto"
+        className={route.name === 'today' ? 'h-screen overflow-hidden' : 'h-screen overflow-y-auto'}
       >
+        {live && route.name !== 'today' ? (
+          <div data-testid="call-elsewhere" className="callie-v2 sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-ok-soft px-5 py-1.5 text-sm">
+            <span className="flex-1 text-ok-ink">You are on a call.</span>
+            <button type="button" className="text-sm font-medium underline-offset-2 hover:underline" onClick={() => onNavigate({ name: 'today' })}>
+              Back to the call
+            </button>
+          </div>
+        ) : null}
         {route.name === 'today' ? (
-          <TodayColumn
+          <TodayWorkspace
             key={key}
             home={view}
-            today={today.state}
+            today={today}
             todayView={todayView}
-            pending={today.pending}
-            refreshAnswered={today.refreshAnswered}
-            now={today.now}
+            call={call}
+            memory={memory}
             hasTodayBridge={hasOperations}
-            actions={today.actions}
             onRefresh={refreshAll}
             onConnectMailbox={() => {
               void session.connectMailbox();

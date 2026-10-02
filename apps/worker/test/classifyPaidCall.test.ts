@@ -401,8 +401,8 @@ describe('classify.reply on the paid-call pattern (slice P1, fix round 2)', () =
       provider_error_type: 'invalid_request_error',
       provider_parameter: 'output_config.format.schema',
     });
-    // The recorded call stays `provider_error`: the CHECK constraint has no other word and this fix has no migration.
-    expect(await outcomes(id)).toEqual(['provider_error']);
+    // The recorded call says it was refused (migration 0033), not that the provider erred.
+    expect(await outcomes(id)).toEqual(['provider_refused']);
     expect(JSON.stringify(logs)).not.toContain('Tuesday');
   });
 

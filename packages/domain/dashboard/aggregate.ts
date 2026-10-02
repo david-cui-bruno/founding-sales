@@ -164,6 +164,7 @@ export async function readDashboard(
        FROM call_logs c
        JOIN firms f ON f.workspace_id = c.workspace_id AND f.id = c.firm_id
       WHERE c.workspace_id = $1
+        AND c.direction = 'outbound'
         AND c.occurred_at >= $2::timestamptz AND c.occurred_at < $3::timestamptz
         AND ($4::uuid IS NULL OR f.assigned_user_id = $4::uuid)
       GROUP BY c.outcome

@@ -116,7 +116,9 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings']);
+    expect(families).toEqual(['today', 'calling', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls']);
+    // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual(['firms.saveBasics', 'calls.logIncoming']);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
     expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.unmatched', 'meetings.match']);
     // Slice C1: placing a call from Callie, when `calling_provider = twilio`.

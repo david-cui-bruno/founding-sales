@@ -20,7 +20,7 @@ import type { TodayActions } from './useToday.ts';
  * may be pressed; this file draws that answer.
  */
 
-function UpdatedLine({
+export function UpdatedLine({
   state,
   now,
   refreshAnswered,
@@ -149,11 +149,31 @@ export function TodayColumn({
         )}
       </div>
 
+      <HomeExtras home={home} onConnectMailbox={onConnectMailbox} />
+    </div>
+  );
+}
+
+/**
+ * The numbers and what needs the person, below the lanes (lane g65). Exported since
+ * slice S2, which shows them under the queue of the three-region Today.
+ */
+export function HomeExtras({
+  home,
+  onConnectMailbox,
+  compact = false,
+}: {
+  readonly home: HomeView;
+  onConnectMailbox(): void;
+  readonly compact?: boolean;
+}): JSX.Element {
+  return (
+    <div className={compact ? 'flex flex-col gap-1 px-2 [&>section]:mt-5' : 'contents'}>
       <section data-testid="figures" className="mt-9">
         <h2 data-testid="figures-label" className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
           {home.figures.label}
         </h2>
-        <div className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
+        <div className={compact ? 'grid grid-cols-2 gap-x-4 gap-y-2' : 'grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4'}>
           {home.figures.cells.map(cell => (
             <div key={cell.key} data-testid={`figure-${cell.key}`} className="flex flex-col gap-0.5">
               <div className="text-xs text-muted-foreground">{cell.label}</div>

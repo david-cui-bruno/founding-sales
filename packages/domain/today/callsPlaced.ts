@@ -17,6 +17,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * the next, whatever UTC says about it, and a zone changed in Settings moves the boundary
  * for the next read rather than reinterpreting the calls already recorded.
  *
+ * **Placed, so outbound only (migration 0034).** An incoming call David took on his mobile
+ * and logged afterwards is a conversation, not a call he placed; it is not counted here.
+ *
  * **`occurred_at`, not `recorded_at`.** A call can be recorded a little after it was
  * placed, and one placed late last night and recorded after midnight belongs to the night
  * it happened. `recorded_at` is the server's clock on the insert; `occurred_at` is the
@@ -54,6 +57,7 @@ export async function readCallsPlacedToday(
                FROM call_logs c
                JOIN firms f ON f.workspace_id = c.workspace_id AND f.id = c.firm_id
               WHERE c.workspace_id = w.id
+                AND c.direction = 'outbound'
                 AND (c.occurred_at AT TIME ZONE w.business_time_zone)::date = (local.at)::date
                 AND ($3::uuid IS NULL OR f.assigned_user_id = $3::uuid))::text AS calls
        FROM workspaces w

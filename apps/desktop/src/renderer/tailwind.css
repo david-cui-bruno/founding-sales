@@ -20,6 +20,8 @@
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import 'tw-animate-css';
+/* The v2 tokens (Slice 2), scoped under `.callie-v2`: only a root that names it reads them. */
+@import './v2/tokens.css' layer(base);
 
 /* The sources Tailwind scans for class names. Explicit, because the automatic scan
    starts from this file's directory and would also walk `node_modules`-sized trees
@@ -58,6 +60,28 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --font-sans: var(--font-system);
+
+  /* The v2 names shadcn has no word for (Slice 2). They resolve only inside a
+     `.callie-v2` root, which is the only place anything uses them. */
+  --color-faint: var(--v2-faint);
+  --color-strong: var(--v2-border-strong);
+  --color-link: var(--v2-accent);
+  --color-selected: var(--v2-accent-soft);
+  --color-pressed: var(--v2-pressed);
+  --color-ok-soft: var(--v2-ok-soft);
+  --color-ok-ink: var(--v2-ok-ink);
+  --color-warn-soft: var(--v2-warn-soft);
+  --color-warn-ink: var(--v2-warn-ink);
+  --color-danger-soft: var(--v2-danger-soft);
+  --color-danger-ink: var(--v2-danger-ink);
+  --color-info-soft: var(--v2-info-soft);
+  --color-info-ink: var(--v2-info-ink);
+}
+
+/* `text-2xs` (keyboard hints), sized by the v2 root it is used in. */
+@theme {
+  --text-2xs: 10.5px;
+  --text-2xs--line-height: 14px;
 }
 
 :root {

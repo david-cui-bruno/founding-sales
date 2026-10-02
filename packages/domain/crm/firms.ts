@@ -6,6 +6,7 @@ import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
+import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import { FIRM_ZONE_SOURCES } from './zone.ts';
 import {
   accept,
@@ -97,6 +98,10 @@ export async function createFirm(
     return refuse('not_assigned');
   }
   if (input.name.trim().length === 0) return refuse('invalid_input');
+  // Slice S2 lock order: Today's lock before any row this transaction writes or locks,
+  // because it ends in `refreshTodayForFirm` and the morning build holds that lock while
+  // it takes firm locks (S2 review, finding 1).
+  await lockTodayForFirmChange(context);
 
   let created: FirmRow;
   try {
@@ -168,6 +173,11 @@ export async function createFirm(
   // that failed because of the research settings would be the tail wagging the dog.
   // The sweep reaches a firm whose enqueue did not happen.
   await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
+
+  // Slice S2: the firm is on today's list now, not at tomorrow's 05:00 build. The build's
+  // own sources, asked about this one firm, in this transaction — so an import that rolls
+  // a row back leaves no card, and the morning build writes the same row again.
+  await refreshTodayForFirm(context, { firmId: created.id });
   return accept(created);
 }
 

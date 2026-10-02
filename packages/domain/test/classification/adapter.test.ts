@@ -285,7 +285,7 @@ describe('a request the API refuses', () => {
     const message = "output_config.format.schema: Invalid schema: Enum value 'interested' does not match declared type '['string', 'null']'";
     const attempt = await throwing(new FakeApiError(400, { type: 'error', error: { type: 'invalid_request_error', message } })).classify(MESSAGE);
     expect(attempt.ok).toBe(false);
-    expect(attempt.call.outcome).toBe('provider_error');
+    expect(attempt.call.outcome).toBe('provider_refused');
     expect(attempt.usageReported).toBe(false);
     // Only the parameter path the API's sentence starts with (C3 follow-up review).
     expect(attempt.provider).toEqual({ status: 400, type: 'invalid_request_error', parameter: 'output_config.format.schema', refused: true });

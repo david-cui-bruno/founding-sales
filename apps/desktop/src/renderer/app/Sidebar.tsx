@@ -79,7 +79,7 @@ export function Sidebar({
     <aside
       data-region="sidebar"
       data-testid="sidebar"
-      className="flex h-screen flex-col gap-1 overflow-y-auto border-r border-border bg-sidebar px-2 py-3 text-sm"
+      className="callie-v2 flex h-screen flex-col gap-1 overflow-y-auto border-r border-border bg-sidebar px-2 py-3 text-sm"
     >
       <div className="mb-2 flex items-center gap-2 px-2">
         <span className="grid size-5 place-items-center rounded bg-primary text-[11px] font-semibold text-primary-foreground">
