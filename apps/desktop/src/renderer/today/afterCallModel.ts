@@ -31,6 +31,11 @@ export function reviewOnly(proposals: readonly CallProposal[]): readonly CallPro
   return proposals.filter(proposal => proposal.mode === 'review');
 }
 
+/** Whether a proposal is an outcome that stops or retires something (every SENSITIVE_OUTCOMES value). */
+export function isSensitive(proposal: CallProposal): boolean {
+  return proposal.kind === 'outcome' && SENSITIVE_OUTCOMES.includes(proposal.params.outcome);
+}
+
 /** Whether a proposal is a stop: the `do_not_call` outcome. */
 export function isStop(proposal: CallProposal): boolean {
   return proposal.kind === 'outcome' && proposal.params.outcome === 'do_not_call';
@@ -65,7 +70,7 @@ export function noDefiniteAnswer(reason: string | null): boolean {
 export function startsTicked(proposal: CallProposal): boolean {
   if (proposal.mode !== 'apply') return false;
   if (proposal.kind === 'task') return true;
-  if (proposal.kind === 'outcome') return !isStop(proposal);
+  if (proposal.kind === 'outcome') return !isSensitive(proposal);
   return false;
 }
 

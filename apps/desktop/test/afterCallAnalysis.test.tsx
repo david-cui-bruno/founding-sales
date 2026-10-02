@@ -385,6 +385,19 @@ describe('analyses are read by session', () => {
   });
 });
 
+describe('every sensitive outcome starts unticked, with its evidence', () => {
+  it.each(['do_not_call', 'wrong_number'] as const)('%s: unticked, its quote shown, nothing sent until David ticks it', async outcome => {
+    const proposal = { ...PROPOSALS.outcome, reason: 'x', params: { outcome, evidence: PROPOSALS.outcome.params.evidence } } as unknown as CallProposal;
+    expect(startsTicked(proposal)).toBe(false);
+    const calls = install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }]) });
+    show(completed([proposal]));
+    expect(check('outcome').checked).toBe(false);
+    expect(screen.getByTestId('suggestion-evidence-outcome').textContent).toContain('Sure, tell me more');
+    expect((screen.getByTestId('apply') as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.filter(call => call.name === 'calling.proposalsApply')).toHaveLength(0);
+  });
+});
+
 describe('fix round (review S3C): the tick boundary, done keys, command ids', () => {
   const selectOptions = (): string[] => [...(screen.getByTestId('suggestion-outcome-select') as HTMLSelectElement).options].map(option => option.value);
 
