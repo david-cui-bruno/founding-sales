@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3851,
+    "cachedInputTokens": 0,
+    "outputTokens": 298
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management. They said they're comparing three vendors and asked to be put down for a trial. You confirmed they and their maintenance coordinator would use it.\",\"facts\":[{\"text\":\"comparing three vendors\",\"line\":2},{\"text\":\"has a maintenance coordinator\",\"line\":4}],\"interest\":{\"level\":\"buying_signal\",\"signals\":[{\"kind\":\"demo_request\",\"quote\":\"Put us down for a trial\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"Put us down for a trial\",\"line\":2,\"due_phrase\":\"\"}],\"coaching\":{\"observation\":\"\",\"lines\":[]},\"prompt_version\":\"call_analysis.2\"}"
+}

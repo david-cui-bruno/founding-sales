@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3828,
+    "cachedInputTokens": 0,
+    "outputTokens": 333
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They said they dispatch plumbing and HVAC vendors mostly, and offered to email you their vendor list tonight. The call was brief with no objections or callback requested.\",\"facts\":[{\"text\":\"Plumbing and HVAC mostly\",\"line\":2}],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"them\",\"quote\":\"I'll e-mail you our vendor list tonight\",\"line\":2,\"due_phrase\":\"tonight\"}],\"coaching\":{\"observation\":\"The call ended very quickly after a single question. You could have explored their dispatch challenges, current tools, or pain points before they offered to send the list, to better understand whether Callie is relevant to their operation.\",\"lines\":[1,2,3]},\"prompt_version\":\"call_analysis.2\"}"
+}

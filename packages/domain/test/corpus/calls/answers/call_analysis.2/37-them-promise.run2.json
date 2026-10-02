@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3823,
+    "cachedInputTokens": 0,
+    "outputTokens": 310
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management, which manages around three hundred units. Dana offered to send their unit list. The call was very brief with no discussion of Callie's product or services.\",\"facts\":[{\"text\":\"Around three hundred\",\"line\":2}],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"them\",\"quote\":\"I'll send you our unit list\",\"line\":2,\"due_phrase\":\"\"}],\"coaching\":{\"observation\":\"The call ended immediately after Dana offered to send their unit list. You could have used this opening to briefly describe Callie or ask about their current maintenance coordination process before the call ended.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.2\"}"
+}

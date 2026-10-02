@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3820,
+    "cachedInputTokens": 0,
+    "outputTokens": 265
+  },
+  "text": "{\"reached\":\"gatekeeper\",\"summary\":\"You called Harbor Lane Property Management asking for Dana Whitfield. A gatekeeper said she was out of the office and suggested trying later.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"You accepted the gatekeeper's suggestion to call back without securing a specific time or day, which may make it harder to reach Dana. Consider asking when would be a good time to reach her.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.2\"}"
+}

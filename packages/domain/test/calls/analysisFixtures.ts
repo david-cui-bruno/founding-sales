@@ -14,7 +14,7 @@ export function emptyAnswer(): CallAnalysisAnswer {
     facts: [],
     interest: { level: 'neutral', signals: [] },
     objections: [],
-    follow_up_request: { kind: 'none', quote: '', line: 0 },
+    follow_up_request: { kind: 'none', quote: '', line: 0, agreed_line: 0 },
     callback: { requested: false, exact: false, phrase: '', line: 0, agreed_line: 0, day: 'none', date_text: '', time: '' },
     stop: { requested: false, scope: 'this_number', quote: '', line: 0 },
     wrong_number: { is_wrong: false, quote: '', line: 0, other_number_given: '' },

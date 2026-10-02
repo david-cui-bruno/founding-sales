@@ -50,8 +50,8 @@ import { fold, sideOfSpeaker, verbatimIn } from './summaryModel.ts';
  */
 
 /** Bumped whenever a byte of the system prompt or the output schema moves. */
-export const CALL_ANALYSIS_PROMPT_VERSION = 'call_analysis.2';
-export const CALL_ANALYSIS_SCHEMA_VERSION = 'call_analysis.schema.1';
+export const CALL_ANALYSIS_PROMPT_VERSION = 'call_analysis.3';
+export const CALL_ANALYSIS_SCHEMA_VERSION = 'call_analysis.schema.2';
 
 export const CALL_ANALYSIS_MODELS = ['claude-haiku-4-5-20251001', 'claude-sonnet-5-5'] as const;
 export type CallAnalysisModel = (typeof CALL_ANALYSIS_MODELS)[number];
@@ -193,7 +193,7 @@ interest: level and signals.
 
 objections: each reason Them gave against going further, with category, quote, line, and answered_line (the line where You answered it, or 0). Categories: "no_need" (they don't need it, "we're all set"), "has_solution" (they already use or tried something for it), "timing" ("not now", "maybe next year", just renewed), "price", "too_small", "not_decision_maker", "brush_off" (a bare no with no reason, or getting off the phone), "other".
 
-follow_up_request: whether Them asked to be sent something. Them offering to send you something ("I'll send you our list") is a commitment of theirs, not a request. kind "overview_email" (an overview or information by e-mail), "other_email" (something else by e-mail), "other" (any other channel), or "none" with quote "" and line 0.
+follow_up_request: whether Them asked to be sent something, or agreed when You offered to send it. Them offering to send you something ("I'll send you our list") is a commitment of theirs, not a request. kind "overview_email" (an overview or information by e-mail), "other_email" (something else by e-mail), "other" (any other channel), or "none" with quote "", line 0 and agreed_line 0. If Them asked, quote Them's line and set agreed_line to 0. If You offered ("Can I send you an overview?") and Them agreed ("Sure"), quote You's offer and set agreed_line to Them's agreeing line, which must come within two lines after it. A reply that declines, hedges ("maybe, we'll see") or is later taken back is not agreement: use "none".
 
 callback: whether Them asked to be called back, or agreed when You proposed a time.
 - requested: true if Them asked for a call back (including "try later", "call me back", "call later", even with no time) or agreed to one.
@@ -249,7 +249,7 @@ export const CALL_ANALYSIS_JSON_SCHEMA: Readonly<Record<string, unknown>> = Obje
       type: 'array',
       items: closed({ category: enumOf(CALL_ANALYSIS_OBJECTION_CATEGORIES), quote: text, line, answered_line: line }),
     },
-    follow_up_request: closed({ kind: enumOf(CALL_ANALYSIS_FOLLOW_UP_KINDS), quote: text, line }),
+    follow_up_request: closed({ kind: enumOf(CALL_ANALYSIS_FOLLOW_UP_KINDS), quote: text, line, agreed_line: line }),
     callback: closed({
       requested: bool,
       exact: bool,
@@ -358,7 +358,13 @@ export const callAnalysisAnswerSchema = z.strictObject({
       }),
     )
     .max(40),
-  follow_up_request: z.strictObject({ kind: z.enum(CALL_ANALYSIS_FOLLOW_UP_KINDS), quote: answerText, line: answerLine }),
+  follow_up_request: z.strictObject({
+    kind: z.enum(CALL_ANALYSIS_FOLLOW_UP_KINDS),
+    quote: answerText,
+    line: answerLine,
+    // Absent in answers recorded under call_analysis.1 and .2, which the replay still reads.
+    agreed_line: answerLine.default(0),
+  }),
   callback: z.strictObject({
     requested: z.boolean(),
     exact: z.boolean(),
@@ -399,6 +405,15 @@ const PROMISE = /\b(?:i'll|i will|i shall|i'm going to|i am going to|i can|we'll
 
 /** A request to be sent something names the sending. */
 const SEND = /\b(?:send|sending|e ?mail|mail|forward|shoot)\b/u;
+
+/** A plain yes at the start of Them's reply to an offer. */
+const AGREES = /^(?:yes|yeah|yep|sure|ok|okay|please|absolutely|definitely|of course|go ahead|sounds good|that works|that would be great|that'd be great|that'd help|please do)\b/u;
+
+/** A reply that declines or hedges is not agreement, whatever it starts with. */
+const HEDGES = /\b(?:no|not|don't|dont|maybe|we'll see|not sure|i'll think|think about it|later|but)\b/u;
+
+/** Them taking a send back: "actually, don't send anything", "never mind the e-mail". */
+const RETRACTS = /\b(?:(?:don't|dont|do not|no need to) (?:send|e ?mail|mail|bother)|never mind|scratch that)\b/u;
 
 /** The speaker's own offer to send ("I'll send you our list"): a commitment, not a request. */
 const OFFER = /\b(?:i'll|i will|i can|i'm going to|i am going to|we'll|we will|we can|we're going to|we are going to|let me)(?: \w+){0,2} (?:send|e ?mail|mail|forward|shoot)\b/u;
@@ -552,12 +567,38 @@ export function readCallAnalysisAnswer(
   }
 
   let followUpRequest: CallAnalysisResult['followUpRequest'] = null;
-  if (answer.follow_up_request.kind !== 'none') {
-    const ref = quoteRef(answer.follow_up_request.quote, answer.follow_up_request.line, 'them');
-    // A request names the sending, and is not Them's own offer to send ("I'll send you…").
+  const request = answer.follow_up_request;
+  const requestKind = request.kind;
+  if (requestKind !== 'none') {
+    const ref = quoteRef(request.quote, request.line, null);
     const words = ref === null ? '' : fold(ref.quote);
-    if (ref === null || !SEND.test(words) || OFFER.test(words)) drop('follow_up_request');
-    else followUpRequest = { kind: answer.follow_up_request.kind, ref };
+    let agreed: CallAnalysisLineRef | null = null;
+    let valid = ref !== null && SEND.test(words);
+    if (ref !== null && ref.side === 'them') {
+      // Them's request names the sending, and is not Them's own offer to send ("I'll send you…").
+      valid = valid && !OFFER.test(words);
+    } else if (ref !== null) {
+      // David's offer naming the sending, answered within two lines by a Them line that agrees
+      // plainly ("Sure", "Yes please") and does not hedge or decline.
+      const candidate = lineRef(request.agreed_line);
+      const reply = candidate === null ? '' : fold(utterances[candidate.line - 1]?.text ?? '');
+      valid =
+        valid &&
+        candidate !== null &&
+        candidate.side === 'them' &&
+        candidate.line > ref.line &&
+        candidate.line - ref.line <= 2 &&
+        AGREES.test(reply) &&
+        !HEDGES.test(reply);
+      agreed = valid ? candidate : null;
+    }
+    // Taken back later in the call ("actually, don't send anything"): no request.
+    const after = agreed?.line ?? ref?.line ?? 0;
+    const retracted = utterances.some(
+      (utterance, index) => index + 1 > after && sideOfSpeaker(utterance.speaker) === 'them' && RETRACTS.test(fold(utterance.text)),
+    );
+    if (!valid || ref === null || retracted) drop('follow_up_request');
+    else followUpRequest = { kind: requestKind, ref, agreed };
   }
 
   let callback: CallAnalysisResult['callback'] = null;

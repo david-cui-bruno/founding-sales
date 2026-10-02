@@ -1,5 +1,5 @@
 {
-  "promptVersion": "call_analysis.2",
+  "promptVersion": "call_analysis.3",
   "note": "Slice 3a, C2. Each case runs through readCallAnalysisAnswer then proposeEffects. A run fails on any label in forbidden_effects that is not also in expected_effects ('x:*' matches every 'x:' label). Labels: outcome:<outcome>, callback:<localDate>T<localTime>, follow_up, buying_signal, park, task:overview, task:commitment, and each review kind by name.",
   "cases": [
     {
@@ -2063,6 +2063,248 @@
       ],
       "expected_content": {
         "reached": "person"
+      }
+    },
+    {
+      "id": "43-offer-agreed",
+      "n": 43,
+      "title": "You: Can I send you an overview by e-mail? Them: Sure, that works",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 6.4,
+          "text": "Hi Dana, David from Callie. We help property managers coordinate maintenance with vendors."
+        },
+        {
+          "speaker": 1,
+          "start": 6.8,
+          "end": 8.3,
+          "text": "Okay."
+        },
+        {
+          "speaker": 0,
+          "start": 8.7,
+          "end": 11.7,
+          "text": "Can I send you a short overview by e-mail?"
+        },
+        {
+          "speaker": 1,
+          "start": 12.1,
+          "end": 13.6,
+          "text": "Sure, that works."
+        },
+        {
+          "speaker": 0,
+          "start": 14.0,
+          "end": 15.5,
+          "text": "Thanks Dana."
+        }
+      ],
+      "expected_effects": [
+        "outcome:interested",
+        "follow_up",
+        "task:overview"
+      ],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "park",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person",
+        "follow_up_kind": "overview_email"
+      },
+      "with_open_opportunity": {
+        "expected_effects": [
+          "outcome:interested",
+          "follow_up"
+        ],
+        "forbidden_effects": [
+          "buying_signal",
+          "outcome:do_not_call",
+          "callback:*",
+          "park",
+          "outcome:wrong_number",
+          "task:*"
+        ]
+      }
+    },
+    {
+      "id": "44-offer-declined",
+      "n": 44,
+      "title": "You offers an overview; Them: No thanks",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 5.4,
+          "text": "Hi Dana, David from Callie, maintenance coordination for property managers."
+        },
+        {
+          "speaker": 1,
+          "start": 5.8,
+          "end": 7.3,
+          "text": "Okay."
+        },
+        {
+          "speaker": 0,
+          "start": 7.7,
+          "end": 10.7,
+          "text": "Can I send you a short overview by e-mail?"
+        },
+        {
+          "speaker": 1,
+          "start": 11.1,
+          "end": 12.6,
+          "text": "No thanks."
+        },
+        {
+          "speaker": 0,
+          "start": 13.0,
+          "end": 15.4,
+          "text": "Understood, thanks for your time."
+        }
+      ],
+      "expected_effects": [],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person",
+        "follow_up_kind": "none"
+      }
+    },
+    {
+      "id": "45-offer-hedged",
+      "n": 45,
+      "title": "You offers an overview; Them: Maybe, we'll see",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 5.4,
+          "text": "Hi Dana, David from Callie, maintenance coordination for property managers."
+        },
+        {
+          "speaker": 1,
+          "start": 5.8,
+          "end": 7.3,
+          "text": "Okay."
+        },
+        {
+          "speaker": 0,
+          "start": 7.7,
+          "end": 10.7,
+          "text": "Can I send you a short overview by e-mail?"
+        },
+        {
+          "speaker": 1,
+          "start": 11.1,
+          "end": 12.6,
+          "text": "Maybe, we'll see."
+        },
+        {
+          "speaker": 0,
+          "start": 13.0,
+          "end": 14.8,
+          "text": "Fair enough. Thanks Dana."
+        }
+      ],
+      "expected_effects": [],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person",
+        "follow_up_kind": "none"
+      }
+    },
+    {
+      "id": "46-offer-retracted",
+      "n": 46,
+      "title": "You offers an overview, Them agrees, then takes it back",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 5.0,
+          "text": "Hi Dana, David from Callie. Can I send you a short overview by e-mail?"
+        },
+        {
+          "speaker": 1,
+          "start": 5.4,
+          "end": 6.9,
+          "text": "Sure."
+        },
+        {
+          "speaker": 0,
+          "start": 7.3,
+          "end": 9.9,
+          "text": "Great. How many doors do you manage?"
+        },
+        {
+          "speaker": 1,
+          "start": 10.3,
+          "end": 15.7,
+          "text": "About eighty. Actually, don't send anything, we're happy with what we have."
+        },
+        {
+          "speaker": 0,
+          "start": 16.1,
+          "end": 17.8,
+          "text": "Understood. Thanks Dana."
+        }
+      ],
+      "expected_effects": [],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person",
+        "follow_up_kind": "none"
       }
     }
   ]

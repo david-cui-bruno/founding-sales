@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3851,
+    "cachedInputTokens": 0,
+    "outputTokens": 321
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management, a firm with about two hundred doors. They use a clunky portal for maintenance coordination. You offered to send pricing by Friday, and they agreed.\",\"facts\":[{\"text\":\"We have about two hundred doors\",\"line\":2},{\"text\":\"the portal we use is clunky\",\"line\":2}],\"interest\":{\"level\":\"curious\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"I'll send pricing by Friday\",\"line\":3,\"due_phrase\":\"by Friday\"}],\"coaching\":{\"observation\":\"You moved quickly to a commitment without exploring their needs further or asking discovery questions about their pain points with the current portal or their decision-making process.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.2\"}"
+}

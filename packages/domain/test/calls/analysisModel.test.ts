@@ -252,4 +252,38 @@ describe('A-1: reading an answer', () => {
       [6, 'no more calls', true],
     ]);
   });
+
+  it('keeps David’s offer to send only when a Them line within two lines plainly agrees, and nothing later takes it back', () => {
+    const offer = (reply: string, extra: readonly (readonly ['Y' | 'T', string])[] = []) =>
+      lines(['Y', 'Can I send you a short overview by e-mail?'], ['T', reply], ...extra);
+    const raw = answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you a short overview by e-mail?', line: 1, agreed_line: 2 } });
+    const agreed = readCallAnalysisAnswer(raw, offer('Sure, that works.'));
+    expect(agreed.ok && agreed.result.followUpRequest).toMatchObject({ kind: 'overview_email', ref: { line: 1, side: 'you' }, agreed: { line: 2, side: 'them' } });
+    for (const reply of ['No thanks.', "Maybe, we'll see.", 'Sure, but not now.', 'Hmm.']) {
+      const read = readCallAnalysisAnswer(raw, offer(reply));
+      expect(read.ok && read.result.followUpRequest, reply).toBeNull();
+    }
+    const retracted = readCallAnalysisAnswer(raw, offer('Sure.', [['Y', 'How many doors?'], ['T', "About eighty. Actually, don't send anything."]]));
+    expect(retracted.ok && retracted.result.followUpRequest).toBeNull();
+    // No agreement line, or one three lines on, or a You line: no request.
+    const call = lines(['Y', 'Can I send you a short overview by e-mail?'], ['Y', 'It is short.'], ['Y', 'Really.'], ['T', 'Sure.']);
+    for (const agreedLine of [0, 2, 4]) {
+      const read = readCallAnalysisAnswer(
+        answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you a short overview by e-mail?', line: 1, agreed_line: agreedLine } }),
+        call,
+      );
+      expect(read.ok && read.result.followUpRequest).toBeNull();
+    }
+    // A You line that names no sending is not an offer.
+    const noSend = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'overview_email', quote: 'Is that useful?', line: 1, agreed_line: 2 } }), lines(['Y', 'Is that useful?'], ['T', 'Sure.']));
+    expect(noSend.ok && noSend.result.followUpRequest).toBeNull();
+  });
+
+  it('still reads an answer recorded before agreed_line existed', () => {
+    const old = JSON.parse(answer({ follow_up_request: { kind: 'overview_email', quote: 'Just send me an overview', line: 2 } })) as Record<string, Record<string, unknown>>;
+    delete old['follow_up_request']?.['agreed_line'];
+    const read = readCallAnalysisAnswer(JSON.stringify(old), lines(['Y', 'Hi.'], ['T', 'Just send me an overview by e-mail.']));
+    expect(read.ok && read.result.followUpRequest).toMatchObject({ kind: 'overview_email', agreed: null });
+  });
 });
+

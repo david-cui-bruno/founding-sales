@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3883,
+    "cachedInputTokens": 0,
+    "outputTokens": 380
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management and explained that Callie helps with maintenance requests and vendor dispatch. Dana asked how technicians would receive work orders and whether Callie would replace their current portal. You explained the text-based system, and Dana indicated this could solve a problem they have with their technicians resisting the portal.\",\"facts\":[{\"text\":\"Our techs hate logging into the portal\",\"line\":4}],\"interest\":{\"level\":\"curious\",\"signals\":[{\"kind\":\"adoption_question\",\"quote\":\"How would our techs get work orders? Would it replace our portal?\",\"line\":2},{\"kind\":\"other\",\"quote\":\"That could actually work for us\",\"line\":4}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"You moved quickly from your opening to Dana's specific technical concern, and Dana engaged with a concrete question about how the system would work for their team. This shows good early interest, but the call ended without scheduling a follow-up or next step.\",\"lines\":[2,3,4]},\"prompt_version\":\"call_analysis.2\"}"
+}

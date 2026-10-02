@@ -142,7 +142,13 @@ export const callAnalysisResultSchema = z.strictObject({
     )
     .max(10),
   followUpRequest: z
-    .strictObject({ kind: z.enum(CALL_ANALYSIS_FOLLOW_UP_KINDS).exclude(['none']), ref: callAnalysisQuoteRefSchema })
+    .strictObject({
+      kind: z.enum(CALL_ANALYSIS_FOLLOW_UP_KINDS).exclude(['none']),
+      /** Them's request, or David's offer when Them agreed to it on `agreed`. */
+      ref: callAnalysisQuoteRefSchema,
+      /** The Them line that agreed to an offer David made; null when Them asked. */
+      agreed: callAnalysisLineRefSchema.nullable(),
+    })
     .nullable(),
   callback: z
     .strictObject({
