@@ -42,7 +42,13 @@ import { routeShown, type Route } from '../routes.ts';
  */
 
 export interface CrmActions {
+  /** The firm's own page: the route follows to it. */
   openFirm(firmId: string): void;
+  /**
+   * The firm in the Pipeline's side panel (S4). The same read as `openFirm`, but the route
+   * stays Pipeline and the board is not replaced: the bridge keeps the board beside the firm.
+   */
+  openPanel(firmId: string): void;
   openPipeline(includeLost?: boolean): void;
   openAddFirm(): void;
   openImport(): void;
@@ -81,7 +87,9 @@ export type CrmRouteName = 'pipeline' | 'firms';
  * the same answer on both and the bridge's screen cannot tell them apart. A capture
  * screen is Firms', which is where Add firm and Import are offered.
  */
-export function routeOfState(state: CrmState, from: CrmRouteName): Route {
+export function routeOfState(state: CrmState, from: CrmRouteName, panel = false): Route {
+  // The Pipeline's side panel is a firm read that must not move the route (S4).
+  if (state.screen === 'firm' && state.firm !== null && panel) return { name: from };
   if (state.screen === 'firm' && state.firm !== null) return { name: 'firm', firmId: state.firm.read.firm.id };
   return { name: state.screen === 'pipeline' ? from : 'firms' };
 }
@@ -91,8 +99,14 @@ export function useCrm(
   identity: string | null,
   generation: number,
   guard: Generation,
+  /** The firm the Pipeline's panel is open on, read when the view is first drawn (S4). */
+  panelFirm: () => string | null = () => null,
 ): Crm {
   const wanted = route.name === 'firm' ? route.firmId : null;
+  const panelRef = useRef(panelFirm);
+  panelRef.current = panelFirm;
+  /** Whether the firm on screen was asked for as a full page (true) or for the panel. */
+  const fullPage = useRef(route.name === 'firm');
   const first = useMemo(
     () =>
       async (api: OperationApi): Promise<CrmState> => {
@@ -100,8 +114,16 @@ export function useCrm(
         // Pipeline and Firms are the board read, or a capture screen the bridge is still
         // holding; a firm page it last showed is not what either row means.
         const held = await api.read('crm.state', {});
-        return held.screen === 'firm' ? await api.read('crm.openPipeline', {}) : held;
+        const board = held.screen === 'firm' ? await api.read('crm.openPipeline', {}) : held;
+        // A panel left open when the view was last left is read again, so it shows the
+        // firm as it is now, beside the board (UI criterion 7).
+        const panel = route.name === 'pipeline' ? panelRef.current() : null;
+        if (panel !== null && board.screen === 'pipeline' && board.pipeline !== null) {
+          return await api.read('crm.openFirm', { firmId: panel });
+        }
+        return board;
       },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [wanted],
   );
   const view = useViewState<CrmState>({ key: 'crm', identity, generation, guard, first });
@@ -110,9 +132,15 @@ export function useCrm(
   const actions = useMemo<CrmActions>(
     () => ({
       openFirm: firmId => {
+        fullPage.current = true;
+        read(api => api.read('crm.openFirm', { firmId }));
+      },
+      openPanel: firmId => {
+        fullPage.current = false;
         read(api => api.read('crm.openFirm', { firmId }));
       },
       openPipeline: includeLost => {
+        fullPage.current = false;
         // `onClick={openPipeline}` hands over the event; only a real boolean is a filter.
         read(api => api.read('crm.openPipeline', typeof includeLost === 'boolean' ? { includeLost } : {}));
       },
@@ -180,12 +208,12 @@ export function useCrm(
   const shown = useRef<string | null>(null);
   useEffect(() => {
     if (state === null) return;
-    const next = routeOfState(state, from);
+    const next = routeOfState(state, from, route.name === 'pipeline' && !fullPage.current);
     const text = next.name === 'firm' ? `firm/${next.firmId}` : next.name;
     if (shown.current === text) return;
     shown.current = text;
     routeShown(next);
-  }, [state, from]);
+  }, [state, from, route.name]);
 
   return useMemo(() => ({ ...view, actions, origin: from }), [view, actions, from]);
 }

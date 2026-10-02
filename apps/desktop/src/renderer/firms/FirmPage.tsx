@@ -1,5 +1,6 @@
-import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
-import { useState, type JSX } from 'react';
+import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmDetailDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
+import { useState, type JSX, type ReactNode } from 'react';
+import type { BoardCard } from '@fss/contracts';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
 import type {
   CheckRouteRequest,
@@ -8,10 +9,14 @@ import type {
   FirmSequencesView,
   ResolveOutgoingRequest,
 } from '../firmWorkspaceContract.ts';
+import { nextActionLabel } from '../pipeline/cardText.ts';
 import { EMAIL_VALIDATION_TEXT, emailValidationStateOf, noticeText } from '../firmWorkspaceView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Row, RowActions, RowMain, Rows, Section, Tag } from '../ui/layout.tsx';
+import { Row, RowActions, RowMain, Rows, Tag } from '../ui/layout.tsx';
+import { Chip, Group } from '../v2/parts.tsx';
+import { currentCrmMemory, useKeptText } from './crmMemory.ts';
+import { StageEventRow, StageWhy } from './StageWhy.tsx';
 import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
 import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
@@ -43,14 +48,27 @@ function Identity({
   page,
   actionsEnabled,
   onBasicsSaved,
+  stageName,
 }: {
   readonly page: FirmPageResponse;
   readonly actionsEnabled: boolean;
   onBasicsSaved(): void;
+  stageName(key: string): string;
 }): JSX.Element {
   const firm = page.read.firm;
   const detail = page.visibility === 'assigned_or_admin' && page.read.visibility === 'assigned_or_admin' ? page.read.firm : null;
-  const [editing, setEditing] = useState(false);
+  // Open or closed is kept above the route; the editor itself stays mounted while closed,
+  // so its draft is there when it is opened again (criteria 2 and 7). Escape closes it and
+  // never discards.
+  const memory = currentCrmMemory();
+  const [, redraw] = useState(0);
+  const editing = memory.pageEditors[`basics:${firm.id}`] === true;
+  const setEditing = (open: boolean): void => {
+    memory.pageEditors[`basics:${firm.id}`] = open;
+    redraw(n => n + 1);
+  };
+  const [opened, setOpened] = useState(editing);
+  if (editing && !opened) setOpened(true);
   // The number a new one replaces: the firm's own callable line, else its first callable one.
   const callable = detail?.phoneRoutes.filter(route => route.eligibility === 'usable') ?? [];
   const phone = callable.find(route => route.contactId === null) ?? callable[0] ?? null;
@@ -58,7 +76,7 @@ function Identity({
   const rows: readonly (readonly [string, string])[] = [
     ['Website', firm.website ?? '—'],
     ['Where', where === '' ? '—' : where],
-    ['Stage', firm.stageKey === null ? '—' : inWords(firm.stageKey)],
+    ['Stage', firm.stageKey === null ? '—' : stageName(firm.stageKey)],
     // 9.2: a firm with no established zone says which rule could not place it, because
     // "no time zone" and "we never looked" are different problems.
     ['Time zone', firm.timeZone ?? (firm.timeZoneUnresolvedReason === null ? '—' : inWords(firm.timeZoneUnresolvedReason))],
@@ -70,41 +88,60 @@ function Identity({
         ] as const)),
   ];
   return (
-    <section data-testid="firm-identity" className="mt-5">
+    <section data-testid="firm-identity">
       <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
         {rows.map(([term, value]) => (
           <div key={term} className="contents">
             <dt className="text-xs text-muted-foreground">{term}</dt>
-            <dd className="truncate">{value}</dd>
+            <dd className="truncate" title={value}>
+              {value}
+            </dd>
           </div>
         ))}
       </dl>
       {/* Slice S2: the number, city, state and zone a call needs, the same form as Today's. */}
-      {detail === null ? null : editing ? (
-        <div className="callie-v2 mt-3 max-w-[560px]">
-          <BasicsEditor
-            firmId={firm.id}
-            values={{ locality: firm.locality, regionCode: firm.regionCode, timeZone: firm.timeZone }}
-            phone={phone === null ? null : { routeId: phone.id, e164: phone.value }}
-            enabled={actionsEnabled}
-            onSaved={() => {
-              setEditing(false);
-              onBasicsSaved();
+      {detail === null ? null : (
+        <>
+          <Button
+            variant="quiet"
+            size="sm"
+            data-testid="firm-edit-basics"
+            aria-expanded={editing}
+            className="mt-2 -ml-2"
+            disabled={!actionsEnabled}
+            onClick={() => {
+              setEditing(!editing);
             }}
-            onCancel={() => setEditing(false)}
-          />
-        </div>
-      ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="firm-edit-basics"
-          className="mt-3"
-          disabled={!actionsEnabled}
-          onClick={() => setEditing(true)}
-        >
-          Edit phone and location
-        </Button>
+          >
+            {editing ? 'Close phone and location' : 'Edit phone and location'}
+          </Button>
+          {opened ? (
+            <div
+              className="callie-v2 mt-2 max-w-[560px]"
+              hidden={!editing}
+              onKeyDown={event => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation();
+                  setEditing(false);
+                }
+              }}
+            >
+              <BasicsEditor
+                firmId={firm.id}
+                values={{ locality: firm.locality, regionCode: firm.regionCode, timeZone: firm.timeZone }}
+                phone={phone === null ? null : { routeId: phone.id, e164: phone.value }}
+                enabled={actionsEnabled}
+                onSaved={() => {
+                  setEditing(false);
+                  onBasicsSaved();
+                }}
+                onCancel={() => {
+                  setEditing(false);
+                }}
+              />
+            </div>
+          ) : null}
+        </>
       )}
     </section>
   );
@@ -119,7 +156,7 @@ function phoneTag(route: RouteDto): { readonly text: string; readonly tone: 'ok'
 
 function PhoneRoutes({ routes }: { readonly routes: readonly RouteDto[] }): JSX.Element {
   return (
-    <Section data-testid="firm-routes-phone" title="Phone" count={routes.length}>
+    <Group data-testid="firm-routes-phone" title="Phone" count={routes.length}>
       {routes.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">No phone number is recorded.</p>
       ) : (
@@ -139,7 +176,7 @@ function PhoneRoutes({ routes }: { readonly routes: readonly RouteDto[] }): JSX.
           })}
         </Rows>
       )}
-    </Section>
+    </Group>
   );
 }
 
@@ -156,7 +193,7 @@ function EmailRoutes({
   onCheckRoute(request: CheckRouteRequest): void;
 }): JSX.Element {
   return (
-    <Section data-testid="firm-routes-email" title="Email" count={routes.length}>
+    <Group data-testid="firm-routes-email" title="Email" count={routes.length}>
       {routes.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">No email address is recorded.</p>
       ) : (
@@ -194,7 +231,7 @@ function EmailRoutes({
           })}
         </Rows>
       )}
-    </Section>
+    </Group>
   );
 }
 
@@ -227,9 +264,14 @@ function ContactRow({
   readonly saving: boolean;
   onSave(edit: ContactEdit): void;
 }): JSX.Element {
-  const [fullName, setFullName] = useState(contact.fullName);
-  const [title, setTitle] = useState(contact.title ?? '');
-  const [primary, setPrimary] = useState(contact.isPrimary);
+  // Kept above the route: a half-edited contact survives a visit elsewhere (criterion 7).
+  const [fullName, setFullName] = useKeptText(`contact:${contact.id}:name`, contact.fullName);
+  const [title, setTitle] = useKeptText(`contact:${contact.id}:title`, contact.title ?? '');
+  const [primaryText, setPrimaryText] = useKeptText(`contact:${contact.id}:primary`, contact.isPrimary ? 'yes' : 'no');
+  const primary = primaryText === 'yes';
+  const setPrimary = (next: boolean): void => {
+    setPrimaryText(next ? 'yes' : 'no');
+  };
   const changed = fullName !== contact.fullName || title !== (contact.title ?? '') || (primary && !contact.isPrimary);
   return (
     <Row data-testid="contact-row" data-contact-id={contact.id}>
@@ -320,8 +362,8 @@ function Sequences({
 }): JSX.Element {
   const names = new Map(contacts.map(contact => [contact.id, contact.fullName] as const));
   const active = contacts.filter(contact => contact.status === 'active');
-  const [contactId, setContactId] = useState(active[0]?.id ?? '');
-  const [sequenceVersionId, setSequenceVersionId] = useState(view.published[0]?.sequenceVersionId ?? '');
+  const [contactId, setContactId] = useKeptText(`enroll:${page.read.firm.id}:contact`, active[0]?.id ?? '');
+  const [sequenceVersionId, setSequenceVersionId] = useKeptText(`enroll:${page.read.firm.id}:sequence`, view.published[0]?.sequenceVersionId ?? '');
   const opportunity = page.opportunity;
 
   const body = ((): JSX.Element => {
@@ -416,7 +458,7 @@ function Sequences({
   })();
 
   return (
-    <Section data-testid="firm-sequences" title="Sequences" count={view.enrollments.length}>
+    <Group data-testid="firm-sequences" title="Sequences" count={view.enrollments.length}>
       {view.enrollments.length === 0 ? null : (
         <Rows data-testid="firm-enrollments">
           {view.enrollments.map(enrollment => (
@@ -430,7 +472,7 @@ function Sequences({
         </Rows>
       )}
       {body}
-    </Section>
+    </Group>
   );
 }
 
@@ -469,7 +511,7 @@ export function HeldOutgoing({
   const said = notice !== null && OUTGOING_NOTICES.has(notice) ? noticeText(notice) : null;
   if (messages.length === 0 && said === null) return null;
   return (
-    <Section data-testid="held-outgoing" title="Your e-mails waiting for a firm" count={messages.length}>
+    <Group data-testid="held-outgoing" title="Your e-mails waiting for a firm" count={messages.length}>
       {messages.length === 0 ? null : (
         <Rows data-testid="held-outgoing-list">
           {messages.map(message => (
@@ -503,7 +545,7 @@ export function HeldOutgoing({
           {said}
         </p>
       )}
-    </Section>
+    </Group>
   );
 }
 
@@ -524,7 +566,7 @@ function TakeOver({
   readonly saving: boolean;
   onTakeOver(reason: string): void;
 }): JSX.Element {
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useKeptText('take-over:reason');
   return (
     <div data-testid="take-over" className="flex items-center gap-2 py-2">
       <Input
@@ -569,18 +611,22 @@ function takeoverOffered(
 
 function Opportunity({
   page,
+  card,
+  stageName,
   actionsEnabled,
   busy,
   onTakeOver,
 }: {
   readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+  readonly card: BoardCard | undefined;
+  stageName(key: string): string;
   readonly actionsEnabled: boolean;
   busy(form: string): boolean;
   onTakeOver(reason: string): void;
 }): JSX.Element {
   const opportunity = page.opportunity;
   return (
-    <Section data-testid="firm-opportunity" title="Opportunity">
+    <Group data-testid="firm-opportunity" title="Opportunity and stage">
       {opportunity === null ? (
         <p data-testid="opportunity-none" className="py-2 text-sm text-muted-foreground">
           There is no opportunity at this firm yet.
@@ -588,42 +634,27 @@ function Opportunity({
       ) : (
         <>
           <p className="py-1 text-sm">
-            {`${inWords(opportunity.status)} at ${inWords(opportunity.stageKey)}, opened ${shortDay(opportunity.openedAt)}`}
+            {`${inWords(opportunity.status)} at ${stageName(opportunity.stageKey)}, opened ${shortDay(opportunity.openedAt)}`}
             {opportunity.closeReason === null ? '' : ` · closed because ${inWords(opportunity.closeReason)}`}
           </p>
+          <StageWhy history={page.stageHistory} card={card} stageName={stageName} />
           {takeoverOffered(opportunity) ? (
             <TakeOver enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
           ) : null}
           <ol data-testid="stage-history" className="mt-1 flex flex-col border-t border-border">
             {page.stageHistory.map(event => (
-              <li
-                key={`${event.occurredAt}:${event.toStageKey}`}
-                data-testid="stage-event"
-                className="flex items-center gap-3 border-b border-border py-1 text-xs last:border-b-0"
-              >
-                <span data-testid="stage-event-move" className="flex-1">
-                  {`${event.fromStageKey === null ? 'opened' : inWords(event.fromStageKey)} → ${inWords(event.toStageKey)}`}
-                </span>
-                {event.reason === null ? null : (
-                  <span data-testid="stage-event-reason" className="text-muted-foreground">
-                    {event.reason}
-                  </span>
-                )}
-                <span data-testid="stage-event-at" className="text-muted-foreground">
-                  {shortDay(event.occurredAt)}
-                </span>
-              </li>
+              <StageEventRow key={`${event.occurredAt}:${event.toStageKey}`} event={event} stageName={stageName} />
             ))}
           </ol>
         </>
       )}
-    </Section>
+    </Group>
   );
 }
 
 function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }> }): JSX.Element {
   return (
-    <Section data-testid="firm-holds" title="Holds" count={page.holds.length}>
+    <Group data-testid="firm-holds" title="Holds" count={page.holds.length}>
       {page.holds.length === 0 ? (
         <p data-testid="holds-none" className="py-2 text-sm text-muted-foreground">
           Nothing is holding this firm.
@@ -659,7 +690,7 @@ function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility
           ))}
         </Rows>
       )}
-    </Section>
+    </Group>
   );
 }
 
@@ -679,7 +710,7 @@ function FollowUpPermissions({
 }): JSX.Element {
   const permissions = page.followUpPermissions;
   return (
-    <Section data-testid="firm-follow-ups" title="Follow-up permissions" count={permissions.length}>
+    <Group data-testid="firm-follow-ups" title="Follow-up permissions" count={permissions.length}>
       {permissions.length === 0 ? (
         <p data-testid="follow-ups-none" className="py-2 text-sm text-muted-foreground">
           Callie may not write to anybody at this firm.
@@ -706,7 +737,7 @@ function FollowUpPermissions({
           ))}
         </Rows>
       )}
-    </Section>
+    </Group>
   );
 }
 
@@ -730,6 +761,49 @@ function permissionState(permission: FollowUp): string {
   return `until ${shortDayTime(permission.expiresAt)}`;
 }
 
+/** The earliest next action the board knows of, as the card shows it (no new read). */
+function NextAction({ card, timeZone }: { readonly card: BoardCard | undefined; readonly timeZone: string | null }): JSX.Element {
+  const next = card?.nextAction ?? null;
+  return (
+    <Group data-testid="firm-next-action" title="Next action">
+      {next === null ? (
+        <p className="py-1 text-sm text-muted-foreground">Nothing is scheduled.</p>
+      ) : (
+        <p className="py-1 text-sm" data-testid="firm-next-action-line">
+          {nextActionLabel(next, timeZone)}
+        </p>
+      )}
+    </Group>
+  );
+}
+
+/** Contacts without the editing controls: the panel's form, who is there and how to reach them. */
+function ContactsBrief({ detail }: { readonly detail: FirmDetailDto }): JSX.Element {
+  const routesOf = (id: string): string[] =>
+    [...detail.phoneRoutes, ...detail.emailRoutes].filter(route => route.contactId === id && route.eligibility !== 'retired').map(route => route.value);
+  return (
+    <Group data-testid="contacts-panel" title="Contacts" count={detail.contacts.length}>
+      {detail.contacts.length === 0 ? (
+        <p data-testid="contacts-empty" className="py-1 text-sm text-muted-foreground">
+          Nobody is recorded at this firm yet.
+        </p>
+      ) : (
+        <ul data-testid="contacts-list" className="flex flex-col">
+          {detail.contacts.map(contact => (
+            <li key={contact.id} data-testid="contact-row" className="flex flex-col py-1">
+              <span className="flex items-center gap-1.5 text-sm">
+                <span className="truncate font-medium">{contact.fullName}</span>
+                {contact.isPrimary ? <Chip tone="outline">Main contact</Chip> : null}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">{[contact.title, ...routesOf(contact.id)].filter(part => part !== null).join(' · ')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Group>
+  );
+}
+
 export function FirmPage({
   page,
   sequences,
@@ -745,6 +819,10 @@ export function FirmPage({
   notice = null,
   onResolveOutgoing = () => undefined,
   onBasicsSaved = () => undefined,
+  card,
+  stageName = inWords,
+  variant = 'page',
+  research = null,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -764,68 +842,117 @@ export function FirmPage({
   onResolveOutgoing?(request: ResolveOutgoingRequest): void;
   /** The basics were saved (slice S2): read the page again. */
   onBasicsSaved?(): void;
+  /** The firm's board card, when the board has been read: its next action and latest evidence. */
+  readonly card?: BoardCard | undefined;
+  /** A stage key as the workspace names it (the board's stages); the words of the key otherwise. */
+  stageName?(key: string): string;
+  /** `page`: the whole firm in two columns. `panel`: the Pipeline's side panel, one column. */
+  readonly variant?: 'page' | 'panel';
+  /** The Research section, mounted by the caller because it has its own read. */
+  readonly research?: ReactNode;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
   // narrowing is what makes "the detail fields exist" a type rather than a hope.
   const detail = page.visibility === 'assigned_or_admin' && page.read.visibility === 'assigned_or_admin' ? page.read.firm : null;
-  return (
-    <>
-      <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} />
-      {page.visibility !== 'assigned_or_admin' || detail === null ? (
+  const identity = <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} stageName={stageName} />;
+  if (page.visibility !== 'assigned_or_admin' || detail === null) {
+    return (
+      <div className="callie-v2 mt-4">
+        {identity}
         <p data-testid="firm-redacted" className="mt-6 text-sm text-muted-foreground">
           {redactionNotice ?? ''}
         </p>
-      ) : (
-        <>
-          <PhoneRoutes routes={detail.phoneRoutes} />
-          <EmailRoutes routes={detail.emailRoutes} actionsEnabled={actionsEnabled} busy={busy} onCheckRoute={onCheckRoute} />
-          <Section data-testid="contacts-panel" title="Contacts" count={detail.contacts.length}>
-            {detail.contacts.length === 0 ? (
-              <p data-testid="contacts-empty" className="py-2 text-sm text-muted-foreground">
-                Nobody is recorded at this firm yet.
-              </p>
-            ) : (
-              <Rows data-testid="contacts-list">
-                {detail.contacts.map(contact => (
-                  <ContactRow
-                    key={contact.id}
-                    contact={contact}
-                    enabled={actionsEnabled}
-                    saving={busy(`contact:${contact.id}`)}
-                    onSave={onSaveContact}
-                  />
-                ))}
-              </Rows>
-            )}
-          </Section>
-          {sequences === null ? null : (
-            <Sequences
-              page={page}
-              contacts={detail.contacts}
-              view={sequences}
-              actionsEnabled={actionsEnabled}
-              busy={busy}
-              onOpenOpportunity={onOpenOpportunity}
-              onEnroll={onEnroll}
-            />
+      </div>
+    );
+  }
+  const calls = (
+    <>
+      {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
+      <CallHistory firmId={page.read.firm.id} />
+      {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}
+      {variant === 'page' ? <FirmMeetings firmId={page.read.firm.id} /> : null}
+    </>
+  );
+  if (variant === 'panel') {
+    return (
+      <div data-testid="firm-panel-body" className="callie-v2 flex flex-col">
+        {identity}
+        <NextAction card={card} timeZone={page.read.firm.timeZone} />
+        <Group data-testid="firm-opportunity" title="Stage">
+          {page.opportunity === null ? (
+            <p data-testid="opportunity-none" className="py-1 text-sm text-muted-foreground">
+              There is no opportunity at this firm yet.
+            </p>
+          ) : (
+            <StageWhy history={page.stageHistory} card={card} stageName={stageName} />
           )}
-          <HeldOutgoing
-            messages={heldOutgoing}
-            notice={notice}
+        </Group>
+        <ContactsBrief detail={detail} />
+        <div className="mt-7 first:mt-0">{calls}</div>
+        {research}
+      </div>
+    );
+  }
+  return (
+    <div className="callie-v2 mt-5 grid gap-x-12 gap-y-6 min-[1100px]:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="min-w-0 max-w-[760px]">
+        <NextAction card={card} timeZone={page.read.firm.timeZone} />
+        <Opportunity
+          page={page}
+          card={card}
+          stageName={stageName}
+          actionsEnabled={actionsEnabled}
+          busy={busy}
+          onTakeOver={onTakeOver}
+        />
+        <div className="mt-7">{calls}</div>
+        {research}
+        {sequences === null ? null : (
+          <Sequences
+            page={page}
+            contacts={detail.contacts}
+            view={sequences}
             actionsEnabled={actionsEnabled}
             busy={busy}
-            onResolve={onResolveOutgoing}
+            onOpenOpportunity={onOpenOpportunity}
+            onEnroll={onEnroll}
           />
-          <Opportunity page={page} actionsEnabled={actionsEnabled} busy={busy} onTakeOver={onTakeOver} />
-          <FollowUpPermissions page={page} />
-          <Holds page={page} />
-          {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
-          <CallHistory firmId={page.read.firm.id} />
-          {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}
-          <FirmMeetings firmId={page.read.firm.id} />
-        </>
-      )}
-    </>
+        )}
+        <HeldOutgoing
+          messages={heldOutgoing}
+          notice={notice}
+          actionsEnabled={actionsEnabled}
+          busy={busy}
+          onResolve={onResolveOutgoing}
+        />
+        <FollowUpPermissions page={page} />
+        <Holds page={page} />
+      </div>
+      <aside aria-label="Properties and contacts" className="min-w-0">
+        {identity}
+        <PhoneRoutes routes={detail.phoneRoutes} />
+        <EmailRoutes routes={detail.emailRoutes} actionsEnabled={actionsEnabled} busy={busy} onCheckRoute={onCheckRoute} />
+        <Group data-testid="contacts-panel" title="Contacts" count={detail.contacts.length}>
+          {detail.contacts.length === 0 ? (
+            <p data-testid="contacts-empty" className="py-2 text-sm text-muted-foreground">
+              Nobody is recorded at this firm yet.
+            </p>
+          ) : (
+            <Rows data-testid="contacts-list">
+              {detail.contacts.map(contact => (
+                <ContactRow
+                  key={contact.id}
+                  contact={contact}
+                  enabled={actionsEnabled}
+                  saving={busy(`contact:${contact.id}`)}
+                  onSave={onSaveContact}
+                />
+              ))}
+            </Rows>
+          )}
+        </Group>
+      </aside>
+    </div>
   );
 }

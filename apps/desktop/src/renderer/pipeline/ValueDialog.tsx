@@ -1,4 +1,5 @@
 import { useState, type JSX } from 'react';
+import { useKeptText } from '../firms/crmMemory.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Select } from '../ui/select.tsx';
@@ -26,14 +27,20 @@ export function ValueDialog({
   onSave(change: ValueChange): void;
   onCancel(): void;
 }): JSX.Element {
-  const [text, setText] = useState(initial === null ? '' : String(initial.monthlyCents / 100));
-  const [kind, setKind] = useState<'estimated' | 'agreed'>(initial?.kind ?? 'estimated');
+  // Kept above the card, so closing the dialog (a second click, Escape) or leaving the
+  // Pipeline never discards what was typed (criteria 2 and 7).
+  const [text, setText] = useKeptText(`value:${opportunityId}:text`, initial === null ? '' : String(initial.monthlyCents / 100));
+  const [kindText, setKindText] = useKeptText(`value:${opportunityId}:kind`, initial?.kind ?? 'estimated');
+  const kind: 'estimated' | 'agreed' = kindText === 'agreed' ? 'agreed' : 'estimated';
+  const setKind = (next: 'estimated' | 'agreed'): void => {
+    setKindText(next);
+  };
   const [touched, setTouched] = useState(false);
   const parsed = parseMonthlyDollars(text);
   const problem = touched && !parsed.ok ? VALUE_PROBLEMS[parsed.problem] : null;
 
   return (
-    <div role="dialog" aria-label={`Set value for ${firmName}`} data-testid="value-dialog" className="mt-2 flex flex-col gap-2 rounded-md border border-border bg-background p-2 text-xs shadow-sm">
+    <div role="dialog" aria-label={`Set value for ${firmName}`} data-testid="value-dialog" className="mt-1 flex flex-col gap-2 border-t border-border pt-2 text-xs">
       <label className="flex flex-col gap-1">
         <span className="text-muted-foreground">Amount per month ($)</span>
         <Input
@@ -70,7 +77,7 @@ export function ValueDialog({
       </label>
       <div className="flex justify-end gap-1">
         <Button size="sm" variant="quiet" data-testid="value-cancel" onClick={onCancel}>
-          Cancel
+          Close
         </Button>
         <Button
           size="sm"
