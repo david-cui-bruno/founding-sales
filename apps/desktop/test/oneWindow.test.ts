@@ -49,6 +49,9 @@ vi.mock('electron', () => ({
       return false;
     }
     restore(): void {}
+    maximize(): void {}
+    setFullScreen(): void {}
+    on(): void {}
     focus(): void {
       electron.focused += 1;
     }
@@ -56,6 +59,12 @@ vi.mock('electron', () => ({
   ipcMain: { handle: () => undefined },
   Menu: { setApplicationMenu: () => undefined, buildFromTemplate: (template: unknown) => template },
   shell: { openExternal: async () => undefined },
+  // The window's remembered size (`windowStateWiring.ts`) asks the screen where to open.
+  screen: {
+    getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1440, height: 900 } }],
+    getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+    getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+  },
 }));
 
 const configuration = {

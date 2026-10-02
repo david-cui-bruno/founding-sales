@@ -12,6 +12,7 @@ import { resetBridges } from './identityReset.ts';
 import { createImportHandoff, IMPORT_FILE_FILTERS } from './importHandoff.ts';
 import { registerWindowBridges } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
+import { loadWindowChoice, rememberWindowState } from './windowStateWiring.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
@@ -137,11 +138,12 @@ export function sendSessionChange(change: SessionChange): void {
 }
 
 export async function openWindow(configuration: DesktopConfiguration): Promise<BrowserWindow> {
+  // Most of the screen on first launch, and wherever he left it after that (`windowState.ts`).
+  const chosen = loadWindowChoice();
   const window = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    minWidth: 760,
-    minHeight: 480,
+    ...chosen.bounds,
+    minWidth: chosen.minimum.width,
+    minHeight: chosen.minimum.height,
     title: 'Callie',
     webPreferences: {
       preload: configuration.preloadEntry,
@@ -153,6 +155,9 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
       webviewTag: false,
     },
   });
+  if (chosen.maximized) window.maximize();
+  if (chosen.fullScreen) window.setFullScreen(true);
+  rememberWindowState(window);
   // A link the renderer asks to open goes to the system browser, never to a second
   // Electron window where a person cannot see where they are — and **only if it is a
   // web link**. Until 1.0.12 this handler passed any URL to `shell.openExternal`, so a
