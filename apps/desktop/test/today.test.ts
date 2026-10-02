@@ -525,7 +525,7 @@ describe('the Today bridge', () => {
     await bridge.expand({ firmId: FIRM_ID });
     const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const permission = { scope: 'single_email' as const, templateVersionId: '66666666-6666-4666-8666-666666666666' };
-    const record = async (outcome: 'interested' | 'callback_requested' | 'referral_or_wrong_person' | 'not_interested' | 'do_not_call' | 'voicemail'): Promise<unknown> => {
+    const record = async (outcome: 'interested' | 'callback_requested' | 'referral_or_wrong_person' | 'not_interested' | 'do_not_call' | 'voicemail_left'): Promise<unknown> => {
       calls.length = 0;
       await bridge.recordOutcome({
         firmId: FIRM_ID,
@@ -543,7 +543,7 @@ describe('the Today bridge', () => {
     for (const outcome of ['interested', 'callback_requested', 'referral_or_wrong_person', 'not_interested'] as const) {
       expect(await record(outcome), outcome).toMatchObject({ followUpPermission: permission });
     }
-    for (const outcome of ['do_not_call', 'voicemail'] as const) {
+    for (const outcome of ['do_not_call', 'voicemail_left'] as const) {
       expect(await record(outcome), outcome).not.toHaveProperty('followUpPermission');
     }
 
@@ -556,7 +556,7 @@ describe('the Today bridge', () => {
       routeId: null,
       itemId: null,
       callSessionId: SESSION,
-      outcome: 'voicemail',
+      outcome: 'voicemail_left',
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
@@ -569,7 +569,7 @@ describe('the Today bridge', () => {
       contactId: null,
       routeId: null,
       itemId: null,
-      outcome: 'voicemail',
+      outcome: 'voicemail_left',
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
