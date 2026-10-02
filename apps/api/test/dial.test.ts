@@ -299,6 +299,56 @@ describe('policy, suppression and dialing routes', () => {
     expect(suppressions.some(row => row.canonicalKey === '+14015550192')).toBe(true);
   });
 
+  it('S3X: a record names its channel; absent is all (the installed "Stop all contact"); a channel the key cannot carry is refused', async () => {
+    const before = journal.appended.length;
+    const legacy = await post('/suppressions/record', assigneeToken, command({ scope: 'firm', firmId, source: 'prospect_do_not_call' }));
+    expect(legacy.status, JSON.stringify(legacy.body)).toBe(200);
+    expect(journal.appended.at(-1)?.channel).toBe('all');
+    expect(resultOf(legacy)['channel']).toBe('all');
+
+    const callsOnly = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'firm', firmId, source: 'prospect_do_not_call', channel: 'phone' }),
+    );
+    expect(callsOnly.status, JSON.stringify(callsOnly.body)).toBe(200);
+    expect(journal.appended.at(-1)?.channel).toBe('phone');
+    const listed = await get('/suppressions', assigneeToken);
+    const channels = (listed.body['suppressions'] as { canonicalKey: string; channel: string }[])
+      .filter(row => row.canonicalKey === firmId)
+      .map(row => row.channel)
+      .sort();
+    expect(channels).toEqual(['all', 'phone']);
+
+    const misfit = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'handle', value: '+14015550194', firmId, source: 'prospect_opt_out', channel: 'email' }),
+    );
+    expect(misfit.status).not.toBe(200);
+    expect(misfit.body['reason']).toBe('invalid_input');
+    expect(journal.appended.length).toBe(before + 2);
+  });
+
+  it('S3X: /calls/log carries the four-way doNotCall to the stops it writes', async () => {
+    const target = await numberToSuppress('+14015550189');
+    const before = journal.appended.length;
+    const logged = await post(
+      '/calls/log',
+      assigneeToken,
+      command({ ...target, outcome: 'do_not_call', doNotCall: { scope: 'firm', channel: 'phone' } }),
+    );
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const written = journal.appended.slice(before).map(entry => `${entry.scope}/${entry.channel}`).sort();
+    expect(written).toEqual(['firm/phone', 'handle/phone']);
+    const malformed = await post(
+      '/calls/log',
+      assigneeToken,
+      command({ ...target, outcome: 'do_not_call', doNotCall: { scope: 'firm', channel: 'email' } }),
+    );
+    expect(malformed.status).toBe(400);
+  });
+
   it('fails a manual record and leaves the id free when the journal write fails', async () => {
     const commandId = randomUUID();
     const body = {
