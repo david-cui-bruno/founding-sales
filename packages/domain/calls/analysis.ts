@@ -307,7 +307,8 @@ export interface CompleteCallAnalysisInput {
  * Complete a pending model version: under `call_analysis:<session>`, read the answer
  * (`readCallAnalysisAnswer`), propose (`proposeEffects`), and write `completed` with the
  * result, the proposals and their hash. A malformed or schema-invalid answer, or a
- * transcript other than the one the version was created on, writes `failed`. A version
+ * transcript — carried by the request, or stored now — other than the one the version was
+ * created on, writes `failed`. A version
  * that is no longer pending is left as it is.
  */
 export async function completeCallAnalysis(
@@ -318,7 +319,10 @@ export async function completeCallAnalysis(
   if (row === 'gone') return { kind: 'gone' };
   if (row.state !== 'pending' || row.origin !== 'model') return { kind: 'not_pending', state: row.state };
 
-  if (row.transcript_sha256 !== transcriptSha256(input.utterances)) {
+  // Both the transcript the request carried and the one stored now, re-read under the lock
+  // (review S3A1): a transcript replaced while the model ran fails the version.
+  const stored = await readStoredTranscript(context, row.call_session_id);
+  if (row.transcript_sha256 !== transcriptSha256(input.utterances) || stored === null || stored.sha256 !== row.transcript_sha256) {
     await writeFailed(context, row.id, 'transcript_changed');
     return { kind: 'failed', analysisId: row.id, reason: 'transcript_changed' };
   }

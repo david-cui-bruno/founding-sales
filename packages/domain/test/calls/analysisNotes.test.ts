@@ -236,6 +236,18 @@ describe('A-3 (C5): the current notes through the production writers', () => {
     ).toEqual({ kind: 'capped' });
   });
 
+  it('a completion whose stored transcript was replaced while the model ran fails transcript_changed, even with the original utterances (S3A1 [7])', async () => {
+    const sessionId = await transcribedCall(session, { seeded, crm, policy }, UTTERANCES);
+    const v1 = await modelVersion(sessionId);
+    await session.query('UPDATE call_transcripts SET utterances = $2::jsonb WHERE call_session_id = $1', [
+      sessionId,
+      JSON.stringify([...UTTERANCES, { speaker: 1, start: 30, end: 33, text: 'Thanks, bye.' }]),
+    ]);
+    expect(await complete(v1, sessionId, GOOD)).toEqual({ kind: 'failed', analysisId: v1, reason: 'transcript_changed' });
+    expect((await read(sessionId)).failure).toEqual({ analysisId: v1, version: 1, reason: 'transcript_changed' });
+    expect((await read(sessionId)).current).toBeNull();
+  });
+
   it('the authoritative version is the newest completed one on the current transcript: a new transcript has none until it is analysed', async () => {
     const sessionId = await transcribedCall(session, { seeded, crm, policy }, UTTERANCES);
     const v1 = await modelVersion(sessionId);
