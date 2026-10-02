@@ -260,7 +260,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     // Slice C1: the calling operations are the Today bridge's dial path, under their own names.
     calling: {
       ...Object.fromEntries(
-        ['analysis', 'analysisRetry', 'analysisEdit', 'proposalsApply', 'proposalsDecline', 'pendingDismiss', 'recap', 'acceptance'].map(method => [
+        ['analysis', 'analysisRetry', 'analysisEdit', 'proposalsApply', 'proposalsDecline', 'pendingDismiss', 'recap', 'acceptance', 'trial'].map(method => [
           method,
           async (input: unknown) => await operationHandlers({ api } as unknown as OperationHostDeps)[`calling.${method}` as OperationName](input as never),
         ]),

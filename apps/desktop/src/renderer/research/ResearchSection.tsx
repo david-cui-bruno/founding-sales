@@ -1,9 +1,11 @@
-import { useState, type JSX } from 'react';
+import { type JSX } from 'react';
+import { useKeptText } from '../firms/crmMemory.ts';
+import { Group } from '../v2/parts.tsx';
 import type { ResearchState } from '../researchContract.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
-import { factLine, factSourceLine, judgmentChips, researchNotice, runLine } from '../researchView.ts';
+import { Row, RowActions, RowMain, Rows } from '../ui/layout.tsx';
+import { factLine, factSourceLine, shortDate, sourceHost, judgmentChips, researchNotice, runLine } from '../researchView.ts';
 
 /**
  * The Firm page's Research section (lane R).
@@ -34,14 +36,15 @@ export function ResearchSection({
   onResearchNow(): void;
   onAddLink(url: string): void;
 }): JSX.Element {
-  const [url, setUrl] = useState('');
+  // Kept above the route: a link half typed is still there after a visit to Today.
+  const [url, setUrl] = useKeptText(`research-link:${firmId}`);
   const firm = state?.firm ?? null;
   const judgments = firm?.judgments ?? null;
   const running = busy(`research-run:${firmId}`);
   const linking = busy(`research-link:${firmId}`);
 
   return (
-    <Section
+    <Group
       data-testid="research-panel"
       title="Research"
       actions={
@@ -62,6 +65,8 @@ export function ResearchSection({
           {researchNotice(state.notice)}
         </p>
       )}
+
+      {firm === null ? null : <ResearchBasics facts={firm.facts} />}
 
       {judgments === null ? (
         <p data-testid="research-empty" className="py-1 text-sm text-muted-foreground">
@@ -158,7 +163,7 @@ export function ResearchSection({
           </Button>
         </RowActions>
       </div>
-    </Section>
+    </Group>
   );
 }
 
@@ -167,4 +172,41 @@ function reasonFor(reasons: Readonly<Record<string, string>>, label: string): st
   const key =
     label === 'Fit' ? 'fit' : label === 'Problem' ? 'problemEvidence' : label === 'Timing' ? 'timing' : 'reachability';
   return reasons[key] ?? '';
+}
+
+/**
+ * Doors and software, as research found them (S4). Nothing structured stores either, so these
+ * are the two research facts that speak to them, each labelled as research with its source,
+ * and "unknown" when the run found nothing: the page never guesses a figure.
+ */
+const BASICS: readonly { readonly key: string; readonly label: string }[] = [
+  { key: 'portfolio_size', label: 'Doors' },
+  { key: 'software_evidence', label: 'Software' },
+];
+
+function ResearchBasics({ facts }: { readonly facts: readonly { readonly key: string; readonly quote: string | null; readonly sourceReference: string; readonly retrievedAt: string }[] }): JSX.Element {
+  return (
+    <dl data-testid="research-basics" className="mb-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+      {BASICS.map(({ key, label }) => {
+        const fact = facts.find(entry => entry.key === key);
+        return (
+          <div key={key} className="contents">
+            <dt className="text-xs text-muted-foreground">{label}</dt>
+            <dd data-testid={`research-basic-${key}`} className="min-w-0">
+              {fact === undefined ? (
+                <span className="text-faint">Unknown</span>
+              ) : (
+                <>
+                  <span>{factLine(fact)}</span>{' '}
+                  <span className="text-xs text-muted-foreground">
+                    from research · {sourceHost(fact.sourceReference)} · {shortDate(fact.retrievedAt)}
+                  </span>
+                </>
+              )}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
 }

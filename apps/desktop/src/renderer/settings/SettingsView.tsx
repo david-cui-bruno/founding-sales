@@ -8,6 +8,7 @@ import { Page, ViewHeader } from '../ui/layout.tsx';
 import { cn } from '../lib/utils.ts';
 import type { StatusRow } from '../homeView.ts';
 import { Administration } from './Administration.tsx';
+import { isAttributed, NoticeProvider } from './FormNotice.tsx';
 import { CallingCalendarSection } from './CallingCalendarSection.tsx';
 import { MailboxSection } from './MailboxSection.tsx';
 import { ReplyModelSection } from './ReplyModelSection.tsx';
@@ -85,7 +86,8 @@ export function SettingsView({
   const view = state === null ? null : adminViewOf(state);
 
   return (
-    <Page data-testid="settings-view" aria-busy={admin.pending > 0}>
+    <NoticeProvider value={{ text: view?.notice ?? null, form: admin.lastForm }}>
+    <Page data-testid="settings-view" aria-busy={admin.pending > 0} className="callie-v2">
       <ViewHeader title="Settings" />
       <nav data-testid="tabs" className="mt-3 flex items-center gap-1 border-b border-border">
         {SETTINGS_TABS.map(name => (
@@ -119,7 +121,9 @@ export function SettingsView({
                 {view.banner}
               </Alert>
             )}
-            {view.notice === null ? null : (
+            {/* A command's answer is drawn beside the control that sent it (criterion 6). Only a
+                notice that no form owns — the answer to a read — is said here. */}
+            {view.notice === null || isAttributed(admin.lastForm) ? null : (
               <Alert tone="info" data-testid="notice">
                 {view.notice}
               </Alert>
@@ -165,5 +169,6 @@ export function SettingsView({
         </>
       )}
     </Page>
+    </NoticeProvider>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import { useEffect, type JSX } from 'react';
 import type { ActiveSettingKey } from '../settingsContract.ts';
 import {
   BUSINESS_ZONE_CHOICES,
@@ -14,6 +14,8 @@ import {
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Field, Row, RowMain, Rows } from '../ui/layout.tsx';
+import { useKept, useKeptBased, useKeptMap } from '../replies/kept.ts';
+import { ChangedElsewhere, FormNotice } from './FormNotice.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
@@ -107,6 +109,63 @@ function Control({
   );
 }
 
+const NONE = '\u0000';
+
+/**
+ * The typed controls' values, one kept key per field (`settings:row:<setting>:<field>`), each
+ * with the saved value it was started from (K2). A toggle is stored as `true` or `false`, a
+ * text field as itself. A field shows what was typed only while the saved value is still the
+ * one the edit began from; if it moved, the edit is dropped and the field shows what is saved
+ * now, with `elsewhere` set (unless the saved value is now what was typed: the person's own
+ * save). A field nobody touched is always the current saved value, so a Save never sends a
+ * stale one.
+ */
+function useKeptFields(
+  prefix: string,
+  fields: readonly SettingField[],
+): {
+  readonly values: Readonly<Record<string, string | boolean>>;
+  set(key: string, value: string | boolean): void;
+  readonly elsewhere: boolean;
+} {
+  const kept = useKeptMap(`${prefix}:`);
+  const rows = fields.map(field => {
+    const server = String(field.value);
+    const raw = kept.get(field.key, NONE);
+    const base = kept.get(`${field.key}#base`, NONE);
+    const has = raw !== NONE;
+    return { field, server, raw, has, stale: has && base !== server, flagged: kept.get(`${field.key}#elsewhere`, '') === 'yes' };
+  });
+  const anyStale = rows.some(row => row.stale);
+  useEffect(() => {
+    if (!anyStale) return;
+    for (const row of rows) {
+      if (!row.stale) continue;
+      kept.set(row.field.key, NONE);
+      kept.set(`${row.field.key}#base`, NONE);
+      kept.set(`${row.field.key}#elsewhere`, row.raw === row.server ? '' : 'yes');
+    }
+    // `kept` and `rows` are new every render; the guard is `anyStale`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyStale]);
+  const values = Object.fromEntries(
+    rows.map(row => {
+      if (!row.has || row.stale) return [row.field.key, row.field.value];
+      return [row.field.key, typeof row.field.value === 'boolean' ? row.raw === 'true' : row.raw];
+    }),
+  );
+  return {
+    values,
+    elsewhere: rows.some(row => row.flagged && (!row.has || row.stale)),
+    set: (key, value) => {
+      const row = rows.find(candidate => candidate.field.key === key);
+      kept.set(key, String(value));
+      kept.set(`${key}#base`, row?.server ?? '');
+      kept.set(`${key}#elsewhere`, '');
+    },
+  };
+}
+
 export function SettingRow({
   row,
   history,
@@ -122,12 +181,20 @@ export function SettingRow({
   onHistory(settingKey: ActiveSettingKey): void;
 }): JSX.Element {
   const fields = settingFields(row.settingKey, row.value);
-  const [values, setValues] = useState<Readonly<Record<string, string | boolean>>>(() =>
-    Object.fromEntries((fields ?? []).map(field => [field.key, field.value])),
-  );
-  const [raw, setRaw] = useState(() => JSON.stringify(row.value, null, 2));
-  const [unreadable, setUnreadable] = useState(false);
-  const [note, setNote] = useState('');
+  // Every edit is kept above the route (S4R, criterion 7): leaving Settings for Today and
+  // coming back finds the field as it was typed, with the saved value as the fallback.
+  const prefix = `settings:row:${row.settingKey}`;
+  const typed = useKeptFields(prefix, fields ?? []);
+  const values = typed.values;
+  const setValues = typed.set;
+  const rawKept = useKeptBased(`${prefix}:raw`, JSON.stringify(row.value, null, 2));
+  const [raw, setRaw] = [rawKept.value, rawKept.set] as const;
+  const [unreadableText, setUnreadableText] = useKept(`${prefix}:unreadable`, '');
+  const unreadable = unreadableText === 'yes';
+  const setUnreadable = (next: boolean): void => {
+    setUnreadableText(next ? 'yes' : '');
+  };
+  const [note, setNote] = useKept(`${prefix}:note`, '');
   const summary = settingSummary(row.settingKey, row.value);
   const key = row.settingKey as ActiveSettingKey;
 
@@ -168,7 +235,7 @@ export function SettingRow({
               editable={row.editable && !saving}
               value={values[field.key] ?? field.value}
               onChange={next => {
-                setValues(current => ({ ...current, [field.key]: next }));
+                setValues(field.key, next);
               }}
             />
           ))
@@ -223,6 +290,8 @@ export function SettingRow({
         >
           History
         </Button>
+        <FormNotice forms={[]} exact={`setting:${row.settingKey}`} />
+        <ChangedElsewhere show={typed.elsewhere || rawKept.elsewhere} />
       </div>
 
       {row.notEditableBecause === null ? null : (

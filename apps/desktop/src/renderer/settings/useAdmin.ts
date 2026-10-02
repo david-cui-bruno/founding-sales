@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OperationApi } from '../../shared/operations.ts';
 import type { Generation } from '../app/generation.ts';
+import { useClearDrafts } from '../app/drafts.tsx';
 import { useViewState, type ViewState } from '../app/useViewState.ts';
 import type {
   ActiveSettingKey,
@@ -56,6 +57,8 @@ export interface AdminActions {
 
 export interface Admin extends ViewState<AdminState> {
   readonly actions: AdminActions;
+  /** The form whose command was sent last, or null after a read: whose notice the page's is. */
+  readonly lastForm: string | null;
 }
 
 export function useAdmin(tab: SettingsTab, identity: string | null, generation: number, guard: Generation): Admin {
@@ -68,7 +71,33 @@ export function useAdmin(tab: SettingsTab, identity: string | null, generation: 
     [],
   );
   const view = useViewState<AdminState>({ key: 'settings', identity, generation, guard, first });
-  const { read, command, state } = view;
+  const { read: viewRead, command: viewCommand, state } = view;
+  // Which form spoke last (S4R): the answer's one notice belongs beside that form's control.
+  const [lastForm, setLastForm] = useState<string | null>(null);
+  const read = useCallback<typeof view.read>(
+    next => {
+      setLastForm(null);
+      viewRead(next);
+    },
+    [viewRead],
+  );
+  const clearDrafts = useClearDrafts();
+  const command = useCallback<typeof view.command>(
+    (form, next) => {
+      setLastForm(form);
+      viewCommand(form, async api => {
+        const answer = await next(api);
+        // A posture confirmation is spent the moment the server records or already holds the
+        // states it was given for (K6): cleared by the command's own answer, here, so it is gone
+        // whether or not the form is still mounted, and never carried to the next state chosen.
+        if (form === 'postures' && (answer.notice === 'posture_recorded' || answer.notice === 'posture_already_allowed')) {
+          clearDrafts('settings:postures:');
+        }
+        return answer;
+      });
+    },
+    [viewCommand, clearDrafts],
+  );
 
   const actions = useMemo<AdminActions>(
     () => ({
@@ -126,5 +155,5 @@ export function useAdmin(tab: SettingsTab, identity: string | null, generation: 
     show(tab);
   }, [tab, state, show]);
 
-  return useMemo(() => ({ ...view, actions }), [view, actions]);
+  return useMemo(() => ({ ...view, actions, lastForm }), [view, actions, lastForm]);
 }

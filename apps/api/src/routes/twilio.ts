@@ -6,7 +6,6 @@ import {
   workspaceOfCallSession,
 } from '@fss/domain/calls/sessions.ts';
 import { workspacesWithIntegration } from '@fss/domain/settings/integrations.ts';
-import { enqueueCallTranscription, transcriptionWorkerAvailable } from '@fss/domain/calls/transcription.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -167,6 +166,13 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
       }),
     );
     if (!outcome.known) options.log?.log('info', 'twilio_callback_unknown_sid', { path: request.path });
+    // Since S3T a status delivery may queue the transcription too (an answer after the
+    // recording). Its refusals are logged as the recording callback's are, except "not
+    // eligible", which nearly every status delivery is (ringing, unanswered, no recording yet).
+    const queued = outcome.known ? outcome.transcription : undefined;
+    if (queued !== undefined && !queued.enqueued && queued.reason !== 'transcription_off' && queued.reason !== 'transcription_not_eligible') {
+      options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });
+    }
     return { status: 200, body: EMPTY_TWIML, contentType: TWIML };
   }
 
@@ -175,30 +181,24 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
   // recording with no audio, and is never transcribed.
   const recordingDuration = numberOf(params['RecordingDuration']);
   const recordingStatus = params['RecordingStatus'];
-  const outcome = await withTransaction(session, async () => {
-    const recorded = await recordCallRecording(session, {
+  // Slice C2: the transcription is queued in the same transaction, when the workspace turned
+  // it on, a worker with the key is up, the call was answered and the recording lasts at least
+  // twenty seconds (`calls/transcription.ts`). Since S3T the domain callback does it (and the
+  // status callback too, for an answer that arrives after the recording), together with the
+  // pending-review hold (`admitToAnalysisPath`).
+  const outcome = await withTransaction(session, async () =>
+    await recordCallRecording(session, {
       callSid: params['CallSid'] ?? '',
       recordingSid: params['RecordingSid'] ?? '',
       recordingUrl: params['RecordingUrl'] ?? '',
       ...(recordingDuration === undefined ? {} : { durationSeconds: recordingDuration }),
-    });
-    // Slice C2: the transcription is queued from here, in the same transaction, when the
-    // workspace turned it on, a worker with the key is up, the call was answered and the
-    // recording lasts at least twenty seconds (`calls/transcription.ts`).
-    if (recorded.recorded !== undefined && (recordingStatus === undefined || recordingStatus === 'completed')) {
-      const queued = await enqueueCallTranscription(session, {
-        workspaceId: recorded.recorded.workspaceId,
-        sessionId: recorded.recorded.sessionId,
-        // The key is the worker's alone; a live worker that can transcribe says so in its
-        // heartbeat (review fold 1, P2), and that is what "configured" means here.
-        keyConfigured: await transcriptionWorkerAvailable(session),
-      });
-      if (!queued.enqueued && queued.reason !== 'transcription_off') {
-        options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });
-      }
-    }
-    return recorded;
-  });
+      final: recordingStatus === undefined || recordingStatus === 'completed',
+    }),
+  );
+  const queued = outcome.transcription;
+  if (queued !== undefined && !queued.enqueued && queued.reason !== 'transcription_off') {
+    options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });
+  }
   if (!outcome.known) options.log?.log('info', 'twilio_callback_unknown_sid', { path: request.path });
   return { status: 200, body: EMPTY_TWIML, contentType: TWIML };
 }

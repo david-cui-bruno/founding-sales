@@ -3,7 +3,10 @@ import type { CallingNumberSectionView } from '../settingsView.ts';
 import { inertSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Field, Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
+import { Field, Row, RowActions, RowMain, Rows } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 
 /**
  * "Your calling number" (9.1; lane g60), first on the page because it is the one setting
@@ -30,8 +33,8 @@ export function CallingNumberSection({
   onAdd(input: { readonly e164: string; readonly label: string }): void;
   onRetire(identityId: string): void;
 }): JSX.Element {
-  const [e164, setE164] = useState('');
-  const [label, setLabel] = useState('');
+  const [e164, setE164] = useKept('settings:calling-number:e164', '');
+  const [label, setLabel] = useKept('settings:calling-number:label', '');
   const [missing, setMissing] = useState(false);
 
   return (
@@ -120,6 +123,9 @@ export function CallingNumberSection({
         >
           Add number
         </Button>
+      </div>
+      <div className="mt-2 empty:hidden">
+        <FormNotice forms={['calling-number']} />
       </div>
       {section.notEditableBecause === null ? null : (
         <p className="mt-2 text-xs text-muted-foreground">{inertSentence(section.notEditableBecause)}</p>

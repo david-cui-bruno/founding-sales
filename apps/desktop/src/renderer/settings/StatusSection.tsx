@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import type { StatusRow } from '../homeView.ts';
 import { cn } from '../lib/utils.ts';
-import { Section } from '../ui/layout.tsx';
+import { Section } from './Group.tsx';
 
 /**
  * Settings › Status: the routine state of the system, in one place (slice 3a, C0).
@@ -16,24 +16,29 @@ import { Section } from '../ui/layout.tsx';
  */
 
 const TONE_DOT: Readonly<Record<StatusRow['tone'], string>> = Object.freeze({
-  ok: 'bg-[var(--status-ok)]',
-  warn: 'bg-[var(--status-warn)]',
+  ok: 'bg-ok',
+  warn: 'bg-warn',
   stop: 'bg-destructive',
-  none: 'bg-border',
+  none: 'bg-strong',
 });
 
+/**
+ * S4R: v2 restyle only. The rows, their keys, their tones and their words are
+ * `buildHomeView`'s and are drawn exactly as before; what changed is the weight (a quiet
+ * hairline list under a sentence-case title, in the Settings group style).
+ */
 export function StatusSection({ rows }: { readonly rows: readonly StatusRow[] }): JSX.Element {
   return (
-    <Section data-testid="settings-status" title="Status">
-      <ul className="flex flex-col border-t border-border">
+    <Section data-testid="settings-status" title="Status" className="mt-5 border-t-0 pt-0">
+      <ul className="flex flex-col">
         {rows.map(row => (
           <li
             key={row.key}
             data-testid={`status-${row.key}`}
             data-tone={row.tone}
-            className="flex items-center gap-2.5 border-b border-border py-1.5 text-sm last:border-b-0"
+            className="flex min-h-[var(--v2-row)] items-center gap-2.5 border-b border-border py-1 text-sm last:border-b-0"
           >
-            <span className={cn('size-[7px] shrink-0 rounded-full', TONE_DOT[row.tone])} />
+            <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', TONE_DOT[row.tone])} />
             <span className="flex-1">{row.text}</span>
           </li>
         ))}

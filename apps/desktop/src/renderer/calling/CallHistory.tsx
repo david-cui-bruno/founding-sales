@@ -7,6 +7,7 @@ import {
   type CallSessionDto,
   type CallTranscriptResponse,
 } from '@fss/contracts';
+import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { CallSummaryBlock } from './CallSummary.tsx';
 import { Button } from '../ui/button.tsx';
 import { callTimer } from './callText.ts';
@@ -235,12 +236,17 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
 
   return (
     <section data-testid="call-history" className="flex flex-col">
-      <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">Calls</h3>
+      <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">Calls</h3>
       <ul className="flex flex-col border-t border-border">
         {calls.map(call => (
           <li key={call.sessionId} data-testid="call-history-row" className="group/row flex flex-col border-b border-border py-1.5 text-sm">
             <div className="flex items-center gap-3">
               <span className="flex-1 truncate">{when(call.startedAt ?? call.endedAt)}</span>
+              {call.outcome == null ? null : (
+                <span data-testid="call-history-outcome" className="text-xs font-medium">
+                  {OUTCOME_LABELS[call.outcome]}
+                </span>
+              )}
               <span className="text-xs text-muted-foreground">{STATUS_WORDS[call.status]}</span>
               <span data-testid="call-history-duration" className="w-14 text-right text-xs text-muted-foreground tabular-nums">
                 {call.durationSeconds === null ? '—' : callTimer(call.durationSeconds)}
