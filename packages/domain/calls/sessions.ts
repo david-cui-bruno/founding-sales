@@ -875,6 +875,8 @@ export type CallStatusOutcome =
       readonly status: CallSessionStatus;
       readonly applied: boolean;
       readonly settlement: 'settled' | 'estimated' | null;
+      /** The delivery's transcription enqueue (`admitToAnalysisPath`), for the route to log. */
+      readonly transcription?: EnqueueTranscriptionOutcome;
     };
 
 interface CallbackSessionRow {
@@ -988,7 +990,7 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
   // Slice 3a: every delivery, duplicates included, may complete the facts the pending-review
   // hold is admitted on (since S3T the analysis path's: an answer, then the recording). An
   // answer that arrives after the recording queues its transcription here (review S3T, 2).
-  await admitToAnalysisPath(db, { workspaceId: session.workspace_id, sessionId: session.id });
+  const admitted = await admitToAnalysisPath(db, { workspaceId: session.workspace_id, sessionId: session.id });
 
   let settlement: 'settled' | 'estimated' | null = null;
   if (terminal) {
@@ -1031,7 +1033,14 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
     }
   }
 
-  return { known: true, sessionId: session.id, status: forward ? status : session.status, applied: forward, settlement };
+  return {
+    known: true,
+    sessionId: session.id,
+    status: forward ? status : session.status,
+    applied: forward,
+    settlement,
+    transcription: admitted.transcription,
+  };
 }
 
 /**

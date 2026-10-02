@@ -166,6 +166,13 @@ export async function routeTwilio(request: ApiRequest, options: RoutingOptions):
       }),
     );
     if (!outcome.known) options.log?.log('info', 'twilio_callback_unknown_sid', { path: request.path });
+    // Since S3T a status delivery may queue the transcription too (an answer after the
+    // recording). Its refusals are logged as the recording callback's are, except "not
+    // eligible", which nearly every status delivery is (ringing, unanswered, no recording yet).
+    const queued = outcome.known ? outcome.transcription : undefined;
+    if (queued !== undefined && !queued.enqueued && queued.reason !== 'transcription_off' && queued.reason !== 'transcription_not_eligible') {
+      options.log?.log('info', 'call_transcription_not_queued', { reason: queued.reason });
+    }
     return { status: 200, body: EMPTY_TWIML, contentType: TWIML };
   }
 

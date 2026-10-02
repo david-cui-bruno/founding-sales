@@ -207,10 +207,14 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
 
   it('after transcription, the analysis source offers exactly the calls the whole rule calls eligible', async () => {
     await world.setTranscription(true);
-    const cases: { readonly provider: string; readonly model: string; readonly summary: boolean; readonly reason: string | null }[] = [
-      { provider: 'aws_transcribe', model: 'standard', summary: false, reason: null },
-      { provider: 'deepgram', model: 'nova-3', summary: false, reason: 'not_channel_labelled' },
-      { provider: 'aws_transcribe', model: 'standard', summary: true, reason: 'summary_path' },
+    // Each summary-path marker on its own, the others absent (review S3TF): a job, a
+    // reservation, a stored summary.
+    const cases: { readonly provider: string; readonly model: string; readonly summary: 'job' | 'reservation' | 'stored' | null; readonly reason: string | null }[] = [
+      { provider: 'aws_transcribe', model: 'standard', summary: null, reason: null },
+      { provider: 'deepgram', model: 'nova-3', summary: null, reason: 'not_channel_labelled' },
+      { provider: 'aws_transcribe', model: 'standard', summary: 'job', reason: 'summary_path' },
+      { provider: 'aws_transcribe', model: 'standard', summary: 'reservation', reason: 'summary_path' },
+      { provider: 'aws_transcribe', model: 'standard', summary: 'stored', reason: 'summary_path' },
     ];
     for (const transcript of cases) {
       const call = await world.placeCall(await world.newFirm(), CALL, { transcript: false });
@@ -219,8 +223,8 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
          VALUES ($1, $2, $3, $4, 'en-US', 125, $5::jsonb)`,
         [world.seeded.alpha.workspaceId, call.sessionId, transcript.provider, transcript.model, JSON.stringify(CALL)],
       );
-      if (transcript.summary) {
-        // An obligation started before 3a: a summarize job puts the call on the summary path.
+      // An obligation started before 3a puts the call on the summary path.
+      if (transcript.summary === 'job') {
         await enqueueJob(world.session, {
           workspaceId: world.seeded.alpha.workspaceId,
           kind: 'call.summarize',
@@ -228,7 +232,35 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
           payload: { callSessionId: call.sessionId },
           maxAttempts: 3,
         });
+      } else if (transcript.summary === 'reservation') {
+        await world.session.query(
+          `INSERT INTO provider_reservations
+             (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date, business_time_zone,
+              cents, model_name, max_input_tokens, max_output_tokens)
+           VALUES ($1, 'anthropic_call_summary', 'call_summary', $2, 1, '2026-10-01', 'America/New_York',
+                   2, 'claude-haiku-4-5-20251001', 4000, 1500)`,
+          [world.seeded.alpha.workspaceId, call.sessionId],
+        );
+      } else if (transcript.summary === 'stored') {
+        await world.session.query(
+          `INSERT INTO call_summaries (workspace_id, call_session_id, model, prompt_version, summary, next_steps, commitments)
+           VALUES ($1, $2, 'claude-haiku-4-5-20251001', 'call_summary.1', 'They talked briefly.', '[]'::jsonb, '[]'::jsonb)`,
+          [world.seeded.alpha.workspaceId, call.sessionId],
+        );
       }
+      const markers = (
+        await world.session.query<{ jobs: number; reservations: number; stored: number }>(
+          `SELECT (SELECT count(*) FROM jobs WHERE kind = 'call.summarize' AND payload ->> 'callSessionId' = $1::text)::int AS jobs,
+                  (SELECT count(*) FROM provider_reservations WHERE subject_kind = 'call_summary' AND subject_id = $1::uuid)::int AS reservations,
+                  (SELECT count(*) FROM call_summaries WHERE call_session_id = $1::uuid)::int AS stored`,
+          [call.sessionId],
+        )
+      ).rows[0];
+      expect(markers).toEqual({
+        jobs: transcript.summary === 'job' ? 1 : 0,
+        reservations: transcript.summary === 'reservation' ? 1 : 0,
+        stored: transcript.summary === 'stored' ? 1 : 0,
+      });
       const verdict = callAnalysisEligibility({
         ...(await factsOf(call, true)),
         transcript: transcript.provider === 'deepgram' ? 'not_channel_labelled' : 'channel_labelled',
@@ -237,7 +269,11 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
         summaryPath: (await postCallModelPath(world.session, world.seeded.alpha.workspaceId, call.sessionId)) === 'summary',
       });
       const offered = (await listOwedAnalyses(world.session, 500)).some(owed => owed.sessionId === call.sessionId);
-      expect({ offered, eligible: verdict.kind === 'eligible' }).toEqual({ offered: transcript.reason === null, eligible: transcript.reason === null });
+      expect({ case: transcript.summary ?? transcript.provider, offered, eligible: verdict.kind === 'eligible' }).toEqual({
+        case: transcript.summary ?? transcript.provider,
+        offered: transcript.reason === null,
+        eligible: transcript.reason === null,
+      });
       if (verdict.kind === 'excluded') expect(verdict.reason).toBe(transcript.reason);
     }
   });
