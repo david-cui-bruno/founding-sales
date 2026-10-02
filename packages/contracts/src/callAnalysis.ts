@@ -23,11 +23,6 @@ import { CALL_SUMMARY_SIDES } from './callSummaries.ts';
 /** Bumped whenever a byte of the policy table (`analysisPolicy.ts`) changes what it proposes. */
 export const CALL_POLICY_VERSION = 'call_policy.1';
 
-/** The advisory lock every writer of one call's analysis takes: `call_analysis:<sessionId>`. */
-export function callAnalysisLockName(callSessionId: string): string {
-  return `call_analysis:${callSessionId}`;
-}
-
 // ---------------------------------------------------------------------------
 // Vocabulary
 // ---------------------------------------------------------------------------
