@@ -323,6 +323,27 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
   });
 
+  it('B-8: stop plus e-mail stays in review — no follow_up key to apply, and none is accepted', async () => {
+    // A confirmed stop (its own line, a known form) with an e-mail request on the next line:
+    // the stop applies, the request is David's to read.
+    const stopMail = lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', 'Please stop calling me.'], ['T', 'Just send me an overview by email.']);
+    const call = await analysedCall(
+      stopMail,
+      answer({
+        summary: 'Dana asked not to be called and to be e-mailed an overview.',
+        stop: { requested: true, scope: 'this_number', quote: 'Please stop calling me', line: 2 },
+        follow_up_request: { kind: 'overview_email', quote: 'Just send me an overview by email', line: 3 },
+      }),
+    );
+    const shown = (await world.read(call.sessionId)).authoritative?.proposals ?? [];
+    expect(shown.find(proposal => proposal.key === 'stop_with_email')?.mode).toBe('review');
+    expect(shown.some(proposal => proposal.kind === 'follow_up')).toBe(false);
+    expect(await apply(world, call, ['outcome', 'follow_up'], { edits: { follow_up: { templateVersionId: '00000000-0000-4000-8000-000000000001' } } })).toEqual({
+      ok: false,
+      reason: 'proposal_unknown',
+    });
+  });
+
   // ---------------------------------------------------------------------------- B-5
 
   describe('B-5: the buying signal, in either click order, leaves the opportunity manual', () => {
