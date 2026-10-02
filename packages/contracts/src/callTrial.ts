@@ -13,6 +13,10 @@ import { instant, uuid } from './foundationRows.ts';
  * the one the analysis path already applies (`packages/domain/calls/analysisEligibility.ts`).
  */
 
+/** A later decision row's result for a correction, and its reasons (the outcome-correction slice). */
+export const CALL_PROPOSAL_CORRECTED = 'corrected' as const;
+export const CALL_PROPOSAL_CORRECTION_REASONS = ['original_error', 'new_information'] as const;
+
 /** The 3a release: the trial's default start. */
 export const CALL_TRIAL_DEFAULT_SINCE = '2026-10-02T07:14:00.000Z';
 
@@ -81,7 +85,20 @@ const trialTypeSchema = z.object({
   bypassed: count,
   /** No decision yet: "unresolved" on screen. */
   undecided: count,
-  /** unchanged / decided (unchanged + edited + declined + bypassed), or null with nothing decided. */
+  /**
+   * Applied unchanged, then corrected later (the outcome-correction slice; 0 until it ships).
+   * A later decision row with result `corrected` leaves the first one intact, so `unchanged`
+   * stays the initial acceptance. A correction that fixes the model's original error
+   * (`original_error`) counts against the bar; one that follows genuinely new information
+   * (`new_information`) is recorded and is not a model error.
+   */
+  correctedOriginalError: count.default(0),
+  correctedNewInformation: count.default(0),
+  /**
+   * The bar's share: (unchanged − correctedOriginalError) / decided, decided = unchanged +
+   * edited + declined + bypassed; null with nothing decided. A correction is not a second
+   * decision, so it never changes `decided`.
+   */
   acceptedUnchangedShare: z.number().min(0).max(1).nullable(),
   /** Fewer than `minimumDecided` decided: the type stays manual. */
   insufficient: z.boolean(),
@@ -134,13 +151,17 @@ export const callTrialResponseSchema = z.object({
    */
   heldButExcluded: count,
   types: z.array(trialTypeSchema),
+  /**
+   * Every stop or deal-opening suggestion on these calls that David declined or edited, or
+   * (once corrections exist) corrected later for an original model error, by id.
+   */
   incorrect: z.array(
     z.object({
       analysisId: uuid,
       callSessionId: uuid,
       key: callProposalKeySchema,
       type: z.enum(['buying_signal', 'stop']),
-      result: z.enum(['declined', 'edited']),
+      result: z.enum(['declined', 'edited', 'corrected']),
       decidedAt: instant,
     }),
   ),
