@@ -8,6 +8,7 @@ import {
 import type { AuthedClient } from '../src/main/authedClient.ts';
 import type { CrmBridgeHost } from '../src/main/crmBridge.ts';
 import type { MailboxBridgeHost } from '../src/main/mailboxBridge.ts';
+import type { BriefImportHost } from '../src/main/briefImport.ts';
 import type { ReplyBridgeHost } from '../src/main/replyBridge.ts';
 import type { ResearchBridgeHost } from '../src/main/researchBridge.ts';
 import type { SequenceBridgeHost } from '../src/main/sequenceBridge.ts';
@@ -108,6 +109,7 @@ const hosts = () => {
       () => ({}) as never,
     ),
     mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect', 'switch'], () => ({}) as never),
+    briefImport: stub<BriefImportHost>(['state', 'choose', 'commit', 'reset', 'forget'], () => ({}) as never),
     spies: { today, replies, api },
   };
 };
@@ -118,7 +120,16 @@ describe('the operation registry', () => {
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
     expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual(['firms.saveBasics', 'calls.logIncoming']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
+      'firms.saveBasics',
+      'calls.logIncoming',
+      // Lane PB: a firm's prepared brief, and importing them from a JSON file.
+      'firms.setPreparedBrief',
+      'firms.clearPreparedBrief',
+      'firms.briefImportState',
+      'firms.briefImportCommit',
+      'firms.briefImportReset',
+    ]);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
     expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.unmatched', 'meetings.match']);
     // Slice C1: placing a call from Callie, when `calling_provider = twilio`.
@@ -173,7 +184,7 @@ describe('the operation registry', () => {
     ]);
     expect(Object.values(OPERATION_IPC_CHANNELS)).toEqual(['callie:op:read', 'callie:op:command']);
     expect(Object.values(DIAL_IPC_CHANNELS)).toEqual(['callie:dial:call']);
-    expect(Object.values(IMPORT_IPC_CHANNELS)).toEqual(['callie:import:choose']);
+    expect(Object.values(IMPORT_IPC_CHANNELS)).toEqual(['callie:import:choose', 'callie:import:choose-briefs']);
   });
 
   it('names no operation that dials, and every operation says what the main process does for it', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
+import { createBriefImport } from '../src/main/briefImport.ts';
 import { createCrmBridge } from '../src/main/crmBridge.ts';
 import { createMailboxBridge } from '../src/main/mailboxBridge.ts';
 import { createReplyBridge } from '../src/main/replyBridge.ts';
@@ -181,6 +182,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.forFirm': { firmId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
   'firms.saveBasics': { firmId: UUID, regionCode: 'TX' },
+  'firms.setPreparedBrief': { firmId: UUID, brief: 'Who to ask for: unknown' },
+  'firms.clearPreparedBrief': { firmId: UUID },
   'calls.logIncoming': {
     firmId: UUID,
     contactId: null,
@@ -241,6 +244,8 @@ const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]
   // Calling needs the card open: the route and identity come from it.
   'calling.start': [['expand', { firmId: FIXTURE_IDS.firm }]],
   'crm.commitImport': [['previewImport', { fileName: 'firms.csv', csv: 'name\nAspen Test Wealth\n' }]],
+  // Lane PB: committing a prepared-brief import needs a previewed file with a matched row.
+  'firms.briefImportCommit': [['briefImportChoose', {}]],
 });
 
 type Host = Readonly<Record<string, ((input?: unknown) => Promise<unknown>) | undefined>>;
@@ -305,7 +310,35 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         // Slice 3a, lane C: the after-call analysis and its siblings, straight through the client.
         review: through(['review.list', 'review.stageResolve']),
         suppressions: through(['suppressions.firmStop', 'suppressions.supersede']),
-        firms: { saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never) },
+        firms: (() => {
+          // Lane PB: the import is the main process's own host; set and clear go straight through.
+          const briefImport = createBriefImport({
+            api,
+            openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/tmp/briefs.json'] }),
+            read: async () =>
+              await Promise.resolve(
+                JSON.stringify([
+                  {
+                    external_id: 'dfw-20261002-e01',
+                    brief: 'Who to ask for: unknown',
+                    sources: [{ url: 'https://firm.example.test/', label: 'Source' }],
+                    observed_on: '2026-10-02',
+                    prepared_by: 'Research agent',
+                  },
+                ]),
+              ),
+          });
+          const withBriefs = operationHandlers({ api, briefImport } as unknown as OperationHostDeps);
+          return {
+            saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never),
+            setPreparedBrief: async (input: unknown) => await handlers['firms.setPreparedBrief'](input as never),
+            clearPreparedBrief: async (input: unknown) => await handlers['firms.clearPreparedBrief'](input as never),
+            briefImportState: async () => await withBriefs['firms.briefImportState'](undefined as never),
+            briefImportCommit: async () => await withBriefs['firms.briefImportCommit'](undefined as never),
+            briefImportReset: async () => await withBriefs['firms.briefImportReset'](undefined as never),
+            briefImportChoose: async () => await briefImport.choose(),
+          } as Host;
+        })(),
         calls: { logIncoming: async (input: unknown) => await handlers['calls.logIncoming'](input as never) },
       };
     })(),

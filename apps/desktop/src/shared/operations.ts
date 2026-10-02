@@ -28,7 +28,13 @@ import {
   meetingMatchedSchema,
   unmatchedMeetingDtoSchema,
   uuid,
+  businessDate,
+  preparedBriefSetResultSchema,
+  preparedBriefSourcesSchema,
+  preparedBriefTextSchema,
+  preparedByTextSchema,
 } from '@fss/contracts';
+import { briefImportViewSchema } from './briefImport.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -170,6 +176,15 @@ const firmBasicsInput = z.strictObject({
   locality: z.string().max(200).nullable().optional(),
   regionCode: z.string().max(10).nullable().optional(),
   timeZone: z.string().min(1).max(64).optional(),
+});
+
+/** Lane PB: a prepared brief's fields, each only when the person changed it (rule K2). */
+const setPreparedBriefInput = z.strictObject({
+  firmId: uuid,
+  brief: preparedBriefTextSchema.optional(),
+  sources: preparedBriefSourcesSchema.optional(),
+  observedOn: businessDate.optional(),
+  preparedBy: preparedByTextSchema.optional(),
 });
 
 /** What saving the basics came to: the saved values, or the refusal and its fields. */
@@ -1549,6 +1564,46 @@ export const OPERATIONS = {
     output: incomingCallAnswerSchema,
     transform: 'direction inbound and nothing a placed call binds: no ticket, session, route or calling identity',
   },
+
+  // --- Lane PB: a firm's prepared brief, and importing them from a JSON file ------------
+  // Set and clear go straight through the client, like the basics: the view that asked reads
+  // its own state again. The import is held in the main process (`main/briefImport.ts`); the
+  // file is chosen on its own channel, `IMPORT_IPC_CHANNELS.chooseBriefs`.
+  'firms.setPreparedBrief': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/firms/brief/set' }],
+    input: setPreparedBriefInput,
+    output: z.strictObject({ saved: preparedBriefSetResultSchema.nullable(), reason: z.string().max(80).nullable() }),
+    transform: 'none: only the fields the person changed are sent; the answer is a length and a count, never the text',
+  },
+  'firms.clearPreparedBrief': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/firms/brief/clear' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: z.strictObject({ cleared: z.boolean(), reason: z.string().max(80).nullable() }),
+    transform: 'none: whether a brief was cleared, or the refusal code',
+  },
+  'firms.briefImportState': {
+    kind: 'read',
+    calls: [],
+    input: nothing,
+    output: briefImportViewSchema,
+    transform: 'the prepared-brief import the main process is holding: the preview and any results, never the text',
+  },
+  'firms.briefImportCommit': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/firms/brief/set' }],
+    input: nothing,
+    output: briefImportViewSchema,
+    transform: 'one set command per matched row not yet saved, under the id minted at the preview, so a second press replays',
+  },
+  'firms.briefImportReset': {
+    kind: 'command',
+    calls: [],
+    input: nothing,
+    output: briefImportViewSchema,
+    transform: 'lets the file and its preview go',
+  },
 } as const satisfies Readonly<Record<string, Operation>>;
 
 export type OperationName = keyof typeof OPERATIONS;
@@ -1578,7 +1633,7 @@ export const OPERATION_IPC_CHANNELS = {
 export const DIAL_IPC_CHANNELS = { call: 'callie:dial:call' } as const;
 
 /** Choosing a CSV to import: macOS's open dialog, which belongs to the main process. */
-export const IMPORT_IPC_CHANNELS = { choose: 'callie:import:choose' } as const;
+export const IMPORT_IPC_CHANNELS = { choose: 'callie:import:choose', chooseBriefs: 'callie:import:choose-briefs' } as const;
 
 /**
  * What the renderer is given. Two functions and a closed vocabulary: a view that wants
@@ -1606,6 +1661,11 @@ export interface DialBridge {
  */
 export interface ImportBridge {
   choose(): Promise<OperationOutput<'crm.state'>>;
+  /**
+   * Lane PB: choose a prepared-brief JSON file. The same rule: the main process opens the
+   * panel, reads and previews the file, and answers the preview, never the briefs.
+   */
+  chooseBriefs(): Promise<OperationOutput<'firms.briefImportState'>>;
 }
 
 declare global {

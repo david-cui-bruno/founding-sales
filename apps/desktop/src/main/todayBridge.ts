@@ -503,7 +503,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       firmId,
       cardVersion: TODAY_CARD_VERSION,
       // Slice 3a: the firm's open call tasks, as tasks of kind `task`.
-      include: ['tasks'],
+      // Lane PB (migration 0038): and the firm's prepared brief, or null.
+      include: ['tasks', 'preparedBrief'],
     });
     if (stale(mine)) return;
     if (!page.ok) {

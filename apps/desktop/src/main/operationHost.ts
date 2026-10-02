@@ -12,6 +12,8 @@ import {
   firmBasicsRefusalSchema,
   firmBasicsResultSchema,
   firmMeetingsResponseSchema,
+  preparedBriefClearResultSchema,
+  preparedBriefSetResultSchema,
   loggedCallResultSchema,
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
@@ -27,6 +29,7 @@ import {
   type OperationName,
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
+import type { BriefImportHost } from './briefImport.ts';
 import type { CrmBridgeHost } from './crmBridge.ts';
 import type { MailboxBridgeHost } from './mailboxBridge.ts';
 import type { ReplyBridgeHost } from './replyBridge.ts';
@@ -66,6 +69,8 @@ export interface OperationHostDeps {
   readonly sequences: SequenceBridgeHost;
   readonly settings: AdminBridgeHost;
   readonly mailbox: MailboxBridgeHost;
+  /** Lane PB: the prepared-brief import the main process holds. */
+  readonly briefImport: BriefImportHost;
 }
 
 type Handler = (input: never) => Promise<unknown>;
@@ -366,6 +371,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
         issues: refusal?.success === true ? (refusal.data.issues ?? []) : [],
       };
     },
+    // Lane PB. Straight through the client, like the basics: the view reads its own state again.
+    'firms.setPreparedBrief': async (input: OperationInput<'firms.setPreparedBrief'>) => {
+      const answer = await deps.api.command('/firms/brief/set', input, value => preparedBriefSetResultSchema.parse(value));
+      return answer.ok ? { saved: answer.value, reason: null } : { saved: null, reason: answer.reason.slice(0, 80) };
+    },
+    'firms.clearPreparedBrief': async (input: OperationInput<'firms.clearPreparedBrief'>) => {
+      const answer = await deps.api.command('/firms/brief/clear', input, value => preparedBriefClearResultSchema.parse(value));
+      return answer.ok ? { cleared: answer.value.cleared, reason: null } : { cleared: false, reason: answer.reason.slice(0, 80) };
+    },
+    'firms.briefImportState': async () => await deps.briefImport.state(),
+    'firms.briefImportCommit': async () => await deps.briefImport.commit(),
+    'firms.briefImportReset': async () => await deps.briefImport.reset(),
     'calls.logIncoming': async (input: OperationInput<'calls.logIncoming'>) => {
       const answer = await deps.api.command(
         '/calls/log',

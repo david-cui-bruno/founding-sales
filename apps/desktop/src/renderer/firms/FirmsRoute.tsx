@@ -12,11 +12,13 @@ import { FirmMerge } from './FirmMerge.tsx';
 import { FirmPage } from './FirmPage.tsx';
 import { FirmsList, firmsOf } from './FirmsList.tsx';
 import { ImportScreen } from './ImportScreen.tsx';
+import { BriefImport } from './BriefImport.tsx';
 import { PipelineBoard } from './PipelineBoard.tsx';
 import { clearKeptText, nextCommandId, useCrmMemory, type CardEditor } from './crmMemory.ts';
 import { BookingsToMatch } from '../meetings/BookingsToMatch.tsx';
 import { FirmPanel } from '../pipeline/FirmPanel.tsx';
 import { FirmResearch } from '../research/FirmResearch.tsx';
+import { PreparedBrief } from '../research/PreparedBrief.tsx';
 import { buildFirmWorkspaceView, FIRMS_HEADING, noticeText, PIPELINE_HEADING } from '../firmWorkspaceView.ts';
 import type { CrmState, StageChange, ValueChange } from '../firmWorkspaceContract.ts';
 import { useCrm } from './useCrm.ts';
@@ -255,15 +257,33 @@ export function FirmsRoute({
       stageName={stageName}
       variant={variant}
       research={
-        /* Its own read, because the firm page's contract is strict behind
-            `pageVersion` and a key added to it is a wire break (lane R). */
-        <FirmResearch
-          firmId={firm.read.firm.id}
-          identity={identity}
-          generation={generation}
-          guard={guard}
-          enabled={view.actionsEnabled}
-        />
+        <>
+          {/* Lane PB: the prepared brief, negotiated on the firm page read
+              (`include: ['preparedBrief']`), beside Callie's own research. */}
+          {firm.visibility === 'assigned_or_admin' ? (
+            <div className="mb-4">
+              <PreparedBrief
+                firmId={firm.read.firm.id}
+                brief={firm.preparedBrief}
+                canEdit={state.role === 'admin'}
+                enabled={view.actionsEnabled}
+                onChanged={() => {
+                  if (variant === 'page') crm.actions.openFirm(firm.read.firm.id);
+                  else crm.actions.openPanel(firm.read.firm.id);
+                }}
+              />
+            </div>
+          ) : null}
+          {/* Its own read, because the firm page's contract is strict behind
+              `pageVersion` and a key added to it is a wire break (lane R). */}
+          <FirmResearch
+            firmId={firm.read.firm.id}
+            identity={identity}
+            generation={generation}
+            guard={guard}
+            enabled={view.actionsEnabled}
+          />
+        </>
       }
     />
   );
@@ -444,13 +464,17 @@ export function FirmsRoute({
           onOpenFirm={crm.actions.openFirm}
         />
       ) : state.screen === 'import' && state.import !== null ? (
-        <ImportScreen
-          view={state.import}
-          actionsEnabled={view.actionsEnabled && state.role === 'admin' && !crm.busy('import')}
-          onChooseFile={crm.actions.chooseImportFile}
-          onCommit={crm.actions.commitImport}
-          onDone={crm.actions.openPipeline}
-        />
+        <>
+          <ImportScreen
+            view={state.import}
+            actionsEnabled={view.actionsEnabled && state.role === 'admin' && !crm.busy('import')}
+            onChooseFile={crm.actions.chooseImportFile}
+            onCommit={crm.actions.commitImport}
+            onDone={crm.actions.openPipeline}
+          />
+          {/* Lane PB: prepared briefs from a JSON file, an administrator's import too. */}
+          {state.role === 'admin' ? <BriefImport enabled={view.actionsEnabled} /> : null}
+        </>
       ) : state.screen === 'merge' && state.merge !== null ? (
         <FirmMerge
           merge={state.merge}
