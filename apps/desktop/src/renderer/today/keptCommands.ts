@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from 'react';
 import type { OperationInput } from '../../shared/operations.ts';
 import { useSessionEpoch } from '../app/drafts.tsx';
+import type { ResolvedCall } from './OutcomeForm.tsx';
 
 /**
  * Today's commands that outlive the control that sent them (kept-state rules K3, K5, K6).
@@ -17,8 +18,6 @@ import { useSessionEpoch } from '../app/drafts.tsx';
 export interface OutcomeCommand {
   readonly id: string;
   readonly body: Omit<OperationInput<'today.recordOutcome'>, 'commandId'>;
-  /** The draft text it was built from, by key: a success forgets exactly these, if unchanged. */
-  readonly drafts: Readonly<Record<string, string>>;
 }
 
 /** The editors of a Needs review item that send a firm stop. */
@@ -33,7 +32,7 @@ export interface PendingStop {
 }
 
 export interface TodayKept {
-  /** By `outcomeCommandKey`: the firm and the call the form records. */
+  /** By `outcomeCommandKey`: the firm and the call the form records (its session, or `none`). */
   readonly outcomes: Map<string, OutcomeCommand>;
   /** By review item (`itemKey`): the stop on the wire. */
   readonly stops: Map<string, PendingStop>;
@@ -43,7 +42,7 @@ export interface TodayKept {
    * The outcome form on screen for each key, as its opener's "submitted": a success closes the
    * form for the call it recorded, whichever mount of it is showing, and no other.
    */
-  readonly openForms: Map<string, () => void>;
+  readonly openForms: Map<string, (recorded: ResolvedCall | null) => void>;
 }
 
 const fresh = (): TodayKept => ({ outcomes: new Map(), stops: new Map(), notes: new Map(), openForms: new Map() });
@@ -85,9 +84,5 @@ export function useTodayKept(): TodayKept {
   return todayKeptFor(useSessionEpoch());
 }
 
-/** The call an outcome form records, as a key: its session, or the call just placed. */
-export function logTargetKey(target: { readonly kind: 'current' } | { readonly kind: 'session'; readonly callSessionId: string }): string {
-  return target.kind === 'session' ? `session:${target.callSessionId}` : 'current';
-}
-
-export const outcomeCommandKey = (firmId: string, targetKey: string): string => `${firmId}:${targetKey}`;
+/** The command of one call's outcome form: its firm and its session key (`outcomeSessionKey`). */
+export const outcomeCommandKey = (firmId: string, sessionKey: string): string => `${firmId}:${sessionKey}`;

@@ -102,7 +102,11 @@ export function QueuePanel({
                   const isSelected = card.firmId === selected;
                   const line = queueLine(card);
                   const finished = done.has(card.firmId);
-                  const note = (drafts.values[`today:outcome:${card.firmId}:note`] ?? '').trim() !== '';
+                  // A note typed for any of this firm's calls (X1F rule 2: notes are kept by call).
+                  const notePrefix = `today:outcome:${card.firmId}:`;
+                  const note = Object.entries(drafts.values).some(
+                    ([key, value]) => key.startsWith(notePrefix) && key.endsWith(':note') && value.trim() !== '',
+                  );
                   // During a call only the call's own firm can be opened (S2 review, finding 4).
                   const held = locked && card.firmId !== (callFirm ?? selected);
                   return (

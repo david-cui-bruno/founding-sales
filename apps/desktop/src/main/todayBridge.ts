@@ -452,7 +452,17 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       lastCall:
         lastCall === null
           ? null
-          : { firmId: lastCall.firmId, routeId: lastCall.routeId, contactId: lastCall.contactId, e164: lastCall.e164 },
+          : {
+              firmId: lastCall.firmId,
+              routeId: lastCall.routeId,
+              contactId: lastCall.contactId,
+              e164: lastCall.e164,
+              // The session of that call, when it was placed from Callie (X1F rule 1).
+              callSessionId:
+                lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
+                  ? lastSession.sessionId
+                  : null,
+            },
     });
   };
 
@@ -905,9 +915,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // last call: not its route and not its person. The server derives the route from that
       // session's ticket, and a route from another call would be refused as a mismatch.
       const named = input.callSessionId ?? null;
+      // X1F rule 1: a request with the form's own command id is forwarded as it is. The form
+      // resolved the call (its session, number and person) when it opened, so nothing here is
+      // filled in from the last call or the last session, and a retry under the same id is
+      // byte for byte the same request, whatever was dialled since.
+      const verbatim = input.commandId !== undefined;
       // The last handed-off call belongs to this outcome when it was to this firm and,
       // if the window named a number, to that number (C16).
       const call =
+        !verbatim &&
         named === null &&
         lastCall !== null &&
         lastCall.firmId === input.firmId &&
@@ -922,7 +938,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // When the page names the call (a Needs review item's Log), that session is sent as it
       // is and `lastSession` is never consulted: it may be another call, or none after a restart.
       const placed =
-        named !== null
+        verbatim || named !== null
           ? null
           : lastSession !== null && lastSession.firmId === input.firmId && (routeId === null || routeId === lastSession.routeId)
             ? lastSession
@@ -981,6 +997,20 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
         followUpPreview = null;
         if (call !== null) lastCall = null;
         if (placed !== null) lastSession = null;
+        // A forwarded request recorded the call it names: that call is no longer "the last
+        // call" for the next opening. Only these two fields, and only when they are that call;
+        // a retry reads neither, so clearing them never changes it.
+        if (verbatim) {
+          const lastCallSession =
+            lastCall !== null && lastSession !== null && lastSession.firmId === lastCall.firmId && lastSession.routeId === lastCall.routeId
+              ? lastSession.sessionId
+              : null;
+          // A retry of call A that lands after call B was placed on the same number leaves B.
+          if (lastCall !== null && lastCall.firmId === input.firmId && input.routeId !== null && lastCall.routeId === input.routeId && lastCallSession === named) {
+            lastCall = null;
+          }
+          if (lastSession !== null && named !== null && lastSession.sessionId === named) lastSession = null;
+        }
         // The dates changed between the preview and the recording, and nothing was
         // granted (P1-B). The card keeps this call's agreement open and reads the dates
         // as they are now, for the person to hear before "Record the agreed dates".

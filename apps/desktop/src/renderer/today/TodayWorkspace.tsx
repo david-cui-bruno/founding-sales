@@ -19,7 +19,9 @@ import { SHORTCUTS, useShortcuts, type ShortcutAction } from '../v2/shortcuts.ts
 import { BasicsEditor, type BasicsField } from './BasicsEditor.tsx';
 import { CallPanel } from './CallPanel.tsx';
 import { LogIncomingDialog, type Contact } from './LogIncomingDialog.tsx';
-import { OutcomeForm, type LogTarget } from './OutcomeForm.tsx';
+import { OutcomeForm, callIdentity, currentCallOf, outcomeDraftPrefix, type LogTarget } from './OutcomeForm.tsx';
+import { outcomeCommandKey, useTodayKept } from './keptCommands.ts';
+import { useHasDrafts } from '../app/drafts.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { BLOCKER_FIXES, BLOCKER_SENTENCES, blockersOf, groupOf, nextToCall, stepFrom } from './queueView.ts';
 import { TaskRow } from './TaskRow.tsx';
@@ -381,6 +383,36 @@ export function TodayWorkspace({
   const outcomeOpen = outcomeTarget !== null;
   const openOutcome = (target: LogTarget): void => setOutcomeTarget(target);
   const closeOutcome = (): void => setOutcomeTarget(null);
+  // X1F rule 1: "the call just placed" is resolved here, once, as the form opens: the firm's last
+  // call as the main process holds it, with its session when Callie placed it. The form keys its
+  // drafts and its command by that call, and the request it sends names it.
+  const freshCall = state === null ? null : currentCallOf(state, firmId);
+  const resolveCurrent = (): LogTarget => ({ kind: 'current', call: freshCall });
+  const freshIdentity = freshCall === null ? null : callIdentity(freshCall);
+  const kept = useTodayKept();
+  const noneTyped = useHasDrafts(outcomeDraftPrefix(firmId ?? '', 'none'));
+  const nonePending = firmId !== null && kept.outcomes.has(outcomeCommandKey(firmId, 'none'));
+  const loaded = state !== null;
+  // The form stays open after it recorded "the call just placed" (its feedback and a stale
+  // agreement are drawn in it), resolved then to no call. It takes the next call placed only
+  // while nothing is typed or waiting under "no call", and never the call it just recorded.
+  // A form already resolved to a call keeps it: Record again is always that call's request.
+  useEffect(() => {
+    if (!loaded || outcomeTarget?.kind !== 'current') return;
+    if (outcomeTarget.call === undefined) {
+      setOutcomeTarget({ kind: 'current', call: freshCall });
+      return;
+    }
+    if (outcomeTarget.call !== null) return;
+    if (freshCall === null) {
+      if (outcomeTarget.after !== undefined) setOutcomeTarget({ kind: 'current', call: null });
+      return;
+    }
+    if (freshIdentity === outcomeTarget.after || noneTyped || nonePending) return;
+    setOutcomeTarget({ kind: 'current', call: freshCall });
+    // `freshCall` is read through its identity: a new object for the same call changes nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, outcomeTarget, freshIdentity, noneTyped, nonePending]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [incomingNotice, setIncomingNotice] = useState<string | null>(null);
 
@@ -766,7 +798,7 @@ export function TodayWorkspace({
                   outcomeOpen={outcomeOpen}
                   onEdit={() => setEditing(editing === null ? editFirst() : null)}
                   onOpen={() => navigate({ name: 'firm', firmId: expanded.firmId })}
-                  onOutcome={() => (outcomeOpen ? closeOutcome() : openOutcome({ kind: 'current' }))}
+                  onOutcome={() => (outcomeOpen ? closeOutcome() : openOutcome(resolveCurrent()))}
                 />
                 {incomingNotice === null ? null : (
                   <p data-testid="feedback-incoming" role="status" className="py-1 text-sm text-muted-foreground">
@@ -840,9 +872,11 @@ export function TodayWorkspace({
                       actions={actions}
                       callSessionId={call.state.phase === 'ended' && callFirm === expanded.firmId ? call.state.sessionId : null}
                       target={outcomeTarget}
-                      onSubmitted={() => {
-                        // A call named by its session is a one-off: the form closes with it.
+                      onSubmitted={recorded => {
+                        // A call named by its session is a one-off: the form closes with it. The
+                        // call just placed is recorded: the form stays, resolved to no call.
                         if (outcomeTarget.kind === 'session') closeOutcome();
+                        else setOutcomeTarget({ kind: 'current', call: null, ...(recorded === null ? {} : { after: callIdentity(recorded) }) });
                       }}
                     />
                   </Block>
@@ -891,7 +925,7 @@ export function TodayWorkspace({
               hasNext={next !== null}
               onFix={blocker => setEditing(blocker === 'no_phone' ? 'phone' : 'regionCode')}
               onNext={goNext}
-              onOutcome={() => openOutcome({ kind: 'current' })}
+              onOutcome={() => openOutcome(resolveCurrent())}
               feedback={feedback}
               afterBlock={afterBlock}
             />

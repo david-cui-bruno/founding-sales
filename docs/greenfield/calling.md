@@ -227,12 +227,19 @@ page shows "Email stopped", "Calls stopped" or "All contact stopped" on the firm
 contact (`POST /crm/firm-page` with `include: ['stops']`). `docs/greenfield/suppression.md`
 has the whole table of which stop blocks which action.
 
-The choice is kept per call (the session, or the call just placed), never per firm alone. The
-outcome form keeps it, and every other field, until the server says the call was recorded: a
-refusal leaves the form as it was, and a lost answer locks it and offers "Record again", which
-resends the same request under the form's own command id so the server answers it from its
-receipt. A Needs review stop's answer is kept by item and waits beside it after David moves on;
-a late success closes the confirm that sent it only if he has not touched the editors since.
+The outcome form records one call, resolved when it opens: a Needs review item's session, or
+"the call just placed", which is the firm's last call as the main process holds it (its number,
+person and, when Callie placed it, its session). Every field of the form, the stop choice
+included, and the live call's note are kept under that call (`today:outcome:<firm>:<session or
+none>:`), so another call at the same firm never inherits them; calls handed to the phone app
+carry no session and share `none`. The form clears that call's fields, by key, only when the
+server says the call was recorded: a refusal leaves the form as it was, and a lost answer locks it
+and offers "Record again". The request names the resolved call and carries the form's own command
+id, and the main process forwards such a request as it is, so "Record again" is byte for byte the
+same request and the server answers it from its receipt. After recording the call just placed the
+form stays open on no call, and takes the next call placed only while nothing is typed there. A
+Needs review stop's answer is kept by item and waits beside it after David moves on; a late
+success closes the confirm that sent it only if he has not touched the editors since.
 
 ### Recordings
 

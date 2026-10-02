@@ -110,9 +110,19 @@ export const todayStateSchema = z.strictObject({
    * The call the last Call button handed to the phone app, so the outcome form can say
    * which number it is recording (lane g79, C16). The ticket and the calling identity
    * that authorized it stay in the main process, which attaches them to the outcome.
+   *
+   * `callSessionId` is the session of that call when it was placed from Callie (the outcome
+   * form reset, X1F rule 1): the form resolves "the call just placed" to it once, when it
+   * opens, and every request it sends for that call names it, so a retry is the same request.
    */
   lastCall: z
-    .strictObject({ firmId: uuid, routeId: uuid, contactId: uuid.nullable(), e164: z.string().max(20) })
+    .strictObject({
+      firmId: uuid,
+      routeId: uuid,
+      contactId: uuid.nullable(),
+      e164: z.string().max(20),
+      callSessionId: uuid.nullable().optional(),
+    })
     .nullable()
     .optional(),
   /**
@@ -304,6 +314,10 @@ export interface OutcomeRequest {
    * The command id the form minted (rules K5/K6). A retry after a lost answer sends the same
    * request under the same id, so the server answers it from its receipt rather than
    * recording the call twice. Absent, the main process mints one.
+   *
+   * With an id the request is the form's whole decision (X1F rule 1): the main process sends
+   * its route, person and session exactly as given and fills nothing in from its own last
+   * call, so the same id always carries the same body.
    */
   readonly commandId?: string;
   /**

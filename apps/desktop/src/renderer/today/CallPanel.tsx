@@ -4,6 +4,7 @@ import { CALL_ANNOUNCEMENT } from '@fss/contracts';
 import type { TodayCardBlocker } from '@fss/contracts';
 import { useDraft } from '../app/drafts.tsx';
 import { Feedback } from './Feedback.tsx';
+import { outcomeDraftPrefix } from './OutcomeForm.tsx';
 import { attemptLabel, callTimer } from '../calling/callText.ts';
 import type { CallControl } from '../calling/useCall.ts';
 import type { CallingStatus } from '../calling/useCallingStatus.ts';
@@ -96,7 +97,12 @@ export function ReadAloud({ live }: { readonly live: boolean }): JSX.Element {
 
 function LiveCall({ call, firmId }: { readonly call: CallControl; readonly firmId: string }): JSX.Element | null {
   const state = call.state;
-  const [note, setNote] = useDraft(`today:outcome:${firmId}:note`);
+  // X1F rule 2: the live call's note is that call's outcome draft from the start, under its own
+  // session, so the outcome form for this call (opened from here or by "Enter manually") finds
+  // it and no other call's form does. While the call is starting there is no session yet, and
+  // the field waits for one.
+  const sessionId = state.phase === 'ringing' || state.phase === 'connected' ? state.sessionId : null;
+  const [note, setNote] = useDraft(sessionId === null ? 'today:outcome:unbound' : `${outcomeDraftPrefix(firmId, sessionId)}note`);
   if (state.phase !== 'starting' && state.phase !== 'ringing' && state.phase !== 'connected') return null;
   return (
     <div data-testid="call-live" className="flex flex-col gap-4">
@@ -156,7 +162,8 @@ function LiveCall({ call, firmId }: { readonly call: CallControl; readonly firmI
           id="call-notes"
           data-testid="call-notes"
           rows={4}
-          value={note}
+          value={sessionId === null ? '' : note}
+          disabled={sessionId === null}
           maxLength={2000}
           onChange={event => setNote(event.target.value)}
           className="resize-none border-strong text-sm"

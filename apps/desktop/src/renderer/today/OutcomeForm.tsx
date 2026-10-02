@@ -1,6 +1,6 @@
 import { CALL_OUTCOMES, type CallOutcome } from '@fss/contracts';
 import { useEffect, useState, type JSX } from 'react';
-import { useClearUnchangedDrafts, useDraft, useDrafts } from '../app/drafts.tsx';
+import { useClearDrafts, useDraft } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
 import {
   OUTCOME_LABELS,
@@ -24,7 +24,7 @@ import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { StopChoice } from './StopChoice.tsx';
 import { noDefiniteAnswer } from './afterCallModel.ts';
-import { announceKept, logTargetKey, outcomeCommandKey, useTodayKept, type OutcomeCommand } from './keptCommands.ts';
+import { announceKept, outcomeCommandKey, useTodayKept, type OutcomeCommand } from './keptCommands.ts';
 import {
   FOLLOW_UP_CHOICES,
   FOLLOW_UP_CHOICE_LABELS,
@@ -51,11 +51,51 @@ import { todayForm, type TodayActions } from './useToday.ts';
  * that was this firm's; there is no ticket to name since 1.0.12, because `POST /calls/log`
  * never needed one.
  */
-export type LogTarget = { readonly kind: 'current' } | { readonly kind: 'session'; readonly callSessionId: string };
+export type LogTarget =
+  | {
+      readonly kind: 'current';
+      /**
+       * The call "the call just placed" was resolved to when the form opened (X1F rule 1): its
+       * number, person and, when Callie placed it, its session; null when there was none.
+       * Undefined only for a form mounted without an opener (a test), which resolves it from
+       * the state it is drawn with.
+       */
+      readonly call?: ResolvedCall | null;
+      /** The call this opening last recorded (`callIdentity`), so it is never resolved to again. */
+      readonly after?: string;
+    }
+  | { readonly kind: 'session'; readonly callSessionId: string };
 const CURRENT: LogTarget = { kind: 'current' };
 
-/** The fields of the firm's outcome draft that every call shares; the stop choice is per call. */
-const SHARED_FIELDS = ['task', 'outcome', 'note', 'callbackDate', 'callbackTime', 'followUp', 'followUpKind', 'followUpSequence'] as const;
+/** "The call just placed", resolved once: what the outcome request names for it. */
+export interface ResolvedCall {
+  readonly routeId: string;
+  readonly contactId: string | null;
+  readonly e164: string;
+  readonly callSessionId: string | null;
+}
+
+/**
+ * The firm's last call as the main process holds it, or null when it was another firm's or
+ * there was none. `endedSession` is the session of a call that ended here, used only when the
+ * last call carries none (a form drawn without the main process's session, in a test).
+ */
+export function currentCallOf(state: TodayState, firmId: string | null, endedSession: string | null = null): ResolvedCall | null {
+  const last = state.lastCall;
+  if (last == null || firmId === null || last.firmId !== firmId) return null;
+  return { routeId: last.routeId, contactId: last.contactId, e164: last.e164, callSessionId: last.callSessionId ?? endedSession };
+}
+
+/** One call's identity: its session, or its number for a call handed to the phone app. */
+export const callIdentity = (call: ResolvedCall): string => call.callSessionId ?? `route:${call.routeId}`;
+
+/** The key every draft and command of a call is kept under (X1F rule 2): its session, or `none`. */
+export function outcomeSessionKey(target: LogTarget, resolved: ResolvedCall | null): string {
+  return target.kind === 'session' ? target.callSessionId : (resolved?.callSessionId ?? 'none');
+}
+
+/** Where a call's outcome drafts live: by firm and by call, never by firm alone. */
+export const outcomeDraftPrefix = (firmId: string, sessionKey: string): string => `today:outcome:${firmId}:${sessionKey}:`;
 
 export function OutcomeForm({
   state,
@@ -85,19 +125,22 @@ export function OutcomeForm({
   readonly target?: LogTarget;
   /**
    * The outcome was recorded: the opener decides what that closes. Called on a definite
-   * success only, never on a refusal or a lost answer (kept-state rules K5/K6).
+   * success only, never on a refusal or a lost answer (kept-state rules K5/K6), with the call
+   * it recorded (null for a named session).
    */
-  onSubmitted?(): void;
+  onSubmitted?(recorded: ResolvedCall | null): void;
 }): JSX.Element | null {
   const named = target.kind === 'session';
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
-  const prefix = `today:outcome:${firmId}:`;
-  // The call this opening records (rule K1): the stop choice and the command on the wire
-  // belong to it, so a stop picked for one call is never offered as another call's.
-  const targetKey = logTargetKey(target);
-  const stopKey = `${prefix}stopChoice:${targetKey}`;
-  const commandKey = outcomeCommandKey(firmId, targetKey);
+  // The call this opening records (X1F rules 1 and 2). "The call just placed" was resolved when
+  // the form opened; a named session is itself. Every draft and the command on the wire are
+  // kept under that call, so call B never sees call A's fields, stop or unanswered command.
+  const resolved = named ? null : target.call !== undefined ? target.call : currentCallOf(state, expanded?.firmId ?? null, callSessionId);
+  const sessionKey = outcomeSessionKey(target, resolved);
+  const prefix = outcomeDraftPrefix(firmId, sessionKey);
+  const stopKey = `${prefix}stopChoice`;
+  const commandKey = outcomeCommandKey(firmId, sessionKey);
   const kept = useTodayKept();
   const [chosenTask, setChosenTask] = useDraft(`${prefix}task`);
   const [outcome, setOutcome] = useDraft(`${prefix}outcome`);
@@ -116,8 +159,7 @@ export function OutcomeForm({
   // template version's id, which is what it has always held.
   const [followUpKind, setFollowUpKind] = useDraft(`${prefix}followUpKind`);
   const [followUpSequence, setFollowUpSequence] = useDraft(`${prefix}followUpSequence`);
-  const clearUnchanged = useClearUnchangedDrafts();
-  const draftValues = useDrafts().values;
+  const clear = useClearDrafts();
   // The approved templates this call may promise. The value the select holds is the
   // template version's id, which is what the permission is bound to (P0-2).
   const templates = state.followUpTemplates;
@@ -125,8 +167,7 @@ export function OutcomeForm({
 
   // Who this call was with, and whether a follow-up may be offered at all. Computed
   // before the early return, because the preview below is asked for from an effect.
-  const lastCallHere =
-    !named && expanded !== null && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
+  const lastCallHere = resolved;
   // A named call borrows nothing: only a task David picked in this form names a person or an item.
   const pickedTask = chosenTask !== '' && chosenTask !== 'none' ? chosenTask : '';
   const chosenItemId = named ? pickedTask : chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
@@ -168,7 +209,7 @@ export function OutcomeForm({
   // mount sent it.
   useEffect(() => {
     if (expanded === null) return;
-    const close = (): void => onSubmitted?.();
+    const close = (recorded: ResolvedCall | null): void => onSubmitted?.(recorded);
     kept.openForms.set(commandKey, close);
     return () => {
       if (kept.openForms.get(commandKey) === close) kept.openForms.delete(commandKey);
@@ -187,8 +228,8 @@ export function OutcomeForm({
     doNotCall: doNotCallChoiceKeyOf(stopChoice),
   };
 
-  // The number the last Call button handed to the phone app, when it was this firm's.
-  const lastCall = !named && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
+  // The call this opening resolved to: the number handed off, and its session if Callie placed it.
+  const lastCall = resolved;
   const callable = view.tasks.filter(entry => entry.callable);
   // The view model's default is the task of the contact just called; a person may pick
   // another, and what they picked wins.
@@ -313,21 +354,17 @@ export function OutcomeForm({
             draft,
           });
           if ('problem' in built) return;
+          // X1F rule 1: the body names the resolved call, its session included, so the main
+          // process forwards it as it is and a retry under this id is the same request.
+          const sessionId = target.kind === 'session' ? target.callSessionId : (lastCall?.callSessionId ?? null);
           command = {
             id: crypto.randomUUID(),
-            // The draft this command carries: the call's shared fields and this call's stop.
-            drafts: Object.fromEntries(
-              [...SHARED_FIELDS.map(field => `${prefix}${field}`), stopKey].flatMap(key => {
-                const value = draftValues[key];
-                return value === undefined ? [] : [[key, value]];
-              }),
-            ),
             body: {
               firmId: expanded.firmId,
               contactId,
               routeId: lastCall?.routeId ?? null,
               itemId: itemId === '' ? null : itemId,
-              ...(target.kind === 'session' ? { callSessionId: target.callSessionId } : {}),
+              ...(sessionId === null ? {} : { callSessionId: sessionId }),
               outcome: built.command.outcome,
               note: built.command.note ?? '',
               callback:
@@ -351,6 +388,8 @@ export function OutcomeForm({
         }
         const sent = command;
         const sentKey = commandKey;
+        const sentPrefix = prefix;
+        const sentCall = lastCall;
         const settle = (answered: TodayState | null | undefined): void => {
           if (kept.outcomes.get(sentKey) !== sent) return;
           const answer = answered?.outcomeAnswer ?? null;
@@ -363,11 +402,11 @@ export function OutcomeForm({
           }
           kept.outcomes.delete(sentKey);
           if (answer.recorded) {
-            // Recorded: the draft it was sent with goes (a field typed in since stays), and the
-            // form for this call closes if its opener closes it. A refusal keeps every field and
-            // the stop choice, for David to correct.
-            clearUnchanged(sent.drafts);
-            kept.openForms.get(sentKey)?.();
+            // Recorded (X1F rule 3): exactly this call's drafts go, by their keys, and only this
+            // call's form is told. Another call's fields are under other keys and stay. A
+            // refusal keeps every field and the stop choice, for David to correct.
+            clear(sentPrefix);
+            kept.openForms.get(sentKey)?.(sentCall);
           }
           announceKept();
         };
