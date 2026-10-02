@@ -123,7 +123,8 @@ describe('an address on the Firm page says where its validation stands (lane g90
   it('asks the Firm page for its second version', async () => {
     const { api, calls } = scriptedApi(reads([route({ technicalValidation: 'unknown' })]));
     const opened = await bridgeOver(api).openFirm({ firmId: FIRM });
-    expect(calls.find(entry => entry.path === '/crm/firm-page')?.body).toMatchObject({ firmId: FIRM, pageVersion: 2 });
+    // Migration 0037: and the stop badges' facts, negotiated.
+    expect(calls.find(entry => entry.path === '/crm/firm-page')?.body).toEqual({ firmId: FIRM, pageVersion: 2, include: ['stops'] });
     const page = opened.firm;
     expect(page?.read.visibility === 'assigned_or_admin' && page.read.firm.emailRoutes[0]?.technicalValidation).toBe('unknown');
   });

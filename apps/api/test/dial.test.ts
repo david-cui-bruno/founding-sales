@@ -700,10 +700,12 @@ describe('the suppression journal client', () => {
         channel: 'all' as const,
       }),
     ) as Record<string, unknown>;
+    // `channel` (migration 0037) is a code: `phone`, `email` or `all`.
     expect(Object.keys(body).sort()).toEqual([
       'actorUserId',
       'canonicalKey',
       'canonicalizerVersion',
+      'channel',
       'commandId',
       'eventId',
       'recordedAt',

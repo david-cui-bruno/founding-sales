@@ -4,7 +4,7 @@ import { useMemo, useRef, useState, type JSX } from 'react';
 import type { AnalysisView, OperationInput } from '../../shared/operations.ts';
 import { useDraft } from '../app/drafts.tsx';
 import { cn } from '../lib/utils.ts';
-import { OUTCOME_LABELS } from '../outcomeForm.ts';
+import { OUTCOME_LABELS, doNotCallChoiceKeyOf } from '../outcomeForm.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Select } from '../ui/select.tsx';
@@ -29,6 +29,7 @@ import {
   type FieldDrafts,
 } from './afterCallModel.ts';
 import { phaseOf } from './useAnalysis.ts';
+import { StopChoice } from './StopChoice.tsx';
 
 /**
  * The after-call block (slice 3a, lane C; DESIGN-S3A §2.3, §2.10): one call's notes and
@@ -276,13 +277,14 @@ function Completed({
   const setTicked = (next: ReadonlySet<CallProposalKey>): void => setTickedText([...settle(next, rows, isLogged)].filter(key => !done.has(key)).join(','));
 
   const [outcomeDraft, setOutcomeDraft] = useDraft(`${base}:outcome`);
-  const [coversAll, setCoversAll] = useDraft(`${base}:coversAll`);
+  // Migration 0037: which of the four stops a "Do not call" records. Empty is calls to this person.
+  const [stopChoice, setStopChoice] = useDraft(`${base}:stopChoice`);
   const [callbackDate, setCallbackDate] = useDraft(`${base}:cbDate`);
   const [callbackTime, setCallbackTime] = useDraft(`${base}:cbTime`);
   const [template, setTemplate] = useDraft(`${base}:template`);
   const drafts: FieldDrafts = {
     ...(outcomeDraft === '' ? {} : { outcome: outcomeDraft as CallOutcome }),
-    coversAll: coversAll === 'yes',
+    stopChoice: doNotCallChoiceKeyOf(stopChoice),
     ...(callbackDate === '' ? {} : { callbackDate }),
     ...(callbackTime === '' ? {} : { callbackTime }),
     ...(template === '' ? {} : { templateVersionId: template }),
@@ -458,10 +460,12 @@ function Completed({
                             ))}
                           </Select>
                           {effectiveOutcome === 'do_not_call' ? (
-                            <label className="flex items-center gap-1.5 text-xs">
-                              <input type="checkbox" data-testid="suggestion-covers-all" checked={coversAll === 'yes'} onChange={event => setCoversAll(event.target.checked ? 'yes' : '')} />
-                              Covers all contact at this firm
-                            </label>
+                            <StopChoice
+                              testId="suggestion-stop-choice"
+                              value={doNotCallChoiceKeyOf(stopChoice)}
+                              disabled={false}
+                              onChange={next => setStopChoice(next)}
+                            />
                           ) : null}
                         </>
                       ) : null}

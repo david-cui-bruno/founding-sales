@@ -16,6 +16,7 @@ import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
 import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
 import { BasicsEditor } from '../today/BasicsEditor.tsx';
+import { StopBadge, contactStopLabel, firmStopLabel, type StopLabel } from './stops.tsx';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -221,8 +222,11 @@ function ContactRow({
   enabled,
   saving,
   onSave,
+  stop = null,
 }: {
   readonly contact: ContactDto;
+  /** Migration 0037 (P2): "Email stopped", "Calls stopped" or "All contact stopped". */
+  readonly stop?: StopLabel | null;
   readonly enabled: boolean;
   readonly saving: boolean;
   onSave(edit: ContactEdit): void;
@@ -271,6 +275,7 @@ function ContactRow({
         Main contact
       </label>
       <Tag data-testid="contact-status">{contact.status}</Tag>
+      <StopBadge label={stop} testId="contact-stop" />
       <RowActions>
         <Button
           size="sm"
@@ -772,6 +777,11 @@ export function FirmPage({
   return (
     <>
       <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} />
+      {page.visibility === 'assigned_or_admin' ? (
+        <div className="mt-2">
+          <StopBadge label={firmStopLabel(page.stops)} testId="firm-stop" />
+        </div>
+      ) : null}
       {page.visibility !== 'assigned_or_admin' || detail === null ? (
         <p data-testid="firm-redacted" className="mt-6 text-sm text-muted-foreground">
           {redactionNotice ?? ''}
@@ -794,6 +804,7 @@ export function FirmPage({
                     enabled={actionsEnabled}
                     saving={busy(`contact:${contact.id}`)}
                     onSave={onSaveContact}
+                    stop={contactStopLabel(page.stops, contact.id)}
                   />
                 ))}
               </Rows>

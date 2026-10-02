@@ -1,4 +1,4 @@
-import { knownBlockedActionKinds, type FollowUpPermissionDto } from '@fss/contracts';
+import { knownBlockedActionKinds, type FirmStopsDto, type FollowUpPermissionDto, type SuppressionChannel } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { holdEnrollments, type HoldEnrollmentDto } from '../sequences/holdEnrollments.ts';
 import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
@@ -76,6 +76,8 @@ export type FirmPageDto =
       readonly stageHistory: readonly StageEventDto[];
       readonly holds: readonly FirmHoldDto[];
       readonly followUpPermissions: readonly FollowUpPermissionDto[];
+      /** Only when the caller negotiated it (`include: ['stops']`, migration 0037). */
+      readonly stops?: FirmStopsDto;
     };
 
 interface StageEventRow {
@@ -116,6 +118,8 @@ export async function readFirmPage(
     readonly firmId: string;
     /** The second version, whose routes carry their technical validation. */
     readonly routeValidation?: boolean | undefined;
+    /** `include: ['stops']` (migration 0037): add the stop badges' facts. */
+    readonly includeStops?: boolean | undefined;
   },
 ): Promise<CrmResult<FirmPageDto>> {
   const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation });
@@ -199,5 +203,50 @@ export async function readFirmPage(
     followUpPermissions: (await listFollowUpPermissions(context, { firmId: input.firmId })).map(
       followUpPermissionDto,
     ),
+    ...(input.includeStops === true ? { stops: await readFirmStops(context, input.firmId) } : {}),
   });
+}
+
+/**
+ * The stop badges' facts (migration 0037, DESIGN-S3X §2.5, David's P2): which channels the
+ * firm's own stops carry, and for each contact holding a stopped handle whether e-mail and
+ * calls are stopped.
+ *
+ * The rule is the readers' own. A contact's e-mail is stopped by an `email` or `all` stop on
+ * any of their handles (the union `suppressionSource` reads for an e-mail step); their calls
+ * by a `phone` or `all` stop on any of them (the dial keys: their numbers and, for `all`,
+ * their addresses). Because the CHECK keeps a number from carrying `email` and an address
+ * from carrying `phone`, the two unions agree with the send gate and the dial. A firm stop
+ * is reported once, at the firm, and not repeated on every contact.
+ */
+export async function readFirmStops(context: RepositoryContext, firmId: string): Promise<FirmStopsDto> {
+  const workspace = context.scope.workspaceId;
+  const firm = await context.db.query<{ channel: SuppressionChannel }>(
+    `SELECT DISTINCT channel FROM effective_suppressions
+      WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = lower($2::text)
+      ORDER BY channel`,
+    [workspace, firmId],
+  );
+  const contacts = await context.db.query<{ contact_id: string; email: boolean; phone: boolean }>(
+    `WITH handles AS (
+       SELECT a.contact_id, a.address AS canonical_key FROM email_addresses a
+        WHERE a.workspace_id = $1 AND a.firm_id = $2 AND a.contact_id IS NOT NULL
+       UNION
+       SELECT p.contact_id, p.e164 FROM phone_routes p
+        WHERE p.workspace_id = $1 AND p.firm_id = $2 AND p.contact_id IS NOT NULL
+     )
+     SELECT h.contact_id::text AS contact_id,
+            bool_or(e.channel IN ('email', 'all')) AS email,
+            bool_or(e.channel IN ('phone', 'all')) AS phone
+       FROM handles h
+       JOIN effective_suppressions e
+         ON e.workspace_id = $1 AND e.scope = 'handle' AND e.canonical_key = h.canonical_key
+      GROUP BY h.contact_id
+      ORDER BY h.contact_id`,
+    [workspace, firmId],
+  );
+  return {
+    firm: firm.rows.map(row => row.channel),
+    contacts: contacts.rows.map(row => ({ contactId: row.contact_id, email: row.email, phone: row.phone })),
+  };
 }

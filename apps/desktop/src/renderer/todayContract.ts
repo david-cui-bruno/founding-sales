@@ -286,7 +286,10 @@ export interface OutcomeRequest {
     readonly dueAt: string;
     readonly sourceTimeZone: string;
   } | null;
+  /** The 1.0.29 checkbox. A newer form sends `doNotCall` instead and leaves this false. */
   readonly doNotCallCoversAllContact: boolean;
+  /** What a `do_not_call` stops (migration 0037, P1): the four-way choice. Wins over the checkbox. */
+  readonly doNotCall?: { readonly scope: 'contact' | 'firm'; readonly channel: 'phone' | 'all' };
   /**
    * The follow-up agreed on the call (migration 0025): one approved e-mail, or — since
    * send-path v2 (slice S3) — an agreed published sequence, which the server enrols in

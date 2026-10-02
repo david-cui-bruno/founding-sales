@@ -5,6 +5,7 @@ import { semanticVersionSchema } from './clientVersion.ts';
 import { holdEnrollmentDtoSchema, holdReasonCodeSchema } from './reasonCodes.ts';
 import { uuid } from './foundationRows.ts';
 import { firmReadDtoSchema } from './crm.ts';
+import { suppressionChannelSchema } from './dial.ts';
 
 /**
  * The wire contract of the CRM surface: admin CSV import and Add firm (specification
@@ -331,7 +332,30 @@ export const FIRM_PAGE_VERSION = 2;
 export const firmPageRequestSchema = z.strictObject({
   firmId: uuid,
   pageVersion: z.literal(FIRM_PAGE_VERSION).optional(),
+  /**
+   * Migration 0037 (DESIGN-S3X §2.5, P2): `['stops']` adds `stops`, the channels the firm's
+   * and its contacts' stops cover. Negotiated, so the installed 1.0.29, which parses the
+   * answer strictly and never asks, never meets the key.
+   */
+  include: z.array(z.literal('stops')).max(1).optional(),
 });
+
+/**
+ * What the firm page says is stopped (migration 0037, David's P2: the CRM shows "Email
+ * stopped" on the contact). Computed with the readers' own rule: e-mail is stopped by an
+ * `email` or `all` stop, calls by a `phone` or `all` stop.
+ *
+ *  * `firm` — the channels the firm's own effective stops carry (`phone`, `email`, `all`),
+ *    sorted; empty when the firm is not stopped.
+ *  * `contacts` — every contact with a stop on one of their handles (numbers and
+ *    addresses, the union a send and a dial both read), and which of the two channels
+ *    that stops. A contact with neither is not listed. A firm stop is not repeated here.
+ */
+export const firmStopsDtoSchema = z.strictObject({
+  firm: z.array(suppressionChannelSchema),
+  contacts: z.array(z.strictObject({ contactId: uuid, email: z.boolean(), phone: z.boolean() })),
+});
+export type FirmStopsDto = z.infer<typeof firmStopsDtoSchema>;
 
 const stageEventDtoSchema = z.strictObject({
   id: uuid,
@@ -391,6 +415,8 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
      * they ask it.
      */
     followUpPermissions: z.array(followUpPermissionDtoSchema),
+    /** Present exactly when the request negotiated `include: ['stops']` (migration 0037). */
+    stops: firmStopsDtoSchema.optional(),
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

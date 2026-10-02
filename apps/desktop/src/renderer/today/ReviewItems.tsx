@@ -164,7 +164,7 @@ export function ReviewGroup({
   );
 }
 
-type Editor = 'phone' | 'timeZone' | 'stop';
+type Editor = 'phone' | 'timeZone' | 'stop' | 'stopCalls';
 
 /** The firm the items are about, as the call panel knows it. */
 export interface ReviewFirm {
@@ -207,14 +207,15 @@ function ItemCard({
       () => setNote('Could not dismiss that. Nothing was changed.'),
     );
   };
-  const stop = (): void => {
+  // Migration 0037: two firm stops, calls only or all contact, each with its own confirm.
+  const stop = (channel: 'phone' | 'all'): void => {
     const bridge = api();
     if (bridge === undefined) return;
-    void bridge.command('suppressions.firmStop', { firmId: firm.firmId }).then(
+    void bridge.command('suppressions.firmStop', { firmId: firm.firmId, channel }).then(
       answer => {
         if (answer.stopped) {
           setEditor(null);
-          setNote('Stopped: nobody at this firm will be contacted.');
+          setNote(channel === 'all' ? 'Stopped: nobody at this firm will be contacted.' : 'Stopped: nobody at this firm will be called.');
           onChanged();
         } else setNote('Could not record the stop. Nothing was changed.');
       },
@@ -340,14 +341,38 @@ function ItemCard({
           {proposal.kind === 'stop_scope' ? (
             logged ? (
               <>
-                <Button variant="outline" data-testid="review-stop" aria-expanded={editor === 'stop'} className={cn(dense.md, 'self-start')} onClick={() => toggle('stop')}>
-                  Stop all contact with this firm
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    data-testid="review-stop-calls"
+                    aria-expanded={editor === 'stopCalls'}
+                    className={cn(dense.md, 'self-start')}
+                    onClick={() => toggle('stopCalls')}
+                  >
+                    Stop calls to this firm
+                  </Button>
+                  <Button variant="outline" data-testid="review-stop" aria-expanded={editor === 'stop'} className={cn(dense.md, 'self-start')} onClick={() => toggle('stop')}>
+                    Stop all contact with this firm
+                  </Button>
+                </div>
+                {editor === 'stopCalls' ? (
+                  <div data-testid="review-stop-calls-confirm" className="flex flex-col gap-2 rounded-md border border-border bg-warn-soft/40 p-2.5">
+                    <p className="text-xs">Callie will not call anyone at this firm again. E-mail is not stopped, and no permission to e-mail is given.</p>
+                    <div className="flex gap-2">
+                      <Button data-testid="review-stop-calls-confirm-button" className={dense.md} onClick={() => stop('phone')}>
+                        Confirm: stop calls
+                      </Button>
+                      <Button variant="ghost" className={dense.md} onClick={() => setEditor(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 {editor === 'stop' ? (
                   <div data-testid="review-stop-confirm" className="flex flex-col gap-2 rounded-md border border-border bg-warn-soft/40 p-2.5">
                     <p className="text-xs">Callie will not call or e-mail anyone at this firm again. This is recorded as a firm-wide stop.</p>
                     <div className="flex gap-2">
-                      <Button data-testid="review-stop-confirm-button" className={dense.md} onClick={stop}>
+                      <Button data-testid="review-stop-confirm-button" className={dense.md} onClick={() => stop('all')}>
                         Confirm: stop all contact
                       </Button>
                       <Button variant="ghost" className={dense.md} onClick={() => setEditor(null)}>
@@ -359,7 +384,7 @@ function ItemCard({
               </>
             ) : (
               <p data-testid="review-stop-unlogged" className="text-xs text-muted-foreground">
-                This call has no log yet: tick “Stop” in the suggestions and choose whether it covers all contact.
+                This call has no log yet: tick “Stop” in the suggestions and choose what it stops.
               </p>
             )
           ) : null}

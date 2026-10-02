@@ -939,8 +939,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           // No `occurredAt`: "just now" is the server's clock (C15).
           ...(input.note === '' ? {} : { note: input.note }),
           ...(callback === undefined ? {} : { callback }),
+          // What a "Do not call" stops (migration 0037): the four-way choice when the form
+          // sent one, else the 1.0.29 checkbox, which keeps its meaning on the server.
           ...(input.outcome === 'do_not_call'
-            ? { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
+            ? input.doNotCall !== undefined
+              ? { doNotCall: input.doNotCall }
+              : { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
             : {}),
           // The agreed follow-up (migration 0025). Sent for the outcomes the consent rule
           // allows one on (a conversation that reached somebody, never `do_not_call`): any

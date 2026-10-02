@@ -8,6 +8,7 @@ import {
   OUTCOME_PROBLEM_SENTENCES,
   SUPPRESSION_WARNINGS,
   callbackNeedsTime,
+  doNotCallChoiceKeyOf,
   logCallCommand,
   outcomeProblem,
   outcomeSuppresses,
@@ -21,6 +22,7 @@ import { Input } from '../ui/input.tsx';
 import { Label } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
+import { StopChoice } from './StopChoice.tsx';
 import {
   FOLLOW_UP_CHOICES,
   FOLLOW_UP_CHOICE_LABELS,
@@ -88,7 +90,9 @@ export function OutcomeForm({
   const [note, setNote] = useDraft(`${prefix}note`);
   const [callbackDate, setCallbackDate] = useDraft(`${prefix}callbackDate`);
   const [callbackTime, setCallbackTime] = useDraft(`${prefix}callbackTime`);
-  const [coversAll, setCoversAll] = useDraft(`${prefix}coversAll`);
+  // Migration 0037: which of the four stops a "Do not call" records. Empty is the default,
+  // calls to this person.
+  const [stopChoice, setStopChoice] = useDraft(`${prefix}stopChoice`);
   // Migration 0025: the follow-up agreed on the call. Empty is "none", which is the
   // default, because a permission to write to somebody is not something a form should
   // grant by accident.
@@ -154,7 +158,7 @@ export function OutcomeForm({
     callbackLocalTime: callbackTime,
     callbackTimeZone: state.businessTimeZone ?? '',
     callbackDueAt: '',
-    doNotCallCoversAllContact: coversAll === 'yes',
+    doNotCall: doNotCallChoiceKeyOf(stopChoice),
   };
 
   // The number the last Call button handed to the phone app, when it was this firm's.
@@ -288,7 +292,8 @@ export function OutcomeForm({
                     dueAt: built.command.callback?.dueAt ?? '',
                     sourceTimeZone: draft.callbackTimeZone,
                   },
-          doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
+          doNotCallCoversAllContact: false,
+          ...(built.command.doNotCall === undefined ? {} : { doNotCall: built.command.doNotCall }),
           // Never without a person: the select is hidden in that case, and a draft kept
           // from a moment when it was not is not a reason to send one.
           followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
@@ -486,19 +491,16 @@ export function OutcomeForm({
       </fieldset>
 
       {draft.outcome === 'do_not_call' ? (
-        <label data-testid="do-not-call-scope" className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            data-testid="do-not-call-covers-all"
+        <div data-testid="do-not-call-scope">
+          <StopChoice
+            testId="do-not-call-choice"
+            value={draft.doNotCall}
             disabled={!enabled || busy}
-            checked={coversAll === 'yes'}
-            onChange={event => {
-              setCoversAll(event.target.checked ? 'yes' : '');
+            onChange={next => {
+              setStopChoice(next);
             }}
-            className="size-3.5 accent-[var(--primary)]"
           />
-          <span>They asked not to be contacted at all, not just on this number</span>
-        </label>
+        </div>
       ) : null}
 
       <Textarea

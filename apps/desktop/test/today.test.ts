@@ -511,6 +511,30 @@ describe('the Today bridge', () => {
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
   });
 
+  it('S3X: a do-not-call carries the four-way doNotCall when the form chose one, else the 1.0.29 checkbox, and never on another outcome', async () => {
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/calls/log': accepted(null) });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    const base = { firmId: FIRM_ID, contactId: null, routeId: null, itemId: null, note: '', callback: null, followUpPermission: null };
+    const logged = (): Record<string, unknown> => calls.filter(call => call.path === '/calls/log').at(-1)?.body as Record<string, unknown>;
+
+    await bridge.recordOutcome({ ...base, outcome: 'do_not_call', doNotCallCoversAllContact: false, doNotCall: { scope: 'firm', channel: 'phone' } });
+    expect(logged()['doNotCall']).toEqual({ scope: 'firm', channel: 'phone' });
+    expect(logged()).not.toHaveProperty('doNotCallCoversAllContact');
+
+    await bridge.recordOutcome({ ...base, outcome: 'do_not_call', doNotCallCoversAllContact: true });
+    expect(logged()['doNotCallCoversAllContact']).toBe(true);
+    expect(logged()).not.toHaveProperty('doNotCall');
+
+    await bridge.recordOutcome({ ...base, outcome: 'voicemail_left', doNotCallCoversAllContact: false, doNotCall: { scope: 'firm', channel: 'all' } });
+    expect(logged()).not.toHaveProperty('doNotCall');
+    expect(logged()).not.toHaveProperty('doNotCallCoversAllContact');
+  });
+
   it('S3CF-2: a named session borrows no route from the last call; an unnamed outcome still does', async () => {
     const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice(), '/calls/log': accepted(null) });
     const bridge = createTodayBridge({

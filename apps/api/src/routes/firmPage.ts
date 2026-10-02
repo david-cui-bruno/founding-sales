@@ -42,6 +42,9 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
   const page = await readFirmPage(scoped.context, {
     firmId: parsed.data.firmId,
     routeValidation: parsed.data.pageVersion === FIRM_PAGE_VERSION,
+    // Migration 0037: the stop badges, only when asked for, so the installed 1.0.29's
+    // strict parse never meets the key.
+    includeStops: parsed.data.include?.includes('stops') === true,
   });
   // `firm_unknown` is a 404 with the same redacted sentence every unmounted path
   // gets: a firm in another workspace and a firm that never existed are one answer.

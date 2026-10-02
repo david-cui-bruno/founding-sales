@@ -289,10 +289,16 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return { resolved: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
     },
     'suppressions.firmStop': async (input: OperationInput<'suppressions.firmStop'>) => {
-      // Scope firm, the firm, and the source David's own "do not call" carries. Nothing else.
+      // Scope firm, the firm, the source David's own "do not call" carries, and the channel
+      // he chose (migration 0037: calls, or all contact). Nothing else.
       const answer = await deps.api.command(
         '/suppressions/record',
-        { scope: 'firm', firmId: input.firmId, source: 'prospect_do_not_call' },
+        {
+          scope: 'firm',
+          firmId: input.firmId,
+          source: 'prospect_do_not_call',
+          ...(input.channel === undefined ? {} : { channel: input.channel }),
+        },
         value => value,
       );
       return { stopped: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };

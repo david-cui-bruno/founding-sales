@@ -156,6 +156,20 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     policy = await seedPolicy(session, seeded, crm);
     await setting('telephony_budget', { dailyCeilingCents: 10_000, maxMinutesPerCall: 30, unitPriceMicros: 14_000 });
     await setting('monthly_cash_ceiling_cents', { cents: 5000 });
+    // The calls below are placed through HEAD's own dial commands, and since migration 0037
+    // the dial authorisation reads `effective_suppressions.channel`. At schema 34 that
+    // column does not exist yet, so the view is given the value 0037 says every earlier
+    // stop has, `all`; 0037 replaces this view with its own when the migrations run below.
+    // Nothing else about schema 34 changes, and no stop is involved in this test.
+    await session.query(`CREATE OR REPLACE VIEW effective_suppressions AS
+      SELECT DISTINCT ON (e.workspace_id, e.scope, e.canonical_key)
+             e.workspace_id, e.scope, e.canonical_key, e.event_id, e.canonicalizer_version,
+             e.source, e.actor_user_id, e.recorded_at, 'all'::text AS channel
+        FROM suppression_events e
+       WHERE e.supersedes_event_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM suppression_events s
+                          WHERE s.workspace_id = e.workspace_id AND s.supersedes_event_id = e.event_id)
+       ORDER BY e.workspace_id, e.scope, e.canonical_key, e.recorded_at, e.event_id`);
     // At schema 34: production's shapes, written before the release.
     for (const key of Object.keys(legacy) as (keyof typeof legacy)[]) legacy[key] = await placeTranscribedCall(session, { seeded, crm, policy }, UTTERANCES);
     all = Object.values(legacy);
@@ -174,7 +188,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
       [seeded.alpha.workspaceId, legacy.completed, CALL_SUMMARY_PROMPT_VERSION],
     );
     const { applyMigrations } = await import('@fss/domain/db/migrationRunner.ts');
-    await applyMigrations(session, { throughVersion: 36 });
+    await applyMigrations(session, { throughVersion: 37 });
     // After the release David writes notes on one held legacy call (S3A2, P1): they never
     // move it off the summary path.
     const salesperson = repositoryContext(
@@ -192,7 +206,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
   });
 
   it('after the upgrade, every legacy call is on the summary path and owed no analysis', async () => {
-    expect(await readAppliedSchemaVersion(session)).toBe(36);
+    expect(await readAppliedSchemaVersion(session)).toBe(37);
     for (const id of all) expect(await postCallModelPath(session, seeded.alpha.workspaceId, id), id).toBe('summary');
     await transcriptionOn(true);
     const owed = await owedAnalyses();
