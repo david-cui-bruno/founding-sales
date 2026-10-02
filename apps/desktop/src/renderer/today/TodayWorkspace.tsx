@@ -1,4 +1,4 @@
-import { ArrowUpRight, CalendarClock, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
+import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { TodayCardBlocker } from '@fss/contracts';
 import type { FirmBasicsAnswer } from '../../shared/operations.ts';
