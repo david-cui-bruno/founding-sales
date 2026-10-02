@@ -1,11 +1,13 @@
 import {
   FOLLOW_UP_PERMISSION_WINDOW_DAYS,
+  type CallOutcome,
   type FollowUpGrantRule,
   type FollowUpPermissionDto,
   type FollowUpPermissionKind,
   type FollowUpPermissionScope,
 } from '@fss/contracts';
 import { decideFirmMutation } from '../crm/authorization.ts';
+import { REACHED_OUTCOMES } from '../dial/outcomes.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from './calendars.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -398,13 +400,14 @@ export async function verifyFollowUpPermission(
  * The evidence row, re-read. `null` when it is sound; otherwise the detail of the
  * refusal.
  *
- * **A call log** must be a conversation (`outcome = 'interested'`), must name this firm
- * and — since P0-1 — **this person by name**: a log with a null `contact_id` is a call
+ * **A call log** must have reached a person (`REACHED_OUTCOMES`: interested, callback
+ * requested, referral, not interested — slice 3a; it was `interested` only), must name this
+ * firm and — since P0-1 — **this person by name**: a log with a null `contact_id` is a call
  * to a main line and is evidence about a firm, not consent from somebody. And it must
  * record *what* was agreed: `agreed_follow_up` with the template version or the sequence
- * version the permission claims. A `callback_requested` log therefore cannot support a
- * permission through any API, which is David's "'Call me Tuesday' means a callback
- * task" enforced where it cannot be routed around.
+ * version the permission claims. A `callback_requested` log alone still supports nothing —
+ * "'Call me Tuesday' means a callback task" — unless it also recorded an explicit
+ * agreement ("call me Tuesday, and e-mail me the overview").
  *
  * **An inbound e-mail**: `mail_messages` carries no firm, so the evidence is the
  * confirmation a person made — a `mail_reply_confirmations` row for this message, at
@@ -442,7 +445,7 @@ async function verifyEvidence(
     if (log.firm_id !== permission.firmId) return 'call_log_firm_mismatch';
     if (log.contact_id === null) return 'call_log_names_no_person';
     if (log.contact_id !== permission.contactId) return 'call_log_contact_mismatch';
-    if (log.outcome !== 'interested') return `call_outcome_${log.outcome}`;
+    if (!REACHED_OUTCOMES.has(log.outcome as CallOutcome)) return `call_outcome_${log.outcome}`;
     if (log.agreed_follow_up === null) return 'call_agreed_nothing';
     if (log.agreed_follow_up !== permission.scope) return `call_agreed_${log.agreed_follow_up}`;
     if (
@@ -622,7 +625,7 @@ async function termsOfEvidence(
       [context.scope.workspaceId, input.callLogId],
     );
     const log = rows[0];
-    if (log === undefined || log.outcome !== 'interested' || log.agreed_follow_up === null) return null;
+    if (log === undefined || !REACHED_OUTCOMES.has(log.outcome as CallOutcome) || log.agreed_follow_up === null) return null;
     if (log.agreed_follow_up === 'single_email') {
       return {
         kind: 'conversation',

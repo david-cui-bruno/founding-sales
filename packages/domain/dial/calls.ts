@@ -31,7 +31,9 @@ import type { SuppressionJournal } from '../suppression/journal.ts';
 import { businessDateOf, completeTodayItemsByKey, readTodayItem, upsertTodayItem } from '../today/snapshots.ts';
 import { callLogIdOfItemKey, callbackTimeNeededItemKey } from '../today/types.ts';
 import { completeCallback, createCallback, resolveConfirmedInstant } from './callbacks.ts';
-import { callOutcomeEffects, manualReasonFor } from './outcomes.ts';
+import { callOutcomeEffects, manualReasonFor, REACHED_OUTCOMES } from './outcomes.ts';
+
+export { REACHED_OUTCOMES };
 import { UNANSWERED_OUTCOMES, parkIfCadenceSpent } from '../calls/sessions.ts';
 import { releasePendingHold } from '../calls/pendingHold.ts';
 import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep } from './stepEffects.ts';
@@ -386,7 +388,7 @@ export async function logCallOutcome(
   // rolled the stop back and the command still answered accepted — the sequences kept
   // running against a firm that had just had a conversation.
   if (input.followUpPermission !== undefined) {
-    if (input.outcome !== 'interested') return refusePolicy('invalid_input');
+    if (!REACHED_OUTCOMES.has(input.outcome)) return refusePolicy('invalid_input');
     if (input.contactId === undefined && ticket?.contact_id == null) return refusePolicy('invalid_input');
     // Send-path v2 (slice S3): an agreed sequence names one **published** version of this
     // workspace's own sequences, checked here for the same reason as the two rules above —
@@ -815,7 +817,7 @@ export async function recordCallFollowUp(
   // The person who made the call records what was agreed on it — not whoever holds the
   // firm now, and not an administrator (review of S3, round 3, P1-F).
   if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
-  if (log.outcome !== 'interested' || log.contact_id === null) return refusePolicy('invalid_input');
+  if (!REACHED_OUTCOMES.has(log.outcome as CallOutcome) || log.contact_id === null) return refusePolicy('invalid_input');
   if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
   // The wall clock, read in its own statement **after** the row lock was granted
   // (review of S3, rounds 3 and 4, P1-G): the transaction's `now()` predates the waits for
@@ -855,17 +857,6 @@ export async function recordCallFollowUp(
   });
   return acceptPolicy({ callLogId: input.callLogId, followUpPermissionId: agreed.permissionId, followUps: agreed.followUps });
 }
-
-/**
- * The outcomes that say a person was reached (slice 3a, DESIGN-S3A §2.7; migration 0036's
- * `call_logs_agreement_needs_reached`): an agreement comes from a reached, named person.
- */
-export const REACHED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>([
-  'interested',
-  'callback_requested',
-  'referral_or_wrong_person',
-  'not_interested',
-]);
 
 export interface ConfirmCapturedFollowUpInput {
   readonly callLogId: string;

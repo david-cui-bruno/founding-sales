@@ -91,3 +91,29 @@ export function callOutcomeEffects(
 export function manualReasonFor(outcome: CallOutcome): string {
   return `call outcome: ${outcome}`;
 }
+
+/**
+ * The outcomes that say a person was reached (slice 3a, DESIGN-S3A §2.7; migration 0036's
+ * `call_logs_agreement_needs_interest`, widened under its old name).
+ *
+ * Three things a call log records are separate, and this set is the bridge between only
+ * two of them:
+ *
+ *   * the **disposition** — the outcome above, what happened on the call and what it does
+ *     to the step, the opportunity's control mode and the number;
+ *   * the prospect's **interest** — a buying signal is its own click (`buying_signal`,
+ *     stage evidence `call.interested`), never inferred from the disposition;
+ *   * **consent** — an explicit agreement to an e-mail or a sequence, recorded on the log
+ *     (`agreed_follow_up`) and granted as a permission.
+ *
+ * Consent needs a reached, named person, whatever the disposition: "call me Tuesday, and
+ * e-mail me the overview" (`callback_requested`) and "not for us, but send it over"
+ * (`not_interested`) are both agreements. A voicemail, a no-answer, a wrong number or a
+ * do-not-call agreed to nothing.
+ */
+export const REACHED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>([
+  'interested',
+  'callback_requested',
+  'referral_or_wrong_person',
+  'not_interested',
+]);

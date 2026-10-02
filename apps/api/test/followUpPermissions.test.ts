@@ -343,16 +343,18 @@ describe('the follow-up permission endpoints', () => {
       assignedUserId: fixture.alpha.salesperson.userId,
     });
     const contactId = await seedContact(fixture, { firmId, fullName: 'Robin Example' });
-    // "Call me Tuesday" is a callback task and grants no e-mail permission, whatever the
-    // client sends (David, 29 September 2026).
+    // A voicemail reached nobody, so it agreed to nothing and grants no e-mail permission,
+    // whatever the client sends. (Until slice 3a this case was "Call me Tuesday"; since
+    // David's decision of 2 October a callback with an overview request is consent from the
+    // person reached — `REACHED_OUTCOMES`, B-8 — so the outcome that agrees to nothing is
+    // the one that reached nobody.)
     const logged = await post(
       '/calls/log',
       salespersonToken,
       command({
         firmId,
         contactId,
-        outcome: 'callback_requested',
-        callback: { localDate: '2026-10-06', localTime: '09:00', sourceTimeZone: 'America/New_York' },
+        outcome: 'voicemail_left',
         followUpPermission: { scope: 'single_email', templateVersionId },
       }),
     );
