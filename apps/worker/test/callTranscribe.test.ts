@@ -45,7 +45,7 @@ import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { readFinishing } from '@fss/domain/settings/finishing.ts';
 import { telephonySweepJobHandler } from '../src/handlers/telephonySweep.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
-import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
+import { runSchedulerPass, type DueWorkSource } from '../src/scheduler/schedulerPass.ts';
 import {
   DEEPGRAM_PROVIDER_KEY,
   deepgramTranscription,
@@ -1128,10 +1128,10 @@ describe('the call.transcribe job', () => {
     const sessionId = await call(150);
     expect((await enqueue(sessionId)).enqueued).toBe(true);
     await drain(fake.provider);
-    // Past the deadline: the next look (the source counted it) gives up, estimated, terminal.
+    // Past the deadline: the scheduler gives up, estimated, terminal, and emits no look (REL1).
     await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
-    await collectRound(fake.provider);
-    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
+    expect(await collectRound(fake.provider)).toBe(0);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 0 }]);
     expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
     // Any later claim for the call — a resume, a stray enqueue — buys nothing.
     await withTransaction(database.session, async () =>
@@ -1140,6 +1140,112 @@ describe('the call.transcribe job', () => {
     await drain(fake.provider);
     expect(await attempts(sessionId)).toHaveLength(1);
     expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it('gives up a job past its deadline from the scheduler when every look job dies before running: estimated once, no further looks (REL1)', async () => {
+    const fake = fakeTranscribe({ runningLooks: 1_000 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    const source = transcriptionJobsSource({ enabled: true });
+    const lookJobs = async (): Promise<number> => {
+      const { rows } = await database.session.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM jobs WHERE kind = 'call.transcribe' AND idempotency_key LIKE 'call-transcribe-collect:%'",
+      );
+      return Number(rows[0]?.n ?? 0);
+    };
+    const before = await lookJobs();
+    const due = async (): Promise<void> => {
+      await database.session.query("UPDATE transcription_provider_jobs SET next_look_at = now() - interval '1 second' WHERE call_session_id = $1", [sessionId]);
+    };
+    // Inside the deadline a pass emits a look; its job is never drained: it "dies".
+    await due();
+    await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    expect(await lookJobs()).toBe(before + 1);
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 1 }]);
+    // Past the deadline, with no look ever having run.
+    await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
+    await due();
+    await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 1 }]);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
+    const spent = await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY);
+    // Later passes: no look, no second settlement.
+    for (let pass = 0; pass < 3; pass += 1) {
+      await due();
+      await runSchedulerPass(database.session, { sources: [source], now: new Date().toISOString() });
+    }
+    expect(await lookJobs()).toBe(before + 1);
+    expect(await attempts(sessionId)).toEqual([{ attempt: 1, state: 'estimated', cents: 2, settled_cents: 2 }]);
+    expect(await ledgerCents(AWS_TRANSCRIBE_PROVIDER_KEY)).toBe(spent);
+    expect(fake.state.starts).toHaveLength(1);
+  });
+
+  /** A started job two hours past its deadline, its attempt calling, no look ever run. */
+  async function expiredJob(): Promise<string> {
+    const fake = fakeTranscribe({ runningLooks: 1_000 });
+    const sessionId = await call(150);
+    expect((await enqueue(sessionId)).enqueued).toBe(true);
+    await drain(fake.provider);
+    await database.session.query("UPDATE transcription_provider_jobs SET created_at = now() - interval '3 hours' WHERE call_session_id = $1", [sessionId]);
+    return sessionId;
+  }
+
+  it('never blocks the scheduler pass on a busy budget lock: the pass completes, later sources run, and the job is given up once the lock is free (REL1 fix)', async () => {
+    const sessionId = await expiredJob();
+    const holder = await database.appRuntimeSession();
+    const later: DueWorkSource = {
+      name: 'later-source',
+      find: async () => await Promise.resolve([{ workspaceId: seeded.alpha.workspaceId, kind: 'call.transcribe' as const, idempotencyKey: `rel1-later:${sessionId}`, payload: { callSessionId: randomUUID() }, maxAttempts: 1 }]),
+    };
+    const sources = [transcriptionJobsSource({ enabled: true }), later];
+    await holder.query('BEGIN');
+    try {
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${seeded.alpha.workspaceId}:transcription_budget`]);
+      const report = await runSchedulerPass(database.session, { sources, now: new Date().toISOString() });
+      expect(report.outcome).toBe('ran');
+      expect(report.sources.find(source => source.name === 'later-source')?.inserted).toBe(1);
+      // Skipped, and nothing left behind.
+      expect(await providerJobs(sessionId)).toEqual([{ state: 'started', looks: 0 }]);
+      expect((await attempts(sessionId))[0]?.state).toBe('calling');
+    } finally {
+      await holder.query('COMMIT');
+    }
+    await runSchedulerPass(database.session, { sources: [transcriptionJobsSource({ enabled: true })], now: new Date().toISOString() });
+    expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 0 }]);
+    expect((await attempts(sessionId))[0]?.state).toBe('estimated');
+  });
+
+  it('does not let busy expired rows starve a later one: twenty locked rows ahead, row 21 is given up in the first pass (REL1 fix)', async () => {
+    const sessionId = await expiredJob();
+    const holder = await database.appRuntimeSession();
+    const busy: string[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const session = randomUUID();
+      busy.push(session);
+      await database.session.query(
+        `INSERT INTO transcription_provider_jobs
+           (workspace_id, job_name, call_session_id, attempt, reservation_id, provider_key, input_key, output_key, state, started_at, created_at)
+         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, 'started', now(), now() - interval '4 hours')`,
+        [seeded.alpha.workspaceId, `fss-test-${session}-a1`, session, randomUUID(), AWS_TRANSCRIBE_PROVIDER_KEY, `calls/${session}/attempt-1.mp3`, `calls/${session}/attempt-1.json`],
+      );
+    }
+    await holder.query('BEGIN');
+    try {
+      for (const session of busy) {
+        await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${seeded.alpha.workspaceId}:call_transcription:${session}`]);
+      }
+      await runSchedulerPass(database.session, { sources: [transcriptionJobsSource({ enabled: true })], now: new Date().toISOString() });
+      expect(await providerJobs(sessionId)).toEqual([{ state: 'failed', looks: 0 }]);
+      const { rows } = await database.session.query<{ open: string }>(
+        "SELECT count(*)::text AS open FROM transcription_provider_jobs WHERE call_session_id = ANY($1::uuid[]) AND state = 'started'",
+        [busy],
+      );
+      expect(Number(rows[0]?.open)).toBe(20);
+    } finally {
+      await holder.query('COMMIT');
+      await database.session.query('DELETE FROM transcription_provider_jobs WHERE call_session_id = ANY($1::uuid[])', [busy]);
+    }
   });
 
   it('is terminal after a FAILED job: settled at 0, and no later claim buys another (C3-F #4)', async () => {

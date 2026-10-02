@@ -9,7 +9,7 @@ import {
   type TodayCounts,
   type TodayItemRow,
 } from './types.ts';
-import type { TodayItemKind, TodayLane } from '@fss/contracts';
+import type { TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts';
 
 /**
  * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).
@@ -20,7 +20,8 @@ import type { TodayItemKind, TodayLane } from '@fss/contracts';
  * for 24 hours (5.3), so the list is the one read whose shape is also a retention
  * decision: a field added here is a field that ends up encrypted on somebody's
  * laptop, and the strict schema on the other side is what makes that a parse failure
- * rather than a surprise.
+ * rather than a surprise. (Slice S2 added `blockers`, two codes and never a value, to
+ * both sides at once.)
  *
  * The expanded card is a *second* read and is not cached. Its tasks name a contact,
  * which the cache has no room for, and 4.2 says an offline client shows "its
@@ -37,6 +38,8 @@ export interface TodayCardDto {
   readonly lane: TodayLane;
   readonly dueAt: string;
   readonly counts: TodayCounts;
+  /** Why the firm cannot be called yet, from its own record (slice S2). Empty when it can. */
+  readonly blockers: readonly TodayCardBlocker[];
 }
 
 export interface TodayListDto {
@@ -133,6 +136,15 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
    * desktop that has never heard of it parses the card it always parsed.
    */
   readonly brief: CallBrief | null;
+  /** The firm's editable basics and what is missing from them (slice S2). Version 2 only. */
+  readonly basics: FirmBasicsDto;
+}
+
+export interface FirmBasicsDto {
+  readonly locality: string | null;
+  readonly regionCode: string | null;
+  readonly timeZone: string | null;
+  readonly blockers: readonly TodayCardBlocker[];
 }
 
 /**
@@ -140,8 +152,8 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
  * `TodayTaskDtoV2`. What `/today/firm` answers a client that did not ask for version 2,
  * so an older desktop keeps parsing the card it always parsed.
  */
-export function todayFirmVersion1(page: TodayFirmDto): Omit<TodayFirmDto<TodayTaskDto>, 'brief'> {
-  const { brief: _brief, ...rest } = page;
+export function todayFirmVersion1(page: TodayFirmDto): Omit<TodayFirmDto<TodayTaskDto>, 'brief' | 'basics'> {
+  const { brief: _brief, basics: _basics, ...rest } = page;
   return {
     ...rest,
     tasks: page.tasks.map(task => ({
@@ -365,6 +377,7 @@ export async function readTodayList(
   const ordered = (await snapshotIsCurrent(context, snapshotDate))
     ? callFirstFirst(cards, await callFirstFirmIds(context))
     : cards;
+  const blockers = await readFirmBasics(context, cards.map(card => card.firmId));
   return {
     workspaceId: context.scope.workspaceId,
     snapshotDate,
@@ -375,6 +388,7 @@ export async function readTodayList(
       lane: card.lane,
       dueAt: card.sortAt,
       counts: card.counts,
+      blockers: blockers.get(card.firmId)?.blockers ?? [],
     })),
   };
 }
@@ -458,5 +472,52 @@ export async function readTodayFirm(
     })),
     callingIdentityId,
     brief: await readCallBrief(context, input.firmId),
+    basics: (await readFirmBasics(context, [input.firmId])).get(input.firmId) ?? {
+      locality: null,
+      regionCode: null,
+      timeZone: null,
+      blockers: ['no_phone', 'no_location'],
+    },
   };
+}
+
+/**
+ * The basics of these firms and what is missing from them (slice S2), in one read.
+ *
+ * `no_phone`: no number Callie could dial — every route retired or invalid, or none.
+ * `no_location`: no state or no time zone. The calling window needs the zone and the
+ * state posture needs the state, so either missing blocks every call (`zone_unresolved`,
+ * `posture_missing` on the dial check), and both are fixed in the same place.
+ */
+export async function readFirmBasics(
+  context: RepositoryContext,
+  firmIds: readonly string[],
+): Promise<ReadonlyMap<string, FirmBasicsDto>> {
+  if (firmIds.length === 0) return new Map();
+  const { rows } = await context.db.query<{
+    id: string;
+    locality: string | null;
+    region_code: string | null;
+    time_zone: string | null;
+    has_phone: boolean;
+  }>(
+    `SELECT f.id, f.locality, f.region_code, f.time_zone,
+            EXISTS (SELECT 1 FROM phone_routes r
+                     WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
+                       AND r.eligibility = 'usable') AS has_phone
+       FROM firms f
+      WHERE f.workspace_id = $1 AND f.id = ANY($2::uuid[])`,
+    [context.scope.workspaceId, [...firmIds]],
+  );
+  return new Map(
+    rows.map(row => {
+      const blockers: TodayCardBlocker[] = [];
+      if (!row.has_phone) blockers.push('no_phone');
+      if (row.region_code === null || row.time_zone === null) blockers.push('no_location');
+      return [
+        row.id,
+        { locality: row.locality, regionCode: row.region_code, timeZone: row.time_zone, blockers },
+      ] as const;
+    }),
+  );
 }

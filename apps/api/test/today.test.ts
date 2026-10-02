@@ -183,7 +183,9 @@ describe('the Today routes', () => {
     const cards = answer.body['cards'] as Record<string, unknown>[];
     expect(cards).toHaveLength(1);
     const card = cards[0] ?? {};
-    expect(Object.keys(card).sort()).toEqual(['counts', 'dueAt', 'firmId', 'firmName', 'lane']);
+    // `blockers` (slice S2) is codes only, and the Mac's cache schema names it too; an
+    // installed 1.0.25 parses the card with `z.object` and drops it before its cache sees it.
+    expect(Object.keys(card).sort()).toEqual(['blockers', 'counts', 'dueAt', 'firmId', 'firmName', 'lane']);
     expect(card['firmId']).toBe(firmId);
     expect(card['counts']).toEqual({ replies: 0, emailsDue: 1, callsDue: 1 });
   });

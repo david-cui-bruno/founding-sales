@@ -300,6 +300,8 @@ export async function cancelUnproducedItems(
     readonly businessDate: string;
     readonly sourceKinds: readonly TodaySourceKind[];
     readonly keptItemKeys: readonly string[];
+    /** One firm's tasks only: a per-firm refresh reconciles nothing of any other firm. */
+    readonly firmId?: string | undefined;
   },
 ): Promise<number> {
   if (input.sourceKinds.length === 0) return 0;
@@ -310,8 +312,9 @@ export async function cancelUnproducedItems(
         AND snapshot_date = $2::date
         AND source_kind = ANY($3::text[])
         AND status IN ('open', 'snoozed')
-        AND NOT (item_key = ANY($4::text[]))`,
-    [context.scope.workspaceId, input.businessDate, [...input.sourceKinds], [...input.keptItemKeys]],
+        AND NOT (item_key = ANY($4::text[]))
+        AND ($5::uuid IS NULL OR firm_id = $5::uuid)`,
+    [context.scope.workspaceId, input.businessDate, [...input.sourceKinds], [...input.keptItemKeys], input.firmId ?? null],
   );
   return rowCount ?? 0;
 }

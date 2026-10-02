@@ -157,6 +157,8 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   snooze_reason_required: 'A snooze needs a reason.',
   snooze_return_not_future: 'Pick a moment in the future for it to come back.',
   outcome_recorded: 'Call recorded.',
+  // Slice S2: "Log incoming call".
+  incoming_logged: 'Incoming call logged on the firm’s history.',
   dial_opened: 'Handed to the phone app.',
   dial_opened_unknown: 'Callie could not confirm the phone app opened. Record what happened either way.',
   no_tel_handler: 'This Mac has no phone app registered for tel: links.',

@@ -266,6 +266,57 @@ export const addFirmRefusalSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// A firm's calling basics (slice S2)
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /crm/firms/basics`: a firm's number, state, locality and time zone, edited from
+ * Today or the firm page (slice S2). A new endpoint, so nothing an installed desktop sends
+ * or reads changes. Every value is as typed; the domain canonicalizes and refuses, naming
+ * each field at fault. Absent leaves a field alone; `null` clears the locality or state.
+ */
+export const FIRM_BASICS_FIELDS = ['phone', 'locality', 'regionCode', 'timeZone'] as const;
+export const FIRM_BASICS_ISSUE_CODES = ['phone_invalid', 'region_code_invalid', 'time_zone_invalid', 'too_long'] as const;
+
+export const firmBasicsCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  firmId: uuid,
+  phone: z.strictObject({ number: z.string().min(1).max(40), replacesRouteId: uuid.optional() }).optional(),
+  locality: z.string().max(200).nullable().optional(),
+  regionCode: z.string().max(10).nullable().optional(),
+  timeZone: z.string().min(1).max(64).optional(),
+});
+export type FirmBasicsCommand = z.infer<typeof firmBasicsCommandSchema>;
+
+export const firmBasicsIssueSchema = z.object({ field: z.enum(FIRM_BASICS_FIELDS), code: z.enum(FIRM_BASICS_ISSUE_CODES) });
+export type FirmBasicsIssueDto = z.infer<typeof firmBasicsIssueSchema>;
+
+export const firmBasicsResultSchema = z.object({
+  firmId: uuid,
+  /** The number the edit recorded, or null when no number was given. */
+  routeId: uuid.nullable(),
+  locality: z.string().nullable(),
+  regionCode: z.string().nullable(),
+  timeZone: z.string().nullable(),
+  /** What still stands between the firm and a call (`TODAY_CARD_BLOCKERS`). */
+  blockers: z.array(z.enum(['no_phone', 'no_location'])),
+});
+
+export const firmBasicsAcceptedSchema = z.object({
+  status: z.literal('accepted'),
+  replayed: z.boolean(),
+  result: firmBasicsResultSchema,
+});
+
+export const firmBasicsRefusalSchema = z.object({
+  status: z.literal('refused'),
+  replayed: z.boolean(),
+  reason: z.string().min(1).max(80),
+  issues: z.array(firmBasicsIssueSchema).optional(),
+});
+
+// ---------------------------------------------------------------------------
 // The Firm page read (7.2, 7.3, 8.1, 15)
 // ---------------------------------------------------------------------------
 

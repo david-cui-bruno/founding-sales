@@ -122,6 +122,8 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
       outcome: body.outcome,
       ...(body.occurredAt === undefined ? {} : { occurredAt: body.occurredAt }),
       ...(body.note === undefined ? {} : { note: body.note }),
+      ...(body.direction === undefined ? {} : { direction: body.direction }),
+      ...(body.durationSeconds === undefined ? {} : { durationSeconds: body.durationSeconds }),
       ...(body.callback === undefined ? {} : { callback: body.callback }),
       ...(body.doNotCallCoversAllContact === undefined
         ? {}

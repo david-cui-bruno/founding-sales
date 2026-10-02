@@ -775,6 +775,14 @@ export const POLICY_CONSTRAINT_CASES: readonly PolicyCase[] = [
     run: async f => await aCallLog(f, await aFirm(f), { step_effect: 'skip' }),
   },
   {
+    constraint: 'call_logs_direction_known',
+    run: async f => await aCallLog(f, await aFirm(f), { direction: 'sideways' }),
+  },
+  {
+    constraint: 'call_logs_duration_bounded',
+    run: async f => await aCallLog(f, await aFirm(f), { direction: 'inbound', duration_seconds: -1 }),
+  },
+  {
     constraint: 'call_logs_command_id_shape',
     run: async f => await aCallLog(f, await aFirm(f), { command_id: 'has a space' }),
   },

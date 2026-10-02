@@ -13,7 +13,7 @@
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import 'tw-animate-css';
-@import './tokens.css' layer(base);
+@import '../renderer/v2/tokens.css' layer(base);
 
 /* The prototype and the owned shadcn primitives it composes. */
 @source './**/*.{ts,tsx}';

@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { cancelUnproducedItems, upsertTodayItem, workspaceBusinessTimeZone } from './snapshots.ts';
+import { databaseNow } from '../policy/clock.ts';
+import { businessDateOf, cancelUnproducedItems, upsertTodayItem, workspaceBusinessTimeZone } from './snapshots.ts';
 import {
   CALLBACK_TIME_NEEDED_KEY_PREFIX,
   TODAY_ALGORITHM_VERSION,
@@ -53,6 +54,11 @@ export interface TodaySourceInput {
   readonly businessTimeZone: string;
   /** The instant the build is running at. Database time, passed in by the caller. */
   readonly now: string;
+  /**
+   * One firm only (slice S2): `refreshTodayForFirm`, the same sources asked about the firm
+   * that was just added or edited. Absent is the whole workspace, the 05:00 build.
+   */
+  readonly firmId?: string | undefined;
 }
 
 export interface TodaySource {
@@ -95,8 +101,9 @@ export function callbackSource(): TodaySource {
             AND c.status = 'open'
             AND f.status = 'active'
             AND (c.due_at AT TIME ZONE $2)::date <= $3::date
+            AND ($4::uuid IS NULL OR c.firm_id = $4::uuid)
           ORDER BY c.due_at, c.id`,
-        [context.scope.workspaceId, input.businessTimeZone, input.businessDate],
+        [context.scope.workspaceId, input.businessTimeZone, input.businessDate, input.firmId ?? null],
       );
       const { rows: needingTime } = await context.db.query<{
         id: string;
@@ -117,8 +124,15 @@ export function callbackSource(): TodaySource {
               SELECT 1 FROM today_items t
                WHERE t.workspace_id = l.workspace_id AND t.firm_id = l.firm_id
                  AND t.item_key = $4 || l.id::text AND t.status = 'completed')
+            AND ($5::uuid IS NULL OR l.firm_id = $5::uuid)
           ORDER BY l.recorded_at, l.id`,
-        [context.scope.workspaceId, input.businessTimeZone, input.businessDate, CALLBACK_TIME_NEEDED_KEY_PREFIX],
+        [
+          context.scope.workspaceId,
+          input.businessTimeZone,
+          input.businessDate,
+          CALLBACK_TIME_NEEDED_KEY_PREFIX,
+          input.firmId ?? null,
+        ],
       );
       return [
         ...rows.map(row => ({
@@ -168,7 +182,7 @@ export function newFirmSource(): TodaySource {
   return {
     name: 'new-firms',
     sourceKinds: ['firm'],
-    find: async context => {
+    find: async (context, input) => {
       const { rows } = await context.db.query<{ id: string; created_at: Date }>(
         `SELECT f.id, f.created_at
            FROM firms f
@@ -191,8 +205,9 @@ export function newFirmSource(): TodaySource {
                  AND e.scope = 'firm'
                  AND e.canonical_key = f.id::text
             )
+            AND ($2::uuid IS NULL OR f.id = $2::uuid)
           ORDER BY f.created_at, f.id`,
-        [context.scope.workspaceId],
+        [context.scope.workspaceId, input.firmId ?? null],
       );
       return rows.map(row => ({
         firmId: row.id,
@@ -235,12 +250,82 @@ export async function buildTodaySnapshot(
   context: RepositoryContext,
   input: BuildTodaySnapshotInput,
 ): Promise<TodayBuildReport> {
+  // Exclusive against every per-firm refresh still in flight (`refreshTodayForFirm`), so
+  // a firm committed between this build's reads and its cancellation cannot have its
+  // fresh task cancelled as "no longer produced".
+  await lockTodayBuild(context, 'exclusive');
+  return await buildFrom(context, input, null);
+}
+
+/**
+ * The advisory lock that orders a build against a per-firm refresh (slice S2).
+ *
+ * The race it closes: the 05:00 build reads the firms, a firm added at that moment
+ * commits with its own task, and the build's cancellation — every task of the date its
+ * sources did not produce — then finds the new task and cancels it. With the lock, the
+ * build waits for every refresh already holding it (so its reads see their firms), and a
+ * refresh that arrives during the build waits for the build to commit and then writes its
+ * task on top. Refreshes share the lock, so adding firms never waits for another firm.
+ * Transaction-scoped: released at commit or rollback, never held across a request.
+ */
+async function lockTodayBuild(context: RepositoryContext, mode: 'exclusive' | 'shared'): Promise<void> {
+  await context.db.query(
+    mode === 'exclusive'
+      ? `SELECT pg_advisory_xact_lock(hashtextextended('today.build:' || $1::text, 0))`
+      : `SELECT pg_advisory_xact_lock_shared(hashtextextended('today.build:' || $1::text, 0))`,
+    [context.scope.workspaceId],
+  );
+}
+
+/**
+ * Put one firm's tasks for the current business date on the list now, rather than at the
+ * next 05:00 build (slice S2: "a newly added firm becomes a usable card without waiting
+ * overnight").
+ *
+ * It is the build, asked about one firm: the same sources with `firmId`, the same upsert,
+ * and the same reconciliation restricted to that firm — so a firm added, imported or
+ * edited at 14:00 gets exactly the card the next morning's build would give it, and a
+ * rule changed in a source changes both. Idempotent; the morning build of the same date
+ * writes the same rows. Called in the transaction of the change that made the firm what
+ * it is (`createFirm`, `updateFirmBasics`), so the task commits with the firm or not at all.
+ */
+/**
+ * Take Today's lock as a change to one firm does (shared), **before any firm or route row
+ * lock** (S2 review, finding 1). The morning build holds this lock exclusively and then
+ * takes the firms' foreign-key locks as it writes their tasks; a change that locked a firm
+ * first and then waited here would be the other half of a deadlock. So every transaction
+ * that ends in `refreshTodayForFirm` calls this first — `createFirm`, `updateFirmBasics` —
+ * and the order is the one in docs/greenfield/calling.md: Today's lock → firm → route.
+ * Re-taking it later in the same transaction (the refresh does) is free.
+ */
+export async function lockTodayForFirmChange(context: RepositoryContext): Promise<void> {
+  await lockTodayBuild(context, 'shared');
+}
+
+export async function refreshTodayForFirm(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly now?: string | undefined; readonly sources?: readonly TodaySource[] | undefined },
+): Promise<TodayBuildReport> {
+  // Already held when the caller followed the lock order; taken here for one that has
+  // locked nothing yet.
+  await lockTodayForFirmChange(context);
+  const now = input.now ?? (await databaseNow(context));
+  const businessDate = await businessDateOf(context, now);
+  return await buildFrom(context, { businessDate, now, sources: input.sources }, input.firmId);
+}
+
+async function buildFrom(
+  context: RepositoryContext,
+  input: BuildTodaySnapshotInput,
+  firmId: string | null,
+): Promise<TodayBuildReport> {
   const sources = input.sources ?? defaultTodaySources();
   const businessTimeZone = await workspaceBusinessTimeZone(context);
   const sourceInput: TodaySourceInput = {
     businessDate: input.businessDate,
     businessTimeZone,
     now: input.now,
+    ...(firmId === null ? {} : { firmId }),
   };
 
   const contributions: TodayContribution[] = [];
@@ -274,6 +359,7 @@ export async function buildTodaySnapshot(
     businessDate: input.businessDate,
     sourceKinds: [...sourceKinds],
     keptItemKeys,
+    ...(firmId === null ? {} : { firmId }),
   });
 
   return {

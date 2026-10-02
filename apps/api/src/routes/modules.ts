@@ -2,6 +2,7 @@ import { buildHealthReport } from '../health.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { BootstrapRequest, BootstrapResponse, RouteModule } from '../bootstrap/routeRegistry.ts';
 import { ADD_FIRM_PATHS, routeAddFirm } from './addFirm.ts';
+import { FIRM_BASICS_PATHS, routeFirmBasics } from './firmBasics.ts';
 import { routeAuth } from './auth.ts';
 import { routeContacts } from './contacts.ts';
 import { DEVICE_PATHS, routeDevices } from './devices.ts';
@@ -148,6 +149,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
     // The Add firm form: one row of an import, typed. Exact, like its neighbours.
     moduleOf('add-firm', { paths: ADD_FIRM_PATHS }, routeAddFirm, routing),
+    // A firm's calling basics, from Today and the firm page (slice S2).
+    moduleOf('firm-basics', { paths: FIRM_BASICS_PATHS }, routeFirmBasics, routing),
     // The policy, suppression and dialing surface. Exact paths throughout, for
     // the reason above. `/dial/check` is declared by name rather than as a `/dial`
     // prefix because a mistyped dialing path must be `not_found` and not an

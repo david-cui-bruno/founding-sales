@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, shortcutFor, type KeyLike } from '../src/prototype/shortcuts.ts';
+import { SHORTCUTS, shortcutFor, type KeyLike } from '../src/renderer/v2/shortcuts.ts';
 
 /**
  * The Slice 1 prototype's two keyboard rules: no shortcut dials, and typing in a field
