@@ -7,7 +7,8 @@ import type { CallCorrectionEffect, CallOutcome, CorrectCallOutcomeResult, Corre
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { ChangeOutcome, type CorrectionPorts } from '../src/renderer/calling/ChangeOutcome.tsx';
 import { resetCorrectionMemory } from '../src/renderer/calling/correctionMemory.ts';
-import type { CorrectedView, CorrectionPreviewView, OperationInput } from '../src/shared/operations.ts';
+import { correctionBody } from '../src/renderer/calling/correctionModel.ts';
+import type { CorrectedView, CorrectionPreviewView, OperationApi, OperationInput } from '../src/shared/operations.ts';
 
 /**
  * "Change outcome" (S3X lane X2, X2-7 and the kept-state rules K1–K7). Written before the
@@ -145,6 +146,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  globalThis.callieApi = undefined;
 });
 
 async function openAndChoose(outcome: CallOutcome = 'no_answer'): Promise<void> {
@@ -412,5 +414,81 @@ describe('kept state', () => {
     });
     expect(screen.queryByTestId('change-outcome-conflicts')).toBeNull();
     expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('review of X2 (findings 2 and 3)', () => {
+  it('K2: a preview reporting another current outcome drops the edit, says so and reloads; nothing is sent over it', async () => {
+    // History shows Conversation; another correction moved the call to Callback requested.
+    const ports = fake(previewOf({ currentOutcome: 'callback_requested', effects: [historyEffect] }));
+    const changed = vi.fn();
+    const { rerender } = render(<Shell session="a"><Subject ports={ports} onChanged={changed} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    expect((await screen.findByTestId('change-outcome-changed-elsewhere')).textContent).toContain('The outcome is now Callback requested.');
+    expect((screen.getByTestId('change-outcome-select') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('change-outcome-save'));
+    expect(ports.corrections).toEqual([]);
+    // The history read again: the new outcome is the one David now sees, and Save sends it.
+    rerender(<Shell session="a"><Subject ports={ports} outcome="callback_requested" onChanged={changed} /></Shell>);
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    await screen.findByTestId('change-outcome-collapsed');
+    fireEvent.click(screen.getByTestId('change-outcome-save'));
+    await waitFor(() => expect(ports.corrections).toHaveLength(1));
+    expect(ports.corrections[0]).toMatchObject({ expectedOutcome: 'callback_requested', outcome: 'no_answer' });
+  });
+
+  it('K2: the base is the outcome shown when Change opened; a history re-read before the choice drops it', async () => {
+    const ports = fake(previewOf({ currentOutcome: 'busy', effects: [historyEffect] }));
+    const { rerender } = render(<Shell session="a"><Subject ports={ports} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    rerender(<Shell session="a"><Subject ports={ports} outcome="busy" /></Shell>);
+    expect((await screen.findByTestId('change-outcome-changed-elsewhere')).textContent).toContain('The outcome is now Busy.');
+    expect(ports.previews).toEqual([]);
+  });
+
+  it('stale_outcome: the edit is dropped as "Changed elsewhere" once the new outcome is read, never re-sent on the new base', async () => {
+    const ports = fake(previewOf({ effects: [historyEffect] }));
+    ports.correctAnswer = async () => await Promise.resolve({ corrected: null, reason: 'stale_outcome' });
+    const changed = vi.fn();
+    const { rerender } = render(<Shell session="a"><Subject ports={ports} onChanged={changed} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    await screen.findByTestId('change-outcome-collapsed');
+    ports.previewAnswer = async () => await Promise.resolve({ preview: previewOf({ currentOutcome: 'busy', effects: [historyEffect] }), reason: null });
+    fireEvent.click(screen.getByTestId('change-outcome-save'));
+    expect((await screen.findByTestId('change-outcome-changed-elsewhere')).textContent).toContain('The outcome is now Busy.');
+    rerender(<Shell session="a"><Subject ports={ports} outcome="busy" onChanged={changed} /></Shell>);
+    expect((screen.getByTestId('change-outcome-select') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(true);
+    expect(ports.corrections).toHaveLength(1);
+    expect(ports.corrections[0]?.expectedOutcome).toBe('interested');
+  });
+
+  it('the body carries the base David saw as expectedOutcome, and none when the review is based elsewhere', () => {
+    const draft = { outcome: 'no_answer' as const, doNotCall: 'contact_phone' as const, callbackDate: '', callbackTime: '', reason: null, decisions: {} };
+    const review = previewOf({ effects: [historyEffect] });
+    expect(correctionBody({ callLogId: LOG_ID, preview: review, draft, base: 'interested', timeZone: null, commandId: 'c' })?.expectedOutcome).toBe('interested');
+    expect(correctionBody({ callLogId: LOG_ID, preview: previewOf({ currentOutcome: 'callback_requested', effects: [historyEffect] }), draft, base: 'interested', timeZone: null, commandId: 'c' })).toBeNull();
+  });
+
+  it('the registry-backed default ports ask exactly one preview per selection', async () => {
+    // Bounded: past five requests the answer never comes, so a loop cannot spin the test forever.
+    const read = vi.fn(async (_operation: string, _input: OperationInput<'calling.correctionPreview'>) => {
+      return read.mock.calls.length <= 5 ? await Promise.resolve({ preview: previewOf({ effects: [historyEffect] }), reason: null }) : await new Promise(() => undefined);
+    });
+    globalThis.callieApi = { read, command: vi.fn() } as unknown as OperationApi;
+    render(<Shell session="a"><ChangeOutcome callLogId={LOG_ID} currentOutcome="interested" timeZone="America/New_York" onChanged={() => undefined} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    await screen.findByTestId('change-outcome-collapsed');
+    for (let turn = 0; turn < 10; turn += 1) await act(async () => await new Promise(resolve => setTimeout(resolve, 0)));
+    expect(read.mock.calls.map(call => [call[0], call[1].outcome])).toEqual([['calling.correctionPreview', 'no_answer']]);
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'busy' } });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    for (let turn = 0; turn < 10; turn += 1) await act(async () => await new Promise(resolve => setTimeout(resolve, 0)));
+    expect(read.mock.calls.map(call => call[1].outcome)).toEqual(['no_answer', 'busy']);
   });
 });

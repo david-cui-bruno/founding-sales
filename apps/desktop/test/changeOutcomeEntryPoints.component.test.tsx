@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CallLogRowDto, CallSessionDto, CorrectionPreviewResponse } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
@@ -139,6 +139,101 @@ describe('the firm page’s call history', () => {
     await waitFor(() => expect(correction.corrected).toEqual([expect.objectContaining({ callLogId: FORM_LOG, outcome: 'voicemail_left', expectedOutcome: 'no_answer' })]));
     // The history re-fetches itself and shows the current outcome.
     await waitFor(() => expect(screen.getByTestId('change-outcome-current').textContent).toBe('Voicemail left'));
+  });
+});
+
+describe('the call history across firms (review of X2, finding 1)', () => {
+  const OTHER_FIRM = '66666666-6666-4666-8666-666666666666';
+  const OTHER_LOG = '77777777-7777-4777-8777-777777777777';
+  interface Pending {
+    readonly firmId: string;
+    resolve(answer: { readonly calls: readonly CallLogRowDto[] | null }): void;
+  }
+
+  it('switching firms never leaves the previous firm’s calls actionable, even when the sessions answer first', async () => {
+    const pending: Pending[] = [];
+    const ports: CallHistoryPorts = {
+      history: async () => await Promise.resolve({ calls: [] }),
+      recording: async () => await Promise.resolve({ recording: null, reason: null }),
+      logs: async firmId =>
+        firmId === FIRM_ID
+          ? await Promise.resolve({ calls: [log({ id: FORM_LOG })] })
+          : await new Promise(resolve => {
+              pending.push({ firmId, resolve });
+            }),
+      correction: correctionPorts('no_answer'),
+    };
+    const { rerender } = render(<DraftsProvider><CallHistory firmId={FIRM_ID} ports={ports} /></DraftsProvider>);
+    await screen.findByTestId('call-history-log-row');
+    await act(async () => {
+      rerender(<DraftsProvider><CallHistory firmId={OTHER_FIRM} ports={ports} /></DraftsProvider>);
+      await Promise.resolve();
+    });
+    // B's sessions answered; its logs have not. Nothing of A is on screen.
+    expect(screen.queryByTestId('call-history-log-row')).toBeNull();
+    expect(screen.queryByTestId('change-outcome')).toBeNull();
+    // B's answer: only B's rows show, and a row of another firm in it never does.
+    await act(async () => {
+      pending[0]?.resolve({ calls: [log({ id: OTHER_LOG, firmId: OTHER_FIRM }), log({ id: FORM_LOG })] });
+      await Promise.resolve();
+    });
+    expect(screen.getAllByTestId('change-outcome').map(control => control.getAttribute('data-log'))).toEqual([OTHER_LOG]);
+  });
+
+  it('a late log answer for a firm no longer shown is dropped', async () => {
+    const pending: Pending[] = [];
+    const ports: CallHistoryPorts = {
+      history: async () => await Promise.resolve({ calls: [] }),
+      recording: async () => await Promise.resolve({ recording: null, reason: null }),
+      logs: async firmId =>
+        await new Promise(resolve => {
+          pending.push({ firmId, resolve });
+        }),
+      correction: correctionPorts('no_answer'),
+    };
+    const { rerender } = render(<DraftsProvider><CallHistory firmId={FIRM_ID} ports={ports} /></DraftsProvider>);
+    await act(async () => {
+      rerender(<DraftsProvider><CallHistory firmId={OTHER_FIRM} ports={ports} /></DraftsProvider>);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      pending.find(entry => entry.firmId === FIRM_ID)?.resolve({ calls: [log({ id: FORM_LOG })] });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('change-outcome')).toBeNull();
+  });
+
+  it('Change is disabled while the shown firm’s log read is pending', async () => {
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const ports: CallHistoryPorts = {
+      history: async () => await Promise.resolve({ calls: [] }),
+      recording: async () => await Promise.resolve({ recording: null, reason: null }),
+      logs: async () => {
+        reads += 1;
+        if (reads === 1) return await Promise.resolve({ calls: [log({ id: FORM_LOG })] });
+        return await new Promise(resolve => {
+          release = () => resolve({ calls: [log({ id: FORM_LOG, outcome: 'voicemail_left' })] });
+        });
+      },
+      correction: correctionPorts('no_answer'),
+    };
+    render(<DraftsProvider><CallHistory firmId={FIRM_ID} ports={ports} /></DraftsProvider>);
+    await screen.findByTestId('call-history-log-row');
+    expect((screen.getByTestId('change-outcome-toggle') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'voicemail_left' } });
+    await waitFor(() => expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('change-outcome-save'));
+    // The correction re-reads the logs; until the read answers, Change is disabled.
+    await waitFor(() => expect(reads).toBe(2));
+    expect((screen.getByTestId('change-outcome-toggle') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect((screen.getByTestId('change-outcome-toggle') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByTestId('change-outcome-current').textContent).toBe('Voicemail left');
   });
 });
 

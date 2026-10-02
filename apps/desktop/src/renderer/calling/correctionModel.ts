@@ -20,8 +20,10 @@ import { DO_NOT_CALL_CHOICES, OUTCOME_LABELS, type DoNotCallChoiceKey } from '..
  *     when §3.7's rule needs it — the outcome came from an applied suggestion, or he chose Undo
  *     or Lift stop… on an effect whose `appliedKey` is set — and appears or disappears as he
  *     decides;
- *   * the body carries only what he chose: the outcome he picked against the outcome the
- *     review was based on (`expectedOutcome`), and one decision per effect of the set he saw.
+ *   * the body carries only what he chose: the outcome he picked against the outcome he saw
+ *     when he opened Change (`expectedOutcome` is that base, never the preview's current
+ *     outcome), and one decision per effect of the set he saw. A review whose current outcome
+ *     is not the base makes no body.
  */
 
 /** One effect's identity in the review: what the server compares the echo by. */
@@ -108,10 +110,13 @@ export function correctionBody(input: {
   readonly callLogId: string;
   readonly preview: CorrectionPreviewResponse;
   readonly draft: CorrectionDraft;
+  /** The outcome David saw when he opened Change. */
+  readonly base: CallOutcome;
   readonly timeZone: string | null;
   readonly commandId: string;
 }): CorrectOutcomeInput | null {
   const { preview, draft } = input;
+  if (preview.currentOutcome !== input.base) return null;
   if (saveProblem(preview, draft, input.timeZone) !== null) return null;
   const decisions = decisionsFor(preview, draft.decisions);
   const needsReason = reasonRequired(preview, decisions);
@@ -122,7 +127,7 @@ export function correctionBody(input: {
   return {
     commandId: input.commandId,
     callLogId: input.callLogId,
-    expectedOutcome: preview.currentOutcome,
+    expectedOutcome: input.base,
     outcome: draft.outcome,
     ...(needsReason && draft.reason !== null ? { reason: draft.reason } : {}),
     ...(draft.outcome === 'do_not_call' ? { doNotCall: DO_NOT_CALL_CHOICES[draft.doNotCall].choice } : {}),

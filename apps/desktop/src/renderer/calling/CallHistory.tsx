@@ -37,6 +37,11 @@ import { playRecording, type Playback } from './playRecording.ts';
  * No answer, 2 Oct"; every log no session row shows — a form or incoming log, a log linked to an
  * unconsumed session, or every log while the session read failed — gets a row of its own,
  * newest first. A correction or a lift re-fetches both reads.
+ *
+ * K7 (review of X2, finding 1): both reads are kept with the firm and the read generation they
+ * answered. An answer for a firm no longer shown, or for an older read, is dropped; a row shows
+ * only when it belongs to the firm shown; and "Change" is disabled while the shown firm's log
+ * read is pending, so nothing on screen can correct another firm's call.
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -181,10 +186,11 @@ export function CallHistory({
   readonly timeZone?: string | null;
   readonly ports?: CallHistoryPorts | null;
 }): JSX.Element | null {
-  const [calls, setCalls] = useState<readonly CallSessionDto[] | null | undefined>(undefined);
-  const [logs, setLogs] = useState<readonly CallLogRowDto[] | null>(null);
   // A correction or a lift asks for both reads again (this view does not use React Query).
   const [reads, setReads] = useState(0);
+  // Each answer is kept with the firm and the generation it answered (K7).
+  const [sessionRead, setSessionRead] = useState<{ readonly firmId: string; readonly read: number; readonly calls: readonly CallSessionDto[] | null } | null>(null);
+  const [logRead, setLogRead] = useState<{ readonly firmId: string; readonly read: number; readonly calls: readonly CallLogRowDto[] | null } | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const playback = useRef<Playback | null>(null);
@@ -204,22 +210,21 @@ export function CallHistory({
 
   useEffect(() => {
     let current = true;
-    if (reads === 0) setCalls(undefined);
+    // K7: an answer for a firm no longer shown, or for an older read, is dropped.
     void portsRef.current?.history(firmId).then(
       answer => {
-        if (current) setCalls(answer.calls);
+        if (current) setSessionRead({ firmId, read: reads, calls: answer.calls });
       },
       () => {
-        if (current) setCalls(null);
+        if (current) setSessionRead({ firmId, read: reads, calls: null });
       },
     );
-    // K7: an answer for a firm no longer shown, or for an older read, is dropped.
     void portsRef.current?.logs?.(firmId).then(
       answer => {
-        if (current) setLogs(answer.calls);
+        if (current) setLogRead({ firmId, read: reads, calls: answer.calls });
       },
       () => {
-        if (current) setLogs(null);
+        if (current) setLogRead({ firmId, read: reads, calls: null });
       },
     );
     return () => {
@@ -228,9 +233,14 @@ export function CallHistory({
   }, [firmId, reads]);
   useEffect(() => () => stopPlayback(), [firmId]);
 
-  const logById = new Map((logs ?? []).map(log => [log.id, log] as const));
+  // Only the shown firm's answers count. A re-read of the same firm keeps its rows on screen
+  // until it answers; another firm's never show.
+  const calls = sessionRead !== null && sessionRead.firmId === firmId ? sessionRead.calls : undefined;
+  const logs = logRead !== null && logRead.firmId === firmId ? (logRead.calls ?? []).filter(log => log.firmId === firmId) : [];
+  const logsPending = logRead === null || logRead.firmId !== firmId || logRead.read !== reads;
+  const logById = new Map(logs.map(log => [log.id, log] as const));
   const shownLogIds = new Set((calls ?? []).flatMap(call => (call.callLogId === null ? [] : [call.callLogId])));
-  const ownRows = (logs ?? []).filter(log => !shownLogIds.has(log.id));
+  const ownRows = logs.filter(log => !shownLogIds.has(log.id));
   const reread = (): void => {
     setReads(count => count + 1);
   };
@@ -250,6 +260,7 @@ export function CallHistory({
         currentOutcome={log.outcome}
         corrections={log.corrections}
         timeZone={timeZone}
+        enabled={!logsPending}
         onChanged={reread}
         {...(ports?.correction === undefined ? {} : { ports: ports.correction })}
       />

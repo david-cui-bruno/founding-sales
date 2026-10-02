@@ -48,8 +48,11 @@ import {
  *
  * **Kept state (K1–K7).** The draft — the chosen outcome, the stop choice, the callback time,
  * the decisions and the reason — is in the shell's drafts under `correct:<logId>:…`, which the
- * shell empties on every new session (K1), and remembers the outcome it was based on: when the
- * server's outcome has moved, the draft is dropped and "Changed elsewhere" says so (K2). The
+ * shell empties on every new session (K1), and remembers the outcome it was based on — the one
+ * David saw when he opened Change. When that has moved, whether the history read again or a
+ * preview reports another current outcome, the draft is dropped, "Changed elsewhere" says so
+ * and the caller reads again; Save always sends that base as `expectedOutcome`, never the
+ * preview's, so the server's stale-outcome check stands (K2). The
  * command on the wire, its answer, the open toggle and the pending lifts live in the session's
  * correction memory by log id (`calling/correctionMemory.ts`), so a late answer lands even after the control
  * unmounted and only updates feedback; it never reopens a review David closed (K3). J and K
@@ -65,14 +68,22 @@ export interface CorrectionPorts {
   supersede(input: OperationInput<'suppressions.supersede'>): Promise<{ readonly lifted: boolean; readonly reason: string | null }>;
 }
 
+/**
+ * The registry's ports, one object per bridge: the default prop is the same object on every
+ * render, so nothing keyed on it re-runs (review of X2, finding 3).
+ */
+let registryPorts: { readonly api: object; readonly ports: CorrectionPorts } | null = null;
 export function registryCorrectionPorts(): CorrectionPorts | null {
   const api = globalThis.callieApi;
   if (api === undefined) return null;
-  return {
+  if (registryPorts !== null && registryPorts.api === api) return registryPorts.ports;
+  const ports: CorrectionPorts = {
     preview: async input => await api.read('calling.correctionPreview', input),
     correct: async input => await api.command('calling.correctOutcome', input),
     supersede: async input => await api.command('suppressions.supersede', input),
   };
+  registryPorts = { api, ports };
+  return ports;
 }
 
 /** The draft keys of one log's correction. */
@@ -142,6 +153,8 @@ export function ChangeOutcome({
   const root = useRef<HTMLDivElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  const portsRef = useRef(ports);
+  portsRef.current = ports;
 
   const open = memory.open.has(callLogId);
   const unanswered = memory.corrections.get(callLogId) ?? null;
@@ -149,42 +162,59 @@ export function ChangeOutcome({
   const note = memory.notes.get(callLogId) ?? null;
   const lifts = memory.lifts.get(callLogId) ?? [];
 
-  // K2: the draft remembers the server outcome it began from. When that has moved — corrected
-  // elsewhere, or by a late answer — the draft is dropped rather than sent over the change.
-  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  // K2: the draft remembers the outcome David saw when he opened Change (`base`). When the
+  // history's outcome has moved from it — corrected elsewhere, or by a late answer — the draft is
+  // dropped rather than sent over the change. The value is the outcome it moved to.
+  const [changedElsewhere, setChangedElsewhere] = useState<CallOutcome | null>(null);
   useEffect(() => {
     if (base !== '' && base !== currentOutcome && unanswered === null) {
       clearDrafts(draftPrefix);
-      setChangedElsewhere(true);
+      setChangedElsewhere(currentOutcome);
     }
   }, [base, currentOutcome, unanswered, clearDrafts, draftPrefix]);
 
   const chosen = (CALL_OUTCOMES as readonly string[]).includes(outcomeText) && outcomeText !== currentOutcome ? (outcomeText as CallOutcome) : null;
+  const baseOutcome = (CALL_OUTCOMES as readonly string[]).includes(base) ? (base as CallOutcome) : null;
 
-  // The preview, by (log, outcome). K7: an answer for an outcome no longer chosen is dropped.
+  // The preview, keyed by (log, chosen outcome, reload) and asked only while the review is open.
+  // K7: an answer for a key no longer current is dropped. The ports are read through a ref, so a
+  // caller's new ports object never asks again (review of X2, finding 3).
   const [preview, setPreview] = useState<{ readonly key: string; readonly view: CorrectionPreviewView } | null>(null);
-  const asked = useRef(0);
   const reloadTick = note?.reload ?? 0;
-  const previewKey = chosen === null ? null : `${callLogId}:${chosen}:${String(reloadTick)}`;
+  const canAsk = ports !== null;
+  const request = useMemo(
+    () => (!open || !canAsk || chosen === null ? null : { key: `${callLogId}:${chosen}:${String(reloadTick)}`, callLogId, outcome: chosen }),
+    [open, canAsk, callLogId, chosen, reloadTick],
+  );
   useEffect(() => {
-    if (!open || previewKey === null || chosen === null || ports === null) return;
-    asked.current += 1;
-    const mine = asked.current;
-    void ports.preview({ callLogId, outcome: chosen }).then(
+    const read = portsRef.current;
+    if (request === null || read === null) return;
+    let current = true;
+    void read.preview({ callLogId: request.callLogId, outcome: request.outcome }).then(
       view => {
-        if (mine === asked.current) setPreview({ key: previewKey, view });
+        if (current) setPreview({ key: request.key, view });
       },
       () => {
-        if (mine === asked.current) setPreview({ key: previewKey, view: { preview: null, reason: 'offline' } });
+        if (current) setPreview({ key: request.key, view: { preview: null, reason: 'offline' } });
       },
     );
-  }, [open, previewKey, chosen, callLogId, ports]);
-  const shown = preview !== null && preview.key === previewKey ? preview.view : null;
-  const review = shown?.preview ?? null;
-  // A draft whose base was cleared by a stale review takes the fresh review's outcome as its base.
+    return () => {
+      current = false;
+    };
+  }, [request]);
+  const shown = request !== null && preview !== null && preview.key === request.key ? preview.view : null;
+  const fresh = shown?.preview ?? null;
+  // K2 (review of X2, finding 2): a preview that reports another current outcome than the one
+  // David saw never rebases the edit. The edit is dropped, "Changed elsewhere" says so, and the
+  // caller reads the call again.
+  const movedUnder = fresh !== null && baseOutcome !== null && fresh.currentOutcome !== baseOutcome && unanswered === null;
   useEffect(() => {
-    if (review !== null && base === '' && chosen !== null && review.currentOutcome === currentOutcome) setBase(currentOutcome);
-  }, [review, base, chosen, currentOutcome, setBase]);
+    if (!movedUnder || fresh === null) return;
+    clearDrafts(draftPrefix);
+    setChangedElsewhere(fresh.currentOutcome);
+    onChangedRef.current();
+  }, [movedUnder, fresh, clearDrafts, draftPrefix]);
+  const review = movedUnder ? null : fresh;
 
   // K4: a navigation key never leaves focus on one of this review's command buttons.
   useEffect(() => {
@@ -209,7 +239,7 @@ export function ChangeOutcome({
   };
   const live = review === null ? {} : decisionsFor(review, decisions);
   const needsReason = review !== null && reasonRequired(review, live);
-  const problem = review === null ? null : saveProblem(review, draft, timeZone);
+  const problem = review === null || baseOutcome === null ? null : saveProblem(review, draft, timeZone);
   const locked = busy || unanswered !== null || !enabled;
 
   const setOpen = (next: boolean): void => {
@@ -228,8 +258,8 @@ export function ChangeOutcome({
     const canonicalKeys = new Map((review?.effects ?? []).map(effect => [effect.id, effect.facts.canonicalKey ?? null] as const));
     if (unanswered !== null) command = unanswered;
     else {
-      if (review === null || chosen === null) return;
-      const body = correctionBody({ callLogId, preview: review, draft, timeZone, commandId: 'draft' });
+      if (review === null || chosen === null || baseOutcome === null) return;
+      const body = correctionBody({ callLogId, preview: review, draft, base: baseOutcome, timeZone, commandId: 'draft' });
       if (body === null) return;
       const { commandId: _draftId, ...rest } = body;
       void _draftId;
@@ -273,14 +303,15 @@ export function ChangeOutcome({
         onChangedRef.current();
         return;
       }
-      // A refusal wrote nothing. A review that went stale is read again: the chosen outcome
-      // stays, the decisions are cleared (never carried to a different set).
+      // A refusal wrote nothing. A review that went stale is read again: the decisions are
+      // cleared (never carried to a different set). The base stays the outcome David saw, so a
+      // stale outcome drops the edit as "Changed elsewhere" once the new outcome is read (K2),
+      // while changed effects keep the chosen outcome.
       const reload = view.reason !== null && RELOAD_REFUSALS.has(view.reason);
       if (reload) {
         clearUnchanged({
           [`${draftPrefix}decisions`]: sent.drafts[`${draftPrefix}decisions`] ?? '',
           [`${draftPrefix}reason`]: sent.drafts[`${draftPrefix}reason`] ?? '',
-          [`${draftPrefix}base`]: sent.drafts[`${draftPrefix}base`] ?? '',
         });
       }
       memory.notes.set(callLogId, { text: refusalSentence(view.reason), alert: true, ...(reload ? { reload: Date.now() } : {}) });
@@ -355,7 +386,9 @@ export function ChangeOutcome({
             className={cn(dense.sm, 'text-muted-foreground')}
             disabled={!enabled}
             onClick={() => {
-              setChangedElsewhere(false);
+              setChangedElsewhere(null);
+              // K2: the edit's base is the outcome shown when Change opens.
+              if (!open && base === '') setBase(currentOutcome);
               setOpen(!open);
             }}
           >
@@ -364,9 +397,9 @@ export function ChangeOutcome({
         )}
       </div>
 
-      {changedElsewhere && open ? (
+      {changedElsewhere !== null && open ? (
         <p data-testid="change-outcome-changed-elsewhere" role="status" className="text-xs text-muted-foreground">
-          Changed elsewhere. The outcome is now {OUTCOME_LABELS[currentOutcome]}.
+          Changed elsewhere. The outcome is now {OUTCOME_LABELS[changedElsewhere]}. Reloaded; choose again.
         </p>
       ) : null}
 
@@ -502,7 +535,7 @@ export function ChangeOutcome({
             <Button
               data-testid="change-outcome-save"
               className={dense.md}
-              disabled={busy || !enabled || (unanswered === null && (review === null || problem !== null))}
+              disabled={busy || !enabled || (unanswered === null && (review === null || baseOutcome === null || problem !== null))}
               {...(busy ? { 'aria-busy': true } : {})}
               onClick={send}
             >

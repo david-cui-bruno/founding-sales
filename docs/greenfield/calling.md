@@ -307,10 +307,15 @@ the call log row → effect rows: Apply's prefix plus the log.
 **On the Mac**, "Change" sits beside the outcome on the firm page's call history (which also
 shows every log no session row shows), in Today's previous interactions and on the after-call
 "Logged:" line. One compact review: nothing preselected, unaffected effects collapsed, the
-reason shown exactly when needed, Save once. The draft is kept under `correct:<logId>:…` and
-dropped with "Changed elsewhere" if the outcome moved; the command, its answer and the pending
-lift confirms live in the session's kept store by log id, and a lost answer offers Retry, which
-resends the same request under the same command id.
+reason shown exactly when needed, Save once. The draft is kept under `correct:<logId>:…` with
+the outcome David saw when he opened Change as its base. If the history or a preview reports
+another current outcome, the draft is dropped with "Changed elsewhere" and the call is read
+again; Save always sends that base as `expectedOutcome`, never the preview's, so the server's
+stale-outcome check stands. The command, its answer and the pending lift confirms live in the
+session's kept store by log id, and a lost answer offers Retry, which resends the same request
+under the same command id. The firm page's history keeps each read with its firm and read
+generation: another firm's answer is dropped, a row shows only under its own firm, and Change is
+disabled while the shown firm's log read is pending.
 
 ### Recordings
 
