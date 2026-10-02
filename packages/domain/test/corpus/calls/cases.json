@@ -1,6 +1,6 @@
 {
   "promptVersion": "call_analysis.3",
-  "note": "Slice 3a, C2. Each case runs through readCallAnalysisAnswer then proposeEffects. A run fails on any label in forbidden_effects that is not also in expected_effects ('x:*' matches every 'x:' label). Labels: outcome:<outcome>, callback:<localDate>T<localTime>, follow_up, buying_signal, park, task:overview, task:commitment, and each review kind by name.",
+  "note": "Slice 3a, C2. Each case runs through readCallAnalysisAnswer then proposeEffects. A run fails on any label in forbidden_effects that is not also in expected_effects ('x:*' matches every 'x:' label). Labels: outcome:<outcome>, callback:<localDate>T<localTime>, follow_up, buying_signal, park, task:overview, task:commitment, each review kind by name, and review:buying_signal or review:follow_up for an action kind offered for review only (call_policy.4).",
   "cases": [
     {
       "id": "01-overview-only",
@@ -58,7 +58,8 @@
       "with_open_opportunity": {
         "expected_effects": [
           "outcome:interested",
-          "follow_up"
+          "follow_up",
+          "task:overview"
         ],
         "forbidden_effects": [
           "buying_signal",
@@ -1134,7 +1135,8 @@
         "expected_effects": [
           "outcome:callback_requested",
           "callback:2026-10-08T10:00",
-          "follow_up"
+          "follow_up",
+          "task:overview"
         ],
         "forbidden_effects": [
           "buying_signal",
@@ -1469,7 +1471,8 @@
       "with_open_opportunity": {
         "expected_effects": [
           "outcome:interested",
-          "follow_up"
+          "follow_up",
+          "task:overview"
         ],
         "forbidden_effects": [
           "buying_signal",
@@ -1558,8 +1561,7 @@
         }
       ],
       "expected_effects": [
-        "outcome:callback_requested",
-        "callback:2026-10-07T10:00"
+        "outcome:callback_requested"
       ],
       "forbidden_effects": [
         "buying_signal",
@@ -1572,7 +1574,8 @@
       ],
       "expected_content": {
         "reached": "person"
-      }
+      },
+      "note": "call_policy.4 (review S3A1, rules 5 and 6): two times and a correction near a day, so a vague callback; David sets the time."
     },
     {
       "id": "33-stop-but-overview",
@@ -2105,7 +2108,8 @@
       "with_open_opportunity": {
         "expected_effects": [
           "outcome:interested",
-          "follow_up"
+          "follow_up",
+          "task:overview"
         ],
         "forbidden_effects": [
           "buying_signal",

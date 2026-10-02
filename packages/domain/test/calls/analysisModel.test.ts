@@ -138,7 +138,7 @@ describe('A-1: reading an answer', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.result.interest.signals).toEqual([
-      { kind: 'evaluation', ref: { line: 2, side: 'them', start: 5, end: 9, quote: 'we are EVALUATING a couple of tools' } },
+      { kind: 'evaluation', ref: { line: 2, side: 'them', start: 5, end: 9, quote: 'we are EVALUATING a couple of tools' }, confirmed: true },
     ]);
     expect(read.result.interest.level).toBe('buying_signal');
     expect(read.result.dropped).toEqual({ signals: 4 });

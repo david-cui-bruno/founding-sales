@@ -48,13 +48,13 @@ describe('A-2: the policy table', () => {
     ]);
   });
 
-  it('an overview request: interested and follow_up, plus the "Send overview" task only without an open opportunity, never a buying signal', () => {
+  it('an overview request: interested, follow_up and the "Send overview" task, with or without an open opportunity (Q4), never a buying signal', () => {
     const call = lines(['Y', 'Hi.'], ['T', 'Just send me an overview by e-mail.']);
     const raw = answer({ interest: { level: 'curious', signals: [] }, follow_up_request: { kind: 'overview_email', quote: 'send me an overview', line: 2 } });
     expect(labels(raw, call)).toEqual(['outcome:interested', 'follow_up', 'task:overview']);
     const set = proposeEffects(read(raw, call), CONTEXT);
     expect(set.proposals.find(proposal => proposal.kind === 'task')).toMatchObject({ key: taskKey('send me an overview'), params: { text: 'Send overview to Dana Whitfield' } });
-    expect(labels(raw, call, { ...CONTEXT, hasOpenOpportunity: true })).toEqual(['outcome:interested', 'follow_up']);
+    expect(labels(raw, call, { ...CONTEXT, hasOpenOpportunity: true })).toEqual(['outcome:interested', 'follow_up', 'task:overview']);
     // No named contact: no follow-up, since an agreement needs a named person.
     expect(labels(raw, call, { ...CONTEXT, contactName: null })).toEqual(['outcome:interested']);
   });
@@ -200,8 +200,8 @@ describe('A-2: resolveSpokenCallback', () => {
     expect(at('Call me Tuesday at 2', 'wednesday', 'Tuesday', '2')).toBeNull();
   });
 
-  it('uses what follows the last correction', () => {
-    expect(at('Tuesday at 2, no wait, Wednesday at 10', 'wednesday', 'Wednesday', '10')).toBe('2026-10-07T10:00');
+  it('never resolves a corrected day or time: two times and a correction near a day are a vague callback (call_policy.4)', () => {
+    expect(at('Tuesday at 2, no wait, Wednesday at 10', 'wednesday', 'Wednesday', '10')).toBeNull();
     expect(at('Tuesday at 2, no wait, Wednesday at 10', 'tuesday', 'Tuesday', '2')).toBeNull();
   });
 
@@ -339,3 +339,111 @@ describe('A-2: "next <weekday>" (C2 final, case 10)', () => {
   });
 });
 
+
+describe('S3A1: confirm or review — each review trigger', () => {
+  it('[1] a negated stop is no stop at all, whatever the model read; a line with both a stop and a negated one is reviewed', () => {
+    const call = lines(['Y', 'Should I take you off our list?'], ['T', "Don't take me off anything, just call later."]);
+    const raw = answer({
+      stop: { requested: true, scope: 'this_number', quote: 'take me off', line: 2 },
+      callback: { requested: true, exact: false, phrase: 'just call later', line: 2, agreed_line: 0, day: 'none', date_text: '', time: '' },
+    });
+    expect(labels(raw, call)).toEqual(['outcome:callback_requested']);
+    expect(read(raw, call).stop).toBeNull();
+    const mixed = lines(['Y', 'Hi.'], ["T", "Don't stop calling me. Actually, remove me."]);
+    expect(labels(answer({ stop: { requested: true, scope: 'this_number', quote: 'remove me', line: 2 } }), mixed)).toEqual(['outcome_unclear', 'stop_scope']);
+    // A model stop on a line with no stop phrase at all is reviewed, never applied.
+    const unspoken = lines(['Y', 'Hi.'], ['T', 'I am done with this conversation.']);
+    expect(labels(answer({ stop: { requested: true, scope: 'this_number', quote: 'I am done with this conversation', line: 2 } }), unspoken)).toEqual([
+      'outcome_unclear',
+      'stop_scope',
+    ]);
+  });
+
+  it('[2] a qualifying category on a price-only line is no buying signal; an unconfirmed qualifying line is a buying signal to review', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'What does it cost?']);
+    const raw = answer({ interest: { level: 'buying_signal', signals: [{ kind: 'evaluation', quote: 'What does it cost?', line: 2 }] } });
+    expect(labels(raw, call)).toEqual(['outcome_unclear']);
+    expect(read(raw, call).interest.signals).toMatchObject([{ kind: 'pricing_question', confirmed: false }]);
+    const vague = lines(['Y', 'Hi.'], ['T', 'Hm, that sounds pretty neat.']);
+    expect(labels(answer({ interest: { level: 'buying_signal', signals: [{ kind: 'evaluation', quote: 'that sounds pretty neat', line: 2 }] } }), vague)).toEqual([
+      'review:buying_signal',
+      'outcome_unclear',
+    ]);
+    const negated = lines(['Y', 'Hi.'], ["T", "We're not evaluating anything this year."]);
+    expect(labels(answer({ interest: { level: 'buying_signal', signals: [{ kind: 'evaluation', quote: 'evaluating anything', line: 2 }] } }), negated)).toEqual([
+      'review:buying_signal',
+      'outcome_unclear',
+    ]);
+  });
+
+  it('[3] a refused request, a quoted fragment of Them’s own offer, and an agreement taken back at the agreeing line are no follow-up', () => {
+    const refused = lines(['Y', 'Hi.'], ['T', 'Do not send me an overview by email.']);
+    expect(labels(answer({ follow_up_request: { kind: 'overview_email', quote: 'send me an overview by email', line: 2 } }), refused)).toEqual(['outcome_unclear']);
+    const ownOffer = lines(['Y', 'Hi.'], ['T', "I'll send you our unit list."]);
+    expect(labels(answer({ follow_up_request: { kind: 'other_email', quote: 'send you our unit list', line: 2 } }), ownOffer)).toEqual(['outcome_unclear']);
+    const takenBack = lines(['Y', 'Can I send you an overview by e-mail?'], ['T', 'Sure. Actually, scratch that.']);
+    expect(
+      labels(answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you an overview by e-mail?', line: 1, agreed_line: 2 } }), takenBack),
+    ).toEqual(['outcome_unclear']);
+    const hedged = lines(['Y', 'Can I send you an overview by e-mail?'], ['T', "Sure, but I probably won't read it."]);
+    expect(labels(answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you an overview by e-mail?', line: 1, agreed_line: 2 } }), hedged)).toEqual([
+      'outcome_unclear',
+    ]);
+    // A line that names a sending but not as a request is a follow-up to review, with no task.
+    const unclear = lines(['Y', 'Hi.'], ["T", "E-mail's fine, whatever."]);
+    expect(labels(answer({ follow_up_request: { kind: 'overview_email', quote: "E-mail's fine", line: 2 } }), unclear)).toEqual([
+      'review:follow_up',
+      'outcome_unclear',
+    ]);
+  });
+
+  it('[4] a callback David offered is agreed only by a plain yes: "No thanks" is no callback', () => {
+    const declined = lines(['Y', 'Can I call you Tuesday at 2?'], ['T', 'No thanks.']);
+    const raw = (): string =>
+      answer({ callback: { requested: true, exact: true, phrase: 'Can I call you Tuesday at 2?', line: 1, agreed_line: 2, day: 'tuesday', date_text: 'Tuesday', time: '2' } });
+    expect(labels(raw(), declined)).toEqual(['outcome_unclear']);
+    const agreed = lines(['Y', 'Can I call you Tuesday at 2?'], ['T', 'Yes, that works.']);
+    expect(labels(raw(), agreed)).toEqual(['outcome:callback_requested', 'callback:2026-10-06T14:00']);
+  });
+
+  it('[5] exact only for one complete time with no range or alternative, minutes kept', () => {
+    const callback = (text: string, time: string): string[] => {
+      const call = lines(['Y', 'Hi.'], ['T', text]);
+      return labels(answer({ callback: { requested: true, exact: true, phrase: text, line: 2, agreed_line: 0, day: 'tuesday', date_text: 'Tuesday', time } }), call);
+    };
+    expect(callback('Call me Tuesday between 2 and 4.', '2')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday at 2 or 3.', '2')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday 2 to 4.', '2')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday 2-4.', '2')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday between lunch and 3pm.', '3pm')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday at 2, or maybe at 5.', '2')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me Tuesday at 9:30.', '9')).toEqual(['outcome:callback_requested', 'callback:2026-10-06T09:30']);
+    expect(callback('Call me Tuesday at noon.', 'noon')).toEqual(['outcome:callback_requested', 'callback:2026-10-06T12:00']);
+    expect(callback('Call me Tuesday at 3pm.', '3pm')).toEqual(['outcome:callback_requested', 'callback:2026-10-06T15:00']);
+  });
+
+  it('[6] any "next <weekday>", or a negation or correction near a day, never resolves; "next week <weekday>" only as the one day said', () => {
+    const callback = (text: string, quote: string, dateText: string): string[] => {
+      const call = lines(['Y', 'Hi.'], ['T', text]);
+      return labels(answer({ callback: { requested: true, exact: true, phrase: quote, line: 2, agreed_line: 0, day: 'tuesday', date_text: dateText, time: '10' } }), call);
+    };
+    expect(callback('Not next week Tuesday. Call me next Tuesday at 10.', 'Call me next Tuesday at 10', 'next Tuesday')).toEqual(['outcome:callback_requested']);
+    expect(callback("Not next week Tuesday, I'm away. Call me Tuesday at 10.", 'Call me Tuesday at 10', 'Tuesday')).toEqual(['outcome:callback_requested']);
+    expect(callback('Monday, no wait, Tuesday at 10.', 'Tuesday at 10', 'Tuesday')).toEqual(['outcome:callback_requested']);
+    expect(callback('Sorry, I mean Tuesday at 10.', 'Tuesday at 10', 'Tuesday')).toEqual(['outcome:callback_requested']);
+    expect(callback('Tuesday at 10, actually.', 'Tuesday at 10', 'Tuesday')).toEqual(['outcome:callback_requested']);
+    expect(callback('Wednesday or Tuesday next week at 10.', 'Tuesday next week at 10', 'Tuesday next week')).toEqual(['outcome:callback_requested']);
+    expect(callback('Call me next week Tuesday at 10.', 'Call me next week Tuesday at 10', 'next week Tuesday')).toEqual([
+      'outcome:callback_requested',
+      'callback:2026-10-13T10:00',
+    ]);
+    // A negation in an earlier sentence does not reach the day.
+    expect(callback('Not now. Call me Tuesday at 10.', 'Call me Tuesday at 10', 'Tuesday')).toEqual(['outcome:callback_requested', 'callback:2026-10-06T10:00']);
+  });
+
+  it('[8] a confirmed overview request gives follow_up and the task with an open opportunity too', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'Just send me an overview by e-mail.']);
+    const raw = answer({ follow_up_request: { kind: 'overview_email', quote: 'send me an overview', line: 2 } });
+    expect(labels(raw, call, { ...CONTEXT, hasOpenOpportunity: true })).toEqual(['outcome:interested', 'follow_up', 'task:overview']);
+  });
+});

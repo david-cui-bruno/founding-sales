@@ -10,7 +10,6 @@ import {
   CALL_ANALYSIS_SIDES,
   CALL_ANALYSIS_SIGNAL_KINDS,
   CALL_ANALYSIS_STOP_SCOPES,
-  type CallAnalysisDayQualifier,
   type CallAnalysisLineRef,
   type CallAnalysisQuoteRef,
   type CallAnalysisResult,
@@ -20,6 +19,17 @@ import {
 import { modelProviderKey, transportPrice, type ModelTransportKind } from '../classification/modelTransport.ts';
 import type { ClassifierRequest } from '../classification/prompt.ts';
 import { SERVER_SIDE_FALLBACK_BETA } from '../classification/types.ts';
+import {
+  checkStop,
+  confirmBuyingSignal,
+  confirmedCallbackTime,
+  confirmFollowUpOffer,
+  confirmFollowUpRequest,
+  confirmStop,
+  dayQualifierOf,
+  plainYes,
+  type FollowUpVerdict,
+} from './analysisConfirm.ts';
 import { fold, sideOfSpeaker, verbatimIn } from './summaryModel.ts';
 
 /**
@@ -394,55 +404,6 @@ export type CallAnalysisRead =
 /** A clause in which the speaker says they will do something: what makes a commitment a promise. */
 const PROMISE = /\b(?:i'll|i will|i shall|i'm going to|i am going to|i can|we'll|we will|we're going to|we are going to|we can|let me)\b/u;
 
-/** A request to be sent something names the sending. */
-const SEND = /\b(?:send|sending|e ?mail|mail|forward|shoot)\b/u;
-
-const WEEKDAY_NAMES: ReadonlySet<string> = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']);
-
-/**
- * How a callback's weekday was qualified, read from the callback's own whole lines (the
- * model may quote "Tuesday at 10" out of "next Tuesday at 10"; C2 final, case 10). "Next
- * week" beside the weekday is `next_week`; any other "next" in those lines is `next`, the
- * ambiguous reading, which wins; "this" or "coming" before it is `this`.
- */
-function dayQualifierOf(day: string | null, lines: readonly string[]): CallAnalysisDayQualifier | null {
-  if (day === null || !WEEKDAY_NAMES.has(day)) return null;
-  const text = lines.map(line => fold(line)).join(' \u0000 ');
-  if (new RegExp(`\\bnext week(?: on)? ${day}\\b|\\b${day}(?: of)? next week\\b`, 'u').test(text)) return 'next_week';
-  if (/\bnext\b/u.test(text)) return 'next';
-  if (new RegExp(`\\b(?:this|this coming|coming) ${day}\\b`, 'u').test(text)) return 'this';
-  return null;
-}
-
-/** A plain yes at the start of Them's reply to an offer. */
-const AGREES = /^(?:yes|yeah|yep|sure|ok|okay|please|absolutely|definitely|of course|go ahead|sounds good|that works|that would be great|that'd be great|that'd help|please do)\b/u;
-
-/** A reply that declines or hedges is not agreement, whatever it starts with. */
-const HEDGES = /\b(?:no|not|don't|dont|maybe|we'll see|not sure|i'll think|think about it|later|but)\b/u;
-
-/** Them taking a send back: "actually, don't send anything", "never mind the e-mail". */
-const RETRACTS = /\b(?:(?:don't|dont|do not|no need to) (?:send|e ?mail|mail|bother)|never mind|scratch that)\b/u;
-
-/** The speaker's own offer to send ("I'll send you our list"): a commitment, not a request. */
-const OFFER = /\b(?:i'll|i will|i can|i'm going to|i am going to|we'll|we will|we can|we're going to|we are going to|let me)(?: \w+){0,2} (?:send|e ?mail|mail|forward|shoot)\b/u;
-
-/**
- * Stop language on a Them line, found by the reader itself. Each pattern is negation-guarded
- * where a negation up to two words before reverses it ("don't take me off anything", "I'm
- * not saying stop calling"). Folded text: lower case,
- * apostrophes kept, punctuation removed.
- */
-const STOP_PATTERNS: readonly RegExp[] = [
-  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\b(?:stop|quit) (?:calling|phoning|ringing|contacting)(?: (?:me|us|here|this number|my \w+|our \w+))?\b/gu,
-  /\b(?:don't|dont|do not|never) (?:call|phone|ring|contact) (?:me|us|here|anyone|anybody|this number|again|anymore|my \w+|our \w+)\b/gu,
-  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\btake (?:me|us|my \w+|our \w+|this number) off\b/gu,
-  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\bremove (?:me|us|my \w+|our \w+|this number)\b/gu,
-  /\b(?:don't|dont|do not) want (?:these|your|any|any more|anymore|more) (?:phone )?calls\b/gu,
-  /\bno more calls\b/gu,
-  /\bdo not call list\b/gu,
-  /\blose (?:my|our|this) number\b/gu,
-];
-
 /** The stop phrases on Them lines: the policy's safety net under the model's own reading. */
 function stopPhrasesOf(
   utterances: readonly CallTranscriptUtterance[],
@@ -453,14 +414,9 @@ function stopPhrasesOf(
     if (sideOfSpeaker(utterance.speaker) !== 'them') return;
     const ref = lineRef(index + 1);
     if (ref === null) return;
-    const text = fold(utterance.text);
-    for (const pattern of STOP_PATTERNS) {
-      for (const match of text.matchAll(pattern)) {
-        const quote = match[0];
-        if (found.length >= 10 || !verbatimIn(quote, utterance.text)) continue;
-        const personal = /\b(?:me|my|this number)\b/u.test(quote) && !/\b(?:us|our|anyone|anybody|here|these|your|no more)\b/u.test(quote);
-        found.push({ general: !personal, ref: { ...ref, quote } });
-      }
+    for (const phrase of checkStop(utterance.text).phrases) {
+      if (found.length >= 10 || !verbatimIn(phrase.quote, utterance.text)) continue;
+      found.push({ general: phrase.general, ref: { ...ref, quote: phrase.quote } });
     }
   });
   return found;
@@ -488,10 +444,15 @@ function digitsOf(value: string): string {
  *  * an item that fails is dropped and counted in `dropped`, never repaired;
  *  * a `buying_signal` level with no surviving qualifying signal becomes `unclear`.
  *
- * And three of its own, from the first evaluation run (C2, 1 October 2026):
+ * And its own, from the evaluation runs (C2, 1 October 2026) and review S3A1 (2 October):
  *  * a commitment is a promise: its quote says the speaker will do something (`PROMISE`);
- *  * a follow-up request names the sending (`SEND`) and is not Them's own offer to send;
- *  * stop language on any Them line is recorded in `stopPhrases`, whatever the model said.
+ *  * stop language on any Them line is recorded in `stopPhrases`, whatever the model said;
+ *  * CONFIRM OR REVIEW: every action-critical reading is judged by the confirmer
+ *    (`analysisConfirm.ts`) on the whole speaker line(s), never the quote. A negated stop,
+ *    a refused, negated, self-offered or retracted follow-up, a callback "agreed" by anything
+ *    but a plain yes and a price-only "signal" are removed; a stop, a qualifying signal or a
+ *    follow-up the lines do not confirm is kept with `confirmed: false`, which the policy
+ *    only ever offers for review; a callback resolves only at `confirmedTime`.
  */
 export function readCallAnalysisAnswer(
   raw: string,
@@ -549,7 +510,12 @@ export function readCallAnalysisAnswer(
       drop('signals');
       continue;
     }
-    signals.push({ kind: signal.kind, ref });
+    // CONFIRM OR REVIEW: the signal's whole Them line decides, not its category. A price
+    // question labelled a qualifying kind is a price question (Q3).
+    const line = utterances[ref.line - 1]?.text ?? '';
+    const verdict = qualifying.has(signal.kind) ? confirmBuyingSignal(line) : 'unconfirmed';
+    if (verdict === 'price_only') drop('buying_signal');
+    signals.push({ kind: verdict === 'price_only' ? 'pricing_question' : signal.kind, ref, confirmed: verdict === 'confirmed' });
   }
   let level = answer.interest.level;
   if (level === 'buying_signal' && !signals.some(signal => qualifying.has(signal.kind))) {
@@ -578,38 +544,32 @@ export function readCallAnalysisAnswer(
   const requestKind = request.kind;
   if (requestKind !== 'none') {
     const ref = quoteRef(request.quote, request.line, null);
-    const words = ref === null ? '' : fold(ref.quote);
+    const themAfter = (line: number): string[] =>
+      utterances.filter((utterance, index) => index + 1 > line && sideOfSpeaker(utterance.speaker) === 'them').map(utterance => utterance.text);
     let agreed: CallAnalysisLineRef | null = null;
-    let valid = ref !== null && SEND.test(words);
+    let verdict: FollowUpVerdict = 'refused';
     if (ref !== null && ref.side === 'them') {
-      // Them's request names the sending, and is not Them's own offer to send ("I'll send you…").
-      valid = valid && !OFFER.test(words);
+      // Them's request, judged on the whole line: not negated, not Them's own offer, not taken back.
+      verdict = confirmFollowUpRequest(utterances[ref.line - 1]?.text ?? '', themAfter(ref.line));
     } else if (ref !== null) {
-      // David's offer naming the sending, answered within two lines by a Them line that agrees
-      // plainly ("Sure", "Yes please") and does not hedge or decline.
+      // David's offer naming the sending, answered within two lines by a Them line that
+      // passes the plain-yes rule; a retraction from that answer on takes it back.
       const candidate = lineRef(request.agreed_line);
-      const reply = candidate === null ? '' : fold(utterances[candidate.line - 1]?.text ?? '');
-      valid =
-        valid &&
-        candidate !== null &&
-        candidate.side === 'them' &&
-        candidate.line > ref.line &&
-        candidate.line - ref.line <= 2 &&
-        AGREES.test(reply) &&
-        !HEDGES.test(reply);
-      agreed = valid ? candidate : null;
+      if (candidate !== null && candidate.side === 'them' && candidate.line > ref.line && candidate.line - ref.line <= 2) {
+        verdict = confirmFollowUpOffer(
+          utterances[ref.line - 1]?.text ?? '',
+          utterances[candidate.line - 1]?.text ?? '',
+          themAfter(candidate.line),
+        );
+        if (verdict === 'confirmed') agreed = candidate;
+      }
     }
-    // Taken back later in the call ("actually, don't send anything"): no request.
-    const after = agreed?.line ?? ref?.line ?? 0;
-    const retracted = utterances.some(
-      (utterance, index) => index + 1 > after && sideOfSpeaker(utterance.speaker) === 'them' && RETRACTS.test(fold(utterance.text)),
-    );
-    if (!valid || ref === null || retracted) drop('follow_up_request');
+    if (ref === null || verdict === 'refused') drop('follow_up_request');
     else {
       // An e-mail that names an overview is an overview (C2 final: "send me an overview by
       // e-mail" labelled other_email in 2 of 6 runs).
-      const kind = requestKind === 'other_email' && /\boverview\b/u.test(words) ? 'overview_email' : requestKind;
-      followUpRequest = { kind, ref, agreed };
+      const kind = requestKind === 'other_email' && /\boverview\b/u.test(fold(ref.quote)) ? 'overview_email' : requestKind;
+      followUpRequest = { kind, ref, agreed, confirmed: verdict === 'confirmed' };
     }
   }
 
@@ -620,8 +580,13 @@ export function readCallAnalysisAnswer(
     let valid = phrase !== null;
     if (phrase !== null && phrase.side === 'you') {
       const candidate = lineRef(answer.callback.agreed_line);
+      // The agreeing line must be a plain yes: "No thanks" never agrees to a callback.
       valid =
-        candidate !== null && candidate.side === 'them' && candidate.line > phrase.line && candidate.line - phrase.line <= 2;
+        candidate !== null &&
+        candidate.side === 'them' &&
+        candidate.line > phrase.line &&
+        candidate.line - phrase.line <= 2 &&
+        plainYes(utterances[candidate.line - 1]?.text ?? '');
       agreed = valid ? candidate : null;
     }
     if (!valid || phrase === null) drop('callback');
@@ -637,14 +602,19 @@ export function readCallAnalysisAnswer(
         return found ? words : null;
       };
       const day = answer.callback.day === 'none' ? null : answer.callback.day;
+      const callbackLines = [utterances[phrase.line - 1]?.text ?? '', agreedText ?? ''];
+      const time = spoken(trimmed(answer.callback.time), 60, 'time');
       callback = {
         exact: answer.callback.exact,
         phrase,
         agreed,
         day,
-        dayQualifier: dayQualifierOf(day, [utterances[phrase.line - 1]?.text ?? '', agreedText ?? '']),
+        dayQualifier: dayQualifierOf(day, callbackLines),
         dateText: spoken(trimmed(answer.callback.date_text), 120, 'date_text'),
-        time: spoken(trimmed(answer.callback.time), 60, 'time'),
+        time,
+        // The one complete time the whole lines say, minutes kept; none when a range, an
+        // alternative or a second time is there ("between 2 and 4").
+        confirmedTime: confirmedCallbackTime(callbackLines, time),
       };
     }
   }
@@ -652,8 +622,10 @@ export function readCallAnalysisAnswer(
   let stop: CallAnalysisResult['stop'] = null;
   if (answer.stop.requested) {
     const ref = quoteRef(answer.stop.quote, answer.stop.line, 'them');
-    if (ref === null) drop('stop');
-    else stop = { scope: answer.stop.scope, ref };
+    // The whole Them line decides: a negated stop ("don't take me off anything") is none.
+    const verdict = ref === null ? 'negated' : confirmStop(utterances[ref.line - 1]?.text ?? '');
+    if (ref === null || verdict === 'negated') drop('stop');
+    else stop = { scope: answer.stop.scope, ref, confirmed: verdict === 'confirmed' };
   }
 
   let wrongNumber: CallAnalysisResult['wrongNumber'] = null;

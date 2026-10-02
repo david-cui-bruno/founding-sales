@@ -30,9 +30,13 @@ export interface CorpusCase extends CorpusExpectation {
   readonly with_open_opportunity?: CorpusExpectation;
 }
 
-/** The labels a proposal set shows. */
+/**
+ * The labels a proposal set shows. An action kind offered for review only (the confirmer did
+ * not confirm it) is `review:<kind>`: David decides it, so it is never an applied effect.
+ */
 export function effectLabels(proposals: readonly CallProposal[]): string[] {
   return proposals.map(proposal => {
+    if ((proposal.kind === 'buying_signal' || proposal.kind === 'follow_up') && proposal.mode === 'review') return `review:${proposal.kind}`;
     switch (proposal.kind) {
       case 'outcome':
         return `outcome:${proposal.params.outcome}`;

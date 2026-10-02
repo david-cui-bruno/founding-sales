@@ -11,7 +11,8 @@ import {
   type CallProposal,
   type CallProposalKind,
 } from '@fss/contracts';
-import { fold, verbatimIn } from './summaryModel.ts';
+import { parseSpokenTime } from './analysisConfirm.ts';
+import { fold } from './summaryModel.ts';
 
 /**
  * The post-call policy (slice 3a): a pure function from one read analysis and its call's
@@ -29,17 +30,23 @@ import { fold, verbatimIn } from './summaryModel.ts';
  * |---|---|
  * | a machine | `outcome: voicemail_left`, or `no_answer` when nothing was left |
  * | a wrong number | `outcome: wrong_number`; a number they gave adds `corrected_number` (review) |
- * | an explicit stop | `outcome: do_not_call` on the dialled number only; a wider or unclear scope adds `stop_scope` (review); an e-mail request with it adds `stop_with_email` (review) and never a `follow_up` |
+ * | a confirmed stop | `outcome: do_not_call` on the dialled number only; a wider or unclear scope adds `stop_scope` (review); an e-mail request with it adds `stop_with_email` (review) and never a `follow_up` |
+ * | an unconfirmed stop, or stop language the model missed | `outcome_unclear` and `stop_scope` (review) only |
  * | a referral | `outcome: referral_or_wrong_person`; `referral_contact` (review) |
  * | a callback | `outcome: callback_requested`; an exact one adds `callback` at `resolveSpokenCallback`, or `callback_zone_unknown` (review) when the firm has no zone |
- * | a verified buying signal | `outcome: interested` (unless a callback set the outcome); `buying_signal` |
- * | an e-mail request | `outcome: interested` (unless a callback set it); `follow_up`; at a firm with no open opportunity an overview request adds the task "Send overview to <contact>" |
+ * | a confirmed buying signal | `outcome: interested` (unless a callback set the outcome); `buying_signal`. Unconfirmed: `buying_signal` (review) only |
+ * | a confirmed e-mail request | `outcome: interested` (unless a callback set it); `follow_up`; an overview request adds the task "Send overview to <contact>". Unconfirmed: `follow_up` (review) only |
  * | a soft rejection | `outcome: not_interested`; `park`. Never a callback, never Lost |
  * | anything else | no outcome; `outcome_unclear` (review) |
  * | a You commitment | `task:<first 16 hex of sha256(fold(quote))>`, except under a stop or a wrong number |
  *
- * The rows are tried top to bottom and the first of the first five that applies decides the
+ * The rows are tried top to bottom and the first of the first six that applies decides the
  * outcome; a callback, a buying signal and an e-mail request compose.
+ *
+ * CONFIRM OR REVIEW (review S3A1, 2 October 2026): a stop, a buying signal, an e-mail
+ * request, a callback's agreement and an exact callback time are `apply` only when the
+ * confirmer (`analysisConfirm.ts`) confirmed them on the whole speaker lines; the reader
+ * records its verdicts on the result, and this table reads them.
  */
 
 export interface CallPolicyContext {
@@ -49,7 +56,7 @@ export interface CallPolicyContext {
   readonly firmTimeZone: string | null;
   /** The contact the call was placed to, when one is named: a follow-up needs a named person. */
   readonly contactName: string | null;
-  /** Whether the firm has an open opportunity now: without one an overview also becomes a task. */
+  /** Whether the firm has an open opportunity now (the overview task no longer depends on it; Q4). */
   readonly hasOpenOpportunity: boolean;
 }
 
@@ -66,84 +73,7 @@ export interface ProposalSet {
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
 
-const NUMBER_WORDS: Readonly<Record<string, number>> = Object.freeze({
-  one: 1,
-  two: 2,
-  three: 3,
-  four: 4,
-  five: 5,
-  six: 6,
-  seven: 7,
-  eight: 8,
-  nine: 9,
-  ten: 10,
-  eleven: 11,
-  twelve: 12,
-});
-const MINUTE_WORDS: Readonly<Record<string, number>> = Object.freeze({
-  "o'clock": 0,
-  oclock: 0,
-  fifteen: 15,
-  thirty: 30,
-  'forty five': 45,
-  'forty-five': 45,
-  fortyfive: 45,
-});
-
-/** Words that correct what was just said: the time after the last one is the one meant. */
-const CORRECTION = /\b(no wait|wait no|actually|sorry|i mean|make that|or rather|scratch that)\b/gu;
-
-/**
- * A spoken clock time as `HH:MM`, or null. An explicit am/pm wins; otherwise a bare hour
- * 1-6 is afternoon, 7-11 morning, 12 noon (the hours a sales callback is placed at).
- */
-export function parseSpokenTime(words: string): string | null {
-  let text = fold(words).replace(/(\d)([a-z])/gu, '$1 $2').replace(/\bat\b/gu, ' ').replace(/\s+/gu, ' ').trim();
-  if (text === 'noon' || text === 'midday') return '12:00';
-  let meridiem: 'am' | 'pm' | null = null;
-  const marker = /\b(a ?m|p ?m|in the morning|in the afternoon|in the evening)\b/u.exec(text);
-  if (marker !== null) {
-    meridiem = marker[1]?.startsWith('a') === true || marker[1] === 'in the morning' ? 'am' : 'pm';
-    text = text.replace(marker[0], ' ').replace(/\s+/gu, ' ').trim();
-  }
-  let hour: number | null = null;
-  let minute = 0;
-  const digits = /^(\d{1,2})(?:[: ](\d{2}))?$/u.exec(text);
-  if (digits !== null) {
-    hour = Number(digits[1]);
-    if (digits[2] !== undefined) minute = Number(digits[2]);
-  } else {
-    const half = /^half past (\w+)$/u.exec(text);
-    const quarter = /^quarter past (\w+)$/u.exec(text);
-    if (half !== null) {
-      hour = NUMBER_WORDS[half[1] ?? ''] ?? null;
-      minute = 30;
-    } else if (quarter !== null) {
-      hour = NUMBER_WORDS[quarter[1] ?? ''] ?? null;
-      minute = 15;
-    } else {
-      const [first, ...rest] = text.split(' ');
-      hour = NUMBER_WORDS[first ?? ''] ?? (first !== undefined && /^\d{1,2}$/u.test(first) ? Number(first) : null);
-      const tail = rest.join(' ');
-      if (tail.length > 0) {
-        const m = MINUTE_WORDS[tail] ?? (/^\d{2}$/u.test(tail) ? Number(tail) : undefined);
-        if (m === undefined) return null;
-        minute = m;
-      }
-    }
-  }
-  if (hour === null || !Number.isInteger(hour) || minute < 0 || minute > 59) return null;
-  if (hour > 23) return null;
-  if (hour > 12) {
-    if (meridiem === 'am') return null;
-  } else if (meridiem === 'am') {
-    if (hour === 12) hour = 0;
-  } else if (meridiem === 'pm') {
-    if (hour !== 12) hour += 12;
-  } else if (hour >= 1 && hour <= 6) hour += 12;
-  else if (hour === 0) return null;
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
+export { parseSpokenTime };
 
 function addDays(date: string, days: number): string {
   const [year, month, day] = date.split('-').map(Number) as [number, number, number];
@@ -161,15 +91,15 @@ export interface ResolvedCallback {
 /**
  * The instant an exact spoken callback names, or null when it does not name one.
  *
- * It resolves only when both a day and a time were said in
- * the verified phrase or its agreed line (the reader keeps `dateText` and `time` only
- * then). The rules: a bare weekday or "this <weekday>" is the next one strictly after the
- * call's local date (said on Monday, "Tuesday" is tomorrow); "next <weekday>" is ambiguous
- * and never resolves, wherever "next" was said in the callback's lines; "next week
- * <weekday>" is that weekday in the Monday-to-Sunday week after the call's, and is not
- * resolved when said on a Sunday; a correction ("no wait") uses what follows
- * the last one; a bare hour 1-6 is PM, 7-11 AM, 12 noon; the instant comes from
- * `callbackInstant`, and must be after the call.
+ * It resolves only when a day was said in the verified phrase or its agreed line and the
+ * confirmer found exactly one complete time in those whole lines (`confirmedTime`, minutes
+ * kept, no range or alternative). The rules: a bare weekday or "this <weekday>" is the next
+ * one strictly after the call's local date (said on Monday, "Tuesday" is tomorrow); "next
+ * <weekday>" anywhere in the callback's lines, a negation or correction near a day, or more
+ * than one day said (`ambiguous`) never resolves; "next week <weekday>", the only day said,
+ * is that weekday in the Monday-to-Sunday week after the call's, and is not resolved when
+ * said on a Sunday; a bare hour 1-6 is PM, 7-11 AM, 12 noon; the instant comes from
+ * `callbackInstant`, and must be after the call. Anything else is a vague callback.
  */
 export function resolveSpokenCallback(
   callback: NonNullable<CallAnalysisResult['callback']>,
@@ -178,28 +108,18 @@ export function resolveSpokenCallback(
   const zone = context.firmTimeZone;
   // The model's `exact` flag is not consulted: whether a day and a time were said is decided
   // here from the verified words (C2: "Call me Tuesday at 2" was flagged not exact).
-  if (callback.day === null || callback.dateText === null || callback.time === null) return null;
+  if (callback.day === null || callback.dateText === null || callback.confirmedTime === null) return null;
   if (zone === null || !isKnownTimeZone(zone)) return null;
   const dateWords = fold(callback.dateText);
   // "Next Tuesday" is ambiguous (the coming one, or the one after?) wherever "next" was
   // said — in the model's date words or anywhere in the callback's own lines.
-  if (callback.dayQualifier === 'next') return null;
+  if (callback.dayQualifier === 'next' || callback.dayQualifier === 'ambiguous') return null;
   if (/\bnext\b/u.test(dateWords) && callback.dayQualifier !== 'next_week') return null;
   // The day words must name the day the model chose.
   const dayWord = callback.day;
   if (!new RegExp(`\\b${dayWord.slice(0, 3)}`, 'u').test(dateWords)) return null;
 
-  // After a correction in the phrase, only the words after the last one count.
-  const phrase = fold(callback.phrase.quote);
-  const markers = [...phrase.matchAll(CORRECTION)];
-  const last = markers.at(-1);
-  if (last !== undefined && verbatimIn(callback.time, phrase)) {
-    const after = phrase.slice((last.index ?? 0) + last[0].length);
-    if (!verbatimIn(callback.time, after) || !verbatimIn(callback.dateText, after)) return null;
-  }
-
-  const localTime = parseSpokenTime(callback.time);
-  if (localTime === null) return null;
+  const localTime = callback.confirmedTime;
   const call = localParts(context.callStartedAt, zone);
   let localDate: string;
   if (dayWord === 'today') localDate = call.date;
@@ -319,7 +239,7 @@ export function proposeEffects(
         params: { spokenNumber: result.wrongNumber.otherNumberGiven, evidence: evidenceOf(result.wrongNumber.ref) },
       });
     }
-  } else if (result.stop !== null) {
+  } else if (result.stop !== null && result.stop.confirmed) {
     tasksAllowed = false;
     outcome({
       key: 'outcome',
@@ -351,12 +271,13 @@ export function proposeEffects(
         params: { requestKind: request.kind, evidence: evidenceOf(result.stop.ref, request.ref) },
       });
     }
-  } else if (result.stopPhrases.length > 0) {
-    // The safety net: stop language on a Them line that the model did not read as a stop.
+  } else if (result.stop !== null || result.stopPhrases.length > 0) {
+    // CONFIRM OR REVIEW, and the safety net: a stop the model read that its whole line does
+    // not confirm, or stop language on a Them line that the model did not read as a stop.
     // Nothing is proposed for applying — no park, no rejection, no callback, no follow-up,
     // no task — only the two review items, so David decides what was said.
     tasksAllowed = false;
-    const evidence = evidenceOf(...result.stopPhrases.map(phrase => phrase.ref));
+    const evidence = evidenceOf(result.stop?.ref, ...result.stopPhrases.map(phrase => phrase.ref));
     proposals.push({
       key: 'outcome_unclear',
       kind: 'outcome_unclear',
@@ -392,19 +313,26 @@ export function proposeEffects(
     // (`buying_signal`, or `curious` with a demo request or the like; C2: the model's level and
     // its signals disagreed on a plain demo request). The reader has already turned an
     // unqualified `buying_signal` level into `unclear`.
+    // CONFIRM OR REVIEW: only signals whose whole line the confirmer confirmed are applied;
+    // the others are a buying signal to review.
     const qualifying = new Set(CALL_ANALYSIS_QUALIFYING_SIGNALS);
-    const signals =
+    const claimed =
       result.interest.level === 'buying_signal' || result.interest.level === 'curious'
         ? result.interest.signals.filter(signal => qualifying.has(signal.kind))
         : [];
+    const signals = claimed.filter(signal => signal.confirmed);
     const buying = signals.length > 0;
-    const request = emailRequest(result);
+    const buyingToReview = !buying && claimed.length > 0;
+    const anyRequest = emailRequest(result);
+    const request = anyRequest !== null && result.followUpRequest?.confirmed === true ? anyRequest : null;
     // A soft rejection: they declined (`not_interested`), or a neutral call with an
     // unanswered objection of the declining kinds (C2: "maybe next year" read as neutral).
+    // Never beside anything still to review.
     const declining = result.objections.filter(objection => SOFT_REJECTIONS.has(objection.category) && objection.answered === null);
     const soft =
       !buying &&
-      request === null &&
+      !buyingToReview &&
+      result.followUpRequest === null &&
       ((result.interest.level === 'not_interested' && result.objections.length > 0) ||
         (result.interest.level === 'neutral' && declining.length > 0));
 
@@ -425,7 +353,14 @@ export function proposeEffects(
           reason: 'They named a day and a time.',
           params: { ...resolved, evidence: evidenceOf(callback.phrase) },
         });
-      } else if (context.firmTimeZone === null && callback.day !== null && callback.dateText !== null && callback.time !== null) {
+      } else if (
+        context.firmTimeZone === null &&
+        callback.day !== null &&
+        callback.dateText !== null &&
+        callback.confirmedTime !== null &&
+        callback.dayQualifier !== 'next' &&
+        callback.dayQualifier !== 'ambiguous'
+      ) {
         proposals.push({
           key: 'callback_zone_unknown',
           kind: 'callback_zone_unknown',
@@ -475,6 +410,23 @@ export function proposeEffects(
         reason: 'A buying signal on the call.',
         params: { evidence: evidenceOf(...signals.map(signal => signal.ref)) },
       });
+    } else if (buyingToReview) {
+      proposals.push({
+        key: 'buying_signal',
+        kind: 'buying_signal',
+        mode: 'review',
+        reason: 'Possibly a buying signal; the words do not confirm it.',
+        params: { evidence: evidenceOf(...claimed.map(signal => signal.ref)) },
+      });
+    }
+    if (request === null && anyRequest !== null && context.contactName !== null) {
+      proposals.push({
+        key: 'follow_up',
+        kind: 'follow_up',
+        mode: 'review',
+        reason: 'Possibly asked to be e-mailed; the words do not confirm it.',
+        params: { requestKind: anyRequest.kind, evidence: evidenceOf(anyRequest.ref) },
+      });
     }
     if (request !== null && context.contactName !== null) {
       proposals.push({
@@ -484,12 +436,14 @@ export function proposeEffects(
         reason: request.kind === 'overview_email' ? 'They asked for an overview by e-mail.' : 'They asked to be e-mailed.',
         params: { requestKind: request.kind, evidence: evidenceOf(request.ref) },
       });
-      if (request.kind === 'overview_email' && !context.hasOpenOpportunity) {
+      // Confirming an overview request records the permission and creates the follow-up
+      // task, whether or not an opportunity is open (David, Q4, 2 October 2026).
+      if (request.kind === 'overview_email') {
         proposals.push({
           key: taskKey(request.ref.quote),
           kind: 'task',
           mode: 'apply',
-          reason: 'There is no open opportunity, so the overview has no send path yet.',
+          reason: 'They asked for an overview.',
           params: { text: `Send overview to ${context.contactName}`.slice(0, 300), quote: request.ref.quote, duePhrase: null, evidence: evidenceOf(request.ref) },
         });
       }

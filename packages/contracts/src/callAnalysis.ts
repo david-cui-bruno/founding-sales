@@ -21,7 +21,7 @@ import { CALL_SUMMARY_SIDES } from './callSummaries.ts';
  */
 
 /** Bumped whenever a byte of the policy table (`analysisPolicy.ts`) changes what it proposes. */
-export const CALL_POLICY_VERSION = 'call_policy.3';
+export const CALL_POLICY_VERSION = 'call_policy.4';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -99,7 +99,7 @@ export const CALL_ANALYSIS_DAYS = [
 ] as const;
 export type CallAnalysisDay = (typeof CALL_ANALYSIS_DAYS)[number];
 
-export const CALL_ANALYSIS_DAY_QUALIFIERS = ['next', 'next_week', 'this'] as const;
+export const CALL_ANALYSIS_DAY_QUALIFIERS = ['next', 'next_week', 'this', 'ambiguous'] as const;
 export type CallAnalysisDayQualifier = (typeof CALL_ANALYSIS_DAY_QUALIFIERS)[number];
 
 export const CALL_ANALYSIS_SIDES = CALL_SUMMARY_SIDES;
@@ -134,7 +134,13 @@ export const callAnalysisResultSchema = z.strictObject({
   facts: z.array(z.strictObject({ text: shortText, ref: callAnalysisLineRefSchema })).max(12),
   interest: z.strictObject({
     level: z.enum(CALL_ANALYSIS_INTEREST_LEVELS),
-    signals: z.array(z.strictObject({ kind: z.enum(CALL_ANALYSIS_SIGNAL_KINDS), ref: callAnalysisQuoteRefSchema })).max(10),
+    /**
+     * `confirmed`: the confirmer (`analysisConfirm.ts`) found a qualifying pattern on the
+     * signal's whole Them line; an unconfirmed qualifying signal is only ever reviewed.
+     */
+    signals: z
+      .array(z.strictObject({ kind: z.enum(CALL_ANALYSIS_SIGNAL_KINDS), ref: callAnalysisQuoteRefSchema, confirmed: z.boolean() }))
+      .max(10),
   }),
   objections: z
     .array(
@@ -152,6 +158,8 @@ export const callAnalysisResultSchema = z.strictObject({
       ref: callAnalysisQuoteRefSchema,
       /** The Them line that agreed to an offer David made; null when Them asked. */
       agreed: callAnalysisLineRefSchema.nullable(),
+      /** The confirmer found the request (or the plain yes to the offer) on the whole line(s); otherwise review only. */
+      confirmed: z.boolean(),
     })
     .nullable(),
   callback: z
@@ -165,14 +173,24 @@ export const callAnalysisResultSchema = z.strictObject({
        * How the weekday was qualified in the callback's own lines (the phrase's line and the
        * agreeing line), found by the reader whatever the model quoted: `next` ("next
        * Tuesday", or any "next" beside a weekday: ambiguous, never resolved), `next_week`
-       * ("next week Tuesday", "Tuesday next week"), `this` ("this Tuesday"), or null.
+       * ("next week Tuesday", "Tuesday next week", and the only day said), `this` ("this
+       * Tuesday"), `ambiguous` (a negation or correction near a day, or more than one day
+       * said: never resolved), or null.
        */
       dayQualifier: z.enum(CALL_ANALYSIS_DAY_QUALIFIERS).nullable(),
       dateText: z.string().min(1).max(120).nullable(),
       time: z.string().min(1).max(60).nullable(),
+      /**
+       * The one complete clock time (`HH:MM`) the callback's lines say, with no range or
+       * alternative, found by the confirmer; null otherwise. The only time a callback resolves at.
+       */
+      confirmedTime: z.string().regex(/^\d{2}:\d{2}$/u).nullable(),
     })
     .nullable(),
-  stop: z.strictObject({ scope: z.enum(CALL_ANALYSIS_STOP_SCOPES), ref: callAnalysisQuoteRefSchema }).nullable(),
+  /** `confirmed`: the whole Them line has an un-negated stop phrase and no negated one. */
+  stop: z
+    .strictObject({ scope: z.enum(CALL_ANALYSIS_STOP_SCOPES), ref: callAnalysisQuoteRefSchema, confirmed: z.boolean() })
+    .nullable(),
   wrongNumber: z
     .strictObject({ ref: callAnalysisQuoteRefSchema, otherNumberGiven: z.string().min(1).max(40).nullable() })
     .nullable(),
@@ -267,14 +285,16 @@ export const callProposalSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     key: z.literal('follow_up'),
     kind: z.literal('follow_up'),
-    mode: z.literal('apply'),
+    /** `review` when the confirmer did not confirm it: a Needs review item, never applied. */
+    mode: z.enum(['apply', 'review']),
     reason,
     params: z.strictObject({ requestKind: z.enum(['overview_email', 'other_email']), evidence }),
   }),
   z.strictObject({
     key: z.literal('buying_signal'),
     kind: z.literal('buying_signal'),
-    mode: z.literal('apply'),
+    /** `review` when the confirmer did not confirm it: a Needs review item, never applied. */
+    mode: z.enum(['apply', 'review']),
     reason,
     params: z.strictObject({ evidence }),
   }),
