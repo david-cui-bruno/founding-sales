@@ -69,6 +69,7 @@ describe('what the API mounts', () => {
       '/calls/access-token',
       '/calls/analysis',
       '/calls/analysis/edit',
+      '/calls/analysis/retry',
       '/calls/cadence/resume',
       '/calls/calling',
       '/calls/follow-up',

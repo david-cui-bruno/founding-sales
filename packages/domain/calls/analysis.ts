@@ -77,7 +77,7 @@ export async function lockCallAnalysis(context: RepositoryContext, sessionId: st
   ]);
 }
 
-interface Locked {
+export interface Locked {
   readonly firmId: string;
   readonly permitted: boolean;
 }
@@ -86,7 +86,7 @@ interface Locked {
  * Steps 1-3 for one session: firm, analysis lock, session KEY SHARE. Null when the session
  * (or its firm) is gone. `permitted` is the firm rule for a user actor, true for the system.
  */
-async function lockForSession(context: RepositoryContext, sessionId: string): Promise<Locked | null> {
+export async function lockCallAnalysisForSession(context: RepositoryContext, sessionId: string): Promise<Locked | null> {
   const { rows: located } = await context.db.query<{ firm_id: string }>(
     'SELECT firm_id FROM call_sessions WHERE workspace_id = $1 AND id = $2',
     [context.scope.workspaceId, sessionId],
@@ -103,18 +103,18 @@ async function lockForSession(context: RepositoryContext, sessionId: string): Pr
   // A session moved to another firm between the unlocked read and the lock (a firm merge)
   // is read again from the top rather than written under the wrong firm's lock.
   if (live[0] === undefined) return null;
-  if (live[0].firm_id !== firmId) return await lockForSession(context, sessionId);
+  if (live[0].firm_id !== firmId) return await lockCallAnalysisForSession(context, sessionId);
   const permitted = context.scope.actor.kind !== 'user' || decideFirmMutation(context, firm).permitted;
   return { firmId, permitted };
 }
 
-interface StoredTranscript {
+export interface StoredTranscript {
   readonly channelLabelled: boolean;
   readonly utterances: readonly CallTranscriptUtterance[];
   readonly sha256: string;
 }
 
-async function readStoredTranscript(context: RepositoryContext, sessionId: string): Promise<StoredTranscript | null> {
+export async function readStoredTranscript(context: RepositoryContext, sessionId: string): Promise<StoredTranscript | null> {
   const { rows } = await context.db.query<{ provider: string; model: string; utterances: unknown }>(
     'SELECT provider, model, utterances FROM call_transcripts WHERE workspace_id = $1 AND call_session_id = $2',
     [context.scope.workspaceId, sessionId],
@@ -170,7 +170,7 @@ export async function createAnalysisVersion(
   context: RepositoryContext,
   input: CreateAnalysisVersionInput,
 ): Promise<CreateAnalysisVersionOutcome> {
-  const locked = await lockForSession(context, input.sessionId);
+  const locked = await lockCallAnalysisForSession(context, input.sessionId);
   if (locked === null) return { kind: 'not_applicable', reason: 'session_unknown' };
   if (!locked.permitted) return { kind: 'not_permitted' };
   const transcript = await readStoredTranscript(context, input.sessionId);
@@ -274,7 +274,7 @@ async function lockVersion(context: RepositoryContext, analysisId: string): Prom
   );
   const sessionId = located[0]?.call_session_id;
   if (sessionId === undefined) return 'gone';
-  const locked = await lockForSession(context, sessionId);
+  const locked = await lockCallAnalysisForSession(context, sessionId);
   if (locked === null) return 'gone';
   const { rows } = await context.db.query<PendingRow>(
     `SELECT id, call_session_id, version, origin, state, transcript_sha256

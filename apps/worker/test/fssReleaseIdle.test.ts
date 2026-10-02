@@ -8,6 +8,7 @@ import {
 import { researchFirmJobHandler } from '../src/handlers/research.ts';
 import { callTranscribeJobHandler } from '../src/handlers/callTranscribe.ts';
 import { callSummarizeJobHandler } from '@fss/domain/calls/summaryHandler.ts';
+import { callAnalyzeJobHandler } from '@fss/domain/calls/analysisHandler.ts';
 import { main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands.ts';
 import { CHUNKED_JOB_KINDS } from '../src/tools/fss/releaseIdle.ts';
@@ -200,6 +201,7 @@ describe('fss admin release idle-check', () => {
       researchFirmJobHandler({} as Parameters<typeof researchFirmJobHandler>[0]),
       callTranscribeJobHandler({} as Parameters<typeof callTranscribeJobHandler>[0]),
       callSummarizeJobHandler({} as Parameters<typeof callSummarizeJobHandler>[0]),
+      callAnalyzeJobHandler({} as Parameters<typeof callAnalyzeJobHandler>[0]),
     ]
       .filter(h => h.chunked === true)
       .map(h => h.kind);

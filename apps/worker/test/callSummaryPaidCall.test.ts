@@ -36,6 +36,8 @@ import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 
 /**
  * Slice C3b: the after-call summary on the paid-call pattern, through the real runner —
+ * since slice 3a for legacy jobs only (a call with a `call.summarize` job before the release;
+ * the source re-owes one the switch held and never makes a first one) —
  * `call.summarize` claimed, chunked and committed by `runOnce` — against the real schema:
  *
  *   * the control: one request, settled at its usage, the summary stored, owed no more;
@@ -195,6 +197,16 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
       });
     });
   }
+  /**
+   * Slice 3a: a call with a `call.summarize` job from before the release, so it is on the
+   * summary path (`postCallModelPath`); the job itself is closed, so no drain claims it, and
+   * these tests drive the chunks by hand.
+   */
+  async function legacy(sessionId: string): Promise<string> {
+    await enqueue(sessionId, `call-summarize:${sessionId}:legacy`);
+    await session.query("UPDATE jobs SET state = 'done', completed_at = now() WHERE kind = 'call.summarize' AND idempotency_key = $1", [`call-summarize:${sessionId}:legacy`]);
+    return sessionId;
+  }
   async function drain(on: SessionQueryable = session, limit = 5): Promise<void> {
     for (let pass = 0; pass < 10; pass += 1) {
       const report = await runOnce(on, { registry: registry(), owner: 'summary-test', limit });
@@ -251,12 +263,12 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     expect(registerHandlers(new HandlerRegistry(), {} as Parameters<typeof registerHandlers>[1]).get('call.summarize')).toBeUndefined();
   });
 
-  it('the control: the source owes it once, one request, settled at its usage, the summary stored and verified', async () => {
+  it('the control: a legacy job (the source never makes a first one since 3a), one request, settled at its usage, the summary stored and verified', async () => {
     mode = 'answer';
     const id = await transcribedCall();
-    const owed = await owedFor(id);
-    expect(owed.map(spec => spec.idempotencyKey)).toEqual([`call-summarize:${id}`]);
-    await runSchedulerPass(session, { sources: [callSummarySource({ enabled: true })], now: new Date().toISOString(), instanceKey: 'summary-test' });
+    // Slice 3a: the source is legacy only, so a new call is never owed a first summary.
+    expect(await owedFor(id)).toEqual([]);
+    await enqueue(id, `call-summarize:${id}`);
     const before = requests;
     await drain();
     expect(requests - before).toBe(1);
@@ -560,7 +572,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
 
   it('a summary request in flight is counted in the transcription switch’s “still finishing” line', async () => {
     mode = 'answer';
-    const id = await transcribedCall();
+    const id = await legacy(await transcribedCall());
     const worker = system(other);
     const finishing = async (): Promise<number> => (await readFinishing(system())).transcriptionFinishing;
     const base = await finishing();
@@ -622,7 +634,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
 
   it('BR1: through Bedrock a summary is reserved and ledgered under aws_bedrock.call_summary, at Bedrock’s price, past a spent cash ceiling', async () => {
     mode = 'answer';
-    const id = await transcribedCall();
+    const id = await legacy(await transcribedCall());
     const bedrock = { ...options, route: () => 'bedrock' as const };
     const cashBefore = await monthSpent();
     await setting('monthly_cash_ceiling_cents', { cents: 0 });
@@ -660,7 +672,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
 
   it('BR1: a direct-API reservation a Bedrock worker finds is released, never called, and reserved again under Bedrock', async () => {
     mode = 'answer';
-    const id = await transcribedCall();
+    const id = await legacy(await transcribedCall());
     const bedrock = { ...options, route: () => 'bedrock' as const };
     const before = requests;
     const begun = await withTransaction(session, async () => await beginCallSummary(system(), options, { sessionId: id, retry: false }));
@@ -691,7 +703,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     await enqueue(kept, `call-summarize:${kept}`);
     await drain();
     expect(await summaryOf(kept)).toBeDefined();
-    const id = await transcribedCall();
+    const id = await legacy(await transcribedCall());
     const worker = system(other);
     const begun = await withTransaction(other, async () => await beginCallSummary(worker, options, { sessionId: id, retry: false }));
     expect(begun.kind).toBe('reserved');

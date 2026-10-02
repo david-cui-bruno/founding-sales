@@ -5,6 +5,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
 import { finaliseSummariesOfSessions, lockSummariesForDeletion } from '../calls/summary.ts';
+import { finaliseAnalysesOfSessions, lockAnalysesForDeletion } from '../calls/analysisPaid.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockMonthlySpend } from '../research/ledger.ts';
 import { lockRun } from '../research/runs.ts';
@@ -327,6 +328,14 @@ async function measure(
       `SELECT count(*) AS count FROM call_transcripts t
          JOIN call_sessions s ON s.workspace_id = t.workspace_id AND s.id = t.call_session_id
         WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+      byContact,
+    ),
+    // Slice 3a (0035): a call's analysis versions quote the prospect; counted in their own right.
+    call_analyses: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_analyses a
+         JOIN call_sessions s ON s.workspace_id = a.workspace_id AND s.id = a.call_session_id
+        WHERE a.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
       byContact,
     ),
     // Slice C3b (0032): a call's summary quotes the prospect; counted in its own right too.
@@ -682,6 +691,13 @@ export async function commitDeletion(
     context,
     targetedSessions.map(session => session.id),
   );
+  // Slice 3a: their analysis locks beside them, `call_analysis:<session>` in id order — after
+  // the firm and before the sessions' own locks and rows, the order every analysis writer
+  // takes them in (`lockCallAnalysisForSession`).
+  await lockAnalysesForDeletion(
+    context,
+    targetedSessions.map(session => session.id),
+  );
   await lockSessionsForDeletion(
     context,
     targetedSessions.map(session => session.id),
@@ -895,6 +911,21 @@ export async function commitDeletion(
     'call_summaries',
     `DELETE FROM call_summaries x USING call_sessions s
       WHERE x.workspace_id = $1 AND s.workspace_id = x.workspace_id AND s.id = x.call_session_id
+        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+    byContact,
+  );
+  // Slice 3a: each session's open analysis attempts finalised as the sweep does it, under
+  // the analysis locks taken above and the monthly lock, then its versions removed (they
+  // would also go with the session, ON DELETE CASCADE; removed here so they are counted).
+  await finaliseAnalysesOfSessions(
+    context,
+    targetedSessions.map(session => session.id),
+    await databaseNow(context),
+  );
+  await remove(
+    'call_analyses',
+    `DELETE FROM call_analyses a USING call_sessions s
+      WHERE a.workspace_id = $1 AND s.workspace_id = a.workspace_id AND s.id = a.call_session_id
         AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
     byContact,
   );

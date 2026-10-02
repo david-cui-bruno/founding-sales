@@ -476,8 +476,37 @@ notes whatever model version completes later. Every writer of one call's analysi
 (`calls/analysis.ts`) takes the call's **firm row** (`FOR UPDATE`), then the advisory lock
 **`call_analysis:<session>`** (`lockCallAnalysis`, keyed `<workspace>:call_analysis:<session>`),
 then the session row (`FOR KEY SHARE`), then its own rows; an apply takes the same three in the
-same order after its own earlier locks (Today, the send gate, a touched route). The paid
-pattern, the switch and the deletion lock for analyses arrive with the analysis job (A2).
+same order after its own earlier locks (Today, the send gate, a touched route).
+
+**The analysis job (slice 3a, A2).** `call.analyze` (`calls/analysisPaid.ts`,
+`analysisHandler.ts`) is the summary's paid-call shape with an analysis **version** as the
+subject: `provider_reservations` subject `call_analysis`, keyed by the version's id, priced by
+model and tokens (`anthropic_call_analysis` is cash; `aws_bedrock.call_analysis` credits). Chunk 1
+takes the version (a pending one, or a new one), the switch, the caps — two paid attempts and six
+rows per version, three model versions per call (`CALL_ANALYSIS_MAX_MODEL_VERSIONS`), forty a day
+under `call_analysis_budget` — the month, and a reservation (one open per version,
+`provider_reservations_one_open_analysis`); chunk 2 the month and the switch's setting lock
+SHARED to the commit that marks `calling`; chunk 3 the request, then the settlement by id, then
+A1's `completeCallAnalysis` in the same transaction — there is no second completion path. An
+unreadable or ambiguous answer is retried once within the two. The switch is transcription's,
+`call_transcription`: off, a version is created and held (pending, nothing reserved), and the
+`call-analyze` source resumes it once per change of the setting. The model is the deployment's
+(`FSS_CALL_ANALYSIS_MODEL`, Haiku 4.5 unless set; not set in the infrastructure). David's
+`POST /calls/analysis/retry` (reason `retry` or `reanalysis`) queues one job per command.
+
+**The summary cutover.** `postCallModelPath(session)` is `analysis` for a call with an analysis
+version; `summary` for one with any `call.summarize` job, `call_summary` reservation or summary;
+`analysis` otherwise. The summary handler refuses a call on the `analysis` path; the
+`call-summarize` source is **legacy only** — it re-owes a summary the switch held for a call that
+already has a `call.summarize` job (and no analysis version), and never makes a first one. So
+every obligation started before the release finishes as a summary, every new call is analysed,
+and a historical call is analysed only by David's `reanalysis`. `GET /calls/history?include=summary`
+maps the current analysis (David's notes, else the latest completed model reading) to the
+summary's shape and falls back to the stored summary for a call with none. The deletion workflow
+takes each targeted session's `call_analysis:<session>` lock beside its summary lock, after the
+firm and before the sessions' own locks, finalises their open analysis attempts as the sweep
+does, and removes and counts their versions (`removes.call_analyses`); the telephony sweep
+finalises an analysis reservation half an hour on, skipping a call whose lock a live claim holds.
 
 **Provider errors in the logs (C3 review, finding 6).** A request the API refuses with a 4xx
 (not 408) is `provider_refused`: refused before generation, settled at 0, not retried; a 5xx,
@@ -493,7 +522,7 @@ firm and before the sessions' own locks.
 
 routing → send gate → firm (and contact) → the subject's own lock (call summary, call analysis
 `call_analysis:<session>`, call session row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
-`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`) → the
+`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`, `call_analysis_budget`) → the
 workspace monthly lock →
 rows: reservations, ledger, and the rows that reference a message (classifier attempts).
 

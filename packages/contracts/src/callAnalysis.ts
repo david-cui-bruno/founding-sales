@@ -476,3 +476,22 @@ export const editCallAnalysisCommandSchema = z.strictObject({
 });
 export type EditCallAnalysisCommand = z.infer<typeof editCallAnalysisCommandSchema>;
 
+/**
+ * `POST /calls/analysis/retry` (slice 3a, A2): queue one `call.analyze` for the call. `retry`
+ * after a failed version; `reanalysis` for a new reading, the only way a historical call (one
+ * on the summary path) is ever analysed. Refused `analysis_in_flight` while a version is
+ * pending, `reanalysis_required` for a historical call asked to `retry`, `transcript_missing`
+ * without a channel-labelled transcript, and `not_found` for another firm's call.
+ */
+export const retryCallAnalysisCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  callSessionId: uuid,
+  reason: z.enum(['retry', 'reanalysis']),
+});
+export type RetryCallAnalysisCommand = z.infer<typeof retryCallAnalysisCommandSchema>;
+
+/** The receipt's result: the job is queued (false when this command was already queued). */
+export const retryCallAnalysisResultSchema = z.strictObject({ callSessionId: uuid, queued: z.boolean() });
+export type RetryCallAnalysisResult = z.infer<typeof retryCallAnalysisResultSchema>;
+

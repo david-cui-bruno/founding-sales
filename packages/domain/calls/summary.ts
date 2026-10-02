@@ -14,6 +14,7 @@ import {
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
 import { providerFunding } from '../settings/funding.ts';
 import { DIRECT_ROUTE, transportOfProviderKey, type ModelRoute } from '../classification/modelTransport.ts';
+import { postCallModelPath } from './analysisPaid.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { settingLockName } from '../settings/store.ts';
 import { localDate } from '../src/rules/localClock.ts';
@@ -215,6 +216,10 @@ export async function beginCallSummary(
   input: { readonly sessionId: string; readonly retry: boolean },
 ): Promise<BeginSummaryOutcome> {
   await lockSummary(context, input.sessionId);
+  // Slice 3a: a call on the analysis path is never summarized (`postCallModelPath`).
+  if ((await postCallModelPath(context.db, context.scope.workspaceId, input.sessionId)) === 'analysis') {
+    return { kind: 'done', reason: 'not_applicable' };
+  }
   const prepared = await prepare(context, input.sessionId);
   if (prepared.kind === 'skip') return { kind: 'done', reason: prepared.reason };
 
@@ -547,7 +552,9 @@ export interface OwedSummary {
 }
 
 /**
- * Calls owed a summary, for the `call-summarize` source. A channel-labelled transcript of the last
+ * Calls owed a summary, for the legacy-only `call-summarize` source (slice 3a: never a first
+ * job — only a call that already has a `call.summarize` job, re-owed after a change of the
+ * setting). A channel-labelled transcript of the last
  * `CALL_SUMMARY_RESUME_DAYS`, no summary, the transcription switch on with a ceiling above
  * 0, no open summary reservation, fewer than two paid summary attempts, and either no
  * `call.summarize` job yet or — a held summary (paused work is held, not completed) —
@@ -569,7 +576,11 @@ export async function listOwedSummaries(db: Queryable, limit = 50): Promise<read
       WHERE t.created_at > now() - make_interval(days => $1)
         AND t.provider || '/' || t.model = ANY($5::text[])
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
-        AND (j.jobs = 0 OR (j.all_done AND s.changed_at > j.finished_at))
+        -- Slice 3a: legacy only. A call is re-owed a summary only when it already has a
+        -- call.summarize job (held, after a change of the setting); a first job is never made,
+        -- and a call that has entered the analysis path is never summarized.
+        AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id)
         AND NOT EXISTS (SELECT 1 FROM call_summaries x WHERE x.workspace_id = t.workspace_id AND x.call_session_id = t.call_session_id)
         AND NOT EXISTS (
           SELECT 1 FROM provider_reservations r

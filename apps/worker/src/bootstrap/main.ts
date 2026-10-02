@@ -37,6 +37,8 @@ import { readSelectedTranscriptionProvider } from '../transcription/selectProvid
 import { readAwsTranscribeProvider } from '../transcription/awsTranscribeClient.ts';
 import { callSummarizeHandlers, callSummarySource, readCallSummaryComposition } from '../handlers/callSummarize.ts';
 import type { CallSummarizeOptions } from '@fss/domain/calls/summaryHandler.ts';
+import { callAnalysisSource, callAnalyzeHandlers, readCallAnalysisComposition } from '../handlers/callAnalyze.ts';
+import type { CallAnalyzeOptions } from '@fss/domain/calls/analysisHandler.ts';
 import { readTwilioRecordingCredentials, twilioRecordingFetcher } from '@fss/domain/calls/twilioRecording.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -108,6 +110,11 @@ export interface HandlerComposition {
    * transport is. Absent, `call.summarize` is not registered and its source finds nothing.
    */
   readonly summary?: CallSummarizeOptions | undefined;
+  /**
+   * Post-call analyses (slice 3a): present only when the classifier's Anthropic transport
+   * is. Absent, `call.analyze` is not registered and its source finds nothing.
+   */
+  readonly analysis?: CallAnalyzeOptions | undefined;
 }
 
 /**
@@ -192,6 +199,8 @@ export function registerHandlers(
   if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
   // Slice C3b. Calls Anthropic, with the classifier's transport, so only with its key.
   for (const handler of callSummarizeHandlers(composition.summary)) registry.register(handler);
+  // Slice 3a. Calls Anthropic, with the classifier's transport, so only with its key.
+  for (const handler of callAnalyzeHandlers(composition.analysis)) registry.register(handler);
   // Lane g90. An address's technical validation (7.4) asks the process's own DNS
   // resolver for the domain's MX, and nothing else: no credential, no provider, no
   // deployment switch to consult, so like `retention.batch` it is registered in every
@@ -383,11 +392,12 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis'>): {
   readonly calcomReconcile: boolean;
   readonly transcription: boolean;
   readonly transcriptionCollector: boolean;
   readonly summary: boolean;
+  readonly analysis: boolean;
 } {
   return {
     calcomReconcile: composition.calcom !== undefined,
@@ -396,6 +406,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
     // Slice C3a, review C3-N: whenever the collector is composed, whatever credentials are missing.
     transcriptionCollector: composition.transcription?.collector !== undefined,
     summary: composition.summary !== undefined,
+    analysis: composition.analysis !== undefined,
   };
 }
 
@@ -415,6 +426,8 @@ export function workerDueWorkSources(
     readonly calcomReconcile?: boolean;
     readonly transcription?: boolean;
     readonly summary?: boolean;
+    /** Slice 3a: whether `call.analyze` is registered. */
+    readonly analysis?: boolean;
     /** Slice C3a: whether recorded Transcribe jobs are collected (the call-audio bucket is configured). */
     readonly transcriptionCollector?: boolean;
   } = {},
@@ -437,6 +450,8 @@ export function workerDueWorkSources(
     transcriptionJobsSource({ enabled: options.transcriptionCollector === true }),
     // Slice C3b. Listed always, materializing only where `call.summarize` is registered.
     callSummarySource({ enabled: options.summary === true }),
+    // Slice 3a. Listed always, materializing only where `call.analyze` is registered.
+    callAnalysisSource({ enabled: options.analysis === true }),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -503,6 +518,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const transcription = readTranscriptionComposition(environment, (event, fields) => log.log('info', event, fields));
   // Slice C3b: the summary rides the classifier's transport; the model is the deployment's.
   const summary = readCallSummaryComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
+  // Slice 3a: the analysis rides the same transport; the model is the deployment's.
+  const analysis = readCallAnalysisComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
   const composition: HandlerComposition = {
     ...composed,
     ...(calcomReconcile.client === null
@@ -510,6 +527,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
       : { calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } }),
     ...(transcription.options === null ? {} : { transcription: transcription.options }),
     ...(summary.options === null ? {} : { summary: summary.options }),
+    ...(analysis.options === null ? {} : { analysis: analysis.options }),
   };
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
@@ -528,6 +546,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     call_transcription: transcription.problem ?? 'configured',
     // Whether after-call summaries run, and with which model; never a key.
     call_summary: summary.problem ?? summary.options?.model ?? 'configured',
+    // Whether post-call analyses run, and with which model; never a key.
+    call_analysis: analysis.problem ?? analysis.options?.model ?? 'configured',
     // Slice BR1: why no model transport was built, by variable name, or null.
     model_transport_problem: modelTransportProblem(environment),
   });

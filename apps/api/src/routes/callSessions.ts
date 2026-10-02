@@ -19,6 +19,7 @@ import {
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { readCallTranscript } from '@fss/domain/calls/transcription.ts';
 import { readCallSummaries } from '@fss/domain/calls/summary.ts';
+import { readAnalysisSummaries } from '@fss/domain/calls/analysisPaid.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -47,7 +48,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *
  * Slice C3b: `GET /calls/history?firmId=&include=summary` adds each call's summary and
  * suggested next steps (`summary`, absent when the call has none). Opt-in, so a Mac built
- * before C3b, which never asks, gets the answer its strict parser expects.
+ * before C3b, which never asks, gets the answer its strict parser expects. Slice 3a: a call's
+ * current analysis (David's notes, else the latest completed model version) is mapped to the
+ * same shape and wins; a call with none falls back to its stored summary.
  *
  * Slice C2 adds one more read with the same switch:
  *
@@ -119,15 +122,14 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
       return { status: 200, body: callHistoryResponseSchema.parse({ calls }) };
     }
     // The firm was already decided readable by `listFirmCallSessions`; these are its calls.
-    const summaries = await readCallSummaries(
-      scoped.context,
-      calls.map(call => call.sessionId),
-    );
+    const sessionIds = calls.map(call => call.sessionId);
+    const analyses = await readAnalysisSummaries(scoped.context, sessionIds);
+    const summaries = await readCallSummaries(scoped.context, sessionIds);
     return {
       status: 200,
       body: callHistoryResponseSchema.parse({
         calls: calls.map(call => {
-          const summary = summaries.get(call.sessionId);
+          const summary = analyses.get(call.sessionId) ?? summaries.get(call.sessionId);
           return summary === undefined ? call : { ...call, summary };
         }),
       }),

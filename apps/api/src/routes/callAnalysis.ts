@@ -1,5 +1,6 @@
-import { callAnalysisResponseSchema, editCallAnalysisCommandSchema, uuid } from '@fss/contracts';
+import { callAnalysisResponseSchema, editCallAnalysisCommandSchema, retryCallAnalysisCommandSchema, uuid } from '@fss/contracts';
 import { editCallAnalysis, readCallAnalysis } from '@fss/domain/calls/analysis.ts';
+import { requestCallAnalysis } from '@fss/domain/calls/analysisPaid.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -15,13 +16,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     proposals }` among it, which an Apply echoes (`calls/analysis.ts`).
  *   * `POST /calls/analysis/edit` — David's notes as a new user version, a command with a
  *     receipt; answers the read above.
+ *   * `POST /calls/analysis/retry` — queue one `call.analyze` for the call (A2), reason
+ *     `retry` or `reanalysis`; a historical call is analysed only for `reanalysis`.
  *
  * Both are 404 unless the workspace's `calling_provider` is `twilio`, like the transcript
  * read they sit beside, and 404 for a call of a firm that is not the caller's, exactly like
  * an unknown one.
  */
 
-export const CALL_ANALYSIS_PATHS: readonly string[] = ['/calls/analysis', '/calls/analysis/edit'];
+export const CALL_ANALYSIS_PATHS: readonly string[] = ['/calls/analysis', '/calls/analysis/edit', '/calls/analysis/retry'];
 
 export async function routeCallAnalysis(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!CALL_ANALYSIS_PATHS.includes(request.path)) return null;
@@ -42,6 +45,12 @@ export async function routeCallAnalysis(request: ApiRequest, options: RoutingOpt
     const analysis = await readCallAnalysis(scoped.context, parsed.data);
     if (analysis === null) return notFound;
     return { status: 200, body: callAnalysisResponseSchema.parse(analysis) };
+  }
+
+  if (request.path === '/calls/analysis/retry') {
+    return await runPolicyCommand(deps, retryCallAnalysisCommandSchema, 'call_analysis_retry', async (context, body) =>
+      await requestCallAnalysis(context, { sessionId: body.callSessionId, reason: body.reason, commandId: body.commandId }),
+    );
   }
 
   return await runPolicyCommand(deps, editCallAnalysisCommandSchema, 'call_analysis_edit', async (context, body) =>
