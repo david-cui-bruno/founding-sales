@@ -7,6 +7,7 @@ import { loadFirmForUpdate } from '../crm/firms.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact, sendGateLockName } from '../policy/sendGate.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
+import { callAnalysisAdmission } from './analysisEligibility.ts';
 
 /**
  * The pending-review hold (slice 3a, DESIGN-S3A §2.5).
@@ -24,12 +25,18 @@ import { readCallTranscription } from '../settings/integrations.ts';
  * **every** status and recording delivery, duplicates included, and reads the facts the
  * row has accumulated so far. It opens the hold when all of these hold:
  *
- *   * the session is terminal (`completed`, `failed` or `canceled`);
- *   * the call was answered: `answered_at IS NOT NULL OR provider_status = 'completed'`;
- *   * `coalesce(duration_seconds, recording_duration_seconds) >= 20`;
- *   * the workspace's `call_transcription` is on;
+ *   * the call is admitted to the analysis path (`callAnalysisAdmission`,
+ *     `analysisEligibility.ts`): `answered_at` set, a recording of at least
+ *     `TRANSCRIPTION_MINIMUM_SECONDS` by its own duration, and `call_transcription` on —
+ *     the rule the transcription enqueue applies, so a call is held exactly when it is on
+ *     its way to an analysis (slice S3T). In practice that is the recording delivery;
  *   * the call has no log;
  *   * no `call_analysis_pending` hold for this session has **ever** existed.
+ *
+ * Before S3T the hold asked for a terminal status, `answered_at` or a provider status of
+ * `completed`, and `coalesce(duration_seconds, recording_duration_seconds) >= 20`. It held
+ * calls that were never analysed (no recording, a short recording, no recorded answer) and
+ * missed calls that were (a short call duration with a longer recording).
  *
  * ## Locks
  *
@@ -52,9 +59,6 @@ export const PENDING_HOLD_BLOCKED_ACTIONS: readonly BlockedActionKind[] = Object
   'enrollment_advance',
   'call_task',
 ]);
-
-/** The shortest answered call that is held for review: the transcription minimum. */
-export const PENDING_HOLD_MINIMUM_SECONDS = 20;
 
 export { CALL_ANALYSIS_PENDING_SOURCE, PENDING_HOLD_REVIEW_AFTER_HOURS };
 
@@ -84,8 +88,9 @@ type SessionFacts = {
   readonly firm_id: string;
   readonly status: string;
   readonly provider_status: string | null;
-  readonly answered_at: Date | null;
-  readonly seconds: number | null;
+  readonly answered: boolean;
+  readonly recording: boolean;
+  readonly recording_seconds: number | null;
   readonly call_log_id: string | null;
   readonly ever_held: boolean;
 };
@@ -97,8 +102,8 @@ type SessionFacts = {
  */
 export async function admitPendingHold(context: RepositoryContext, sessionId: string): Promise<string | null> {
   const { rows } = await context.db.query<SessionFacts>(
-    `SELECT s.firm_id, s.status, s.provider_status, s.answered_at,
-            coalesce(s.duration_seconds, s.recording_duration_seconds) AS seconds, s.call_log_id,
+    `SELECT s.firm_id, s.status, s.provider_status, s.answered_at IS NOT NULL AS answered,
+            s.recording_path IS NOT NULL AS recording, s.recording_duration_seconds AS recording_seconds, s.call_log_id,
             EXISTS (SELECT 1 FROM active_holds h
                      WHERE h.workspace_id = s.workspace_id AND h.source_event_kind = $3
                        AND h.source_event_id = s.id::text) AS ever_held
@@ -107,12 +112,17 @@ export async function admitPendingHold(context: RepositoryContext, sessionId: st
   );
   const facts = rows[0];
   if (facts === undefined) return null;
-  const terminal = facts.status === 'completed' || facts.status === 'failed' || facts.status === 'canceled';
-  const answered = facts.answered_at !== null || facts.provider_status === 'completed';
-  const long = facts.seconds !== null && Number(facts.seconds) >= PENDING_HOLD_MINIMUM_SECONDS;
-  if (!terminal || !answered || !long || facts.call_log_id !== null || facts.ever_held) return null;
+  if (facts.call_log_id !== null || facts.ever_held) return null;
   const transcription = await readCallTranscription(context);
-  if (!transcription.enabled || transcription.dailyCeilingCents <= 0) return null;
+  const admitted = callAnalysisAdmission({
+    status: facts.status,
+    providerStatus: facts.provider_status,
+    answered: facts.answered,
+    recording: facts.recording,
+    recordingSeconds: facts.recording_seconds === null ? null : Number(facts.recording_seconds),
+    transcriptionOn: transcription.enabled && transcription.dailyCeilingCents > 0,
+  });
+  if (admitted.kind !== 'eligible') return null;
 
   // `openHold` takes the gate again (re-entrant: the callback holds it already).
   const holdId = await openHold(context, {

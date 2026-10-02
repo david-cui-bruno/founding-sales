@@ -913,7 +913,7 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
   // Every status callback takes the send gate, then the firm, before the session row — the
   // order consumption and Log outcome use — and never asks for the gate while holding the
   // session. A final no-answer or busy may park the firm (`parkIfCadenceSpent`), and since
-  // slice 3a any terminal delivery may admit the pending-review hold (`admitPendingHold`);
+  // slice 3a any delivery may admit the pending-review hold (`admitPendingHold`);
   // both take the gate EXCLUSIVE (review of C1, fold 2, finding 1; DESIGN-S3A §2.5). Taken
   // for every status, not only the ones that write a hold: the facts a later delivery
   // admits on are the ones an earlier one wrote, so the order is one order for all of them.
@@ -985,7 +985,7 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
   }
 
   // Slice 3a: every delivery, duplicates included, may complete the facts the pending-review
-  // hold is admitted on (a late duration, a terminal status before the answer).
+  // hold is admitted on (since S3T the analysis path's: an answer, then the recording).
   await admitPendingHold(context, session.id);
 
   let settlement: 'settled' | 'estimated' | null = null;

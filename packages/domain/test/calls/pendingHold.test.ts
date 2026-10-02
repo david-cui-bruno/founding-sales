@@ -16,9 +16,10 @@ import { createApplyWorld, type ApplyWorld, type PlacedCall, type TestFirm } fro
  * Slice 3a, lane B — the pending-review hold (B-7) and its firm-page read (B-12).
  *
  * Admission reads the facts a session has accumulated, on every status and recording
- * delivery, duplicates included: terminal, answered (`answered_at` or a provider status
- * of `completed`), at least 20 seconds (`duration_seconds`, else the recording's), the
- * transcription switch on, no log, and no pending hold for the session ever before.
+ * delivery, duplicates included. Since S3T it is the analysis path's rule
+ * (`callAnalysisAdmission`): `answered_at` set, a recording of at least 20 seconds by its own
+ * duration, the transcription switch on; then no log, and no pending hold for the session
+ * ever before. So the hold is admitted at the recording delivery.
  */
 
 const CALL = lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', 'Sure, go ahead.']);
@@ -70,18 +71,28 @@ describe('B-7 and B-12: the pending-review hold', () => {
       }),
     );
 
-  it('a terminal status before the answer, with a qualifying duration, is admitted (and the late answer changes nothing)', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'completed', seconds: 25 }]);
-    expect(await holdsOf(call.sessionId)).toHaveLength(1);
+  it('a terminal status before the answer is not held, even with a 25 s recording, and the late answer changes nothing', async () => {
+    // hold == analysis path (S3T): no `answered_at`, so it is never transcribed or analysed.
+    const call = await place(await world.newFirm(), [{ status: 'completed', seconds: 25 }], 25);
+    expect(await holdsOf(call.sessionId)).toEqual([]);
     await status(call, 'in-progress');
-    expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: false })]);
+    expect(await holdsOf(call.sessionId)).toEqual([]);
   });
 
-  it('a terminal without a duration is not admitted; a repeat with 25 s is', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed' }]);
+  it('an answered terminal with a call duration but no recording is not admitted; the 25 s recording admits it', async () => {
+    // hold == analysis path (S3T): the recording's duration is the one the analysis path reads.
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 25 }]);
     expect(await holdsOf(call.sessionId)).toEqual([]);
-    await status(call, 'completed', 25);
+    await recording(call, 25);
     expect(await holdsOf(call.sessionId)).toHaveLength(1);
+  });
+
+  it('a 15 s call duration with a 25 s recording is held; a 25 s call with a 15 s recording is not', async () => {
+    // hold == analysis path (S3T): the first is transcribed and analysed, the second is not.
+    const analysed = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 15 }], 25);
+    const short = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 25 }], 15);
+    expect(await holdsOf(analysed.sessionId)).toHaveLength(1);
+    expect(await holdsOf(short.sessionId)).toEqual([]);
   });
 
   it('a terminal without a duration is admitted by the recording that carries 25 s', async () => {
@@ -100,7 +111,7 @@ describe('B-7 and B-12: the pending-review hold', () => {
   });
 
   it('a call logged before its terminal status gets no hold', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'in-progress' }]);
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }], null);
     expect((await logIt(call)).ok).toBe(true);
     await status(call, 'completed', 125);
     await recording(call, 125);
@@ -108,7 +119,8 @@ describe('B-7 and B-12: the pending-review hold', () => {
   });
 
   it('is released at the first log link and never reopened by a later delivery', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    // hold == analysis path (S3T): admitted at the recording delivery.
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
     expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: false })]);
     expect((await logIt(call)).ok).toBe(true);
     expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: true })]);
@@ -118,7 +130,8 @@ describe('B-7 and B-12: the pending-review hold', () => {
   });
 
   it('Dismiss releases it, and a later delivery does not reopen it', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    // hold == analysis path (S3T): admitted at the recording delivery.
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
     const dismissed = await withTransaction(world.session, async () => await dismissPendingHold(world.salesperson(), { callSessionId: call.sessionId }));
     const held = await holdsOf(call.sessionId);
     expect(dismissed).toEqual({ ok: true, value: { callSessionId: call.sessionId, releasedHoldId: held[0]?.id } });
@@ -141,7 +154,8 @@ describe('B-7 and B-12: the pending-review hold', () => {
   });
 
   it('blocks e-mail, enrollment advance and call tasks at the firm, and never dialling', async () => {
-    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    // hold == analysis path (S3T): admitted at the recording delivery.
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
     const [hold] = await holdsOf(call.sessionId);
     expect(hold).toMatchObject({ reason: 'scoped_pause', recovery: 'review_call', scope_key: call.firm.firmId });
     expect([...(hold?.blocked ?? [])].sort()).toEqual(['call_task', 'email_send', 'enrollment_advance']);
@@ -152,9 +166,12 @@ describe('B-7 and B-12: the pending-review hold', () => {
     expect(await listApplicableHolds(world.system(), { actionKind: 'dial_authorization', firmId: call.firm.firmId })).toEqual([]);
   });
 
-  it('B-12: a hold admitted by a real status delivery reads back through the firm page and parses with the 134dc811 contract', async () => {
-    // `recordCallStatus` only: the answer, then the terminal status with its duration.
+  it('B-12: a hold admitted by real deliveries reads back through the firm page and parses with the 134dc811 contract', async () => {
+    // `recordCallStatus` for the answer and the terminal status, then `recordCallRecording`.
+    // hold == analysis path (S3T): the status deliveries alone admit nothing; the recording does.
     const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    expect(await holdsOf(call.sessionId)).toEqual([]);
+    await recording(call, 125);
     const [hold] = await holdsOf(call.sessionId);
     expect(hold).toBeDefined();
     const page = await readFirmPage(world.salesperson(), { firmId: call.firm.firmId });
@@ -185,7 +202,8 @@ describe('B-7 and B-12: the pending-review hold', () => {
       `INSERT INTO contacts (workspace_id, firm_id, full_name, title, is_primary) VALUES ($1, $2, 'Riley Example', 'Owner', false)`,
       [world.seeded.alpha.workspaceId, firm.firmId],
     );
-    const call = await place(firm, [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }]);
+    // hold == analysis path (S3T): admitted at the recording delivery.
+    const call = await place(firm, [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
     expect(await holdsOf(call.sessionId)).toEqual([expect.objectContaining({ released: false })]);
     // Open for four hours: Needs review lists it until the deletion.
     await world.session.query(
