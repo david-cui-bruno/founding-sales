@@ -1,4 +1,4 @@
-import { CALL_OUTCOMES, type CallOutcome, type CallProposal, type CallProposalKey } from '@fss/contracts';
+import { type CallOutcome, type CallProposal, type CallProposalKey } from '@fss/contracts';
 import { Pencil } from 'lucide-react';
 import { useMemo, useRef, useState, type JSX } from 'react';
 import type { AnalysisView } from '../../shared/operations.ts';
@@ -14,9 +14,12 @@ import {
   KEY_RESULT_TEXT,
   applicable,
   applyProblem,
+  chosenOutcome,
   editsOf,
   evidenceLines,
   keyRefusalText,
+  noDefiniteAnswer,
+  outcomeChoices,
   refusalOf,
   reviewOnly,
   rowLabel,
@@ -155,6 +158,11 @@ export interface AfterCallAnalysisProps {
   readonly loggedOutcome?: CallOutcome | null;
   /** The approved e-mails the follow-up may be promised as. */
   readonly templates: readonly { readonly id: string; readonly name: string }[];
+  /**
+   * An Apply's command id, by call session, kept above the route so a click that lost its
+   * answer is retried under the same id after leaving Today and coming back.
+   */
+  readonly commands?: Map<string, { readonly signature: string; readonly id: string }>;
   /** Read the analysis again. */
   onReload(): void;
   /** Something was applied: the card, the history and Needs review are read again. */
@@ -230,6 +238,7 @@ function Completed({
   logged,
   loggedOutcome = null,
   templates,
+  commands,
   onReload,
   onChanged,
 }: AfterCallAnalysisProps & { readonly analysis: NonNullable<AnalysisView['analysis']> }): JSX.Element {
@@ -239,14 +248,25 @@ function Completed({
   const needReview = reviewOnly(proposals);
   const base = `analysis:${authoritative?.analysisId ?? sessionId}`;
 
+  // What was applied or declined stays done for good: it is in the draft store with the ticks, so
+  // it survives leaving Today, and a done key is never ticked and never sent again.
+  const [doneText, setDoneText] = useDraft(`${base}:done`);
+  const done = useMemo<ReadonlySet<string>>(() => new Set(doneText === '' ? [] : doneText.split(',')), [doneText]);
+  const [wasLogged, setWasLogged] = useState<CallOutcome | null>(null);
+  const isLogged = logged || wasLogged !== null;
+  const shownOutcome = wasLogged ?? loggedOutcome;
+
   // Ticks live in the shell's draft store, so they survive leaving Today like any draft.
-  const defaults = useMemo(() => rows.filter(startsTicked).map(row => row.key).join(','), [rows]);
+  const defaults = useMemo(() => rows.filter(row => startsTicked(row) && !done.has(row.key)).map(row => row.key).join(','), [rows, done]);
   const [tickedText, setTickedText] = useDraft(`${base}:ticked`, defaults);
   const ticked = useMemo(
-    () => settle(new Set<CallProposalKey>(tickedText === '' ? [] : (tickedText.split(',') as CallProposalKey[])), rows, logged),
-    [tickedText, rows, logged],
+    () => {
+      const open = new Set<CallProposalKey>((tickedText === '' ? [] : (tickedText.split(',') as CallProposalKey[])).filter(key => !done.has(key)));
+      return settle(open, rows, isLogged);
+    },
+    [tickedText, rows, isLogged, done],
   );
-  const setTicked = (next: ReadonlySet<CallProposalKey>): void => setTickedText([...settle(next, rows, logged)].join(','));
+  const setTicked = (next: ReadonlySet<CallProposalKey>): void => setTickedText([...settle(next, rows, isLogged)].filter(key => !done.has(key)).join(','));
 
   const [outcomeDraft, setOutcomeDraft] = useDraft(`${base}:outcome`);
   const [coversAll, setCoversAll] = useDraft(`${base}:coversAll`);
@@ -262,13 +282,10 @@ function Completed({
   };
 
   const [rowNotes, setRowNotes] = useState<Readonly<Record<string, string>>>({});
-  const [done, setDone] = useState<ReadonlySet<string>>(new Set());
   const [blockNote, setBlockNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [wasLogged, setWasLogged] = useState<CallOutcome | null>(null);
-  const commandId = useRef<{ readonly signature: string; readonly id: string } | null>(null);
-  const isLogged = logged || wasLogged !== null;
-  const shownOutcome = wasLogged ?? loggedOutcome;
+  const fallbackCommands = useRef(new Map<string, { readonly signature: string; readonly id: string }>());
+  const commandMemory = commands ?? fallbackCommands.current;
 
   const outcomeProposal = rows.find((row): row is Extract<CallProposal, { kind: 'outcome' }> => row.kind === 'outcome');
   const problem = applyProblem(rows, ticked, drafts);
@@ -277,7 +294,7 @@ function Completed({
   const apply = (): void => {
     const bridge = api();
     if (bridge === undefined || authoritative === null || busy || problem !== null) return;
-    const keys = rows.filter(row => ticked.has(row.key)).map(row => row.key);
+    const keys = rows.filter(row => ticked.has(row.key) && !done.has(row.key)).map(row => row.key);
     const edits = editsOf(rows, ticked, drafts);
     const body = {
       analysisId: authoritative.analysisId,
@@ -287,15 +304,19 @@ function Completed({
       ...(Object.keys(edits).length === 0 ? {} : { edits }),
     };
     const signature = JSON.stringify(body);
-    // The same click is the same command: a retry after a lost answer is answered from its receipt.
-    if (commandId.current?.signature !== signature) commandId.current = { signature, id: crypto.randomUUID() };
+    // The command id lives with the session, above the route. It is reused only for the same body
+    // after an answer that never came (the server then answers from its receipt); any definite
+    // answer, success or refusal, ends it, and a changed selection or edit is a new command.
+    const remembered = commandMemory.get(sessionId);
+    const command = remembered?.signature === signature ? remembered : { signature, id: crypto.randomUUID() };
+    commandMemory.set(sessionId, command);
     setBusy(true);
     setBlockNote(null);
     // An Apply is atomic, so a refusal wrote nothing and every key still stands: the notes a
     // previous refusal left on the rows are cleared, and this one's are drawn fresh.
     setRowNotes(current => Object.fromEntries(Object.entries(current).filter(([key]) => done.has(key))));
     void bridge
-      .command('calling.proposalsApply', { ...body, commandId: commandId.current.id })
+      .command('calling.proposalsApply', { ...body, commandId: command.id })
       .then(answer => {
         if (answer.applied !== null) {
           const notes: Record<string, string> = {};
@@ -304,15 +325,19 @@ function Completed({
             notes[result.key] = KEY_RESULT_TEXT[result.result] ?? 'Done';
             finished.add(result.key);
           }
+          commandMemory.delete(sessionId);
           setRowNotes(current => ({ ...current, ...notes }));
-          setDone(finished);
+          setDoneText([...finished].join(','));
+          setTickedText([...ticked].filter(key => !finished.has(key)).join(','));
           if (answer.applied.callLogId !== null && keys.includes('outcome')) {
-            setWasLogged(drafts.outcome ?? outcomeProposal?.params.outcome ?? null);
+            setWasLogged(outcomeProposal === undefined ? null : chosenOutcome(outcomeProposal, drafts));
           }
-          commandId.current = null;
           onChanged();
           return;
         }
+        // A refusal is a definite answer: the next click is a new command. Only an answer that
+        // never came keeps the id.
+        if (!noDefiniteAnswer(answer.reason)) commandMemory.delete(sessionId);
         // Nothing was applied. Every tick and every draft stays, so David changes what is wrong
         // and presses Apply again; each refused key says why next to its own suggestion.
         const refusal = refusalOf(answer.reason);
@@ -328,7 +353,6 @@ function Completed({
           setBlockNote('Nothing was applied. Untick the e-mail and apply again.');
         } else setBlockNote(refusal.text);
         if (refusal.reload) {
-          commandId.current = null;
           onReload();
           onChanged();
         }
@@ -343,14 +367,14 @@ function Completed({
       .command('calling.proposalsDecline', { analysisId: authoritative.analysisId, proposalHash: authoritative.proposalHash, keys: unticked.map(row => row.key) })
       .then(answer => {
         if (answer.declined) {
-          setDone(current => new Set([...current, ...unticked.map(row => row.key)]));
+          setDoneText([...done, ...unticked.map(row => row.key)].join(','));
           setRowNotes(current => ({ ...current, ...Object.fromEntries(unticked.map(row => [row.key, 'Declined'])) }));
           onChanged();
         } else setBlockNote('Callie could not record that. Nothing was changed.');
       }, () => setBlockNote('Callie could not record that. Nothing was changed.'));
   };
 
-  const effectiveOutcome = (drafts.outcome ?? outcomeProposal?.params.outcome) as CallOutcome | undefined;
+  const effectiveOutcome = outcomeProposal === undefined ? undefined : chosenOutcome(outcomeProposal, drafts);
 
   return (
     <div data-testid="analysis-completed" className="flex flex-col gap-4">
@@ -415,10 +439,10 @@ function Completed({
                             aria-label="What happened"
                             data-testid="suggestion-outcome-select"
                             className="h-7 w-auto text-xs"
-                            value={outcomeDraft === '' ? row.params.outcome : outcomeDraft}
+                            value={chosenOutcome(row, drafts)}
                             onChange={event => setOutcomeDraft(event.target.value)}
                           >
-                            {CALL_OUTCOMES.map(value => (
+                            {outcomeChoices(row).map(value => (
                               <option key={value} value={value}>
                                 {OUTCOME_LABELS[value]}
                               </option>
@@ -451,9 +475,9 @@ function Completed({
                       ) : null}
                     </div>
                   )}
-                  {rowNotes[row.key] === undefined ? null : (
+                  {(rowNotes[row.key] ?? (finished && !loggedRow ? 'Done' : undefined)) === undefined ? null : (
                     <p data-testid={`suggestion-note-${row.key}`} role="status" className="ml-6 text-xs text-muted-foreground">
-                      {rowNotes[row.key]}
+                      {rowNotes[row.key] ?? 'Done'}
                     </p>
                   )}
                 </li>

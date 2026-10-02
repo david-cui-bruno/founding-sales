@@ -13,7 +13,8 @@ import type { AnalysisView, ReviewView } from '../../shared/operations.ts';
  *
  * Polling is per session and stops when that session is settled: every 4 s while its
  * analysis is pending, every 10 s while a call that has just ended has none yet (the
- * transcript is on its way), and not at all once it has completed, failed, or is old.
+ * transcript is on its way), and not at all once it has completed, failed, or is older than
+ * twenty minutes, pending or not.
  */
 
 export const analysisKey = (callSessionId: string): readonly unknown[] => ['calling.analysis', callSessionId];
@@ -43,10 +44,16 @@ export interface Watch {
   readonly endedAt: number;
 }
 
-function intervalOf(view: AnalysisView | undefined, endedAt: number, now: number): number | false {
+/**
+ * How often to read a session again, or not at all. **Every** state stops at the same bound:
+ * twenty minutes after the call ended, a pending analysis is no longer polled either (a manual
+ * refresh still reads it). Within the window: 4 s while pending, 10 s while none exists yet.
+ */
+export function intervalOf(view: AnalysisView | undefined, endedAt: number, now: number): number | false {
+  if (now - endedAt >= WAITING_WINDOW_MS) return false;
   const analysis = view?.analysis ?? null;
   if (analysis?.pending != null) return PENDING_POLL_MS;
-  if (analysis === null && now - endedAt < WAITING_WINDOW_MS) return WAITING_POLL_MS;
+  if (analysis === null) return WAITING_POLL_MS;
   return false;
 }
 
@@ -97,14 +104,18 @@ export function useAnalysis(callSessionId: string | null, endedAt: number): { vi
   };
 }
 
-/** Needs review, as the server lists it; null items when the read did not answer (the group hides). */
-export function useReview(enabled: boolean): { items: ReviewView['items']; reload(): void } {
+/**
+ * Needs review, as the server lists it. Items are null when the API does not serve the list
+ * at all (404: the group hides). Any other failed read keeps the **last known list** and says
+ * so through `failed`, because the items on it are unresolved work.
+ */
+export function useReview(enabled: boolean): { items: ReviewView['items']; failed: boolean; reload(): void } {
   const client = useQueryClient();
   const query = useQuery({
     queryKey: REVIEW_KEY,
     queryFn: async (): Promise<ReviewView> => {
       const bridge = api();
-      return bridge === undefined ? { items: null } : await bridge.read('review.list', {});
+      return bridge === undefined ? { items: null, failed: false } : await bridge.read('review.list', {});
     },
     enabled: enabled && api() !== undefined,
     staleTime: 0,
@@ -112,5 +123,11 @@ export function useReview(enabled: boolean): { items: ReviewView['items']; reloa
     refetchOnWindowFocus: false,
     refetchInterval: 60_000,
   });
-  return { items: query.data?.items ?? null, reload: () => void client.invalidateQueries({ queryKey: REVIEW_KEY }) };
+  // The last list that did answer, kept while later reads fail.
+  const known = useRef<ReviewView['items']>(null);
+  const data = query.data;
+  if (data !== undefined && data.items !== null) known.current = data.items;
+  else if (data !== undefined && !data.failed) known.current = null;
+  const failed = query.isError || data?.failed === true;
+  return { items: known.current, failed: failed && known.current !== null, reload: () => void client.invalidateQueries({ queryKey: REVIEW_KEY }) };
 }

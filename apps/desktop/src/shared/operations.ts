@@ -106,6 +106,8 @@ const snoozeInput = z.strictObject({
 const outcomeInput = z.strictObject({
   firmId: uuid,
   itemId: uuid.nullable(),
+  /** The call named by the page; never replaced by the bridge's own last call. */
+  callSessionId: uuid.nullable().optional(),
   contactId: uuid.nullable(),
   routeId: uuid.nullable(),
   outcome: z.enum(CALL_OUTCOMES),
@@ -417,7 +419,7 @@ export const declinedViewSchema = z.strictObject({ declined: z.boolean(), reason
 export const dismissedViewSchema = z.strictObject({ dismissed: z.boolean(), reason: reasonCode });
 export const resolvedViewSchema = z.strictObject({ resolved: z.boolean(), reason: reasonCode });
 export const stoppedViewSchema = z.strictObject({ stopped: z.boolean(), reason: reasonCode });
-export const reviewViewSchema = z.strictObject({ items: z.array(reviewItemSchema).nullable() });
+export const reviewViewSchema = z.strictObject({ items: z.array(reviewItemSchema).nullable(), failed: z.boolean() });
 export type ReviewView = z.infer<typeof reviewViewSchema>;
 export const recapViewSchema = z.strictObject({ recap: callRecapResponseSchema.nullable() });
 export const acceptanceViewSchema = z.strictObject({ acceptance: proposalAcceptanceResponseSchema.nullable() });
@@ -701,7 +703,7 @@ export const OPERATIONS = {
     calls: [{ method: 'GET', path: '/review' }],
     input: nothing,
     output: reviewViewSchema,
-    transform: 'none: Needs review’s three sources as the server lists them; null when the read did not answer',
+    transform: 'none: Needs review’s three sources as the server lists them; null when the API does not serve it; failed when it did not answer (the page keeps its last list)',
   },
   'review.stageResolve': {
     kind: 'command',

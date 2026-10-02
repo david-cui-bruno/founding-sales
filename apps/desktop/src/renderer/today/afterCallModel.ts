@@ -1,4 +1,5 @@
 import {
+  CALL_OUTCOMES,
   type CallAnalysisQuoteRef,
   type CallOutcome,
   type CallProposal,
@@ -33,6 +34,31 @@ export function reviewOnly(proposals: readonly CallProposal[]): readonly CallPro
 /** Whether a proposal is a stop: the `do_not_call` outcome. */
 export function isStop(proposal: CallProposal): boolean {
   return proposal.kind === 'outcome' && proposal.params.outcome === 'do_not_call';
+}
+
+/**
+ * Outcomes that stop or retire something. David's tick is the boundary for them (§12), and the
+ * outcome row's tick was given for the outcome the analysis proposed, not for one he picks
+ * afterwards. So the editor offers a sensitive outcome only as the proposal's own value: a stop
+ * the analysis did not propose goes through the stop suggestion or the firm stop, and a wrong
+ * number through the outcome form, each an explicit act.
+ */
+export const SENSITIVE_OUTCOMES: readonly CallOutcome[] = Object.freeze(['do_not_call', 'wrong_number']);
+
+/** What the outcome select offers for this proposal. */
+export function outcomeChoices(proposal: Extract<CallProposal, { kind: 'outcome' }>): readonly CallOutcome[] {
+  return CALL_OUTCOMES.filter(value => !SENSITIVE_OUTCOMES.includes(value) || value === proposal.params.outcome);
+}
+
+/** The outcome that will be applied: a draft counts only when the select could have offered it. */
+export function chosenOutcome(proposal: Extract<CallProposal, { kind: 'outcome' }>, drafts: FieldDrafts): CallOutcome {
+  const draft = drafts.outcome;
+  return draft !== undefined && outcomeChoices(proposal).includes(draft) ? draft : proposal.params.outcome;
+}
+
+/** An answer that is not a definite one: nothing says whether the command ran. */
+export function noDefiniteAnswer(reason: string | null): boolean {
+  return reason === 'offline' || reason === 'timeout' || reason === 'unreadable_answer' || (reason !== null && /^http_5\d\d$/u.test(reason));
 }
 
 /** The tick a row starts with. Only the outcome (not a stop) and the promises may start ticked. */
@@ -121,10 +147,10 @@ export function editsOf(proposals: readonly CallProposal[], ticked: ReadonlySet<
   for (const proposal of proposals) {
     if (!ticked.has(proposal.key)) continue;
     if (proposal.kind === 'outcome') {
-      const changed = drafts.outcome !== undefined && drafts.outcome !== proposal.params.outcome;
-      const effective = drafts.outcome ?? proposal.params.outcome;
+      const effective = chosenOutcome(proposal, drafts);
+      const changed = effective !== proposal.params.outcome;
       const covers = effective === 'do_not_call' && drafts.coversAll === true;
-      if (changed || covers) edits.outcome = { ...(changed ? { outcome: drafts.outcome as CallOutcome } : {}), ...(covers ? { doNotCallCoversAllContact: true } : {}) };
+      if (changed || covers) edits.outcome = { ...(changed ? { outcome: effective } : {}), ...(covers ? { doNotCallCoversAllContact: true } : {}) };
     }
     if (proposal.kind === 'callback') {
       const date = drafts.callbackDate ?? proposal.params.localDate;

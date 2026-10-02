@@ -47,7 +47,7 @@ const firm = (overrides: Partial<ReviewFirm> = {}): ReviewFirm => ({
   ...overrides,
 });
 
-function panel(items: readonly ReviewItem[], overrides: Partial<ReviewFirm> = {}, extra: { onChanged?: () => void; onLog?: () => void } = {}) {
+function panel(items: readonly ReviewItem[], overrides: Partial<ReviewFirm> = {}, extra: { onChanged?: () => void; onLog?: (callSessionId: string) => void } = {}) {
   const onChanged = extra.onChanged ?? vi.fn();
   const onLog = extra.onLog ?? vi.fn();
   render(
@@ -179,7 +179,7 @@ describe('the pending hold', () => {
     expect(text.toLowerCase()).not.toContain('paused');
     expect(within(screen.getByTestId('review-item')).getAllByRole('button').map(button => button.textContent)).toEqual(['Log', 'Dismiss']);
     fireEvent.click(screen.getByTestId('review-log'));
-    expect(onLog).toHaveBeenCalled();
+    expect(onLog).toHaveBeenCalledWith(SESSION_ID);
     expect(itemLabel(HOLD_ITEM)).toBe('Waiting for this call’s notes');
   });
 });
@@ -240,5 +240,30 @@ describe('a task is a quiet card with Complete', () => {
     expect(screen.queryByTestId('snooze-form')).toBeNull();
     fireEvent.click(screen.getByTestId('task-complete'));
     expect(completeTask).toHaveBeenCalledWith({ taskId: '13131313-1313-4131-8131-131313131313' });
+  });
+});
+
+describe('fix round (review S3C)', () => {
+  it('finding 4: an unclear outcome logs its own call, by session', () => {
+    const OLD = '99999999-9999-4999-8999-9999999999cc';
+    const { onLog } = panel([proposalItem(PROPOSALS.outcomeUnclear, { callSessionId: OLD })]);
+    fireEvent.click(screen.getByTestId('review-set-outcome'));
+    expect(onLog).toHaveBeenCalledWith(OLD);
+  });
+
+  it('finding 9: a logged call the analysis says was a wrong number opens the phone editor inline', () => {
+    const wrong = { ...PROPOSALS.outcome, params: { outcome: 'wrong_number', evidence: PROPOSALS.outcome.params.evidence } } as unknown as Parameters<typeof proposalItem>[0];
+    panel([proposalItem(wrong, { reviewKind: 'outcome' })]);
+    expect(screen.queryByTestId('basics-editor')).toBeNull();
+    fireEvent.click(screen.getByTestId('review-correct-phone'));
+    expect(screen.getByTestId('basics-phone')).toBe(document.activeElement);
+  });
+
+  it('minor: only the clicked row is current, not every row of the selected firm', () => {
+    const cards = [{ firmId: FIRM_ID, firmName: 'Elm Fork Test Rentals', lane: 'new_firm', dueAt: '2026-10-02T13:00:00.000Z', counts: { replies: 0, emailsDue: 0, callsDue: 0 } }] as const;
+    render(<ReviewGroup items={[HOLD_ITEM, proposalItem(PROPOSALS.referral)]} cards={cards} selected={FIRM_ID} onSelect={vi.fn()} onChanged={vi.fn()} />);
+    expect(screen.getAllByTestId('review-row').map(row => row.getAttribute('aria-current'))).toEqual([null, null]);
+    fireEvent.click(screen.getAllByTestId('review-row')[1] as HTMLElement);
+    expect(screen.getAllByTestId('review-row').map(row => row.getAttribute('aria-current'))).toEqual([null, 'true']);
   });
 });

@@ -53,6 +53,7 @@ export function OutcomeForm({
   enabled,
   actions,
   callSessionId = null,
+  forSession = null,
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
@@ -64,6 +65,11 @@ export function OutcomeForm({
    * filed with the recording.
    */
   readonly callSessionId?: string | null;
+  /**
+   * A call chosen by name — a Needs review item's Log. It is sent as the log's session as it
+   * is, and the main process never replaces it with "the last call placed".
+   */
+  readonly forSession?: string | null;
 }): JSX.Element | null {
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
@@ -258,6 +264,7 @@ export function OutcomeForm({
             contactId,
             routeId: lastCall?.routeId ?? null,
             itemId: itemId === '' ? null : itemId,
+            ...(forSession === null ? {} : { callSessionId: forSession }),
             outcome: built.command.outcome,
             note: built.command.note ?? '',
             callback:

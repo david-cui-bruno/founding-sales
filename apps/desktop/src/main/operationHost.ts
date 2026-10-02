@@ -292,7 +292,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'review.list': async () => {
       const answer = await deps.api.read('/review', value => reviewListResponseSchema.parse(value));
-      return { items: answer.ok ? answer.value.items : null };
+      if (answer.ok) return { items: answer.value.items, failed: false };
+      // A 404 is an API that does not serve the list: the group hides. Anything else is a read
+      // that did not answer, and the page keeps what it last knew.
+      const notServed = !answer.offline && (answer.reason === 'not_found' || answer.reason === 'http_404');
+      return { items: null, failed: !notServed };
     },
     'review.stageResolve': async (input: OperationInput<'review.stageResolve'>) => {
       const answer = await deps.api.command('/review/stage/resolve', input, value => value);

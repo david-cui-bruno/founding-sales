@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnalysisView } from '../src/shared/operations.ts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { AfterCallAnalysis, type AfterCallAnalysisProps } from '../src/renderer/today/AfterCallAnalysis.tsx';
-import { startsTicked } from '../src/renderer/today/afterCallModel.ts';
+import { chosenOutcome, editsOf, outcomeChoices, startsTicked } from '../src/renderer/today/afterCallModel.ts';
 import { analysisKey, useAnalyses } from '../src/renderer/today/useAnalysis.ts';
 import { ANALYSIS_ID, HASH, OTHER_SESSION_ID, PROPOSALS, QUOTES, SESSION_ID, SHA, TASK_KEY, analysisAnswer } from './support/analysisAnswers.ts';
 
@@ -369,5 +369,107 @@ describe('analyses are read by session', () => {
       expect([SESSION_ID, OTHER_SESSION_ID]).toContain(key[1]);
       expect(key).toHaveLength(2);
     }
+  });
+});
+
+describe('fix round (review S3C): the tick boundary, done keys, command ids', () => {
+  const selectOptions = (): string[] => [...(screen.getByTestId('suggestion-outcome-select') as HTMLSelectElement).options].map(option => option.value);
+
+  it('finding 1: the outcome editor never offers a stop or a wrong number the analysis did not propose', () => {
+    show(completed());
+    expect(selectOptions()).not.toContain('do_not_call');
+    expect(selectOptions()).not.toContain('wrong_number');
+    expect(selectOptions()).toContain('not_interested');
+  });
+
+  it('finding 1: a sensitive outcome can only be sent as the proposal’s own, ticked by David', async () => {
+    const stop = PROPOSALS.stopOutcome as Extract<CallProposal, { kind: 'outcome' }>;
+    const interested = PROPOSALS.outcome as Extract<CallProposal, { kind: 'outcome' }>;
+    // However a draft got there, a sensitive outcome the proposal did not carry is ignored.
+    expect(chosenOutcome(interested, { outcome: 'do_not_call' })).toBe('interested');
+    expect(chosenOutcome(interested, { outcome: 'wrong_number' })).toBe('interested');
+    expect(editsOf([interested], new Set(['outcome']), { outcome: 'do_not_call' })).toEqual({});
+    expect(outcomeChoices(stop)).toContain('do_not_call');
+    // The stop proposal starts unticked, so Apply has nothing until David ticks it.
+    const calls = install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }]) });
+    show(completed([stop]));
+    expect(check('outcome').checked).toBe(false);
+    expect((screen.getByTestId('apply') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(check('outcome'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(calls.filter(call => call.name === 'calling.proposalsApply')).toHaveLength(1));
+    expect((calls[0]?.input as { keys: string[] }).keys).toEqual(['outcome']);
+  });
+
+  it('finding 2: applied keys become Done rows and a later Apply carries only the new tick', async () => {
+    const calls = install({
+      'calling.proposalsApply': input =>
+        (input as { keys: string[] }).keys.includes('outcome')
+          ? applied([{ key: 'outcome', kind: 'outcome' }, { key: 'callback', kind: 'callback' }, { key: TASK_KEY, kind: 'task' }])
+          : applied([{ key: 'buying_signal', kind: 'buying_signal' }], null),
+    });
+    show(completed());
+    fireEvent.click(check('callback'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(screen.getByTestId('suggestion-note-callback').textContent).toBe('Done'));
+    expect(check('callback').checked).toBe(false);
+    expect(check('callback').disabled).toBe(true);
+    expect(check(TASK_KEY).checked).toBe(false);
+    fireEvent.click(check('buying_signal'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(calls.filter(call => call.name === 'calling.proposalsApply')).toHaveLength(2));
+    const sent = calls.filter(call => call.name === 'calling.proposalsApply').map(call => (call.input as { keys: string[] }).keys);
+    expect(sent).toEqual([['outcome', 'callback', TASK_KEY], ['buying_signal']]);
+  });
+
+  it('finding 2: done keys survive leaving Today and coming back', async () => {
+    install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }, { key: TASK_KEY, kind: 'task' }]) });
+    const onChanged = vi.fn();
+    const props: AfterCallAnalysisProps = {
+      view: completed(), sessionId: SESSION_ID, waiting: false, logged: false, templates: [], onReload: vi.fn(), onChanged, onEnterManually: vi.fn(),
+    };
+    const tree = (away: boolean): JSX.Element => (
+      <DraftsProvider>{away ? <span data-testid="elsewhere" /> : <AfterCallAnalysis {...props} />}</DraftsProvider>
+    );
+    const { rerender } = render(tree(false));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    rerender(tree(true));
+    expect(screen.queryByTestId('analysis-completed')).toBeNull();
+    rerender(tree(false));
+    expect(check(TASK_KEY).checked).toBe(false);
+    expect(check(TASK_KEY).disabled).toBe(true);
+    expect(screen.getByTestId(`suggestion-note-${TASK_KEY}`).textContent).toBe('Done');
+  });
+
+  it('finding 3: a definite refusal ends the command id; a lost answer keeps it, even across leaving Today', async () => {
+    const commands = new Map<string, { signature: string; id: string }>();
+    let answer: unknown = refused('outcome_required');
+    const calls = install({ 'calling.proposalsApply': () => answer });
+    const ids = (): string[] => calls.filter(call => call.name === 'calling.proposalsApply').map(call => (call.input as { commandId: string }).commandId);
+
+    show(completed(), { commands });
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(screen.getByTestId('apply-note')).toBeTruthy());
+    // Refused (definite): the same body again is a new command.
+    expect(commands.size).toBe(0);
+    answer = refused('offline');
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(ids()).toHaveLength(2));
+    expect(ids()[1]).not.toBe(ids()[0]);
+    // No definite answer: the id is kept, with the session, above the panel.
+    expect(commands.get(SESSION_ID)?.id).toBe(ids()[1]);
+    cleanup();
+    show(completed(), { commands });
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(ids()).toHaveLength(3));
+    expect(ids()[2]).toBe(ids()[1]);
+    // A changed selection is a new command, and a success ends the id.
+    answer = applied([{ key: 'outcome', kind: 'outcome' }, { key: 'buying_signal', kind: 'buying_signal' }, { key: TASK_KEY, kind: 'task' }]);
+    fireEvent.click(check('buying_signal'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(ids()).toHaveLength(4));
+    expect(ids()[3]).not.toBe(ids()[2]);
+    await waitFor(() => expect(commands.size).toBe(0));
   });
 });

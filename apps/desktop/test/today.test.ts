@@ -511,6 +511,73 @@ describe('the Today bridge', () => {
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
   });
 
+  it('forwards the agreed follow-up for every reached outcome, never for a stop, and names the call it was given', async () => {
+    const { api, calls } = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/dial/check': advice(),
+      '/calls/log': accepted(null),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    const CONTACT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const permission = { scope: 'single_email' as const, templateVersionId: '66666666-6666-4666-8666-666666666666' };
+    const record = async (outcome: 'interested' | 'callback_requested' | 'referral_or_wrong_person' | 'not_interested' | 'do_not_call' | 'voicemail'): Promise<unknown> => {
+      calls.length = 0;
+      await bridge.recordOutcome({
+        firmId: FIRM_ID,
+        contactId: CONTACT_ID,
+        routeId: null,
+        itemId: null,
+        outcome,
+        note: '',
+        callback: null,
+        doNotCallCoversAllContact: false,
+        followUpPermission: permission,
+      });
+      return calls.find(call => call.path === '/calls/log')?.body;
+    };
+    for (const outcome of ['interested', 'callback_requested', 'referral_or_wrong_person', 'not_interested'] as const) {
+      expect(await record(outcome), outcome).toMatchObject({ followUpPermission: permission });
+    }
+    for (const outcome of ['do_not_call', 'voicemail'] as const) {
+      expect(await record(outcome), outcome).not.toHaveProperty('followUpPermission');
+    }
+
+    // A call named by the page (a Needs review item's Log) is the log's session as given.
+    const SESSION = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    calls.length = 0;
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      callSessionId: SESSION,
+      outcome: 'voicemail',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: null,
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({ callSessionId: SESSION });
+    calls.length = 0;
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      outcome: 'voicemail',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: null,
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('callSessionId');
+  });
+
   it('never puts a token, a URI or a command id in the state it returns', async () => {
     const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({

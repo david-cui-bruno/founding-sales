@@ -90,6 +90,8 @@ export function ReviewGroup({
   onChanged(): void;
 }): JSX.Element | null {
   const [notes, setNotes] = useState<Readonly<Record<string, string>>>({});
+  // Only the row that was chosen is current: a firm can have several items.
+  const [active, setActive] = useState<string | null>(null);
   if (items.length === 0) return null;
   const nameOf = (firmId: string | null): string => cards.find(card => card.firmId === firmId)?.firmName ?? 'A firm not on today’s list';
   return (
@@ -104,20 +106,22 @@ export function ReviewGroup({
         {items.map(item => {
           const key = itemKey(item);
           const firmId = itemFirmId(item);
+          const current = firmId !== null && firmId === selected && active === key;
           return (
             <li key={key} className="group/review relative">
               <button
                 type="button"
                 data-testid="review-row"
                 data-source={item.source}
-                aria-current={firmId !== null && firmId === selected ? 'true' : undefined}
+                aria-current={current ? 'true' : undefined}
                 disabled={firmId === null}
                 onClick={() => {
+                  setActive(key);
                   if (firmId !== null) onSelect(firmId);
                 }}
                 className={cn(
                   'flex w-full items-start gap-2 rounded-md px-2 py-1.5 pr-14 text-left transition-colors hover:bg-pressed',
-                  firmId !== null && firmId === selected && 'bg-selected',
+                  current && 'bg-selected',
                 )}
               >
                 <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-warn-ink" aria-hidden />
@@ -181,7 +185,7 @@ function ItemCard({
   readonly item: ReviewItem;
   readonly firm: ReviewFirm;
   onChanged(): void;
-  onLog(): void;
+  onLog(callSessionId: string): void;
 }): JSX.Element {
   const key = itemKey(item);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -191,6 +195,9 @@ function ItemCard({
   const proposal = item.source === 'proposal' ? item.proposal : null;
   const logged = item.source !== 'stage' && firm.loggedSessions.has(item.callSessionId);
 
+  const logIt = (): void => {
+    if (item.source !== 'stage') onLog(item.callSessionId);
+  };
   const dismiss = (): void => {
     void dismissItem(item).then(
       result => {
@@ -252,7 +259,7 @@ function ItemCard({
         <>
           <p className="text-xs text-muted-foreground">Callie is still waiting for this call’s notes. Calling is not stopped; e-mail and sequence steps for this firm wait.</p>
           <div className="flex gap-2">
-            <Button variant="outline" data-testid="review-log" className={dense.md} onClick={onLog}>
+            <Button variant="outline" data-testid="review-log" className={dense.md} onClick={logIt}>
               Log
             </Button>
             <Button variant="ghost" data-testid="review-item-dismiss" className={cn(dense.md, 'text-muted-foreground')} onClick={dismiss}>
@@ -310,6 +317,16 @@ function ItemCard({
             </>
           ) : null}
 
+          {proposal.kind === 'outcome' && proposal.params.outcome === 'wrong_number' ? (
+            <>
+              <p className="text-xs text-muted-foreground">The call is logged as something else, but they said this was the wrong number. Correct the number so Callie stops using it.</p>
+              <Button variant="outline" data-testid="review-correct-phone" aria-expanded={editor === 'phone'} className={cn(dense.md, 'self-start')} onClick={() => toggle('phone')}>
+                Correct the number
+              </Button>
+              {editor === 'phone' ? editors('phone') : null}
+            </>
+          ) : null}
+
           {proposal.kind === 'callback_zone_unknown' ? (
             <>
               <p className="text-xs text-muted-foreground">Set the firm’s time zone, then apply the callback above.</p>
@@ -356,7 +373,7 @@ function ItemCard({
           ) : null}
 
           {proposal.kind === 'outcome_unclear' ? (
-            <Button variant="outline" data-testid="review-set-outcome" className={cn(dense.md, 'self-start')} onClick={onLog}>
+            <Button variant="outline" data-testid="review-set-outcome" className={cn(dense.md, 'self-start')} onClick={logIt}>
               Set the outcome
             </Button>
           ) : null}
@@ -385,7 +402,8 @@ export function ReviewPanel({
   readonly items: readonly ReviewItem[];
   readonly firm: ReviewFirm;
   onChanged(): void;
-  onLog(): void;
+  /** Log this item's call, by its own session: never "the last call". */
+  onLog(callSessionId: string): void;
 }): JSX.Element | null {
   const mine = items.filter(item => itemFirmId(item) === firm.firmId);
   if (mine.length === 0) return null;

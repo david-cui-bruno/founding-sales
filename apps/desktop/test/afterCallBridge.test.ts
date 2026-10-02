@@ -52,9 +52,19 @@ describe('the recorded reads', () => {
   it('a read an API does not serve (404) is null, never a thrown error: the block hides', async () => {
     const { handlers } = scripted({});
     expect(await handlers['calling.analysis']({ callSessionId: SESSION_ID } as never)).toEqual({ analysis: null, reason: 'not_found' });
-    expect(await handlers['review.list'](undefined as never)).toEqual({ items: null });
+    expect(await handlers['review.list'](undefined as never)).toEqual({ items: null, failed: false });
     expect(await handlers['calling.recap'](undefined as never)).toEqual({ recap: null });
     expect(await handlers['calling.acceptance'](undefined as never)).toEqual({ acceptance: null });
+  });
+});
+
+describe('a failed review read is not a read the API does not serve', () => {
+  it('a 500 and an unreadable answer are `failed`; only a 404 is quietly absent', async () => {
+    const server = scripted({ '/review': { status: 500, body: { error: 'internal' } } });
+    expect(await server.handlers['review.list'](undefined as never)).toEqual({ items: null, failed: true });
+    const garbled = scripted({ '/review': ok({ nonsense: true }) });
+    expect(await garbled.handlers['review.list'](undefined as never)).toEqual({ items: null, failed: true });
+    expect(OPERATIONS['review.list'].output.safeParse({ items: null, failed: true }).success).toBe(true);
   });
 });
 

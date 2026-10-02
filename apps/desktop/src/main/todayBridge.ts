@@ -45,6 +45,7 @@ import {
   type TodayFirm,
   type TodayState,
 } from '../renderer/todayContract.ts';
+import { REACHED_OUTCOMES } from '../renderer/outcomeForm.ts';
 import type { AuthedClient } from './authedClient.ts';
 import type { CallActivity } from './callActivity.ts';
 import type { CallStart, CallingView } from '../shared/operations.ts';
@@ -913,10 +914,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // A call placed from Callie to this firm and number: the outcome names its session,
       // so the server links the log to the recorded call (slice C1). Never guessed across
       // firms or numbers, exactly like the last call above.
+      // When the page names the call (a Needs review item's Log), that session is sent as it
+      // is and `lastSession` is never consulted: it may be another call, or none after a restart.
+      const named = input.callSessionId ?? null;
       const placed =
-        lastSession !== null && lastSession.firmId === input.firmId && (routeId === null || routeId === lastSession.routeId)
-          ? lastSession
-          : null;
+        named !== null
+          ? null
+          : lastSession !== null && lastSession.firmId === input.firmId && (routeId === null || routeId === lastSession.routeId)
+            ? lastSession
+            : null;
       const answer = await deps.api.command(
         '/calls/log',
         {
@@ -924,7 +930,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(contactId === null ? {} : { contactId }),
           ...(routeId === null ? {} : { routeId }),
           ...(input.itemId === null ? {} : { itemId: input.itemId }),
-          ...(placed === null ? {} : { callSessionId: placed.sessionId }),
+          ...(named !== null ? { callSessionId: named } : placed === null ? {} : { callSessionId: placed.sessionId }),
           outcome: input.outcome,
           // No `occurredAt`: "just now" is the server's clock (C15).
           ...(input.note === '' ? {} : { note: input.note }),
@@ -932,14 +938,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(input.outcome === 'do_not_call'
             ? { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
             : {}),
-          // The agreed follow-up (migration 0025). Sent only for `interested`, which
-          // is the only outcome the server grants one on: another outcome would be
-          // refused, and refusing a whole call log because of a stale field in the
-          // form would lose the outcome itself.
+          // The agreed follow-up (migration 0025). Sent for the outcomes the consent rule
+          // allows one on (a conversation that reached somebody, never `do_not_call`): any
+          // other outcome would be refused, and refusing a whole call log because of a
+          // stale field in the form would lose the outcome itself.
           // …and only when the call names a person. A permission is granted to somebody,
           // and the server refuses an agreement with no contact — which would take the
           // whole call log with it, losing the outcome (the third review of PR 332).
-          ...(input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
+          ...(input.followUpPermission !== null && REACHED_OUTCOMES.includes(input.outcome) && contactId !== null
             ? { followUpPermission: input.followUpPermission }
             : {}),
         },
@@ -954,7 +960,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       if (stale(mine)) return await answerFor(mine);
       // What was actually sent, for the notice: the same condition as the body above.
       const agreed =
-        input.followUpPermission !== null && input.outcome === 'interested' && contactId !== null
+        input.followUpPermission !== null && REACHED_OUTCOMES.includes(input.outcome) && contactId !== null
           ? input.followUpPermission
           : null;
       agreement = null;

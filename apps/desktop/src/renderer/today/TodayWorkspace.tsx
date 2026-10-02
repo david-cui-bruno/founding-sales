@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { TodayCardBlocker } from '@fss/contracts';
-import type { FirmBasicsAnswer } from '../../shared/operations.ts';
+import type { AnalysisView, FirmBasicsAnswer } from '../../shared/operations.ts';
 import type { CallControl } from '../calling/useCall.ts';
 import { useCallingStatus } from '../calling/useCallingStatus.ts';
 import { UNAVAILABLE, type HomeView } from '../homeView.ts';
@@ -32,7 +32,7 @@ import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type W
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
 import { callTimer } from '../calling/callText.ts';
-import { useCallProgress } from './useCallProgress.ts';
+import { callHistoryKey, useCallProgress } from './useCallProgress.ts';
 import { todayForm, type Today } from './useToday.ts';
 
 /**
@@ -74,12 +74,16 @@ export interface TodayMemory {
    * when it completes and never depends on which firm is open.
    */
   readonly sessions: { current: Map<string, { readonly callSessionId: string; readonly endedAt: number }> };
+  /** An Apply's command id by call session: it outlives the panel so a lost answer is retried under it. */
+  readonly applyCommands: Map<string, { readonly signature: string; readonly id: string }>;
 }
 
 export interface OpenPanels {
   readonly firmId: string | null;
   readonly editing: BasicsField | null;
   readonly outcomeOpen: boolean;
+  /** The call the open outcome form records when it was chosen by name (a Needs review item's Log). */
+  readonly logSession?: string | null;
 }
 
 export function useTodayMemory(): TodayMemory {
@@ -88,10 +92,11 @@ export function useTodayMemory(): TodayMemory {
   const firmScroll = useRef(new Map<string, number>());
   const panels = useRef<OpenPanels>({ firmId: null, editing: null, outcomeOpen: false });
   const sessions = useRef(new Map<string, { readonly callSessionId: string; readonly endedAt: number }>());
+  const applyCommands = useRef(new Map<string, { readonly signature: string; readonly id: string }>());
   const markDone = useCallback((firmId: string): void => {
     setDone(current => (current.has(firmId) ? current : new Set([...current, firmId])));
   }, []);
-  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels, sessions }), [done, markDone]);
+  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels, sessions, applyCommands: applyCommands.current }), [done, markDone]);
 }
 
 /** A call worth showing the steps of: placed in the last day. Older ones are history. */
@@ -112,6 +117,55 @@ function laneChip(card: TodayCard | undefined, blockers: readonly TodayCardBlock
   if (card === undefined) return <Chip tone="outline">Not on today’s list</Chip>;
   if (groupOf(card) === 'blocked' && blockers.length > 0) return <Chip tone="warn">Can’t call yet</Chip>;
   return null;
+}
+
+/**
+ * The latest call's steps. The notes chip reads the CURRENT analysis (the same state the
+ * after-call block shows), not the legacy summary chip: while the block says "Writing the
+ * notes…" this must not say "Summary done" or "in progress" from an older record.
+ */
+function LatestCall({
+  history,
+  view,
+  waiting,
+}: {
+  readonly history: ReturnType<typeof useCallProgress>;
+  readonly view: AnalysisView | undefined;
+  readonly waiting: boolean;
+}): JSX.Element | null {
+  const progress = history.progress;
+  const latest = history.latest;
+  if (progress === null || latest === null) return null;
+  const phase = view === undefined ? 'absent' : phaseOf(view, waiting);
+  const notes =
+    phase === 'pending' || phase === 'waiting'
+      ? { state: 'pending' as const, word: 'being written' }
+      : phase === 'completed'
+        ? { state: 'done' as const, word: 'ready' }
+        : phase === 'failed'
+          ? { state: 'failed' as const, word: 'could not be written' }
+          : { state: progress.analysis.state, word: progress.analysis.word };
+  const known = phase !== 'absent';
+  return (
+    <Block data-testid="latest-call" className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
+      <Label>Latest call</Label>
+      <div className="flex flex-wrap gap-1.5">
+        <StepChip label="Call" state={progress.call.state} word={progress.call.word} testId="latest-step-call" />
+        <StepChip label="Recording" state={progress.recording.state} word={progress.recording.word} testId="latest-step-recording" />
+        <StepChip label="Transcript" state={progress.transcription.state} word={progress.transcription.word} testId="latest-step-transcription" />
+        <StepChip label="Notes" state={notes.state} word={notes.word} testId="latest-step-analysis" />
+      </div>
+      {known ? null : latest.summary === undefined ? (
+        progress.sentence === null ? null : (
+          <p className="mt-2 text-sm text-muted-foreground">{progress.sentence}</p>
+        )
+      ) : (
+        <p data-testid="latest-call-summary" className="mt-2 text-base">
+          {latest.summary.summary}
+        </p>
+      )}
+    </Block>
+  );
 }
 
 function SearchDialog({
@@ -322,6 +376,7 @@ export function TodayWorkspace({
   // The two forms come back open when the person does, with the text they left in them.
   const [editing, setEditing] = useState<BasicsField | null>(() => memory.panels.current.editing);
   const [outcomeOpen, setOutcomeOpen] = useState(() => memory.panels.current.outcomeOpen);
+  const [logSession, setLogSession] = useState<string | null>(() => memory.panels.current.logSession ?? null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [incomingNotice, setIncomingNotice] = useState<string | null>(null);
 
@@ -382,6 +437,7 @@ export function TodayWorkspace({
     if (!returning) {
       setEditing(null);
       setOutcomeOpen(false);
+      setLogSession(null);
     }
     if (region !== null) region.scrollTop = firmId === null ? 0 : (memory.firmScroll.current.get(firmId) ?? 0);
     if (call.state.phase === 'ended' || call.state.phase === 'refused') {
@@ -392,8 +448,8 @@ export function TodayWorkspace({
   // What is open, kept for the next visit. Not written while no firm is open, so a visit
   // that starts before the firm has been read does not forget the last one's forms.
   useEffect(() => {
-    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen };
-  }, [firmId, editing, outcomeOpen, memory]);
+    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen, logSession: outcomeOpen ? logSession : null };
+  }, [firmId, editing, outcomeOpen, logSession, memory]);
 
   // A call that ended: read the card and the cadence again, read the history now (and
   // while its steps are on their way), and tick the firm off for this sitting.
@@ -469,10 +525,15 @@ export function TodayWorkspace({
   const loading = state === null || todayView === null;
 
   const loggedSessions = new Set((history.calls ?? []).filter(call => call.callLogId !== null).map(call => call.sessionId));
+  // `reload` is captured by a pending Apply, so a late answer for firm A can arrive while B is
+  // open. It always refreshes A's cached data; it re-opens a firm only when that firm is still
+  // the one on screen, so a background result never moves David off the firm he is working on.
+  const openFirm = useRef(firmId);
+  openFirm.current = firmId;
   const reload = (): void => {
     review.reload();
-    history.refresh();
-    if (firmId !== null) actions?.expand(firmId);
+    if (firmId !== null) void queries.invalidateQueries({ queryKey: callHistoryKey(firmId) });
+    if (firmId !== null && openFirm.current === firmId) actions?.expand(firmId);
     today.refresh();
   };
   const marks: Record<string, string> = {};
@@ -494,11 +555,15 @@ export function TodayWorkspace({
             waiting={Date.now() - panelSession.endedAt < WAITING_WINDOW_MS}
             logged={loggedSessions.has(panelSession.callSessionId)}
             templates={state?.followUpTemplates ?? []}
+            commands={memory.applyCommands}
             onReload={() => {
               void queryReload(panelSession.callSessionId);
             }}
             onChanged={reload}
-            onEnterManually={() => setOutcomeOpen(true)}
+            onEnterManually={() => {
+              setLogSession(panelSession.callSessionId);
+              setOutcomeOpen(true);
+            }}
           />
         )}
         <ReviewPanel
@@ -514,7 +579,10 @@ export function TodayWorkspace({
             reload();
             if (panelSession !== null) void queryReload(panelSession.callSessionId);
           }}
-          onLog={() => setOutcomeOpen(true)}
+          onLog={callSessionId => {
+            setLogSession(callSessionId);
+            setOutcomeOpen(true);
+          }}
         />
       </div>
     );
@@ -665,7 +733,17 @@ export function TodayWorkspace({
               marks={marks}
               review={
                 review.items === null ? null : (
-                  <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
+                  <>
+                    <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
+                    {review.failed ? (
+                      <p data-testid="review-refresh-failed" role="status" className="mb-3 flex items-center gap-1 px-2 text-xs text-muted-foreground">
+                        Couldn’t refresh.
+                        <button type="button" data-testid="review-refresh-retry" className="underline underline-offset-2 hover:text-foreground" onClick={review.reload}>
+                          Retry
+                        </button>
+                      </p>
+                    ) : null}
+                  </>
                 )
               }
             />
@@ -760,6 +838,7 @@ export function TodayWorkspace({
                       enabled={todayView.actionsEnabled}
                       actions={actions}
                       callSessionId={call.state.phase === 'ended' && callFirm === expanded.firmId ? call.state.sessionId : null}
+                      forSession={logSession}
                     />
                   </Block>
                   </div>
@@ -778,24 +857,7 @@ export function TodayWorkspace({
                 )}
 
                 {history.progress !== null && history.latest !== null && recentCall(history.latest) ? (
-                  <Block data-testid="latest-call" className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
-                    <Label>Latest call</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      <StepChip label="Call" state={history.progress.call.state} word={history.progress.call.word} testId="latest-step-call" />
-                      <StepChip label="Recording" state={history.progress.recording.state} word={history.progress.recording.word} testId="latest-step-recording" />
-                      <StepChip label="Transcript" state={history.progress.transcription.state} word={history.progress.transcription.word} testId="latest-step-transcription" />
-                      <StepChip label="Summary" state={history.progress.analysis.state} word={history.progress.analysis.word} testId="latest-step-analysis" />
-                    </div>
-                    {history.latest.summary === undefined ? (
-                      history.progress.sentence === null ? null : (
-                        <p className="mt-2 text-sm text-muted-foreground">{history.progress.sentence}</p>
-                      )
-                    ) : (
-                      <p data-testid="latest-call-summary" className="mt-2 text-base">
-                        {history.latest.summary.summary}
-                      </p>
-                    )}
-                  </Block>
+                  <LatestCall history={history} view={analyses.get(history.latest.sessionId)} waiting={Date.now() - (Number.isFinite(latestEnded) ? latestEnded : Date.now()) < WAITING_WINDOW_MS} />
                 ) : null}
 
                 <div className="mt-6">
