@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { lockSuppressionHistory } from '../suppression/events.ts';
 import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -105,6 +106,10 @@ export async function mergeFirms(
   // after the firm locks, it closed a cycle with a Twilio call's consumption, which
   // holds the gate SHARED and then locks the firm (review fold 2).
   await lockSendGateForStopFact(context);
+  // Then the stop-history lock (brief RF, review P2): a lift of a source stop either
+  // commits before this merge reads the source's stops, and is copied with them, or waits
+  // for the merge and then lifts the survivor's copy too (`liftMergeCopies`).
+  await lockSuppressionHistory(context);
 
   // Lock in a stable order so two merges naming the same pair in opposite directions
   // cannot deadlock.

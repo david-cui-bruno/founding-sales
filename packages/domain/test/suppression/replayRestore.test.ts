@@ -68,9 +68,11 @@ async function stop(
 
 async function lift(journal: RecordingSuppressionJournal, eventId: string): Promise<string> {
   const lifted = await withTransaction(database.session, async () =>
-    await recordAdminSupersession(as('admin'), { eventId, reason: 'correction', commandId: randomUUID(), journal }),
+    await recordAdminSupersession(as('admin'), { eventId, reason: 'correction', commandId: randomUUID() }),
   );
   if (!lifted.ok) throw new Error(lifted.reason);
+  // Journalled after the commit, as the API route does (brief RF).
+  await journal.append(lifted.value.journalRecord);
   return lifted.value.supersessionEventId;
 }
 

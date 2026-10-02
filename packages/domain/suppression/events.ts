@@ -18,7 +18,7 @@ import {
   mayCorrectSuppression,
 } from '../src/rules/suppressionCanonicalization.ts';
 import { claimFinalization } from './finalize.ts';
-import { deterministicEventId, type SuppressionJournal } from './journal.ts';
+import { deterministicEventId, type SuppressionJournal, type SuppressionJournalRecord } from './journal.ts';
 
 /**
  * The insert-only suppression protocol (specification 10.2, Appendix A, Appendix G
@@ -50,10 +50,13 @@ import { deterministicEventId, type SuppressionJournal } from './journal.ts';
  * the command transaction and before the commit. A throw rolls the transaction
  * back and nothing is suppressed; a success followed by a rollback leaves the
  * journal holding an event the database does not, which 10.2 calls out as the safe
- * direction because replay only ever re-adds a suppression. A stop is journalled before
- * its INSERT. A supersession is journalled after its INSERT has won the
- * one-supersession index (brief RF, R1): a supersession the database refused must not be
- * in the journal, because replaying a lift is not the safe direction.
+ * direction because replay only ever re-adds a suppression. That is a stop's rule. A
+ * supersession is the opposite direction, so its rule is the opposite (brief RF): it is
+ * journalled only AFTER its command transaction commits, by whoever ends that transaction
+ * (the API's suppression route). These functions return the record for that and never
+ * append it themselves. A lift whose journal write fails after the commit stays lifted and
+ * is logged; a later restore brings the stop back, which errs toward the stop. A lift in the
+ * journal that never committed would be the one thing a replay must not apply.
  */
 
 export type SuppressionResult<T> =
@@ -349,8 +352,10 @@ export async function recordSuppression(
     supersessionReason: null,
     recordedAt: now,
     channel: input.channel,
-    // The firm the review hold below goes on, so a replay opens the same one (brief RF, X5).
-    ...(input.firmId === undefined ? {} : { firmId: input.firmId }),
+    // The firm the review hold below goes on, so a replay opens the same one (brief RF, X5);
+    // null, written as such, when there is none, so a replay can tell it from an object
+    // written before RF, which says nothing.
+    firmId: input.firmId ?? null,
   });
 
   await context.db.query(
@@ -471,7 +476,67 @@ async function underSupersessionSavepoint(context: RepositoryContext, work: () =
   }
 }
 
+/** The lock's name: one per workspace, like the send gate. */
+export function suppressionHistoryLockName(workspaceId: string): string {
+  return `fss.suppression-history:${workspaceId}`;
+}
+
+/**
+ * Serialise every write that reads a stop's history and writes from it (brief RF, review P2):
+ * a supersession (admin lift or correction), the merge's copy of a firm's stops, and the
+ * replay. Without it a lift that commits while a merge is between reading the source's
+ * stops and copying them is lost on the survivor. A supersession takes it first thing;
+ * the merge and the replay take it right after the send gate, before any row. Nothing
+ * takes the send gate after it, so the two locks never form a cycle. Transaction-scoped.
+ */
+export async function lockSuppressionHistory(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    suppressionHistoryLockName(context.scope.workspaceId),
+  ]);
+}
+
+/**
+ * Carry a supersession onto every merge copy of the event it lifted (brief RF, review P2).
+ *
+ * A firm merge copies each source stop to the survivor as `merge:<event>`. A lift of the
+ * source's event after the merge is a lift of the stop the survivor inherited, so the copy
+ * is lifted with it, as `merge:<supersession>` — exactly the row the merge would have
+ * copied had the lift come first. Copies of copies follow. Like every merge copy these are
+ * not journalled: a restore to before the merge loses the copies with the merge.
+ */
+async function liftMergeCopies(context: RepositoryContext, originalEventId: string, supersessionEventId: string): Promise<void> {
+  const { rows } = await context.db.query<{ event_id: string }>(
+    `SELECT copy.event_id FROM suppression_events copy
+      WHERE copy.workspace_id = $1 AND copy.event_id = 'merge:' || $2
+        AND NOT EXISTS (
+          SELECT 1 FROM suppression_events lift
+           WHERE lift.workspace_id = copy.workspace_id AND lift.supersedes_event_id = copy.event_id
+        )`,
+    [context.scope.workspaceId, originalEventId],
+  );
+  for (const copy of rows) {
+    const copiedLift = `merge:${supersessionEventId}`;
+    await context.db.query(
+      `INSERT INTO suppression_events
+         (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id,
+          recorded_at, supersedes_event_id, supersession_reason, channel)
+       SELECT $1, $2, copy.scope, copy.canonical_key, copy.canonicalizer_version, lift.source, lift.actor_user_id,
+              lift.command_id, lift.recorded_at, copy.event_id, lift.supersession_reason, copy.channel
+         FROM suppression_events copy
+         JOIN suppression_events lift ON lift.workspace_id = copy.workspace_id AND lift.event_id = $3
+        WHERE copy.workspace_id = $1 AND copy.event_id = $4`,
+      [context.scope.workspaceId, copiedLift, supersessionEventId, copy.event_id],
+    );
+    await liftMergeCopies(context, copy.event_id, copiedLift);
+  }
+}
+
 export interface CorrectionOutcome {
+  /**
+   * The journal record of the correction, for the caller to append once the command
+   * transaction has committed (brief RF): a supersession is never journalled before then.
+   */
+  readonly journalRecord: SuppressionJournalRecord;
   readonly correctionEventId: string;
   readonly originalEventId: string;
   readonly releasedHoldIds: readonly string[];
@@ -491,10 +556,11 @@ export interface CorrectionOutcome {
  */
 export async function recordCorrection(
   context: RepositoryContext,
-  input: { readonly eventId: string; readonly commandId?: string | undefined; readonly journal: SuppressionJournal },
+  input: { readonly eventId: string; readonly commandId?: string | undefined },
 ): Promise<SuppressionResult<CorrectionOutcome>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('not_your_event');
+  await lockSuppressionHistory(context);
 
   const original = await readSuppressionEvent(context, input.eventId);
   if (original === null) return refuse('suppression_unknown');
@@ -560,10 +626,10 @@ export async function recordCorrection(
   });
   if (!written) return refuse(claimLost ?? 'already_superseded');
 
-  // The journal, once the row has won and before the command is acknowledged: a losing
-  // supersession leaves no journal object for a replay to apply (brief RF, R1). A throw
-  // here rolls the row back with the transaction.
-  await input.journal.append({
+  await liftMergeCopies(context, original.eventId, correctionEventId);
+
+  // The record the caller journals after the commit (brief RF): never appended here.
+  const journalRecord: SuppressionJournalRecord = {
     eventId: correctionEventId,
     workspaceId: context.scope.workspaceId,
     scope: original.scope,
@@ -576,7 +642,7 @@ export async function recordCorrection(
     supersessionReason: 'mistaken_entry',
     recordedAt: now,
     channel: original.channel,
-  });
+  };
 
   // "It clears only this hold; remaining holds still apply."
   const released = await releaseHoldsOfEvent(context, {
@@ -595,6 +661,7 @@ export async function recordCorrection(
   });
 
   return accept({
+    journalRecord,
     correctionEventId,
     originalEventId: original.eventId,
     releasedHoldIds: released.map(hold => hold.id),
@@ -615,10 +682,9 @@ export async function recordCorrection(
  * supersession lifts the suppression from here on. `already_superseded` comes from
  * migration 0001's partial unique index, so two admins racing produce one.
  *
- * A supersession is journalled after its row, not before (brief RF, R1). The journal still
- * holds it before the command is acknowledged, which is what 10.2 asks, and only the
- * supersession that won the index is journalled: a lift in the journal that the database
- * refused is the one journal object a replay must never apply.
+ * The supersession is journalled by the caller after the command commits (brief RF): the
+ * result carries its record. A lift in the journal that never committed is the one journal
+ * object a replay must never apply.
  */
 export async function recordAdminSupersession(
   context: RepositoryContext,
@@ -626,12 +692,19 @@ export async function recordAdminSupersession(
     readonly eventId: string;
     readonly reason: 'correction' | 'documented_reconsent';
     readonly commandId?: string | undefined;
-    readonly journal: SuppressionJournal;
   },
-): Promise<SuppressionResult<{ readonly supersessionEventId: string; readonly originalEventId: string }>> {
+): Promise<
+  SuppressionResult<{
+    readonly supersessionEventId: string;
+    readonly originalEventId: string;
+    /** For the caller to append once the command has committed (brief RF). */
+    readonly journalRecord: SuppressionJournalRecord;
+  }>
+> {
   if (!isAdminScope(context.scope)) return refuse('admin_only');
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('admin_only');
+  await lockSuppressionHistory(context);
 
   const original = await readSuppressionEvent(context, input.eventId);
   if (original === null) return refuse('suppression_unknown');
@@ -676,9 +749,10 @@ export async function recordAdminSupersession(
   });
   if (!written) return refuse('already_superseded');
 
-  // The journal, once the row has won and before the command is acknowledged: the loser of
-  // a race leaves no journal object superseding the event. A throw rolls the row back.
-  await input.journal.append({
+  await liftMergeCopies(context, original.eventId, supersessionEventId);
+
+  // The record the caller journals after the commit (brief RF): never appended here.
+  const journalRecord: SuppressionJournalRecord = {
     eventId: supersessionEventId,
     workspaceId: context.scope.workspaceId,
     scope: original.scope,
@@ -691,7 +765,7 @@ export async function recordAdminSupersession(
     supersessionReason: input.reason,
     recordedAt: now,
     channel: original.channel,
-  });
+  };
 
   await releaseHoldsOfEvent(context, {
     sourceEventId: original.eventId,
@@ -704,5 +778,5 @@ export async function recordAdminSupersession(
     detail: { supersessionEventId, reason: input.reason },
   });
 
-  return accept({ supersessionEventId, originalEventId: original.eventId });
+  return accept({ supersessionEventId, originalEventId: original.eventId, journalRecord });
 }

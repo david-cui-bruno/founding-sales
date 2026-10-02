@@ -362,6 +362,8 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
   // Brief RF: the journal objects a replay skipped, by id only (no key, no address).
   const competingSupersessions: string[] = [];
   const orphanSupersessions: string[] = [];
+  const staleCorrections: string[] = [];
+  const unreconstructedHolds: string[] = [];
   for (const [workspaceId, forWorkspace] of byWorkspace) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
     const report = await withTransaction(invocation.session, async () =>
@@ -375,6 +377,8 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     released += report.released;
     competingSupersessions.push(...report.competingSupersessions);
     orphanSupersessions.push(...report.orphanSupersessions);
+    staleCorrections.push(...report.staleCorrections);
+    unreconstructedHolds.push(...report.unreconstructedHolds);
   }
 
   return accept({
@@ -389,6 +393,11 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     released,
     competingSupersessions,
     orphanSupersessions,
+    staleCorrections,
+    // Review P3: manual handle stops whose review hold the journal cannot say. The count is
+    // the line an operator reads; the ids are the stops to look at.
+    unreconstructedHoldCount: unreconstructedHolds.length,
+    unreconstructedHolds,
     workspaces: byWorkspace.size,
   });
 }

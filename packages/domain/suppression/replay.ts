@@ -7,7 +7,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization } from './finalize.ts';
-import { readSuppressionEvent, reviewHoldBlocks } from './events.ts';
+import { lockSuppressionHistory, readSuppressionEvent, reviewHoldBlocks } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
@@ -77,10 +77,12 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
   if (channel !== 'phone' && channel !== 'email' && channel !== 'all') {
     return { ok: false, reason: 'field_missing', detail: 'channel' };
   }
-  // The firm the live write opened its review hold on (brief RF, X5): absent on every object
-  // written before it, and then null; a string when present.
-  const firmId = object['firmId'] === undefined || object['firmId'] === null ? null : object['firmId'];
-  if (firmId !== null && typeof firmId !== 'string') return { ok: false, reason: 'field_missing', detail: 'firmId' };
+  // The firm the live write opened its review hold on (brief RF, X5): a string, or null when
+  // the write named none; absent on every object written before RF, which says nothing.
+  const firmId = object['firmId'];
+  if (firmId !== undefined && firmId !== null && typeof firmId !== 'string') {
+    return { ok: false, reason: 'field_missing', detail: 'firmId' };
+  }
   return {
     ok: true,
     value: {
@@ -96,7 +98,7 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
       supersessionReason: text('supersessionReason'),
       recordedAt: text('recordedAt') ?? '',
       channel,
-      ...(firmId === null ? {} : { firmId }),
+      ...(firmId === undefined ? {} : { firmId }),
     },
   };
 }
@@ -134,6 +136,17 @@ export interface JournalReplayReport {
    * is nothing for them to lift, and the foreign key would refuse them. Ids only; skipped.
    */
   readonly orphanSupersessions: readonly string[];
+  /**
+   * Corrections whose original was already decided `finalized` when the replay reached them
+   * (brief RF, review P1): the correction never committed live (its stop was finalized
+   * instead), so it is neither inserted nor allowed to release anything. Ids only.
+   */
+  readonly staleCorrections: readonly string[];
+  /**
+   * Manual handle stops inside their window whose journal object predates RF and so does
+   * not say which firm the live write held (review P3). Their hold is not guessed. Ids only.
+   */
+  readonly unreconstructedHolds: readonly string[];
 }
 
 /** The sources that are terminal the instant they commit (10.2). Mirrors `events.ts`. */
@@ -173,8 +186,10 @@ export async function replaySuppressionJournal(
   context: RepositoryContext,
   input: ReplayInput,
 ): Promise<JournalReplayReport> {
-  // A replayed suppression stops sends exactly as the original did (lane g77).
+  // A replayed suppression stops sends exactly as the original did (lane g77). Then the
+  // history lock every supersession and the merge take (brief RF), in that order.
   await lockSendGateForStopFact(context);
+  await lockSuppressionHistory(context);
   const now = await databaseNow(context);
   let alreadyPresent = 0;
   let foreign = 0;
@@ -257,7 +272,24 @@ export async function replaySuppressionJournal(
   let finalized = 0;
   let windowsReopened = 0;
   let released = 0;
+  const staleCorrections: string[] = [];
+  const unreconstructedHolds: string[] = [];
   for (const record of ordered) {
+    // A correction is a claim before it is a row, as it was live. A lost claim means the stop
+    // was finalized instead: the correction did not commit, so it is not inserted (the row
+    // alone would lift the stop) and releases nothing (review P1).
+    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null) {
+      const claim = await claimFinalization(context, {
+        eventId: record.supersedesEventId,
+        outcome: 'corrected',
+        correctionEventId: record.eventId,
+        ...(record.actorUserId === null ? {} : { decidedByUserId: record.actorUserId }),
+      });
+      if (!claim.won && claim.outcome !== 'corrected') {
+        staleCorrections.push(record.eventId);
+        continue;
+      }
+    }
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
@@ -282,17 +314,9 @@ export async function replaySuppressionJournal(
     inserted += 1;
 
     if (SUPERSESSION_SOURCES.has(record.source) && record.supersedesEventId !== null) {
-      // R4: a lift is replayed as the lift it was. A correction claims its original as the
-      // live correction did; both release the original's review hold. Neither opens a hold
-      // or is owed a finalizer: `finalize.ts` answers `not_applicable` for them.
-      if (record.source === 'mistaken_entry_correction') {
-        await claimFinalization(context, {
-          eventId: record.supersedesEventId,
-          outcome: 'corrected',
-          correctionEventId: record.eventId,
-          ...(record.actorUserId === null ? {} : { decidedByUserId: record.actorUserId }),
-        });
-      }
+      // R4: a lift is replayed as the lift it was: it releases the original's review hold (a
+      // correction has claimed its original above). It opens no hold and is owed no
+      // finalizer: `finalize.ts` answers `not_applicable` for it.
       await releaseHoldsOfEvent(context, { sourceEventId: record.supersedesEventId, reasonCode: 'manual_suppression_review' });
       released += 1;
       continue;
@@ -316,7 +340,10 @@ export async function replaySuppressionJournal(
     // The hold is the one the live write opened (brief RF, X5): on the firm it named, which
     // is the key of a firm stop and, since RF, journalled for a handle stop. A handle stop
     // journalled before RF names no firm, and its live hold cannot be known.
-    const holdFirm = record.firmId ?? (record.scope === 'firm' ? record.canonicalKey : null);
+    const holdFirm = record.scope === 'firm' ? record.canonicalKey : (record.firmId ?? null);
+    // Review P3: a handle stop whose object predates RF says nothing about a firm. Its hold
+    // is reported, not guessed.
+    if (record.scope === 'handle' && record.firmId === undefined) unreconstructedHolds.push(record.eventId);
     if (holdFirm !== null) {
       await openHold(context, {
         scopeKind: 'firm',
@@ -340,5 +367,16 @@ export async function replaySuppressionJournal(
     windowsReopened += 1;
   }
 
-  return { inserted, alreadyPresent, foreign, finalized, windowsReopened, released, competingSupersessions, orphanSupersessions };
+  return {
+    inserted,
+    alreadyPresent,
+    foreign,
+    finalized,
+    windowsReopened,
+    released,
+    competingSupersessions,
+    orphanSupersessions,
+    staleCorrections,
+    unreconstructedHolds,
+  };
 }

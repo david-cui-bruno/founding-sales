@@ -223,6 +223,33 @@ describe('X5: replay opens the review hold the live write opened for a handle st
     const report = await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [record] }));
     expect(report.windowsReopened).toBe(1);
     expect(await openReviewHolds(firm.firmId)).toEqual([]);
+    // Review P3: not guessed, and not silent either.
+    expect(report.unreconstructedHolds).toEqual([record.eventId]);
+  });
+
+  it('a handle stop journalled since RF with no firm says so, and is not reported', async () => {
+    const commandId = randomUUID();
+    const record: SuppressionJournalRecord = {
+      eventId: deterministicEventId({ workspaceId: seeded.alpha.workspaceId, scope: 'handle', canonicalKey: '+14155550145', source: 'salesperson_manual', commandId, channel: 'phone' }),
+      workspaceId: seeded.alpha.workspaceId,
+      scope: 'handle',
+      canonicalKey: '+14155550145',
+      canonicalizerVersion: 'e164-lower.1',
+      source: 'salesperson_manual',
+      actorUserId: seeded.alpha.salesperson.userId,
+      commandId,
+      supersedesEventId: null,
+      supersessionReason: null,
+      recordedAt: minutesAgo(1),
+      channel: 'phone',
+      firmId: null,
+    };
+    const parsed = parseSuppressionJournalRecord(journalObjectBody(record));
+    expect(parsed).toMatchObject({ ok: true, value: { firmId: null } });
+    const report = await withTransaction(database.session, async () =>
+      await replaySuppressionJournal(restore(), { records: [parsed.ok ? parsed.value : record] }),
+    );
+    expect(report).toMatchObject({ windowsReopened: 1, unreconstructedHolds: [] });
   });
 });
 
@@ -298,7 +325,6 @@ describe('X7: a merge keeps a lifted stop lifted and an active stop active', () 
         eventId: lifted,
         reason: 'documented_reconsent',
         commandId: randomUUID(),
-        journal,
       }),
     );
     expect(lift.ok, JSON.stringify(lift)).toBe(true);
@@ -315,5 +341,111 @@ describe('X7: a merge keeps a lifted stop lifted and an active stop active', () 
     expect(effective.rows).toEqual([{ event_id: `merge:${active}`, channel: 'email' }]);
     expect(await supersessionsOf(`merge:${lifted}`)).toEqual([`merge:${lift.ok ? lift.value.supersessionEventId : ''}`]);
     expect(await supersessionsOf(`merge:${active}`)).toEqual([]);
+  });
+});
+
+describe('R3: a supersession with no original anywhere', () => {
+  it('is skipped and reported, and releases nothing', async () => {
+    const firm = await seedChannelFirm(database.session, seeded.alpha);
+    // A manual stop with its open review hold, in the database; an orphan lift names a stop
+    // that is neither there nor in the records read.
+    const journal = recordingSuppressionJournal();
+    const recorded = await withTransaction(database.session, async () =>
+      await recordSuppression(userContext(database.session, seeded.alpha), {
+        scope: 'firm',
+        firmId: firm.firmId,
+        source: 'salesperson_manual',
+        channel: 'all',
+        commandId: randomUUID(),
+        journal,
+      }),
+    );
+    if (!recorded.ok) throw new Error(recorded.reason);
+    const missing = stopRecord(firm, 'salesperson_manual', minutesAgo(5));
+    const orphan = liftRecord(missing, minutesAgo(4));
+    const report = await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [orphan] }));
+    expect(report).toMatchObject({ inserted: 0, released: 0, orphanSupersessions: [orphan.eventId] });
+    expect(await supersessionsOf(missing.eventId)).toEqual([]);
+    // The stop in the database still holds the firm.
+    expect(await openReviewHolds(firm.firmId)).toHaveLength(1);
+  });
+});
+
+describe('R4 and review P1: a replayed correction', () => {
+  /** A correction of `original`, as the journal holds it. */
+  function correctionRecord(original: SuppressionJournalRecord, recordedAt: string): SuppressionJournalRecord {
+    const commandId = randomUUID();
+    return {
+      ...original,
+      eventId: deterministicEventId({
+        workspaceId: original.workspaceId,
+        scope: original.scope,
+        canonicalKey: original.canonicalKey,
+        source: 'mistaken_entry_correction',
+        commandId,
+        supersedesEventId: original.eventId,
+        channel: original.channel,
+      }),
+      source: 'mistaken_entry_correction',
+      commandId,
+      supersedesEventId: original.eventId,
+      supersessionReason: 'mistaken_entry',
+      recordedAt,
+    };
+  }
+
+  it('is a release: it claims its original corrected, releases its hold, and opens nothing', async () => {
+    const firm = await seedChannelFirm(database.session, seeded.alpha);
+    const stop = stopRecord(firm, 'salesperson_manual', minutesAgo(3), { firmId: firm.firmId });
+    const correction = correctionRecord(stop, minutesAgo(2));
+    const report = await withTransaction(database.session, async () =>
+      await replaySuppressionJournal(restore(), { records: [correction, stop] }),
+    );
+    expect(report).toMatchObject({ inserted: 2, released: 1, windowsReopened: 1, staleCorrections: [] });
+    expect(await supersessionsOf(stop.eventId)).toEqual([correction.eventId]);
+    expect(await openReviewHolds(firm.firmId)).toEqual([]);
+    const claim = await database.session.query<{ outcome: string; correction_event_id: string }>(
+      'SELECT outcome, correction_event_id FROM suppression_finalizations WHERE workspace_id = $1 AND event_id = $2',
+      [seeded.alpha.workspaceId, stop.eventId],
+    );
+    expect(claim.rows).toEqual([{ outcome: 'corrected', correction_event_id: correction.eventId }]);
+    const jobs = await database.session.query(
+      `SELECT 1 FROM jobs WHERE workspace_id = $1 AND kind = 'suppression.finalize' AND payload->>'eventId' = $2`,
+      [seeded.alpha.workspaceId, correction.eventId],
+    );
+    expect(jobs.rows).toEqual([]);
+  });
+
+  it('whose stop was finalized instead is not inserted and releases nothing (the legacy failed correction)', async () => {
+    const firm = await seedChannelFirm(database.session, seeded.alpha);
+    // Live: the stop, its correction rolled back after its journal write (before RF), and the
+    // finalizer then finalized the stop. The database has the stop and its claim.
+    const journal = recordingSuppressionJournal();
+    const recorded = await withTransaction(database.session, async () =>
+      await recordSuppression(userContext(database.session, seeded.alpha), {
+        scope: 'firm',
+        firmId: firm.firmId,
+        source: 'salesperson_manual',
+        channel: 'all',
+        commandId: randomUUID(),
+        journal,
+      }),
+    );
+    if (!recorded.ok) throw new Error(recorded.reason);
+    await database.session.query(
+      `INSERT INTO suppression_finalizations (workspace_id, event_id, outcome) VALUES ($1, $2, 'finalized')`,
+      [seeded.alpha.workspaceId, recorded.value.eventId],
+    );
+    const stale = correctionRecord(journal.appended[0]!, minutesAgo(1));
+    const report = await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [stale] }));
+    expect(report).toMatchObject({ inserted: 0, released: 0, staleCorrections: [stale.eventId] });
+    expect(await supersessionsOf(recorded.value.eventId)).toEqual([]);
+    // Still a stop, and its review hold is not released by the stale correction.
+    const effective = await database.session.query('SELECT 1 FROM effective_suppressions WHERE workspace_id = $1 AND event_id = $2', [
+      seeded.alpha.workspaceId,
+      recorded.value.eventId,
+    ]);
+    expect(effective.rows).toHaveLength(1);
+    expect(await openReviewHolds(firm.firmId)).toHaveLength(1);
   });
 });

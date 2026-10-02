@@ -5,6 +5,8 @@ import {
 } from '@fss/contracts';
 import { listEffectiveSuppressions } from '@fss/domain/suppression/effective.ts';
 import { recordAdminSupersession, recordCorrection, recordSuppression } from '@fss/domain/suppression/events.ts';
+import type { SuppressionJournal, SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
+import type { Logger } from '../bootstrap/log.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -84,32 +86,80 @@ export async function routeSuppressions(request: ApiRequest, options: RoutingOpt
             journal: deps.journal,
           }),
       );
-    case '/suppressions/correct':
-      return await runPolicyCommand(
-        deps,
-        correctSuppressionCommandSchema,
-        'correct_suppression',
-        async (repository, body) =>
-          await recordCorrection(repository, {
-            eventId: body.eventId,
-            commandId: body.commandId,
-            journal: deps.journal,
-          }),
-      );
-    case '/suppressions/supersede':
-      return await runPolicyCommand(
-        deps,
-        supersedeSuppressionCommandSchema,
-        'supersede_suppression',
-        async (repository, body) =>
-          await recordAdminSupersession(repository, {
-            eventId: body.eventId,
-            reason: body.reason,
-            commandId: body.commandId,
-            journal: deps.journal,
-          }),
-      );
+    case '/suppressions/correct': {
+      // The lift this command made, journalled only once the command has committed (brief RF).
+      let lift: SuppressionJournalRecord | null = null;
+      const reply = await runPolicyCommand(deps, correctSuppressionCommandSchema, 'correct_suppression', async (repository, body) => {
+        lift = null;
+        const corrected = await recordCorrection(repository, { eventId: body.eventId, commandId: body.commandId });
+        if (!corrected.ok) return corrected;
+        const { journalRecord, ...value } = corrected.value;
+        lift = journalRecord;
+        return { ok: true, value };
+      });
+      await journalCommittedLift(deps.journal, lift, reply, options.log);
+      return reply;
+    }
+    case '/suppressions/supersede': {
+      let lift: SuppressionJournalRecord | null = null;
+      const reply = await runPolicyCommand(deps, supersedeSuppressionCommandSchema, 'supersede_suppression', async (repository, body) => {
+        lift = null;
+        const superseded = await recordAdminSupersession(repository, {
+          eventId: body.eventId,
+          reason: body.reason,
+          commandId: body.commandId,
+        });
+        if (!superseded.ok) return superseded;
+        const { journalRecord, ...value } = superseded.value;
+        lift = journalRecord;
+        return { ok: true, value };
+      });
+      await journalCommittedLift(deps.journal, lift, reply, options.log);
+      return reply;
+    }
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }
+}
+
+/** How often, and after how long, a committed lift's journal write is tried again. */
+export const LIFT_JOURNAL_RETRY_DELAYS_MS: readonly number[] = [100, 500];
+
+/**
+ * Journal a supersession after its command committed (brief RF, review P1).
+ *
+ * A stop is journalled before its transaction commits, because a stop the journal holds and
+ * the database lost is the safe direction. A lift is the opposite direction: one the journal
+ * holds and the database never committed would be applied by a restore replay and remove a
+ * stop. So a lift is appended here, after `runCommand` returned a fresh acceptance (a replay
+ * of a receipt ran no work, and a command that failed to commit never gets here), with a
+ * bounded retry. If every attempt fails the lift stays committed and the failure is logged
+ * by id: a later restore brings the stop back, which errs toward the stop. Each failed put
+ * also logs `suppression_journal_write_failed`, the critical alarm's event.
+ */
+export async function journalCommittedLift(
+  journal: SuppressionJournal,
+  lift: SuppressionJournalRecord | null,
+  reply: RouteResult,
+  log: Logger | undefined,
+  delays: readonly number[] = LIFT_JOURNAL_RETRY_DELAYS_MS,
+): Promise<void> {
+  if (lift === null || reply.status !== 200) return;
+  const body = reply.body as { readonly replayed?: unknown };
+  if (body.replayed !== false) return;
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      await journal.append(lift);
+      return;
+    } catch {
+      const wait = delays[attempt];
+      if (wait === undefined) break;
+      await new Promise(resolve => setTimeout(resolve, wait));
+    }
+  }
+  log?.log('error', 'suppression_lift_unjournalled', {
+    workspace_id: lift.workspaceId,
+    event_id: lift.eventId,
+    supersedes_event_id: lift.supersedesEventId ?? '',
+  });
 }

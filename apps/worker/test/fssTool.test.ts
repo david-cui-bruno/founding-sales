@@ -425,6 +425,34 @@ describe('the fss admin commands a restore runs', () => {
     if (second.ok) expect(second.value['inserted']).toBe(0);
   });
 
+  it('prints the count of manual handle stops whose review hold a pre-RF journal cannot say (brief RF, review P3)', async () => {
+    const legacy = {
+      eventId: `sup_${'b'.repeat(64)}`,
+      workspaceId,
+      scope: 'handle' as const,
+      canonicalKey: '+14155550144',
+      canonicalizerVersion: 'e164-lower.1',
+      source: 'salesperson_manual',
+      actorUserId: null,
+      commandId: null,
+      supersedesEventId: null,
+      supersessionReason: null,
+      // Inside its ten-minute window, and written before RF: no firmId at all.
+      recordedAt: new Date().toISOString(),
+      channel: 'phone' as const,
+    };
+    const invocation: AdminInvocation = {
+      session,
+      config: readToolConfig({ DATABASE_URL: databaseUrl }),
+      environment: {},
+      options: { '--from': '2026-09-19T00:00:00Z' },
+      switches: new Set(),
+      journalSource: { read: async () => await Promise.resolve([legacy]) },
+    };
+    const replayed = await suppressionJournalReplayCommand(invocation);
+    expect(replayed).toMatchObject({ ok: true, value: { unreconstructedHoldCount: 1, unreconstructedHolds: [legacy.eventId] } });
+  });
+
   it('keeps a Message-ID in a report only as a hash (lane g73)', () => {
     expect(redactedMessageId('<fss.00000000-0000-4000-8000-000000000001@example.test>')).toMatch(/^[0-9a-f]{16}$/u);
     expect(redactedMessageId('<a@example.test>')).not.toBe(redactedMessageId('<b@example.test>'));
