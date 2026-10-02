@@ -4,7 +4,7 @@ import type { UpdateStatus } from '../shared/updateContract.ts';
 import type { Route, RouteName } from './routes.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
 import type { TodayCard, TodayLane, TodayState } from './todayContract.ts';
-import type { BannerView, CardView, TodayScreenView } from './todayView.ts';
+import { updatedLine, type BannerView, type CardView, type TodayScreenView } from './todayView.ts';
 import { buildMailboxView } from './viewModel.ts';
 
 /**
@@ -127,12 +127,14 @@ export interface HomeInput {
   readonly callsToday: number | null;
   /** Lane g83: what `callieUpdate` last said. Absent or null draws no update line. */
   readonly update?: UpdateStatus | null;
+  /** The clock for "Updated 2 min ago" in Settings › Status; absent draws no such row. */
+  readonly now?: number;
 }
 
 type Tone = 'ok' | 'warn' | 'stop' | 'none';
 
 export interface StatusRow {
-  readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system' | 'update';
+  readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system' | 'list' | 'update';
   readonly tone: Tone;
   readonly text: string;
   /** Lane g83: the one row with a control, the staged update's Restart to update. */
@@ -151,11 +153,21 @@ export interface NeedsRow {
   readonly action: NeedsAction;
 }
 
-interface FigureCell {
+export interface FigureCell {
   readonly key: 'calls_today' | 'calls' | 'meetings' | 'replies' | 'waiting' | 'holds' | 'emails';
   readonly label: string;
+  /** The confirmed count, or a dash. Uncertain counts are never added into it. */
   readonly value: string;
   readonly note: string | null;
+  /**
+   * The period the number covers (slice 3a, C0): "today", "since 24 Sep", or "now" for a
+   * count of what is open at this moment. Every cell names one.
+   */
+  readonly period: string;
+  /** Counts that are not confirmed yet, drawn beside the value as "(+1 unconfirmed)". */
+  readonly unconfirmed: number | null;
+  /** Where an actionable count leads: its queue or filter. Null for a plain total. */
+  readonly link: Route | null;
 }
 
 interface FiguresView {
@@ -432,8 +444,14 @@ function updateStatus(input: HomeInput): readonly StatusRow[] {
 }
 // --- end of lane g83's update line ---------------------------------------------------
 
+/** When Today's list was last read. It was a line in Today's header; it is routine, so it is a row here. */
+function listStatus(input: HomeInput): readonly StatusRow[] {
+  const line = input.now === undefined ? null : updatedLine(input.today?.asOf ?? null, input.now);
+  return line === null ? [] : [{ key: 'list', tone: 'none', text: `Today’s list: ${line.charAt(0).toLowerCase()}${line.slice(1)}` }];
+}
+
 export function statusRows(input: HomeInput): readonly StatusRow[] {
-  return [mailboxStatus(input), ...adminRows(input), systemStatus(input), ...updateStatus(input)];
+  return [mailboxStatus(input), ...adminRows(input), systemStatus(input), ...listStatus(input), ...updateStatus(input)];
 }
 
 // ---------------------------------------------------------------------------
@@ -546,8 +564,28 @@ export function figuresWindow(now: Date): { readonly from: string; readonly to: 
 const DASH = '—';
 
 /** The two calls figures, which must not read as the same number over two windows. */
-export const CALLS_TODAY_LABEL = 'Calls placed today';
-export const CALLS_SEVEN_DAYS_LABEL = 'Calls placed, 7 days';
+export const CALLS_LABEL = 'Calls placed';
+export const PERIOD_TODAY = 'today';
+export const PERIOD_NOW = 'now';
+
+/** "since 24 Sep": the window's start as the business zone's calendar day. */
+export function sinceLabel(from: string, zone: string | null): string {
+  const at = Date.parse(from);
+  if (!Number.isFinite(at)) return PERIOD_NOW;
+  try {
+    const options = zone === null ? {} : { timeZone: zone };
+    const day = new Intl.DateTimeFormat('en-GB', { ...options, day: 'numeric' }).format(new Date(at));
+    const month = new Intl.DateTimeFormat('en-US', { ...options, month: 'short' }).format(new Date(at));
+    return `since ${day} ${month}`;
+  } catch {
+    return `since ${from.slice(0, 10)}`;
+  }
+}
+
+/** "3", or "3 (+1 unconfirmed)": what the cell says, one string, for a test and a screen reader. */
+export function figureText(cell: FigureCell): string {
+  return cell.unconfirmed === null || cell.unconfirmed === 0 ? cell.value : `${cell.value} (+${String(cell.unconfirmed)} unconfirmed)`;
+}
 
 /** The funnel kind that is one meeting in the calendar (`packages/domain/funnel/kinds.ts`). */
 const MEETING_BOOKED = 'meeting.booked';
@@ -589,23 +627,29 @@ export function figuresView(input: {
   readonly figures: FiguresRead;
   /** The workspace's calls on its own business date, or null until a read has answered. */
   readonly callsToday: number | null;
+  /** The business zone, for the date a window starts on. Null before the first read. */
+  readonly zone?: string | null;
 }): FiguresView {
+  const zone = input.zone ?? null;
+  const plain = { unconfirmed: null, link: null } as const;
   const today: FigureCell = {
     key: 'calls_today',
-    label: CALLS_TODAY_LABEL,
+    label: CALLS_LABEL,
     value: input.callsToday === null ? DASH : String(input.callsToday),
     note: null,
+    period: PERIOD_TODAY,
+    ...plain,
   };
-  const dashes = (line: string | null): FiguresView => ({
+  const dashes = (line: string | null, since: string = PERIOD_NOW): FiguresView => ({
     label: FIGURES_LABEL,
     cells: [
       today,
-      { key: 'calls', label: CALLS_SEVEN_DAYS_LABEL, value: DASH, note: null },
-      { key: 'meetings', label: 'Meetings booked', value: DASH, note: null },
-      { key: 'replies', label: 'Replies', value: DASH, note: null },
-      { key: 'waiting', label: 'Replies waiting', value: DASH, note: null },
-      { key: 'holds', label: 'Holds open', value: DASH, note: null },
-      { key: 'emails', label: 'Emails sent', value: DASH, note: null },
+      { key: 'calls', label: CALLS_LABEL, value: DASH, note: null, period: since, ...plain },
+      { key: 'meetings', label: 'Meetings booked', value: DASH, note: null, period: since, ...plain },
+      { key: 'replies', label: 'Replies', value: DASH, note: null, period: since, ...plain },
+      { key: 'waiting', label: 'Replies waiting', value: DASH, note: null, period: since, ...plain },
+      { key: 'holds', label: 'Holds open', value: DASH, note: null, period: PERIOD_NOW, ...plain },
+      { key: 'emails', label: 'Emails sent', value: DASH, note: null, period: since, ...plain },
     ],
     line,
   });
@@ -617,8 +661,9 @@ export function figuresView(input: {
     !sameInstant(dashboard.window.from, requested.from) ||
     !sameInstant(dashboard.window.to, requested.to)
   ) {
-    return dashes(FIGURES_UNREAD);
+    return dashes(FIGURES_UNREAD, sinceLabel(requested.from, zone));
   }
+  const since = sinceLabel(dashboard.window.from, zone);
 
   const sending = dashboard.sending as { readonly available: boolean; readonly sent?: unknown; readonly held?: unknown };
   const sent = sending.available && typeof sending.sent === 'number' ? sending.sent : null;
@@ -629,28 +674,52 @@ export function figuresView(input: {
     : DASH;
   const waiting = Math.max(dashboard.replyHandling.replies - dashboard.replyHandling.handled, 0);
 
+  const repliesRoute: Route = { name: 'replies' };
   return {
     label: FIGURES_LABEL,
     cells: [
       today,
       {
         key: 'calls',
-        label: CALLS_SEVEN_DAYS_LABEL,
+        label: CALLS_LABEL,
         value: String(dashboard.calls.reduce((total, entry) => total + entry.count, 0)),
         note: null,
+        period: since,
+        ...plain,
       },
-      { key: 'meetings', label: 'Meetings booked', value: meetings, note: funnel.available ? null : 'not in this build' },
+      {
+        key: 'meetings',
+        label: 'Meetings booked',
+        value: meetings,
+        note: funnel.available ? null : 'not in this build',
+        period: since,
+        ...plain,
+      },
       {
         key: 'replies',
         label: 'Replies',
+        // `human` is what a person confirmed or the rules settled; `uncertain` is what is
+        // still unclassified. They are two numbers and are never added (slice 3a, C0).
         value: String(dashboard.messages.human),
-        note: dashboard.messages.uncertain > 0 ? `${String(dashboard.messages.uncertain)} uncertain` : null,
+        note: null,
+        period: since,
+        unconfirmed: dashboard.messages.uncertain > 0 ? dashboard.messages.uncertain : null,
+        link: repliesRoute,
       },
-      { key: 'waiting', label: 'Replies waiting', value: String(waiting), note: null },
-      { key: 'holds', label: 'Holds open', value: String(dashboard.holds.open), note: null },
+      { key: 'waiting', label: 'Replies waiting', value: String(waiting), note: null, period: since, unconfirmed: null, link: waiting > 0 ? repliesRoute : null },
+      {
+        key: 'holds',
+        label: 'Holds open',
+        value: String(dashboard.holds.open),
+        note: null,
+        // What is open at this moment, not something the window counted.
+        period: PERIOD_NOW,
+        unconfirmed: null,
+        link: dashboard.holds.open > 0 ? { name: 'settings', tab: 'dashboard' } : null,
+      },
       sent === null
-        ? { key: 'emails', label: 'Emails sent', value: DASH, note: 'not in this build' }
-        : { key: 'emails', label: 'Emails sent', value: String(sent), note: held === null ? null : `${String(held)} held` },
+        ? { key: 'emails', label: 'Emails sent', value: DASH, note: 'not in this build', period: since, ...plain }
+        : { key: 'emails', label: 'Emails sent', value: String(sent), note: held === null ? null : `${String(held)} held`, period: since, ...plain },
     ],
     line: null,
   };
@@ -708,6 +777,6 @@ export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerV
     status: statusRows(input),
     needs,
     needsLine: needsLine(input, needs),
-    figures: figuresView({ admin: input.hasOperations, figures: input.figures, callsToday: input.callsToday }),
+    figures: figuresView({ admin: input.hasOperations, figures: input.figures, callsToday: input.callsToday, zone }),
   };
 }

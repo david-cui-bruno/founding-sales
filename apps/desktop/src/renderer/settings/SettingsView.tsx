@@ -6,12 +6,15 @@ import { adminViewOf } from '../settingsView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Page, ViewHeader } from '../ui/layout.tsx';
 import { cn } from '../lib/utils.ts';
+import type { StatusRow } from '../homeView.ts';
 import { Administration } from './Administration.tsx';
 import { CallingCalendarSection } from './CallingCalendarSection.tsx';
 import { MailboxSection } from './MailboxSection.tsx';
+import { ReplyModelSection } from './ReplyModelSection.tsx';
 import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
 import { RecoveryControls } from './RecoveryControls.tsx';
+import { StatusSection } from './StatusSection.tsx';
 import { tabForScreen, useAdmin } from './useAdmin.ts';
 
 /**
@@ -41,6 +44,8 @@ export function SettingsView({
   mailbox,
   mailboxWaiting,
   hasMailboxBridge,
+  status = [],
+  isAdmin = false,
   onSwitchMailbox,
 }: {
   readonly route: Route;
@@ -50,6 +55,9 @@ export function SettingsView({
   readonly mailbox: MailboxState | null;
   readonly mailboxWaiting: boolean;
   readonly hasMailboxBridge: boolean;
+  /** The routine status rows (slice 3a, C0): `buildHomeView`'s, drawn under Status. */
+  readonly status?: readonly StatusRow[];
+  readonly isAdmin?: boolean;
   onSwitchMailbox(switchTo: string): void;
 }): JSX.Element {
   const tab = route.name === 'settings' ? route.tab : 'administration';
@@ -118,6 +126,7 @@ export function SettingsView({
 
           {tabForScreen(view.screen) === 'administration' ? (
             <>
+              <StatusSection rows={status} />
               <MailboxSection
                 mailbox={mailbox}
                 waiting={mailboxWaiting}
@@ -137,6 +146,7 @@ export function SettingsView({
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />
+              <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
             </>
           ) : tabForScreen(view.screen) === 'dashboard' ? (
             <Panels view={view} />

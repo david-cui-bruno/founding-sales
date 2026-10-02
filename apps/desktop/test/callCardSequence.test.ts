@@ -287,9 +287,14 @@ describe('the Today bridge and an agreed sequence', () => {
       started: true,
       reason: null,
     });
-    const banners = buildTodayView(state).banners.map(banner => banner.text);
-    expect(banners).toContain(noticeSentence('outcome_recorded_sequence_started'));
-    expect(banners).toContain('Agreed on the call: the sequence “After a good call v3”. It has started.');
+    // Slice 3a (C0): the answer is the outcome form's own feedback, not a page banner.
+    const view = buildTodayView(state);
+    expect(view.banners.map(banner => banner.text)).not.toContain(noticeSentence('outcome_recorded_sequence_started'));
+    expect(view.feedback).toMatchObject({
+      zone: 'outcome',
+      text: noticeSentence('outcome_recorded_sequence_started'),
+      agreement: 'Agreed on the call: the sequence “After a good call v3”. It has started.',
+    });
   });
 
   it('says the sequence did not start, and why, when the enrolment was refused', async () => {
@@ -301,8 +306,7 @@ describe('the Today bridge and an agreed sequence', () => {
     const state = await bridge.recordOutcome(interested({ scope: 'agreed_sequence', sequenceVersionId: PUBLISHED, previewBasis: BASIS }));
     expect(state.notice).toBe('outcome_recorded_sequence_not_started');
     expect(state.agreement).toMatchObject({ started: false, granted: true, reason: 'firm_zone_unknown' });
-    const banners = buildTodayView(state).banners.map(banner => banner.text);
-    expect(banners).toContain(
+    expect(buildTodayView(state).feedback?.agreement).toBe(
       'Agreed on the call: the sequence “After a good call v3”. It did not start: the firm’s time zone is not known yet. Start it from the firm’s page.',
     );
   });
@@ -364,7 +368,7 @@ describe('the Today bridge and an agreed sequence', () => {
       name: 'After a good call v3',
     });
     expect(state.followUpPreview?.holidayCalendarVersion).toBe('holidays.2');
-    expect(buildTodayView(state).banners.map(banner => banner.text)).toContain(
+    expect(buildTodayView(state).feedback?.agreement).toBe(
       'The call is recorded, but the sequence “After a good call v3” did not start: its dates changed after you previewed them. Read them the new dates on the card and press Record the agreed dates.',
     );
 
@@ -384,7 +388,7 @@ describe('the Today bridge and an agreed sequence', () => {
     });
     expect(after.pendingAgreement).toBeNull();
     expect(after.notice).toBe('outcome_recorded_sequence_started');
-    expect(buildTodayView(after).banners.map(banner => banner.text)).toContain(
+    expect(buildTodayView(after).feedback?.agreement).toBe(
       'Agreed on the call: the sequence “After a good call v3”. It has started.',
     );
   });

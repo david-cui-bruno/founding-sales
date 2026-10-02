@@ -159,3 +159,27 @@ export interface ResolveReplyRequest {
   readonly opportunityId: string;
 }
 
+
+/**
+ * The reply-suggestions model setting (slice 3a, C0). The two models an admin may choose
+ * between; both are values of `@fss/contracts`' `CLASSIFIER_MODELS`. The effort and the caps
+ * are not offered here and are never sent from it.
+ */
+export const REPLY_MODELS = ['claude-haiku-4-5-20251001', 'claude-opus-5'] as const;
+export type ReplyModel = (typeof REPLY_MODELS)[number];
+
+/** What Settings is given: the current model, and what the last save said. Nothing cached. */
+export const replyModelStateSchema = z.strictObject({
+  classifier: z
+    .strictObject({
+      enabled: z.boolean(),
+      modelName: z.string().max(64),
+      effort: z.enum(CLASSIFIER_EFFORTS),
+    })
+    .nullable(),
+  online: z.boolean(),
+  mayMutate: z.boolean(),
+  /** A stable code, never a sentence composed here: `reply_model_saved` or a refusal's reason. */
+  notice: z.string().max(80).nullable(),
+});
+export type ReplyModelState = z.infer<typeof replyModelStateSchema>;

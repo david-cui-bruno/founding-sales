@@ -148,7 +148,7 @@ describe('Today’s numbers row', () => {
       status: [],
       needs: [],
       needsLine: 'Nothing needs you.',
-      figures: figuresView({ admin: true, figures: { requested: WINDOW, answered: true, dashboard }, callsToday: 3 }),
+      figures: figuresView({ admin: true, figures: { requested: WINDOW, answered: true, dashboard }, callsToday: 3, zone: 'America/New_York' }),
     } as unknown as HomeView;
 
     render(
@@ -167,10 +167,11 @@ describe('Today’s numbers row', () => {
     );
 
     // Today's calls first, from their own read, then the seven-day cells beside them.
-    expect(screen.getByTestId('figure-calls_today').textContent).toBe('Calls placed today3');
-    expect(screen.getByTestId('figure-calls').textContent).toBe('Calls placed, 7 days5');
-    expect(screen.getByTestId('figure-meetings').textContent).toBe('Meetings booked2');
-    expect(screen.getByTestId('figure-waiting').textContent).toBe('Replies waiting1');
-    expect(screen.getByTestId('figure-replies').textContent).toBe('Replies4');
+    // Slice 3a (C0): each figure names its period.
+    expect(screen.getByTestId('figure-calls_today').textContent).toBe('Calls placedtoday3');
+    expect(screen.getByTestId('figure-calls').textContent).toBe('Calls placedsince 18 Sep5');
+    expect(screen.getByTestId('figure-meetings').textContent).toBe('Meetings bookedsince 18 Sep2');
+    expect(screen.getByTestId('figure-waiting').textContent).toBe('Replies waitingsince 18 Sep1');
+    expect(screen.getByTestId('figure-replies').textContent).toBe('Repliessince 18 Sep4');
   });
 });

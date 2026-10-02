@@ -93,6 +93,7 @@ export function QueuePanel({
               <ul className="flex flex-col gap-px">
                 {group.cards.map(card => {
                   const isSelected = card.firmId === selected;
+                  const line = queueLine(card);
                   const finished = done.has(card.firmId);
                   const note = (drafts.values[`today:outcome:${card.firmId}:note`] ?? '').trim() !== '';
                   // During a call only the call's own firm can be opened (S2 review, finding 4).
@@ -126,12 +127,14 @@ export function QueuePanel({
                           >
                             {card.firmName}
                           </span>
-                          <span
-                            data-testid="queue-line"
-                            className={cn('truncate text-xs', group.id === 'blocked' ? 'text-warn-ink' : 'text-muted-foreground')}
-                          >
-                            {queueLine(card)}
-                          </span>
+                          {line === null ? null : (
+                            <span
+                              data-testid="queue-line"
+                              className={cn('truncate text-xs', group.id === 'blocked' ? 'text-warn-ink' : 'text-muted-foreground')}
+                            >
+                              {line}
+                            </span>
+                          )}
                         </span>
                         {note ? (
                           <span data-testid="queue-note" title="A note is typed and not yet saved" className="flex h-5 items-center text-faint">

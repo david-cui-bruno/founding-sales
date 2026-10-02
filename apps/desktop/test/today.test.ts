@@ -231,7 +231,9 @@ describe('the Today view model', () => {
     const refused = buildTodayView(
       state({ expanded: firmPage({ callingIdentityId: null }), notice: 'identity_not_verified' }),
     );
-    expect(refused.banners.filter(banner => banner.text === NO_CALLING_NUMBER)).toHaveLength(1);
+    // The refusal is the call panel's own feedback; the page-level line is not said again.
+    expect(refused.banners.filter(banner => banner.text === NO_CALLING_NUMBER)).toHaveLength(0);
+    expect(refused.feedback).toMatchObject({ zone: 'call', text: NO_CALLING_NUMBER });
   });
 });
 

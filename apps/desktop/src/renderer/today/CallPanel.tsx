@@ -3,6 +3,7 @@ import type { JSX } from 'react';
 import { CALL_ANNOUNCEMENT } from '@fss/contracts';
 import type { TodayCardBlocker } from '@fss/contracts';
 import { useDraft } from '../app/drafts.tsx';
+import { Feedback } from './Feedback.tsx';
 import { attemptLabel, callTimer } from '../calling/callText.ts';
 import type { CallControl } from '../calling/useCall.ts';
 import type { CallingStatus } from '../calling/useCallingStatus.ts';
@@ -53,6 +54,8 @@ export interface CallPanelProps {
   onFix(blocker: TodayCardBlocker): void;
   onNext(): void;
   onOutcome(): void;
+  /** The last command's answer; the part about dialling is drawn here, above the Call button. */
+  readonly feedback?: TodayScreenView['feedback'];
 }
 
 function PhaseChip({ call, firmId }: { readonly call: CallControl; readonly firmId: string | null }): JSX.Element {
@@ -310,12 +313,6 @@ export function CallPanel(props: CallPanelProps): JSX.Element {
           ))
         )}
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-          {view.dialRoutes[0]?.advice?.firmLocalTime == null ? null : (
-            <>
-              <dt className="text-muted-foreground">Their time</dt>
-              <dd className="tabular">{view.dialRoutes[0].advice.firmLocalTime}</dd>
-            </>
-          )}
           {cadence === null ? null : (
             <>
               <dt className="text-muted-foreground">Attempt</dt>
@@ -343,18 +340,21 @@ export function CallPanel(props: CallPanelProps): JSX.Element {
             {phase.sentence}
           </p>
         ) : null}
-        <p className="text-xs text-faint">Calls start only from a Call button. No shortcut dials.</p>
       </div>
     );
   }
 
+  const dialing = props.feedback == null ? null : <Feedback feedback={props.feedback} zone="call" />;
   return (
     <section data-region="call" aria-label="Call" className="flex min-h-0 flex-1 flex-col">
       <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
         <h2 className="text-sm font-semibold">Call</h2>
         <PhaseChip call={call} firmId={firmId} />
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">{body}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {dialing}
+        {body}
+      </div>
     </section>
   );
 }
