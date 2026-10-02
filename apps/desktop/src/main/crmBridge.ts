@@ -21,7 +21,6 @@ import {
   type HeldOutgoingMessage,
   type MergeConflict,
   type PipelineStageDto,
-  type PreparedBriefDto,
 } from '@fss/contracts';
 import type {
   AddFirmDraft,
@@ -105,11 +104,6 @@ export interface CrmBridgeDeps {
 export interface CrmBridgeHost {
   /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
   forget(): Promise<CrmState>;
-  /**
-   * Lane PB, design reset I2: a saved or cleared prepared brief, patched into the firm page
-   * this bridge holds when (and only when) it is that firm's. No read and no navigation.
-   */
-  patchPreparedBrief(input: { readonly firmId: string; readonly brief: PreparedBriefDto | null }): Promise<void>;
   state(): Promise<CrmState>;
   openFirm(input: { readonly firmId: string }): Promise<CrmState>;
   /** The board. `includeLost` is remembered until the next one that says otherwise. */
@@ -434,12 +428,6 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   return {
-    async patchPreparedBrief(input) {
-      if (firm?.visibility === 'assigned_or_admin' && firm.read.firm.id === input.firmId) {
-        firm = { ...firm, preparedBrief: input.brief };
-      }
-      return await Promise.resolve();
-    },
     /**
      * Forget everything this bridge is holding (1.0.13, P0-A).
      *

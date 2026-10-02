@@ -25,7 +25,6 @@ import {
   todaySnoozeResultSchema,
   type CallsPlacedTodayResponse,
   type LoggedCallResult,
-  type PreparedBriefDto,
 } from '@fss/contracts';
 import {
   previewBasisOf,
@@ -130,11 +129,6 @@ export interface TodayBridgeDeps {
 export interface TodayBridgeHost {
   /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
   forget(): Promise<TodayState>;
-  /**
-   * Lane PB, design reset I2: a saved or cleared prepared brief, patched into that firm's held
-   * expansion (the open one and the in-memory cache). No read and no navigation.
-   */
-  patchPreparedBrief(input: { readonly firmId: string; readonly brief: PreparedBriefDto | null }): Promise<void>;
   /**
    * The bridge's identity generation (send-path v2, S3, round 6, P0), for `guardIdentity`:
    * a late method never clears a newer generation's state.
@@ -708,12 +702,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   const host: TodayBridgeHost = {
-    async patchPreparedBrief(input) {
-      if (expanded?.firmId === input.firmId) expanded = { ...expanded, preparedBrief: input.brief };
-      const cached = expansions.get(input.firmId);
-      if (cached !== undefined) expansions.set(input.firmId, { ...cached, preparedBrief: input.brief });
-      return await Promise.resolve();
-    },
     /**
      * Forget everything this bridge is holding (1.0.13, P0-A).
      *

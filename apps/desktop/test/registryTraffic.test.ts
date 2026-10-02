@@ -182,8 +182,6 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.forFirm': { firmId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
   'firms.saveBasics': { firmId: UUID, regionCode: 'TX' },
-  'firms.setPreparedBrief': { firmId: UUID, brief: 'Who to ask for: unknown' },
-  'firms.clearPreparedBrief': { firmId: UUID },
   'calls.logIncoming': {
     firmId: UUID,
     contactId: null,
@@ -311,7 +309,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         review: through(['review.list', 'review.stageResolve']),
         suppressions: through(['suppressions.firmStop', 'suppressions.supersede']),
         firms: (() => {
-          // Lane PB: the import is the main process's own host; set and clear go straight through.
+          // Lane PB: the import is the main process's own host.
           const briefImport = createBriefImport({
             api,
             openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/tmp/briefs.json'] }),
@@ -331,8 +329,6 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
           const withBriefs = operationHandlers({ api, briefImport } as unknown as OperationHostDeps);
           return {
             saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never),
-            setPreparedBrief: async (input: unknown) => await handlers['firms.setPreparedBrief'](input as never),
-            clearPreparedBrief: async (input: unknown) => await handlers['firms.clearPreparedBrief'](input as never),
             briefImportState: async () => await withBriefs['firms.briefImportState'](undefined as never),
             briefImportCommit: async () => await withBriefs['firms.briefImportCommit']({ previewId: (await briefImport.state()).previewId } as never),
             briefImportReset: async () => await withBriefs['firms.briefImportReset'](undefined as never),

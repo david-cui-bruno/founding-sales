@@ -12,9 +12,6 @@ import {
   firmBasicsRefusalSchema,
   firmBasicsResultSchema,
   firmMeetingsResponseSchema,
-  preparedBriefClearResultSchema,
-  preparedBriefSetResultSchema,
-  type PreparedBriefDto,
   loggedCallResultSchema,
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
@@ -112,11 +109,6 @@ async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{
 }
 
 export function operationHandlers(deps: OperationHostDeps): Readonly<Record<OperationName, Handler>> {
-  /** Lane PB, design reset I2: a firm's stored brief into the snapshots that hold that firm. */
-  const patchBrief = async (firmId: string, brief: PreparedBriefDto | null): Promise<void> => {
-    await deps.crm.patchPreparedBrief({ firmId, brief });
-    await deps.today.patchPreparedBrief({ firmId, brief });
-  };
   const handlers = {
     'today.state': async () => await deps.today.state(),
     'today.refresh': async (input: { readonly quiet?: boolean }) =>
@@ -378,20 +370,6 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       };
     },
     // Lane PB. Straight through the client, like the basics: the view reads its own state again.
-    // Design reset I2: the answer carries the stored brief, which is patched into whatever this
-    // process holds for THAT firm. Nothing is read again and nothing is opened.
-    'firms.setPreparedBrief': async (input: OperationInput<'firms.setPreparedBrief'>) => {
-      const answer = await deps.api.command('/firms/brief/set', input, value => preparedBriefSetResultSchema.parse(value));
-      if (!answer.ok) return { saved: null, reason: answer.reason.slice(0, 80) };
-      await patchBrief(answer.value.firmId, answer.value.brief);
-      return { saved: answer.value, reason: null };
-    },
-    'firms.clearPreparedBrief': async (input: OperationInput<'firms.clearPreparedBrief'>) => {
-      const answer = await deps.api.command('/firms/brief/clear', input, value => preparedBriefClearResultSchema.parse(value));
-      if (!answer.ok) return { cleared: false, reason: answer.reason.slice(0, 80) };
-      await patchBrief(answer.value.firmId, null);
-      return { cleared: answer.value.cleared, reason: null };
-    },
     'firms.briefImportState': async () => await deps.briefImport.state(),
     'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
     'firms.briefImportReset': async () => await deps.briefImport.reset(),

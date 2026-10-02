@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -127,51 +127,13 @@ function world(options: { readonly slowExpand?: boolean } = {}) {
 }
 
 describe('the prepared brief in Today', () => {
-  it('finding 1: A’s focused Clear confirmation, then J, then Enter, sends nothing', async () => {
+  it('shows the open firm’s brief, read-only, and the next firm’s after J', async () => {
     const user = userEvent.setup();
     const { commands } = world();
-    await user.click(await screen.findByTestId('prepared-brief-clear'));
-    const confirm = screen.getByTestId('prepared-brief-clear-confirm');
-    expect(confirm.getAttribute('data-firm-id')).toBe(A);
-    act(() => {
-      confirm.focus();
-    });
-    expect(document.activeElement).toBe(confirm);
+    expect((await screen.findByTestId('prepared-brief-text')).textContent).toBe('Alpha brief');
+    expect(screen.getByTestId('prepared-brief').querySelector('button, textarea')).toBeNull();
     await user.keyboard('j');
     await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Bravo brief'));
-    await user.keyboard('{Enter}');
     expect(commands).toEqual([]);
-    // B shows no confirmation it never asked for.
-    expect(screen.queryByTestId('prepared-brief-clear-confirm')).toBeNull();
-  });
-
-  it('PBF finding 1: A’s save answering before B has loaded patches A and leaves the destination B', async () => {
-    const user = userEvent.setup();
-    const { expanded, commands, answers, expansions } = world({ slowExpand: true });
-    await user.click(await screen.findByTestId('prepared-brief-edit'));
-    await user.clear(screen.getByTestId('prepared-brief-text-input'));
-    await user.type(screen.getByTestId('prepared-brief-text-input'), 'Alpha edited');
-    await user.click(screen.getByTestId('prepared-brief-save'));
-    expect(commands).toEqual([{ name: 'firms.setPreparedBrief', input: { firmId: A, brief: 'Alpha edited' } }]);
-    // David asks for B; B has not loaded yet.
-    act(() => {
-      (document.activeElement as HTMLElement | null)?.blur();
-    });
-    await user.keyboard('j');
-    expect(expanded).toEqual([B]);
-    // A's save lands first: A's cached brief is patched in place, nothing is read or opened.
-    await act(async () => {
-      answers[0]?.({ saved: { firmId: A, created: false, briefLength: 12, sourceCount: 1, updatedAt: '2026-10-02T16:00:00.000Z', brief: brief('Alpha edited') }, reason: null });
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Alpha edited'));
-    expect(expanded).toEqual([B]);
-    // Then B loads, and B is where David is.
-    await act(async () => {
-      expansions[0]?.();
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByTestId('prepared-brief-text').textContent).toBe('Bravo brief'));
-    expect(expanded).toEqual([B]);
   });
 });

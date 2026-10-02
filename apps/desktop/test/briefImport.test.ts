@@ -205,6 +205,36 @@ describe('the prepared-brief import, design reset I1', () => {
     ]);
   });
 
+  it('PBR finding 4: an old session’s file read finishing after sign-in never replaces the new preview', async () => {
+    let session = 1;
+    const { api } = fakeApi();
+    let releaseOld: (text: string) => void = () => undefined;
+    let reads = 0;
+    const host = guardIdentity(
+      createBriefImport({
+        api,
+        openDialog: async () => await Promise.resolve({ canceled: false, filePaths: ['/x/f.json'] }),
+        read: async () => {
+          reads += 1;
+          if (reads === 1) return await new Promise<string>(resolve => (releaseOld = resolve));
+          return await Promise.resolve(fileOf('new-1'));
+        },
+      }),
+      () => session,
+    );
+    const oldChoose = host.choose();
+    await settle();
+    session = 2;
+    await host.forget();
+    const fresh = await host.choose();
+    expect(fresh.rows.map(entry => entry.label)).toEqual(['new-1']);
+    releaseOld(fileOf('old-1', 'old-2'));
+    await oldChoose;
+    const after = await host.state();
+    expect(after.previewId).toBe(fresh.previewId);
+    expect(after.rows.map(entry => entry.label)).toEqual(['new-1']);
+  });
+
   it('refuses to preview again or reset while the import is on the wire', async () => {
     const { api, calls, releases } = fakeApi({ hold: true });
     let opened = 0;

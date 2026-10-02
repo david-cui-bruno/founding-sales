@@ -11,6 +11,11 @@ import { businessDate, instant, uuid } from './foundationRows.ts';
  * research brief and labelled "Prepared research · observed <date> · not verified by
  * Callie": nothing in it was read or checked by Callie.
  *
+ * Read-only in Callie (scope reduction after review PBR, David: briefs are to be
+ * accessible, not edited). The only way to change one is to import a corrected file:
+ * `POST /firms/brief/import` replaces a matched firm's brief whole. The reads negotiate
+ * `include: ['preparedBrief']`.
+ *
  * The bounds are the table's CHECKs (`firm_prepared_briefs_*`), stated once here so the
  * API refuses a request before it reaches the database and the desktop can say which row
  * of an import file is out of bounds before anything is sent. JavaScript counts UTF-16
@@ -59,56 +64,6 @@ export const preparedBriefDtoSchema = z.object({
   updatedAt: instant,
 });
 export type PreparedBriefDto = z.infer<typeof preparedBriefDtoSchema>;
-
-/**
- * `POST /firms/brief/set`: an upsert, admin or the firm's assignee, idempotent per
- * command id. Every field but the firm is optional so a save sends only what changed
- * (kept-state rule K2): on a firm that already has a brief an absent field keeps its
- * value; on a firm with none, `brief`, `observedOn` and `preparedBy` are required
- * (`invalid_input` otherwise) and `sources` defaults to none.
- */
-export const setPreparedBriefCommandSchema = z.strictObject({
-  commandId: commandIdSchema,
-  clientVersion: semanticVersionSchema,
-  firmId: uuid,
-  brief: preparedBriefTextSchema.optional(),
-  sources: preparedBriefSourcesSchema.optional(),
-  observedOn: businessDate.optional(),
-  preparedBy: preparedByTextSchema.optional(),
-});
-export type SetPreparedBriefCommand = z.infer<typeof setPreparedBriefCommandSchema>;
-
-/**
- * What the set command's receipt keeps: never the text, so a receipt and an audit row say
- * that a brief was written, not what it says.
- */
-export const preparedBriefSetReceiptSchema = z.object({
-  firmId: uuid,
-  created: z.boolean(),
-  briefLength: z.number().int().min(1),
-  sourceCount: z.number().int().min(0),
-  updatedAt: instant,
-});
-export type PreparedBriefSetReceipt = z.infer<typeof preparedBriefSetReceiptSchema>;
-
-/**
- * What the set command answers (design reset I2): the receipt's fields and the brief as it is
- * stored now, read after the command committed and never kept on the receipt. The desktop
- * patches that firm's cached data with it and reads nothing.
- */
-export const preparedBriefSetResultSchema = preparedBriefSetReceiptSchema.extend({ brief: preparedBriefDtoSchema.nullable() });
-export type PreparedBriefSetResult = z.infer<typeof preparedBriefSetResultSchema>;
-
-/** `POST /firms/brief/clear`. Clearing a firm with no brief is accepted with `cleared: false`. */
-export const clearPreparedBriefCommandSchema = z.strictObject({
-  commandId: commandIdSchema,
-  clientVersion: semanticVersionSchema,
-  firmId: uuid,
-});
-
-export const preparedBriefClearReceiptSchema = z.object({ firmId: uuid, cleared: z.boolean() });
-/** What clear answers (design reset I2): the stored brief afterwards, which is none. */
-export const preparedBriefClearResultSchema = preparedBriefClearReceiptSchema.extend({ brief: z.null() });
 
 /**
  * `POST /firms/brief/match`, admin only and read-only: which firm each row of a prepared

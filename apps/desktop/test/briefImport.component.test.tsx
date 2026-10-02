@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BriefImport } from '../src/renderer/firms/BriefImport.tsx';
 import type { BriefImportView } from '../src/shared/briefImport.ts';
 import type { ImportBridge, OperationApi, OperationName } from '../src/shared/operations.ts';
@@ -97,5 +97,30 @@ describe('the prepared-brief import screen', () => {
     await waitFor(() => expect(screen.getAllByTestId('brief-import-row')).toHaveLength(5));
     expect((screen.getByTestId('brief-import-choose') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('brief-import-commit') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('PBR finding 5: a screen opened while an import is on the wire shows its outcome when it lands, and lets David choose again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let held: BriefImportView = { ...PREVIEW, committing: true };
+      const answer = async (): Promise<unknown> => await Promise.resolve(held);
+      globalThis.callieApi = { read: answer, command: answer } as unknown as OperationApi;
+      globalThis.callieImport = { choose: answer, chooseBriefs: answer } as unknown as ImportBridge;
+      const first = render(<BriefImport enabled />);
+      await waitFor(() => expect(screen.getByTestId('brief-import-commit').textContent).toBe('Importing…'));
+      first.unmount();
+      render(<BriefImport enabled />);
+      await waitFor(() => expect(screen.getByTestId('brief-import-commit').textContent).toBe('Importing…'));
+      expect((screen.getByTestId('brief-import-choose') as HTMLButtonElement).disabled).toBe(true);
+      // The import lands in the main process while this screen is open.
+      held = { ...PREVIEW, committing: false, committed: true, rows: PREVIEW.rows.map(row => (row.index === 1 ? { ...row, result: 'saved' } : row)) };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+      await waitFor(() => expect(screen.getByTestId('brief-import-results').textContent).toContain('1 imported'));
+      expect((screen.getByTestId('brief-import-choose') as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

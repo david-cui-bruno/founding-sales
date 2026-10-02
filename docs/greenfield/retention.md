@@ -144,8 +144,11 @@ What a commit does:
   and a contact deletion leaves it. **Known retention behaviour:** the brief is free
   text prepared outside Callie and its "Who to ask for" line usually names a person, so
   a contact deletion for that person leaves their name in the brief, exactly as it
-  leaves it in a research quote that names them. An admin who needs it gone clears the
-  brief (`POST /firms/brief/clear`, or Clear on the firm page) or deletes the firm
+  leaves it in a research quote that names them. Briefs are read-only in Callie: the
+  only way to change one is to re-import a corrected file (Firms → Import → "Import
+  prepared briefs (JSON)…"), whose row replaces the firm's brief whole — text, sources,
+  observed date and preparer. So an admin who needs the name gone re-imports that firm's
+  row without it, or deletes the firm; nothing in Callie clears a brief on its own
   (`test/crm/preparedBriefs.test.ts`).
 
   A firm deletion also **closes the money before it removes the runs**. A run still

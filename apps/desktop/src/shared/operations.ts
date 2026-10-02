@@ -28,11 +28,6 @@ import {
   meetingMatchedSchema,
   unmatchedMeetingDtoSchema,
   uuid,
-  businessDate,
-  preparedBriefSetResultSchema,
-  preparedBriefSourcesSchema,
-  preparedBriefTextSchema,
-  preparedByTextSchema,
 } from '@fss/contracts';
 import { briefImportViewSchema } from './briefImport.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
@@ -176,15 +171,6 @@ const firmBasicsInput = z.strictObject({
   locality: z.string().max(200).nullable().optional(),
   regionCode: z.string().max(10).nullable().optional(),
   timeZone: z.string().min(1).max(64).optional(),
-});
-
-/** Lane PB: a prepared brief's fields, each only when the person changed it (rule K2). */
-const setPreparedBriefInput = z.strictObject({
-  firmId: uuid,
-  brief: preparedBriefTextSchema.optional(),
-  sources: preparedBriefSourcesSchema.optional(),
-  observedOn: businessDate.optional(),
-  preparedBy: preparedByTextSchema.optional(),
 });
 
 /** What saving the basics came to: the saved values, or the refusal and its fields. */
@@ -1565,24 +1551,10 @@ export const OPERATIONS = {
     transform: 'direction inbound and nothing a placed call binds: no ticket, session, route or calling identity',
   },
 
-  // --- Lane PB: a firm's prepared brief, and importing them from a JSON file ------------
-  // Set and clear go straight through the client, like the basics: the view that asked reads
-  // its own state again. The import is held in the main process (`main/briefImport.ts`); the
-  // file is chosen on its own channel, `IMPORT_IPC_CHANNELS.chooseBriefs`.
-  'firms.setPreparedBrief': {
-    kind: 'command',
-    calls: [{ method: 'POST', path: '/firms/brief/set' }],
-    input: setPreparedBriefInput,
-    output: z.strictObject({ saved: preparedBriefSetResultSchema.nullable(), reason: z.string().max(80).nullable() }),
-    transform: 'none: only the fields the person changed are sent; the answer is a length and a count, never the text',
-  },
-  'firms.clearPreparedBrief': {
-    kind: 'command',
-    calls: [{ method: 'POST', path: '/firms/brief/clear' }],
-    input: z.strictObject({ firmId: uuid }),
-    output: z.strictObject({ cleared: z.boolean(), reason: z.string().max(80).nullable() }),
-    transform: 'none: whether a brief was cleared, or the refusal code',
-  },
+  // --- Lane PB: importing prepared briefs from a JSON file ----------------------------
+  // Briefs are read-only in Callie; a corrected file is the only change path. The import is
+  // held in the main process (`main/briefImport.ts`); the file is chosen on its own channel,
+  // `IMPORT_IPC_CHANNELS.chooseBriefs`.
   'firms.briefImportState': {
     kind: 'read',
     calls: [],

@@ -131,10 +131,11 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
     return await Promise.resolve(view);
   };
 
-  async function preview(fileName: string, text: string): Promise<BriefImportView> {
+  /** `mine` is the identity generation `choose()` began under, before the dialog and the read. */
+  async function preview(fileName: string, text: string, mine: number): Promise<BriefImportView> {
+    if (mine !== generation) return view;
     lastPreviewId += 1;
     const previewId = lastPreviewId;
-    const mine = generation;
     /** Still the latest preview, under the same identity. */
     const current = (): boolean => previewId === lastPreviewId && mine === generation && !view.committing;
     const parsed = parseBriefFile(text);
@@ -212,17 +213,20 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
     },
     async choose() {
       if (view.committing) return view;
+      // Captured before the dialog and the read (review PBR, finding 4): a file chosen or read
+      // under an older identity never becomes the next one's preview.
+      const mine = generation;
       const chosen = await deps.openDialog();
       const path = chosen.canceled ? undefined : chosen.filePaths[0];
-      if (path === undefined || view.committing) return view;
+      if (path === undefined || view.committing || mine !== generation) return view;
       let text: string;
       try {
         text = await read(path);
       } catch {
         return view;
       }
-      if (view.committing) return view;
-      return await preview(path.split('/').at(-1) ?? path, text);
+      if (view.committing || mine !== generation) return view;
+      return await preview(path.split('/').at(-1) ?? path, text, mine);
     },
     async commit(input) {
       // Exactly the preview the window shows, once at a time.

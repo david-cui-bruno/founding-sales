@@ -7,12 +7,9 @@ import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { readFirmPage } from '../../crm/firmPage.ts';
 import { mergeFirms } from '../../crm/merges.ts';
 import {
-  clearPreparedBrief,
   importPreparedBriefs,
   matchPreparedBriefRows,
   readPreparedBrief,
-  setPreparedBrief,
-  type SetPreparedBriefInput,
 } from '../../crm/preparedBriefs.ts';
 import { commitDeletion, previewDeletion } from '../../retention/deletion.ts';
 import { TABLE_RETENTION_COVERAGE } from '../../retention/coverage.ts';
@@ -39,7 +36,7 @@ const as = (role: 'admin' | 'salesperson'): RepositoryContext =>
   );
 
 const SECRET_TEXT = 'Who to ask for: Pat Placeholder, Owner (confirmed)\nBrief: ask about after-hours calls.';
-const FULL: Omit<SetPreparedBriefInput, 'firmId'> = {
+const FULL = {
   brief: SECRET_TEXT,
   sources: [
     { url: 'https://firm.example.test/contact', label: 'Phone source' },
@@ -60,6 +57,16 @@ async function newFirm(name: string, assignee: 'admin' | 'salesperson' = 'salesp
 
 const inTransaction = async <T>(work: () => Promise<T>): Promise<T> => await withTransaction(database.session, work);
 
+/** A stored brief, written as an import writes it (briefs are read-only in Callie otherwise). */
+async function seedBrief(firmId: string, brief: string = FULL.brief): Promise<void> {
+  await database.session.query(
+    `INSERT INTO firm_prepared_briefs (workspace_id, firm_id, brief, sources, observed_on, prepared_by, updated_by_user_id)
+     VALUES ($1, $2, $3, $4::jsonb, $5::date, $6, $7)
+     ON CONFLICT ON CONSTRAINT firm_prepared_briefs_pkey DO UPDATE SET brief = EXCLUDED.brief`,
+    [seeded.alpha.workspaceId, firmId, brief, JSON.stringify(FULL.sources), FULL.observedOn, FULL.preparedBy, seeded.alpha.admin.userId],
+  );
+}
+
 beforeAll(async () => {
   database = await createTestDatabase();
   seeded = await seedTwoWorkspaces(database.session);
@@ -70,122 +77,6 @@ afterAll(async () => {
   await database.drop();
 });
 
-describe('setPreparedBrief and clearPreparedBrief', () => {
-  it('creates a brief for an admin, and the audit row carries the length and count, never the text', async () => {
-    const firmId = await newFirm('Prepared Create Test Co', 'salesperson');
-    const set = await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...FULL }));
-    expect(set).toMatchObject({ ok: true, value: { firmId, created: true, briefLength: SECRET_TEXT.length, sourceCount: 2 } });
-    expect(await readPreparedBrief(as('admin'), firmId)).toMatchObject({
-      brief: SECRET_TEXT,
-      sources: FULL.sources,
-      observedOn: '2026-10-02',
-      preparedBy: FULL.preparedBy,
-    });
-
-    const { rows } = await database.session.query<{ action: string; detail: Record<string, unknown> }>(
-      `SELECT action, detail FROM audit_events WHERE workspace_id = $1 AND subject_id = $2 ORDER BY occurred_at`,
-      [seeded.alpha.workspaceId, firmId],
-    );
-    expect(rows.map(row => row.action)).toEqual(['firm.prepared_brief_set']);
-    expect(rows[0]?.detail).toEqual({
-      created: true,
-      briefLength: SECRET_TEXT.length,
-      sourceCount: 2,
-      fields: ['brief', 'sources', 'observedOn', 'preparedBy'],
-    });
-    const serialized = JSON.stringify(rows);
-    expect(serialized).not.toContain('Pat Placeholder');
-    expect(serialized).not.toContain('firm.example.test');
-  });
-
-  it('lets the assigned salesperson write, and refuses a salesperson the firm is not assigned to', async () => {
-    const own = await newFirm('Prepared Own Test Co', 'salesperson');
-    const other = await newFirm('Prepared Other Test Co', 'admin');
-    expect(await inTransaction(async () => await setPreparedBrief(as('salesperson'), { firmId: own, ...FULL }))).toMatchObject({ ok: true });
-    expect(await inTransaction(async () => await setPreparedBrief(as('salesperson'), { firmId: other, ...FULL }))).toEqual({
-      ok: false,
-      reason: 'not_assigned',
-    });
-    expect(await inTransaction(async () => await clearPreparedBrief(as('salesperson'), { firmId: other }))).toEqual({
-      ok: false,
-      reason: 'not_assigned',
-    });
-    expect(await readPreparedBrief(as('admin'), other)).toBeNull();
-    // A firm in the workspace next door is unknown here.
-    expect(await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId: crm.beta.firmId, ...FULL }))).toEqual({
-      ok: false,
-      reason: 'firm_unknown',
-    });
-  });
-
-  it('keeps every field a later write leaves out, and needs brief, date and preparer for a first write', async () => {
-    const firmId = await newFirm('Prepared Partial Test Co');
-    expect(await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, brief: 'Only text' }))).toEqual({
-      ok: false,
-      reason: 'invalid_input',
-    });
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...FULL }));
-    const edited = await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, brief: 'Edited text' }));
-    expect(edited).toMatchObject({ ok: true, value: { created: false, briefLength: 11, sourceCount: 2 } });
-    expect(await readPreparedBrief(as('admin'), firmId)).toMatchObject({
-      brief: 'Edited text',
-      sources: FULL.sources,
-      observedOn: '2026-10-02',
-      preparedBy: FULL.preparedBy,
-    });
-  });
-
-  it('refuses out-of-bounds input before it reaches the table', async () => {
-    const firmId = await newFirm('Prepared Bounds Test Co');
-    const cases: readonly Omit<SetPreparedBriefInput, 'firmId'>[] = [
-      { ...FULL, brief: 'x'.repeat(4001) },
-      { ...FULL, brief: '   ' },
-      { ...FULL, sources: [{ url: 'http://firm.example.test/', label: 'Plain http' }] },
-      { ...FULL, sources: [{ url: `https://firm.example.test/${'p'.repeat(480)}`, label: 'Long url' }] },
-      { ...FULL, sources: [{ url: 'https://firm.example.test/', label: 'x'.repeat(201) }] },
-      { ...FULL, sources: Array.from({ length: 31 }, (_, i) => ({ url: `https://firm.example.test/${String(i)}`, label: 'Source' })) },
-      { ...FULL, observedOn: '2026-13-40' },
-      { ...FULL, preparedBy: 'x'.repeat(201) },
-    ];
-    for (const input of cases) {
-      expect(await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...input }))).toEqual({
-        ok: false,
-        reason: 'invalid_input',
-      });
-    }
-    // The upper bounds themselves are admitted.
-    const atBounds = await inTransaction(
-      async () =>
-        await setPreparedBrief(as('admin'), {
-          firmId,
-          ...FULL,
-          brief: 'x'.repeat(4000),
-          sources: Array.from({ length: 30 }, (_, i) => ({ url: `https://firm.example.test/${String(i)}`, label: 'l'.repeat(200) })),
-        }),
-    );
-    expect(atBounds).toMatchObject({ ok: true, value: { briefLength: 4000, sourceCount: 30 } });
-  });
-
-  it('clears a brief, audits it, and accepts clearing a firm that has none', async () => {
-    const firmId = await newFirm('Prepared Clear Test Co');
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...FULL }));
-    expect(await inTransaction(async () => await clearPreparedBrief(as('admin'), { firmId }))).toEqual({
-      ok: true,
-      value: { firmId, cleared: true },
-    });
-    expect(await readPreparedBrief(as('admin'), firmId)).toBeNull();
-    expect(await inTransaction(async () => await clearPreparedBrief(as('admin'), { firmId }))).toEqual({
-      ok: true,
-      value: { firmId, cleared: false },
-    });
-    const { rows } = await database.session.query<{ action: string }>(
-      'SELECT action FROM audit_events WHERE workspace_id = $1 AND subject_id = $2 ORDER BY occurred_at, action',
-      [seeded.alpha.workspaceId, firmId],
-    );
-    expect(rows.map(row => row.action)).toEqual(['firm.prepared_brief_set', 'firm.prepared_brief_cleared']);
-  });
-});
-
 describe('the firm page read', () => {
   it('adds the prepared brief only when it was negotiated, and null for a firm with none', async () => {
     const firmId = await newFirm('Prepared Page Test Co');
@@ -193,14 +84,14 @@ describe('the firm page read', () => {
     expect(without.ok && 'preparedBrief' in without.value).toBe(false);
     const empty = await readFirmPage(as('admin'), { firmId, includePreparedBrief: true });
     expect(empty.ok && empty.value.visibility === 'assigned_or_admin' && empty.value.preparedBrief).toBeNull();
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...FULL }));
+    await seedBrief(firmId);
     const withBrief = await readFirmPage(as('admin'), { firmId, includePreparedBrief: true });
     expect(withBrief.ok && withBrief.value.visibility === 'assigned_or_admin' && withBrief.value.preparedBrief?.brief).toBe(SECRET_TEXT);
   });
 
   it('never shows a colleague the brief: the narrow read has no key for it', async () => {
     const firmId = await newFirm('Prepared Colleague Test Co', 'admin');
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId, ...FULL }));
+    await seedBrief(firmId);
     const page = await readFirmPage(as('salesperson'), { firmId, includePreparedBrief: true });
     expect(page).toMatchObject({ ok: true, value: { visibility: 'any_active_member' } });
     expect(JSON.stringify(page)).not.toContain('Pat Placeholder');
@@ -241,8 +132,8 @@ describe('a merge', () => {
   it('keeps the surviving firm’s own brief and drops the merged firm’s', async () => {
     const source = await newFirm('Prepared Merge Source A Test Co');
     const target = await newFirm('Prepared Merge Target A Test Co');
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId: source, ...FULL, brief: 'Source brief' }));
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId: target, ...FULL, brief: 'Target brief' }));
+    await seedBrief(source, 'Source brief');
+    await seedBrief(target, 'Target brief');
     await merge(source, target);
     expect((await readPreparedBrief(as('admin'), target))?.brief).toBe('Target brief');
     expect(await readPreparedBrief(as('admin'), source)).toBeNull();
@@ -251,7 +142,7 @@ describe('a merge', () => {
   it('gives the surviving firm the merged firm’s brief when it has none', async () => {
     const source = await newFirm('Prepared Merge Source B Test Co');
     const target = await newFirm('Prepared Merge Target B Test Co');
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId: source, ...FULL, brief: 'Source brief' }));
+    await seedBrief(source, 'Source brief');
     await merge(source, target);
     expect((await readPreparedBrief(as('admin'), target))?.brief).toBe('Source brief');
     expect(await readPreparedBrief(as('admin'), source)).toBeNull();
@@ -264,7 +155,7 @@ describe('the deletion workflow', () => {
   });
 
   it('removes the brief with the firm, and leaves it when one contact is deleted', async () => {
-    await inTransaction(async () => await setPreparedBrief(as('admin'), { firmId: crm.alpha.firmId, ...FULL }));
+    await seedBrief(crm.alpha.firmId);
     const contactPreview = await previewDeletion(as('admin'), {
       targetKind: 'contact',
       firmId: crm.alpha.firmId,
@@ -348,6 +239,32 @@ describe('importPreparedBriefs (design reset I1)', () => {
     // The same file again changes nothing and says so.
     const again = await inTransaction(async () => await importPreparedBriefs(as('admin'), { rows: rows.slice(0, 2) }));
     expect(again.ok && again.value.counts).toEqual({ saved: 0, unchanged: 2, unmatched: 0, ambiguous: 0 });
+  });
+
+  it('replaces a matched firm’s brief whole: text, sources, date and preparer (the only change path)', async () => {
+    const firmId = await newFirm('Import Replace Test Co', 'salesperson', 'https://replace.example.test');
+    await seedBrief(firmId, 'Old text');
+    const imported = await inTransaction(
+      async () =>
+        await importPreparedBriefs(as('admin'), {
+          rows: [
+            {
+              website: 'https://replace.example.test',
+              brief: 'Corrected text',
+              sources: [{ url: 'https://replace.example.test/new', label: 'Corrected source' }],
+              observed_on: '2026-10-03',
+              prepared_by: 'Corrected preparer',
+            },
+          ],
+        }),
+    );
+    expect(imported.ok && imported.value.rows).toEqual([{ index: 1, status: 'saved', firmId }]);
+    expect(await readPreparedBrief(as('admin'), firmId)).toMatchObject({
+      brief: 'Corrected text',
+      sources: [{ url: 'https://replace.example.test/new', label: 'Corrected source' }],
+      observedOn: '2026-10-03',
+      preparedBy: 'Corrected preparer',
+    });
   });
 
   it('writes nothing at all when a database failure stops row 2', async () => {

@@ -425,10 +425,6 @@ export function TodayWorkspace({
       if (next === null || actions === null || next === firmId) return;
       // Never leave a live call by a keystroke or a click: the queue is locked while one is.
       if (live && callFirm !== next) return;
-      // K4 (lane PB, review finding 1): moving to another firm takes focus off the prepared
-      // brief's controls at once, so the Enter after a J reaches no command meant for this firm.
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && active.closest('[data-prepared-brief]') !== null) active.blur();
       actions.expand(next);
       setQueueOpen(false);
     },
@@ -911,15 +907,9 @@ export function TodayWorkspace({
                 ) : null}
 
                 {/* Lane PB: the prepared brief, negotiated on the card read, above Callie's own research. */}
-                {expanded.preparedBrief === undefined ? null : (
+                {expanded.preparedBrief == null ? null : (
                   <div className="mt-6">
-                    <PreparedBrief
-                      key={expanded.firmId}
-                      firmId={expanded.firmId}
-                      brief={expanded.preparedBrief}
-                      canEdit={state?.role === 'admin'}
-                      enabled={todayView.actionsEnabled}
-                    />
+                    <PreparedBrief key={expanded.firmId} brief={expanded.preparedBrief} />
                   </div>
                 )}
 

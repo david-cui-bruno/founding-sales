@@ -260,15 +260,9 @@ export function FirmsRoute({
         <>
           {/* Lane PB: the prepared brief, negotiated on the firm page read
               (`include: ['preparedBrief']`), beside Callie's own research. */}
-          {firm.visibility === 'assigned_or_admin' ? (
+          {firm.visibility === 'assigned_or_admin' && firm.preparedBrief != null ? (
             <div className="mb-4">
-              <PreparedBrief
-                key={firm.read.firm.id}
-                firmId={firm.read.firm.id}
-                brief={firm.preparedBrief}
-                canEdit={state.role === 'admin'}
-                enabled={view.actionsEnabled}
-              />
+              <PreparedBrief key={firm.read.firm.id} brief={firm.preparedBrief} />
             </div>
           ) : null}
           {/* Its own read, because the firm page's contract is strict behind

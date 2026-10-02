@@ -123,9 +123,7 @@ describe('the operation registry', () => {
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
       'firms.saveBasics',
       'calls.logIncoming',
-      // Lane PB: a firm's prepared brief, and importing them from a JSON file.
-      'firms.setPreparedBrief',
-      'firms.clearPreparedBrief',
+      // Lane PB: importing prepared briefs from a JSON file (briefs are read-only otherwise).
       'firms.briefImportState',
       'firms.briefImportCommit',
       'firms.briefImportReset',

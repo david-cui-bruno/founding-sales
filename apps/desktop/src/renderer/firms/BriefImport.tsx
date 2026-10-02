@@ -59,6 +59,9 @@ const RESULT_WORDS: Readonly<Record<string, string>> = Object.freeze({
 const TONE: Readonly<Record<BriefImportRow['status'], 'ok' | 'warn' | 'none'>> = { matched: 'ok', unmatched: 'none', ambiguous: 'warn', invalid: 'warn' };
 const STATUS_LABEL: Readonly<Record<BriefImportRow['status'], string>> = { matched: 'Matched', unmatched: 'Unmatched', ambiguous: 'Ambiguous', invalid: 'To fix' };
 
+/** How often the screen asks the main process whether an import still on the wire has answered. */
+export const BRIEF_IMPORT_POLL_MS = 1000;
+
 export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Element | null {
   const [view, setView] = useState<BriefImportView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,6 +78,22 @@ export function BriefImport({ enabled }: { readonly enabled: boolean }): JSX.Ele
       mounted.current = false;
     };
   }, [api]);
+
+  // Review PBR, finding 5: while the main process says an import is on the wire, read its
+  // state about once a second, so a screen opened during the import shows its outcome when it
+  // lands and lets David choose again. Stops when it has answered, and on unmount.
+  const committingNow = view?.committing === true;
+  useEffect(() => {
+    if (!committingNow || api === undefined) return undefined;
+    const timer = setInterval(() => {
+      void api.read('firms.briefImportState', {}).then(answer => {
+        if (mounted.current) setView(shown => (shown !== null && answer.previewId !== 0 && answer.previewId < shown.previewId ? shown : answer));
+      });
+    }, BRIEF_IMPORT_POLL_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [committingNow, api]);
 
   if (api === undefined || files === undefined) return null;
 

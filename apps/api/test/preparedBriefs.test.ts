@@ -2,10 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   firmPageResponseSchema,
-  preparedBriefClearResultSchema,
   preparedBriefImportResultSchema,
   preparedBriefMatchResponseSchema,
-  preparedBriefSetResultSchema,
   todayFirmResponseSchema,
 } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
@@ -21,9 +19,8 @@ import { todayFirmResponseSchema as legacyTodayFirmResponseSchema } from './supp
 /**
  * Lane PB: a firm's prepared brief over the wire (migration 0038).
  *
- *   * `POST /firms/brief/set` and `/firms/brief/clear`: the assignee or an admin; bounds are a
- *     malformed body; a replay of one command id answers the same and writes once; neither the
- *     receipt nor the audit row holds the text.
+ *   * briefs are read-only: `/firms/brief/set` and `/firms/brief/clear` are not served
+ *     (scope reduction after review PBR); `POST /firms/brief/import` is the only change path.
  *   * `include: ['preparedBrief']` on `POST /crm/firm-page` and `POST /today/firm`: without it
  *     the answer is the shape an installed desktop parses strictly; with it, the brief or null.
  *   * `POST /firms/brief/match`: an administrator's read, by the importer's matcher.
@@ -33,7 +30,6 @@ describe('prepared briefs over the wire', () => {
   let adminToken: string;
   let salesToken: string;
   let ownFirm: string;
-  let colleagueFirm: string;
 
   const options = () => ({
     session: fixture.db,
@@ -58,17 +54,17 @@ describe('prepared briefs over the wire', () => {
   const envelope = () => ({ commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION });
 
   const TEXT = 'Who to ask for: Robin Placeholder, Broker (likely)\nBrief: owners in Plano.';
-  const full = (firmId: string) => ({
-    ...envelope(),
-    firmId,
-    brief: TEXT,
+  const importRow = (externalId: string, brief = TEXT) => ({
+    external_id: externalId,
+    brief,
     sources: [
       { url: 'https://firm.example.test/contact', label: 'Phone source' },
       { url: 'https://firm.example.test/team', label: 'Decision-maker' },
     ],
-    observedOn: '2026-10-02',
-    preparedBy: 'Callie research agent (web), verified phones',
+    observed_on: '2026-10-02',
+    prepared_by: 'Callie research agent (web), verified phones',
   });
+  let emptyFirm: string;
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
@@ -81,10 +77,10 @@ describe('prepared briefs over the wire', () => {
       externalId: 'dfw-20261002-e01',
       assignedUserId: fixture.alpha.salesperson.userId,
     });
-    colleagueFirm = await seedFirm(fixture, {
-      name: 'Prepared Wire Colleague Test Co',
+    emptyFirm = await seedFirm(fixture, {
+      name: 'Prepared Wire Empty Test Co',
       regionCode: 'TX',
-      assignedUserId: fixture.alpha.admin.userId,
+      assignedUserId: fixture.alpha.salesperson.userId,
     });
   });
 
@@ -92,55 +88,14 @@ describe('prepared briefs over the wire', () => {
     await fixture.stop();
   });
 
-  it('lets the assignee set a brief and replays the same answer for the same command id, writing once', async () => {
-    const body = full(ownFirm);
-    const first = await call(salesToken, '/firms/brief/set', body);
-    expect(first.status, JSON.stringify(first.body)).toBe(200);
-    expect(first.body['result']).toMatchObject({ firmId: ownFirm, created: true, briefLength: TEXT.length, sourceCount: 2 });
-    const replay = await call(salesToken, '/firms/brief/set', body);
-    expect(replay.status).toBe(200);
-    expect(replay.body['replayed']).toBe(true);
-    expect(replay.body['result']).toEqual(first.body['result']);
-    // The same id with another payload is refused, not applied.
-    const mismatch = await call(salesToken, '/firms/brief/set', { ...body, brief: 'Something else' });
-    expect(mismatch.body['reason']).toBe('command_payload_mismatch');
-
-    const audits = await fixture.db.query<{ detail: unknown }>(
-      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND subject_id = $2 AND action = 'firm.prepared_brief_set'`,
-      [fixture.alpha.workspaceId, ownFirm],
-    );
-    expect(audits.rows).toHaveLength(1);
-    const receipts = await fixture.db.query<{ result: unknown }>(
-      `SELECT result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2`,
-      [fixture.alpha.workspaceId, body.commandId],
-    );
-    expect(receipts.rows).toHaveLength(1);
-    for (const stored of [audits.rows, receipts.rows]) {
-      expect(JSON.stringify(stored)).not.toContain('Robin Placeholder');
-      expect(JSON.stringify(stored)).not.toContain('firm.example.test');
+  it('serves no edit route: briefs change only by import', async () => {
+    for (const path of ['/firms/brief/set', '/firms/brief/clear']) {
+      const answer = await call(adminToken, path, { ...envelope(), firmId: ownFirm, brief: 'Edited' });
+      expect(answer.status, path).toBe(404);
     }
-  });
-
-  it('refuses a salesperson on a colleague’s firm, and lets an admin', async () => {
-    const refused = await call(salesToken, '/firms/brief/set', full(colleagueFirm));
-    expect(refused.status).toBe(409);
-    expect(refused.body['reason']).toBe('not_assigned');
-    const clear = await call(salesToken, '/firms/brief/clear', { ...envelope(), firmId: colleagueFirm });
-    expect(clear.body['reason']).toBe('not_assigned');
-    expect((await call(adminToken, '/firms/brief/set', full(colleagueFirm))).status).toBe(200);
-  });
-
-  it('answers out-of-bounds input as a malformed body', async () => {
-    const bad = [
-      { ...full(ownFirm), brief: 'x'.repeat(4001) },
-      { ...full(ownFirm), sources: [{ url: 'http://firm.example.test/', label: 'Source' }] },
-      { ...full(ownFirm), sources: [{ url: 'https://firm.example.test/', label: 'x'.repeat(201) }] },
-      { ...full(ownFirm), sources: Array.from({ length: 31 }, () => ({ url: 'https://firm.example.test/', label: 'S' })) },
-      { ...full(ownFirm), sources: [{ url: 'https://firm.example.test/', label: 'S', extra: 1 }] },
-      { ...full(ownFirm), observedOn: 'yesterday' },
-      { ...full(ownFirm), unknown: true },
-    ];
-    for (const body of bad) expect((await call(adminToken, '/firms/brief/set', body)).status).toBe(400);
+    const imported = await call(adminToken, '/firms/brief/import', { ...envelope(), rows: [importRow('dfw-20261002-e01')] });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+    expect((imported.body['result'] as { counts: unknown }).counts).toEqual({ saved: 1, unchanged: 0, unmatched: 0, ambiguous: 0 });
   });
 
   it('adds the brief to the firm page only when negotiated, so an installed desktop’s strict parse never meets it', async () => {
@@ -182,9 +137,9 @@ describe('prepared briefs over the wire', () => {
     const version1 = await call(salesToken, '/today/firm', { firmId: ownFirm, include: ['preparedBrief'] });
     expect('preparedBrief' in version1.body).toBe(false);
 
-    await call(salesToken, '/firms/brief/clear', { ...envelope(), firmId: ownFirm });
-    const cleared = await call(salesToken, '/today/firm', { firmId: ownFirm, cardVersion: 2, include: ['preparedBrief'] });
-    expect(cleared.body['preparedBrief']).toBeNull();
+    const none = await call(salesToken, '/today/firm', { firmId: emptyFirm, cardVersion: 2, include: ['preparedBrief'] });
+    expect(none.status, JSON.stringify(none.body)).toBe(200);
+    expect(none.body['preparedBrief']).toBeNull();
   });
 
   it('matches rows by external id for an admin, and refuses a salesperson', async () => {
@@ -199,18 +154,6 @@ describe('prepared briefs over the wire', () => {
     const refused = await call(salesToken, '/firms/brief/match', { rows });
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('admin_only');
-  });
-
-  it('answers set and clear with the stored brief, which the receipt never holds (design reset I2)', async () => {
-    const body = { ...full(colleagueFirm), brief: 'Stored after the command' };
-    const set = await call(adminToken, '/firms/brief/set', body);
-    expect(set.status).toBe(200);
-    const result = preparedBriefSetResultSchema.parse(set.body['result']);
-    expect(result.brief).toMatchObject({ brief: 'Stored after the command', observedOn: '2026-10-02' });
-    const receipt = await fixture.db.query<{ result: unknown }>('SELECT result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2', [fixture.alpha.workspaceId, body.commandId]);
-    expect(JSON.stringify(receipt.rows)).not.toContain('Stored after the command');
-    const cleared = await call(adminToken, '/firms/brief/clear', { ...envelope(), firmId: colleagueFirm });
-    expect(preparedBriefClearResultSchema.parse(cleared.body['result'])).toEqual({ firmId: colleagueFirm, cleared: true, brief: null });
   });
 
   describe('POST /firms/brief/import (design reset I1)', () => {
