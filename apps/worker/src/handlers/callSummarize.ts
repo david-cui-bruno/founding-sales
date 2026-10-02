@@ -7,6 +7,7 @@ import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
+import { routeOfTransport } from '@fss/domain/classification/routedTransport.ts';
 import type { ClassifyWorkerOptions } from './classify.ts';
 
 /**
@@ -33,7 +34,13 @@ export function readCallSummaryComposition(
   const model = chosen === '' ? DEFAULT_CALL_SUMMARY_MODEL : chosen;
   if (!isCallSummaryModel(model)) return { options: null, problem: 'call_summary:model_unknown' };
   return {
-    options: { summarizer: anthropicCallSummarizer({ transport: classifier.transport }), model, ...(log === undefined ? {} : { log }) },
+    options: {
+      summarizer: anthropicCallSummarizer({ transport: classifier.transport }),
+      model,
+      // Slice BR1: the reservation's provider key, price and funding follow the model's route.
+      route: routeOfTransport(classifier.transport),
+      ...(log === undefined ? {} : { log }),
+    },
     problem: null,
   };
 }

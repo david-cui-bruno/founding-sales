@@ -279,6 +279,13 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
     condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice"])
     error_message = "A rehearsal worker is handed the Gmail client, the Cal.com, transcription and Twilio entries and its database entry, and never the classifier key."
   }
+
+  # Slice BR1: and no Bedrock transport either, which would need no key and would call a
+  # model for the rehearsal's fixture replies.
+  assert {
+    condition     = !contains(keys(module.stack.worker_environment), "FSS_MODEL_TRANSPORT")
+    error_message = "A rehearsal worker is not given the Bedrock transport."
+  }
 }
 
 run "both_services_are_told_the_workspace_domain" {

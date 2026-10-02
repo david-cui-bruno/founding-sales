@@ -1,3 +1,4 @@
+import type { ModelTransportKind } from './modelTransport.ts';
 import type { ClassifierRequest } from './prompt.ts';
 
 /**
@@ -48,6 +49,12 @@ export interface AnthropicMessageResponse {
 }
 
 export interface AnthropicMessagesTransport {
+  /**
+   * Which transport this is (slice BR1, `modelTransport.ts`): it decides the `provider_key`
+   * a call is reserved under, its price table and who pays. Absent means the direct API —
+   * cash, the direction in which a fake that forgets to say costs nothing.
+   */
+  readonly kind?: ModelTransportKind | undefined;
   /** One non-streaming message. Throws on an API error, as the SDK does. */
   create(request: ClassifierRequest): Promise<AnthropicMessageResponse>;
   /**
@@ -192,6 +199,7 @@ export async function loadAnthropicTransport(options: {
     timeout: options.timeoutMilliseconds ?? 30_000,
   });
   return {
+    kind: 'anthropic',
     create: async request => await client.beta.messages.create(request),
     countTokens: async request => {
       // `max_tokens` is not part of a count and the SDK rejects it here, so the request

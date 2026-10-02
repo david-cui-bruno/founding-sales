@@ -19,6 +19,7 @@ import {
 } from './reservations.ts';
 import { MAX_BUDGET_DROPS, withoutTrailingBlocks } from './extractionPrompt.ts';
 import { admitCall, type ReservationSnapshot } from './pricing.ts';
+import { transportOfProviderKey } from '../classification/modelTransport.ts';
 import { researchUrlsForFirm } from './sourcePolicy.ts';
 import { readResearchSettings } from './settings.ts';
 import {
@@ -229,6 +230,11 @@ export interface BeginResearchInput {
   readonly requestedByUserId?: string | undefined;
   /** Database time. One run dates every write it makes identically. */
   readonly at: string;
+  /**
+   * The extraction port's `provider_key` (slice BR1), which the reservation carries: it
+   * prices the run and says who pays. `anthropic_extraction` when absent.
+   */
+  readonly providerKey?: string | undefined;
 }
 
 /**
@@ -261,10 +267,12 @@ export async function beginFirmResearch(
   const runId = await openRun(context, opening);
   if (runId === null) return accept({ kind: 'done', report: replayed(input.firmId, input.revision) });
 
+  const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
   const clearance = await claimResearchClearance(context, {
     firmId: input.firmId,
     at: input.at,
     attemptKind: 'first',
+    providerKey,
   });
   if (!clearance.ok) {
     await refuseRun(context, { runId, at: input.at, refusalCode: clearance.reason });
@@ -275,7 +283,7 @@ export async function beginFirmResearch(
   // here on `readSpend` counts this run on this date, so a second run started in the
   // same minute is cleared against a budget that already includes it.
   await reserveAttempt(context, {
-    providerKey: EXTRACTION_PROVIDER,
+    providerKey,
     subjectKind: 'research_run',
     subjectId: runId,
     attempt: 1,
@@ -348,6 +356,12 @@ export async function ensureResearchCalling(
      * instead. See `CallPermission`.
      */
     readonly hasExtraction: boolean;
+    /**
+     * The extraction port's `provider_key` (slice BR1). A `reserved` row carrying another
+     * transport's key is released rather than called against, and the retry reserves under
+     * this one. `anthropic_extraction` when absent.
+     */
+    readonly providerKey?: string | undefined;
   },
 ): Promise<CallPermission> {
   const subject = { subjectKind: 'research_run' as const, subjectId: input.runId };
@@ -368,8 +382,18 @@ export async function ensureResearchCalling(
   // the monthly spend lock, and a retry's clearance takes this one, so it must come first.
   await lockResearchBudget(context);
 
-  const rows = await listAttempts(context, subject);
-  const reserved = rows.find(row => row.state === 'reserved');
+  const providerKey = input.providerKey ?? EXTRACTION_PROVIDER;
+  let rows = await listAttempts(context, subject);
+  let reserved = rows.find(row => row.state === 'reserved');
+  if (input.hasExtraction && reserved !== undefined && reserved.providerKey !== providerKey) {
+    // Reserved — priced and funded — for the other transport (a worker that changed
+    // `FSS_MODEL_TRANSPORT` between chunks). Nothing was called against it, so its cents go
+    // back, and the run reserves again below under this worker's key, through the same
+    // clearance as any retry.
+    await settleAttempt(context, { reservationId: reserved.id, at: input.at, outcome: { kind: 'released' } });
+    rows = await listAttempts(context, subject);
+    reserved = undefined;
+  }
 
   if (!input.hasExtraction) {
     // No port, so nothing is marked. A `reserved` row goes back to the budget, because
@@ -421,6 +445,7 @@ export async function ensureResearchCalling(
     firmId: run.firmId,
     at: input.at,
     attemptKind: 'retry',
+    providerKey,
   });
   if (!clearance.ok) {
     // Refused, not failed: no ceiling was broken and nothing went wrong. The run closes
@@ -436,7 +461,7 @@ export async function ensureResearchCalling(
     return { kind: 'closed' };
   }
   const fresh = await reserveAttempt(context, {
-    providerKey: EXTRACTION_PROVIDER,
+    providerKey,
     subjectKind: 'research_run',
     subjectId: input.runId,
     attempt,
@@ -541,7 +566,12 @@ async function finishFirmResearchBody(
   // and the row is the authority on its state. A call is permitted only against a row
   // that is actually `calling`, so a cursor that says otherwise cannot buy one.
   const reservation: ReservationRow | null = await readAttempt(context, { ...subject, attempt: input.attempt });
-  const mayCall = input.mayCall && reservation !== null && reservation.state === 'calling';
+  // And only through the transport the row was priced for (slice BR1).
+  const mayCall =
+    input.mayCall &&
+    reservation !== null &&
+    reservation.state === 'calling' &&
+    (input.extraction === undefined || reservation.providerKey === input.extraction.providerKey);
 
   /**
    * Hand this attempt's cents back, for a run that asked the provider nothing.
@@ -755,6 +785,7 @@ async function finishFirmResearchBody(
     // tokenize several times worse than 2.5 characters a token.
     const snapshot: ReservationSnapshot = {
       modelName: reservation.modelName,
+      transport: transportOfProviderKey(reservation.providerKey),
       maxInputTokens: reservation.maxInputTokens,
       maxOutputTokens: reservation.maxOutputTokens,
       cents: reservation.cents,

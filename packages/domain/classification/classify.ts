@@ -11,17 +11,19 @@ import {
   type ClassificationRow,
 } from './store.ts';
 import { lockClassifierSwitch, readClassifierSettings } from './settings.ts';
+import { DIRECT_ROUTE, transportOfProviderKey, type ModelRoute } from './modelTransport.ts';
 import {
-  CLASSIFIER_PROVIDER_KEY,
   classifierCallCeilingCents,
   classifierCallCents,
   classifierInputTokenBound,
+  classifierProviderKey,
 } from './pricing.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { localDate } from '../src/rules/localClock.ts';
 import { lockMonthlySpend, recordProviderCall, workspaceBusinessZone } from '../research/ledger.ts';
 import { listAttempts, markCalling, readAttempt, reserveAttempt, settleAttempt, type ReservationRow } from '../research/reservations.ts';
 import { clearMonthlyCash, monthWithinCeiling } from '../settings/cashCeiling.ts';
+import { providerFunding } from '../settings/funding.ts';
 import {
   CLASSIFIER_PROMPT_VERSION,
   MODEL_CAPABILITIES,
@@ -81,6 +83,15 @@ export interface ClassifyReplyDeps {
    * admin who turned it off. Either one means no request.
    */
   readonly processEnabled?: boolean | undefined;
+  /**
+   * Which transport carries each model (slice BR1, `modelTransport.ts`): the same route the
+   * transport behind `classifierFor` follows. Decided from the model before the attempt is
+   * reserved, it gives the `provider_key`, the price table and whether the month's cash
+   * ceiling applies (`aws_bedrock.classifier` is credit-funded, so it does not). Null for a
+   * model this deployment cannot call: nothing is reserved and the attempt records
+   * `disabled`. Absent is every model through the direct API.
+   */
+  readonly route?: ModelRoute | undefined;
 }
 
 function deterministicOf(rows: readonly ClassificationRow[]): ClassificationRow | undefined {
@@ -309,11 +320,16 @@ export async function beginClassification(
   const zone = await workspaceBusinessZone(context);
   const today = await classifierRequestsOn(context, localDate(at, zone));
   if (settings.dailyCallCap === 0 || today >= settings.dailyCallCap) return await done('capped');
-  const cents = classifierCallCeilingCents(settings, prepared.input);
-  if (!(await clearMonthlyCash(context, { at, zone, cents }))) return await done('capped');
+  const transport = (deps.route ?? DIRECT_ROUTE)(settings.modelName);
+  if (transport === null) return await done('disabled');
+  const providerKey = classifierProviderKey(transport);
+  const cents = classifierCallCeilingCents(settings, prepared.input, transport);
+  // The month's cash ceiling is for cash (slice BR1): a credit-funded attempt is not cleared
+  // against it, as Amazon Transcribe's is not (`calls/transcription.ts`).
+  if (providerFunding(providerKey) === 'cash' && !(await clearMonthlyCash(context, { at, zone, cents }))) return await done('capped');
   const attempt = rows.reduce((highest, row) => Math.max(highest, row.attempt), 0) + 1;
   await reserveAttempt(context, {
-    providerKey: CLASSIFIER_PROVIDER_KEY,
+    providerKey,
     ...subjectOf(input.messageId),
     attempt,
     at,
@@ -328,6 +344,12 @@ export async function beginClassification(
 
 export type EnsureClassificationOutcome =
   | { readonly kind: 'calling'; readonly attempt: number; readonly plan: ClassifierRequestPlan }
+  /**
+   * The reservation was made for the other transport (slice BR1: a worker that changed
+   * `FSS_MODEL_TRANSPORT` between chunk 1 and chunk 2). Released, nothing sent; chunk 1
+   * reserves again under this worker's transport.
+   */
+  | { readonly kind: 'retry' }
   | { readonly kind: 'done'; readonly report: ClassifyReplyOutcome };
 
 /**
@@ -357,6 +379,12 @@ export async function ensureClassificationCalling(
   const release = async (): Promise<void> => {
     await settleAttempt(context, { reservationId: row.id, at: await databaseNow(context), outcome: { kind: 'released' } });
   };
+  // Never one transport against money reserved — and priced, and funded — for the other.
+  const route = (deps.route ?? DIRECT_ROUTE)(row.modelName);
+  if (route === null || row.providerKey !== classifierProviderKey(route)) {
+    await release();
+    return { kind: 'retry' };
+  }
   const before = await readClassifierSettings(context);
   const prepared = await prepare(context, input.messageId, before);
   if (prepared.kind === 'done') {
@@ -366,7 +394,9 @@ export async function ensureClassificationCalling(
   const at = await databaseNow(context);
   const zone = await workspaceBusinessZone(context);
   // The month, then the switch: the last two things read before the commit.
-  const withinMonth = await monthWithinCeiling(context, { at, zone });
+  // A credit-funded attempt was never cleared against the cash ceiling, so it is not
+  // stopped by it either (slice BR1).
+  const withinMonth = providerFunding(row.providerKey) === 'cash' ? await monthWithinCeiling(context, { at, zone }) : true;
   await lockClassifierSwitch(context, 'shared');
   const settings = await readClassifierSettings(context);
   if (!settings.enabled || deps.processEnabled === false) {
@@ -434,12 +464,17 @@ export async function finishClassification(
           : ambiguous || !attempt.usageReported
           ? // No reported counts: the reservation is the cost, never a computed zero.
             { kind: 'estimated' }
-          : { kind: 'settled', cents: classifierCallCents(input.plan.settings.modelName, attempt.call) },
+          : {
+              kind: 'settled',
+              // At the price of the transport the reservation was made for, which chunk 2
+              // checked is this worker's.
+              cents: classifierCallCents(input.plan.settings.modelName, attempt.call, transportOfProviderKey(row.providerKey)),
+            },
     });
     if (attempt.call.requestSent) {
       // A count and a failure code for the ledger's day; the cents are the reservation's.
       await recordProviderCall(context, {
-        providerKey: CLASSIFIER_PROVIDER_KEY,
+        providerKey: row.providerKey,
         at,
         businessTimeZone: row.businessTimeZone,
         costCents: 0,
@@ -540,6 +575,10 @@ export async function classifyReplyWithModel(
   if (begun.kind === 'done') return begun.report;
   const calling = await ensureClassificationCalling(context, deps, { messageId: input.messageId, attempt: begun.attempt });
   if (calling.kind === 'done') return calling.report;
+  // Reserved for another transport and released (slice BR1): nothing was asked.
+  if (calling.kind === 'retry') {
+    return { messageId: input.messageId, classification: null, outcome: 'not_applicable', recorded: false, call: null };
+  }
   return (await finishClassification(context, deps, { messageId: input.messageId, attempt: begun.attempt, plan: calling.plan })).report;
 }
 

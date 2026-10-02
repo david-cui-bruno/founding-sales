@@ -95,11 +95,13 @@ export function callSummarizeJobHandler(options: CallSummarizeOptions): JobHandl
       }
 
       if (carried.step === 'reserved') {
-        const calling = await ensureCallSummaryCalling(context, { sessionId, attempt: carried.attempt });
+        const calling = await ensureCallSummaryCalling(context, { sessionId, attempt: carried.attempt }, options);
         if (calling.kind === 'done') {
           log('call_summary_skipped', { reason: calling.reason });
           return { progress: { ...carried }, done: true };
         }
+        // Reserved for the other transport and released: back to chunk 1 (slice BR1).
+        if (calling.kind === 'retry') return { progress: { attempt: carried.attempt, step: 'retry', fencing }, done: false };
         PLANS.set(planKey(input.job.id, fencing, calling.attempt), calling.plan);
         return { progress: { attempt: calling.attempt, step: 'calling', fencing }, done: false };
       }

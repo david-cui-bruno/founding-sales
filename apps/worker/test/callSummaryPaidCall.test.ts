@@ -10,7 +10,7 @@ import {
   sweepCallSummaryReservations,
 } from '@fss/domain/calls/summary.ts';
 import { anthropicCallSummarizer } from '@fss/domain/calls/summaryAdapter.ts';
-import { CALL_SUMMARY_PROMPT_VERSION } from '@fss/domain/calls/summaryModel.ts';
+import { CALL_SUMMARY_PROMPT_VERSION, callSummaryCents } from '@fss/domain/calls/summaryModel.ts';
 import type { AnthropicMessageResponse, AnthropicMessagesTransport } from '@fss/domain/classification/anthropicClient.ts';
 import { withTransaction, type QueryResultRowLike, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
@@ -568,7 +568,7 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     if (begun.kind !== 'reserved') throw new Error(begun.reason);
     expect(await finishing()).toBe(base);
     const calling = await withTransaction(other, async () => await ensureCallSummaryCalling(worker, { sessionId: id, attempt: begun.attempt }));
-    if (calling.kind !== 'calling') throw new Error(calling.reason);
+    if (calling.kind !== 'calling') throw new Error(calling.kind === 'done' ? calling.reason : calling.kind);
     expect(await finishing()).toBe(base + 1);
     await withTransaction(other, async () => await finishCallSummary(worker, options, { sessionId: id, attempt: calling.attempt, plan: calling.plan }));
     expect(await finishing()).toBe(base);
@@ -618,6 +618,71 @@ describe('call.summarize on the paid-call pattern (slice C3b)', () => {
     expect(requests - before).toBe(2);
     expect(await summaryOf(id)).toBeUndefined();
     expect(await owedFor(id)).toEqual([]);
+  });
+
+  it('BR1: through Bedrock a summary is reserved and ledgered under aws_bedrock.call_summary, at Bedrock’s price, past a spent cash ceiling', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    const bedrock = { ...options, route: () => 'bedrock' as const };
+    const cashBefore = await monthSpent();
+    await setting('monthly_cash_ceiling_cents', { cents: 0 });
+    try {
+      // The control: the direct API is capped by the spent ceiling.
+      expect(await withTransaction(session, async () => await beginCallSummary(system(), options, { sessionId: id, retry: false }))).toEqual({
+        kind: 'done',
+        reason: 'capped',
+      });
+      const begun = await withTransaction(session, async () => await beginCallSummary(system(), bedrock, { sessionId: id, retry: false }));
+      if (begun.kind !== 'reserved') throw new Error(begun.reason);
+      const calling = await withTransaction(session, async () => await ensureCallSummaryCalling(system(), { sessionId: id, attempt: begun.attempt }, bedrock));
+      if (calling.kind !== 'calling') throw new Error(calling.kind === 'done' ? calling.reason : calling.kind);
+      const finished = await withTransaction(session, async () => await finishCallSummary(system(), bedrock, { sessionId: id, attempt: calling.attempt, plan: calling.plan }));
+      expect(finished.kind).toBe('summarized');
+      const { rows } = await session.query<{ provider_key: string; state: string; settled_cents: number }>(
+        'SELECT provider_key, state, settled_cents FROM provider_reservations WHERE subject_kind = $1 AND subject_id = $2',
+        [CALL_SUMMARY_SUBJECT_KIND, id],
+      );
+      // 900 input and 300 output tokens at $1.10 / $5.50, rounded up to a cent.
+      expect(rows.map(row => [row.provider_key, row.state, Number(row.settled_cents)])).toEqual([
+        ['aws_bedrock.call_summary', 'settled', callSummaryCents('claude-haiku-4-5-20251001', { inputTokens: 900, cachedInputTokens: 0, outputTokens: 300 }, 'bedrock')],
+      ]);
+      const { rows: ledger } = await session.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM provider_ledger WHERE workspace_id = $1 AND provider_key = 'aws_bedrock.call_summary'",
+        [seeded.alpha.workspaceId],
+      );
+      expect(ledger[0]?.n).toBe(1);
+      // Credits, so the month's cash is unchanged.
+      expect(await monthSpent()).toBe(cashBefore);
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5000 });
+    }
+  });
+
+  it('BR1: a direct-API reservation a Bedrock worker finds is released, never called, and reserved again under Bedrock', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    const bedrock = { ...options, route: () => 'bedrock' as const };
+    const before = requests;
+    const begun = await withTransaction(session, async () => await beginCallSummary(system(), options, { sessionId: id, retry: false }));
+    if (begun.kind !== 'reserved') throw new Error(begun.reason);
+    const calling = await withTransaction(session, async () => await ensureCallSummaryCalling(system(), { sessionId: id, attempt: begun.attempt }, bedrock));
+    expect(calling).toEqual({ kind: 'retry' });
+    const again = await withTransaction(session, async () => await beginCallSummary(system(), bedrock, { sessionId: id, retry: true }));
+    expect(again).toEqual({ kind: 'reserved', attempt: 2 });
+    const { rows } = await session.query<{ attempt: number; provider_key: string; state: string }>(
+      'SELECT attempt, provider_key, state FROM provider_reservations WHERE subject_kind = $1 AND subject_id = $2 ORDER BY attempt',
+      [CALL_SUMMARY_SUBJECT_KIND, id],
+    );
+    expect(rows.map(row => [Number(row.attempt), row.provider_key, row.state])).toEqual([
+      [1, 'anthropic_call_summary', 'released'],
+      [2, 'aws_bedrock.call_summary', 'reserved'],
+    ]);
+    expect(requests).toBe(before);
+    // Released by hand, so the file's later tests start from nothing open.
+    await session.query("UPDATE provider_reservations SET state = 'released', settled_at = now() WHERE subject_kind = $1 AND subject_id = $2 AND state = 'reserved'", [
+      CALL_SUMMARY_SUBJECT_KIND,
+      id,
+    ]);
   });
 
   it('a firm deletion that commits while a request is in flight: the chunk 3 finds the session gone and stores nothing; the attempt is estimated', async () => {

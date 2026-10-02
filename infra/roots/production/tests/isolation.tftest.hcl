@@ -246,6 +246,13 @@ run "the_deployment_flags_reach_both_containers" {
     )
     error_message = "A production deployment runs on live dependencies with sending on; an unset switch is a refusal to start, and 16.2's toggle is a literal in infra/roots/production."
   }
+
+  # Slice BR1: production's Claude calls go through Amazon Bedrock (credits), never the
+  # direct API (cash) by default.
+  assert {
+    condition     = module.stack.worker_environment["FSS_MODEL_TRANSPORT"] == "bedrock"
+    error_message = "The production worker sends its model calls through Bedrock."
+  }
 }
 
 run "gmail_push_wires_the_audience_the_webhook_must_require" {

@@ -1,3 +1,4 @@
+import { bedrockModelOf, transportPrice, type ModelTransportKind } from '../classification/modelTransport.ts';
 import { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_SYSTEM_TEXT } from './extractionPrompt.ts';
 import { FACT_KEYS, FACT_KEY_DEFINITIONS } from './facts.ts';
 import { MAX_BLOCKS, MAX_TEXT_CHARACTERS } from './pageText.ts';
@@ -37,6 +38,13 @@ import { MAX_BLOCKS, MAX_TEXT_CHARACTERS } from './pageText.ts';
  * category: if a later change re-enables caching, or a provider reports cached tokens
  * for its own reasons, the ledger must not read a write as free. A category nobody
  * prices is a category the ceilings cannot see.
+ *
+ * ## Over Amazon Bedrock (slice BR1)
+ *
+ * The same model costs Bedrock's regional on-demand rate when the call goes through Bedrock
+ * (`classification/modelTransport.ts`, from the AWS Price List API): Haiku 4.5 $1.10 / $5.50.
+ * Every function here takes the transport, defaulting to the direct API, and a model is
+ * priced on Bedrock only when it has a row in both this table and Bedrock's.
  */
 
 export interface ModelPrice {
@@ -63,8 +71,9 @@ export class UnpricedModelError extends Error {
   }
 }
 
-export function isPricedModel(modelName: string): boolean {
-  return Object.hasOwn(PRICE_CENTS_PER_MILLION, modelName);
+export function isPricedModel(modelName: string, transport: ModelTransportKind = 'anthropic'): boolean {
+  if (!Object.hasOwn(PRICE_CENTS_PER_MILLION, modelName)) return false;
+  return transport === 'anthropic' || bedrockModelOf(modelName) !== undefined;
 }
 
 export interface TokenUsage {
@@ -83,9 +92,10 @@ export interface TokenUsage {
  * that rounded down would let a thousand half-cent calls cost nothing at all. A call
  * that happened costs at least one cent.
  */
-export function centsOf(modelName: string, usage: TokenUsage): number {
-  const price = PRICE_CENTS_PER_MILLION[modelName];
-  if (price === undefined) throw new UnpricedModelError(modelName);
+export function centsOf(modelName: string, usage: TokenUsage, transport: ModelTransportKind = 'anthropic'): number {
+  const firstParty = PRICE_CENTS_PER_MILLION[modelName];
+  if (firstParty === undefined || !isPricedModel(modelName, transport)) throw new UnpricedModelError(modelName);
+  const price = transportPrice(transport, modelName, firstParty);
   const nonNegative = (value: number | undefined): number => Math.max(0, Math.trunc(value ?? 0));
   const input = nonNegative(usage.inputTokens);
   const output = nonNegative(usage.outputTokens);
@@ -149,6 +159,8 @@ const PER_PAGE_TEXT_TOKENS = 300;
 
 export interface WorstCaseInput {
   readonly modelName: string;
+  /** The transport the run's call goes through (slice BR1). Absent is the direct API. */
+  readonly transport?: ModelTransportKind | undefined;
   readonly maxPagesPerFirm: number;
   readonly maxPageBytes: number;
 }
@@ -184,10 +196,11 @@ export interface WorstCaseInput {
  * authorized in the first place.
  */
 export function worstCaseRunCents(input: WorstCaseInput): number {
-  return centsOf(input.modelName, {
-    inputTokens: worstCaseInputTokens(input),
-    outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS,
-  });
+  return centsOf(
+    input.modelName,
+    { inputTokens: worstCaseInputTokens(input), outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS },
+    input.transport ?? 'anthropic',
+  );
 }
 
 /** The input half of the bound, exported so a test can compare a real request with it. */
@@ -220,6 +233,8 @@ export function countedWithHeadroom(countedTokens: number): number {
  */
 export interface ReservationSnapshot {
   readonly modelName: string;
+  /** The transport the reservation was priced for, from its `provider_key` (slice BR1). Absent is the direct API. */
+  readonly transport?: ModelTransportKind | undefined;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
   readonly cents: number;
@@ -248,12 +263,13 @@ export type CallAdmission =
  *     it, and a call nobody can price is a call nobody cleared.
  */
 export function admitCall(snapshot: ReservationSnapshot, countedTokens: number): CallAdmission {
-  if (!isPricedModel(snapshot.modelName)) return { kind: 'refuse', reason: 'unpriced' };
+  const transport = snapshot.transport ?? 'anthropic';
+  if (!isPricedModel(snapshot.modelName, transport)) return { kind: 'refuse', reason: 'unpriced' };
   const inputTokens = countedWithHeadroom(countedTokens);
   if (inputTokens + snapshot.maxOutputTokens > snapshot.maxInputTokens + snapshot.maxOutputTokens) {
     return { kind: 'refuse', reason: 'tokens' };
   }
-  const cents = centsOf(snapshot.modelName, { inputTokens, outputTokens: snapshot.maxOutputTokens });
+  const cents = centsOf(snapshot.modelName, { inputTokens, outputTokens: snapshot.maxOutputTokens }, transport);
   if (cents > snapshot.cents) return { kind: 'refuse', reason: 'cents' };
   return { kind: 'call', inputTokens };
 }
@@ -268,5 +284,5 @@ export function admitCall(snapshot: ReservationSnapshot, countedTokens: number):
  * this function exists to find.
  */
 export function withinWorstCase(input: WorstCaseInput, usage: TokenUsage): boolean {
-  return centsOf(input.modelName, usage) <= worstCaseRunCents(input);
+  return centsOf(input.modelName, usage, input.transport ?? 'anthropic') <= worstCaseRunCents(input);
 }

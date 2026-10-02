@@ -1,6 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification/anthropicClient.ts';
+import { BEDROCK_MODEL_TABLE, MODEL_TRANSPORT_VARIABLE } from '@fss/domain/classification/modelTransport.ts';
 import { COVERAGE_FRESHNESS_SECONDS } from '@fss/domain/mail/coverage.ts';
 import { MAILBOX_CHECK_INTERVAL_SECONDS } from '@fss/domain/mail/mailboxes.ts';
 import {
@@ -292,5 +293,37 @@ describe('Terraform declares the task definitions CI deploys around (lane g91)',
     expect(operations).toContain('image      = var.worker_image');
     expect(operations).toContain('"awslogs-group"         = var.worker_log_group_name');
     expect(operations).toContain('"awslogs-stream-prefix" = "operations"');
+  });
+});
+
+/**
+ * Slice BR1: the worker's Bedrock grant names exactly the inference profiles and foundation
+ * models the transport maps (`BEDROCK_MODEL_TABLE`), and CountTokens exactly the models the
+ * transport counts. A model added to the table and not to the grant would be a 403 on every
+ * call; one granted and not mapped would be access nothing uses.
+ */
+describe('BR1: the Bedrock grant and the transport’s model table agree', () => {
+  const STACK = readRepositoryFile('infra/modules/stack/main.tf');
+  const entries = (name: string, open: string, close: string): string => {
+    const start = CLUSTER.indexOf(`\n  ${name} = ${open}`);
+    expect(start, `infra/modules/cluster/main.tf declares no ${name}`).toBeGreaterThan(-1);
+    return CLUSTER.slice(start, CLUSTER.indexOf(`\n  ${close}`, start + 1));
+  };
+
+  it('grants every mapped profile and its foundation model, and nothing else', () => {
+    const granted = [...entries('bedrock_models', '{', '}').matchAll(/"([^"]+)"\s*=\s*"([^"]+)"/gu)].map(match => `${match[1] ?? ''} -> ${match[2] ?? ''}`);
+    const mapped = [...new Set(Object.values(BEDROCK_MODEL_TABLE).map(row => `${row.inferenceProfileId} -> ${row.foundationModelId}`))];
+    expect(granted.sort()).toEqual(mapped.sort());
+  });
+
+  it('grants CountTokens on exactly the models the transport counts', () => {
+    const counted = [...(/bedrock_counted_models\s*=\s*\[([^\]]*)\]/u.exec(CLUSTER)?.[1] ?? '').matchAll(/"([^"]+)"/gu)].map(match => match[1]);
+    const mapped = [...new Set(Object.values(BEDROCK_MODEL_TABLE).filter(row => row.countTokens).map(row => row.foundationModelId))];
+    expect(counted.sort()).toEqual(mapped.sort());
+  });
+
+  it('sets the variable the code reads, and production alone chooses Bedrock', () => {
+    expect(CLUSTER).toContain(`{ ${MODEL_TRANSPORT_VARIABLE} = "bedrock" }`);
+    expect(STACK).toContain('worker_model_transport = local.is_production ? "bedrock" : "anthropic"');
   });
 });

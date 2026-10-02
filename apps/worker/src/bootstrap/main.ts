@@ -13,6 +13,7 @@ import {
   classifyReplySource,
   classifyWorkerOptions,
   describeClassifier,
+  modelTransportProblem,
   type ClassifyWorkerOptions,
 } from '../handlers/classify.ts';
 import type { OutboundSendDeps } from '@fss/domain/outbound/send.ts';
@@ -527,6 +528,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     call_transcription: transcription.problem ?? 'configured',
     // Whether after-call summaries run, and with which model; never a key.
     call_summary: summary.problem ?? summary.options?.model ?? 'configured',
+    // Slice BR1: why no model transport was built, by variable name, or null.
+    model_transport_problem: modelTransportProblem(environment),
   });
 
   const sink = await createSink(config, log);
