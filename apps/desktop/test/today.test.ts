@@ -674,7 +674,7 @@ describe('the Today bridge', () => {
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.callHistory({ firmId: FIRM_ID });
-    expect(seen).toEqual([`/calls/history?firmId=${FIRM_ID}&include=summary,outcome`]);
+    expect(seen).toEqual([`/calls/history?firmId=${FIRM_ID}&include=summary,outcome,notes`]);
   });
 
   it('never puts a token, a URI or a command id in the state it returns', async () => {

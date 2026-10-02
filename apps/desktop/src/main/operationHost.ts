@@ -159,6 +159,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
 
     'crm.state': async () => await deps.crm.state(),
     'crm.openFirm': async (input: { readonly firmId: string }) => await deps.crm.openFirm(input),
+    'crm.firmTimeline': async (input: { readonly firmId: string; readonly before: string }) => await deps.crm.firmTimeline(input),
     'crm.openPipeline': async (input?: Parameters<CrmBridgeHost['openPipeline']>[0]) => await deps.crm.openPipeline(input),
     'crm.openAddFirm': async () => await deps.crm.openAddFirm(),
     'crm.openImport': async () => await deps.crm.openImport(),

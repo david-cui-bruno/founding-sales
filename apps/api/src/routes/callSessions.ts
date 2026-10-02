@@ -1,4 +1,5 @@
 import {
+  CALL_HISTORY_INCLUDE_NOTES,
   CALL_HISTORY_INCLUDE_OUTCOME,
   CALL_HISTORY_INCLUDE_SUMMARY,
   callHistoryResponseSchema,
@@ -13,6 +14,7 @@ import {
 import {
   createCallSession,
   listFirmCallSessions,
+  readCallLogNotes,
   readCallLogOutcomes,
   readCallingStatus,
   recordingPathOfSession,
@@ -139,6 +141,12 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
           calls.flatMap(call => (call.callLogId === null ? [] : [call.callLogId])),
         )
       : null;
+    const notes = includes.has(CALL_HISTORY_INCLUDE_NOTES)
+      ? await readCallLogNotes(
+          scoped.context,
+          calls.flatMap(call => (call.callLogId === null ? [] : [call.callLogId])),
+        )
+      : null;
     return {
       status: 200,
       body: callHistoryResponseSchema.parse({
@@ -148,6 +156,7 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
             ...call,
             ...(summary === undefined ? {} : { summary }),
             ...(outcomes === null ? {} : { outcome: call.callLogId === null ? null : (outcomes.get(call.callLogId) ?? null) }),
+            ...(notes === null ? {} : { note: call.callLogId === null ? null : (notes.get(call.callLogId) ?? null) }),
           };
         }),
       }),

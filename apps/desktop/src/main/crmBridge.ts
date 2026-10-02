@@ -18,6 +18,7 @@ import {
   sequencesResponseSchema,
   type FirmIdentityDto,
   type FirmPageResponse,
+  type FirmTimeline,
   type HeldOutgoingMessage,
   type MergeConflict,
   type PipelineStageDto,
@@ -106,6 +107,11 @@ export interface CrmBridgeHost {
   forget(): Promise<CrmState>;
   state(): Promise<CrmState>;
   openFirm(input: { readonly firmId: string }): Promise<CrmState>;
+  /**
+   * S4F: one older page of a firm's timeline. Held by nothing: it is not a screen, so it
+   * never moves the window, and it answers null when the read did not.
+   */
+  firmTimeline(input: { readonly firmId: string; readonly before: string }): Promise<{ readonly timeline: FirmTimeline | null }>;
   /** The board. `includeLost` is remembered until the next one that says otherwise. */
   openPipeline(input?: { readonly includeLost?: boolean }): Promise<CrmState>;
   saveContact(input: ContactEdit): Promise<CrmState>;
@@ -363,7 +369,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       firmId,
       pageVersion: FIRM_PAGE_VERSION,
       // Lane PB (migration 0038): and the firm's prepared brief, or null.
-      include: ['stops', 'preparedBrief'],
+      // S4F: the firm's open work and the newest page of its timeline.
+      include: ['stops', 'preparedBrief', 'tasks', 'timeline'],
     });
     if (!page.ok) {
       notice = page.reason;
@@ -458,6 +465,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     async state() {
       if (pipeline === null && firm === null) await loadPipeline();
       return await snapshot();
+    },
+
+    async firmTimeline(input) {
+      const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
+        firmId: input.firmId,
+        pageVersion: FIRM_PAGE_VERSION,
+        include: ['timeline'],
+        timelineBefore: input.before,
+      });
+      if (!page.ok || page.value.visibility !== 'assigned_or_admin') return { timeline: null };
+      return { timeline: page.value.timeline ?? null };
     },
 
     async openFirm(input) {

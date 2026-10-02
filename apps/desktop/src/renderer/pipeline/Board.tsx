@@ -88,6 +88,10 @@ export function Board({
 
   // J / K walk the cards in the order they are drawn; / goes to the search box.
   const walk = (delta: 1 | -1): void => {
+    // Navigation never leaves focus on a command: a button that had focus (Move, Save) would
+    // otherwise run on the Enter that follows J or K (rule K4).
+    const focused = document.activeElement;
+    if (focused instanceof HTMLButtonElement) focused.blur();
     const order = columns.flatMap(column => visible(column).map(firm => firm.id));
     if (order.length === 0) return;
     const at = selectedFirmId === null ? -1 : order.indexOf(selectedFirmId);

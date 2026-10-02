@@ -185,6 +185,23 @@ describe('calling status, history and recordings (slice C1)', () => {
     expect(history.text).not.toContain(PHONE);
   });
 
+  it('adds the note typed when the call was logged only when asked, and only to the firm’s own salesperson (S4F)', async () => {
+    const logged = await post(
+      '/calls/log',
+      salespersonToken,
+      command({ firmId, contactId, routeId, callSessionId: sessionId, outcome: 'interested', note: 'Wants pricing for 650 doors; call back Tuesday.' }),
+    );
+    expect(logged.status, logged.text).toBe(200);
+    const plain = await get(`/calls/history?firmId=${firmId}&include=outcome`, salespersonToken);
+    expect(plain.status, plain.text).toBe(200);
+    expect(plain.text).not.toContain('Wants pricing');
+    expect((plain.body['calls'] as Record<string, unknown>[])[0]).not.toHaveProperty('note');
+    const withNotes = await get(`/calls/history?firmId=${firmId}&include=outcome,notes`, salespersonToken);
+    expect((withNotes.body['calls'] as Record<string, unknown>[])[0]).toMatchObject({ outcome: 'interested', note: 'Wants pricing for 650 doors; call back Tuesday.' });
+    // Another workspace's session, and a firm that is somebody else's, read no note at all.
+    expect((await get(`/calls/history?firmId=${firmId}&include=notes`, betaToken)).status).toBe(404);
+  });
+
   it('proxies the recording from Twilio with the account key, as bytes and never a URL', async () => {
     const answer = await get(`/calls/recording?sessionId=${sessionId}`, salespersonToken);
     expect(answer.status, answer.text).toBe(200);

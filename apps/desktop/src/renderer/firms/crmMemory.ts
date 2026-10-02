@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useState } from 'react';
+import type { FirmTimelineEvent } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
 
 export interface BoardMemory {
@@ -59,6 +60,12 @@ export interface CrmMemory {
    * arrives, even after the view was left.
    */
   pending: Record<string, PendingCommand | undefined>;
+  /**
+   * The older timeline pages already loaded, by firm (S4F), and the cursor of the next. Keyed
+   * by the firm they belong to, so a page that arrives after David moved to another firm is
+   * cached under its own firm and never shown on this one (rule K7).
+   */
+  timeline: Record<string, { events: FirmTimelineEvent[]; nextBefore: string | null } | undefined>;
 }
 
 export interface PendingCommand {
@@ -82,6 +89,7 @@ const fresh = (): CrmMemory => ({
   pageEditors: {},
   drafts: {},
   pending: {},
+  timeline: {},
 });
 
 let current: { session: string; epoch: object | null; memory: CrmMemory } = { session: '', epoch: null, memory: fresh() };
