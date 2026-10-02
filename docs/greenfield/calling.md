@@ -578,7 +578,10 @@ current transcript, else `stale_analysis`; the echoed hash is the stored one, el
 `outcome_required`, `callback_exists`; a `follow_up` more than seven days after the call —
 the session's start, never the log's time — is `follow_up_expired`), and maps each key to its
 command inside one savepoint. **The Apply is atomic**: any key refused, or a command that
-fails (a selected follow-up whose permission is not granted is `follow_up_not_granted`),
+fails (a selected follow-up whose permission is not granted is `follow_up_not_granted`; a
+warning the outcome's command would keep as history on the form — `effects_not_applied`, a
+selected callback it did not create or whose fields do not name its `dueAt` — is refused,
+the callback's fields checked before anything is logged),
 rolls the whole batch back and the 409 names the key (`keyReasons`, key → code); nothing is
 applied or measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
 none. `outcome` (with `callback`, `follow_up` and the "covers all contact"
