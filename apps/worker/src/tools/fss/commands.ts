@@ -80,6 +80,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'send-path report': 'database',
   // Slice S3X (CC2b): the contacts 0037 made undialable, ids and counts, READ ONLY.
   'stop-channels report': 'database',
+  // Slice S3T-E: the trial's calls, encrypted to David's public key, READ ONLY.
+  'trial export': 'database',
   // Call-to-booking A2: the mailbox switch's two reads, each one READ ONLY transaction.
   'mailbox switch-preflight': 'database',
   'send-path preview': 'database',
@@ -266,6 +268,17 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary:
       'the nine read-before-lift reads of the send-path verification, in one READ ONLY transaction. Reads only, and decides nothing',
+  },
+  {
+    // Slice S3T-E (David's approval, 2 October): what the ten-call trial counts, for his own
+    // review on his Mac through AWS Bedrock. Printed encrypted; never a file, never a report.
+    path: ['admin', 'trial', 'export'],
+    valueFlags: ['--public-key-pem-b64', '--workspace-slug', '--workspace-id', '--since', '--max-calls'],
+    booleanFlags: [],
+    requiredFlags: ['--public-key-pem-b64'],
+    oneOf: ['--workspace-slug', '--workspace-id'],
+    summary:
+      'the trial calls GET /calls/trial counts (transcripts, suggestions, evidence, decisions, outcome; no audio, numbers, addresses or names), AES-256-GCM under a key wrapped with RSA-OAEP-SHA256 to --public-key-pem-b64 (RSA >= 3072), in one READ ONLY transaction',
   },
   {
     // Slice S3X (contract check CC2b, DESIGN-S3X §0.1): read once right after the release

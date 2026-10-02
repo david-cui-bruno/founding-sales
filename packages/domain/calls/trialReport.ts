@@ -131,6 +131,24 @@ export function sampleOf(proposal: CallProposal): CallTrialSample {
 const byReasonOrder = (reason: CallAnalysisExclusionReason): number => CALL_ANALYSIS_EXCLUSION_REASONS.indexOf(reason);
 
 export async function readCallTrial(context: RepositoryContext, options: { readonly since?: string | undefined } = {}): Promise<CallTrialResponse> {
+  return (await computeCallTrial(context, options)).response;
+}
+
+/** One call the trial counts: eligible, answered, with a completed model analysis. */
+export interface TrialAnalysedCall {
+  readonly callSessionId: string;
+  readonly analysisId: string;
+  readonly occurredAt: string;
+}
+
+/**
+ * The trial read, and the calls it counts toward ten (oldest first): what `fss admin trial
+ * export` selects, so the export and `GET /calls/trial` can never disagree.
+ */
+export async function computeCallTrial(
+  context: RepositoryContext,
+  options: { readonly since?: string | undefined } = {},
+): Promise<{ readonly response: CallTrialResponse; readonly analysedCalls: readonly TrialAnalysedCall[] }> {
   const since = new Date(options.since ?? CALL_TRIAL_DEFAULT_SINCE).toISOString();
   const workspaceId = context.scope.workspaceId;
   const actor = context.scope.actor;
@@ -234,6 +252,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
   }
 
   let answered = 0;
+  const analysedCalls: TrialAnalysedCall[] = [];
   let eligible = 0;
   let analysed = 0;
   let fullyDecided = 0;
@@ -278,6 +297,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
     if (authoritative !== null) {
       outcome.completed += 1;
       analysed += 1;
+      analysedCalls.push({ callSessionId: row.id, analysisId: authoritative.id, occurredAt: row.occurred_at.toISOString() });
       let open = 0;
       for (const proposal of authoritative.proposals) {
         const type = acceptanceTypeOf(proposal);
@@ -371,7 +391,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
       decidedAt: entry.at.toISOString(),
     }));
 
-  return {
+  const response: CallTrialResponse = {
     since,
     minimumRecordingSeconds: CALL_ANALYSIS_MINIMUM_RECORDING_SECONDS,
     target: CALL_TRIAL_TARGET_CALLS,
@@ -393,4 +413,6 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
     types,
     incorrect,
   };
+  // Sessions are read newest first; the export takes them oldest first.
+  return { response, analysedCalls: [...analysedCalls].reverse() };
 }
