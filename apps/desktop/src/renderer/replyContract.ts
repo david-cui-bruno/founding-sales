@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   CLASSIFIER_EFFORTS,
   REPLY_DISPOSITIONS,
+  REPLY_CLASSES,
   REPLY_NEXT_ACTIONS,
   instant,
   replyCardDtoSchema,
@@ -74,6 +75,14 @@ export const replySummarySchema = z.strictObject({
   from: z.string().max(320).nullable(),
   contactName: z.string().max(200).nullable(),
   nextAction: z.enum(REPLY_NEXT_ACTIONS),
+  /**
+   * The classifier's own class for the message, as `/replies` already sends it on every card
+   * (no new read, nothing negotiated): `uncertain` is the class for "the classifier could not
+   * tell". The Replies count of uncertain replies is this and nothing else.
+   */
+  deterministicClass: z.enum(REPLY_CLASSES),
+  /** Displayed only; never compared against a threshold. */
+  confidence: z.number().min(0).max(1).nullable(),
   proposedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
   /** What was confirmed, if it was; the note and the consequences stay on the server. */
   confirmedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
@@ -90,6 +99,8 @@ export function replySummaryOf(card: ReplyCardDto): ReplySummary {
     from: card.from,
     contactName: card.contactName,
     nextAction: card.nextAction,
+    deterministicClass: card.deterministicClass,
+    confidence: card.confidence,
     proposedDisposition: card.proposedDisposition,
     confirmedDisposition: card.confirmation?.disposition ?? null,
   };

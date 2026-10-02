@@ -56,6 +56,8 @@ export type CallSummaryDto = z.infer<typeof callSummaryDtoSchema>;
 export const CALL_HISTORY_INCLUDE_SUMMARY = 'summary';
 /** Slice 3a: `GET /calls/history?include=outcome` adds each call's logged outcome. */
 export const CALL_HISTORY_INCLUDE_OUTCOME = 'outcome';
+/** S4F: `GET /calls/history?include=notes` adds the note typed when the call was logged. */
+export const CALL_HISTORY_INCLUDE_NOTES = 'notes';
 
 /**
  * How one side of a call is shown: by the recording's channel (slice C3a's mapping —

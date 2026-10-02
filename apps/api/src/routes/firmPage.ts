@@ -47,6 +47,11 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
     includeStops: parsed.data.include?.includes('stops') === true,
     // Lane PB (migration 0038): the prepared brief, only when asked for, for the same reason.
     includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,
+    // S4F: the firm's open work and one page of its activity, only when asked for, for the
+    // same reason; `timelineBefore` is the cursor of the page older than one already shown.
+    includeTasks: parsed.data.include?.includes('tasks') === true,
+    includeTimeline: parsed.data.include?.includes('timeline') === true,
+    timelineBefore: parsed.data.timelineBefore,
   });
   // `firm_unknown` is a 404 with the same redacted sentence every unmounted path
   // gets: a firm in another workspace and a firm that never existed are one answer.

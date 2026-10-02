@@ -1,6 +1,8 @@
 import {
   knownBlockedActionKinds,
   type FirmStopsDto,
+  type FirmTaskDto,
+  type FirmTimeline,
   type FollowUpPermissionDto,
   type PreparedBriefDto,
   type SuppressionChannel,
@@ -11,6 +13,7 @@ import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/fol
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
 import { readPreparedBrief } from './preparedBriefs.ts';
+import { readFirmTasks, readFirmTimeline } from './firmActivity.ts';
 import { accept, type CrmResult } from './types.ts';
 
 /**
@@ -87,6 +90,10 @@ export type FirmPageDto =
       readonly stops?: FirmStopsDto;
       /** Only when negotiated (`include: ['preparedBrief']`, lane PB): the brief, or null. */
       readonly preparedBrief?: PreparedBriefDto | null;
+      /** Only when negotiated (`include: ['tasks']`, S4F). */
+      readonly tasks?: readonly FirmTaskDto[];
+      /** Only when negotiated (`include: ['timeline']`, S4F). */
+      readonly timeline?: FirmTimeline;
     };
 
 interface StageEventRow {
@@ -131,6 +138,12 @@ export async function readFirmPage(
     readonly includeStops?: boolean | undefined;
     /** `include: ['preparedBrief']` (lane PB, migration 0038): add the prepared brief. */
     readonly includePreparedBrief?: boolean | undefined;
+    /** `include: ['tasks']` (S4F): the firm's open work. */
+    readonly includeTasks?: boolean | undefined;
+    /** `include: ['timeline']` (S4F): one page of the activity timeline. */
+    readonly includeTimeline?: boolean | undefined;
+    /** The timeline cursor (`timelineBefore`): the page older than it. */
+    readonly timelineBefore?: string | undefined;
   },
 ): Promise<CrmResult<FirmPageDto>> {
   const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation });
@@ -216,6 +229,8 @@ export async function readFirmPage(
     ),
     ...(input.includeStops === true ? { stops: await readFirmStops(context, input.firmId) } : {}),
     ...(input.includePreparedBrief === true ? { preparedBrief: await readPreparedBrief(context, input.firmId) } : {}),
+    ...(input.includeTasks === true ? { tasks: [...(await readFirmTasks(context, input.firmId))] } : {}),
+    ...(input.includeTimeline === true ? { timeline: await readFirmTimeline(context, input.firmId, input.timelineBefore) } : {}),
   });
 }
 

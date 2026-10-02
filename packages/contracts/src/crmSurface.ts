@@ -341,8 +341,75 @@ export const firmPageRequestSchema = z.strictObject({
    * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief`, the firm's prepared
    * brief or null. Negotiated for the same reason.
    */
-  include: z.array(z.enum(['stops', 'preparedBrief'])).max(2).optional(),
+  include: z.array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline'])).max(4).optional(),
+  /**
+   * S4F: with `include: ['timeline']`, the page of the activity timeline older than this
+   * cursor (an opaque `nextBefore` from an earlier answer). Absent: the newest page.
+   */
+  timelineBefore: z.string().min(1).max(120).optional(),
 });
+
+/**
+ * S4F: the firm's open work, read-only (`include: ['tasks']`). Acting on a task stays where
+ * it is today (Today's lanes and the callbacks); this lists them beside the firm.
+ *
+ *  * `callback` — an open callback someone asked for (`callbacks.due_at`);
+ *  * `call_task` — a promise made on a call (`call_tasks.text`);
+ *  * `step` — a pending or held call or LinkedIn step of a sequence (`step_executions`).
+ */
+export const FIRM_TASK_KINDS = ['callback', 'call_task', 'step'] as const;
+export const firmTaskDtoSchema = z.strictObject({
+  key: z.string().max(80),
+  kind: z.enum(FIRM_TASK_KINDS),
+  /** A short label: the task's own text, or a code the desktop puts in words. */
+  label: z.string().max(300),
+  dueAt: z.iso.datetime(),
+  status: z.enum(['open', 'held']),
+});
+export type FirmTaskDto = z.infer<typeof firmTaskDtoSchema>;
+
+/**
+ * S4F: one chronological list of what happened at the firm (`include: ['timeline']`), newest
+ * first, 50 to a page. Codes and ids only: no message body, no note, no transcript.
+ *
+ *  * `call` — a logged call; `code` is its outcome;
+ *  * `outcome_corrected` — an outcome changed after the fact; `code` is the new outcome and
+ *    `detail` the one it replaced;
+ *  * `email_sent` / `email_received` — a message matched to the firm; `detail` is its subject;
+ *  * `stage_change` — `code` is the stage moved to and `detail` the one it left;
+ *  * `stop_recorded` / `stop_lifted` — a stop on the firm or on one of its contacts' handles;
+ *    `code` is the stop's source.
+ */
+export const FIRM_TIMELINE_KINDS = [
+  'call',
+  'outcome_corrected',
+  'email_sent',
+  'email_received',
+  'stage_change',
+  'stop_recorded',
+  'stop_lifted',
+] as const;
+export const firmTimelineEventSchema = z.strictObject({
+  /** Stable across pages and re-reads, so a repeated row is recognised and not shown twice. */
+  key: z.string().max(120),
+  at: z.iso.datetime(),
+  kind: z.enum(FIRM_TIMELINE_KINDS),
+  code: z.string().max(80).nullable(),
+  detail: z.string().max(200).nullable(),
+  /**
+   * The cursor that asks for the page of events older than THIS one. The desktop takes it
+   * from the oldest row it is showing, so a refreshed first page merged with older pages it
+   * already holds can never leave a gap behind a stale page cursor.
+   */
+  cursor: z.string().max(120),
+});
+export const firmTimelineSchema = z.strictObject({
+  events: z.array(firmTimelineEventSchema).max(50),
+  /** The cursor for the next (older) page, or null when this was the last. */
+  nextBefore: z.string().max(120).nullable(),
+});
+export type FirmTimelineEvent = z.infer<typeof firmTimelineEventSchema>;
+export type FirmTimeline = z.infer<typeof firmTimelineSchema>;
 
 /**
  * What the firm page says is stopped (migration 0037, David's P2: the CRM shows "Email
@@ -426,6 +493,10 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
      * migration 0038): the firm's prepared brief, or null when it has none.
      */
     preparedBrief: preparedBriefDtoSchema.nullable().optional(),
+    /** Present exactly when the request negotiated `include: ['tasks']` (S4F). */
+    tasks: z.array(firmTaskDtoSchema).optional(),
+    /** Present exactly when the request negotiated `include: ['timeline']` (S4F). */
+    timeline: firmTimelineSchema.optional(),
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

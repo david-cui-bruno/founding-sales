@@ -129,6 +129,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'research.addLink': { firmId: UUID, url: 'https://news.example.test/piece' },
   'research.saveSettings': { dailyFirmCeiling: 25 },
   'crm.openFirm': { firmId: UUID },
+  'crm.firmTimeline': { firmId: UUID, before: '2026-09-20T15:00:00.123456|call|abc' },
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
   'crm.changeStage': { opportunityId: UUID, toStageKey: 'new', reason: null },
   'crm.setValue': { opportunityId: UUID, monthlyCents: 120_000, kind: 'estimated' },

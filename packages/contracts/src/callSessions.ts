@@ -213,6 +213,13 @@ export const callSessionDtoSchema = z.object({
    * never asks, and its parser never meets the key.
    */
   outcome: z.enum(CALL_OUTCOMES).nullable().optional(),
+  /**
+   * S4F: the note typed when the call was logged (null when the log has none or the call has
+   * no log), only when the read asked for it (`include=notes`). A desktop that never asks
+   * never meets the key. The history is the assigned salesperson's and an admin's, which is
+   * exactly who may read a note (Appendix F).
+   */
+  note: z.string().max(2000).nullable().optional(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
 
