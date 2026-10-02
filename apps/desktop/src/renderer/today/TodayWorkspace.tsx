@@ -19,12 +19,12 @@ import { SHORTCUTS, useShortcuts, type ShortcutAction } from '../v2/shortcuts.ts
 import { BasicsEditor, type BasicsField } from './BasicsEditor.tsx';
 import { CallPanel } from './CallPanel.tsx';
 import { LogIncomingDialog, type Contact } from './LogIncomingDialog.tsx';
-import { OutcomeForm } from './OutcomeForm.tsx';
+import { OutcomeForm, type LogTarget } from './OutcomeForm.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { BLOCKER_FIXES, BLOCKER_SENTENCES, blockersOf, groupOf, nextToCall, stepFrom } from './queueView.ts';
 import { TaskRow } from './TaskRow.tsx';
 import { Feedback } from './Feedback.tsx';
-import { AfterCallAnalysis } from './AfterCallAnalysis.tsx';
+import { AfterCallAnalysis, type ApplyCommand } from './AfterCallAnalysis.tsx';
 import { Overview } from './Overview.tsx';
 import { Recap } from './Recap.tsx';
 import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
@@ -75,15 +75,15 @@ export interface TodayMemory {
    */
   readonly sessions: { current: Map<string, { readonly callSessionId: string; readonly endedAt: number }> };
   /** An Apply's command id by call session: it outlives the panel so a lost answer is retried under it. */
-  readonly applyCommands: Map<string, { readonly signature: string; readonly id: string }>;
+  readonly applyCommands: Map<string, ApplyCommand>;
 }
 
 export interface OpenPanels {
   readonly firmId: string | null;
   readonly editing: BasicsField | null;
   readonly outcomeOpen: boolean;
-  /** The call the open outcome form records when it was chosen by name (a Needs review item's Log). */
-  readonly logSession?: string | null;
+  /** What the open outcome form records: set by every opening, null when it is closed. */
+  readonly logTarget?: LogTarget | null;
 }
 
 export function useTodayMemory(): TodayMemory {
@@ -92,7 +92,7 @@ export function useTodayMemory(): TodayMemory {
   const firmScroll = useRef(new Map<string, number>());
   const panels = useRef<OpenPanels>({ firmId: null, editing: null, outcomeOpen: false });
   const sessions = useRef(new Map<string, { readonly callSessionId: string; readonly endedAt: number }>());
-  const applyCommands = useRef(new Map<string, { readonly signature: string; readonly id: string }>());
+  const applyCommands = useRef(new Map<string, ApplyCommand>());
   const markDone = useCallback((firmId: string): void => {
     setDone(current => (current.has(firmId) ? current : new Set([...current, firmId])));
   }, []);
@@ -375,8 +375,12 @@ export function TodayWorkspace({
   const [subtab, setSubtab] = useState<'queue' | 'overview'>('queue');
   // The two forms come back open when the person does, with the text they left in them.
   const [editing, setEditing] = useState<BasicsField | null>(() => memory.panels.current.editing);
-  const [outcomeOpen, setOutcomeOpen] = useState(() => memory.panels.current.outcomeOpen);
-  const [logSession, setLogSession] = useState<string | null>(() => memory.panels.current.logSession ?? null);
+  // The log target is a value every opening sets and every close clears: there is no separate
+  // "open" flag and no session left over from an earlier opening.
+  const [outcomeTarget, setOutcomeTarget] = useState<LogTarget | null>(() => memory.panels.current.logTarget ?? (memory.panels.current.outcomeOpen ? { kind: 'current' } : null));
+  const outcomeOpen = outcomeTarget !== null;
+  const openOutcome = (target: LogTarget): void => setOutcomeTarget(target);
+  const closeOutcome = (): void => setOutcomeTarget(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [incomingNotice, setIncomingNotice] = useState<string | null>(null);
 
@@ -436,8 +440,7 @@ export function TodayWorkspace({
     const returning = before === null && memory.panels.current.firmId === firmId;
     if (!returning) {
       setEditing(null);
-      setOutcomeOpen(false);
-      setLogSession(null);
+      closeOutcome();
     }
     if (region !== null) region.scrollTop = firmId === null ? 0 : (memory.firmScroll.current.get(firmId) ?? 0);
     if (call.state.phase === 'ended' || call.state.phase === 'refused') {
@@ -448,8 +451,8 @@ export function TodayWorkspace({
   // What is open, kept for the next visit. Not written while no firm is open, so a visit
   // that starts before the firm has been read does not forget the last one's forms.
   useEffect(() => {
-    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen, logSession: outcomeOpen ? logSession : null };
-  }, [firmId, editing, outcomeOpen, logSession, memory]);
+    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen, logTarget: outcomeTarget };
+  }, [firmId, editing, outcomeOpen, outcomeTarget, memory]);
 
   // A call that ended: read the card and the cadence again, read the history now (and
   // while its steps are on their way), and tick the firm off for this sitting.
@@ -484,7 +487,7 @@ export function TodayWorkspace({
     close: () => {
       if (dialog !== null) setDialog(null);
       else if (editing !== null) setEditing(null);
-      else if (outcomeOpen) setOutcomeOpen(false);
+      else if (outcomeOpen) closeOutcome();
       else if (queueOpen) setQueueOpen(false);
     },
   });
@@ -525,15 +528,14 @@ export function TodayWorkspace({
   const loading = state === null || todayView === null;
 
   const loggedSessions = new Set((history.calls ?? []).filter(call => call.callLogId !== null).map(call => call.sessionId));
-  // `reload` is captured by a pending Apply, so a late answer for firm A can arrive while B is
-  // open. It always refreshes A's cached data; it re-opens a firm only when that firm is still
-  // the one on screen, so a background result never moves David off the firm he is working on.
-  const openFirm = useRef(firmId);
-  openFirm.current = firmId;
+  // `reload` is captured by a pending Apply, so a late answer for firm A can arrive after Today
+  // was left and another firm opened. It captures the firm at Apply time, always invalidates that
+  // firm's caches, and re-opens a firm only when the firm on screen according to the shell's
+  // memory (which outlives this view) is still that firm. It never navigates.
   const reload = (): void => {
     review.reload();
     if (firmId !== null) void queries.invalidateQueries({ queryKey: callHistoryKey(firmId) });
-    if (firmId !== null && openFirm.current === firmId) actions?.expand(firmId);
+    if (firmId !== null && memory.panels.current.firmId === firmId) actions?.expand(firmId);
     today.refresh();
   };
   const marks: Record<string, string> = {};
@@ -562,8 +564,7 @@ export function TodayWorkspace({
             }}
             onChanged={reload}
             onEnterManually={() => {
-              setLogSession(panelSession.callSessionId);
-              setOutcomeOpen(true);
+              openOutcome({ kind: 'session', callSessionId: panelSession.callSessionId });
             }}
           />
         )}
@@ -581,8 +582,7 @@ export function TodayWorkspace({
             if (panelSession !== null) void queryReload(panelSession.callSessionId);
           }}
           onLog={callSessionId => {
-            setLogSession(callSessionId);
-            setOutcomeOpen(true);
+            openOutcome({ kind: 'session', callSessionId });
           }}
         />
       </div>
@@ -766,7 +766,7 @@ export function TodayWorkspace({
                   outcomeOpen={outcomeOpen}
                   onEdit={() => setEditing(editing === null ? editFirst() : null)}
                   onOpen={() => navigate({ name: 'firm', firmId: expanded.firmId })}
-                  onOutcome={() => setOutcomeOpen(!outcomeOpen)}
+                  onOutcome={() => (outcomeOpen ? closeOutcome() : openOutcome({ kind: 'current' }))}
                 />
                 {incomingNotice === null ? null : (
                   <p data-testid="feedback-incoming" role="status" className="py-1 text-sm text-muted-foreground">
@@ -818,14 +818,14 @@ export function TodayWorkspace({
                       // shell's draft store, not in this form.
                       if (event.key === 'Escape') {
                         event.stopPropagation();
-                        setOutcomeOpen(false);
+                        closeOutcome();
                       }
                     }}
                   >
                   <Block className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
                     <Label
                       actions={
-                        <Button variant="ghost" className={dense.sm} onClick={() => setOutcomeOpen(false)}>
+                        <Button variant="ghost" className={dense.sm} onClick={closeOutcome}>
                           Close <Kbd className="ml-0.5">Esc</Kbd>
                         </Button>
                       }
@@ -839,7 +839,11 @@ export function TodayWorkspace({
                       enabled={todayView.actionsEnabled}
                       actions={actions}
                       callSessionId={call.state.phase === 'ended' && callFirm === expanded.firmId ? call.state.sessionId : null}
-                      forSession={logSession}
+                      target={outcomeTarget}
+                      onSubmitted={() => {
+                        // A call named by its session is a one-off: the form closes with it.
+                        if (outcomeTarget.kind === 'session') closeOutcome();
+                      }}
                     />
                   </Block>
                   </div>
@@ -887,7 +891,7 @@ export function TodayWorkspace({
               hasNext={next !== null}
               onFix={blocker => setEditing(blocker === 'no_phone' ? 'phone' : 'regionCode')}
               onNext={goNext}
-              onOutcome={() => setOutcomeOpen(true)}
+              onOutcome={() => openOutcome({ kind: 'current' })}
               feedback={feedback}
               afterBlock={afterBlock}
             />

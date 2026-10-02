@@ -1,7 +1,7 @@
 import { type CallOutcome, type CallProposal, type CallProposalKey } from '@fss/contracts';
 import { Pencil } from 'lucide-react';
 import { useMemo, useRef, useState, type JSX } from 'react';
-import type { AnalysisView } from '../../shared/operations.ts';
+import type { AnalysisView, OperationInput } from '../../shared/operations.ts';
 import { useDraft } from '../app/drafts.tsx';
 import { cn } from '../lib/utils.ts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
@@ -48,6 +48,13 @@ import { phaseOf } from './useAnalysis.ts';
  *
  * It reads only the session it is given. A result for another session never reaches it.
  */
+
+/** An Apply that was sent and has no definite answer yet: its id and exactly the body it carried. */
+export interface ApplyCommand {
+  readonly id: string;
+  readonly body: ApplyBody;
+}
+type ApplyBody = Omit<OperationInput<'calling.proposalsApply'>, 'commandId'>;
 
 const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalThis.callieApi;
 
@@ -162,7 +169,7 @@ export interface AfterCallAnalysisProps {
    * An Apply's command id, by call session, kept above the route so a click that lost its
    * answer is retried under the same id after leaving Today and coming back.
    */
-  readonly commands?: Map<string, { readonly signature: string; readonly id: string }>;
+  readonly commands?: Map<string, ApplyCommand>;
   /** Read the analysis again. */
   onReload(): void;
   /** Something was applied: the card, the history and Needs review are read again. */
@@ -284,39 +291,47 @@ function Completed({
   const [rowNotes, setRowNotes] = useState<Readonly<Record<string, string>>>({});
   const [blockNote, setBlockNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const fallbackCommands = useRef(new Map<string, { readonly signature: string; readonly id: string }>());
+  const fallbackCommands = useRef(new Map<string, ApplyCommand>());
   const commandMemory = commands ?? fallbackCommands.current;
 
   const outcomeProposal = rows.find((row): row is Extract<CallProposal, { kind: 'outcome' }> => row.kind === 'outcome');
   const problem = applyProblem(rows, ticked, drafts);
   const unticked = rows.filter(row => !ticked.has(row.key) && !done.has(row.key) && !(row.kind === 'outcome' && isLogged));
 
+  // An entry here means the last Apply has no definite answer. Retry resends exactly that body
+  // under its id, whatever the selection or the history shows now; a definite answer deletes it.
+  const lost = commandMemory.get(sessionId) ?? null;
+
   const apply = (): void => {
     const bridge = api();
-    if (bridge === undefined || authoritative === null || busy || problem !== null) return;
-    const keys = rows.filter(row => ticked.has(row.key) && !done.has(row.key)).map(row => row.key);
-    const edits = editsOf(rows, ticked, drafts);
-    const body = {
-      analysisId: authoritative.analysisId,
-      transcriptSha256: authoritative.transcriptSha256,
-      proposalHash: authoritative.proposalHash,
-      keys,
-      ...(Object.keys(edits).length === 0 ? {} : { edits }),
-    };
-    const signature = JSON.stringify(body);
-    // The command id lives with the session, above the route. It is reused only for the same body
-    // after an answer that never came (the server then answers from its receipt); any definite
-    // answer, success or refusal, ends it, and a changed selection or edit is a new command.
-    const remembered = commandMemory.get(sessionId);
-    const command = remembered?.signature === signature ? remembered : { signature, id: crypto.randomUUID() };
-    commandMemory.set(sessionId, command);
+    if (bridge === undefined || authoritative === null || busy) return;
+    if (lost === null && problem !== null) return;
+    let command: ApplyCommand;
+    if (lost !== null) command = lost;
+    else {
+      const keys = rows.filter(row => ticked.has(row.key) && !done.has(row.key)).map(row => row.key);
+      const edits = editsOf(rows, ticked, drafts);
+      command = {
+        id: crypto.randomUUID(),
+        body: {
+          analysisId: authoritative.analysisId,
+          transcriptSha256: authoritative.transcriptSha256,
+          proposalHash: authoritative.proposalHash,
+          keys,
+          ...(Object.keys(edits).length === 0 ? {} : { edits }),
+        },
+      };
+      commandMemory.set(sessionId, command);
+    }
+    const keys = command.body.keys;
+    const sentOutcome = command.body.edits?.outcome?.outcome;
     setBusy(true);
     setBlockNote(null);
     // An Apply is atomic, so a refusal wrote nothing and every key still stands: the notes a
     // previous refusal left on the rows are cleared, and this one's are drawn fresh.
     setRowNotes(current => Object.fromEntries(Object.entries(current).filter(([key]) => done.has(key))));
     void bridge
-      .command('calling.proposalsApply', { ...body, commandId: command.id })
+      .command('calling.proposalsApply', { ...command.body, commandId: command.id })
       .then(answer => {
         if (answer.applied !== null) {
           const notes: Record<string, string> = {};
@@ -329,8 +344,8 @@ function Completed({
           setRowNotes(current => ({ ...current, ...notes }));
           setDoneText([...finished].join(','));
           setTickedText([...ticked].filter(key => !finished.has(key)).join(','));
-          if (answer.applied.callLogId !== null && keys.includes('outcome')) {
-            setWasLogged(outcomeProposal === undefined ? null : chosenOutcome(outcomeProposal, drafts));
+          if (answer.applied.callLogId !== null && (keys as readonly string[]).includes('outcome')) {
+            setWasLogged(sentOutcome ?? outcomeProposal?.params.outcome ?? null);
           }
           onChanged();
           return;
@@ -486,8 +501,8 @@ function Completed({
           {rows.length === 0 ? null : (
             <div className="mt-2 flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
-                <Button data-testid="apply" className={dense.md} disabled={busy || problem !== null} {...(busy ? { 'aria-busy': true } : {})} onClick={apply}>
-                  Apply selected
+                <Button data-testid="apply" className={dense.md} disabled={busy || (lost === null && problem !== null)} {...(busy ? { 'aria-busy': true } : {})} onClick={apply}>
+                  {lost === null ? 'Apply selected' : 'Retry'}
                 </Button>
                 {unticked.length === 0 ? null : (
                   <Button variant="ghost" data-testid="decline-rest" className={cn(dense.md, 'text-muted-foreground')} disabled={busy} onClick={declineRest}>
@@ -495,7 +510,12 @@ function Completed({
                   </Button>
                 )}
               </div>
-              {problem === null || ticked.size === 0 ? null : (
+              {lost === null ? null : (
+                <p data-testid="apply-retry-note" className="text-xs text-muted-foreground">
+                  The answer to the last Apply was lost. Retry sends that same request again.
+                </p>
+              )}
+              {lost !== null || problem === null || ticked.size === 0 ? null : (
                 <p data-testid="apply-problem" className="text-xs text-muted-foreground">
                   {problem}
                 </p>

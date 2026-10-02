@@ -511,6 +511,30 @@ describe('the Today bridge', () => {
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('followUpPermission');
   });
 
+  it('S3CF-2: a named session borrows no route from the last call; an unnamed outcome still does', async () => {
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice(), '/calls/log': accepted(null) });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    // A newer call to another number at the same firm is the last call.
+    const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(dialled.lastCall?.routeId).toBe(ROUTE_ID);
+    const OLD = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const base = { firmId: FIRM_ID, contactId: null, routeId: null, itemId: null, outcome: 'voicemail_left' as const, note: '', callback: null, doNotCallCoversAllContact: false, followUpPermission: null };
+    calls.length = 0;
+    await bridge.recordOutcome({ ...base, callSessionId: OLD });
+    const named = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
+    expect(named['callSessionId']).toBe(OLD);
+    expect(named).not.toHaveProperty('routeId');
+    expect(named).not.toHaveProperty('contactId');
+    calls.length = 0;
+    await bridge.recordOutcome(base);
+    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({ routeId: ROUTE_ID });
+  });
+
   it('forwards the agreed follow-up for every reached outcome, never for a stop, and names the call it was given', async () => {
     const { api, calls } = scriptedApi({
       '/today/firm': { status: 200, body: firmPage() },

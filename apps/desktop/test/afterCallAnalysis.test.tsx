@@ -6,7 +6,7 @@ import type { CallProposal } from '@fss/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnalysisView } from '../src/shared/operations.ts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
-import { AfterCallAnalysis, type AfterCallAnalysisProps } from '../src/renderer/today/AfterCallAnalysis.tsx';
+import { AfterCallAnalysis, type AfterCallAnalysisProps, type ApplyCommand } from '../src/renderer/today/AfterCallAnalysis.tsx';
 import { chosenOutcome, editsOf, outcomeChoices, startsTicked } from '../src/renderer/today/afterCallModel.ts';
 import { analysisKey, useAnalyses } from '../src/renderer/today/useAnalysis.ts';
 import { ANALYSIS_ID, HASH, OTHER_SESSION_ID, PROPOSALS, QUOTES, SESSION_ID, SHA, TASK_KEY, analysisAnswer } from './support/analysisAnswers.ts';
@@ -280,10 +280,11 @@ describe('what the answers say', () => {
     expect(screen.getByTestId('apply-note').textContent).toContain('Nothing was applied');
   });
 
-  it('follow_up_not_granted names the e-mail row and reloads; already_applied is a success on its row', async () => {
+  it('follow_up_not_granted names the e-mail row and reloads nothing; already_applied is a success on its row', async () => {
     const reloaded = await applyOnly(refused('follow_up_not_granted', { follow_up: 'follow_up_not_granted' }));
     await waitFor(() => expect(screen.getByTestId('suggestion-note-follow_up').textContent).toContain('can no longer be promised'));
-    expect(reloaded.props.onReload).toHaveBeenCalled();
+    expect(reloaded.props.onReload).not.toHaveBeenCalled();
+    expect(reloaded.props.onChanged).not.toHaveBeenCalled();
     cleanup();
     install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }, { key: 'buying_signal', kind: 'buying_signal', result: 'already_applied' }]) });
     show(completed());
@@ -481,34 +482,43 @@ describe('fix round (review S3C): the tick boundary, done keys, command ids', ()
     expect(screen.getByTestId(`suggestion-note-${TASK_KEY}`).textContent).toBe('Done');
   });
 
-  it('finding 3: a definite refusal ends the command id; a lost answer keeps it, even across leaving Today', async () => {
-    const commands = new Map<string, { signature: string; id: string }>();
+  it('S3CF-3: a lost answer is retried with the stored id and body, even after history marks the call logged and the panel was left', async () => {
+    const commands = new Map<string, ApplyCommand>();
+    const calls = install({ 'calling.proposalsApply': () => refused('offline') });
+    const sent = (): { commandId: string; keys: string[] }[] => calls.filter(call => call.name === 'calling.proposalsApply').map(call => call.input as { commandId: string; keys: string[] });
+    show(completed(), { commands });
+    fireEvent.click(check('callback'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('apply').textContent).toBe('Retry'));
+    expect(commands.get(SESSION_ID)?.id).toBe(sent()[0]?.commandId);
+    cleanup();
+    // The call is now logged (history says so): the outcome row would drop out of a fresh selection.
+    show(completed(), { commands, logged: true });
+    expect(screen.getByTestId('apply').textContent).toBe('Retry');
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]).toEqual(sent()[0]);
+    expect(sent()[1]?.keys).toEqual(['outcome', 'callback', TASK_KEY]);
+  });
+
+  it('S3CF-3: a definite answer deletes the stored command, and the next click is a new one', async () => {
+    const commands = new Map<string, ApplyCommand>();
     let answer: unknown = refused('outcome_required');
     const calls = install({ 'calling.proposalsApply': () => answer });
     const ids = (): string[] => calls.filter(call => call.name === 'calling.proposalsApply').map(call => (call.input as { commandId: string }).commandId);
-
     show(completed(), { commands });
     fireEvent.click(screen.getByTestId('apply'));
     await waitFor(() => expect(screen.getByTestId('apply-note')).toBeTruthy());
-    // Refused (definite): the same body again is a new command.
     expect(commands.size).toBe(0);
-    answer = refused('offline');
+    expect(screen.getByTestId('apply').textContent).toBe('Apply selected');
     fireEvent.click(screen.getByTestId('apply'));
     await waitFor(() => expect(ids()).toHaveLength(2));
     expect(ids()[1]).not.toBe(ids()[0]);
-    // No definite answer: the id is kept, with the session, above the panel.
-    expect(commands.get(SESSION_ID)?.id).toBe(ids()[1]);
-    cleanup();
-    show(completed(), { commands });
+    answer = applied([{ key: 'outcome', kind: 'outcome' }, { key: TASK_KEY, kind: 'task' }]);
     fireEvent.click(screen.getByTestId('apply'));
-    await waitFor(() => expect(ids()).toHaveLength(3));
-    expect(ids()[2]).toBe(ids()[1]);
-    // A changed selection is a new command, and a success ends the id.
-    answer = applied([{ key: 'outcome', kind: 'outcome' }, { key: 'buying_signal', kind: 'buying_signal' }, { key: TASK_KEY, kind: 'task' }]);
-    fireEvent.click(check('buying_signal'));
-    fireEvent.click(screen.getByTestId('apply'));
-    await waitFor(() => expect(ids()).toHaveLength(4));
-    expect(ids()[3]).not.toBe(ids()[2]);
     await waitFor(() => expect(commands.size).toBe(0));
+    expect(ids()).toHaveLength(3);
+    expect(ids()[2]).not.toBe(ids()[1]);
   });
 });

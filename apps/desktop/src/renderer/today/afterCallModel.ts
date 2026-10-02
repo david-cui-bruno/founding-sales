@@ -193,7 +193,7 @@ export const REFUSALS: Readonly<Record<string, { readonly text: string; readonly
   callback_not_created: { text: 'The callback could not be created. Nothing was applied.', reload: false },
   effects_not_applied: { text: 'The outcome could not be fully applied, so nothing was written. Try again.', reload: false },
   route_not_named: { text: 'This call’s number is not known, so nothing was applied. Log the outcome by hand.', reload: false },
-  follow_up_not_granted: { text: 'That e-mail can no longer be promised. Reloaded: choose another and apply again.', reload: true },
+  follow_up_not_granted: { text: 'That e-mail can no longer be promised. Choose another and apply again.', reload: false },
 });
 
 /** What an applied key says on its row. */
