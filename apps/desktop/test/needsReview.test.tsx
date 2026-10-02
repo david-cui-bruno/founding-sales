@@ -243,6 +243,13 @@ describe('a task is a quiet card with Complete', () => {
   });
 });
 
+describe('B’s contract: review items name their firm', () => {
+  it('the row reads the item’s own firmName, even for a firm that is not on today’s list', () => {
+    render(<ReviewGroup items={[{ ...HOLD_ITEM, firmName: 'Maple Court Test Lettings' } as ReviewItem]} cards={[]} selected={null} onSelect={vi.fn()} onChanged={vi.fn()} />);
+    expect(screen.getByTestId('review-firm').textContent).toBe('Maple Court Test Lettings');
+  });
+});
+
 describe('fix round (review S3C)', () => {
   it('finding 4: an unclear outcome logs its own call, by session', () => {
     const OLD = '99999999-9999-4999-8999-9999999999cc';

@@ -345,12 +345,6 @@ function Completed({
         if (named.length > 0) {
           setRowNotes(current => ({ ...current, ...Object.fromEntries(named.map(([key, code]) => [key, keyRefusalText(code)])) }));
           setBlockNote('Nothing was applied. Fix what is marked below, or untick it, and apply again.');
-        } else if (answer.reason === 'callback_exists') {
-          setRowNotes(current => ({ ...current, callback: 'This call already has a callback.' }));
-          setBlockNote('Nothing was applied. Untick the callback and apply again.');
-        } else if (answer.reason === 'follow_up_expired') {
-          setRowNotes(current => ({ ...current, follow_up: 'Over 7 days: in Needs review.' }));
-          setBlockNote('Nothing was applied. Untick the e-mail and apply again.');
         } else setBlockNote(refusal.text);
         if (refusal.reload) {
           onReload();

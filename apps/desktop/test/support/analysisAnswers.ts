@@ -10,6 +10,7 @@ export const SESSION_ID = '11111111-1111-4111-8111-1111111111aa';
 export const OTHER_SESSION_ID = '22222222-2222-4222-8222-2222222222bb';
 export const ANALYSIS_ID = '33333333-3333-4333-8333-3333333333cc';
 export const FIRM_ID = '44444444-4444-4444-8444-4444444444dd';
+export const FIRM_NAME = 'Elm Fork Test Rentals';
 export const SHA = 'a'.repeat(64);
 export const HASH = 'b'.repeat(64);
 export const TASK_KEY = 'task:0123456789abcdef';
@@ -189,6 +190,7 @@ export function proposalItem(proposal: CallProposal, extra: Partial<Extract<Revi
     proposalHash: HASH,
     callSessionId: SESSION_ID,
     firmId: FIRM_ID,
+    firmName: FIRM_NAME,
     proposal,
     completedAt: '2026-10-02T14:01:00.000Z',
     ...extra,
@@ -200,6 +202,7 @@ export const HOLD_ITEM: ReviewItem = {
   holdId: '55555555-5555-4555-8555-5555555555ee',
   callSessionId: SESSION_ID,
   firmId: FIRM_ID,
+  firmName: FIRM_NAME,
   openedAt: '2026-10-02T09:00:00.000Z',
 };
 
@@ -207,6 +210,7 @@ export const STAGE_ITEM: ReviewItem = {
   source: 'stage',
   itemId: '66666666-6666-4666-8666-6666666666ff',
   firmId: FIRM_ID,
+  firmName: FIRM_NAME,
   opportunityId: null,
   evidenceKind: 'meeting.booked',
   reason: 'no_matching_rule',

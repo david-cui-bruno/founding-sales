@@ -1214,7 +1214,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     async callHistory(input) {
       const answer = await deps.api.read(
         // Slice C3b: with each call's summary and suggested next steps, when it has one.
-        `/calls/history?firmId=${encodeURIComponent(input.firmId)}&include=summary`,
+        `/calls/history?firmId=${encodeURIComponent(input.firmId)}&include=summary,outcome`,
         value => callHistoryResponseSchema.parse(value),
       );
       return { calls: answer.ok ? answer.value.calls : null };

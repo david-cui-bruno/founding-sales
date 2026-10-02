@@ -1,5 +1,6 @@
 import {
   applyCallProposalsResultSchema,
+  applyKeyReasonsSchema,
   callAnalysisResponseSchema,
   callRecapResponseSchema,
   proposalAcceptanceResponseSchema,
@@ -82,30 +83,15 @@ const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
 });
 
 /**
- * The per-key reasons of a refused Apply, when the refusal body names them. An Apply is atomic:
- * one refused key refuses the batch and writes nothing, and each key that was refused says why.
- * Read tolerantly (a list of `{ key, reason }` under `keys`, `results` or `refusals`, or a
- * `{ key: reason }` map under `keyReasons`); anything else is no per-key detail.
+ * The per-key reasons of a refused Apply: the 409 body's `keyReasons`, `{ [proposalKey]: code }`
+ * (`applyKeyReasonsSchema`). An Apply is atomic: one refused key refuses the batch and writes
+ * nothing, and each key that was refused says why. A refusal that names no key (a freshness
+ * refusal) carries none, and anything that does not parse is no per-key detail.
  */
 export function keyReasonsOf(refusal: unknown): Record<string, string> {
   if (typeof refusal !== 'object' || refusal === null) return {};
-  const body = refusal as Record<string, unknown>;
-  const out: Record<string, string> = {};
-  const map = body['keyReasons'];
-  if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
-    for (const [key, value] of Object.entries(map)) if (typeof value === 'string') out[key.slice(0, 80)] = value.slice(0, 80);
-  }
-  for (const name of ['keys', 'results', 'refusals']) {
-    const list = body[name];
-    if (!Array.isArray(list)) continue;
-    for (const entry of list) {
-      if (typeof entry !== 'object' || entry === null) continue;
-      const record = entry as Record<string, unknown>;
-      const code = record['reason'] ?? record['result'];
-      if (typeof record['key'] === 'string' && typeof code === 'string' && code !== 'applied') out[record['key'].slice(0, 80)] = code.slice(0, 80);
-    }
-  }
-  return out;
+  const parsed = applyKeyReasonsSchema.safeParse((refusal as { keyReasons?: unknown }).keyReasons);
+  return parsed.success ? parsed.data : {};
 }
 
 async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{ analysis: z.infer<typeof callAnalysisResponseSchema> | null; reason: string | null }> {

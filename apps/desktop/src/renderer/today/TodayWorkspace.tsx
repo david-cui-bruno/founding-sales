@@ -554,6 +554,7 @@ export function TodayWorkspace({
             sessionId={panelSession.callSessionId}
             waiting={Date.now() - panelSession.endedAt < WAITING_WINDOW_MS}
             logged={loggedSessions.has(panelSession.callSessionId)}
+            loggedOutcome={(history.calls ?? []).find(call => call.sessionId === panelSession.callSessionId)?.outcome ?? null}
             templates={state?.followUpTemplates ?? []}
             commands={memory.applyCommands}
             onReload={() => {

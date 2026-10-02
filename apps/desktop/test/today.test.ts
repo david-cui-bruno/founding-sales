@@ -578,6 +578,26 @@ describe('the Today bridge', () => {
     expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('callSessionId');
   });
 
+  it('reads the firm’s call history with its summary and its logged outcome', async () => {
+    const seen: string[] = [];
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async url => {
+        seen.push(new URL(url).pathname + new URL(url).search);
+        return await Promise.resolve({ status: 200, body: { calls: [] } });
+      },
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.callHistory({ firmId: FIRM_ID });
+    expect(seen).toEqual([`/calls/history?firmId=${FIRM_ID}&include=summary,outcome`]);
+  });
+
   it('never puts a token, a URI or a command id in the state it returns', async () => {
     const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({

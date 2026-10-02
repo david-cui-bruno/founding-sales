@@ -260,11 +260,24 @@ describe('what the answers say', () => {
   });
 
   it('callback_exists and follow_up_expired are shown on their rows, and nothing was applied', async () => {
-    await applyOnly(refused('callback_exists'));
+    await applyOnly(refused('callback_exists', { callback: 'callback_exists' }));
     await waitFor(() => expect(screen.getByTestId('suggestion-note-callback').textContent).toBe('This call already has a callback.'));
     cleanup();
-    await applyOnly(refused('follow_up_expired'));
+    await applyOnly(refused('follow_up_expired', { follow_up: 'follow_up_expired' }));
     await waitFor(() => expect(screen.getByTestId('suggestion-note-follow_up').textContent).toBe('Over 7 days: in Needs review.'));
+  });
+
+  it('follow_up_not_granted names the e-mail row and reloads; already_applied is a success on its row', async () => {
+    const reloaded = await applyOnly(refused('follow_up_not_granted', { follow_up: 'follow_up_not_granted' }));
+    await waitFor(() => expect(screen.getByTestId('suggestion-note-follow_up').textContent).toContain('can no longer be promised'));
+    expect(reloaded.props.onReload).toHaveBeenCalled();
+    cleanup();
+    install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }, { key: 'buying_signal', kind: 'buying_signal', result: 'already_applied' }]) });
+    show(completed());
+    fireEvent.click(check('buying_signal'));
+    fireEvent.click(screen.getByTestId('apply'));
+    await waitFor(() => expect(screen.getByTestId('suggestion-note-buying_signal').textContent).toBe('Already on the deal'));
+    expect(screen.queryByTestId('apply-note')).toBeNull();
   });
 
   it('an atomic refusal keeps every tick and draft, names each refused key beside it, and leaves the batch unapplied', async () => {

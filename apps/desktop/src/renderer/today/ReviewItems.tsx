@@ -93,7 +93,7 @@ export function ReviewGroup({
   // Only the row that was chosen is current: a firm can have several items.
   const [active, setActive] = useState<string | null>(null);
   if (items.length === 0) return null;
-  const nameOf = (firmId: string | null): string => cards.find(card => card.firmId === firmId)?.firmName ?? 'A firm not on today’s list';
+  const nameOf = (item: ReviewItem): string => item.firmName ?? cards.find(card => card.firmId === item.firmId)?.firmName ?? 'A firm not on today’s list';
   return (
     <div data-testid="queue-group" data-group="review" className="mb-3">
       <h3 className="flex h-7 items-center justify-between px-2 text-xs font-medium text-muted-foreground">
@@ -127,7 +127,7 @@ export function ReviewGroup({
                 <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-warn-ink" aria-hidden />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span data-testid="review-firm" className="truncate text-sm">
-                    {nameOf(firmId)}
+                    {nameOf(item)}
                   </span>
                   <span data-testid="review-label" className="truncate text-xs text-muted-foreground">
                     {itemLabel(item)}

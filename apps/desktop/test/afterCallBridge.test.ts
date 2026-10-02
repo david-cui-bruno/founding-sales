@@ -1,3 +1,4 @@
+import { retryCallAnalysisCommandSchema, retryCallAnalysisResultSchema } from '@fss/contracts';
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
@@ -91,9 +92,11 @@ describe('the commands send what the contract takes', () => {
     expect(view).toEqual({ applied: null, reason: 'callback_exists', keyReasons: { callback: 'callback_exists' } });
   });
 
-  it('reads per-key reasons tolerantly and never invents one', () => {
-    expect(keyReasonsOf({ keyReasons: { callback: 'callback_exists' } })).toEqual({ callback: 'callback_exists' });
-    expect(keyReasonsOf({ keys: [{ key: 'follow_up', reason: 'follow_up_expired' }, { key: 'outcome', result: 'applied' }] })).toEqual({ follow_up: 'follow_up_expired' });
+  it('reads the 409’s keyReasons exactly and never invents one', () => {
+    expect(keyReasonsOf({ keyReasons: { callback: 'callback_exists', follow_up: 'follow_up_not_granted' } })).toEqual({ callback: 'callback_exists', follow_up: 'follow_up_not_granted' });
+    // The old tolerant shapes are gone.
+    expect(keyReasonsOf({ keys: [{ key: 'follow_up', reason: 'follow_up_expired' }] })).toEqual({});
+    expect(keyReasonsOf({ keyReasons: [{ key: 'callback', reason: 'x', detail: null }] })).toEqual({});
     expect(keyReasonsOf('nonsense')).toEqual({});
     expect(keyReasonsOf(null)).toEqual({});
   });
@@ -115,6 +118,9 @@ describe('the commands send what the contract takes', () => {
     const view = (await handlers['calling.analysisRetry']({ callSessionId: SESSION_ID, reason: 'retry' } as never)) as { analysis: { pending: unknown } | null };
     expect(calls[0]).toMatchObject({ method: 'POST', path: '/calls/analysis/retry' });
     expect(calls[0]?.body).toMatchObject({ callSessionId: SESSION_ID, reason: 'retry' });
+    // The real route's own request and result schemas (apps/api/src/routes/callAnalysis.ts).
+    expect(retryCallAnalysisCommandSchema.safeParse(calls[0]?.body).success).toBe(true);
+    expect(retryCallAnalysisResultSchema.safeParse({ callSessionId: SESSION_ID, queued: true }).success).toBe(true);
     expect(view.analysis?.pending).not.toBeNull();
     expect(OPERATIONS['calling.analysisRetry'].input.safeParse({ callSessionId: SESSION_ID, reason: 'other' }).success).toBe(false);
   });

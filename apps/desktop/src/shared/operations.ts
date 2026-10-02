@@ -622,10 +622,10 @@ export const OPERATIONS = {
   },
   'calling.history': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}&include=summary' }],
+    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}&include=summary,outcome' }],
     input: z.strictObject({ firmId: uuid }),
     output: callHistoryViewSchema,
-    transform: 'none: the firm’s placed calls, each with its summary when it has one, or null when the read did not answer',
+    transform: 'none: the firm’s placed calls, each with its summary and logged outcome when it has them, or null when the read did not answer',
   },
   'calling.analysis': {
     kind: 'read',

@@ -184,6 +184,7 @@ export const REFUSALS: Readonly<Record<string, { readonly text: string; readonly
   outcome_required: { text: 'Tick the outcome as well: a callback or an e-mail needs the call logged.', reload: false },
   callback_exists: { text: 'This call already has a callback.', reload: true },
   follow_up_expired: { text: 'Over 7 days: in Needs review.', reload: true },
+  follow_up_not_granted: { text: 'That e-mail can no longer be promised. Reloaded: choose another and apply again.', reload: true },
 });
 
 /** What an applied key says on its row. */
@@ -191,6 +192,7 @@ export const KEY_RESULT_TEXT: Readonly<Record<string, string>> = Object.freeze({
   applied: 'Done',
   already_created: 'Already a task for this call',
   already_parked: 'Calling is already paused here',
+  already_applied: 'Already on the deal',
 });
 
 export function refusalOf(reason: string | null): { readonly text: string; readonly reload: boolean } {
