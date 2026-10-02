@@ -176,15 +176,23 @@ export function ChangeOutcome({
   const chosen = (CALL_OUTCOMES as readonly string[]).includes(outcomeText) && outcomeText !== currentOutcome ? (outcomeText as CallOutcome) : null;
   const baseOutcome = (CALL_OUTCOMES as readonly string[]).includes(base) ? (base as CallOutcome) : null;
 
-  // The preview, keyed by (log, chosen outcome, reload) and asked only while the review is open.
-  // K7: an answer for a key no longer current is dropped. The ports are read through a ref, so a
-  // caller's new ports object never asks again (review of X2, finding 3).
-  const [preview, setPreview] = useState<{ readonly key: string; readonly view: CorrectionPreviewView } | null>(null);
+  // The preview, one request per (log, chosen outcome, base David saw, reload, opening), asked only
+  // while the review is open. K7: an answer qualifies only for the very request that asked it, so
+  // an answer from before the base changed, from an older reload or from an earlier opening never
+  // stands in for the current one (review of X2F). The ports are read through a ref, so a caller's
+  // new ports object never asks again (review of X2, finding 3).
+  interface PreviewRequest {
+    readonly callLogId: string;
+    readonly outcome: CallOutcome;
+    readonly base: CallOutcome;
+    readonly reload: number;
+  }
+  const [preview, setPreview] = useState<{ readonly request: PreviewRequest; readonly view: CorrectionPreviewView } | null>(null);
   const reloadTick = note?.reload ?? 0;
   const canAsk = ports !== null;
-  const request = useMemo(
-    () => (!open || !canAsk || chosen === null ? null : { key: `${callLogId}:${chosen}:${String(reloadTick)}`, callLogId, outcome: chosen }),
-    [open, canAsk, callLogId, chosen, reloadTick],
+  const request = useMemo<PreviewRequest | null>(
+    () => (!open || !canAsk || chosen === null || baseOutcome === null ? null : { callLogId, outcome: chosen, base: baseOutcome, reload: reloadTick }),
+    [open, canAsk, callLogId, chosen, baseOutcome, reloadTick],
   );
   useEffect(() => {
     const read = portsRef.current;
@@ -192,17 +200,17 @@ export function ChangeOutcome({
     let current = true;
     void read.preview({ callLogId: request.callLogId, outcome: request.outcome }).then(
       view => {
-        if (current) setPreview({ key: request.key, view });
+        if (current) setPreview({ request, view });
       },
       () => {
-        if (current) setPreview({ key: request.key, view: { preview: null, reason: 'offline' } });
+        if (current) setPreview({ request, view: { preview: null, reason: 'offline' } });
       },
     );
     return () => {
       current = false;
     };
   }, [request]);
-  const shown = request !== null && preview !== null && preview.key === request.key ? preview.view : null;
+  const shown = request !== null && preview !== null && preview.request === request ? preview.view : null;
   const fresh = shown?.preview ?? null;
   // K2 (review of X2, finding 2): a preview that reports another current outcome than the one
   // David saw never rebases the edit. The edit is dropped, "Changed elsewhere" says so, and the
@@ -210,6 +218,8 @@ export function ChangeOutcome({
   const movedUnder = fresh !== null && baseOutcome !== null && fresh.currentOutcome !== baseOutcome && unanswered === null;
   useEffect(() => {
     if (!movedUnder || fresh === null) return;
+    // The mismatched answer is spent: it never qualifies for a later request.
+    setPreview(null);
     clearDrafts(draftPrefix);
     setChangedElsewhere(fresh.currentOutcome);
     onChangedRef.current();

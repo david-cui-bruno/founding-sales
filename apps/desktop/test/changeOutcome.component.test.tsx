@@ -474,6 +474,50 @@ describe('review of X2 (findings 2 and 3)', () => {
     expect(correctionBody({ callLogId: LOG_ID, preview: previewOf({ currentOutcome: 'callback_requested', effects: [historyEffect] }), draft, base: 'interested', timeZone: null, commandId: 'c' })).toBeNull();
   });
 
+  it('K7: after "Changed elsewhere", choosing the same outcome again reads a fresh preview on the new base and can save', async () => {
+    // The reviewer's recovery sequence (X2F): the cached preview from the old base must not qualify.
+    let current: CallOutcome = 'interested';
+    const ports = fake();
+    ports.previewAnswer = async () => await Promise.resolve({ preview: previewOf({ currentOutcome: current, effects: [historyEffect] }), reason: null });
+    const changed = vi.fn();
+    const { rerender } = render(<Shell session="a"><Subject ports={ports} outcome={current} onChanged={changed} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    await waitFor(() => expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false));
+    current = 'busy';
+    rerender(<Shell session="a"><Subject ports={ports} outcome={current} onChanged={changed} /></Shell>);
+    await screen.findByTestId('change-outcome-changed-elsewhere');
+    expect((screen.getByTestId('change-outcome-select') as HTMLSelectElement).value).toBe('');
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    for (let turn = 0; turn < 8; turn += 1) await act(async () => await new Promise(resolve => setTimeout(resolve, 0)));
+    expect((screen.getByTestId('change-outcome-select') as HTMLSelectElement).value).toBe('no_answer');
+    expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false);
+    expect(ports.previews).toHaveLength(2);
+    expect(changed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('change-outcome-save'));
+    await waitFor(() => expect(ports.corrections).toHaveLength(1));
+    expect(ports.corrections[0]).toMatchObject({ expectedOutcome: 'busy', outcome: 'no_answer' });
+  });
+
+  it('K7: reopening a kept draft waits for its new preview before Save is offered', async () => {
+    const ports = fake(previewOf({ effects: [historyEffect] }));
+    render(<Shell session="a"><Subject ports={ports} /></Shell>);
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.change(screen.getByTestId('change-outcome-select'), { target: { value: 'no_answer' } });
+    await waitFor(() => expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false));
+    const second = deferred<CorrectionPreviewView>();
+    ports.previewAnswer = async () => await second.promise;
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    fireEvent.click(screen.getByTestId('change-outcome-toggle'));
+    expect(ports.previews).toHaveLength(2);
+    expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      second.resolve({ preview: previewOf({ effects: [historyEffect] }), reason: null });
+      await second.promise;
+    });
+    expect((screen.getByTestId('change-outcome-save') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('the registry-backed default ports ask exactly one preview per selection', async () => {
     // Bounded: past five requests the answer never comes, so a loop cannot spin the test forever.
     const read = vi.fn(async (_operation: string, _input: OperationInput<'calling.correctionPreview'>) => {
