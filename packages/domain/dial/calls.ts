@@ -33,6 +33,7 @@ import { callLogIdOfItemKey, callbackTimeNeededItemKey } from '../today/types.ts
 import { completeCallback, createCallback, resolveConfirmedInstant } from './callbacks.ts';
 import { manualReasonFor } from './outcomes.ts';
 import { UNANSWERED_OUTCOMES, parkIfCadenceSpent } from '../calls/sessions.ts';
+import { releasePendingHold } from '../calls/pendingHold.ts';
 import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep } from './stepEffects.ts';
 
 /**
@@ -292,6 +293,20 @@ export async function logCallOutcome(
       return refusePolicy('ticket_mismatch');
     }
   }
+  // Slice 3a (DESIGN-S3A §2.3): a placed call is logged once. The session's row, locked
+  // after the gate and the firm (the callbacks' and the apply's order), says whether it
+  // already has its log — from the form, or from an analysis Apply — and a second outcome
+  // for the same session is `call_already_logged`, decided before anything is written.
+  // Correcting a logged outcome is slice 3b's. A ticket with no session (an older placed
+  // call) has nothing to say here.
+  if (ticket !== null && input.ticketId !== undefined) {
+    const { rows: placed } = await context.db.query<{ call_log_id: string | null }>(
+      'SELECT call_log_id FROM call_sessions WHERE workspace_id = $1 AND ticket_id = $2 FOR UPDATE',
+      [context.scope.workspaceId, input.ticketId],
+    );
+    if (placed[0] !== undefined && placed[0].call_log_id !== null) return refusePolicy('call_already_logged');
+  }
+
   const routeId = input.routeId ?? ticket?.phone_route_id;
   const callingIdentityId = input.callingIdentityId ?? ticket?.calling_identity_id;
   const contactId = input.contactId ?? ticket?.contact_id ?? undefined;
@@ -450,6 +465,9 @@ export async function logCallOutcome(
     if (linkedSession !== undefined && UNANSWERED_OUTCOMES.has(input.outcome)) {
       await parkIfCadenceSpent(context, { firmId: input.firmId, sessionId: linkedSession });
     }
+    // Slice 3a: the call is logged, so the review its pending hold waited for is done.
+    // Released at this first link only; the hold is never reopened (`calls/pendingHold.ts`).
+    if (linkedSession !== undefined) await releasePendingHold(context, linkedSession);
   }
 
   // ---- 3. Apply -----------------------------------------------------------
@@ -797,6 +815,120 @@ export async function recordCallFollowUp(
     },
   });
   return acceptPolicy({ callLogId: input.callLogId, followUpPermissionId: agreed.permissionId, followUps: agreed.followUps });
+}
+
+/**
+ * The outcomes that say a person was reached (slice 3a, DESIGN-S3A §2.7; migration 0036's
+ * `call_logs_agreement_needs_reached`): an agreement comes from a reached, named person.
+ */
+export const REACHED_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>([
+  'interested',
+  'callback_requested',
+  'referral_or_wrong_person',
+  'not_interested',
+]);
+
+export interface ConfirmCapturedFollowUpInput {
+  readonly callLogId: string;
+  /** The approved e-mail the single-email permission is for. */
+  readonly templateVersionId: string;
+  readonly commandId?: string | undefined;
+}
+
+/**
+ * Confirm the follow-up a post-call analysis captured (slice 3a, David's decision 7;
+ * DESIGN-S3A §2.3): "e-mail me an overview", heard on the call and backed by a verified
+ * quote, selected by David within **seven days** of the call.
+ *
+ * A path of its own beside `recordCallFollowUp`, whose sixty-minute window stays exactly as
+ * it is for its own manual stale-preview recovery. The caller — the proposal Apply — has
+ * already checked that the authoritative analysis carries a verified `follow_up` proposal;
+ * this command checks the call and the clock, under the locks:
+ *
+ *   * the send gate, then the firm, then the call log's row (the order every command here
+ *     keeps); the person who made the call is the one confirming (`not_call_actor`);
+ *   * the log names a person who was reached (`REACHED_OUTCOMES`) and agreed to nothing yet
+ *     (`agreement_exists`);
+ *   * `clock_timestamp()`, read after the locks, is within seven days of the call's
+ *     `occurred_at` — otherwise `follow_up_expired`, and nothing is written.
+ *
+ * Then exactly `applyAgreedFollowUp`'s single-email arm: the template's standing, the
+ * agreement on the log, the grant. A single e-mail stops after the grant (no enrollment);
+ * the "Send overview" task the Apply writes beside it is what carries the work.
+ */
+export async function confirmCapturedFollowUp(
+  context: RepositoryContext,
+  input: ConfirmCapturedFollowUpInput,
+): Promise<PolicyResult<RecordedCallFollowUp>> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refusePolicy('invalid_input');
+  await lockSendGateForStopFact(context);
+  const { rows: located } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM call_logs WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const firmId = located[0]?.firm_id;
+  if (firmId === undefined) return refusePolicy('call_log_unknown');
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return refusePolicy('firm_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
+  }
+  const { rows } = await context.db.query<{
+    firm_id: string;
+    contact_id: string | null;
+    outcome: CallOutcome;
+    agreed_follow_up: string | null;
+    actor_user_id: string;
+    occurred_at: Date;
+  }>(
+    `SELECT firm_id, contact_id, outcome, agreed_follow_up, actor_user_id, occurred_at
+       FROM call_logs WHERE workspace_id = $1 AND id = $2
+       FOR UPDATE`,
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const log = rows[0];
+  if (log === undefined || log.firm_id !== firmId) return refusePolicy('call_log_unknown');
+  if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
+  if (!REACHED_OUTCOMES.has(log.outcome) || log.contact_id === null) return refusePolicy('invalid_input');
+  if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
+  if (!(await withinCapturedFollowUpWindow(context, log.occurred_at))) return refusePolicy('follow_up_expired');
+
+  const opportunity = await readOpenOpportunity(context, log.firm_id);
+  const agreed = await applyAgreedFollowUp(context, {
+    firmId: log.firm_id,
+    contactId: log.contact_id,
+    callLogId: input.callLogId,
+    grantedByUserId: actor.userId,
+    agreement: { scope: 'single_email', templateVersionId: input.templateVersionId },
+    opportunityId: opportunity?.id ?? null,
+  });
+  await recordCrmAuditEvent(context, {
+    action: 'call.follow_up_confirmed',
+    subjectKind: 'call_log',
+    subjectId: input.callLogId,
+    detail: {
+      firmId: log.firm_id,
+      scope: 'single_email',
+      followUps: agreed.followUps.map(entry => `${entry.kind}:${entry.reason}`),
+    },
+  });
+  return acceptPolicy({ callLogId: input.callLogId, followUpPermissionId: agreed.permissionId, followUps: agreed.followUps });
+}
+
+/** How long after its call a captured follow-up may be confirmed (David's decision 7). */
+export const CAPTURED_FOLLOW_UP_WINDOW_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Whether `occurredAt` is within seven days of the wall clock, read in its own statement
+ * after the caller's locks (the transaction's `now()` predates the lock waits; review of
+ * S3, rounds 3 and 4, P1-G).
+ */
+export async function withinCapturedFollowUpWindow(context: RepositoryContext, occurredAt: Date): Promise<boolean> {
+  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  const wallClock = (clock[0]?.now ?? new Date()).getTime();
+  return wallClock - occurredAt.getTime() <= CAPTURED_FOLLOW_UP_WINDOW_MS;
 }
 
 interface AppliedEffects {
