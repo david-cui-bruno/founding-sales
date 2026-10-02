@@ -125,6 +125,8 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
       ...(body.direction === undefined ? {} : { direction: body.direction }),
       ...(body.durationSeconds === undefined ? {} : { durationSeconds: body.durationSeconds }),
       ...(body.callback === undefined ? {} : { callback: body.callback }),
+      // What a `do_not_call` stops (migration 0037, P1); the 1.0.29 checkbox below it.
+      ...(body.doNotCall === undefined ? {} : { doNotCall: body.doNotCall }),
       ...(body.doNotCallCoversAllContact === undefined
         ? {}
         : { doNotCallCoversAllContact: body.doNotCallCoversAllContact }),

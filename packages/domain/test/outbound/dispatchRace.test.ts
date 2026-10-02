@@ -232,6 +232,7 @@ describe('Appendix G 3: a reply commits while the dispatch is between its read a
           scope: 'handle',
           value: suppressed,
           source: 'prospect_opt_out',
+          channel: 'all',
           journal: world.journal,
         });
         expect(recorded.ok).toBe(true);

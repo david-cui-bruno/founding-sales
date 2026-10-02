@@ -628,6 +628,24 @@ const cases: readonly Case[] = [
       ),
   },
   {
+    // Migration 0037 (DESIGN-S3X §2.3, P1-6).
+    constraint: 'suppression_events_channel_known',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, channel) VALUES ($1, 'e-channel', 'firm', 'firm-1', 'v1', 'import', 'sms')",
+        [workspace(f)],
+      ),
+  },
+  {
+    // A phone-only stop on an address is a stop no reader would read.
+    constraint: 'suppression_events_channel_fits_key',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, channel) VALUES ($1, 'e-fits', 'handle', 'x@example.test', 'v1', 'import', 'phone')",
+        [workspace(f)],
+      ),
+  },
+  {
     constraint: 'suppression_events_one_direct_supersession',
     run: async f => {
       // The canonical key matches the base event's on purpose: migration 0006's

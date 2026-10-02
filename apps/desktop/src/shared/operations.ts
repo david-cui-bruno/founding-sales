@@ -7,6 +7,7 @@ import {
   callProposalEditsSchema,
   callProposalKeySchema,
   callRecapResponseSchema,
+  doNotCallChoiceSchema,
   proposalAcceptanceResponseSchema,
   callTrialResponseSchema,
   reviewItemSchema,
@@ -122,6 +123,10 @@ const outcomeInput = z.strictObject({
     })
     .nullable(),
   doNotCallCoversAllContact: z.boolean(),
+  /** What a `do_not_call` stops (migration 0037, P1). Absent is the checkbox above. */
+  doNotCall: doNotCallChoiceSchema.optional(),
+  /** The form's own command id (rules K5/K6): a retry resends the request under it. */
+  commandId: uuid.optional(),
   /**
    * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
    * "none", which is the default the form offers, and the only value the server accepts
@@ -725,9 +730,11 @@ export const OPERATIONS = {
   'suppressions.firmStop': {
     kind: 'command',
     calls: [{ method: 'POST', path: '/suppressions/record' }],
-    input: z.strictObject({ firmId: uuid }),
+    // Migration 0037: `phone` is "stop calls to this firm", `all` is "stop all contact with
+    // this firm". Absent sends no channel, which the server reads as `all`.
+    input: z.strictObject({ firmId: uuid, channel: z.enum(['phone', 'all']).optional() }),
     output: stoppedViewSchema,
-    transform: 'sends scope firm, the firm and source prospect_do_not_call, and nothing else; the explicit confirm is the caller’s',
+    transform: 'sends scope firm, the firm, source prospect_do_not_call and the channel when one is chosen, and nothing else; the explicit confirm is the caller’s',
   },
   'calling.recording': {
     kind: 'read',

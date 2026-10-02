@@ -1,4 +1,4 @@
-import type { SuppressionScope, SuppressionSource } from '@fss/contracts';
+import type { SuppressionChannel, SuppressionReaderChannel, SuppressionScope, SuppressionSource } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isSupportedCanonicalizerVersion } from '../src/rules/suppressionCanonicalization.ts';
 
@@ -27,6 +27,8 @@ export interface EffectiveSuppression {
   readonly source: SuppressionSource;
   readonly actorUserId: string | null;
   readonly recordedAt: string;
+  /** Which channel this stop stops (migration 0037). Every pre-0037 stop is `all`. */
+  readonly channel: SuppressionChannel;
 }
 
 interface EffectiveRow {
@@ -37,10 +39,12 @@ interface EffectiveRow {
   readonly source: SuppressionSource;
   readonly actor_user_id: string | null;
   readonly recorded_at: Date;
+  readonly channel: SuppressionChannel;
   readonly [column: string]: unknown;
 }
 
-const EFFECTIVE_COLUMNS = 'event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, recorded_at';
+const EFFECTIVE_COLUMNS =
+  'event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, recorded_at, channel';
 
 function toEffective(row: EffectiveRow): EffectiveSuppression {
   return {
@@ -52,17 +56,27 @@ function toEffective(row: EffectiveRow): EffectiveSuppression {
     source: row.source,
     actorUserId: row.actor_user_id,
     recordedAt: row.recorded_at.toISOString(),
+    channel: row.channel,
   };
 }
 
-/** The effective suppression covering one key, or null. */
+/**
+ * The effective suppression covering one key, on any channel, or null.
+ *
+ * Any channel on purpose: its readers are research (`research/firmState.ts`) and the
+ * upgrade test, for which a firm that asked to stop being called is as excluded as one
+ * that asked to stop everything (DESIGN-S3X §2.5, unchanged and conservative). The
+ * earliest stop of the key is answered.
+ */
 export async function isSuppressed(
   context: RepositoryContext,
   key: { readonly scope: SuppressionScope; readonly canonicalKey: string },
 ): Promise<EffectiveSuppression | null> {
   const { rows } = await context.db.query<EffectiveRow>(
     `SELECT ${EFFECTIVE_COLUMNS} FROM effective_suppressions
-      WHERE workspace_id = $1 AND scope = $2 AND canonical_key = $3`,
+      WHERE workspace_id = $1 AND scope = $2 AND canonical_key = $3
+      ORDER BY recorded_at, event_id
+      LIMIT 1`,
     [context.scope.workspaceId, key.scope, key.canonicalKey.toLowerCase()],
   );
   const row = rows[0];
@@ -75,10 +89,16 @@ export async function isSuppressed(
  * One statement rather than a loop: section 9.2 evaluates "effective firm, number,
  * or relevant contact-handle suppression" as a single step, and a loop would make it
  * several instants with a gap between each.
+ *
+ * `channel` is the reader's (migration 0037): `email` for the send gate and the send
+ * path's fence check, `phone` for dialling and the dial advice. A stop of that channel
+ * or of `all` refuses; a stop of the other channel does not. Required, so no reader can
+ * forget which channel it is asking about.
  */
 export async function firstSuppressed(
   context: RepositoryContext,
   keys: readonly { readonly scope: SuppressionScope; readonly canonicalKey: string }[],
+  channel: SuppressionReaderChannel,
 ): Promise<EffectiveSuppression | null> {
   if (keys.length === 0) return null;
   const scopes = keys.map(key => key.scope);
@@ -89,16 +109,18 @@ export async function firstSuppressed(
         AND (scope, canonical_key) IN (
           SELECT * FROM unnest($2::text[], $3::text[])
         )
+        AND channel IN ($4::text, 'all')
       -- A firm-wide do-not-contact outranks one number: it is the broader fact and
       -- the more useful sentence for a person reading the refusal.
-      ORDER BY CASE scope WHEN 'firm' THEN 0 ELSE 1 END, recorded_at
+      ORDER BY CASE scope WHEN 'firm' THEN 0 ELSE 1 END, recorded_at, event_id
       LIMIT 1`,
-    [context.scope.workspaceId, scopes, canonicalKeys],
+    [context.scope.workspaceId, scopes, canonicalKeys, channel],
   );
   const row = rows[0];
   return row === undefined ? null : toEffective(row);
 }
 
+/** Every effective stop, every channel: up to one row per (key, channel) since 0037. */
 export async function listEffectiveSuppressions(
   context: RepositoryContext,
   options: { readonly scope?: SuppressionScope; readonly limit?: number } = {},

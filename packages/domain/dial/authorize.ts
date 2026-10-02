@@ -102,12 +102,18 @@ const ELIGIBILITY_REFUSAL: Readonly<Partial<Record<PhoneRouteRow['eligibility'],
 const refused = (reason: DialRefusalCode): DialDecision => ({ allowed: false, reason });
 
 /**
- * Step 1's keys: the firm, the number about to be dialed, and every other phone
- * handle of the same contact.
+ * Step 1's keys: the firm, the number about to be dialed, every other phone handle of
+ * the same contact, and the contact's e-mail addresses.
  *
  * "Effective firm, number, or relevant contact-handle suppression." The third is the
  * one that is easy to miss: a prospect who asked to stop on their mobile has not
  * given permission for their desk line, and both are the same person.
+ *
+ * The addresses arrived with migration 0037 (DESIGN-S3X §0.1): a stop of `all` on a
+ * person's address is a stop of everything for that person, dialling included. Read with
+ * the `phone` channel, an address key can only ever match an `all` stop — the CHECK
+ * keeps a handle stop on an address from being `phone` — so an e-mail-only opt-out never
+ * stops a call.
  */
 export async function suppressionKeys(
   context: RepositoryContext,
@@ -126,6 +132,11 @@ export async function suppressionKeys(
       [context.scope.workspaceId, firm.id, contact],
     );
     for (const row of rows) keys.push({ scope: 'handle', canonicalKey: row.e164 });
+    const addresses = await context.db.query<{ address: string }>(
+      'SELECT address FROM email_addresses WHERE workspace_id = $1 AND firm_id = $2 AND contact_id = $3',
+      [context.scope.workspaceId, firm.id, contact],
+    );
+    for (const row of addresses.rows) keys.push({ scope: 'handle', canonicalKey: row.address });
   }
   return keys;
 }
@@ -150,9 +161,11 @@ export async function authorizeDial(
   const route = routeResult.rows[0] ?? null;
 
   // ---- 1. Suppression -----------------------------------------------------
+  // A phone reader (migration 0037): a `phone` or `all` stop refuses, an `email` one does not.
   const suppression = await firstSuppressed(
     context,
     await suppressionKeys(context, firm, route, input.contactId),
+    'phone',
   );
   if (suppression !== null) return refused(suppressionRefusal(suppression));
 

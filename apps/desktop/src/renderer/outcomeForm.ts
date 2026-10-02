@@ -1,4 +1,4 @@
-import { CALL_OUTCOMES, callbackInstant, type CallOutcome } from '@fss/contracts';
+import { CALL_OUTCOMES, DEFAULT_DO_NOT_CALL_CHOICE, callbackInstant, type CallOutcome, type DoNotCallChoice } from '@fss/contracts';
 
 /**
  * The call outcome form, as a pure model (specification 9.1, 14.2).
@@ -84,8 +84,11 @@ export interface OutcomeDraft {
    * the instant is `resolvedCallbackInstant(draft)`, the domain's own resolution.
    */
   readonly callbackDueAt: string;
-  /** True only when the person said the request covered every kind of contact. */
-  readonly doNotCallCoversAllContact: boolean;
+  /**
+   * What a "Do not call" stops (migration 0037, David's P1): one of the four choices in
+   * `DO_NOT_CALL_CHOICES`. The default is calls to this person; never inferred.
+   */
+  readonly doNotCall: DoNotCallChoiceKey;
 }
 
 export const emptyOutcomeDraft = (): OutcomeDraft => ({
@@ -95,8 +98,35 @@ export const emptyOutcomeDraft = (): OutcomeDraft => ({
   callbackLocalTime: '',
   callbackTimeZone: '',
   callbackDueAt: '',
-  doNotCallCoversAllContact: false,
+  doNotCall: 'contact_phone',
 });
+
+/**
+ * The four answers to "what did they ask Callie to stop?" for a "Do not call" (P1). Calls to
+ * this person is the default: an explicit "don't contact me again" is a different choice,
+ * and keeping e-mail open grants no permission to send any (consent is unchanged).
+ */
+export const DO_NOT_CALL_CHOICE_KEYS = ['contact_phone', 'contact_all', 'firm_phone', 'firm_all'] as const;
+export type DoNotCallChoiceKey = (typeof DO_NOT_CALL_CHOICE_KEYS)[number];
+
+export const DO_NOT_CALL_CHOICES: Readonly<Record<DoNotCallChoiceKey, { readonly label: string; readonly choice: DoNotCallChoice }>> =
+  Object.freeze({
+    contact_phone: { label: 'Calls to this person', choice: { scope: 'contact', channel: 'phone' } },
+    contact_all: { label: 'All contact with this person', choice: { scope: 'contact', channel: 'all' } },
+    firm_phone: { label: 'Calls to anyone at this firm', choice: { scope: 'firm', channel: 'phone' } },
+    firm_all: { label: 'All contact with this firm', choice: { scope: 'firm', channel: 'all' } },
+  });
+
+/** A kept draft value read back as a choice: anything unknown is the default, calls to this person. */
+export function doNotCallChoiceKeyOf(value: string): DoNotCallChoiceKey {
+  return (DO_NOT_CALL_CHOICE_KEYS as readonly string[]).includes(value) ? (value as DoNotCallChoiceKey) : 'contact_phone';
+}
+
+/** Whether a choice is the default one, which a client need not send. */
+export function isDefaultDoNotCall(key: DoNotCallChoiceKey): boolean {
+  const choice = DO_NOT_CALL_CHOICES[key].choice;
+  return choice.scope === DEFAULT_DO_NOT_CALL_CHOICE.scope && choice.channel === DEFAULT_DO_NOT_CALL_CHOICE.channel;
+}
 
 export type OutcomeProblem =
   | 'outcome_missing'
@@ -160,15 +190,19 @@ export function outcomeProblem(draft: OutcomeDraft): OutcomeProblem | null {
   return null;
 }
 
-/** Whether recording this draft writes a suppression, and how wide. */
-export function outcomeSuppresses(draft: OutcomeDraft): 'none' | 'number' | 'firm' {
+/** Whether recording this draft writes a stop, and which of the four. */
+export function outcomeSuppresses(draft: OutcomeDraft): 'none' | DoNotCallChoiceKey {
   if (draft.outcome !== 'do_not_call') return 'none';
-  return draft.doNotCallCoversAllContact ? 'firm' : 'number';
+  return draft.doNotCall;
 }
 
-export const SUPPRESSION_WARNINGS: Readonly<Record<'number' | 'firm', string>> = Object.freeze({
-  number: 'Recording this stops Callie calling this number. It does not stop email or another number at the firm.',
-  firm: 'Recording this stops Callie contacting this firm by any means. Only an admin can undo it, and only with a documented reason.',
+/** What each of the four stops does, said before it is recorded. */
+export const SUPPRESSION_WARNINGS: Readonly<Record<DoNotCallChoiceKey, string>> = Object.freeze({
+  contact_phone: 'Recording this stops Callie calling this person. It does not stop e-mail, and it gives no permission to send any.',
+  contact_all: 'Recording this stops Callie calling or e-mailing this person. Only an admin can undo it.',
+  firm_phone: 'Recording this stops Callie calling anyone at this firm. It does not stop e-mail, and it gives no permission to send any.',
+  firm_all:
+    'Recording this stops Callie contacting this firm by any means. Only an admin can undo it, and only with a documented reason.',
 });
 
 export interface LogCallCommand {
@@ -189,7 +223,8 @@ export interface LogCallCommand {
     readonly dueAt: string;
     readonly sourceTimeZone: string;
   };
-  readonly doNotCallCoversAllContact?: boolean;
+  /** Only for `do_not_call`: the four-way choice (migration 0037). */
+  readonly doNotCall?: DoNotCallChoice;
 }
 
 export interface LogCallCommandInput {
@@ -245,9 +280,7 @@ export function logCallCommand(
             },
           }
         : {}),
-      ...(outcome === 'do_not_call'
-        ? { doNotCallCoversAllContact: input.draft.doNotCallCoversAllContact }
-        : {}),
+      ...(outcome === 'do_not_call' ? { doNotCall: DO_NOT_CALL_CHOICES[input.draft.doNotCall].choice } : {}),
     },
   };
 }

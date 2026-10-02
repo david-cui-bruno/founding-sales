@@ -340,6 +340,7 @@ describe('the worker drains what the lanes left', () => {
       scope: 'firm',
       firmId: beta.firmId,
       source: 'prospect_opt_out',
+      channel: 'all',
       journal,
     });
     expect(recorded.ok).toBe(true);

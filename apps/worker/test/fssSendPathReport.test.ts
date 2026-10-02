@@ -442,6 +442,8 @@ describe('fss admin send-path report', () => {
     // 6. The suppression on Bravo, and the one live enrollment it covers.
     expect(section(answer, 'suppression')).toEqual({
       byScope: [{ scope: 'firm', count: 1 }],
+      // Migration 0037: by scope and channel, and the stop the fixture writes is `all`.
+      byScopeAndChannel: [{ scope: 'firm', channel: 'all', count: 1 }],
       liveEnrollmentsOfSuppressedPeople: 1,
     });
 
@@ -547,6 +549,40 @@ describe('fss admin send-path report', () => {
     );
     expect(rows).toContain(prospectingEnrollmentId);
     expect(rows).toHaveLength(3);
+  });
+
+  it('counts not_interested as a conversation, and counts only e-mail-stopping stops against live enrollments (S3X)', async () => {
+    // Added for this case and removed after it, so the shared fixture stays as the other
+    // cases read it. The test session is the owner, which may delete what the roles may not.
+    const callLogId = await one(
+      `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, actor_user_id)
+       VALUES ($1, $2, 'not_interested', 'none', now() - interval '30 days', $3) RETURNING id`,
+      [workspaceId, alphaFirmId, userId],
+    );
+    await database.session.query(
+      `INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, channel)
+       VALUES ($1, 'sendpath-phone-only', 'firm', $2::text, 'canonical.1', 'prospect_do_not_call', $3, 'phone')`,
+      [workspaceId, alphaFirmId, userId],
+    );
+    try {
+      const { report: answer } = await report();
+      const perRow = section(answer, 'liveEnrollmentRows')['rows'] as readonly Record<string, unknown>[];
+      // DESIGN-S3X 0.4: a not_interested call was a conversation all along (REACHED_OUTCOMES).
+      expect(perRow.find(row => row['originKind'] === 'cold_legacy')).toMatchObject({ hadConversation: true });
+      // Alpha's phone-only stop is listed by channel, and its two live enrollments are not
+      // "enrollments of suppressed people": a phone-only stop leaves e-mail running.
+      expect(section(answer, 'suppression')).toEqual({
+        byScope: [{ scope: 'firm', count: 2 }],
+        byScopeAndChannel: [
+          { scope: 'firm', channel: 'all', count: 1 },
+          { scope: 'firm', channel: 'phone', count: 1 },
+        ],
+        liveEnrollmentsOfSuppressedPeople: 1,
+      });
+    } finally {
+      await database.session.query("DELETE FROM suppression_events WHERE event_id = 'sendpath-phone-only'");
+      await database.session.query('DELETE FROM call_logs WHERE id = $1', [callLogId]);
+    }
   });
   it('refuses workspace_ambiguous, naming the count, when the database holds more than one workspace', async () => {
     const otherId = await one(

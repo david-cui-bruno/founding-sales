@@ -191,21 +191,29 @@ describe('one Apply for the selected keys', () => {
     });
   });
 
-  it('a stop sends doNotCallCoversAllContact only when David ticks that choice', async () => {
+  it('a stop sends doNotCall only when David chooses more than calls to this person (migration 0037)', async () => {
     const calls = install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }]) });
     show(completed([PROPOSALS.stopOutcome]));
     fireEvent.click(check('outcome'));
+    // The four-way choice shows, on the default: calls to this person.
+    expect((screen.getByTestId('suggestion-stop-choice') as HTMLSelectElement).value).toBe('contact_phone');
     fireEvent.click(screen.getByTestId('apply'));
     await waitFor(() => expect(calls.some(call => call.name === 'calling.proposalsApply')).toBe(true));
     expect((calls.at(-1)?.input as Record<string, unknown>)['edits']).toBeUndefined();
-    cleanup();
-    const second = install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }]) });
-    show(completed([PROPOSALS.stopOutcome]));
-    fireEvent.click(check('outcome'));
-    fireEvent.click(screen.getByTestId('suggestion-covers-all'));
-    fireEvent.click(screen.getByTestId('apply'));
-    await waitFor(() => expect(second.some(call => call.name === 'calling.proposalsApply')).toBe(true));
-    expect((second.at(-1)?.input as { edits: unknown }).edits).toEqual({ outcome: { doNotCallCoversAllContact: true } });
+    for (const [key, choice] of [
+      ['contact_all', { scope: 'contact', channel: 'all' }],
+      ['firm_phone', { scope: 'firm', channel: 'phone' }],
+      ['firm_all', { scope: 'firm', channel: 'all' }],
+    ] as const) {
+      cleanup();
+      const next = install({ 'calling.proposalsApply': () => applied([{ key: 'outcome', kind: 'outcome' }]) });
+      show(completed([PROPOSALS.stopOutcome]));
+      fireEvent.click(check('outcome'));
+      fireEvent.change(screen.getByTestId('suggestion-stop-choice'), { target: { value: key } });
+      fireEvent.click(screen.getByTestId('apply'));
+      await waitFor(() => expect(next.some(call => call.name === 'calling.proposalsApply')).toBe(true));
+      expect((next.at(-1)?.input as { edits: unknown }).edits).toEqual({ outcome: { doNotCall: choice } });
+    }
   });
 
   it('declines the suggestions that are not selected, only when David chooses to', async () => {

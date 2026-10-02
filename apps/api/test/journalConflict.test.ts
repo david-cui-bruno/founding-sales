@@ -85,6 +85,7 @@ const record: SuppressionJournalRecord = {
   supersedesEventId: null,
   supersessionReason: null,
   recordedAt: '2026-09-25T12:00:00.000Z',
+  channel: 'all' as const,
 };
 
 describe('the S3 journal put (audit S12)', () => {

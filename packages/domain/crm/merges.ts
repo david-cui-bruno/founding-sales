@@ -451,7 +451,9 @@ async function insertAlias(
  * firm-scoped event on the source becomes a new event on the target with a
  * deterministic id derived from the original, so replaying the merge inserts nothing
  * twice. Handle-scoped suppressions need no work at all: section 10.2 makes a handle
- * suppression "global across the workspace", so it already covers the target.
+ * suppression "global across the workspace", so it already covers the target. Each copy
+ * keeps its original's channel (migration 0037): a firm that asked not to be called is,
+ * after the merge, a firm that asked not to be called, not one that asked for silence.
  */
 async function preserveFirmSuppressions(
   context: RepositoryContext,
@@ -463,7 +465,7 @@ async function preserveFirmSuppressions(
   await lockSendGateForStopFact(context);
   await context.db.query(
     `INSERT INTO suppression_events
-       (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id)
+       (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id, channel)
      SELECT $1,
             'merge:' || e.event_id,
             'firm',
@@ -471,7 +473,8 @@ async function preserveFirmSuppressions(
             e.canonicalizer_version,
             e.source,
             e.actor_user_id,
-            $4
+            $4,
+            e.channel
        FROM suppression_events e
       WHERE e.workspace_id = $1 AND e.scope = 'firm' AND e.canonical_key = $2
         AND NOT EXISTS (

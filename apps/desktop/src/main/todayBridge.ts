@@ -939,8 +939,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           // No `occurredAt`: "just now" is the server's clock (C15).
           ...(input.note === '' ? {} : { note: input.note }),
           ...(callback === undefined ? {} : { callback }),
+          // What a "Do not call" stops (migration 0037): the four-way choice when the form
+          // sent one, else the 1.0.29 checkbox, which keeps its meaning on the server.
           ...(input.outcome === 'do_not_call'
-            ? { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
+            ? input.doNotCall !== undefined
+              ? { doNotCall: input.doNotCall }
+              : { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
             : {}),
           // The agreed follow-up (migration 0025). Sent for the outcomes the consent rule
           // allows one on (a conversation that reached somebody, never `do_not_call`): any
@@ -957,6 +961,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           const parsed = loggedCallResultSchema.safeParse(value);
           return parsed.success ? parsed.data : null;
         },
+        // The form's id (rules K5/K6): its retry after a lost answer is this same command.
+        input.commandId === undefined ? {} : { commandId: input.commandId },
       );
       // The person who recorded this call has left this Mac while it was on the wire:
       // nothing of theirs — the pending agreement's call, contact and sequence ids, the
@@ -996,7 +1002,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // number. Re-read rather than patching the page: the server decided, not us.
       await reloadAfterMutation({ refreshList: true }, mine);
       if (!stale(mine) && pendingAgreement !== null) await loadPreview(pendingAgreement, mine);
-      return await answerFor(mine);
+      const state = await answerFor(mine);
+      // The form's own answer, on this state only (rules K5/K6): it clears its draft on
+      // `recorded` and keeps it on anything else. A state for a newer generation carries none.
+      if (input.commandId === undefined || stale(mine)) return state;
+      return todayStateSchema.parse({
+        ...state,
+        outcomeAnswer: { commandId: input.commandId, recorded: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) },
+      });
     },
 
     async recordAgreedDates(input) {

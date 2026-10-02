@@ -101,6 +101,7 @@ describe('adviseDial', () => {
       scope: 'firm',
       firmId: crm.alpha.firmId,
       source: 'prospect_do_not_call',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(recorded.ok).toBe(true);
@@ -114,6 +115,7 @@ describe('adviseDial', () => {
       firmId: crm.alpha.firmId,
       value: policy.alpha.e164,
       source: 'prospect_do_not_call',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(recorded.ok).toBe(true);

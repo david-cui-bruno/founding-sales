@@ -216,6 +216,7 @@ describe('scenario 17: no replay ever yields a second allow', () => {
       scope: 'firm',
       firmId: crm.beta.firmId,
       source: 'prospect_do_not_call',
+      channel: 'all',
       commandId: 'cmd-beta-suppress',
       journal,
     });
@@ -261,6 +262,7 @@ describe('scenario 21: the insert-only protocol refuses everything else', () => 
       scope: 'handle',
       value: '+14015550133',
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-cross-key-original',
       journal,
     });
@@ -305,6 +307,7 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       scope: 'firm',
       firmId: crm.alpha.firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-window-suppress',
       journal: recordingSuppressionJournal(),
     });
@@ -326,6 +329,7 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       value: '+14015550188',
       firmId: crm.alpha.firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-correct-first',
       journal: recordingSuppressionJournal(),
     });
@@ -384,6 +388,7 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       value: '+14015550155',
       firmId: crm.alpha.firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-finalize-first',
       journal: recordingSuppressionJournal(),
     });
@@ -429,6 +434,7 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       value: '+14015550177',
       firmId: crm.alpha.firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-two-corrections',
       journal: recordingSuppressionJournal(),
     });
@@ -471,6 +477,7 @@ describe('scenario 30: a prospect opt-out is never salesperson-reversible', () =
       value: '+14015550166',
       firmId: crm.alpha.firmId,
       source: 'prospect_opt_out',
+      channel: 'all',
       commandId: 'cmd-optout',
       journal: recordingSuppressionJournal(),
     });

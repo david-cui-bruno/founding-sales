@@ -128,6 +128,17 @@ describe('lane g90 through the API', () => {
     expect((await post('/crm/firm-page', salespersonToken, { firmId, pageVersion: 3 })).status).toBe(400);
   });
 
+  it('S3X: adds the stops only when the read negotiates include: [stops]', async () => {
+    const plain = await post('/crm/firm-page', salespersonToken, { firmId, pageVersion: 2 });
+    expect(plain.status).toBe(200);
+    expect(plain.body).not.toHaveProperty('stops');
+    const withStops = await post('/crm/firm-page', salespersonToken, { firmId, pageVersion: 2, include: ['stops'] });
+    expect(withStops.status).toBe(200);
+    expect(wireDrift(firmPageResponseSchema, withStops.body)).toEqual([]);
+    expect(withStops.body['stops']).toEqual({ firm: [], contacts: [] });
+    expect((await post('/crm/firm-page', salespersonToken, { firmId, include: ['everything'] })).status).toBe(400);
+  });
+
   it('queues one more check for an address being checked, once per command, at the version on screen', async () => {
     const routeId = await addAddress('dana@slow.fsstest');
     const body = command({ routeKind: 'email', routeId, routeVersion: 1 });

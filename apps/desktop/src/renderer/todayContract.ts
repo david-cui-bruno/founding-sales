@@ -193,6 +193,16 @@ export const todayStateSchema = z.strictObject({
     })
     .nullable()
     .optional(),
+  /**
+   * The answer to the outcome command this state answers, by the command id the form sent
+   * (kept-state rules K5/K6). Only on the answer to `today.recordOutcome` itself, never on a
+   * later read: the form clears its draft on `recorded` and on nothing else, and an absent
+   * answer is a lost one, which keeps the draft and the command for a retry under the same id.
+   */
+  outcomeAnswer: z
+    .strictObject({ commandId: uuid, recorded: z.boolean(), reason: z.string().max(80).nullable() })
+    .nullable()
+    .optional(),
 });
 export type TodayState = z.infer<typeof todayStateSchema>;
 export type PendingAgreementView = NonNullable<TodayState['pendingAgreement']>;
@@ -286,7 +296,16 @@ export interface OutcomeRequest {
     readonly dueAt: string;
     readonly sourceTimeZone: string;
   } | null;
+  /** The 1.0.29 checkbox. A newer form sends `doNotCall` instead and leaves this false. */
   readonly doNotCallCoversAllContact: boolean;
+  /** What a `do_not_call` stops (migration 0037, P1): the four-way choice. Wins over the checkbox. */
+  readonly doNotCall?: { readonly scope: 'contact' | 'firm'; readonly channel: 'phone' | 'all' };
+  /**
+   * The command id the form minted (rules K5/K6). A retry after a lost answer sends the same
+   * request under the same id, so the server answers it from its receipt rather than
+   * recording the call twice. Absent, the main process mints one.
+   */
+  readonly commandId?: string;
   /**
    * The follow-up agreed on the call (migration 0025): one approved e-mail, or — since
    * send-path v2 (slice S3) — an agreed published sequence, which the server enrols in

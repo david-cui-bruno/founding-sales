@@ -357,9 +357,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 
   const loadFirm = async (firmId: string): Promise<void> => {
     // Lane g90: the second version, whose routes carry their technical validation.
+    // Migration 0037: `include: ['stops']` adds the facts behind "Email stopped", "Calls
+    // stopped" and "All contact stopped".
     const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
       firmId,
       pageVersion: FIRM_PAGE_VERSION,
+      include: ['stops'],
     });
     if (!page.ok) {
       notice = page.reason;

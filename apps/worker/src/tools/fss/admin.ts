@@ -38,6 +38,7 @@ import { readEnrollment, readStepExecution } from '@fss/domain/sequences/rows.ts
 import type { EnrollmentRow } from '@fss/domain/sequences/types.ts';
 import { readSetting } from '@fss/domain/settings/store.ts';
 import { firstSuppressed } from '@fss/domain/suppression/effective.ts';
+import { REACHED_OUTCOMES } from '@fss/domain/dial/outcomes.ts';
 import { businessDateOf } from '@fss/domain/today/snapshots.ts';
 import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
 import { readSentMessageBytes, scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
@@ -1400,9 +1401,11 @@ async function sendPathLiveEnrollmentRows(
               AND p.expires_at > now()) AS permission_live,
             o.control_mode,
             o.control_mode_origin,
+            -- A conversation is a reached outcome, the list consent reads (REACHED_OUTCOMES
+            -- in dial/outcomes.ts): not_interested was missing here (DESIGN-S3X 0.4).
             EXISTS (SELECT 1 FROM call_logs c
                      WHERE c.workspace_id = n.workspace_id AND c.firm_id = n.firm_id
-                       AND c.outcome IN ('interested', 'callback_requested', 'referral_or_wrong_person')
+                       AND c.outcome = ANY($3::text[])
                        AND c.occurred_at < n.started_at) AS had_conversation,
             EXISTS (SELECT 1 FROM mail_message_matches m
                       JOIN mail_messages mm ON mm.workspace_id = m.workspace_id AND mm.id = m.mail_message_id
@@ -1416,7 +1419,7 @@ async function sendPathLiveEnrollmentRows(
       WHERE n.workspace_id = $1 AND n.ended_at IS NULL
       ORDER BY n.started_at, n.id
       LIMIT $2`,
-    [workspaceId, sample],
+    [workspaceId, sample, [...REACHED_OUTCOMES]],
   );
   const total = asCount(counted.rows[0]?.['total']);
   return {
@@ -1467,10 +1470,22 @@ async function sendPathParallelThreads(
   }));
 }
 
-/** Section 6: suppression is present and readable (the document's read 6). */
+/**
+ * Section 6: suppression is present and readable (the document's read 6).
+ *
+ * Since migration 0037 the view holds one row per (key, channel), so `byScope` counts
+ * (key, channel) rows and `byScopeAndChannel` says which. The live-enrollment count asks
+ * about e-mail-stopping rows only (`email` or `all`): a phone-only stop leaves an
+ * enrollment running by design, and its call-task steps are held at eligibility.
+ */
 async function sendPathSuppression(session: SessionQueryable, workspaceId: string): Promise<Record<string, unknown>> {
   const byScope = await session.query(
     'SELECT scope, count(*) AS count FROM effective_suppressions WHERE workspace_id = $1 GROUP BY scope ORDER BY scope',
+    [workspaceId],
+  );
+  const byScopeAndChannel = await session.query(
+    `SELECT scope, channel, count(*) AS count FROM effective_suppressions
+      WHERE workspace_id = $1 GROUP BY scope, channel ORDER BY scope, channel`,
     [workspaceId],
   );
   const live = await session.query(
@@ -1480,16 +1495,23 @@ async function sendPathSuppression(session: SessionQueryable, workspaceId: strin
         AND n.ended_at IS NULL
         AND (EXISTS (SELECT 1 FROM effective_suppressions s
                       WHERE s.workspace_id = n.workspace_id
+                        AND s.channel IN ('email', 'all')
                         AND s.scope = 'firm' AND s.canonical_key = n.firm_id::text)
              OR EXISTS (SELECT 1 FROM effective_suppressions s
                          JOIN email_addresses a
                            ON a.workspace_id = s.workspace_id AND a.address = s.canonical_key
                         WHERE s.workspace_id = n.workspace_id
+                          AND s.channel IN ('email', 'all')
                           AND s.scope = 'handle' AND a.contact_id = n.contact_id))`,
     [workspaceId],
   );
   return {
     byScope: byScope.rows.map(row => ({ scope: row['scope'], count: asCount(row['count']) })),
+    byScopeAndChannel: byScopeAndChannel.rows.map(row => ({
+      scope: row['scope'],
+      channel: row['channel'],
+      count: asCount(row['count']),
+    })),
     liveEnrollmentsOfSuppressedPeople: asCount(live.rows[0]?.['live_enrollments_of_suppressed_people']),
   };
 }
@@ -2184,10 +2206,14 @@ export async function sendPathPreviewCommand(invocation: AdminInvocation): Promi
         const sources = await sourceConditions(context, input, enrollment, fence.sourceZone, now);
         // The gate's own suppression read, on the fence's firm and recipient, beside the
         // source's contact-wide one.
-        const fenceSuppressed = await firstSuppressed(context, [
-          { scope: 'firm', canonicalKey: fence.firmId },
-          { scope: 'handle', canonicalKey: fence.recipientAddress },
-        ]);
+        const fenceSuppressed = await firstSuppressed(
+          context,
+          [
+            { scope: 'firm', canonicalKey: fence.firmId },
+            { scope: 'handle', canonicalKey: fence.recipientAddress },
+          ],
+          'email',
+        );
         const cold = coldOutreachDispatchRefusal(enrollment, { kind: mailboxKind });
         const decided = await decideStepPermission(
           context,
@@ -2286,6 +2312,83 @@ export async function sendPathPreviewCommand(invocation: AdminInvocation): Promi
         dueEmailSteps: steps,
       },
     });
+  } finally {
+    await session.query('ROLLBACK');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The stop-channels report (slice S3X, migration 0037; contract check CC2b).
+// ---------------------------------------------------------------------------
+
+/** The migration that gave every stop a channel. The report needs it applied. */
+const STOP_CHANNELS_MIGRATION = 37;
+
+/**
+ * `fss admin stop-channels report`: the contacts migration 0037 made undialable (DESIGN-S3X
+ * §0.1, CC2b), measured after the release because production has no read path before it.
+ *
+ * Before 0037 the dial keys were phone-only, so a stop on a person's e-mail address never
+ * stopped a call. 0037 made every earlier stop `all` and put the person's addresses into the
+ * dial keys, so such a stop now does. A contact is counted when, in one workspace:
+ *
+ *   * an effective handle stop on one of their addresses is `all` and was recorded before
+ *     0037 was applied (`schema_versions.applied_at` for version 37) — a stop of before;
+ *   * they have a phone route at their firm — there is somebody one could dial;
+ *   * nothing else stops dialling them: no effective `phone`/`all` stop on any of their
+ *     numbers, and none on their firm — those were undialable before 0037 as well.
+ *
+ * An address stop recorded after 0037 is not counted: an opt-out since then is `email` and
+ * stops no call, and an `all` one was chosen as all. The output is ids and counts only — no
+ * name, address or number — because it is printed to the operations task's log. One READ
+ * ONLY transaction, rolled back; it writes nothing and decides nothing. Refused below 0037.
+ */
+export async function stopChannelsReportCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const schemaVersion = await readAppliedSchemaVersion(session);
+    if (schemaVersion < STOP_CHANNELS_MIGRATION) {
+      return refuse('schema_too_old', `the stop channels arrive with migration 0037; this database is at schema ${String(schemaVersion)}`);
+    }
+    const applied = await session.query<{ applied_at: Date | string }>(
+      'SELECT applied_at FROM schema_versions WHERE version = $1',
+      [STOP_CHANNELS_MIGRATION],
+    );
+    const appliedAt = asInstant(applied.rows[0]?.applied_at);
+    const { rows } = await session.query<{ workspace_id: string; firm_id: string; contact_id: string }>(
+      `SELECT DISTINCT a.workspace_id, a.firm_id::text AS firm_id, a.contact_id::text AS contact_id
+         FROM effective_suppressions s
+         JOIN email_addresses a
+           ON a.workspace_id = s.workspace_id AND a.address = s.canonical_key
+        WHERE s.scope = 'handle'
+          AND position('@' in s.canonical_key) > 0
+          AND s.channel = 'all'
+          AND s.recorded_at < $1::timestamptz
+          AND a.contact_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM phone_routes p
+                       WHERE p.workspace_id = a.workspace_id AND p.firm_id = a.firm_id AND p.contact_id = a.contact_id)
+          AND NOT EXISTS (SELECT 1 FROM effective_suppressions f
+                           WHERE f.workspace_id = a.workspace_id AND f.scope = 'firm'
+                             AND f.canonical_key = a.firm_id::text AND f.channel IN ('phone', 'all'))
+          AND NOT EXISTS (SELECT 1 FROM effective_suppressions h
+                            JOIN phone_routes p ON p.workspace_id = h.workspace_id AND p.e164 = h.canonical_key
+                           WHERE h.workspace_id = a.workspace_id AND h.scope = 'handle' AND h.channel IN ('phone', 'all')
+                             AND p.firm_id = a.firm_id AND p.contact_id = a.contact_id)
+        ORDER BY a.workspace_id, firm_id, contact_id`,
+      [appliedAt],
+    );
+    const workspaceIds = await listWorkspaceIds(session);
+    const workspaces = workspaceIds.map(workspaceId => {
+      const mine = rows.filter(row => row.workspace_id === workspaceId);
+      return {
+        workspaceId,
+        newlyUndialableContacts: mine.length,
+        atFirms: new Set(mine.map(row => row.firm_id)).size,
+        contacts: mine.map(row => ({ contactId: row.contact_id, firmId: row.firm_id })),
+      };
+    });
+    return accept({ ok: true, report: { schemaVersion, migration0037AppliedAt: appliedAt, workspaces } });
   } finally {
     await session.query('ROLLBACK');
   }

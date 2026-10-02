@@ -22,6 +22,7 @@ import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
 import { FirmMeetings } from '../meetings/FirmMeetings.tsx';
 import { BasicsEditor } from '../today/BasicsEditor.tsx';
+import { StopBadge, contactStopLabel, firmStopLabel, type StopLabel } from './stops.tsx';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -284,8 +285,11 @@ function ContactRow({
   enabled,
   saving,
   onSave,
+  stop = null,
 }: {
   readonly contact: ContactDto;
+  /** Migration 0037 (P2): "Email stopped", "Calls stopped" or "All contact stopped". */
+  readonly stop?: StopLabel | null;
   readonly enabled: boolean;
   readonly saving: boolean;
   onSave(edit: ContactEdit): void;
@@ -351,6 +355,7 @@ function ContactRow({
         Main contact
       </label>
       <Tag data-testid="contact-status">{contact.status}</Tag>
+      <StopBadge label={stop} testId="contact-stop" />
       {guard.changedElsewhere ? (
         <span data-testid="contact-changed-elsewhere" role="status" className="basis-full text-xs text-muted-foreground">
           Changed elsewhere. Your earlier edit was dropped.
@@ -907,7 +912,18 @@ export function FirmPage({
   // the read's. They always agree — `readFirmPage` produces them together — and the
   // narrowing is what makes "the detail fields exist" a type rather than a hope.
   const detail = page.visibility === 'assigned_or_admin' && page.read.visibility === 'assigned_or_admin' ? page.read.firm : null;
-  const identity = <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} stageName={stageName} />;
+  // Migration 0037 (P2): "Email stopped", "Calls stopped" or "All contact stopped" under the
+  // firm's identity, from the negotiated `stops`; nothing for a narrow read.
+  const identity = (
+    <>
+      <Identity page={page} actionsEnabled={actionsEnabled} onBasicsSaved={onBasicsSaved} stageName={stageName} />
+      {page.visibility === 'assigned_or_admin' ? (
+        <div className="mt-2 empty:hidden">
+          <StopBadge label={firmStopLabel(page.stops)} testId="firm-stop" />
+        </div>
+      ) : null}
+    </>
+  );
   if (page.visibility !== 'assigned_or_admin' || detail === null) {
     return (
       <div className="callie-v2 mt-4">
@@ -999,6 +1015,7 @@ export function FirmPage({
                   enabled={actionsEnabled}
                   saving={busy(`contact:${contact.id}`)}
                   onSave={onSaveContact}
+                  stop={contactStopLabel(page.stops, contact.id)}
                 />
               ))}
             </Rows>

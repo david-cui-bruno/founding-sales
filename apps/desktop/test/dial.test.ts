@@ -262,22 +262,29 @@ describe('the outcome form', () => {
     expect(built.command.itemId).toBe('55555555-5555-4555-8555-555555555555');
   });
 
-  it('says how wide a do-not-call suppression will be, and sends the same answer', () => {
-    const number = draftWith({ outcome: 'do_not_call' });
-    const firm = draftWith({ outcome: 'do_not_call', doNotCallCoversAllContact: true });
+  it('says which of the four stops a do-not-call records, and sends the same answer (migration 0037)', () => {
+    const person = draftWith({ outcome: 'do_not_call' });
     expect(outcomeSuppresses(emptyOutcomeDraft())).toBe('none');
-    expect(outcomeSuppresses(number)).toBe('number');
-    expect(outcomeSuppresses(firm)).toBe('firm');
-
-    const built = logCallCommand({
-      commandId: 'cmd-2',
-      clientVersion: '1.4.0',
-      firmId: FIRM_ID,
-      occurredAt: '2026-09-16T14:05:00.000Z',
-      draft: firm,
-    });
-    if (!('command' in built)) throw new Error('expected a command');
-    expect(built.command.doNotCallCoversAllContact).toBe(true);
+    // P1: the default is calls to this person, never more.
+    expect(outcomeSuppresses(person)).toBe('contact_phone');
+    for (const [key, choice] of [
+      ['contact_phone', { scope: 'contact', channel: 'phone' }],
+      ['contact_all', { scope: 'contact', channel: 'all' }],
+      ['firm_phone', { scope: 'firm', channel: 'phone' }],
+      ['firm_all', { scope: 'firm', channel: 'all' }],
+    ] as const) {
+      const draft = draftWith({ outcome: 'do_not_call', doNotCall: key });
+      expect(outcomeSuppresses(draft)).toBe(key);
+      const built = logCallCommand({
+        commandId: 'cmd-2',
+        clientVersion: '1.4.0',
+        firmId: FIRM_ID,
+        occurredAt: '2026-09-16T14:05:00.000Z',
+        draft,
+      });
+      if (!('command' in built)) throw new Error('expected a command');
+      expect(built.command.doNotCall).toEqual(choice);
+    }
   });
 
   it('omits the callback and the suppression scope from every other outcome', () => {
@@ -292,12 +299,12 @@ describe('the outcome form', () => {
         note: 'left a message',
         // Left over in the form from an earlier click; it must not travel.
         callbackLocalDate: '2026-09-22',
-        doNotCallCoversAllContact: true,
+        doNotCall: 'firm_all',
       }),
     });
     if (!('command' in built)) throw new Error('expected a command');
     expect(built.command.callback).toBeUndefined();
-    expect(built.command.doNotCallCoversAllContact).toBeUndefined();
+    expect(built.command.doNotCall).toBeUndefined();
     expect(built.command.routeId).toBe(ROUTE_ID);
     expect(built.command.note).toBe('left a message');
   });

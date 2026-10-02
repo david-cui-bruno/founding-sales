@@ -17,6 +17,9 @@ anyone but an admin with a documented reason.
 packages/domain/db/migrations/0001_foundation.sql  suppression_events, insert-only by privilege
 packages/domain/db/migrations/0006_policy.sql      the finalization marker, the view,
                                                    the same-key trigger
+packages/domain/db/migrations/0037_suppression_channels.sql
+                                                   the channel, the view per channel,
+                                                   the same-channel trigger
 packages/domain/suppression/journal.ts             the port, the deterministic id, the fake
 packages/domain/suppression/events.ts              record, correct, supersede
 packages/domain/suppression/effective.ts           the one authoritative read
@@ -101,6 +104,76 @@ canonicalizer this build does not understand still **suppresses** — it reads a
 key is suppressed and I cannot reason about it further" — and it is the *write* paths,
 correction and supersession, that refuse to act on it.
 
+## The channels (migration 0037)
+
+David, 2 October 2026 (P1, P2): "Do not call" stops phone calls only; an explicit "don't
+contact me again" stops both; an e-mail opt-out stops e-mail only; every stop recorded
+before 0037 means all channels. Scope and channel are independent, so every event is one
+of `{handle, firm} × {phone, email, all}`. The column defaults to `all` (metadata only: no
+rewrite and no UPDATE privilege), so every older row, and every row an older binary
+inserts, reads `all`.
+
+`suppression_events_channel_fits_key` refuses a handle stop on a number that is `email`
+and one on an address that is `phone`: a stop no reader would ever read. A firm stop takes
+any channel. `recordSuppression` refuses the same combination as `invalid_input` before it
+journals anything.
+
+**Which stop blocks which action.** "Yes" means refused. A contact's handles are their
+numbers and addresses.
+
+| Stop | E-mail send | Call-task step | Dial / dial advice | Terminal enrollment stop | Today new-firm lane | Research |
+|---|---|---|---|---|---|---|
+| handle, number, `phone` | no | yes | yes (that number and the contact's other numbers) | no | — | — |
+| handle, number, `all` | yes | yes | yes | yes | — | — |
+| handle, address, `email` | yes | no | no | yes | — | — |
+| handle, address, `all` | yes | yes | yes (the contact's addresses are dial keys) | yes | — | — |
+| firm, `phone` | no | yes | yes | no | excluded | excluded |
+| firm, `email` | yes | no | no | yes | listed | excluded |
+| firm, `all` | yes | yes | yes | yes | excluded | excluded |
+
+The rule every reader follows: an e-mail reader (the send gate, the send path's fence
+check, an e-mail step's eligibility, the terminal stops) refuses on `channel IN ('email',
+'all')`; a phone reader (dialling, the dial advice, a call-task step's eligibility, the
+Today new-firm lane, Needs review's stop-scope item) refuses on `channel IN ('phone',
+'all')`. `firstSuppressed` takes the channel as a required argument. Research
+(`isSuppressed`, the sweep) reads any channel, unchanged and conservative; the listing,
+the dashboard and the send-path report show every channel.
+
+A phone-only stop leaves an enrollment running, and its call-task steps are held at
+eligibility (`handle_suppressed` / `firm_suppressed`): nothing is sent past them. The
+terminal stops end exactly the enrollments whose e-mail steps eligibility refuses.
+
+**Writers state both.** `RecordSuppressionInput.channel` is required:
+
+| Writer | Scope / channel |
+|---|---|
+| `logCallOutcome` `do_not_call` | the dialled number with `doNotCall.channel` (default `phone`); the firm with the same channel when `doNotCall.scope = 'firm'`. The 1.0.29 checkbox `doNotCallCoversAllContact` (no `doNotCall`): number `phone`, firm `all` |
+| Apply's outcome | `edits.outcome.doNotCall`, the same rule |
+| an e-mail opt-out (`mail/effects.ts`, a confirmed reply) | handle `email`; the firm (one candidate, or ticked) `email` |
+| a deletion tombstone | `all` |
+| a merge | the original's channel |
+| a correction or an admin supersession | the original's channel; the trigger refuses another |
+| replay | the journalled channel, absent `all` |
+| `POST /suppressions/record` | `channel`, absent `all` (the installed desktop's "Stop all contact with this firm") |
+
+**The manual review hold follows the channel** (`reviewHoldBlocks`): `email` blocks
+`email_send` only (`enrollment_advance` is read by every sequence channel, so it cannot be
+part of an e-mail-only hold); `phone` blocks `call_task` and `dial_authorization`; `all`
+blocks all four. Replay opens the same set from the record's channel.
+
+**The journal** carries `channel` under the same schema, `fss.suppression.v1`: the field
+is additive, an older parser ignores it and replays the event as `all`, and this parser
+reads a body without it as `all` (any other value is `field_missing`). The deterministic
+id hashes the channel **only when it is not `all`**, so every id written before 0037, and
+every replay of an old object, is unchanged.
+
+**Who 0037 made undialable.** Every stop before 0037 reads `all`, and a person's addresses
+are now dial keys, so an old opt-out on an address now stops calls to that person.
+`fss admin stop-channels report` (one READ ONLY transaction, ids and counts only) lists, per
+workspace, the contacts with such a stop recorded before 0037 was applied, a phone route,
+and no other stop on calls (no `phone`/`all` stop on their numbers or their firm). It is read
+once after the release that applies 0037 (contract check CC2b).
+
 ## Who may undo what
 
 | Source | Salesperson correction | Admin supersession |
@@ -121,7 +194,8 @@ but a sequence — the terminal stops happened, and the supersession lifts the
 suppression from there on. Two admins racing produce one supersession, refused by
 migration 0001's partial unique index.
 
-A supersession may not change the scope or the canonical key. A CHECK cannot read
+A supersession may not change the scope, the canonical key or (since 0037) the channel:
+a narrower or wider lift is a supersession followed by a new event. A CHECK cannot read
 another row, so that is an `AFTER INSERT` trigger. It is AFTER rather than BEFORE
 because a BEFORE row trigger runs ahead of the table's own CHECKs and would have
 reported "the scope does not match" for a row that was really breaking
@@ -130,7 +204,11 @@ reported "the scope does not match" for a row that was really breaking
 ## The effective view
 
 One view, authoritative for email and for dialing, one row per `(workspace, scope,
-canonical key)` carrying the earliest event that made the key suppressed. An event is
+canonical key, channel)` carrying the earliest event of that channel (migration 0037; one
+row per key before it). Per channel, so a key with an earlier `phone` event and a later
+`email` one shows both, and an e-mail reader filtering by channel never misses the `email`
+event behind the `phone` one. A key can therefore have up to three rows, and the report's
+per-scope counts count (key, channel) rows. An event is
 effective when nothing directly supersedes it, and a supersession row is never itself
 a suppression — it is the record of one being lifted, which is why
 `supersedes_event_id IS NULL` is the first predicate rather than a filter on the

@@ -91,8 +91,9 @@ export async function adviseDial(
   const keys = await suppressionKeys(context, firm, route, undefined);
   const firmKeys = keys.filter(key => key.scope === 'firm');
   const handleKeys = keys.filter(key => key.scope === 'handle');
-  if ((await firstSuppressed(context, firmKeys)) !== null) add('firm_suppressed');
-  if ((await firstSuppressed(context, handleKeys)) !== null) add('handle_suppressed');
+  // The phone channel, as `authorizeDial` reads it (migration 0037).
+  if ((await firstSuppressed(context, firmKeys, 'phone')) !== null) add('firm_suppressed');
+  if ((await firstSuppressed(context, handleKeys, 'phone')) !== null) add('handle_suppressed');
 
   if (input.routeId !== undefined) {
     if (route === null) add('route_missing');

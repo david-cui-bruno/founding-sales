@@ -4,6 +4,7 @@ import type {
   HoldReasonCode,
   PauseChannel,
   StepChannel,
+  SuppressionReaderChannel,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
@@ -116,6 +117,12 @@ export interface StepEligibility {
 export const CHANNEL_ACTION_KINDS: Readonly<Record<StepChannel, BlockedActionKind>> = Object.freeze({
   email: 'email_send',
   call_task: 'call_task',
+});
+
+/** The suppression channel a step's channel reads (migration 0037). */
+export const SUPPRESSION_READER_CHANNELS: Readonly<Record<StepChannel, SuppressionReaderChannel>> = Object.freeze({
+  email: 'email',
+  call_task: 'phone',
 });
 
 /** The key a channel-scoped pause is stored under for a step's channel (10.1). */
@@ -520,6 +527,11 @@ export function enrollmentSource(): StepEligibilitySource {
  * handle arm covers every email address of this contact, not only the one the step
  * would use: a prospect who asked to stop has asked about themselves, not about one
  * of their addresses.
+ *
+ * The channel is the step's (migration 0037): an e-mail step is refused by an `email` or
+ * `all` stop, a call-task step by a `phone` or `all` stop. The key set is the same union
+ * for both, so a stop on a person's number covers their addresses when it is `all`, and
+ * a stop on an address covers their numbers when it is `all`.
  */
 export function suppressionSource(): StepEligibilitySource {
   return {
@@ -529,6 +541,7 @@ export function suppressionSource(): StepEligibilitySource {
         `SELECT e.scope
            FROM effective_suppressions e
           WHERE e.workspace_id = $1
+            AND e.channel IN ($4::text, 'all')
             AND (
               (e.scope = 'firm' AND e.canonical_key = $2::text)
               OR (e.scope = 'handle' AND e.canonical_key IN (
@@ -540,7 +553,7 @@ export function suppressionSource(): StepEligibilitySource {
                   ))
             )
           LIMIT 1`,
-        [context.scope.workspaceId, input.firmId, input.contactId],
+        [context.scope.workspaceId, input.firmId, input.contactId, SUPPRESSION_READER_CHANNELS[input.channel]],
       );
       const scope = rows[0]?.scope;
       if (scope === undefined) return { ok: true };

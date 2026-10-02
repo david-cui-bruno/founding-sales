@@ -107,7 +107,21 @@ describe('the firm stop', () => {
     fireEvent.click(screen.getByTestId('review-stop'));
     fireEvent.click(screen.getByTestId('review-stop-confirm-button'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    expect(calls).toEqual([{ name: 'suppressions.firmStop', input: { firmId: FIRM_ID } }]);
+    // Migration 0037: "all contact" names its channel.
+    expect(calls).toEqual([{ name: 'suppressions.firmStop', input: { firmId: FIRM_ID, channel: 'all' } }]);
+  });
+
+  it('offers a second firm stop, calls only, with its own confirm (migration 0037)', async () => {
+    const calls = install({ 'suppressions.firmStop': { stopped: true, reason: null } });
+    const { onChanged } = panel([proposalItem(PROPOSALS.stopScope)], { loggedSessions: new Set([SESSION_ID]) });
+    fireEvent.click(screen.getByTestId('review-stop-calls'));
+    expect(screen.getByTestId('review-stop-calls-confirm')).toBeTruthy();
+    expect(screen.queryByTestId('review-stop-confirm')).toBeNull();
+    expect(calls).toEqual([]);
+    fireEvent.click(screen.getByTestId('review-stop-calls-confirm-button'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(calls).toEqual([{ name: 'suppressions.firmStop', input: { firmId: FIRM_ID, channel: 'phone' } }]);
+    expect(screen.getByText('Stopped: nobody at this firm will be called.')).toBeTruthy();
   });
 
   it('with no log yet there is no stop button: the outcome Apply carries it', () => {

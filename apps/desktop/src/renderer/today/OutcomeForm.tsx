@@ -1,6 +1,6 @@
 import { CALL_OUTCOMES, type CallOutcome } from '@fss/contracts';
 import { useEffect, useState, type JSX } from 'react';
-import { useClearDrafts, useDraft } from '../app/drafts.tsx';
+import { useClearUnchangedDrafts, useDraft, useDrafts } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
 import {
   OUTCOME_LABELS,
@@ -8,6 +8,7 @@ import {
   OUTCOME_PROBLEM_SENTENCES,
   SUPPRESSION_WARNINGS,
   callbackNeedsTime,
+  doNotCallChoiceKeyOf,
   logCallCommand,
   outcomeProblem,
   outcomeSuppresses,
@@ -21,6 +22,9 @@ import { Input } from '../ui/input.tsx';
 import { Label } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
+import { StopChoice } from './StopChoice.tsx';
+import { noDefiniteAnswer } from './afterCallModel.ts';
+import { announceKept, logTargetKey, outcomeCommandKey, useTodayKept, type OutcomeCommand } from './keptCommands.ts';
 import {
   FOLLOW_UP_CHOICES,
   FOLLOW_UP_CHOICE_LABELS,
@@ -50,6 +54,9 @@ import { todayForm, type TodayActions } from './useToday.ts';
 export type LogTarget = { readonly kind: 'current' } | { readonly kind: 'session'; readonly callSessionId: string };
 const CURRENT: LogTarget = { kind: 'current' };
 
+/** The fields of the firm's outcome draft that every call shares; the stop choice is per call. */
+const SHARED_FIELDS = ['task', 'outcome', 'note', 'callbackDate', 'callbackTime', 'followUp', 'followUpKind', 'followUpSequence'] as const;
+
 export function OutcomeForm({
   state,
   view,
@@ -76,19 +83,30 @@ export function OutcomeForm({
    * is borrowed from the last call; the server derives the route from the session's ticket.
    */
   readonly target?: LogTarget;
-  /** The form was submitted: the opener decides what that closes. */
+  /**
+   * The outcome was recorded: the opener decides what that closes. Called on a definite
+   * success only, never on a refusal or a lost answer (kept-state rules K5/K6).
+   */
   onSubmitted?(): void;
 }): JSX.Element | null {
   const named = target.kind === 'session';
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
   const prefix = `today:outcome:${firmId}:`;
+  // The call this opening records (rule K1): the stop choice and the command on the wire
+  // belong to it, so a stop picked for one call is never offered as another call's.
+  const targetKey = logTargetKey(target);
+  const stopKey = `${prefix}stopChoice:${targetKey}`;
+  const commandKey = outcomeCommandKey(firmId, targetKey);
+  const kept = useTodayKept();
   const [chosenTask, setChosenTask] = useDraft(`${prefix}task`);
   const [outcome, setOutcome] = useDraft(`${prefix}outcome`);
   const [note, setNote] = useDraft(`${prefix}note`);
   const [callbackDate, setCallbackDate] = useDraft(`${prefix}callbackDate`);
   const [callbackTime, setCallbackTime] = useDraft(`${prefix}callbackTime`);
-  const [coversAll, setCoversAll] = useDraft(`${prefix}coversAll`);
+  // Migration 0037: which of the four stops a "Do not call" records. Empty is the default,
+  // calls to this person.
+  const [stopChoice, setStopChoice] = useDraft(stopKey);
   // Migration 0025: the follow-up agreed on the call. Empty is "none", which is the
   // default, because a permission to write to somebody is not something a form should
   // grant by accident.
@@ -98,7 +116,8 @@ export function OutcomeForm({
   // template version's id, which is what it has always held.
   const [followUpKind, setFollowUpKind] = useDraft(`${prefix}followUpKind`);
   const [followUpSequence, setFollowUpSequence] = useDraft(`${prefix}followUpSequence`);
-  const clear = useClearDrafts();
+  const clearUnchanged = useClearUnchangedDrafts();
+  const draftValues = useDrafts().values;
   // The approved templates this call may promise. The value the select holds is the
   // template version's id, which is what the permission is bound to (P0-2).
   const templates = state.followUpTemplates;
@@ -145,6 +164,17 @@ export function OutcomeForm({
     });
   }, [previewKey, wantsPreview, preview, askedKey, actions, expanded, calledContactId, pick.sequenceVersionId]);
 
+  // This mount is the form for its call: a success of that call's command closes it, whichever
+  // mount sent it.
+  useEffect(() => {
+    if (expanded === null) return;
+    const close = (): void => onSubmitted?.();
+    kept.openForms.set(commandKey, close);
+    return () => {
+      if (kept.openForms.get(commandKey) === close) kept.openForms.delete(commandKey);
+    };
+  }, [kept, commandKey, expanded, onSubmitted]);
+
   if (expanded === null) return null;
 
   const draft: OutcomeDraft = {
@@ -154,7 +184,7 @@ export function OutcomeForm({
     callbackLocalTime: callbackTime,
     callbackTimeZone: state.businessTimeZone ?? '',
     callbackDueAt: '',
-    doNotCallCoversAllContact: coversAll === 'yes',
+    doNotCall: doNotCallChoiceKeyOf(stopChoice),
   };
 
   // The number the last Call button handed to the phone app, when it was this firm's.
@@ -166,6 +196,11 @@ export function OutcomeForm({
   const stopper = outcomeProblem(draft);
   // This card's outcome form waits for its own command and for nothing else (P1-4).
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
+  // Rules K5/K6: an entry here is an outcome sent for this call with no definite answer yet.
+  // Its fields stay as they were sent and locked; Record sends exactly that request again
+  // under its id, so the server answers it from its receipt and never records it twice.
+  const unanswered = kept.outcomes.get(commandKey) ?? null;
+  const locked = busy || unanswered !== null;
   // The agreed sequence's preview on the wire: the form waits for it before it can be
   // recorded, because the preview is what the person agreed to.
   const previewing = actions.busy(todayForm.preview(expanded.firmId));
@@ -262,39 +297,83 @@ export function OutcomeForm({
       className="mt-3 flex flex-col gap-2 border-t border-border pt-3"
       onSubmit={event => {
         event.preventDefault();
-        const built = logCallCommand({
-          // The main process mints the real command id; this one only proves the draft is
-          // complete before the page offers to send it.
-          commandId: 'draft',
-          clientVersion: '0.0.0',
-          firmId: expanded.firmId,
-          draft,
-        });
-        if ('problem' in built) return;
-        actions.recordOutcome({
+        if (!enabled || busy) return;
+        // Rules K5/K6: the request without a definite answer is sent again exactly, under its
+        // id, whatever the fields show; otherwise a new command is built from the fields.
+        let command: OutcomeCommand;
+        if (unanswered !== null) command = unanswered;
+        else {
+          if (followUpStopper !== null) return;
+          const built = logCallCommand({
+            // The command id below is the form's own; this one only proves the draft is
+            // complete before the page offers to send it.
+            commandId: 'draft',
+            clientVersion: '0.0.0',
             firmId: expanded.firmId,
-            contactId,
-            routeId: lastCall?.routeId ?? null,
-            itemId: itemId === '' ? null : itemId,
-            ...(target.kind === 'session' ? { callSessionId: target.callSessionId } : {}),
-            outcome: built.command.outcome,
-            note: built.command.note ?? '',
-            callback:
-              built.command.outcome !== 'callback_requested' || callbackNeedsTime(draft)
-                ? null
-                : {
-                    localDate: draft.callbackLocalDate.trim(),
-                    localTime: draft.callbackLocalTime.trim(),
-                    dueAt: built.command.callback?.dueAt ?? '',
-                    sourceTimeZone: draft.callbackTimeZone,
-                  },
-          doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
-          // Never without a person: the select is hidden in that case, and a draft kept
-          // from a moment when it was not is not a reason to send one.
-          followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
+            draft,
+          });
+          if ('problem' in built) return;
+          command = {
+            id: crypto.randomUUID(),
+            // The draft this command carries: the call's shared fields and this call's stop.
+            drafts: Object.fromEntries(
+              [...SHARED_FIELDS.map(field => `${prefix}${field}`), stopKey].flatMap(key => {
+                const value = draftValues[key];
+                return value === undefined ? [] : [[key, value]];
+              }),
+            ),
+            body: {
+              firmId: expanded.firmId,
+              contactId,
+              routeId: lastCall?.routeId ?? null,
+              itemId: itemId === '' ? null : itemId,
+              ...(target.kind === 'session' ? { callSessionId: target.callSessionId } : {}),
+              outcome: built.command.outcome,
+              note: built.command.note ?? '',
+              callback:
+                built.command.outcome !== 'callback_requested' || callbackNeedsTime(draft)
+                  ? null
+                  : {
+                      localDate: draft.callbackLocalDate.trim(),
+                      localTime: draft.callbackLocalTime.trim(),
+                      dueAt: built.command.callback?.dueAt ?? '',
+                      sourceTimeZone: draft.callbackTimeZone,
+                    },
+              doNotCallCoversAllContact: false,
+              ...(built.command.doNotCall === undefined ? {} : { doNotCall: built.command.doNotCall }),
+              // Never without a person: the select is hidden in that case, and a draft kept
+              // from a moment when it was not is not a reason to send one.
+              followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
+            },
+          };
+          kept.outcomes.set(commandKey, command);
+          announceKept();
+        }
+        const sent = command;
+        const sentKey = commandKey;
+        const settle = (answered: TodayState | null | undefined): void => {
+          if (kept.outcomes.get(sentKey) !== sent) return;
+          const answer = answered?.outcomeAnswer ?? null;
+          // No answer, an answer to another command, or a refusal that is not one (offline, a
+          // timeout, a 5xx): nothing says whether the call was recorded. Everything stays, and
+          // so does the command, for Record again.
+          if (answer === null || answer.commandId !== sent.id || (!answer.recorded && noDefiniteAnswer(answer.reason))) {
+            announceKept();
+            return;
+          }
+          kept.outcomes.delete(sentKey);
+          if (answer.recorded) {
+            // Recorded: the draft it was sent with goes (a field typed in since stays), and the
+            // form for this call closes if its opener closes it. A refusal keeps every field and
+            // the stop choice, for David to correct.
+            clearUnchanged(sent.drafts);
+            kept.openForms.get(sentKey)?.();
+          }
+          announceKept();
+        };
+        void Promise.resolve(actions.recordOutcome({ ...sent.body, commandId: sent.id })).then(settle, () => {
+          settle(null);
         });
-        clear(prefix);
-        onSubmitted?.();
       }}
     >
       <p data-testid="outcome-call" className="text-xs text-muted-foreground">
@@ -311,7 +390,7 @@ export function OutcomeForm({
           Which task
           <Select
             data-testid="outcome-task"
-            disabled={!enabled || busy}
+            disabled={!enabled || locked}
             value={itemId}
             onChange={event => {
               setChosenTask(event.target.value === '' ? 'none' : event.target.value);
@@ -330,7 +409,7 @@ export function OutcomeForm({
           What happened
           <Select
             data-testid="outcome-select"
-            disabled={!enabled || busy}
+            disabled={!enabled || locked}
             value={outcome}
             onChange={event => {
               setOutcome(event.target.value);
@@ -357,7 +436,7 @@ export function OutcomeForm({
         <Select
           data-testid="outcome-follow-up-kind"
           aria-label="What did they agree to hear from us?"
-          disabled={!enabled || busy}
+          disabled={!enabled || locked}
           value={pick.choice}
           onChange={event => {
             setFollowUpKind(event.target.value);
@@ -374,7 +453,7 @@ export function OutcomeForm({
           Which e-mail
           <Select
             data-testid="outcome-follow-up"
-            disabled={!enabled || busy}
+            disabled={!enabled || locked}
             value={followUp}
             onChange={event => {
               setFollowUp(event.target.value);
@@ -398,7 +477,7 @@ export function OutcomeForm({
           Which sequence
           <Select
             data-testid="outcome-follow-up-sequence"
-            disabled={!enabled || busy}
+            disabled={!enabled || locked}
             value={followUpSequence}
             onChange={event => {
               setFollowUpSequence(event.target.value);
@@ -441,7 +520,7 @@ export function OutcomeForm({
               variant="outline"
               size="sm"
               data-testid="outcome-follow-up-retry"
-              disabled={!enabled || busy}
+              disabled={!enabled || locked}
               onClick={() => {
                 setAskedKey(null);
               }}
@@ -459,7 +538,7 @@ export function OutcomeForm({
         <Input
           data-testid="callback-date"
           type="date"
-          disabled={!enabled || busy}
+          disabled={!enabled || locked}
           value={callbackDate}
           onChange={event => {
             setCallbackDate(event.target.value);
@@ -469,7 +548,7 @@ export function OutcomeForm({
         <Input
           data-testid="callback-time"
           type="time"
-          disabled={!enabled || busy}
+          disabled={!enabled || locked}
           value={callbackTime}
           onChange={event => {
             setCallbackTime(event.target.value);
@@ -486,25 +565,22 @@ export function OutcomeForm({
       </fieldset>
 
       {draft.outcome === 'do_not_call' ? (
-        <label data-testid="do-not-call-scope" className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            data-testid="do-not-call-covers-all"
-            disabled={!enabled || busy}
-            checked={coversAll === 'yes'}
-            onChange={event => {
-              setCoversAll(event.target.checked ? 'yes' : '');
+        <div data-testid="do-not-call-scope">
+          <StopChoice
+            testId="do-not-call-choice"
+            value={draft.doNotCall}
+            disabled={!enabled || locked}
+            onChange={next => {
+              setStopChoice(next);
             }}
-            className="size-3.5 accent-[var(--primary)]"
           />
-          <span>They asked not to be contacted at all, not just on this number</span>
-        </label>
+        </div>
       ) : null}
 
       <Textarea
         data-testid="outcome-note"
         placeholder="Note"
-        disabled={!enabled || busy}
+        disabled={!enabled || locked}
         value={note}
         onChange={event => {
           setNote(event.target.value);
@@ -525,15 +601,20 @@ export function OutcomeForm({
       <p data-testid="outcome-problem" className="text-xs text-destructive empty:hidden">
         {stopper === null || draft.outcome === null ? '' : OUTCOME_PROBLEM_SENTENCES[stopper]}
       </p>
+      {unanswered !== null && !busy ? (
+        <p data-testid="outcome-unanswered" role="status" className="text-xs text-destructive">
+          No answer came back, so Callie cannot say whether this call was recorded. Record again sends the same outcome, and it is never recorded twice.
+        </p>
+      ) : null}
 
       <div>
         <Button
           type="submit"
           data-testid="outcome-submit"
-          disabled={!enabled || stopper !== null || followUpStopper !== null || busy}
+          disabled={!enabled || busy || (unanswered === null && (stopper !== null || followUpStopper !== null))}
           {...(busy ? { 'aria-busy': true } : {})}
         >
-          Record
+          {unanswered === null ? 'Record' : 'Record again'}
         </Button>
       </div>
     </form>

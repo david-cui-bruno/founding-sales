@@ -36,7 +36,12 @@ export interface TodayActions {
   expand(firmId: string): void;
   collapse(firmId: string): void;
   snooze(input: OperationInput<'today.snooze'>): void;
-  recordOutcome(input: OperationInput<'today.recordOutcome'>): void;
+  /**
+   * Record a call's outcome. Resolves with the state that answered it, or null when no answer
+   * came (an IPC fault): the form clears its draft only on that state's `outcomeAnswer` saying
+   * `recorded` (kept-state rules K5/K6).
+   */
+  recordOutcome(input: OperationInput<'today.recordOutcome'>): Promise<TodayState | null>;
   /**
    * Ask the server what an agreed sequence would send, and when, for one person at the
    * open firm (send-path v2, slice S3). The answer lands on the state as
@@ -203,7 +208,12 @@ export function useToday(identity: string | null, generation: number, guard: Gen
       recordOutcome: input => {
         // The one form under the expanded card, so its own id is the firm's: `itemId`
         // is optional there — an outcome can be recorded with no task chosen.
-        command(value.command('today.recordOutcome', input), todayForm.outcome(input.firmId));
+        const next = value.command('today.recordOutcome', input);
+        command(next, todayForm.outcome(input.firmId));
+        return next.then(
+          answer => answer,
+          () => null,
+        );
       },
       previewFollowUp: input => {
         command(value.read('today.previewFollowUp', input), todayForm.preview(input.firmId));

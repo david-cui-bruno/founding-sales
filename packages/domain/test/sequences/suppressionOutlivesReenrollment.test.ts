@@ -95,6 +95,7 @@ describe('a stop request outlives the enrollment it stopped', () => {
       firmId: crm.alpha.firmId,
       value: crm.collidingEmail,
       source: 'prospect_opt_out',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(suppressed.ok).toBe(true);
@@ -128,6 +129,7 @@ describe('a stop request outlives the enrollment it stopped', () => {
       scope: 'firm',
       firmId: crm.alpha.firmId,
       source: 'prospect_opt_out',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(suppressed.ok).toBe(true);

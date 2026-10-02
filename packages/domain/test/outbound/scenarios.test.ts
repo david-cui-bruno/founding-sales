@@ -402,6 +402,7 @@ describe('at-most-once sending', () => {
       scope: 'handle',
       value: fence?.recipientAddress ?? '',
       source: 'prospect_opt_out',
+      channel: 'all',
       journal: world.journal,
     });
 

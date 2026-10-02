@@ -7,7 +7,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization } from './finalize.ts';
-import { REVIEW_HOLD_BLOCKS, readSuppressionEvent } from './events.ts';
+import { readSuppressionEvent, reviewHoldBlocks } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
@@ -47,7 +47,8 @@ export type JournalParseResult =
  * The parser is strict and total: both processes write this shape with
  * `journalObjectBody`, so a body that does not carry a field is a corrupt object rather
  * than a default to invent.
- * The only optional fields are the four the writers emit as `null`.
+ * The only optional fields are the four the writers emit as `null`, and `channel`, which
+ * objects written before migration 0037 do not carry and which then reads `all`.
  */
 export function parseSuppressionJournalRecord(body: string): JournalParseResult {
   let parsed: unknown;
@@ -70,6 +71,12 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
   }
   const scope = text('scope');
   if (scope !== 'firm' && scope !== 'handle') return { ok: false, reason: 'field_missing', detail: 'scope' };
+  // Migration 0037's channel: absent (every object written before it) is `all`; anything
+  // other than the three channels is a corrupt object, not a default to invent.
+  const channel = object['channel'] === undefined ? 'all' : object['channel'];
+  if (channel !== 'phone' && channel !== 'email' && channel !== 'all') {
+    return { ok: false, reason: 'field_missing', detail: 'channel' };
+  }
   return {
     ok: true,
     value: {
@@ -84,6 +91,7 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
       supersedesEventId: text('supersedesEventId'),
       supersessionReason: text('supersessionReason'),
       recordedAt: text('recordedAt') ?? '',
+      channel,
     },
   };
 }
@@ -156,8 +164,8 @@ export async function replaySuppressionJournal(
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
-          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10, $11)`,
+          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason, channel)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10, $11, $12)`,
       [
         context.scope.workspaceId,
         record.eventId,
@@ -170,6 +178,8 @@ export async function replaySuppressionJournal(
         record.recordedAt,
         record.supersedesEventId,
         record.supersessionReason,
+        // The journalled channel; a record written before 0037 parses as `all`.
+        record.channel,
       ],
     );
     inserted += 1;
@@ -192,7 +202,8 @@ export async function replaySuppressionJournal(
         scopeKind: 'firm',
         scopeKey: record.canonicalKey,
         reasonCode: 'manual_suppression_review',
-        blockedActionKinds: REVIEW_HOLD_BLOCKS,
+        // The set the original write opened (DESIGN-S3X §2.3a): the event's own channel.
+        blockedActionKinds: reviewHoldBlocks(record.channel),
         sourceEventKind: 'suppression.manual',
         sourceEventId: record.eventId,
         ...(record.actorUserId === null ? {} : { ownerUserId: record.actorUserId }),

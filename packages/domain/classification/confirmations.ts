@@ -288,6 +288,8 @@ export async function confirmReplyDisposition(
       scope: 'handle',
       value: address,
       source: 'prospect_opt_out',
+      // David's P2 (2 October 2026): an e-mail opt-out stops e-mail only.
+      channel: 'email',
       commandId: `reply-confirmation:${input.messageId}:handle`,
       journal: input.journal,
     });
@@ -314,6 +316,8 @@ export async function confirmReplyDisposition(
         scope: 'firm',
         firmId: chosen.firmId,
         source: 'prospect_opt_out',
+        // P2: a firm-wide e-mail opt-out stops e-mail to everyone at the firm.
+        channel: 'email',
         commandId: `reply-confirmation:${input.messageId}:firm`,
         journal: input.journal,
       });

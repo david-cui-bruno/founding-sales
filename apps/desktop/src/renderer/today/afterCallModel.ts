@@ -6,7 +6,7 @@ import {
   type CallProposalEdits,
   type CallProposalKey,
 } from '@fss/contracts';
-import { OUTCOME_LABELS } from '../outcomeForm.ts';
+import { DO_NOT_CALL_CHOICES, OUTCOME_LABELS, isDefaultDoNotCall, type DoNotCallChoiceKey } from '../outcomeForm.ts';
 
 /**
  * What the after-call block shows and sends, as pure functions of the analysis (slice 3a,
@@ -136,7 +136,8 @@ export function settle(ticked: ReadonlySet<CallProposalKey>, proposals: readonly
 
 export interface FieldDrafts {
   readonly outcome?: CallOutcome;
-  readonly coversAll?: boolean;
+  /** What a "Do not call" stops (migration 0037, P1). Absent is calls to this person. */
+  readonly stopChoice?: DoNotCallChoiceKey;
   readonly callbackDate?: string;
   readonly callbackTime?: string;
   readonly templateVersionId?: string;
@@ -154,8 +155,16 @@ export function editsOf(proposals: readonly CallProposal[], ticked: ReadonlySet<
     if (proposal.kind === 'outcome') {
       const effective = chosenOutcome(proposal, drafts);
       const changed = effective !== proposal.params.outcome;
-      const covers = effective === 'do_not_call' && drafts.coversAll === true;
-      if (changed || covers) edits.outcome = { ...(changed ? { outcome: effective } : {}), ...(covers ? { doNotCallCoversAllContact: true } : {}) };
+      // The suggestion stops calls to this person; any other of the four stops is David's
+      // explicit choice and travels as `doNotCall`, the default never does.
+      const stopKey = drafts.stopChoice ?? 'contact_phone';
+      const chooses = effective === 'do_not_call' && !isDefaultDoNotCall(stopKey);
+      if (changed || chooses) {
+        edits.outcome = {
+          ...(changed ? { outcome: effective } : {}),
+          ...(chooses ? { doNotCall: DO_NOT_CALL_CHOICES[stopKey].choice } : {}),
+        };
+      }
     }
     if (proposal.kind === 'callback') {
       const date = drafts.callbackDate ?? proposal.params.localDate;

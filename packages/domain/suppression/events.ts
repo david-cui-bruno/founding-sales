@@ -1,4 +1,4 @@
-import type { SuppressionRefusalCode, SuppressionScope, SuppressionSource } from '@fss/contracts';
+import type { BlockedActionKind, SuppressionChannel, SuppressionRefusalCode, SuppressionScope, SuppressionSource } from '@fss/contracts';
 import { MANUAL_SUPPRESSION_CORRECTION_SECONDS } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
@@ -71,6 +71,8 @@ export interface SuppressionEventRow {
   readonly recordedAt: string;
   readonly supersedesEventId: string | null;
   readonly supersessionReason: string | null;
+  /** Which channel the event stops (migration 0037). */
+  readonly channel: SuppressionChannel;
 }
 
 interface EventDbRow {
@@ -84,11 +86,12 @@ interface EventDbRow {
   readonly recorded_at: Date;
   readonly supersedes_event_id: string | null;
   readonly supersession_reason: string | null;
+  readonly channel: SuppressionChannel;
   readonly [column: string]: unknown;
 }
 
 const EVENT_COLUMNS = `event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id,
-  command_id, recorded_at, supersedes_event_id, supersession_reason`;
+  command_id, recorded_at, supersedes_event_id, supersession_reason, channel`;
 
 function toEvent(row: EventDbRow): SuppressionEventRow {
   return {
@@ -102,6 +105,7 @@ function toEvent(row: EventDbRow): SuppressionEventRow {
     recordedAt: row.recorded_at.toISOString(),
     supersedesEventId: row.supersedes_event_id,
     supersessionReason: row.supersession_reason,
+    channel: row.channel,
   };
 }
 
@@ -117,8 +121,40 @@ export async function readSuppressionEvent(
   return row === undefined ? null : toEvent(row);
 }
 
-/** The action kinds a suppression's review hold blocks. Everything outbound. */
-export const REVIEW_HOLD_BLOCKS = ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance'] as const;
+/**
+ * The action kinds a manual suppression's review hold blocks, by the stop's channel
+ * (DESIGN-S3X §2.3a). The hold must not cross channels during the correction window when
+ * the stop itself does not:
+ *
+ *  * `email` → `email_send` **only**. `enrollment_advance` is checked by every sequence
+ *    channel (`holdSource`, `sequences/eligibility.ts`), so an e-mail-only hold carrying it
+ *    would hold a call-task step the stop leaves open.
+ *  * `phone` → `call_task` and `dial_authorization`.
+ *  * `all` → all four, `enrollment_advance` included: everything outbound, as before 0037.
+ *
+ * `recordSuppression` and the journal replay both ask this with the event's channel, so a
+ * replay opens exactly the hold the original write opened.
+ */
+export function reviewHoldBlocks(channel: SuppressionChannel): readonly BlockedActionKind[] {
+  switch (channel) {
+    case 'email':
+      return ['email_send'];
+    case 'phone':
+      return ['call_task', 'dial_authorization'];
+    case 'all':
+      return ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance'];
+  }
+}
+
+/**
+ * Whether a channel can sit on a key (`suppression_events_channel_fits_key`, 0037): a
+ * firm stop takes any channel; a handle stop on a number cannot be `email`, and one on an
+ * address cannot be `phone`, because no reader would ever read it.
+ */
+export function channelFitsKey(scope: SuppressionScope, canonicalKey: string, channel: SuppressionChannel): boolean {
+  if (scope === 'firm' || channel === 'all') return true;
+  return (channel === 'email') === canonicalKey.includes('@');
+}
 
 /**
  * The sources that are terminal the instant they commit (10.2).
@@ -144,6 +180,12 @@ export interface RecordSuppressionInput {
   /** Required for a handle suppression: the raw number or address. */
   readonly value?: string | undefined;
   readonly source: Exclude<SuppressionSource, 'mistaken_entry_correction' | 'admin_supersession'>;
+  /**
+   * Which channel the stop stops (migration 0037, David's P1 and P2). Required, so every
+   * writer states it: an e-mail opt-out is `email`, a "Do not call" is `phone` unless the
+   * person said "don't contact me again", a deletion tombstone is `all`.
+   */
+  readonly channel: SuppressionChannel;
   readonly commandId?: string | undefined;
   readonly journal: SuppressionJournal;
   /**
@@ -159,6 +201,7 @@ export interface RecordSuppressionInput {
 export interface RecordedSuppression {
   readonly eventId: string;
   readonly scope: SuppressionScope;
+  readonly channel: SuppressionChannel;
   readonly canonicalKey: string;
   readonly canonicalizerVersion: string;
   readonly recordedAt: string;
@@ -218,6 +261,9 @@ export async function recordSuppression(
     }
   }
 
+  // Refused here rather than by the CHECK, before anything is journalled.
+  if (!channelFitsKey(input.scope, canonicalKey, input.channel)) return refuse('invalid_input');
+
   const now = await databaseNow(context);
   const eventId = deterministicEventId({
     workspaceId: context.scope.workspaceId,
@@ -225,6 +271,7 @@ export async function recordSuppression(
     canonicalKey,
     source: input.source,
     commandId: input.commandId,
+    channel: input.channel,
   });
 
   const existing = await readSuppressionEvent(context, eventId);
@@ -234,6 +281,7 @@ export async function recordSuppression(
     return accept({
       eventId: existing.eventId,
       scope: existing.scope,
+      channel: existing.channel,
       canonicalKey: existing.canonicalKey,
       canonicalizerVersion: existing.canonicalizerVersion,
       recordedAt: existing.recordedAt,
@@ -257,13 +305,14 @@ export async function recordSuppression(
     supersedesEventId: null,
     supersessionReason: null,
     recordedAt: now,
+    channel: input.channel,
   });
 
   await context.db.query(
     `INSERT INTO suppression_events
        (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
-        actor_user_id, command_id, recorded_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)`,
+        actor_user_id, command_id, recorded_at, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10)`,
     [
       context.scope.workspaceId,
       eventId,
@@ -274,6 +323,7 @@ export async function recordSuppression(
       actorUserId,
       input.commandId ?? null,
       now,
+      input.channel,
     ],
   );
 
@@ -296,7 +346,7 @@ export async function recordSuppression(
           scopeKind: 'firm',
           scopeKey: input.firmId,
           reasonCode: 'manual_suppression_review',
-          blockedActionKinds: REVIEW_HOLD_BLOCKS,
+          blockedActionKinds: reviewHoldBlocks(input.channel),
           sourceEventKind: 'suppression.manual',
           sourceEventId: eventId,
           ...(actorUserId === null ? {} : { ownerUserId: actorUserId }),
@@ -320,12 +370,13 @@ export async function recordSuppression(
     action: 'suppression.recorded',
     subjectKind: 'suppression_event',
     subjectId: eventId,
-    detail: { scope: input.scope, source: input.source, terminal, holds: reviewHoldIds.length },
+    detail: { scope: input.scope, channel: input.channel, source: input.source, terminal, holds: reviewHoldIds.length },
   });
 
   return accept({
     eventId,
     scope: input.scope,
+    channel: input.channel,
     canonicalKey,
     canonicalizerVersion: CANONICALIZER_VERSION,
     recordedAt: now,
@@ -382,6 +433,7 @@ export async function recordCorrection(
     source: 'mistaken_entry_correction',
     commandId: input.commandId,
     supersedesEventId: original.eventId,
+    channel: original.channel,
   });
 
   // The claim, before anything is written. The finalizer races for the same row.
@@ -405,14 +457,15 @@ export async function recordCorrection(
     supersedesEventId: original.eventId,
     supersessionReason: 'mistaken_entry',
     recordedAt: now,
+    channel: original.channel,
   });
 
   try {
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
-          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason)
-       VALUES ($1, $2, $3, $4, $5, 'mistaken_entry_correction', $6, $7, $8::timestamptz, $9, 'mistaken_entry')`,
+          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason, channel)
+       VALUES ($1, $2, $3, $4, $5, 'mistaken_entry_correction', $6, $7, $8::timestamptz, $9, 'mistaken_entry', $10)`,
       [
         context.scope.workspaceId,
         correctionEventId,
@@ -423,6 +476,7 @@ export async function recordCorrection(
         input.commandId ?? null,
         now,
         original.eventId,
+        original.channel,
       ],
     );
   } catch (error) {
@@ -494,6 +548,7 @@ export async function recordAdminSupersession(
     source: 'admin_supersession',
     commandId: input.commandId,
     supersedesEventId: original.eventId,
+    channel: original.channel,
   });
 
   await input.journal.append({
@@ -508,14 +563,15 @@ export async function recordAdminSupersession(
     supersedesEventId: original.eventId,
     supersessionReason: input.reason,
     recordedAt: now,
+    channel: original.channel,
   });
 
   try {
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
-          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason)
-       VALUES ($1, $2, $3, $4, $5, 'admin_supersession', $6, $7, $8::timestamptz, $9, $10)`,
+          actor_user_id, command_id, recorded_at, supersedes_event_id, supersession_reason, channel)
+       VALUES ($1, $2, $3, $4, $5, 'admin_supersession', $6, $7, $8::timestamptz, $9, $10, $11)`,
       [
         context.scope.workspaceId,
         supersessionEventId,
@@ -527,6 +583,7 @@ export async function recordAdminSupersession(
         now,
         original.eventId,
         input.reason,
+        original.channel,
       ],
     );
   } catch (error) {

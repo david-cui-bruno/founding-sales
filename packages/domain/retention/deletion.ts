@@ -749,6 +749,8 @@ export async function commitDeletion(
       scope: 'handle',
       value: handle,
       source: 'deletion_tombstone',
+      // A deleted person is never contacted again, on any channel.
+      channel: 'all',
       commandId: `${input.commandId}:${handle}`,
       journal: input.journal,
     });
@@ -760,6 +762,7 @@ export async function commitDeletion(
       scope: 'handle',
       fallbackKey: key,
       source: 'deletion_tombstone',
+      channel: 'all',
       commandId: `${input.commandId}:${key}`,
       journal: input.journal,
     });
@@ -771,6 +774,7 @@ export async function commitDeletion(
       scope: 'firm',
       firmId: scope.firmId,
       source: 'deletion_tombstone',
+      channel: 'all',
       commandId: input.commandId,
       journal: input.journal,
     });

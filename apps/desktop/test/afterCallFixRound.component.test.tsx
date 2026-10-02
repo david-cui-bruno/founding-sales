@@ -202,7 +202,7 @@ describe('finding 6: a late Apply never reopens the firm it came from', () => {
 const OLD_SESSION = '99999999-9999-4999-8999-9999999999cc';
 
 /** Today shown or left, over a shell that keeps its memory and state, as the real shell does. */
-function Shell({ show, record, newerCall = false }: { readonly show: boolean; readonly record: (input: unknown) => void; readonly newerCall?: boolean }): JSX.Element {
+function Shell({ show, record, newerCall = false }: { readonly show: boolean; readonly record: (input: unknown) => unknown; readonly newerCall?: boolean }): JSX.Element {
   const [state, setState] = useState<TodayState>(() => (newerCall ? { ...initial(), lastCall: { firmId: A, routeId: ROUTE_ID, contactId: null, e164: '+12145550142' } } : initial()));
   const memory = useTodayMemory();
   const actions = {
@@ -262,13 +262,24 @@ describe('R1 (S3CF-1, S3CF-2): the log target is set by every opening', () => {
   it('an older item’s Log sends its session and no route, and closes with the save', async () => {
     const recorded: Record<string, unknown>[] = [];
     // A newer call to another number at this firm is the last call.
-    mount(() => <Shell show newerCall record={input => recorded.push(input as Record<string, unknown>)} />);
+    mount(() => (
+      <Shell
+        show
+        newerCall
+        record={input => {
+          const sent = input as Record<string, unknown>;
+          recorded.push(sent);
+          // The save's answer: recorded, for this command (rules K5/K6 close on nothing less).
+          return Promise.resolve({ ...initial(), outcomeAnswer: { commandId: sent['commandId'], recorded: true, reason: null } });
+        }}
+      />
+    ));
     fireEvent.click(await screen.findByTestId('review-log'));
     expect(screen.getByTestId('outcome-call').textContent).not.toContain('2145550142');
     fireEvent.change(screen.getByTestId('outcome-select'), { target: { value: 'no_answer' } });
     fireEvent.click(screen.getByTestId('outcome-submit'));
     expect(recorded[0]).toMatchObject({ callSessionId: OLD_SESSION, routeId: null, contactId: null });
-    expect(screen.queryByTestId('outcome-panel')).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('outcome-panel')).toBeNull());
   });
 });
 

@@ -221,6 +221,7 @@ describe('the dispatch claim', () => {
       firmId: step.firm_id,
       value: alternate,
       source: 'prospect_opt_out',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(suppressed.ok).toBe(true);

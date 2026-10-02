@@ -203,6 +203,37 @@ Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessio
   calling" on the card) releases it, and its release instant starts the count again; the
   Mac then reads the card's dial advice again.
 
+### "Do not call": what it stops (migration 0037)
+
+David, 2 October 2026 (P1): "Do not call" stops phone calls only; an explicit "don't
+contact me again" stops both channels; keeping e-mail open grants no permission (a
+`do_not_call` log is not a reached outcome, so it carries no agreement). The outcome form
+and the after-call suggestions offer one four-way choice, sent as
+`doNotCall: { scope, channel }` on `POST /calls/log` and in Apply's `edits.outcome`:
+
+| Choice | `doNotCall` | Stops written |
+|---|---|---|
+| Calls to this person (default; absent means this) | `{ contact, phone }` | the dialled number, `phone` |
+| All contact with this person | `{ contact, all }` | the dialled number, `all` |
+| Calls to anyone at this firm | `{ firm, phone }` | the number, `phone`; the firm, `phone` |
+| All contact with this firm | `{ firm, all }` | the number, `all`; the firm, `all` |
+
+A stop on a number covers the person who holds it: dialling refuses that number and their
+other numbers, and an `all` stop also refuses e-mail to their addresses. The installed
+1.0.29 sends `doNotCallCoversAllContact` instead, which keeps its label's meaning: the
+number for calls and the firm for everything. Needs review's firm stop offers "Stop calls to
+this firm" (firm, `phone`) beside "Stop all contact with this firm" (firm, `all`). The firm
+page shows "Email stopped", "Calls stopped" or "All contact stopped" on the firm and each
+contact (`POST /crm/firm-page` with `include: ['stops']`). `docs/greenfield/suppression.md`
+has the whole table of which stop blocks which action.
+
+The choice is kept per call (the session, or the call just placed), never per firm alone. The
+outcome form keeps it, and every other field, until the server says the call was recorded: a
+refusal leaves the form as it was, and a lost answer locks it and offers "Record again", which
+resends the same request under the form's own command id so the server answers it from its
+receipt. A Needs review stop's answer is kept by item and waits beside it after David moves on;
+a late success closes the confirm that sent it only if he has not touched the editors since.
+
 ### Recordings
 
 `<Dial record="record-from-answer-dual">` records every call. **`GET /calls/history?firmId=`**
@@ -584,8 +615,8 @@ selected callback it did not create or whose fields do not name its `dueAt` — 
 the callback's fields checked before anything is logged),
 rolls the whole batch back and the 409 names the key (`keyReasons`, key → code); nothing is
 applied or measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
-none. `outcome` (with `callback`, `follow_up` and the "covers all contact"
-choice) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
+none. `outcome` (with `callback`, `follow_up` and the stop choice — `doNotCall`, or the
+1.0.29 "covers all contact" checkbox) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
 `createCallback`; `follow_up` on a logged call is `confirmCapturedFollowUp` (seven days, not
 `recordCallFollowUp`'s sixty minutes); `buying_signal` is `applyStageEvidence('call.interested')`
 then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` when

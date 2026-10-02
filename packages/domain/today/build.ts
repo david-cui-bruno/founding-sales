@@ -241,11 +241,14 @@ export function newFirmSource(): TodaySource {
                  AND closed.firm_id = f.id
                  AND closed.status <> 'open'
             )
+            -- A call list (migration 0037): a firm that asked not to be called is not
+            -- listed; one that only stopped e-mail still is.
             AND NOT EXISTS (
               SELECT 1 FROM effective_suppressions e
                WHERE e.workspace_id = f.workspace_id
                  AND e.scope = 'firm'
                  AND e.canonical_key = f.id::text
+                 AND e.channel IN ('phone', 'all')
             )
             AND ($2::uuid IS NULL OR f.id = $2::uuid)
           ORDER BY f.created_at, f.id`,
