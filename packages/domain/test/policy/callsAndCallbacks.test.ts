@@ -906,6 +906,7 @@ describe('S10: consuming a ticket re-runs the dial decision', () => {
       value: policy.alpha.e164,
       firmId: crm.alpha.firmId,
       source: 'prospect_do_not_call',
+      channel: 'all',
       journal: recordingSuppressionJournal(),
     });
     expect(suppressed.ok).toBe(true);

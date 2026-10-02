@@ -135,6 +135,7 @@ describe('fss admin suppression-journal replay', () => {
       supersedesEventId: null,
       supersessionReason: null,
       recordedAt: '2026-09-02T12:30:00.000Z',
+      channel: 'all' as const,
     });
     expect(parseSuppressionJournalRecord(body)).toMatchObject({ ok: true });
     expect(parseSuppressionJournalRecord('{"schema":"something.else"}')).toMatchObject({
@@ -169,6 +170,7 @@ describe('fss admin suppression-journal replay', () => {
         supersedesEventId: null,
         supersessionReason: null,
         recordedAt: '2026-09-02T12:00:00.000Z',
+        channel: 'all' as const,
       },
       {
         eventId: 'sup_replayed_0000000000000000000000000000000000000000000000000000000000',
@@ -182,6 +184,7 @@ describe('fss admin suppression-journal replay', () => {
         supersedesEventId: null,
         supersessionReason: null,
         recordedAt: '2026-09-02T12:31:00.000Z',
+        channel: 'all' as const,
       },
     ];
 
@@ -225,6 +228,7 @@ describe('fss admin suppression-journal replay', () => {
           supersedesEventId: null,
           supersessionReason: null,
           recordedAt: '2026-09-02T12:32:00.000Z',
+          channel: 'all' as const,
         },
       ],
     });

@@ -1,5 +1,7 @@
 import {
   CALL_OCCURRED_AT_TOLERANCE_SECONDS,
+  DEFAULT_DO_NOT_CALL_CHOICE,
+  type DoNotCallChoice,
   type CallFollowUp,
   type CallOutcome,
   type CallStepApplication,
@@ -110,7 +112,18 @@ export interface LogCallOutcomeInput {
         readonly sourceTimeZone: string;
       }
     | undefined;
-  /** `do_not_call` suppresses the firm only when the request covered all Callie contact. */
+  /**
+   * What a `do_not_call` stops (migration 0037, David's P1 of 2 October 2026): calls to
+   * this person unless the person said "don't contact me again" (`channel: 'all'`), and
+   * this person unless the firm is named (`scope: 'firm'`). Absent is
+   * `{ scope: 'contact', channel: 'phone' }`. Wins over `doNotCallCoversAllContact`.
+   */
+  readonly doNotCall?: DoNotCallChoice | undefined;
+  /**
+   * The installed 1.0.29 desktop's "covers all contact" checkbox, kept for that client:
+   * when `doNotCall` is absent and this is true, the number is stopped for calls and the
+   * firm for everything (`firm / all`), which is what that checkbox's label says.
+   */
   readonly doNotCallCoversAllContact?: boolean | undefined;
   /**
    * The follow-up the salesperson agreed with the person on this call (migration 0025).
@@ -205,6 +218,27 @@ export const INBOUND_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>([
 /** Outcomes that fulfil a callback: somebody was reached, or a message was left. */
 function fulfilsCallback(outcome: CallOutcome, engaged: boolean): boolean {
   return engaged || outcome === 'voicemail_left';
+}
+
+/**
+ * The stops a `do_not_call` writes (DESIGN-S3X §2.4): the dialled number's channel, and
+ * the firm's channel or null for none.
+ *
+ *  * `doNotCall` given: the number with its channel; the firm with the same channel when
+ *    the scope is `firm`.
+ *  * absent, with the 1.0.29 `doNotCallCoversAllContact`: the number for calls and the
+ *    firm for everything — the checkbox's own words, "covers all contact".
+ *  * absent: the number for calls only (P1's default).
+ */
+export function doNotCallStops(input: {
+  readonly doNotCall?: DoNotCallChoice | undefined;
+  readonly doNotCallCoversAllContact?: boolean | undefined;
+}): { readonly handle: 'phone' | 'all'; readonly firm: 'phone' | 'all' | null } {
+  if (input.doNotCall !== undefined) {
+    return { handle: input.doNotCall.channel, firm: input.doNotCall.scope === 'firm' ? input.doNotCall.channel : null };
+  }
+  if (input.doNotCallCoversAllContact === true) return { handle: 'phone', firm: 'all' };
+  return { handle: DEFAULT_DO_NOT_CALL_CHOICE.channel, firm: null };
 }
 
 export async function logCallOutcome(
@@ -525,26 +559,30 @@ export async function logCallOutcome(
 
     const suppressionEventIds: string[] = [];
     if (effects.suppressesNumber && input.journal !== undefined) {
-      // "Suppress the number immediately" — the number that was dialed.
+      const stops = doNotCallStops(input);
+      // "Suppress the number immediately" — the number that was dialed, with the channel
+      // the salesperson chose (P1: calls only unless "don't contact me again").
       if (route !== null) {
         const handle = await recordSuppression(context, {
           scope: 'handle',
           value: route.e164,
           firmId: input.firmId,
           source: 'prospect_do_not_call',
+          channel: stops.handle,
           ...(input.commandId === undefined ? {} : { commandId: `${input.commandId}:handle` }),
           journal: input.journal,
         });
         if (!handle.ok) return refusePolicy(asPolicyRefusal(handle.reason));
         suppressionEventIds.push(handle.value.eventId);
       }
-      // "Suppress the firm only when the request covers all Callie contact." The
-      // salesperson says which; nothing infers it from the wording of a call.
-      if (input.doNotCallCoversAllContact === true) {
+      // "Suppress the firm only when the request covers the firm." The salesperson says
+      // which; nothing infers it from the wording of a call.
+      if (stops.firm !== null) {
         const firmWide = await recordSuppression(context, {
           scope: 'firm',
           firmId: input.firmId,
           source: 'prospect_do_not_call',
+          channel: stops.firm,
           ...(input.commandId === undefined ? {} : { commandId: `${input.commandId}:firm` }),
           journal: input.journal,
         });

@@ -134,11 +134,16 @@ export async function decideSend(
 
   // ---------------------------------------------------------------- never send
   // 9.2, and the strongest refusal there is. A suppressed handle or firm is not a
-  // scheduling problem.
-  const suppressed = await firstSuppressed(context, [
-    { scope: 'firm', canonicalKey: fence.firmId },
-    { scope: 'handle', canonicalKey: fence.recipientAddress },
-  ]);
+  // scheduling problem. An e-mail reader (migration 0037): an `email` or `all` stop
+  // refuses, a phone-only stop does not.
+  const suppressed = await firstSuppressed(
+    context,
+    [
+      { scope: 'firm', canonicalKey: fence.firmId },
+      { scope: 'handle', canonicalKey: fence.recipientAddress },
+    ],
+    'email',
+  );
   if (suppressed !== null) {
     return refuseSend(suppressed.scope === 'firm' ? 'firm_suppressed' : 'handle_suppressed');
   }

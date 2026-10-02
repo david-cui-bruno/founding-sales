@@ -1365,6 +1365,9 @@ function handleSuppressionPart(
             scope: 'handle',
             value: SUPPRESSED_HANDLE,
             source: 'prospect_opt_out',
+            // Migration 0037 makes the channel required. `all` is what the base checkout's
+            // fixture writes too (the column default), so the row is the same at both ends.
+            channel: 'all',
             commandId: 'fixture-handle-opt-out',
             journal: recordingSuppressionJournal(),
           }),

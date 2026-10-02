@@ -130,6 +130,7 @@ describe('C4 (B-3): the apply against every competitor, in both orders and stopp
           scope: 'handle',
           value: `dana-${call.sessionId.slice(0, 8)}@example.test`,
           source: 'prospect_opt_out',
+          channel: 'all',
           commandId: `mail-message:${call.sessionId}`,
           journal: recordingSuppressionJournal(),
         });
@@ -137,6 +138,7 @@ describe('C4 (B-3): the apply against every competitor, in both orders and stopp
           scope: 'firm',
           firmId: call.firm.firmId,
           source: 'prospect_opt_out',
+          channel: 'all',
           commandId: `mail-message:${call.sessionId}:firm`,
           journal: recordingSuppressionJournal(),
         });

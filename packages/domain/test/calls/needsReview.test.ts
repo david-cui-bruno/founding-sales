@@ -115,6 +115,7 @@ describe('B-13: Needs review', () => {
         scope: 'firm',
         firmId: call.firm.firmId,
         source: 'prospect_do_not_call',
+        channel: 'all',
         commandId: `review-stop-${call.sessionId}`,
         journal: recordingSuppressionJournal(),
       }),

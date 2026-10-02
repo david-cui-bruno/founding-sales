@@ -12,7 +12,7 @@ import { listFencesToReconcile, listMailboxesToReconcile } from '@fss/domain/out
 import { claimJobs, completeJob, enqueueJob, writeProgress } from '@fss/domain/jobs/jobStore.ts';
 import { recordFunnelFact } from '@fss/domain/funnel/facts.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
-import { isSuppressed, listEffectiveSuppressions } from '@fss/domain/suppression/effective.ts';
+import { firstSuppressed, isSuppressed, listEffectiveSuppressions } from '@fss/domain/suppression/effective.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { readDashboard } from '@fss/domain/dashboard/aggregate.ts';
 import { liveDashboardSources } from '@fss/domain/dashboard/sendingSource.ts';
@@ -809,6 +809,16 @@ export async function runWorkflows(
         if (!effective.canonicalizerVersionSupported) {
           throw new Error(`the stored canonicaliser version ${effective.canonicalizerVersion} is not one this build understands`);
         }
+        // Migration 0037 (DESIGN-S3X §2.3, P1-11): a stop recorded before the channel column
+        // existed reads `all`, and so stops e-mail and dialling alike.
+        if (effective.channel !== 'all') {
+          throw new Error(`the opted-out handle reads channel ${effective.channel}; a stop written before 0037 must read all`);
+        }
+        for (const channel of ['email', 'phone'] as const) {
+          if ((await firstSuppressed(admin, [{ scope: 'handle', canonicalKey: suppressed }], channel)) === null) {
+            throw new Error(`the opted-out handle does not stop the ${channel} channel, and a pre-0037 stop stops every channel`);
+          }
+        }
         // The set read as well as the point read: they are different statements over
         // the same view and a migration can break one without the other.
         const listed = await listEffectiveSuppressions(admin, { scope: 'handle', limit: 200 });
@@ -824,7 +834,7 @@ export async function runWorkflows(
         if (wrongly !== null) {
           throw new Error(`${clean} reads as suppressed by ${wrongly.source}, and nothing ever suppressed it`);
         }
-        return `${suppressed} is suppressed (${effective.source}, canonicaliser ${effective.canonicalizerVersion}) among ${String(listed.length)} effective handle suppression(s); ${clean} is not`;
+        return `${suppressed} is suppressed (${effective.source}, channel ${effective.channel}, canonicaliser ${effective.canonicalizerVersion}) among ${String(listed.length)} effective handle suppression(s); ${clean} is not`;
       },
     },
   ];

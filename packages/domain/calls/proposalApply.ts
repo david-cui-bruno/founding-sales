@@ -17,7 +17,7 @@ import { loadFirmForUpdate } from '../crm/firms.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { applyStageEvidence } from '../crm/stageEvidence.ts';
 import { createCallback, resolveConfirmedInstant, scheduleCallbackForCall } from '../dial/callbacks.ts';
-import { confirmCapturedFollowUp, logCallOutcome, REACHED_OUTCOMES, withinCapturedFollowUpWindow } from '../dial/calls.ts';
+import { confirmCapturedFollowUp, doNotCallStops, logCallOutcome, REACHED_OUTCOMES, withinCapturedFollowUpWindow } from '../dial/calls.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { PolicyRefusalCode } from '../policy/types.ts';
@@ -408,6 +408,9 @@ async function mapKeys(
       occurredAt: m.session.started.toISOString(),
       ...(edits?.note === undefined ? {} : { note: edits.note }),
       ...(selected.has('callback') && m.callbackParams !== undefined ? { callback: m.callbackParams } : {}),
+      // David's stop choice for a `do_not_call` (P1): the four-way `doNotCall`, or the
+      // 1.0.29 checkbox, which keeps its meaning (`doNotCallStops`, `dial/calls.ts`).
+      ...(edits?.doNotCall === undefined ? {} : { doNotCall: edits.doNotCall }),
       ...(edits?.doNotCallCoversAllContact === undefined ? {} : { doNotCallCoversAllContact: edits.doNotCallCoversAllContact }),
       ...(selected.has('follow_up') && m.templateVersionId !== undefined
         ? { followUpPermission: { scope: 'single_email' as const, templateVersionId: m.templateVersionId } }
@@ -425,8 +428,12 @@ async function mapKeys(
     if (selected.has('follow_up') && logged.value.followUpPermissionId === null) throw notGranted();
     callLogId = logged.value.callLogId;
     followUps.push(...logged.value.followUps);
+    const chosenStops = doNotCallStops(edits ?? {});
+    const proposedStops = doNotCallStops(proposal.params);
     const outcomeEdited =
-      m.appliedOutcome !== proposal.params.outcome || (edits?.doNotCallCoversAllContact ?? false) !== (proposal.params.doNotCallCoversAllContact ?? false);
+      m.appliedOutcome !== proposal.params.outcome ||
+      chosenStops.handle !== proposedStops.handle ||
+      chosenStops.firm !== proposedStops.firm;
     push(proposal, 'applied', callLogId, outcomeEdited);
     if (selected.has('callback')) {
       push(proposalOf('callback'), 'applied', logged.value.callbackId, callbackEdited(proposalOf('callback'), input.edits));

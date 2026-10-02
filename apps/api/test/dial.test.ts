@@ -623,6 +623,7 @@ describe('the suppression journal client', () => {
       supersedesEventId: null,
       supersessionReason: null,
       recordedAt: '2026-09-16T14:00:00.000Z',
+      channel: 'all' as const,
     });
     const request = requests[0];
     expect(request?.key).toBe('suppressions/11111111-1111-4111-8111-111111111111/sup_abc.json');
@@ -651,6 +652,7 @@ describe('the suppression journal client', () => {
       supersedesEventId: null,
       supersessionReason: null,
       recordedAt: '2026-09-16T14:00:00.000Z',
+      channel: 'all' as const,
     })).rejects.toMatchObject({ name: 'SuppressionJournalError', code: 'JOURNAL_UNAVAILABLE' });
   });
 
@@ -669,6 +671,7 @@ describe('the suppression journal client', () => {
       supersedesEventId: null,
       supersessionReason: null,
       recordedAt: '2026-09-16T14:00:00.000Z',
+      channel: 'all' as const,
     })).resolves.toBeUndefined();
     expect(() => requireDurableJournal(resolved)).toThrow(JournalConfigurationError);
 
@@ -694,6 +697,7 @@ describe('the suppression journal client', () => {
         supersedesEventId: null,
         supersessionReason: null,
         recordedAt: '2026-09-16T14:00:00.000Z',
+        channel: 'all' as const,
       }),
     ) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual([

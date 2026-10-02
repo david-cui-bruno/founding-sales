@@ -77,6 +77,9 @@ export async function routeSuppressions(request: ApiRequest, options: RoutingOpt
             ...(body.firmId === undefined ? {} : { firmId: body.firmId }),
             ...(body.value === undefined ? {} : { value: body.value }),
             source: body.source,
+            // Absent is `all` (migration 0037): the installed desktop's "Stop all contact
+            // with this firm" sends no channel and means exactly that.
+            channel: body.channel ?? 'all',
             commandId: body.commandId,
             journal: deps.journal,
           }),

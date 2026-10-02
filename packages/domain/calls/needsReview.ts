@@ -214,8 +214,11 @@ async function reviewKindOf(
       return (await routeRetiredSince()) ? null : 'corrected_number';
     case 'stop_scope': {
       const { rows } = await context.db.query(
+        // Done when a firm stop that stops calls exists since the call (migration 0037):
+        // either of the two firm choices, calls or all contact.
         `SELECT 1 FROM effective_suppressions
-          WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = lower($2::text) AND recorded_at >= $3`,
+          WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = lower($2::text) AND recorded_at >= $3
+            AND channel IN ('phone', 'all')`,
         [workspace, session.firm_id, facts.completed_at],
       );
       return rows.length > 0 ? null : 'stop_scope';

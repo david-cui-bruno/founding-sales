@@ -80,6 +80,7 @@ describe('the suppression finalizer as a job', () => {
       value: '+14015550210',
       firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-enqueue',
       journal: recordingSuppressionJournal(),
     });
@@ -111,6 +112,7 @@ describe('the suppression finalizer as a job', () => {
       value: '+14015550211',
       firmId,
       source: 'salesperson_manual',
+      channel: 'all',
       commandId: 'cmd-stolen-lease',
       journal: recordingSuppressionJournal(),
     });

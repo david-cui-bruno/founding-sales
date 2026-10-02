@@ -408,6 +408,7 @@ describe('the fss admin commands a restore runs', () => {
       supersedesEventId: null,
       supersessionReason: null,
       recordedAt: '2026-09-20T00:00:00.000Z',
+      channel: 'all' as const,
     };
     const invocation: AdminInvocation = {
       session,

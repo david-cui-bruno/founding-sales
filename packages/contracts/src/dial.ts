@@ -230,6 +230,36 @@ const SUPPRESSION_SCOPES = ['firm', 'handle'] as const;
 const suppressionScopeSchema = z.enum(SUPPRESSION_SCOPES);
 export type SuppressionScope = z.infer<typeof suppressionScopeSchema>;
 
+/**
+ * Which channel a stop stops (migration 0037, David's P1 and P2 of 2 October 2026).
+ * Scope and channel are independent. Every stop recorded before 0037 is `all`.
+ *
+ *  * An e-mail reader (the send gate, an e-mail step) refuses on `email` and `all`.
+ *  * A phone reader (dialling, the dial advice, a call-task step) refuses on `phone` and `all`.
+ *
+ * A handle stop on a number cannot be `email`, and one on an address cannot be `phone`
+ * (`suppression_events_channel_fits_key`).
+ */
+export const SUPPRESSION_CHANNELS = ['phone', 'email', 'all'] as const;
+export const suppressionChannelSchema = z.enum(SUPPRESSION_CHANNELS);
+export type SuppressionChannel = z.infer<typeof suppressionChannelSchema>;
+
+/** The channel a reader asks about: never `all`, which is a stop's value, not a reader's. */
+export type SuppressionReaderChannel = Exclude<SuppressionChannel, 'all'>;
+
+/**
+ * What a "Do not call" outcome stops (P1). `contact` writes a stop on the dialled number,
+ * which covers the person holding it; `firm` adds a firm stop with the same channel.
+ * `phone` stops calls only; `all` is the explicit "don't contact me again". The default,
+ * when a client sends nothing, is `{ scope: 'contact', channel: 'phone' }`.
+ */
+export const doNotCallChoiceSchema = z.strictObject({
+  scope: z.enum(['contact', 'firm']),
+  channel: z.enum(['phone', 'all']),
+});
+export type DoNotCallChoice = z.infer<typeof doNotCallChoiceSchema>;
+export const DEFAULT_DO_NOT_CALL_CHOICE: DoNotCallChoice = Object.freeze({ scope: 'contact', channel: 'phone' });
+
 export type SuppressionSource =
   | 'prospect_opt_out'
   | 'prospect_do_not_call'
@@ -546,7 +576,16 @@ export const logCallOutcomeCommandSchema = z.strictObject({
       sourceTimeZone: z.string().min(1).max(64),
     })
     .optional(),
-  /** `do_not_call` suppresses the firm only when the request covered all Callie contact (9.1). */
+  /**
+   * What a `do_not_call` stops (migration 0037, David's P1): `{ scope, channel }`. Absent is
+   * `{ scope: 'contact', channel: 'phone' }`, calls to this person only. Wins over the
+   * checkbox below.
+   */
+  doNotCall: doNotCallChoiceSchema.optional(),
+  /**
+   * The 1.0.29 desktop's "covers all contact" checkbox. With no `doNotCall`, true stops the
+   * number for calls and the firm for everything (9.1).
+   */
   doNotCallCoversAllContact: z.boolean().optional(),
   /**
    * The follow-up the salesperson agreed to on this call (migration 0025). Permitted
@@ -761,6 +800,12 @@ export const recordSuppressionCommandSchema = z.strictObject({
   value: z.string().trim().min(3).max(320).optional(),
   source: z.enum(['prospect_opt_out', 'prospect_do_not_call', 'salesperson_manual', 'import']),
   reason: z.string().trim().min(1).max(500).optional(),
+  /**
+   * Which channel the stop stops (migration 0037). **Absent is `all`**, which is what the
+   * installed desktop's "Stop all contact with this firm" means. A handle on a number
+   * cannot be `email` and one on an address cannot be `phone` (refused `invalid_input`).
+   */
+  channel: suppressionChannelSchema.optional(),
 });
 
 export const correctSuppressionCommandSchema = z.strictObject({

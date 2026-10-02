@@ -379,12 +379,18 @@ function suppressionEndReason(scope: string, source: string): EnrollmentEndReaso
  * `effective_suppressions` rather than `suppression_events` because 10.2 makes that
  * view authoritative, and an event an admin superseded before this sweep ran is no
  * longer a reason to stop anything.
+ *
+ * Only `email` and `all` stops end an enrollment (migration 0037, DESIGN-S3X §2.2): the
+ * enrollments a stop ends are the ones whose e-mail steps eligibility refuses. A
+ * phone-only stop leaves the enrollment running, and its call-task steps are held by the
+ * eligibility read (`handle_suppressed` / `firm_suppressed`) — nothing is sent past them.
  */
 const OUTSTANDING_SUPPRESSION_STOPS = `
   SELECT f.workspace_id, f.event_id, f.decided_at, e.scope, e.source, n.id AS enrollment_id
     FROM suppression_finalizations f
     JOIN effective_suppressions e
       ON e.workspace_id = f.workspace_id AND e.event_id = f.event_id
+     AND e.channel IN ('email', 'all')
     JOIN sequence_enrollments n
       ON n.workspace_id = f.workspace_id
      AND n.ended_at IS NULL

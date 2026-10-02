@@ -293,6 +293,8 @@ export async function applyClassificationEffects(
           scope: 'handle',
           value: address,
           source: 'prospect_opt_out',
+          // David's P2 (2 October 2026): an e-mail opt-out stops e-mail only.
+          channel: 'email',
           commandId: optOutCommand,
           journal: input.journal,
         });
@@ -325,6 +327,9 @@ export async function applyClassificationEffects(
           scope: 'firm',
           firmId: only.firmId,
           source: 'prospect_opt_out',
+          // P2: the firm stop an unambiguous e-mail opt-out writes stops e-mail at the
+          // firm, not calls (DESIGN-S3X §0.3).
+          channel: 'email',
           commandId: `${optOutCommand}:firm`,
           journal: input.journal,
         });

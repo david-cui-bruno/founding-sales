@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
-import { CALL_OUTCOMES, loggedCallResultSchema } from './dial.ts';
+import { CALL_OUTCOMES, doNotCallChoiceSchema, loggedCallResultSchema } from './dial.ts';
 import { instant, uuid } from './foundationRows.ts';
 import { CALL_PROPOSAL_KINDS, callProposalSchema } from './callAnalysis.ts';
 
@@ -127,7 +127,15 @@ export const callProposalEditsSchema = z.strictObject({
   outcome: z
     .strictObject({
       outcome: z.enum(CALL_OUTCOMES).optional(),
-      /** David's explicit "covers all contact" for a `do_not_call` (never inferred). */
+      /**
+       * David's stop choice for a `do_not_call` (migration 0037, P1): the four-way
+       * `{ scope, channel }`. Absent is calls to this person only. Never inferred.
+       */
+      doNotCall: doNotCallChoiceSchema.optional(),
+      /**
+       * The 1.0.29 checkbox, "covers all contact": with no `doNotCall`, the number for calls
+       * and the firm for everything. Kept for that desktop; a newer one sends `doNotCall`.
+       */
       doNotCallCoversAllContact: z.boolean().optional(),
       note: z.string().trim().min(1).max(2000).optional(),
     })

@@ -67,6 +67,7 @@ const record: SuppressionJournalRecord = {
   supersedesEventId: null,
   supersessionReason: null,
   recordedAt: '2026-09-25T12:00:00.000Z',
+  channel: 'all' as const,
 };
 
 describe('the worker S3 journal (audit S12)', () => {
@@ -138,6 +139,7 @@ describe('an opt-out whose journal write meets a conflict', () => {
       scope: 'handle' as const,
       value: 'Dana@Northwind.example.test',
       source: 'prospect_opt_out' as const,
+      channel: 'all' as const,
       commandId: '6f0c2a8e-1d5b-4c1e-9d0a-3b2f7c9e1a44',
       journal,
     };
