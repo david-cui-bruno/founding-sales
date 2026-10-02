@@ -464,7 +464,7 @@ describe('X2: correcting a logged outcome', () => {
     );
     expect(lifted.ok, JSON.stringify(lifted)).toBe(true);
     // Its one journal record, which the route appends after the commit (brief RF).
-    expect(lifted.ok ? [lifted.value.journalRecord.source, lifted.value.journalRecord.supersedesEventId] : null).toEqual(['admin_supersession', first?.eventId]);
+    expect(lifted.ok ? lifted.value.journalRecords.map(record => [record.source, record.supersedesEventId]) : null).toEqual([['admin_supersession', first?.eventId]]);
     expect(await effective(first?.eventId ?? '')).toBe(false);
     // He cancels the second confirm: it stays effective.
     expect(await effective(second?.eventId ?? '')).toBe(true);

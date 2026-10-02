@@ -6,7 +6,7 @@ import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { claimFinalization } from './finalize.ts';
+import { claimFinalization, readFinalization } from './finalize.ts';
 import { lockSuppressionHistory, readSuppressionEvent, reviewHoldBlocks } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
@@ -83,6 +83,8 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
   if (firmId !== undefined && firmId !== null && typeof firmId !== 'string') {
     return { ok: false, reason: 'field_missing', detail: 'firmId' };
   }
+  // The release marker (J2): only `true` means committed; anything else is no marker.
+  const committed = object['committed'] === true;
   return {
     ok: true,
     value: {
@@ -99,6 +101,7 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
       recordedAt: text('recordedAt') ?? '',
       channel,
       ...(firmId === undefined ? {} : { firmId }),
+      ...(committed ? { committed: true as const } : {}),
     },
   };
 }
@@ -147,7 +150,16 @@ export interface JournalReplayReport {
    * not say which firm the live write held (review P3). Their hold is not guessed. Ids only.
    */
   readonly unreconstructedHolds: readonly string[];
+  /**
+   * Releases journalled before the RF reset, without the `committed` marker (J3): written
+   * inside a transaction that may have rolled back, so not applied. David lifts the stop again
+   * if it should be lifted. Ids only.
+   */
+  readonly unverifiedLegacyReleases: readonly string[];
 }
+
+/** A merge's copy (`merge:<event>`), live a bare row: no claim, no hold, no finalizer. */
+const isMergeCopy = (record: SuppressionJournalRecord): boolean => record.eventId.startsWith('merge:');
 
 /** The sources that are terminal the instant they commit (10.2). Mirrors `events.ts`. */
 const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
@@ -209,9 +221,33 @@ export async function replaySuppressionJournal(
     missing.set(record.eventId, record);
   }
 
+  // J3 and J4 (RF reset): validity before selection. A release applies only when it carries
+  // the `committed` marker every release written since the reset has (appended after its
+  // commit); an unmarked one is reported, never applied. A correction whose original is
+  // already decided `finalized` lost its claim live and never committed. Only what remains
+  // competes in R2 below, so a stale candidate can never displace a valid one.
+  const unverifiedLegacyReleases: string[] = [];
+  const staleCorrections: string[] = [];
+  for (const record of [...missing.values()]) {
+    if (record.supersedesEventId === null) continue;
+    if (record.committed !== true) {
+      missing.delete(record.eventId);
+      unverifiedLegacyReleases.push(record.eventId);
+      continue;
+    }
+    if (record.source !== 'mistaken_entry_correction' || isMergeCopy(record)) continue;
+    const decided = await readFinalization(context, record.supersedesEventId);
+    const original = missing.get(record.supersedesEventId);
+    const lost = decided !== null ? decided.outcome === 'finalized' : original !== undefined && TERMINAL_SOURCES.has(original.source);
+    if (lost) {
+      missing.delete(record.eventId);
+      staleCorrections.push(record.eventId);
+    }
+  }
+
   // R2: at most one supersession lifts an event (0001's partial unique index). One the
-  // database already holds wins; otherwise the earliest by recorded time, then id. The rest
-  // are the journal objects of a race's losers, and are counted, not inserted.
+  // database already holds wins; otherwise the earliest valid one by recorded time, then id.
+  // The rest are the journal objects of a race's losers, and are counted, not inserted.
   const competingSupersessions: string[] = [];
   const bySuperseded = new Map<string, SuppressionJournalRecord[]>();
   for (const record of missing.values()) {
@@ -263,7 +299,7 @@ export async function replaySuppressionJournal(
   // it was live, never finalized ahead of it because its window has closed since.
   const correctedBy = new Map<string, string>();
   for (const record of ordered) {
-    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null) {
+    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null && !isMergeCopy(record)) {
       correctedBy.set(record.supersedesEventId, record.eventId);
     }
   }
@@ -272,13 +308,12 @@ export async function replaySuppressionJournal(
   let finalized = 0;
   let windowsReopened = 0;
   let released = 0;
-  const staleCorrections: string[] = [];
   const unreconstructedHolds: string[] = [];
   for (const record of ordered) {
     // A correction is a claim before it is a row, as it was live. A lost claim means the stop
     // was finalized instead: the correction did not commit, so it is not inserted (the row
     // alone would lift the stop) and releases nothing (review P1).
-    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null) {
+    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null && !isMergeCopy(record)) {
       const claim = await claimFinalization(context, {
         eventId: record.supersedesEventId,
         outcome: 'corrected',
@@ -312,6 +347,10 @@ export async function replaySuppressionJournal(
       ],
     );
     inserted += 1;
+
+    // A merge's copy was, live, the row and nothing else (J1, J2): no finalization claim, no
+    // review hold, no finalizer, nothing released.
+    if (isMergeCopy(record)) continue;
 
     if (SUPERSESSION_SOURCES.has(record.source) && record.supersedesEventId !== null) {
       // R4: a lift is replayed as the lift it was: it releases the original's review hold (a
@@ -378,5 +417,6 @@ export async function replaySuppressionJournal(
     orphanSupersessions,
     staleCorrections,
     unreconstructedHolds,
+    unverifiedLegacyReleases,
   };
 }

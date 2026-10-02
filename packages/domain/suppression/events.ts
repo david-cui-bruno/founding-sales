@@ -501,10 +501,15 @@ export async function lockSuppressionHistory(context: RepositoryContext): Promis
  * A firm merge copies each source stop to the survivor as `merge:<event>`. A lift of the
  * source's event after the merge is a lift of the stop the survivor inherited, so the copy
  * is lifted with it, as `merge:<supersession>` — exactly the row the merge would have
- * copied had the lift come first. Copies of copies follow. Like every merge copy these are
- * not journalled: a restore to before the merge loses the copies with the merge.
+ * copied had the lift come first. Copies of copies follow. Each copied lift is a release, so
+ * its journal record is returned for the caller to append after the commit (RF reset, J2),
+ * with the supersession's own.
  */
-async function liftMergeCopies(context: RepositoryContext, originalEventId: string, supersessionEventId: string): Promise<void> {
+async function liftMergeCopies(
+  context: RepositoryContext,
+  originalEventId: string,
+  supersessionEventId: string,
+): Promise<readonly SuppressionJournalRecord[]> {
   const { rows } = await context.db.query<{ event_id: string }>(
     `SELECT copy.event_id FROM suppression_events copy
       WHERE copy.workspace_id = $1 AND copy.event_id = 'merge:' || $2
@@ -514,9 +519,10 @@ async function liftMergeCopies(context: RepositoryContext, originalEventId: stri
         )`,
     [context.scope.workspaceId, originalEventId],
   );
+  const records: SuppressionJournalRecord[] = [];
   for (const copy of rows) {
     const copiedLift = `merge:${supersessionEventId}`;
-    await context.db.query(
+    const inserted = await context.db.query<EventDbRow>(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id,
           recorded_at, supersedes_event_id, supersession_reason, channel)
@@ -524,19 +530,42 @@ async function liftMergeCopies(context: RepositoryContext, originalEventId: stri
               lift.command_id, lift.recorded_at, copy.event_id, lift.supersession_reason, copy.channel
          FROM suppression_events copy
          JOIN suppression_events lift ON lift.workspace_id = copy.workspace_id AND lift.event_id = $3
-        WHERE copy.workspace_id = $1 AND copy.event_id = $4`,
+        WHERE copy.workspace_id = $1 AND copy.event_id = $4
+       RETURNING ${EVENT_COLUMNS}`,
       [context.scope.workspaceId, copiedLift, supersessionEventId, copy.event_id],
     );
-    await liftMergeCopies(context, copy.event_id, copiedLift);
+    const row = inserted.rows[0];
+    if (row !== undefined) records.push(journalRecordOf(context, toEvent(row)));
+    records.push(...(await liftMergeCopies(context, copy.event_id, copiedLift)));
   }
+  return records;
+}
+
+/** An event as the journal holds it. */
+export function journalRecordOf(context: RepositoryContext, event: SuppressionEventRow): SuppressionJournalRecord {
+  return {
+    eventId: event.eventId,
+    workspaceId: context.scope.workspaceId,
+    scope: event.scope,
+    canonicalKey: event.canonicalKey,
+    canonicalizerVersion: event.canonicalizerVersion,
+    source: event.source,
+    actorUserId: event.actorUserId,
+    commandId: event.commandId,
+    supersedesEventId: event.supersedesEventId,
+    supersessionReason: event.supersessionReason,
+    recordedAt: event.recordedAt,
+    channel: event.channel,
+  };
 }
 
 export interface CorrectionOutcome {
   /**
-   * The journal record of the correction, for the caller to append once the command
-   * transaction has committed (brief RF): a supersession is never journalled before then.
+   * The releases this correction wrote, itself first and then any merge copy it lifted, for
+   * the caller to append once the command transaction has committed, marked (RF reset, J2):
+   * a release is never journalled before then.
    */
-  readonly journalRecord: SuppressionJournalRecord;
+  readonly journalRecords: readonly SuppressionJournalRecord[];
   readonly correctionEventId: string;
   readonly originalEventId: string;
   readonly releasedHoldIds: readonly string[];
@@ -626,7 +655,7 @@ export async function recordCorrection(
   });
   if (!written) return refuse(claimLost ?? 'already_superseded');
 
-  await liftMergeCopies(context, original.eventId, correctionEventId);
+  const copiedLifts = await liftMergeCopies(context, original.eventId, correctionEventId);
 
   // The record the caller journals after the commit (brief RF): never appended here.
   const journalRecord: SuppressionJournalRecord = {
@@ -661,7 +690,7 @@ export async function recordCorrection(
   });
 
   return accept({
-    journalRecord,
+    journalRecords: [journalRecord, ...copiedLifts],
     correctionEventId,
     originalEventId: original.eventId,
     releasedHoldIds: released.map(hold => hold.id),
@@ -697,8 +726,8 @@ export async function recordAdminSupersession(
   SuppressionResult<{
     readonly supersessionEventId: string;
     readonly originalEventId: string;
-    /** For the caller to append once the command has committed (brief RF). */
-    readonly journalRecord: SuppressionJournalRecord;
+    /** The releases written, the lift first, for the caller to append after the commit (J2). */
+    readonly journalRecords: readonly SuppressionJournalRecord[];
   }>
 > {
   if (!isAdminScope(context.scope)) return refuse('admin_only');
@@ -749,7 +778,7 @@ export async function recordAdminSupersession(
   });
   if (!written) return refuse('already_superseded');
 
-  await liftMergeCopies(context, original.eventId, supersessionEventId);
+  const copiedLifts = await liftMergeCopies(context, original.eventId, supersessionEventId);
 
   // The record the caller journals after the commit (brief RF): never appended here.
   const journalRecord: SuppressionJournalRecord = {
@@ -778,5 +807,5 @@ export async function recordAdminSupersession(
     detail: { supersessionEventId, reason: input.reason },
   });
 
-  return accept({ supersessionEventId, originalEventId: original.eventId, journalRecord });
+  return accept({ supersessionEventId, originalEventId: original.eventId, journalRecords: [journalRecord, ...copiedLifts] });
 }

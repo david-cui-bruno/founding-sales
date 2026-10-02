@@ -42,16 +42,29 @@ happens to *enrollments*, not whether the handle is suppressed.
 
 ### 2. The journal is durable before the row is
 
-**The journal errs toward the stop** (brief RF). A stop's `journal.append` is awaited inside
-the command transaction and before its `INSERT`: a stop the journal holds and the database
-lost is the safe direction. A supersession (an admin lift or a correction) is the opposite
-direction, so it is journalled only **after its command transaction commits**:
-`recordAdminSupersession` and `recordCorrection` return the record, and the suppression route
-appends it once `runCommand` answered a fresh acceptance (`journalCommittedLift`), with a
-bounded retry. A lift whose journal write still fails stays committed and logs
-`suppression_lift_unjournalled` (ids only; each failed put also logs
-`suppression_journal_write_failed`, the critical alarm's event). A restore then brings that
-stop back, which errs safe. A lift that never committed is never in the journal.
+**The journal errs toward the stop** (brief RF and its reset, J1–J4):
+
+- **J1: every write that creates or copies a stop is journalled before its commit.** A stop's
+  `journal.append` is awaited inside the command transaction and before its `INSERT`, and a
+  firm merge journals each copied stop (`merge:<event>`, under the survivor's key) the same
+  way. A commit that then fails leaves the journal holding a stop the database lacks: a
+  replay adds an extra stop, never loses one.
+- **J2: every release is journalled only after its commit, marked `committed: true`.** An
+  admin lift, a correction, each merge copy a lift carries onto (`merge:<lift>`), and each
+  lift a merge copies: `recordAdminSupersession`, `recordCorrection` and `mergeFirms` return
+  the records, and the route appends them once `runCommand` answered a fresh acceptance
+  (`journalCommittedLifts`), with a bounded retry. One whose write still fails stays committed
+  and logs `suppression_lift_unjournalled` (ids only; each failed put also logs
+  `suppression_journal_write_failed`, the critical alarm's event); a restore then brings that
+  stop back, which errs safe.
+- **J3: replay applies only marked releases.** One without the marker was journalled before
+  the reset, inside a transaction that may have rolled back: it is reported as
+  `unverifiedLegacyReleases` (ids; the CLI prints `unverifiedLegacyReleaseCount`) and not
+  applied. David lifts again if it should be lifted.
+- **J4: validity before selection.** Replay discards every invalid release (unmarked, or a
+  correction whose original is already `finalized`, reported as `staleCorrections`) before it
+  chooses one supersession per event, so a stale candidate never displaces a valid one.
+
 See `docs/archive/decisions/g4-journal-port.md` for the two failure modes and why the
 surviving-journal one is the safe direction for a stop.
 
@@ -222,15 +235,13 @@ survivor's copy too. Nothing takes the send gate after this lock, so the two nev
 
 - puts originals before what supersedes them, whatever order the bucket lists them in,
   earliest first otherwise (R3);
-- keeps one supersession per event: the one the database already holds, else the earliest
+- keeps one supersession per event among the valid ones (J4): the one the database already holds, else the earliest
   by recorded time and then id; the others are reported as `competingSupersessions`, ids
   only (R2), and a supersession whose original is in neither the database nor the records
   read is reported as `orphanSupersessions` and skipped;
 - replays a supersession as a release: it opens no hold, is owed no finalizer, releases its
   original's review hold, and a correction claims its original `corrected` as it did live
-  (R4). A correction whose original is already `finalized` lost that claim live, so it never
-  committed: it is neither inserted nor allowed to release anything, and is reported as
-  `staleCorrections`;
+  (R4); a merge copy is replayed as the bare row it was live (no claim, no hold, no job);
 - reports a manual handle stop inside its window whose object predates RF (no `firmId` at all)
   as `unreconstructedHolds`, and the CLI prints `unreconstructedHoldCount`: the firm its review
   hold was on cannot be known, and is not guessed. A stop journalled since RF says `firmId:

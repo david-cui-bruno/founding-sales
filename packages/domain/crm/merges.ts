@@ -1,6 +1,8 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { lockSuppressionHistory } from '../suppression/events.ts';
+import { databaseNow } from '../policy/clock.ts';
+import { lockSuppressionHistory, readSuppressionEvent } from '../suppression/events.ts';
+import type { SuppressionJournal, SuppressionJournalRecord } from '../suppression/journal.ts';
 import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -57,6 +59,12 @@ export interface MergeOutcome {
   readonly sourceId: string;
   readonly targetId: string;
   readonly preserved: Readonly<Record<string, number>>;
+  /**
+   * The copied lifts, for the caller to journal once the merge has committed, marked (RF
+   * reset, J2). The copied stops were journalled before the commit (J1). Not part of the
+   * command's answer.
+   */
+  readonly journalAfterCommit: readonly SuppressionJournalRecord[];
 }
 
 /** Canonical fields a firm merge refuses to choose between. */
@@ -93,6 +101,8 @@ export interface MergeFirmsInput {
   /** Fields the person has decided to take from the source, resolving a conflict. */
   readonly resolutions?: Readonly<Record<string, string>> | undefined;
   readonly commandId?: string | undefined;
+  /** Where the copied stops are journalled before the merge commits (RF reset, J1). */
+  readonly journal: SuppressionJournal;
 }
 
 export async function mergeFirms(
@@ -227,7 +237,7 @@ export async function mergeFirms(
   await move('meetings');
 
   await preserveIdentifiers(context, source, target);
-  await preserveFirmSuppressions(context, source.id, target.id, input.commandId);
+  const journalAfterCommit = await preserveFirmSuppressions(context, source.id, target.id, input.commandId, input.journal);
 
   // And a fresh run, so the target's judgment is rebuilt from the target's own pages
   // rather than inherited from a firm that no longer exists. Best-effort inside a
@@ -257,7 +267,7 @@ export async function mergeFirms(
     detail: { sourceFirmId: source.id, preserved },
   });
 
-  return accept({ sourceId: source.id, targetId: target.id, preserved });
+  return accept({ sourceId: source.id, targetId: target.id, preserved, journalAfterCommit });
 }
 
 /**
@@ -483,7 +493,8 @@ async function preserveFirmSuppressions(
   sourceFirmId: string,
   targetFirmId: string,
   commandId: string | undefined,
-): Promise<void> {
+  journal: SuppressionJournal,
+): Promise<readonly SuppressionJournalRecord[]> {
   // The target inherits a stop fact, so the insert takes the send gate.
   await lockSendGateForStopFact(context);
   // Brief RF, X7: each copy carries its history. A stop the source had lifted is copied
@@ -497,6 +508,8 @@ async function preserveFirmSuppressions(
     [context.scope.workspaceId, sourceFirmId],
   );
   const onSource = new Map(rows.map(row => [row.event_id, row.supersedes_event_id] as const));
+  const now = await databaseNow(context);
+  const releases: SuppressionJournalRecord[] = [];
   const done = new Set<string>();
   const copy = async (eventId: string): Promise<void> => {
     if (done.has(eventId)) return;
@@ -507,23 +520,51 @@ async function preserveFirmSuppressions(
       if (!onSource.has(supersedes)) return;
       await copy(supersedes);
     }
+    const copyId = `merge:${eventId}`;
+    if ((await readSuppressionEvent(context, copyId)) !== null) return;
+    const original = await readSuppressionEvent(context, eventId);
+    if (original === null) return;
+    const record: SuppressionJournalRecord = {
+      eventId: copyId,
+      workspaceId: context.scope.workspaceId,
+      scope: 'firm',
+      canonicalKey: targetFirmId.toLowerCase(),
+      canonicalizerVersion: original.canonicalizerVersion,
+      source: original.source,
+      actorUserId: original.actorUserId,
+      commandId: commandId ?? null,
+      supersedesEventId: supersedes === null ? null : `merge:${supersedes}`,
+      supersessionReason: original.supersessionReason,
+      recordedAt: now,
+      channel: original.channel,
+    };
+    // RF reset, J1: a copied stop is a stop the survivor now has, so it is journalled before
+    // its row, as every stop is; a restore to before the merge then still finds it. A copied
+    // lift is a release (J2): journalled by the caller after the commit, marked.
+    if (supersedes === null) await journal.append(record);
+    else releases.push(record);
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id, channel,
-          supersedes_event_id, supersession_reason)
-       SELECT $1, 'merge:' || e.event_id, 'firm', $3, e.canonicalizer_version, e.source, e.actor_user_id, $4, e.channel,
-              CASE WHEN e.supersedes_event_id IS NULL THEN NULL ELSE 'merge:' || e.supersedes_event_id END,
-              e.supersession_reason
-         FROM suppression_events e
-        WHERE e.workspace_id = $1 AND e.event_id = $2
-          AND NOT EXISTS (
-            SELECT 1 FROM suppression_events existing
-             WHERE existing.workspace_id = $1 AND existing.event_id = 'merge:' || e.event_id
-          )`,
-      [context.scope.workspaceId, eventId, targetFirmId, commandId ?? null],
+          supersedes_event_id, supersession_reason, recorded_at)
+       VALUES ($1, $2, 'firm', $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)`,
+      [
+        context.scope.workspaceId,
+        record.eventId,
+        record.canonicalKey,
+        record.canonicalizerVersion,
+        record.source,
+        record.actorUserId,
+        record.commandId,
+        record.channel,
+        record.supersedesEventId,
+        record.supersessionReason,
+        record.recordedAt,
+      ],
     );
   };
   for (const row of rows) await copy(row.event_id);
+  return releases;
 }
 
 /** Fill the target's blanks from the source, then apply the person's resolutions. */

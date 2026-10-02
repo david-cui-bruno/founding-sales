@@ -364,6 +364,7 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
   const orphanSupersessions: string[] = [];
   const staleCorrections: string[] = [];
   const unreconstructedHolds: string[] = [];
+  const unverifiedLegacyReleases: string[] = [];
   for (const [workspaceId, forWorkspace] of byWorkspace) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
     const report = await withTransaction(invocation.session, async () =>
@@ -379,6 +380,7 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     orphanSupersessions.push(...report.orphanSupersessions);
     staleCorrections.push(...report.staleCorrections);
     unreconstructedHolds.push(...report.unreconstructedHolds);
+    unverifiedLegacyReleases.push(...report.unverifiedLegacyReleases);
   }
 
   return accept({
@@ -398,6 +400,9 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     // the line an operator reads; the ids are the stops to look at.
     unreconstructedHoldCount: unreconstructedHolds.length,
     unreconstructedHolds,
+    // RF reset, J3: releases journalled before the reset, not applied. David lifts again.
+    unverifiedLegacyReleaseCount: unverifiedLegacyReleases.length,
+    unverifiedLegacyReleases,
     workspaces: byWorkspace.size,
   });
 }

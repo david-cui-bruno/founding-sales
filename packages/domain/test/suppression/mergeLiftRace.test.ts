@@ -81,7 +81,7 @@ describe('an admin lift racing a firm merge', () => {
     const lifter = await connection();
     // The merge has read and copied the source's stops, and has not committed.
     await merger.session.query('BEGIN');
-    const merged = await mergeFirms(userContext(merger.session, seeded.alpha, 'admin'), {
+    const merged = await mergeFirms(userContext(merger.session, seeded.alpha, 'admin'), { journal: recordingSuppressionJournal(),
       sourceFirmId: source.firmId,
       targetFirmId: target.firmId,
     });

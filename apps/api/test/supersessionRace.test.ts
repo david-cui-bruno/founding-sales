@@ -5,8 +5,11 @@ import { CLUSTER_URL_ENVIRONMENT_VARIABLE } from '@fss/domain/db/testing/testDat
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { SuppressionJournal, SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { recordingLogger, type Logger } from '../src/bootstrap/log.ts';
-import { journalCommittedLift } from '../src/routes/suppressions.ts';
+import { journalCommittedLifts } from '../src/routes/suppressions.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { replaySuppressionJournal } from '@fss/domain/suppression/replay.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedFirm } from './support/crmSeed.ts';
@@ -444,11 +447,114 @@ describe('review P1: a lift is journalled only after its command commits', () =>
       recordedAt: new Date().toISOString(),
       channel: 'all',
     };
-    await journalCommittedLift(journal, lifted, { status: 409, body: { status: 'refused', replayed: false, reason: 'already_superseded' } }, undefined, []);
+    await journalCommittedLifts(journal, [lifted], { status: 409, body: { status: 'refused', replayed: false, reason: 'already_superseded' } }, undefined, []);
     // A replay: the work that set the record may have rolled back under a racing receipt.
-    await journalCommittedLift(journal, lifted, { status: 200, body: { status: 'accepted', replayed: true, result: null } }, undefined, []);
+    await journalCommittedLifts(journal, [lifted], { status: 200, body: { status: 'accepted', replayed: true, result: null } }, undefined, []);
     expect(journal.appended).toEqual([]);
-    await journalCommittedLift(journal, lifted, { status: 200, body: { status: 'accepted', replayed: false, result: null } }, undefined, []);
-    expect(journal.appended).toEqual([lifted]);
+    await journalCommittedLifts(journal, [lifted], { status: 200, body: { status: 'accepted', replayed: false, result: null } }, undefined, []);
+    expect(journal.appended).toEqual([{ ...lifted, committed: true }]);
+  });
+});
+
+describe('RF reset J1: a merge that fails to commit leaves at most an extra stop, never a missing one', () => {
+  let fixture: AuthFixture;
+  let adminToken: string;
+
+  beforeAll(async () => {
+    fixture = await createAuthFixture();
+    adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+  });
+
+  afterAll(async () => {
+    await fixture.stop();
+  });
+
+  const post = async (session: SessionQueryable, journal: SuppressionJournal, path: string, body: Record<string, unknown>) =>
+    await dispatch(
+      {
+        method: 'POST',
+        path,
+        query: new URLSearchParams(),
+        headers: { authorization: `Bearer ${adminToken}` },
+        body: { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, ...body },
+      },
+      {
+        session,
+        supportedClientVersions: fixture.deps.config.supportedClientVersions,
+        sendingEnabled: false,
+        auth: { ...fixture.deps, db: session },
+        upgradeUrl: 'https://callie.example/downloads/mac',
+        suppressionJournal: journal,
+      },
+    );
+
+  it('the copied stop is in the journal before the commit, and a replay can only add it', async () => {
+    const appended: SuppressionJournalRecord[] = [];
+    const journal: SuppressionJournal = {
+      async append(record) {
+        appended.push(record);
+        await Promise.resolve();
+      },
+    };
+    const firm = { regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId };
+    const sourceFirmId = await seedFirm(fixture, { name: 'Merged Away Partners', ...firm });
+    const targetFirmId = await seedFirm(fixture, { name: 'Surviving Partners', ...firm });
+    const stopped = await post(fixture.db, journal, '/suppressions/record', { scope: 'firm', firmId: sourceFirmId, source: 'prospect_do_not_call', channel: 'all' });
+    expect(stopped.status, JSON.stringify(stopped.body)).toBe(200);
+    const stopId = String(((stopped.body as Record<string, unknown>)['result'] as { eventId: string }).eventId);
+
+    // The merge's last statement, the receipt, fails: the merge and its copy roll back.
+    const faulty = {
+      async query(text: string, values?: readonly unknown[]) {
+        if (text.includes('INSERT INTO command_receipts')) throw new Error('the receipt write failed');
+        return await fixture.db.query(text, values);
+      },
+    } as unknown as SessionQueryable;
+    const merged = await post(faulty, journal, '/merges/firms', { sourceFirmId, targetFirmId }).then(
+      reply => reply.status,
+      () => 'threw',
+    );
+    expect(merged).not.toBe(200);
+    const onTarget = async (): Promise<number> =>
+      (
+        await fixture.db.query(
+          `SELECT 1 FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
+          [fixture.alpha.workspaceId, targetFirmId],
+        )
+      ).rows.length;
+    expect(await onTarget()).toBe(0);
+    // The journal already holds the copy, under the survivor's key: a restore replay adds a
+    // stop the database does not have (an extra one), and never loses one it does.
+    const copy = appended.find(record => record.eventId === `merge:${stopId}`);
+    expect(copy).toMatchObject({ scope: 'firm', canonicalKey: targetFirmId, supersedesEventId: null });
+    const restore = repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'migration' }), fixture.db);
+    await withTransaction(fixture.db, async () => await replaySuppressionJournal(restore, { records: appended }));
+    expect(await onTarget()).toBe(1);
+  });
+
+  it('a merge of a firm whose stop was lifted journals the copied lift after the commit, marked', async () => {
+    const appended: SuppressionJournalRecord[] = [];
+    const journal: SuppressionJournal = {
+      async append(record) {
+        appended.push(record);
+        await Promise.resolve();
+      },
+    };
+    const firm = { regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId };
+    const sourceFirmId = await seedFirm(fixture, { name: 'Lifted Away Partners', ...firm });
+    const targetFirmId = await seedFirm(fixture, { name: 'Lifted Survivor Partners', ...firm });
+    const stopped = await post(fixture.db, journal, '/suppressions/record', { scope: 'firm', firmId: sourceFirmId, source: 'prospect_do_not_call', channel: 'all' });
+    const stopId = String(((stopped.body as Record<string, unknown>)['result'] as { eventId: string }).eventId);
+    const lifted = await post(fixture.db, journal, '/suppressions/supersede', { eventId: stopId, reason: 'documented_reconsent' });
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+    const liftId = String(((lifted.body as Record<string, unknown>)['result'] as { supersessionEventId: string }).supersessionEventId);
+    const merged = await post(fixture.db, journal, '/merges/firms', { sourceFirmId, targetFirmId });
+    expect(merged.status, JSON.stringify(merged.body)).toBe(200);
+    expect(((merged.body as Record<string, unknown>)['result'] as Record<string, unknown>)['journalAfterCommit']).toBeUndefined();
+    const copies = appended.filter(record => record.eventId.startsWith('merge:'));
+    expect(copies.map(record => [record.eventId, record.committed ?? false])).toEqual([
+      [`merge:${stopId}`, false],
+      [`merge:${liftId}`, true],
+    ]);
   });
 });

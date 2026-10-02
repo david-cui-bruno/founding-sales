@@ -79,6 +79,8 @@ function liftRecord(original: SuppressionJournalRecord, recordedAt: string): Sup
     supersedesEventId: original.eventId,
     supersessionReason: 'correction',
     recordedAt,
+    // Journalled after its commit, as every release is since the RF reset (J2).
+    committed: true,
   };
 }
 
@@ -330,7 +332,7 @@ describe('X7: a merge keeps a lifted stop lifted and an active stop active', () 
     expect(lift.ok, JSON.stringify(lift)).toBe(true);
 
     const merged = await withTransaction(database.session, async () =>
-      await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { sourceFirmId: source.firmId, targetFirmId: target.firmId }),
+      await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { journal: recordingSuppressionJournal(), sourceFirmId: source.firmId, targetFirmId: target.firmId }),
     );
     expect(merged.ok, JSON.stringify(merged)).toBe(true);
 
@@ -391,6 +393,7 @@ describe('R4 and review P1: a replayed correction', () => {
       supersedesEventId: original.eventId,
       supersessionReason: 'mistaken_entry',
       recordedAt,
+      committed: true,
     };
   }
 
@@ -447,5 +450,144 @@ describe('R4 and review P1: a replayed correction', () => {
     ]);
     expect(effective.rows).toHaveLength(1);
     expect(await openReviewHolds(firm.firmId)).toHaveLength(1);
+  });
+});
+
+describe('RF reset J3: an unmarked (legacy) release is never applied', () => {
+  it('a correction journalled before the reset is reported and leaves the stop and its hold', async () => {
+    const firm = await seedChannelFirm(database.session, seeded.alpha);
+    const journal = recordingSuppressionJournal();
+    const recorded = await withTransaction(database.session, async () =>
+      await recordSuppression(userContext(database.session, seeded.alpha), {
+        scope: 'firm',
+        firmId: firm.firmId,
+        source: 'salesperson_manual',
+        channel: 'all',
+        commandId: randomUUID(),
+        journal,
+      }),
+    );
+    if (!recorded.ok) throw new Error(recorded.reason);
+    // Written before the reset, inside a transaction that may have rolled back: no marker.
+    const { committed: _marker, ...legacy } = {
+      ...liftRecord(journal.appended[0]!, minutesAgo(0.5)),
+      source: 'mistaken_entry_correction',
+      supersessionReason: 'mistaken_entry',
+    };
+    const report = await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [legacy] }));
+    expect(report).toMatchObject({ inserted: 0, released: 0, unverifiedLegacyReleases: [legacy.eventId] });
+    expect(await supersessionsOf(recorded.value.eventId)).toEqual([]);
+    expect(await openReviewHolds(firm.firmId)).toHaveLength(1);
+  });
+});
+
+describe('RF reset J4: validity before selection', () => {
+  it('a stale correction and a later committed admin lift: the admin lift applies', async () => {
+    for (const marked of [true, false]) {
+      const firm = await seedChannelFirm(database.session, seeded.alpha);
+      const journal = recordingSuppressionJournal();
+      const recorded = await withTransaction(database.session, async () =>
+        await recordSuppression(userContext(database.session, seeded.alpha), {
+          scope: 'firm',
+          firmId: firm.firmId,
+          source: 'salesperson_manual',
+          channel: 'all',
+          commandId: randomUUID(),
+          journal,
+        }),
+      );
+      if (!recorded.ok) throw new Error(recorded.reason);
+      // The restored database kept the stop and its finalization, and neither release.
+      await database.session.query(`INSERT INTO suppression_finalizations (workspace_id, event_id, outcome) VALUES ($1, $2, 'finalized')`, [
+        seeded.alpha.workspaceId,
+        recorded.value.eventId,
+      ]);
+      const original = journal.appended[0]!;
+      const correction = { ...liftRecord(original, minutesAgo(9)), source: 'mistaken_entry_correction', supersessionReason: 'mistaken_entry' };
+      const { committed: _marker, ...unmarked } = correction;
+      const stale = marked ? correction : unmarked;
+      const lift = liftRecord(original, minutesAgo(1));
+      const report = await withTransaction(database.session, async () =>
+        await replaySuppressionJournal(restore(), { records: [lift, stale] }),
+      );
+      expect(await supersessionsOf(recorded.value.eventId), String(marked)).toEqual([lift.eventId]);
+      expect(report.competingSupersessions, String(marked)).toEqual([]);
+      if (marked) expect(report.staleCorrections).toEqual([stale.eventId]);
+      else expect(report.unverifiedLegacyReleases).toEqual([stale.eventId]);
+    }
+  });
+});
+
+describe('RF reset J1 and J2: a merge’s copies survive a restore', () => {
+  async function stoppedPair(journal: ReturnType<typeof recordingSuppressionJournal>): Promise<{ source: ChannelFirm; target: ChannelFirm; stopId: string }> {
+    const source = await seedChannelFirm(database.session, seeded.alpha);
+    const target = await seedChannelFirm(database.session, seeded.alpha);
+    const recorded = await withTransaction(database.session, async () =>
+      await recordSuppression(userContext(database.session, seeded.alpha), {
+        scope: 'firm',
+        firmId: source.firmId,
+        source: 'prospect_do_not_call',
+        channel: 'all',
+        commandId: randomUUID(),
+        journal,
+      }),
+    );
+    if (!recorded.ok) throw new Error(recorded.reason);
+    const merged = await withTransaction(database.session, async () =>
+      await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { journal, sourceFirmId: source.firmId, targetFirmId: target.firmId }),
+    );
+    expect(merged.ok, JSON.stringify(merged)).toBe(true);
+    return { source, target, stopId: recorded.value.eventId };
+  }
+  const effectiveOn = async (firmId: string): Promise<readonly string[]> =>
+    (
+      await database.session.query<{ event_id: string }>(
+        `SELECT event_id FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
+        [seeded.alpha.workspaceId, firmId],
+      )
+    ).rows.map(row => row.event_id);
+  const remove = async (eventIds: readonly string[]): Promise<void> => {
+    await database.session.query('DELETE FROM suppression_events WHERE workspace_id = $1 AND event_id = ANY($2::text[])', [
+      seeded.alpha.workspaceId,
+      eventIds,
+    ]);
+  };
+
+  it('a restore to before the merge: replay gives the survivor back the stop it inherited', async () => {
+    const journal = recordingSuppressionJournal();
+    const { target, stopId } = await stoppedPair(journal);
+    // The copy was journalled before the merge committed, with the survivor's key.
+    expect(journal.appended.map(record => [record.eventId, record.canonicalKey])).toContainEqual([`merge:${stopId}`, target.firmId]);
+    await remove([`merge:${stopId}`]);
+    expect(await effectiveOn(target.firmId)).toEqual([]);
+    await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
+    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}`]);
+    // Live, a copy is the row alone: no finalization claim.
+    const claims = await database.session.query('SELECT 1 FROM suppression_finalizations WHERE workspace_id = $1 AND event_id = $2', [
+      seeded.alpha.workspaceId,
+      `merge:${stopId}`,
+    ]);
+    expect(claims.rows).toEqual([]);
+  });
+
+  it('a restore between the merge and a lift of the original: replay lifts the copy too', async () => {
+    const journal = recordingSuppressionJournal();
+    const { source, target, stopId } = await stoppedPair(journal);
+    const lifted = await withTransaction(database.session, async () =>
+      await recordAdminSupersession(userContext(database.session, seeded.alpha, 'admin'), {
+        eventId: stopId,
+        reason: 'documented_reconsent',
+        commandId: randomUUID(),
+      }),
+    );
+    if (!lifted.ok) throw new Error(lifted.reason);
+    // The lift and its copy, journalled after the commit and marked, as the route does.
+    expect(lifted.value.journalRecords.map(record => record.supersedesEventId)).toEqual([stopId, `merge:${stopId}`]);
+    for (const record of lifted.value.journalRecords) await journal.append({ ...record, committed: true });
+    await remove(lifted.value.journalRecords.map(record => record.eventId));
+    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}`]);
+    await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
+    expect(await effectiveOn(target.firmId)).toEqual([]);
+    expect(await effectiveOn(source.firmId)).toEqual([]);
   });
 });

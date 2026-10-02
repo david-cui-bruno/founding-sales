@@ -124,7 +124,7 @@ describe('matchPreparedBriefRows', () => {
 describe('a merge', () => {
   const merge = async (sourceFirmId: string, targetFirmId: string): Promise<void> => {
     const merged = await inTransaction(
-      async () => await mergeFirms(as('admin'), { sourceFirmId, targetFirmId, resolutions: { name: 'target' } }),
+      async () => await mergeFirms(as('admin'), { journal: recordingSuppressionJournal(), sourceFirmId, targetFirmId, resolutions: { name: 'target' } }),
     );
     expect(merged, JSON.stringify(merged)).toMatchObject({ ok: true });
   };

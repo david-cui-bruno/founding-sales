@@ -71,8 +71,8 @@ async function lift(journal: RecordingSuppressionJournal, eventId: string): Prom
     await recordAdminSupersession(as('admin'), { eventId, reason: 'correction', commandId: randomUUID() }),
   );
   if (!lifted.ok) throw new Error(lifted.reason);
-  // Journalled after the commit, as the API route does (brief RF).
-  await journal.append(lifted.value.journalRecord);
+  // Journalled after the commit and marked, as the API route does (RF reset, J2).
+  for (const record of lifted.value.journalRecords) await journal.append({ ...record, committed: true });
   return lifted.value.supersessionEventId;
 }
 

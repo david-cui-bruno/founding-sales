@@ -88,33 +88,33 @@ export async function routeSuppressions(request: ApiRequest, options: RoutingOpt
       );
     case '/suppressions/correct': {
       // The lift this command made, journalled only once the command has committed (brief RF).
-      let lift: SuppressionJournalRecord | null = null;
+      let lifts: readonly SuppressionJournalRecord[] = [];
       const reply = await runPolicyCommand(deps, correctSuppressionCommandSchema, 'correct_suppression', async (repository, body) => {
-        lift = null;
+        lifts = [];
         const corrected = await recordCorrection(repository, { eventId: body.eventId, commandId: body.commandId });
         if (!corrected.ok) return corrected;
-        const { journalRecord, ...value } = corrected.value;
-        lift = journalRecord;
+        const { journalRecords, ...value } = corrected.value;
+        lifts = journalRecords;
         return { ok: true, value };
       });
-      await journalCommittedLift(deps.journal, lift, reply, options.log);
+      await journalCommittedLifts(deps.journal, lifts, reply, options.log);
       return reply;
     }
     case '/suppressions/supersede': {
-      let lift: SuppressionJournalRecord | null = null;
+      let lifts: readonly SuppressionJournalRecord[] = [];
       const reply = await runPolicyCommand(deps, supersedeSuppressionCommandSchema, 'supersede_suppression', async (repository, body) => {
-        lift = null;
+        lifts = [];
         const superseded = await recordAdminSupersession(repository, {
           eventId: body.eventId,
           reason: body.reason,
           commandId: body.commandId,
         });
         if (!superseded.ok) return superseded;
-        const { journalRecord, ...value } = superseded.value;
-        lift = journalRecord;
+        const { journalRecords, ...value } = superseded.value;
+        lifts = journalRecords;
         return { ok: true, value };
       });
-      await journalCommittedLift(deps.journal, lift, reply, options.log);
+      await journalCommittedLifts(deps.journal, lifts, reply, options.log);
       return reply;
     }
     default:
@@ -126,40 +126,48 @@ export async function routeSuppressions(request: ApiRequest, options: RoutingOpt
 export const LIFT_JOURNAL_RETRY_DELAYS_MS: readonly number[] = [100, 500];
 
 /**
- * Journal a supersession after its command committed (brief RF, review P1).
+ * Journal the releases a command wrote, after it committed, marked (brief RF, RF reset J2).
  *
  * A stop is journalled before its transaction commits, because a stop the journal holds and
- * the database lost is the safe direction. A lift is the opposite direction: one the journal
- * holds and the database never committed would be applied by a restore replay and remove a
- * stop. So a lift is appended here, after `runCommand` returned a fresh acceptance (a replay
- * of a receipt ran no work, and a command that failed to commit never gets here), with a
- * bounded retry. If every attempt fails the lift stays committed and the failure is logged
- * by id: a later restore brings the stop back, which errs toward the stop. Each failed put
- * also logs `suppression_journal_write_failed`, the critical alarm's event.
+ * the database lost is the safe direction (J1). A release is the opposite direction: one the
+ * journal holds and the database never committed would be applied by a restore replay and
+ * remove a stop. So every release — an admin lift, a correction, and each merge copy one of
+ * them lifted — is appended here, after `runCommand` returned a fresh acceptance (a replay of
+ * a receipt ran no work, and a command that failed to commit never gets here), carrying
+ * `committed: true`, which is what a replay requires before it applies a release (J3). Each
+ * is tried again after the delays; one that still fails stays committed and is logged by id,
+ * and a later restore brings its stop back, which errs toward the stop. Each failed put also
+ * logs `suppression_journal_write_failed`, the critical alarm's event.
  */
-export async function journalCommittedLift(
+export async function journalCommittedLifts(
   journal: SuppressionJournal,
-  lift: SuppressionJournalRecord | null,
+  lifts: readonly SuppressionJournalRecord[],
   reply: RouteResult,
   log: Logger | undefined,
   delays: readonly number[] = LIFT_JOURNAL_RETRY_DELAYS_MS,
 ): Promise<void> {
-  if (lift === null || reply.status !== 200) return;
+  if (lifts.length === 0 || reply.status !== 200) return;
   const body = reply.body as { readonly replayed?: unknown };
   if (body.replayed !== false) return;
-  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
-    try {
-      await journal.append(lift);
-      return;
-    } catch {
-      const wait = delays[attempt];
-      if (wait === undefined) break;
-      await new Promise(resolve => setTimeout(resolve, wait));
+  for (const lift of lifts) {
+    const marked: SuppressionJournalRecord = { ...lift, committed: true };
+    let journalled = false;
+    for (let attempt = 0; attempt <= delays.length && !journalled; attempt += 1) {
+      try {
+        await journal.append(marked);
+        journalled = true;
+      } catch {
+        const wait = delays[attempt];
+        if (wait === undefined) break;
+        await new Promise(resolve => setTimeout(resolve, wait));
+      }
+    }
+    if (!journalled) {
+      log?.log('error', 'suppression_lift_unjournalled', {
+        workspace_id: lift.workspaceId,
+        event_id: lift.eventId,
+        supersedes_event_id: lift.supersedesEventId ?? '',
+      });
     }
   }
-  log?.log('error', 'suppression_lift_unjournalled', {
-    workspace_id: lift.workspaceId,
-    event_id: lift.eventId,
-    supersedes_event_id: lift.supersedesEventId ?? '',
-  });
 }

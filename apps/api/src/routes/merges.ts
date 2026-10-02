@@ -1,6 +1,8 @@
 import { mergeFirmsCommandSchema } from '@fss/contracts';
 import { mergeFirms } from '@fss/domain/crm/merges.ts';
+import { SuppressionJournalError, type SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { journalCommittedLifts } from './suppressions.ts';
 import { commandReply, contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import { runCommand, type RefusalDetails } from '../auth/commands.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -37,29 +39,51 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
     const parsed = mergeFirmsCommandSchema.safeParse(request.body);
     if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const body = parsed.data;
-    const outcome = await runCommand(
-      auth,
-      principal,
-      {
-        commandId: body.commandId,
-        kind: 'firm.merged',
-        payload: { sourceFirmId: body.sourceFirmId, targetFirmId: body.targetFirmId, resolutions: body.resolutions ?? null },
-        clientVersion: body.clientVersion,
-      },
-      async context => {
-        const result = await mergeFirms(context, {
-          sourceFirmId: body.sourceFirmId,
-          targetFirmId: body.targetFirmId,
-          resolutions: body.resolutions,
+    // The copied lifts, journalled once the merge has committed (RF reset, J2); the copied
+    // stops are journalled inside it, before their rows (J1).
+    let lifts: readonly SuppressionJournalRecord[] = [];
+    let outcome: Awaited<ReturnType<typeof runCommand<unknown>>>;
+    try {
+      outcome = await runCommand(
+        auth,
+        principal,
+        {
           commandId: body.commandId,
-        });
-        if (result.ok) return { status: 'accepted', result: result.value };
-        return result.conflicts === undefined
-          ? { status: 'refused', reason: result.reason }
-          : { status: 'refused', reason: result.reason, details: { conflicts: result.conflicts } };
-      },
-    );
-    return withConflicts(commandReply(outcome), outcome);
+          kind: 'firm.merged',
+          payload: { sourceFirmId: body.sourceFirmId, targetFirmId: body.targetFirmId, resolutions: body.resolutions ?? null },
+          clientVersion: body.clientVersion,
+        },
+        async context => {
+          lifts = [];
+          const result = await mergeFirms(context, {
+            sourceFirmId: body.sourceFirmId,
+            targetFirmId: body.targetFirmId,
+            resolutions: body.resolutions,
+            commandId: body.commandId,
+            journal: options.suppressionJournal,
+          });
+          if (result.ok) {
+            const { journalAfterCommit, ...value } = result.value;
+            lifts = journalAfterCommit;
+            return { status: 'accepted', result: value };
+          }
+          return result.conflicts === undefined
+            ? { status: 'refused', reason: result.reason }
+            : { status: 'refused', reason: result.reason, details: { conflicts: result.conflicts } };
+        },
+      );
+    } catch (error) {
+      // A lost journal write of a copied stop fails the merge with a free command id, as it
+      // fails every suppression command (`dialSupport.ts`, 10.2).
+      if (!(error instanceof SuppressionJournalError)) throw error;
+      return {
+        status: 503,
+        body: { error: 'journal_unavailable', message: 'The suppression record could not be made durable.' },
+      };
+    }
+    const reply = withConflicts(commandReply(outcome), outcome);
+    await journalCommittedLifts(options.suppressionJournal, lifts, reply, options.log);
+    return reply;
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
