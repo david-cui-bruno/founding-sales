@@ -1,9 +1,12 @@
-import { useState, type JSX } from 'react';
+import { useEffect, type JSX } from 'react';
 import { SENDING_CHECK_LABELS, SENDING_CHECK_NAMES, type AdminView, type SendingAdminSectionView, type SendingCheckName } from '../settingsView.ts';
 import type { RecordSendingAuthenticationInput, SetSendingCapInput } from '../settingsContract.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Row, RowActions, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
+import { Row, RowActions, RowMain, Rows, Unread } from '../ui/layout.tsx';
+import { useKeptMap } from '../replies/kept.ts';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 
 /**
  * G7-2's sending section (12.6, 12.7): the authentication checklist and the per-mailbox
@@ -32,24 +35,6 @@ function savedText(section: SendingAdminSectionView): string {
   return JSON.stringify([section.checks, section.ramps.map(ramp => [ramp.mailboxId, ramp.cap])]);
 }
 
-interface Draft {
-  /** The saved values this draft was seeded from. */
-  readonly saved: string;
-  readonly checks: Readonly<Record<string, boolean>>;
-  readonly caps: Readonly<Record<string, string>>;
-}
-
-/** Nothing to seed from: the section is about to render nothing at all. */
-const EMPTY_DRAFT: Draft = { saved: '', checks: {}, caps: {} };
-
-function seedOf(section: SendingAdminSectionView): Draft {
-  return {
-    saved: savedText(section),
-    checks: { ...section.checks },
-    caps: Object.fromEntries(section.ramps.map(ramp => [ramp.mailboxId, String(ramp.cap)])),
-  };
-}
-
 export function SendingSection({
   view,
   recording,
@@ -68,22 +53,34 @@ export function SendingSection({
   onRetry(): void;
 }): JSX.Element | null {
   const section = view.sendingAdmin;
-  const [draft, setDraft] = useState<Draft>(() => (section === null ? EMPTY_DRAFT : seedOf(section)));
-  // Adjusting state while rendering, which React allows for exactly this: the form is
-  // derived from the answer until somebody edits it, and an effect would draw the old
-  // values once before replacing them.
-  let form = draft;
-  if (section !== null && draft.saved !== savedText(section)) {
-    form = seedOf(section);
-    setDraft(form);
-  }
-  const checks = form.checks;
-  const caps = form.caps;
-  const setChecks = (next: (was: Readonly<Record<string, boolean>>) => Readonly<Record<string, boolean>>): void => {
-    setDraft(was => ({ ...was, checks: next(was.checks) }));
+  /*
+   * What is typed here is kept above the route (S4R, criterion 7), one key per box and per
+   * cap, each falling back to what is saved. A marker records which saved values the typing
+   * was started from: when the saved values themselves change — a save that went through,
+   * a Refresh, another admin — the typing is dropped and the form shows the new saved
+   * values, as before. A re-read that answers the same thing leaves it alone.
+   */
+  const saved = section === null ? '' : savedText(section);
+  const kept = useKeptMap('settings:sending:');
+  const marker = kept.get('saved', saved);
+  const clear = kept.clear;
+  const setMarker = kept.set;
+  useEffect(() => {
+    if (section === null || marker === saved) return;
+    clear();
+    setMarker('saved', saved);
+  }, [section, marker, saved, clear, setMarker]);
+  const checks: Readonly<Record<string, boolean>> = Object.fromEntries(
+    SENDING_CHECK_NAMES.map(name => [name, kept.get(`check:${name}`, section?.checks[name] === true ? 'yes' : 'no') === 'yes']),
+  );
+  const capText = (mailboxId: string, cap: number): string => kept.get(`cap:${mailboxId}`, String(cap));
+  const setCheck = (name: string, on: boolean): void => {
+    kept.set('saved', saved);
+    kept.set(`check:${name}`, on ? 'yes' : 'no');
   };
-  const setCaps = (next: (was: Readonly<Record<string, string>>) => Readonly<Record<string, string>>): void => {
-    setDraft(was => ({ ...was, caps: next(was.caps) }));
+  const setCap = (mailboxId: string, value: string): void => {
+    kept.set('saved', saved);
+    kept.set(`cap:${mailboxId}`, value);
   };
 
   if (view.sendingUnread !== null) {
@@ -118,14 +115,14 @@ export function SendingSection({
                   disabled={!section.editable}
                   checked={checks[name] === true}
                   onChange={event => {
-                    setChecks(current => ({ ...current, [name]: event.target.checked }));
+                    setCheck(name, event.target.checked);
                   }}
                 />
                 {SENDING_CHECK_LABELS[name] ?? name}
               </label>
             ))}
           </div>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-3">
             <Button
               size="sm"
               data-testid="sending-record"
@@ -144,6 +141,7 @@ export function SendingSection({
             >
               Record checklist
             </Button>
+            <FormNotice forms={['sending-domain']} />
           </div>
         </>
       )}
@@ -159,9 +157,9 @@ export function SendingSection({
                   aria-label="A daily cap"
                   data-testid={`cap-${ramp.mailboxId}`}
                   disabled={!ramp.editable}
-                  value={caps[ramp.mailboxId] ?? ''}
+                  value={capText(ramp.mailboxId, ramp.cap)}
                   onChange={event => {
-                    setCaps(current => ({ ...current, [ramp.mailboxId]: event.target.value }));
+                    setCap(ramp.mailboxId, event.target.value);
                   }}
                   className="h-7 w-20 text-xs"
                 />
@@ -179,7 +177,7 @@ export function SendingSection({
                     disabled={!ramp.editable || capping}
                     {...(capping ? { 'aria-busy': true } : {})}
                     onClick={() => {
-                      const amount = Number.parseInt(caps[ramp.mailboxId] ?? '', 10);
+                      const amount = Number.parseInt(capText(ramp.mailboxId, ramp.cap), 10);
                       if (!Number.isInteger(amount)) return;
                       onCap({ mailboxId: ramp.mailboxId, [key]: amount });
                     }}
@@ -192,6 +190,9 @@ export function SendingSection({
           ))}
         </Rows>
       )}
+      <div className="mt-2 empty:hidden">
+        <FormNotice forms={['sending-cap']} />
+      </div>
     </Section>
   );
 }

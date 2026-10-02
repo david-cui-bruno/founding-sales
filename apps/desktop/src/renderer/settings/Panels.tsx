@@ -1,7 +1,9 @@
 import type { JSX } from 'react';
 import type { AdminView } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
-import { Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
+import { Row, RowActions, RowMain, Rows } from '../ui/layout.tsx';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 
 /**
  * Settings › Dashboard and Settings › Diagnostics: the figures, kept small.
@@ -75,6 +77,9 @@ export function Panels({
               ))}
             </Rows>
           )}
+          <div className="mt-2 empty:hidden">
+            <FormNotice forms={['alert']} />
+          </div>
         </Section>
       )}
     </>

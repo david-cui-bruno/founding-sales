@@ -403,8 +403,8 @@ export function candidateLabel(candidate: ReplyCandidate): string {
   return candidate.firmName.trim() === '' ? 'A firm Callie could not name' : candidate.firmName;
 }
 
-/** One line per card. Built from the summary, which has no body in it to leak. */
-function summaryLine(card: ReplySummary): string {
+/** The second line of a queue row: who wrote, and what Callie makes of it. */
+export function summaryDetail(card: ReplySummary): string {
   const who = card.contactName ?? card.from ?? 'Unknown sender';
   const what =
     card.nextAction === 'resolve_ambiguity'
@@ -416,7 +416,12 @@ function summaryLine(card: ReplySummary): string {
           : card.proposedDisposition === null
             ? 'Needs an answer'
             : `Callie suggests: ${DISPOSITION_LABELS[card.proposedDisposition]}`;
-  return `${card.firmName} — ${who} — ${what}`;
+  return `${who} — ${what}`;
+}
+
+/** One line per card. Built from the summary, which has no body in it to leak. */
+function summaryLine(card: ReplySummary): string {
+  return `${card.firmName} — ${summaryDetail(card)}`;
 }
 
 export function buildReplyView(state: ReplyState, chosen: ReplyDisposition | null): ReplyScreenView {

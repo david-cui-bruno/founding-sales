@@ -1,21 +1,29 @@
-import { useState, type JSX } from 'react';
+import { MailOpen, X } from 'lucide-react';
+import { useEffect, useRef, type JSX } from 'react';
+import { cn } from '../lib/utils.ts';
 import { navigate } from '../routes.ts';
-import type { ReplyState } from '../replyContract.ts';
+import type { ReplyState, ReplySummary } from '../replyContract.ts';
 import {
   CALLBACK_REQUIRED_HINT,
   CALLBACK_REQUIRED_LABEL,
   buildReplyView,
   candidateLabel,
   confirmLabel,
+  replyNotice,
+  summaryDetail,
   type ReplyCardView,
 } from '../replyView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Label } from '../ui/label.tsx';
+import { Label as FieldLabel } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { orDash } from '../today/text.ts';
+import { Block, Chip, dense, EmptyState, Kbd, Label, Skeleton } from '../v2/parts.tsx';
+import { useShortcuts } from '../v2/shortcuts.ts';
+import { useKept } from './kept.ts';
+import { countQueue, filterQueue, isUnsure, isWaiting, orderQueue, queueFilterOf, type QueueFilter } from './queue.ts';
 import type { Replies } from './useReplies.ts';
 
 /**
@@ -47,6 +55,13 @@ import type { Replies } from './useReplies.ts';
  * `GET /replies` answers full cards, so nothing here or in `useReplies.ts` keeps one: the
  * body is React state in this component, it goes when the card closes or the view is
  * left, and offline is a banner where the list would be rather than a card from earlier.
+ *
+ * ## Layout (S4R)
+ *
+ * Two regions, as Today has: the queue on the left (waiting first, newest first, J/K to
+ * walk and Enter to open), the open reply in the panel. After a reply is answered the next
+ * waiting one opens. What is kept above the route is the person's own: the open reply's id,
+ * the answer picked, what was typed, the filter and the list's scroll (`kept.ts`).
  */
 
 function Banners({ banners, prefix }: { readonly banners: ReplyCardView['banners']; readonly prefix: string }): JSX.Element {
@@ -61,10 +76,19 @@ function Banners({ banners, prefix }: { readonly banners: ReplyCardView['banners
   );
 }
 
+/** The sentence a command left, beside the thing it was about. */
+function Notice({ code }: { readonly code: string }): JSX.Element {
+  return (
+    <p data-testid="banner-info" role="status" className="text-xs leading-relaxed text-muted-foreground">
+      {replyNotice(code)}
+    </p>
+  );
+}
+
 function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
   return (
-    <section data-testid="suggestion" className="flex flex-col gap-1 border-t border-border pt-3">
-      <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">What Callie read</h3>
+    <Block data-testid="suggestion" className="flex flex-col gap-1">
+      <Label>What Callie read</Label>
       <p data-testid="suggestion-class" className="text-sm">
         {card.classLabel}
       </p>
@@ -82,10 +106,10 @@ function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
           </p>
           {/* The quotation, marked as a quotation. It is verified verbatim against the
               message before it is ever stored, so what is on screen is what was written. */}
-          <blockquote data-testid="suggestion-excerpt" className="border-l-2 border-border pl-3 text-sm text-muted-foreground">
+          <blockquote data-testid="suggestion-excerpt" className="border-l-2 border-strong pl-3 text-sm text-muted-foreground">
             {orDash(card.suggestion.excerpt)}
           </blockquote>
-          <p data-testid="suggestion-by" className="text-xs text-muted-foreground">
+          <p data-testid="suggestion-by" className="text-xs text-faint">
             {orDash(card.suggestion.attribution)}
           </p>
         </>
@@ -97,7 +121,7 @@ function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
           </li>
         ))}
       </ul>
-    </section>
+    </Block>
   );
 }
 
@@ -108,7 +132,7 @@ function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
  * either, for the reason at the top of this file.
  */
 function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly replies: Replies }): JSX.Element | null {
-  const [picked, setPicked] = useState<string | null>(null);
+  const [picked, setPicked] = useKept(`replies:m:${card.messageId}:candidate`, '');
   // This card's own call, not any call anywhere in the window (P1-4).
   const busy = replies.busy(card.messageId);
   if (card.ambiguity.length === 0) return null;
@@ -137,10 +161,10 @@ function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly 
           variant="outline"
           size="sm"
           data-testid="candidate-submit"
-          disabled={!card.resolveEnabled || picked === null || busy}
+          disabled={!card.resolveEnabled || picked === '' || busy}
           {...(busy ? { 'aria-busy': true } : {})}
           onClick={() => {
-            if (picked === null) return;
+            if (picked === '') return;
             replies.resolve({ messageId: card.messageId, opportunityId: picked });
           }}
         >
@@ -155,22 +179,28 @@ function Answer({
   card,
   state,
   replies,
+  outcome,
 }: {
   readonly card: ReplyCardView;
   readonly state: ReplyState;
   readonly replies: Replies;
+  /** What the last command on this reply said: it belongs beside the button that sent it. */
+  readonly outcome: string | null;
 }): JSX.Element | null {
+  const id = card.messageId;
   // The model's reading of a time, as a prefill a person may overwrite. 12.4 will not
   // let it be committed without them, so nothing here sends it on its own.
   const [date, time] = (card.callbackPrefill?.localDateTime ?? '').split('T');
-  const [callbackDate, setCallbackDate] = useState(date ?? '');
-  const [callbackTime, setCallbackTime] = useState(time ?? '');
-  const [firmWide, setFirmWide] = useState(false);
-  const [note, setNote] = useState('');
+  const [callbackDate, setCallbackDate] = useKept(`replies:m:${id}:date`, date ?? '');
+  const [callbackTime, setCallbackTime] = useKept(`replies:m:${id}:time`, time ?? '');
+  const [firmWideText, setFirmWide] = useKept(`replies:m:${id}:firmwide`, '');
+  const firmWide = firmWideText === 'yes';
+  const [note, setNote] = useKept(`replies:m:${id}:note`, '');
   // Migration 0025: an inbound question permits a contextual reply, so the default is
   // to grant one — and the select is how a person says no to it.
-  const [grantFollowUp, setGrantFollowUp] = useState(true);
-  if (card.choices.length === 0) return null;
+  const [followUpText, setFollowUp] = useKept(`replies:m:${id}:followup`, 'contextual_reply');
+  const grantFollowUp = followUpText === 'contextual_reply';
+  if (card.choices.length === 0) return outcome === null ? null : <Notice code={outcome} />;
 
   /*
    * What is actually about to happen, in one place (1.0.12).
@@ -191,8 +221,8 @@ function Answer({
   const permitsFollowUp = chosen === 'interested' || chosen === 'follow_up_later';
 
   return (
-    <div data-testid="disposition-form" className="mt-4 flex flex-col gap-2 border-t border-border pt-3">
-      <h3 className="text-sm font-medium">What does it mean?</h3>
+    <Block data-testid="disposition-form" className="flex flex-col gap-2">
+      <Label>What does it mean?</Label>
 
       {card.choices.map(choice => (
         <label key={choice.disposition} data-testid="choice" className="flex items-center gap-2 text-sm">
@@ -209,9 +239,9 @@ function Answer({
           />
           <span>{choice.label}</span>
           {choice.suggested ? (
-            <span data-testid="suggested-hint" className="rounded bg-muted px-1.5 py-px text-[11px] text-muted-foreground">
+            <Chip data-testid="suggested-hint" tone="outline">
               Callie’s guess
-            </span>
+            </Chip>
           ) : null}
         </label>
       ))}
@@ -230,7 +260,7 @@ function Answer({
           data-testid="follow-up-scope"
           value={grantFollowUp ? 'contextual_reply' : ''}
           onChange={event => {
-            setGrantFollowUp(event.target.value === 'contextual_reply');
+            setFollowUp(event.target.value === 'contextual_reply' ? 'contextual_reply' : 'none');
           }}
         >
           <option value="contextual_reply">Yes — one reply to what they asked</option>
@@ -277,14 +307,14 @@ function Answer({
           data-testid="firm-wide"
           checked={firmWide}
           onChange={event => {
-            setFirmWide(event.target.checked);
+            setFirmWide(event.target.checked ? 'yes' : '');
           }}
           className="size-3.5 accent-[var(--primary)]"
         />
         <span>Nobody at this firm, not just this address</span>
       </label>
 
-      <Label className="flex-col items-start gap-1">
+      <FieldLabel className="flex-col items-start gap-1">
         Note
         <Textarea
           data-testid="note"
@@ -293,9 +323,9 @@ function Answer({
             setNote(event.target.value);
           }}
         />
-      </Label>
+      </FieldLabel>
 
-      <div>
+      <div className="flex flex-col items-start gap-2">
         {/*
           ⚠ D5.1's first guard. `type="button"`, no form, no submit handler: this
           `onClick` is the only path to `confirm`, so no keystroke in any field above can
@@ -321,40 +351,57 @@ function Answer({
               note: note.trim(),
               grantFollowUp,
             });
-            setNote('');
           }}
         >
           {needsDay ? CALLBACK_REQUIRED_LABEL : confirmLabel(chosen, booked)}
         </Button>
+        {outcome === null ? null : <Notice code={outcome} />}
       </div>
-    </div>
+    </Block>
   );
 }
 
-function Card({ card, state, replies }: { readonly card: ReplyCardView; readonly state: ReplyState; readonly replies: Replies }): JSX.Element {
+function Panel({
+  card,
+  state,
+  replies,
+  outcome,
+}: {
+  readonly card: ReplyCardView;
+  readonly state: ReplyState;
+  readonly replies: Replies;
+  readonly outcome: string | null;
+}): JSX.Element {
+  const received = state.open?.receivedAt ?? null;
   return (
-    <section data-testid="reply-card" className="mt-5 flex flex-col gap-2 border-t border-border pt-4">
+    <section data-testid="reply-card" className="mx-auto flex w-full max-w-[720px] flex-col gap-2 px-6 py-5">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 data-testid="card-firm" className="text-base font-medium">
+        <h2 data-testid="card-firm" className="text-lg font-semibold">
           {card.heading}
         </h2>
-        {/* The firm the reply is about, in the same window: its page is where the deal
-            is marked Lost, a contact is added, or a number is confirmed. */}
-        <Button
-          variant="quiet"
-          size="sm"
-          data-testid="reply-open-firm"
-          onClick={() => {
-            navigate({ name: 'firm', firmId: card.firmId });
-          }}
-        >
-          Open firm
-        </Button>
+        <span className="flex shrink-0 items-center gap-1">
+          {/* The firm the reply is about, in the same window: its page is where the deal
+              is marked Lost, a contact is added, or a number is confirmed. */}
+          <Button
+            variant="quiet"
+            size="sm"
+            data-testid="reply-open-firm"
+            onClick={() => {
+              navigate({ name: 'firm', firmId: card.firmId });
+            }}
+          >
+            Open firm
+          </Button>
+          <Button variant="quiet" size="icon" className={dense.icon} data-testid="reply-close" aria-label="Close reply (Esc)" title="Close (Esc)" onClick={replies.close}>
+            <X />
+          </Button>
+        </span>
       </div>
       <p data-testid="card-from" className="text-sm text-muted-foreground">
         {card.fromLine}
+        {received === null ? null : <span className="tabular text-faint">{`  ·  ${formatReceived(received)}`}</span>}
       </p>
-      <p data-testid="card-subject" className="text-sm">
+      <p data-testid="card-subject" className="text-sm font-medium">
         {orDash(card.subject)}
       </p>
 
@@ -364,7 +411,7 @@ function Card({ card, state, replies }: { readonly card: ReplyCardView; readonly
         </p>
       ) : (
         <>
-          <pre data-testid="card-body" className="rounded-md bg-muted/60 p-3 font-sans text-sm leading-relaxed whitespace-pre-wrap">
+          <pre data-testid="card-body" className="rounded-md bg-muted/60 p-3 font-sans text-base leading-relaxed whitespace-pre-wrap">
             {card.bodyText ?? ''}
           </pre>
           {card.bodyTruncated ? (
@@ -375,90 +422,304 @@ function Card({ card, state, replies }: { readonly card: ReplyCardView; readonly
         </>
       )}
 
-      <Suggestion card={card} />
+      <div className="mt-2">
+        <Suggestion card={card} />
 
-      <section data-testid="impact" className="flex flex-col gap-1 border-t border-border pt-3">
-        <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">What this affects</h3>
-        <ul data-testid="impact-lines" className="flex flex-col gap-0.5">
-          {card.impactLines.map(line => (
-            <li key={line} data-testid="impact-line" className="text-sm">
-              {line}
-            </li>
-          ))}
-        </ul>
-        <Candidates card={card} replies={replies} />
-      </section>
+        <Block data-testid="impact" className="flex flex-col gap-1">
+          <Label>What this affects</Label>
+          <ul data-testid="impact-lines" className="flex flex-col gap-0.5">
+            {card.impactLines.map(line => (
+              <li key={line} data-testid="impact-line" className="text-sm">
+                {line}
+              </li>
+            ))}
+          </ul>
+          <Candidates card={card} replies={replies} />
+        </Block>
 
-      <Banners banners={card.banners} prefix="card-banner" />
-      <Answer card={card} state={state} replies={replies} />
+        <div className="flex flex-col gap-2 empty:hidden">
+          <Banners banners={card.banners} prefix="card-banner" />
+        </div>
+        <Answer key={card.messageId} card={card} state={state} replies={replies} outcome={outcome} />
+      </div>
     </section>
+  );
+}
+
+function formatReceived(instant: string): string {
+  const at = new Date(instant);
+  return Number.isNaN(at.getTime()) ? '' : at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+const FILTER_NAMES: Readonly<Record<QueueFilter, string>> = Object.freeze({
+  all: 'in all',
+  waiting: 'to answer',
+  unsure: 'with no suggestion',
+});
+
+/**
+ * The period and the counts, as controls (criterion 5). Every number says it is today's;
+ * the uncertain count is apart from the firm one, "3 to answer (+1 with no suggestion)"; and
+ * each number opens the list it counts.
+ */
+function Counts({
+  cards,
+  filter,
+  onFilter,
+}: {
+  readonly cards: readonly ReplySummary[];
+  readonly filter: QueueFilter;
+  onFilter(next: QueueFilter): void;
+}): JSX.Element {
+  const counts = countQueue(cards);
+  const pill = (name: QueueFilter, count: number, testId: string): JSX.Element => (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-pressed={filter === name}
+      onClick={() => onFilter(filter === name ? 'all' : name)}
+      className={cn(
+        'rounded-sm px-1 tabular transition-colors hover:bg-pressed',
+        filter === name ? 'bg-selected font-medium text-foreground' : 'text-muted-foreground',
+      )}
+    >
+      {`${String(count)} ${FILTER_NAMES[name]}`}
+    </button>
+  );
+  return (
+    <p data-testid="reply-counts" className="text-xs leading-5 text-muted-foreground">
+      <span>Today:</span>{' '}
+      {pill('waiting', counts.waiting, 'count-waiting')}
+      {counts.unsure === 0 ? null : (
+        <span className="whitespace-nowrap">
+          {' '}
+          <span aria-hidden>(+</span>
+          {pill('unsure', counts.unsure, 'count-unsure')}
+          <span aria-hidden>)</span>
+        </span>
+      )}{' '}
+      <span aria-hidden>·</span> {pill('all', counts.all, 'count-all')}
+    </p>
   );
 }
 
 export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Element | null {
   const state = replies.state;
-  if (state === null) return null;
-  const view = buildReplyView(state, replies.chosen);
+  const [filterText, setFilterText] = useKept('replies:filter', 'all');
+  const filter = queueFilterOf(filterText);
+  const [scrollText, setScrollText] = useKept('replies:scroll', '0');
+  const list = useRef<HTMLUListElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedScroll = useRef(scrollText);
+  savedScroll.current = scrollText;
+  const restoredScroll = useRef(false);
+  const remember = useRef(setScrollText);
+  remember.current = setScrollText;
+  const view = state === null ? null : buildReplyView(state, replies.chosen);
+  const open = state?.open ?? null;
+
+  useEffect(() => {
+    // Restored once, when the lane first draws; afterwards the scroll is the person's.
+    if (restoredScroll.current || state === null || scroller.current === null) return;
+    restoredScroll.current = true;
+    scroller.current.scrollTop = Number(savedScroll.current) || 0;
+  }, [state]);
+
+  useEffect(
+    () => () => {
+      // Leaving: keep where the list was and cancel a pending save.
+      if (scrollTimer.current !== null) clearTimeout(scrollTimer.current);
+    },
+    [],
+  );
+
+  const rows = (): HTMLElement[] => (list.current === null ? [] : [...list.current.querySelectorAll<HTMLElement>('[data-testid="reply-open"]')]);
+  const step = (by: 1 | -1): void => {
+    const all = rows();
+    if (all.length === 0) return;
+    const here = all.findIndex(row => row === document.activeElement);
+    const start = here >= 0 ? here : all.findIndex(row => row.getAttribute('aria-current') === 'true');
+    const next = start < 0 ? (by === 1 ? 0 : all.length - 1) : Math.min(all.length - 1, Math.max(0, start + by));
+    all[next]?.focus();
+  };
+  useShortcuts({
+    next: () => step(1),
+    previous: () => step(-1),
+    close: () => {
+      if (open !== null) replies.close();
+    },
+  });
+
+  if (state === null || view === null) {
+    return (
+      <div data-testid="replies-view" className="callie-v2 flex h-screen min-w-0 flex-col">
+        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
+          <h1 data-testid="heading" className="text-sm font-semibold">
+            Replies
+          </h1>
+        </header>
+        {replies.failed ? (
+          <EmptyState
+            testId="reply-error"
+            icon={<MailOpen />}
+            title="Callie could not read the replies"
+            actions={
+              <Button variant="outline" size="sm" data-testid="reply-retry" onClick={replies.retry}>
+                Try again
+              </Button>
+            }
+          >
+            Nothing was changed. Replies are never kept on this Mac, so there is nothing to show until this answers.
+          </EmptyState>
+        ) : (
+          <div data-testid="reply-loading" aria-busy className="flex w-[340px] flex-col gap-3 px-4 py-4">
+            <Skeleton className="w-3/4" />
+            <Skeleton className="w-1/2" />
+            <Skeleton className="w-2/3" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const ordered = orderQueue(state.cards);
+  const shown = filterQueue(ordered, filter);
+  const openId = open?.messageId ?? null;
+  const outcome = replies.outcome;
+  const outcomeOnPanel = outcome !== null && outcome.messageId === openId;
+  const outcomeOnRow = outcome !== null && !outcomeOnPanel && shown.some(card => card.messageId === outcome.messageId);
+  // A sentence about the lane itself (offline, a read's refusal) stays above the list; one
+  // about a reply goes with that reply, and only a reply nowhere on screen falls back here.
+  const listBanners = view.banners.filter(banner => !(outcome !== null && state.notice === outcome.code && banner.text === replyNotice(outcome.code)));
+  const orphan = outcome !== null && !outcomeOnPanel && !outcomeOnRow ? outcome.code : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-[860px] flex-col px-12 pt-10 pb-20">
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 data-testid="heading" className="text-2xl font-semibold tracking-tight">
-          {view.heading}
-        </h1>
-        <Button variant="quiet" size="sm" data-testid="refresh" onClick={replies.refresh}>
-          Refresh
-        </Button>
-      </div>
-      {state.businessDate === null ? null : (
-        <p data-testid="business-date" className="text-sm text-muted-foreground">
-          {state.businessDate}
-        </p>
-      )}
-
-      <div data-testid="banners" className="mt-3 flex flex-col gap-2 empty:hidden">
-        <Banners banners={view.banners} prefix="banner" />
-      </div>
-
-      <ul data-testid="reply-list" className="mt-4 flex flex-col border-t border-border">
-        {view.summaries.map(summary => (
-          <li
-            key={summary.card.messageId}
-            data-testid="reply-summary"
-            className="group/reply flex items-center gap-3 border-b border-border py-1.5 last:border-b-0"
-          >
-            <span data-testid="summary-line" className="min-w-0 flex-1 truncate text-sm">
-              {summary.line}
+    <div
+      data-testid="replies-view"
+      aria-busy={replies.pending > 0}
+      className="callie-v2 grid h-screen min-w-0 grid-cols-[minmax(280px,340px)_minmax(0,1fr)]"
+    >
+      <section data-region="reply-queue" aria-label="Replies" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
+        <header className="flex shrink-0 flex-col justify-center gap-0.5 border-b border-border px-4 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-baseline gap-2">
+              <h1 data-testid="heading" className="text-sm font-semibold">
+                Replies
+              </h1>
+              {state.businessDate === null ? null : (
+                <span data-testid="business-date" className="text-xs text-faint tabular">
+                  {state.businessDate}
+                </span>
+              )}
             </span>
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="reply-open"
-              disabled={replies.busy(summary.card.messageId)}
-              {...(replies.busy(summary.card.messageId) ? { 'aria-busy': true } : {})}
-              onClick={() => {
-                if (summary.open) replies.close();
-                else replies.open(summary.card.messageId);
-              }}
-            >
-              {summary.open ? 'Close' : 'Read'}
-            </Button>
-          </li>
-        ))}
-      </ul>
-      {view.emptyMessage === null ? null : (
-        <p data-testid="reply-empty" className="py-6 text-sm text-muted-foreground">
-          {view.emptyMessage}
-        </p>
-      )}
+            <span className="flex items-center gap-1">
+              <span aria-hidden className="flex items-center gap-1 text-xs text-faint">
+                <Kbd>J</Kbd>
+                <Kbd>K</Kbd>
+              </span>
+              <Button variant="quiet" size="sm" data-testid="refresh" onClick={replies.refresh}>
+                Refresh
+              </Button>
+            </span>
+          </div>
+          {state.cards.length === 0 ? null : <Counts cards={state.cards} filter={filter} onFilter={next => setFilterText(next)} />}
+        </header>
 
-      {view.card === null ? null : <Card card={view.card} state={state} replies={replies} />}
+        <div
+          ref={scroller}
+          data-testid="queue-list"
+          className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
+          onScroll={event => {
+            const top = event.currentTarget.scrollTop;
+            if (scrollTimer.current !== null) clearTimeout(scrollTimer.current);
+            scrollTimer.current = setTimeout(() => remember.current(String(Math.round(top))), 150);
+          }}
+        >
+          <div data-testid="banners" className="flex flex-col gap-2 px-1 pb-2 empty:hidden">
+            <Banners banners={listBanners} prefix="banner" />
+            {orphan === null ? null : <Notice code={orphan} />}
+            {replies.failed ? (
+              <p data-testid="reply-read-failed" className="flex items-center gap-2 text-xs text-muted-foreground">
+                Callie could not refresh the list.
+                <Button variant="quiet" size="sm" data-testid="reply-retry" onClick={replies.retry}>
+                  Try again
+                </Button>
+              </p>
+            ) : null}
+          </div>
 
-      {view.classifierLine === null ? null : (
-        <p data-testid="classifier-line" className="mt-6 text-xs text-muted-foreground">
-          {view.classifierLine}
-        </p>
-      )}
+          <ul data-testid="reply-list" ref={list} className="flex flex-col gap-px">
+            {shown.map(summary => {
+              const isOpen = summary.messageId === openId;
+              const waiting = isWaiting(summary);
+              const busy = replies.busy(summary.messageId);
+              return (
+                <li key={summary.messageId} data-testid="reply-summary" data-waiting={waiting ? 'true' : 'false'}>
+                  <button
+                    type="button"
+                    data-testid="reply-open"
+                    aria-current={isOpen ? 'true' : undefined}
+                    disabled={busy}
+                    {...(busy ? { 'aria-busy': true } : {})}
+                    onClick={() => {
+                      if (isOpen) replies.close();
+                      else replies.open(summary.messageId);
+                    }}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:opacity-60',
+                      isOpen ? 'bg-selected' : 'hover:bg-pressed',
+                    )}
+                  >
+                    <span aria-hidden className="flex h-5 items-center">
+                      {waiting ? (
+                        <span className={cn('size-1.5 rounded-full', isUnsure(summary) ? 'bg-faint' : 'bg-link')} />
+                      ) : (
+                        <span className="size-1.5 rounded-full border border-strong" />
+                      )}
+                    </span>
+                    <span data-testid="summary-line" className="flex min-w-0 flex-1 flex-col">
+                      <span className={cn('truncate text-sm', waiting || isOpen ? 'font-medium' : 'text-muted-foreground')}>{summary.firmName}</span>
+                      <span className="truncate text-xs text-muted-foreground">{summaryDetail(summary)}</span>
+                    </span>
+                    <span className="tabular pt-0.5 text-xs text-faint">{formatReceived(summary.receivedAt)}</span>
+                  </button>
+                  {outcome !== null && outcome.messageId === summary.messageId && outcomeOnRow ? (
+                    <div className="px-6 pb-1.5">
+                      <Notice code={outcome.code} />
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+          {view.emptyMessage !== null ? (
+            <EmptyState testId="reply-empty" icon={<MailOpen />} title={view.emptyMessage} />
+          ) : shown.length === 0 ? (
+            <EmptyState testId="reply-filter-empty" title="Nothing here">
+              <Button variant="quiet" size="sm" onClick={() => setFilterText('all')}>
+                Show everything from today
+              </Button>
+            </EmptyState>
+          ) : null}
+
+          {view.classifierLine === null ? null : (
+            <p data-testid="classifier-line" className="mt-4 px-2 text-xs text-faint">
+              {view.classifierLine}
+            </p>
+          )}
+        </div>
+      </section>
+
+      <div data-region="reply-panel" className="min-h-0 overflow-y-auto">
+        {view.card === null ? (
+          <EmptyState icon={<MailOpen />} title="Choose a reply to read it" testId="reply-panel-empty" className="h-full">
+            Use J and K to move, Enter to open.
+          </EmptyState>
+        ) : (
+          <Panel card={view.card} state={state} replies={replies} outcome={outcomeOnPanel ? outcome.code : null} />
+        )}
+      </div>
     </div>
   );
 }

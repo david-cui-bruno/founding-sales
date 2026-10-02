@@ -100,3 +100,12 @@ export function useClearDrafts(): (prefix: string) => void {
     [store],
   );
 }
+
+/**
+ * Whether a drafts store is mounted above this component. A view rendered on its own — in a
+ * component test, say — has none, and keeps what it holds in the component instead
+ * (`replies/kept.ts`).
+ */
+export function useDraftStoreAvailable(): boolean {
+  return useContext(DraftContext) !== null;
+}

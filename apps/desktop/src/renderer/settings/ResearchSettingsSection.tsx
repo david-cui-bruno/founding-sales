@@ -1,10 +1,11 @@
-import { useState, type JSX } from 'react';
+import type { JSX } from 'react';
 import type { ResearchSettingsEdit, ResearchState } from '../researchContract.ts';
 import { dollars, researchNotice, spendLine } from '../researchView.ts';
 import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Section } from '../ui/layout.tsx';
+import { useKeptMap } from '../replies/kept.ts';
+import { Section } from './Group.tsx';
 
 /**
  * Settings › Research: the ceilings, the model, and what has been spent (lane R).
@@ -40,15 +41,16 @@ export function ResearchSettingsSection({
   readonly saving: boolean;
   onSave(edit: ResearchSettingsEdit): void;
 }): JSX.Element | null {
-  const [draft, setDraft] = useState<Readonly<Record<string, string>>>({});
   const settings = state?.settings ?? null;
+  // Typed and not yet saved: kept above the route, per field (S4R, criterion 7).
+  const kept = useKeptMap('settings:research:');
   if (settings === null) return null;
   const spend = spendLine(state as ResearchState);
   const finishingLine = finishingSentence('research', state?.finishing);
 
   const numberOf = (key: string, current: number): number => {
-    const typed = draft[key];
-    if (typed === undefined || typed.trim() === '') return current;
+    const typed = kept.get(key, '');
+    if (typed.trim() === '') return current;
     const parsed = Number(typed);
     return Number.isFinite(parsed) ? Math.trunc(parsed) : current;
   };
@@ -87,9 +89,9 @@ export function ResearchSettingsSection({
               data-testid={`research-${field.key}`}
               inputMode="numeric"
               disabled={saving}
-              value={draft[field.key] ?? String(settings[field.key])}
+              value={kept.get(field.key, String(settings[field.key]))}
               onChange={event => {
-                setDraft(current => ({ ...current, [field.key]: event.target.value }));
+                kept.set(field.key, event.target.value);
               }}
             />
           </label>
@@ -109,7 +111,7 @@ export function ResearchSettingsSection({
               monthlyCostCeilingCents: numberOf('monthlyCostCeilingCents', settings.monthlyCostCeilingCents),
               maxPagesPerFirm: numberOf('maxPagesPerFirm', settings.maxPagesPerFirm),
             });
-            setDraft({});
+            kept.clear();
           }}
         >
           Save

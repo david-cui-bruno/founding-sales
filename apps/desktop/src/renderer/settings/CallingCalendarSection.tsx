@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import type { JSX } from 'react';
 import {
   MONTHLY_CASH_CEILING_MAX_CENTS,
   TRANSCRIPTION_DAILY_CEILING_MAX_CENTS,
@@ -11,7 +11,9 @@ import type { AdminState, SaveIntegrationInput } from '../settingsContract.ts';
 import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Row, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
+import { Row, RowMain, Rows, Unread } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { Section } from './Group.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
 /**
@@ -161,9 +163,9 @@ function Loaded({
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
   const budget = integrations.telephonyBudget;
-  const [dollars, setDollars] = useState((budget.dailyCeilingCents / 100).toFixed(2));
-  const [minutes, setMinutes] = useState(String(budget.maxMinutesPerCall));
-  const [script, setScript] = useState(integrations.voicemailScript);
+  const [dollars, setDollars] = useKept('settings:calling:budget-dollars', (budget.dailyCeilingCents / 100).toFixed(2));
+  const [minutes, setMinutes] = useKept('settings:calling:minutes', String(budget.maxMinutesPerCall));
+  const [script, setScript] = useKept('settings:calling:voicemail', integrations.voicemailScript);
 
   const callingOn = integrations.callingProvider === 'twilio';
   const calcomOn = integrations.calendarIntegration === 'calcom';
@@ -372,7 +374,7 @@ function TranscriptionRows({
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
   const setting = transcription.setting;
-  const [dollars, setDollars] = useState((setting.dailyCeilingCents / 100).toFixed(2));
+  const [dollars, setDollars] = useKept('settings:calling:transcription-dollars', (setting.dailyCeilingCents / 100).toFixed(2));
   const on = setting.enabled;
   const keyMissing = !transcription.configured.ok;
   const noBudget = setting.dailyCeilingCents <= 0;
@@ -469,7 +471,7 @@ function MonthRow({
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
-  const [dollars, setDollars] = useState((month.ceilingCents / 100).toFixed(2));
+  const [dollars, setDollars] = useKept('settings:calling:month-dollars', (month.ceilingCents / 100).toFixed(2));
   const cents = monthCentsFromDollars(dollars);
   const saving = busy('monthly_cash_ceiling_cents');
   return (
