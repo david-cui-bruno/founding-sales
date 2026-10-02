@@ -78,7 +78,9 @@ describe('inline corrections open in place', () => {
 
   it('a second click closes it and keeps the draft; so does Escape', () => {
     panel([proposalItem(PROPOSALS.correctedNumber)]);
-    const open = (): void => fireEvent.click(screen.getByTestId('review-correct-phone'));
+    const open = (): void => {
+      fireEvent.click(screen.getByTestId('review-correct-phone'));
+    };
     open();
     fireEvent.change(screen.getByTestId('basics-phone'), { target: { value: '6175550199' } });
     open();

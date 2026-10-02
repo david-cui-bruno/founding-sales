@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { type JSX } from 'react';
+import type { CallProposal } from '@fss/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnalysisView } from '../src/shared/operations.ts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
@@ -73,7 +74,7 @@ function show(view: AnalysisView | undefined, extra: Partial<AfterCallAnalysisPr
   return { props, rerender: (next: Partial<AfterCallAnalysisProps>) => result.rerender(tree({ ...props, ...next })) };
 }
 
-const completed = (proposals = [PROPOSALS.outcome, PROPOSALS.callback, PROPOSALS.followUp, PROPOSALS.buyingSignal, PROPOSALS.task]): AnalysisView => ({
+const completed = (proposals: readonly CallProposal[] = [PROPOSALS.outcome, PROPOSALS.callback, PROPOSALS.followUp, PROPOSALS.buyingSignal, PROPOSALS.task]): AnalysisView => ({
   analysis: analysisAnswer({ proposals }),
   reason: null,
 });
