@@ -281,6 +281,11 @@ export async function createApplyWorld(): Promise<ApplyWorld> {
 }
 
 /** An Apply as the route runs it: the analysis David saw, the selected keys, in one transaction. */
+/** An atomic Apply's refusal that names the key it refused on (review S3B: atomic Apply). */
+export function refusedAt(reason: string, key: string, detail: string | null = null) {
+  return { ok: false, reason, keyReasons: [{ key, reason, detail }] };
+}
+
 export async function apply(
   world: ApplyWorld,
   shown: Analysed,

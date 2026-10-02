@@ -1,4 +1,5 @@
 import {
+  type ApplyKeyReason,
   type ApplyCallProposalsResult,
   type CallAnalysisResult,
   type CallFollowUp,
@@ -38,9 +39,11 @@ import { CALL_CADENCE_PARKED_SOURCE } from './sessions.ts';
  * ticks, with no dialog) and runs in one transaction:
  *
  *   1. **Locks**, in the one order (docs/greenfield/calling.md): Today's lock (shared) →
- *      the send gate → the dialled route, when a wrong-number or stop **outcome** is
- *      applied (its retirement takes the route before the firm, as `updateFirmBasics` and
- *      `retireRoute` do) → the firm → `call_analysis:<session>` → the session row.
+ *      the send gate → the dialled route whenever an **outcome** is applied (`FOR UPDATE`
+ *      when it retires or suppresses the number, as `updateFirmBasics` and `retireRoute`
+ *      take it; `FOR KEY SHARE` otherwise, because the call log's insert takes the route's
+ *      key-share lock through its foreign key and must not take it after the firm) → the
+ *      firm → `call_analysis:<session>` → the session row.
  *   2. **Freshness**: the analysis is the newest completed model analysis on the call's
  *      current transcript, and the echoed transcript hash is that transcript's
  *      (`stale_analysis`); the echoed `proposalHash` is the stored one, never recomputed
@@ -48,11 +51,15 @@ import { CALL_CADENCE_PARKED_SOURCE } from './sessions.ts';
  *   3. **First-time rules**, in this order: `outcome` with a log → `call_already_logged`;
  *      `callback` or `follow_up` with no `outcome` and no log → `outcome_required`;
  *      `callback` when the log has any callback, cancelled included → `callback_exists`.
- *      Then a `follow_up` more than seven days after the call → `follow_up_expired`.
- *   4. **Map** each key to its command, inside one savepoint: a refusal from any of them
- *      undoes every write of this Apply and refuses it (a refused command receipt commits
- *      what ran before it, so nothing may be left behind).
- *   5. **Measure** (one audit row per decided key), then `refreshTodayForFirm`.
+ *      Then a `follow_up` more than seven days after the call → `follow_up_expired` (the
+ *      call's time: the session's start, never when it was logged).
+ *   4. **Map** each key to its command, inside one savepoint. **Atomic**: a refusal from any
+ *      of them — `follow_up_not_granted` included — undoes every write of this Apply and
+ *      refuses it, naming the key (a refused command receipt commits what ran before it, so
+ *      nothing may be left behind). No-op results (`already_parked`, `already_created`) are
+ *      not refusals.
+ *   5. **Measure** (one audit row per `applied` key; a no-op is not a decision), then
+ *      `refreshTodayForFirm`.
  *
  * A retry with the same command id is answered from its receipt; a click with a different
  * id meets a first-time guard. There is no ledger.
@@ -73,9 +80,11 @@ export type ApplyRefusalCode = CallProposalRefusalCode | PolicyRefusalCode | 'no
 
 export type ApplyCallProposalsOutcome =
   | { readonly ok: true; readonly value: ApplyCallProposalsResult }
-  | { readonly ok: false; readonly reason: ApplyRefusalCode };
+  | { readonly ok: false; readonly reason: ApplyRefusalCode; readonly keyReasons?: readonly ApplyKeyReason[] };
 
-const refuse = (reason: ApplyRefusalCode): ApplyCallProposalsOutcome => ({ ok: false, reason });
+/** A refusal of the whole Apply; with `key`, the key that refused it. */
+const refuse = (reason: ApplyRefusalCode, key?: string, detail?: string | null): ApplyCallProposalsOutcome =>
+  key === undefined ? { ok: false, reason } : { ok: false, reason, keyReasons: [{ key, reason, detail: detail ?? null }] };
 
 /** The outcomes whose effects touch the dialled route: retirement, or the number's suppression. */
 const ROUTE_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>(['wrong_number', 'do_not_call']);
@@ -96,7 +105,11 @@ export function analysisParkSourceId(sessionId: string): string {
 const SAVEPOINT = 'call_proposal_apply';
 
 class Refused extends Error {
-  constructor(readonly reason: ApplyRefusalCode) {
+  constructor(
+    readonly reason: ApplyRefusalCode,
+    readonly key?: string,
+    readonly detail?: string | null,
+  ) {
     super(reason);
   }
 }
@@ -175,11 +188,14 @@ export async function applyCallProposals(
   // ---- 1. Locks -------------------------------------------------------------------------
   await lockTodayForFirmChange(context);
   await lockSendGateForStopFact(context);
-  if (touchesRoute) {
-    await context.db.query('SELECT 1 FROM phone_routes WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
-      context.scope.workspaceId,
-      where.phone_route_id,
-    ]);
+  // Every outcome: the call log names the dialled route, so its insert takes the route's
+  // key-share lock — after the firm, that is the other half of a cycle with a Basics edit
+  // that holds the route and waits for the firm (review S3B, finding 1).
+  if (appliedOutcome !== null) {
+    await context.db.query(
+      `SELECT 1 FROM phone_routes WHERE workspace_id = $1 AND id = $2 ${touchesRoute ? 'FOR UPDATE' : 'FOR KEY SHARE'}`,
+      [context.scope.workspaceId, where.phone_route_id],
+    );
   }
   const firm = await loadFirmForUpdate(context, where.firm_id);
   if (firm === null) return refuse('not_found');
@@ -232,7 +248,7 @@ export async function applyCallProposals(
   for (const key of input.keys) {
     const proposal = byKey.get(key);
     if (proposal === undefined || proposal.mode !== 'apply' || !APPLICABLE_KINDS.has(proposal.kind)) {
-      return refuse('proposal_unknown');
+      return refuse('proposal_unknown', key);
     }
     chosen.push(proposal);
   }
@@ -242,8 +258,10 @@ export async function applyCallProposals(
 
   // ---- 3. First-time rules --------------------------------------------------------------
   const logId = session.call_log_id;
-  if (has('outcome') && logId !== null) return refuse('call_already_logged');
-  if ((has('callback') || has('follow_up')) && !has('outcome') && logId === null) return refuse('outcome_required');
+  if (has('outcome') && logId !== null) return refuse('call_already_logged', 'outcome');
+  if ((has('callback') || has('follow_up')) && !has('outcome') && logId === null) {
+    return refuse('outcome_required', has('callback') ? 'callback' : 'follow_up');
+  }
   let log: LogRow | null = null;
   if (logId !== null) {
     const { rows: logs } = await context.db.query<LogRow>(
@@ -258,19 +276,21 @@ export async function applyCallProposals(
       context.scope.workspaceId,
       log.id,
     ]);
-    if (callbacks.length > 0) return refuse('callback_exists');
+    if (callbacks.length > 0) return refuse('callback_exists', 'callback');
   }
 
   // Everything else that can refuse, before the first write.
-  if (has('callback') && log === null && appliedOutcome !== 'callback_requested') return refuse('invalid_input');
+  if (has('callback') && log === null && appliedOutcome !== 'callback_requested') return refuse('invalid_input', 'callback');
   const templateVersionId = input.edits?.follow_up?.templateVersionId;
   if (has('follow_up')) {
-    if (templateVersionId === undefined) return refuse('invalid_input');
+    if (templateVersionId === undefined) return refuse('invalid_input', 'follow_up');
     // The proposal's evidence is a verified quote: Them asked, or Them agreed to an offer.
     const request = analysis.result?.followUpRequest ?? null;
-    if (request === null || (request.ref.side !== 'them' && request.agreed === null)) return refuse('proposal_unknown');
-    if (log === null && (appliedOutcome === null || !REACHED_OUTCOMES.has(appliedOutcome))) return refuse('invalid_input');
-    if (!(await withinCapturedFollowUpWindow(context, log?.occurred_at ?? session.started))) return refuse('follow_up_expired');
+    if (request === null || (request.ref.side !== 'them' && request.agreed === null)) return refuse('proposal_unknown', 'follow_up');
+    if (log === null && (appliedOutcome === null || !REACHED_OUTCOMES.has(appliedOutcome))) return refuse('invalid_input', 'follow_up');
+    // The call's own time, never the log's: a log written late does not reopen the window
+    // (review S3B, finding 3). `confirmCapturedFollowUp` and Needs review read the same.
+    if (!(await withinCapturedFollowUpWindow(context, session.started))) return refuse('follow_up_expired', 'follow_up');
   }
 
   const callbackParams =
@@ -304,7 +324,7 @@ export async function applyCallProposals(
   } catch (error) {
     await context.db.query(`ROLLBACK TO SAVEPOINT ${SAVEPOINT}`);
     await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
-    if (error instanceof Refused) return refuse(error.reason);
+    if (error instanceof Refused) return refuse(error.reason, error.key, error.detail);
     throw error;
   }
   await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
@@ -321,7 +341,11 @@ export async function applyCallProposals(
       policyVersion: analysis.policy_version,
       proposals: analysis.proposals ?? [],
     },
-    applied.results.map(entry => ({ key: entry.key, result: entry.edited ? 'edited' : 'unchanged' })),
+    // Only what this click did. A no-op (`already_created`, `already_parked`) decides nothing,
+    // and recording it would overwrite the first decision (review S3B, finding 8).
+    applied.results
+      .filter(entry => entry.result === 'applied')
+      .map(entry => ({ key: entry.key, result: entry.edited ? 'edited' : 'unchanged' })),
   );
   await refreshTodayForFirm(context, { firmId: where.firm_id });
   return { ok: true, value: { analysisId: analysis.id, callSessionId: sessionId, ...applied } };
@@ -384,7 +408,10 @@ async function mapKeys(
       journal: input.journal,
       viaProposalApply: true,
     });
-    if (!logged.ok) throw new Refused(logged.reason);
+    if (!logged.ok) throw new Refused(logged.reason, 'outcome');
+    // A selected follow-up whose permission was not granted is a refusal of the whole Apply,
+    // never an `applied` key beside a warning (review S3B, finding 4).
+    if (selected.has('follow_up') && logged.value.followUpPermissionId === null) throw notGranted(logged.value.followUps);
     callLogId = logged.value.callLogId;
     followUps.push(...logged.value.followUps);
     const outcomeEdited =
@@ -410,31 +437,34 @@ async function mapKeys(
               assignedUserId: m.assignedUserId,
               ...params,
             });
-      if (!created.ok) throw new Refused(created.reason === 'callback_already_scheduled' ? 'callback_exists' : created.reason);
+      if (!created.ok) throw new Refused(created.reason === 'callback_already_scheduled' ? 'callback_exists' : created.reason, 'callback');
       push(proposalOf('callback'), 'applied', created.value.id, callbackEdited(proposalOf('callback'), input.edits));
     }
     // -- follow-up on an existing log: the evidence-backed seven-day path -------------------
     if (selected.has('follow_up')) {
-      if (m.templateVersionId === undefined) throw new Refused('invalid_input');
+      if (m.templateVersionId === undefined) throw new Refused('invalid_input', 'follow_up');
       const confirmed = await confirmCapturedFollowUp(context, {
         callLogId: m.log.id,
         templateVersionId: m.templateVersionId,
         commandId: input.commandId,
       });
-      if (!confirmed.ok) throw new Refused(confirmed.reason);
+      if (!confirmed.ok) throw new Refused(confirmed.reason, 'follow_up');
+      if (confirmed.value.followUpPermissionId === null) throw notGranted(confirmed.value.followUps);
       followUps.push(...confirmed.value.followUps);
       push(proposalOf('follow_up'), 'applied', confirmed.value.followUpPermissionId, false);
     }
   }
 
   // -- the "Send overview" task an overview request leaves (decision 7) --------------------
-  const createdHere = new Set<string>();
+  // One insertion path: when David selected the task too, the task loop below writes it,
+  // once, with his edits; only an unselected overview task is written here, as proposed
+  // (review S3B, finding 5).
   if (selected.has('follow_up') && m.followUpProposal?.kind === 'follow_up' && m.followUpProposal.params.requestKind === 'overview_email') {
     const quote = m.followUpProposal.params.evidence[0]?.quote;
-    if (quote !== undefined) {
-      const key = taskKey(quote);
+    const key = quote === undefined ? null : taskKey(quote);
+    if (key !== null && !selected.has(key)) {
       const listed = m.byKey.get(key);
-      const task = await createCallTask(context, {
+      await createCallTask(context, {
         firmId: m.firmId,
         contactId: m.session.contact_id,
         callSessionId: m.sessionId,
@@ -442,7 +472,6 @@ async function mapKeys(
         text: listed?.kind === 'task' ? listed.params.text : await overviewText(context, m.session.contact_id),
         dueAt: await wallClock(context),
       });
-      if (task.created) createdHere.add(key);
     }
   }
 
@@ -456,26 +485,34 @@ async function mapKeys(
       detail: { callSessionId: m.sessionId, analysisId: input.analysisId },
     });
     const opportunityId = stage.kind === 'review' ? null : stage.opportunityId;
-    if (opportunityId !== null) {
+    // This call's evidence is already on the opportunity (one per call): a no-op, not a
+    // decision (review S3B, finding 8).
+    const repeat = stage.kind === 'unchanged' && stage.reason === 'already_applied';
+    if (repeat) push(proposalOf('buying_signal'), 'already_applied', opportunityId, false);
+    else if (opportunityId !== null) {
       const manual = await setManualControlMode(context, {
         opportunityId,
         reason: 'buying signal on a call',
         origin: 'engaged_call',
         commandId: `${input.commandId}:buying_signal`,
       });
-      if (!manual.ok) throw new Refused(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
+      if (!manual.ok) throw new Refused(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input', 'buying_signal');
     }
-    push(proposalOf('buying_signal'), 'applied', opportunityId, false);
+    if (!repeat) push(proposalOf('buying_signal'), 'applied', opportunityId, false);
   }
 
-  // -- park: a cadence park the analysis asked for, unless any park is open -----------------
+  // -- park: a cadence park the analysis asked for, once ------------------------------------
+  // `already_parked` when this proposal's park was ever made — released by a Resume
+  // included, because a Resume is deliberate recovery and must stick (review S3B, finding
+  // 7) — or when any park (the automatic one included) is open on the firm.
   if (selected.has('park')) {
     const { rows: open } = await context.db.query<{ id: string }>(
       `SELECT id FROM active_holds
-        WHERE workspace_id = $1 AND scope_kind = 'firm' AND scope_key = ($2::uuid)::text
-          AND source_event_kind = $3 AND released_at IS NULL
-        ORDER BY started_at, id LIMIT 1`,
-      [context.scope.workspaceId, m.firmId, CALL_CADENCE_PARKED_SOURCE],
+        WHERE workspace_id = $1 AND source_event_kind = $3
+          AND (source_event_id = $4
+               OR (scope_kind = 'firm' AND scope_key = ($2::uuid)::text AND released_at IS NULL))
+        ORDER BY (source_event_id = $4) DESC, started_at, id LIMIT 1`,
+      [context.scope.workspaceId, m.firmId, CALL_CADENCE_PARKED_SOURCE, analysisParkSourceId(m.sessionId)],
     );
     const existing = open[0]?.id;
     if (existing !== undefined) push(proposalOf('park'), 'already_parked', existing, false);
@@ -511,11 +548,19 @@ async function mapKeys(
       text: edit?.text ?? proposal.params.text,
       dueAt: edit?.dueAt ?? (await wallClock(context)),
     });
-    const fresh = task.created || createdHere.has(proposal.key);
-    push(proposal, fresh ? 'applied' : 'already_created', task.id, edit?.text !== undefined && edit.text !== proposal.params.text);
+    // Edited: other words, or a due date David set (the proposal carries only a phrase).
+    const edited = (edit?.text !== undefined && edit.text !== proposal.params.text) || edit?.dueAt !== undefined;
+    push(proposal, task.created ? 'applied' : 'already_created', task.id, edited);
   }
 
   return { callLogId, results, followUps };
+}
+
+/** A selected follow-up whose permission was not granted: the Apply's refusal, with why. */
+function notGranted(followUps: readonly CallFollowUp[]): Refused {
+  const entry = followUps.find(followUp => followUp.kind === 'follow_up_not_granted');
+  const reason = entry !== undefined && 'reason' in entry && typeof entry.reason === 'string' ? entry.reason : null;
+  return new Refused('follow_up_not_granted', 'follow_up', reason === null ? null : reason.slice(0, 64));
 }
 
 function callbackEdited(proposal: CallProposal, edits: CallProposalEdits | undefined): boolean {

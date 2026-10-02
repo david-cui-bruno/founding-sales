@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { completeCallAnalysis, createAnalysisVersion, readPolicyContext } from '../../calls/analysis.ts';
 import { applyCallProposals } from '../../calls/proposalApply.ts';
 import { taskKey } from '../../calls/analysisPolicy.ts';
+import { resumeCallCadence } from '../../calls/sessions.ts';
 import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
 import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { answer, lines } from './analysisFixtures.ts';
-import { apply, createApplyWorld, pidOf, waitsOn, type Analysed, type ApplyWorld } from './support/applyWorld.ts';
+import { apply, refusedAt, createApplyWorld, pidOf, waitsOn, type Analysed, type ApplyWorld } from './support/applyWorld.ts';
 
 /**
  * Slice 3a, lane B — check C3: a click applies only the newest completed analysis on the
@@ -126,7 +127,7 @@ describe('C3: first-time apply of the authoritative analysis', () => {
       const racing = apply(world, call, keys, { db: third, commandId: second });
       expect(await waitsOn(world.session, blocker)).toBe(true);
       await other.query('COMMIT');
-      expect(await racing).toEqual({ ok: false, reason: 'call_already_logged' });
+      expect(await racing).toEqual(refusedAt('call_already_logged', 'outcome'));
       expect(await effectsOf(call)).toEqual({ logs: 1, callbacks: 1, evidence: 1, tasks: 1 });
       if (held.ok) {
         expect(held.value.results.map(entry => [entry.key, entry.result])).toEqual([
@@ -142,15 +143,15 @@ describe('C3: first-time apply of the authoritative analysis', () => {
   it('B-1: a second click with a different id meets each first-time guard, key by key', async () => {
     const call = await analysedCall();
     expect((await apply(world, call, ['outcome', 'callback', 'buying_signal', taskKey(PROMISE)])).ok).toBe(true);
-    expect(await apply(world, call, ['outcome'])).toEqual({ ok: false, reason: 'call_already_logged' });
-    expect(await apply(world, call, ['callback'])).toEqual({ ok: false, reason: 'callback_exists' });
+    expect(await apply(world, call, ['outcome'])).toEqual(refusedAt('call_already_logged', 'outcome'));
+    expect(await apply(world, call, ['callback'])).toEqual(refusedAt('callback_exists', 'callback'));
     const again = await apply(world, call, [taskKey(PROMISE)]);
     expect(again.ok && again.value.results).toEqual([
       expect.objectContaining({ key: taskKey(PROMISE), result: 'already_created' }),
     ]);
     // A repeated buying signal moves nothing: the evidence is one per call.
     const signal = await apply(world, call, ['buying_signal']);
-    expect(signal.ok).toBe(true);
+    expect(signal.ok && signal.value.results).toEqual([expect.objectContaining({ key: 'buying_signal', result: 'already_applied' })]);
     expect(await effectsOf(call)).toEqual({ logs: 1, callbacks: 1, evidence: 1, tasks: 1 });
 
     // A park the analysis asked for, then again with a different id: `already_parked`.
@@ -179,9 +180,25 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     expect(parked.ok && parked.value.results).toEqual([expect.objectContaining({ key: 'park', result: 'already_parked' })]);
   });
 
+  it('B-1: a park released by Resume stays released: the same proposal again is already_parked (review S3B, finding 7)', async () => {
+    const soft = await analysedCall(SOFT_NO, SOFT_READING);
+    const parked = await apply(world, soft, ['outcome', 'park']);
+    expect(parked.ok, JSON.stringify(parked)).toBe(true);
+    const resumed = await withTransaction(world.session, async () => await resumeCallCadence(world.salesperson(), { firmId: soft.firm.firmId }));
+    expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
+    const again = await apply(world, soft, ['park'], { commandId: 'park-after-resume' });
+    expect(again.ok && again.value.results).toEqual([expect.objectContaining({ key: 'park', result: 'already_parked' })]);
+    expect(
+      await count(
+        "SELECT count(*)::text AS n FROM active_holds WHERE scope_key = $1 AND source_event_kind = 'call_cadence_parked' AND released_at IS NULL",
+        [soft.firm.firmId],
+      ),
+    ).toBe(0);
+  });
+
   it('B-1: callback (or follow_up) alone with no log is outcome_required, and nothing is written', async () => {
     const call = await analysedCall();
-    expect(await apply(world, call, ['callback'])).toEqual({ ok: false, reason: 'outcome_required' });
+    expect(await apply(world, call, ['callback'])).toEqual(refusedAt('outcome_required', 'callback'));
     expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
   });
 
@@ -307,7 +324,7 @@ describe('C3: first-time apply of the authoritative analysis', () => {
   it('B-2: a hash that is not the stored one is stale_proposal, and an unknown or review key is proposal_unknown', async () => {
     const call = await analysedCall();
     expect(await apply(world, call, ['outcome'], { proposalHash: '0'.repeat(64) })).toEqual({ ok: false, reason: 'stale_proposal' });
-    expect(await apply(world, call, ['park'])).toEqual({ ok: false, reason: 'proposal_unknown' });
+    expect(await apply(world, call, ['park'])).toEqual(refusedAt('proposal_unknown', 'park'));
     expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
   });
 
@@ -319,7 +336,7 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     );
     const shown = (await world.read(call.sessionId)).authoritative?.proposals ?? [];
     expect(shown.find(proposal => proposal.key === 'buying_signal')?.mode).toBe('review');
-    expect(await apply(world, call, ['buying_signal'])).toEqual({ ok: false, reason: 'proposal_unknown' });
+    expect(await apply(world, call, ['buying_signal'])).toEqual(refusedAt('proposal_unknown', 'buying_signal'));
     expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
   });
 
@@ -338,10 +355,9 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     const shown = (await world.read(call.sessionId)).authoritative?.proposals ?? [];
     expect(shown.find(proposal => proposal.key === 'stop_with_email')?.mode).toBe('review');
     expect(shown.some(proposal => proposal.kind === 'follow_up')).toBe(false);
-    expect(await apply(world, call, ['outcome', 'follow_up'], { edits: { follow_up: { templateVersionId: '00000000-0000-4000-8000-000000000001' } } })).toEqual({
-      ok: false,
-      reason: 'proposal_unknown',
-    });
+    expect(await apply(world, call, ['outcome', 'follow_up'], { edits: { follow_up: { templateVersionId: '00000000-0000-4000-8000-000000000001' } } })).toEqual(
+      refusedAt('proposal_unknown', 'follow_up'),
+    );
   });
 
   // ---------------------------------------------------------------------------- B-5

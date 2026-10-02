@@ -16,7 +16,7 @@ import { CALL_PROPOSAL_KINDS, callProposalSchema } from './callAnalysis.ts';
  *     completed model analysis on the current transcript (`stale_analysis`) and that the
  *     echoed hash is the stored one (`stale_proposal`); then the first-time rules
  *     (`call_already_logged`, `outcome_required`, `callback_exists`); then maps each key to
- *     its command. A refusal writes nothing.
+ *     its command. Atomic: a refusal of any key writes nothing, and names the key.
  *   * `POST /calls/proposals/decline` — records the decision only; a declined proposal stays
  *     applicable. Dismissing a review item is a decline of that proposal.
  *   * `POST /calls/pending/dismiss` — releases a call's pending-review hold.
@@ -47,7 +47,10 @@ const keys = z
 // ---------------------------------------------------------------------------
 
 /**
- * Why an Apply is refused as a whole (nothing is written), in the order they are checked:
+ * Why an Apply is refused. **An Apply is atomic**: if any selected key is refused, or its
+ * command fails, the whole batch rolls back — nothing is applied, no task is written, nothing
+ * is measured — and the 409 carries `keyReasons` (`applyKeyReasonSchema`) naming the key.
+ * David re-selects and clicks again. In the order they are checked:
  *
  *   * `stale_analysis` — the analysis is not the newest completed model analysis on the call's
  *     current transcript (a later version completed, or the transcript changed);
@@ -57,7 +60,13 @@ const keys = z
  *   * `outcome_required` — `callback` or `follow_up` selected with no `outcome` and no log;
  *   * `callback_exists` — `callback` selected, and the call's log already has a callback
  *     (cancelled ones included);
- *   * `follow_up_expired` — `follow_up` selected more than 7 days after the call.
+ *   * `follow_up_expired` — `follow_up` selected more than 7 days after the call (the
+ *     call's own time — the session's start — never when it was logged);
+ *   * `follow_up_not_granted` — `follow_up` selected and its single-email permission could
+ *     not be granted (the template retired, say); `detail` says why.
+ *
+ * A command a key maps to may refuse with its own code (e.g. `not_assigned`); that key is
+ * named the same way.
  */
 export const CALL_PROPOSAL_REFUSAL_CODES = [
   'stale_analysis',
@@ -67,15 +76,30 @@ export const CALL_PROPOSAL_REFUSAL_CODES = [
   'outcome_required',
   'callback_exists',
   'follow_up_expired',
+  'follow_up_not_granted',
 ] as const;
 export type CallProposalRefusalCode = (typeof CALL_PROPOSAL_REFUSAL_CODES)[number];
 
 /**
- * What one applied key became. `already_parked`: a park hold (the automatic cadence park
- * included) is already open on the firm, so nothing was opened. `already_created`: that
- * promise is already a task for this call.
+ * One key's reason in a refused Apply's 409 body (`keyReasons`). Freshness refusals
+ * (`stale_analysis`, `stale_proposal`) name no key.
  */
-export const CALL_PROPOSAL_KEY_RESULTS = ['applied', 'already_parked', 'already_created'] as const;
+export const applyKeyReasonSchema = z.object({
+  key: callProposalKeySchema,
+  reason: z.string().min(1).max(64),
+  detail: z.string().min(1).max(64).nullable(),
+});
+export type ApplyKeyReason = z.infer<typeof applyKeyReasonSchema>;
+
+/**
+ * What one applied key became. `already_parked`: this proposal's park was already made
+ * once (even if it was since resumed — a Resume sticks), or a park hold (the automatic
+ * cadence park included) is open on the firm, so nothing was opened. `already_created`:
+ * that promise is already a task for this call. `already_applied`: this call's buying
+ * signal is already on the opportunity (one per call), so nothing moved. None of the three is
+ * measured: only `applied` writes a decision record.
+ */
+export const CALL_PROPOSAL_KEY_RESULTS = ['applied', 'already_parked', 'already_created', 'already_applied'] as const;
 export type CallProposalKeyResult = (typeof CALL_PROPOSAL_KEY_RESULTS)[number];
 
 /** How long after the call an evidence-backed `follow_up` may still be applied (David's decision 7). */

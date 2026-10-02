@@ -98,6 +98,21 @@ describe('the shadow measurement', () => {
     expect((await decisionsOf(bypassed.analysisId)).map(row => [row.key, row.result, row.type])).toEqual([['outcome', 'bypassed', 'outcome:interested']]);
   });
 
+  it('a no-op repeat decides nothing: an edited task, then the same key again (already_created), still reads edited (review S3B, finding 8)', async () => {
+    const promise = 'I will send you the pricing sheet today';
+    const shown = await call(
+      lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', 'Sure.'], ['Y', `${promise}.`]),
+      answer({ summary: 'You promised the pricing sheet.', commitments: [{ speaker: 'you', quote: promise, line: 3, due_phrase: 'today' }] }),
+    );
+    const key = shown.keys.find(entry => entry.startsWith('task:')) ?? '';
+    expect(key).not.toBe('');
+    const first = await apply(world, shown, [key], { edits: { tasks: { [key]: { text: 'Send Dana the pricing sheet' } } } });
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    const repeat = await apply(world, shown, [key], { commandId: 'repeat-no-edit' });
+    expect(repeat.ok && repeat.value.results).toEqual([expect.objectContaining({ key, result: 'already_created' })]);
+    expect((await decisionsOf(shown.analysisId)).map(row => [row.key, row.result])).toEqual([[key, 'edited']]);
+  });
+
   it('B-15: insufficient below five decided suggestions of a type; incorrect stop and deal-opening suggestions listed by id', async () => {
     const before = await acceptance();
     const signalBefore = before.types.find(type => type.type === 'buying_signal');

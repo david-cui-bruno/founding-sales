@@ -279,7 +279,13 @@ describe('B-9: apply-on-click, end to end', () => {
 
     const second = await post('/calls/proposals/apply', salespersonToken, { ...body, commandId: randomUUID() });
     expect(second.status, second.text).toBe(409);
-    expect(second.body).toMatchObject({ status: 'refused', reason: 'call_already_logged' });
+    // Atomic: the whole click is refused, and the key that refused it is named.
+    expect(second.body).toEqual({
+      status: 'refused',
+      replayed: false,
+      reason: 'call_already_logged',
+      keyReasons: [{ key: 'outcome', reason: 'call_already_logged', detail: null }],
+    });
 
     expect(await count('SELECT count(*)::text AS n FROM call_logs WHERE firm_id = $1', [firmId])).toBe(1);
     expect(await count('SELECT count(*)::text AS n FROM call_sessions WHERE id = $1 AND call_log_id IS NOT NULL', [sessionId])).toBe(1);

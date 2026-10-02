@@ -232,10 +232,11 @@ export async function logCallOutcome(
   // basics could deadlock: this command held the firm and waited for the route, the edit
   // held the route and waited for the firm. Located unlocked from what the request names;
   // everything is checked again under the locks below, and a route that turns out not to be
-  // the call's is refused there.
-  if (callOutcomeEffects(input.outcome).retiresRoute || callOutcomeEffects(input.outcome).suppressesNumber) {
-    await lockDialledRoute(context, input);
-  }
+  // the call's is refused there. Every other outcome takes the route too, `FOR KEY SHARE`:
+  // the call log's insert takes that lock through its foreign key, and taken after the firm
+  // it is the same cycle with a Basics edit (review S3B, finding 1).
+  const touchesNumber = callOutcomeEffects(input.outcome).retiresRoute || callOutcomeEffects(input.outcome).suppressesNumber;
+  await lockDialledRoute(context, input, touchesNumber ? 'FOR UPDATE' : 'FOR KEY SHARE');
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refusePolicy('firm_unknown');
   const permitted = decideFirmMutation(context, firm);
@@ -739,6 +740,7 @@ export async function logCallOutcome(
 async function lockDialledRoute(
   context: RepositoryContext,
   input: Pick<LogCallOutcomeInput, 'firmId' | 'routeId' | 'ticketId' | 'callSessionId'>,
+  strength: 'FOR UPDATE' | 'FOR KEY SHARE',
 ): Promise<void> {
   let routeId = input.routeId;
   if (routeId === undefined && (input.ticketId !== undefined || input.callSessionId !== undefined)) {
@@ -751,7 +753,7 @@ async function lockDialledRoute(
     routeId = rows[0]?.phone_route_id;
   }
   if (routeId === undefined || !/^[0-9a-f-]{36}$/iu.test(routeId)) return;
-  await context.db.query('SELECT 1 FROM phone_routes WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE', [
+  await context.db.query(`SELECT 1 FROM phone_routes WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 ${strength}`, [
     context.scope.workspaceId,
     routeId,
     input.firmId,
@@ -896,8 +898,9 @@ export interface ConfirmCapturedFollowUpInput {
  *     keeps); the person who made the call is the one confirming (`not_call_actor`);
  *   * the log names a person who was reached (`REACHED_OUTCOMES`) and agreed to nothing yet
  *     (`agreement_exists`);
- *   * `clock_timestamp()`, read after the locks, is within seven days of the call's
- *     `occurred_at` — otherwise `follow_up_expired`, and nothing is written.
+ *   * `clock_timestamp()`, read after the locks, is within seven days of the call itself
+ *     (its session's start, not the log's `occurred_at`, which a late manual log sets to
+ *     when it was written) — otherwise `follow_up_expired`, and nothing is written.
  *
  * Then exactly `applyAgreedFollowUp`'s single-email arm: the template's standing, the
  * agreement on the log, the grant. A single e-mail stops after the grant (no enrollment);
@@ -940,7 +943,17 @@ export async function confirmCapturedFollowUp(
   if (log.actor_user_id !== actor.userId) return refusePolicy('not_call_actor');
   if (!REACHED_OUTCOMES.has(log.outcome) || log.contact_id === null) return refusePolicy('invalid_input');
   if (log.agreed_follow_up !== null) return refusePolicy('agreement_exists');
-  if (!(await withinCapturedFollowUpWindow(context, log.occurred_at))) return refusePolicy('follow_up_expired');
+  // Seven days from the CALL — the session's start — never from the log, which a late manual
+  // log writes at the time it was written (review S3B, finding 3). A log with no session is
+  // not a captured call.
+  const { rows: sessions } = await context.db.query<{ started: Date }>(
+    `SELECT coalesce(answered_at, started_at, created_at) AS started FROM call_sessions
+      WHERE workspace_id = $1 AND call_log_id = $2 ORDER BY created_at LIMIT 1`,
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const callStarted = sessions[0]?.started;
+  if (callStarted === undefined) return refusePolicy('invalid_input');
+  if (!(await withinCapturedFollowUpWindow(context, callStarted))) return refusePolicy('follow_up_expired');
 
   const opportunity = await readOpenOpportunity(context, log.firm_id);
   const agreed = await applyAgreedFollowUp(context, {
