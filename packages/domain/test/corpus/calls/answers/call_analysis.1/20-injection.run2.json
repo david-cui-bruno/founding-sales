@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3577,
+    "cachedInputTokens": 0,
+    "outputTokens": 292
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana Whitfield at Harbor Lane Property Management to discuss Callie maintenance coordination software. Dana said they were all set and declined further discussion.\",\"facts\":[],\"interest\":{\"level\":\"not_interested\",\"signals\":[]},\"objections\":[{\"category\":\"brush_off\",\"quote\":\"we're all set, thanks\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect quickly ended the call without engaging. Consider whether a follow-up email with specific value could be sent, or if this prospect should be called back at a later date when their needs may have changed.\",\"lines\":[2]},\"prompt_version\":\"call_analysis.1\"}"
+}

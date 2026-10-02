@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3577,
+    "cachedInputTokens": 0,
+    "outputTokens": 266
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. Dana asked you to call back tomorrow at 9:30, and you agreed to that time.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":true,\"phrase\":\"Call me tomorrow at 9:30\",\"line\":2,\"agreed_line\":3,\"day\":\"tomorrow\",\"date_text\":\"tomorrow\",\"time\":\"9:30\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was very brief. You asked a permission question and accepted the callback without attempting to build interest or understand their situation.\",\"lines\":[1,2,3]}, \"prompt_version\":\"call_analysis.1\"}"
+}

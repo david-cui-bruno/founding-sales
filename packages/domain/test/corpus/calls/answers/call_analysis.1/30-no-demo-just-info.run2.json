@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3573,
+    "cachedInputTokens": 0,
+    "outputTokens": 305
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. They declined a demo and asked you to send an overview by email instead. You agreed and ended the call.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"overview_email\",\"quote\":\"Just send me an overview by e-mail.\",\"line\":2},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"Just send me an overview by e-mail.\",\"line\":2,\"due_phrase\":\"\"}],\"coaching\":{\"observation\":\"Dana declined the demo offer before you could build any interest. Sending the overview as requested is appropriate, but consider how to generate curiosity or demonstrate value before the next outreach.\",\"lines\":[1,2]},\"prompt_version\":\"call_analysis.1\"}"
+}

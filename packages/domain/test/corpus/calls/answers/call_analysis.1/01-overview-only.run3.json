@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3605,
+    "cachedInputTokens": 0,
+    "outputTokens": 291
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. After a brief introduction to Callie, Dana asked you to send an overview by email and said they would review it. The call ended shortly after.\",\"facts\":[],\"interest\":{\"level\":\"neutral\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"overview_email\",\"quote\":\"Just send me an overview by e-mail and I'll look at it.\",\"line\":2},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana was busy and cut the call short, but agreed to review materials. Next time, you might ask if there's a better time to call back rather than leaving the conversation at just an email promise.\",\"lines\":[2]},\"prompt_version\":\"call_analysis.1\"}"
+}

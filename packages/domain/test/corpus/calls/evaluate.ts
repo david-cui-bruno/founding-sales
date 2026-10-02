@@ -75,7 +75,13 @@ export function judge(variant: string, labels: readonly string[], expectation: C
 export function contentAgreement(result: CallAnalysisResult, expected: Readonly<Record<string, unknown>>): [number, number] {
   let agreed = 0;
   let compared = 0;
-  for (const [field, want] of Object.entries(expected)) {
+  for (const [field, expectedValue] of Object.entries(expected)) {
+    // `{ "oneOf": [...] }`: more than one reading is right (who answered a referral, say).
+    const alternatives =
+      typeof expectedValue === 'object' && expectedValue !== null && !Array.isArray(expectedValue) && 'oneOf' in expectedValue
+        ? ((expectedValue as { oneOf: unknown[] }).oneOf)
+        : [expectedValue];
+    const want = alternatives[0];
     compared += 1;
     let got: unknown;
     switch (field) {
@@ -100,7 +106,9 @@ export function contentAgreement(result: CallAnalysisResult, expected: Readonly<
       default:
         got = undefined;
     }
-    if (JSON.stringify(got) === JSON.stringify(want)) agreed += 1;
+    if (field === 'objection_categories') {
+      if (got !== null) agreed += 1;
+    } else if (alternatives.some(alternative => JSON.stringify(got) === JSON.stringify(alternative))) agreed += 1;
   }
   return [agreed, compared];
 }
@@ -141,7 +149,7 @@ export function scoreAnswer(corpusCase: CorpusCase, raw: string): CaseScore {
   if (corpusCase.q3_yes !== undefined) {
     const wide = readCallAnalysisAnswer(raw, corpusCase.utterances, { qualifyingSignals: corpusCase.q3_yes.qualifyingSignals });
     if (wide.ok) {
-      const yes = proposeEffects(wide.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity));
+      const yes = proposeEffects(wide.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity), corpusCase.q3_yes.qualifyingSignals);
       verdicts.push(judge('q3_yes', effectLabels(yes.proposals), corpusCase.q3_yes));
     }
   }

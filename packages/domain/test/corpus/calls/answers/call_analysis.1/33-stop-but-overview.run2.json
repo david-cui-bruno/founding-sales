@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3560,
+    "cachedInputTokens": 0,
+    "outputTokens": 257
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They asked you to stop calling but requested an overview email, which you acknowledged.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"overview_email\",\"quote\":\"send the overview by e-mail\",\"line\":2},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":true,\"scope\":\"this_number\",\"quote\":\"Stop calling me\",\"line\":2},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect declined further calls but expressed interest in receiving information by email. Honor the stop request while following up with the overview as requested.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.1\"}"
+}

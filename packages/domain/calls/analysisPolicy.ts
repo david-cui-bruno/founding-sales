@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
+  CALL_ANALYSIS_QUALIFYING_SIGNALS,
   CALL_POLICY_VERSION,
   callbackInstant,
   isKnownTimeZone,
   localParts,
   type CallAnalysisQuoteRef,
+  type CallAnalysisObjectionCategory,
   type CallAnalysisResult,
+  type CallAnalysisSignalKind,
   type CallProposal,
   type CallProposalKind,
 } from '@fss/contracts';
@@ -159,7 +162,7 @@ export interface ResolvedCallback {
 /**
  * The instant an exact spoken callback names, or null when it does not name one.
  *
- * It resolves only when the model called it exact and both a day and a time were said in
+ * It resolves only when both a day and a time were said in
  * the verified phrase or its agreed line (the reader keeps `dateText` and `time` only
  * then). The rules: a weekday is the next one strictly after the call's local date; "next
  * <weekday>" is ambiguous and never resolves; a correction ("no wait") uses what follows
@@ -171,7 +174,9 @@ export function resolveSpokenCallback(
   context: { readonly callStartedAt: string; readonly firmTimeZone: string | null },
 ): ResolvedCallback | null {
   const zone = context.firmTimeZone;
-  if (!callback.exact || callback.day === null || callback.dateText === null || callback.time === null) return null;
+  // The model's `exact` flag is not consulted: whether a day and a time were said is decided
+  // here from the verified words (C2: "Call me Tuesday at 2" was flagged not exact).
+  if (callback.day === null || callback.dateText === null || callback.time === null) return null;
   if (zone === null || !isKnownTimeZone(zone)) return null;
   const dateWords = fold(callback.dateText);
   if (/\bnext\b/u.test(dateWords)) return null;
@@ -227,6 +232,9 @@ export function proposalHash(proposals: readonly CallProposal[]): string {
   return createHash('sha256').update(canonicalJson(proposals) + CALL_POLICY_VERSION, 'utf8').digest('hex');
 }
 
+/** Objections that decline: with a neutral reading and unanswered, a soft rejection. */
+const SOFT_REJECTIONS: ReadonlySet<CallAnalysisObjectionCategory> = new Set(['no_need', 'has_solution', 'timing', 'too_small', 'brush_off']);
+
 const KIND_ORDER: readonly CallProposalKind[] = [
   'outcome',
   'callback',
@@ -254,14 +262,26 @@ function emailRequest(result: CallAnalysisResult): { readonly kind: 'overview_em
 }
 
 /** The proposal set for one read analysis. Pure: the same inputs give the same bytes. */
-export function proposeEffects(result: CallAnalysisResult, context: CallPolicyContext): ProposalSet {
+export function proposeEffects(
+  result: CallAnalysisResult,
+  context: CallPolicyContext,
+  /** Production never passes it; the evaluation passes a wider set to measure Q3's other reading. */
+  qualifyingSignals?: readonly CallAnalysisSignalKind[],
+): ProposalSet {
   const proposals: CallProposal[] = [];
   const outcome = (value: Extract<CallProposal, { kind: 'outcome' }>): void => {
     proposals.push(value);
   };
   let tasksAllowed = true;
+  // A verified Them quote of a wrong number or a stop means a person answered, whatever
+  // `reached` says (C2: a wrong number read as `none`).
+  const machine =
+    (result.reached === 'machine' || result.reached === 'none') &&
+    result.wrongNumber === null &&
+    result.stop === null &&
+    result.stopPhrases.length === 0;
 
-  if (result.reached === 'machine' || result.reached === 'none') {
+  if (machine) {
     outcome({
       key: 'outcome',
       kind: 'outcome',
@@ -296,13 +316,17 @@ export function proposeEffects(result: CallAnalysisResult, context: CallPolicyCo
       reason: 'They asked not to be called.',
       params: { outcome: 'do_not_call', doNotCallCoversAllContact: false, evidence: evidenceOf(result.stop.ref) },
     });
-    if (result.stop.scope !== 'this_number') {
+    // Words that do not name only the speaker or this number ("I don't want these calls")
+    // leave the scope to David, whatever scope the model read.
+    const general = result.stopPhrases.find(phrase => phrase.general);
+    const spokenScope = result.stop.scope !== 'this_number' ? result.stop.scope : general !== undefined ? 'unclear' : null;
+    if (spokenScope !== null) {
       proposals.push({
         key: 'stop_scope',
         kind: 'stop_scope',
         mode: 'review',
-        reason: result.stop.scope === 'all_contact' ? 'They may have asked for no contact with the firm at all.' : 'How far the stop reaches is unclear.',
-        params: { spokenScope: result.stop.scope, evidence: evidenceOf(result.stop.ref) },
+        reason: spokenScope === 'all_contact' ? 'They may have asked for no contact with the firm at all.' : 'How far the stop reaches is unclear.',
+        params: { spokenScope, evidence: evidenceOf(result.stop.ref, general?.ref) },
       });
     }
     const request = emailRequest(result);
@@ -315,6 +339,26 @@ export function proposeEffects(result: CallAnalysisResult, context: CallPolicyCo
         params: { requestKind: request.kind, evidence: evidenceOf(result.stop.ref, request.ref) },
       });
     }
+  } else if (result.stopPhrases.length > 0) {
+    // The safety net: stop language on a Them line that the model did not read as a stop.
+    // Nothing is proposed for applying — no park, no rejection, no callback, no follow-up,
+    // no task — only the two review items, so David decides what was said.
+    tasksAllowed = false;
+    const evidence = evidenceOf(...result.stopPhrases.map(phrase => phrase.ref));
+    proposals.push({
+      key: 'outcome_unclear',
+      kind: 'outcome_unclear',
+      mode: 'review',
+      reason: 'They may have asked not to be called.',
+      params: { evidence },
+    });
+    proposals.push({
+      key: 'stop_scope',
+      kind: 'stop_scope',
+      mode: 'review',
+      reason: 'They may have asked not to be called; how far that reaches is unclear.',
+      params: { spokenScope: 'unclear', evidence },
+    });
   } else if (result.referral !== null) {
     outcome({
       key: 'outcome',
@@ -332,10 +376,25 @@ export function proposeEffects(result: CallAnalysisResult, context: CallPolicyCo
     });
   } else {
     const callback = result.callback;
-    const signals = result.interest.level === 'buying_signal' ? result.interest.signals : [];
+    // A buying signal is a verified qualifying signal in a call the model read as interested
+    // (`buying_signal`, or `curious` with a demo request or the like; C2: the model's level and
+    // its signals disagreed on a plain demo request). The reader has already turned an
+    // unqualified `buying_signal` level into `unclear`.
+    const qualifying = new Set(qualifyingSignals ?? CALL_ANALYSIS_QUALIFYING_SIGNALS);
+    const signals =
+      result.interest.level === 'buying_signal' || result.interest.level === 'curious'
+        ? result.interest.signals.filter(signal => qualifying.has(signal.kind))
+        : [];
     const buying = signals.length > 0;
     const request = emailRequest(result);
-    const soft = result.interest.level === 'not_interested' && result.objections.length > 0 && !buying && request === null;
+    // A soft rejection: they declined (`not_interested`), or a neutral call with an
+    // unanswered objection of the declining kinds (C2: "maybe next year" read as neutral).
+    const declining = result.objections.filter(objection => SOFT_REJECTIONS.has(objection.category) && objection.answered === null);
+    const soft =
+      !buying &&
+      request === null &&
+      ((result.interest.level === 'not_interested' && result.objections.length > 0) ||
+        (result.interest.level === 'neutral' && declining.length > 0));
 
     if (callback !== null) {
       outcome({
@@ -354,7 +413,7 @@ export function proposeEffects(result: CallAnalysisResult, context: CallPolicyCo
           reason: 'They named a day and a time.',
           params: { ...resolved, evidence: evidenceOf(callback.phrase) },
         });
-      } else if (context.firmTimeZone === null && callback.exact && callback.day !== null && callback.time !== null) {
+      } else if (context.firmTimeZone === null && callback.day !== null && callback.dateText !== null && callback.time !== null) {
         proposals.push({
           key: 'callback_zone_unknown',
           kind: 'callback_zone_unknown',
@@ -428,6 +487,8 @@ export function proposeEffects(result: CallAnalysisResult, context: CallPolicyCo
   if (tasksAllowed) {
     for (const commitment of result.commitments) {
       if (commitment.speaker !== 'you') continue;
+      // "I'll call you Thursday at 10" beside a callback is the callback, not a second task.
+      if (result.callback !== null && /\bcall\b/u.test(fold(commitment.ref.quote))) continue;
       const key = taskKey(commitment.ref.quote);
       if (proposals.some(proposal => proposal.key === key)) continue;
       proposals.push({

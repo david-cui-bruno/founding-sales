@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3626,
+    "cachedInputTokens": 0,
+    "outputTokens": 341
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They asked how technicians would receive work orders and whether Callie would replace their current portal. You explained the text-based system, and they indicated it could solve a pain point—their techs dislike logging into the portal.\",\"facts\":[{\"text\":\"Their techs hate logging into the portal\",\"line\":4}],\"interest\":{\"level\":\"curious\",\"signals\":[{\"kind\":\"adoption_question\",\"quote\":\"How would our techs get work orders? Would it replace our portal?\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana showed interest by asking a practical adoption question about how technicians would use the system. You answered directly and they acknowledged it could solve their pain point. Consider proposing a demo or callback to move the conversation forward.\",\"lines\":[2,3,4]},\"prompt_version\":\"call_analysis.1\"}"
+}

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3625,
+    "cachedInputTokens": 0,
+    "outputTokens": 301
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They expressed interest in seeing a demo of Callie, specifically focusing on the vendor side of the platform.\",\"facts\":[],\"interest\":{\"level\":\"curious\",\"signals\":[{\"kind\":\"demo_request\",\"quote\":\"could you, like, show us, uh, a demo, maybe?\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect responded positively to your opening and immediately asked for a demo without objection, showing quick engagement. You should explore their current vendor management process and pain points before diving into the demo to ensure it addresses their specific needs.\",\"lines\":[2,3,4]},\"prompt_version\":\"call_analysis.1\"}"
+}

@@ -1,5 +1,5 @@
 {
-  "promptVersion": "call_analysis.1",
+  "promptVersion": "call_analysis.2",
   "note": "Slice 3a, C2. Each case runs through readCallAnalysisAnswer then proposeEffects. A run fails on any label in forbidden_effects that is not also in expected_effects ('x:*' matches every 'x:' label). Labels: outcome:<outcome>, callback:<localDate>T<localTime>, follow_up, buying_signal, park, task:overview, task:commitment, and each review kind by name.",
   "cases": [
     {
@@ -917,7 +917,12 @@
         "task:*"
       ],
       "expected_content": {
-        "reached": "person"
+        "reached": {
+          "oneOf": [
+            "person",
+            "gatekeeper"
+          ]
+        }
       }
     },
     {
@@ -1821,6 +1826,235 @@
       "forbidden_effects": [
         "buying_signal",
         "outcome:do_not_call",
+        "callback:*",
+        "park",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person"
+      }
+    },
+    {
+      "id": "38-them-offers-email",
+      "n": 38,
+      "title": "Them: I'll e-mail you our vendor list (an offer, not a request)",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 4.5,
+          "text": "Hi Dana, David from Callie. Which vendors do you dispatch most?"
+        },
+        {
+          "speaker": 1,
+          "start": 4.9,
+          "end": 9.6,
+          "text": "Plumbing and HVAC mostly. I'll e-mail you our vendor list tonight."
+        },
+        {
+          "speaker": 0,
+          "start": 10.0,
+          "end": 11.5,
+          "text": "Thanks Dana."
+        }
+      ],
+      "expected_effects": [],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "park",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person",
+        "follow_up_kind": "none"
+      }
+    },
+    {
+      "id": "39-ack-callback",
+      "n": 39,
+      "title": "Call me Wednesday at 3; You acknowledges and repeats the callback",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 3.3,
+          "text": "Hi Dana, David from Callie. Is now a bad time?"
+        },
+        {
+          "speaker": 1,
+          "start": 3.7,
+          "end": 5.8,
+          "text": "It is. Call me Wednesday at 3."
+        },
+        {
+          "speaker": 0,
+          "start": 6.2,
+          "end": 9.6,
+          "text": "Great, Wednesday at 3 then. I'll call you then."
+        }
+      ],
+      "expected_effects": [
+        "outcome:callback_requested",
+        "callback:2026-10-07T15:00"
+      ],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "park",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person"
+      }
+    },
+    {
+      "id": "40-remove-number",
+      "n": 40,
+      "title": "Please remove this number from your list",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 3.9,
+          "text": "Hi, David from Callie, about maintenance coordination."
+        },
+        {
+          "speaker": 1,
+          "start": 4.3,
+          "end": 7.2,
+          "text": "Please remove this number from your list."
+        },
+        {
+          "speaker": 0,
+          "start": 7.6,
+          "end": 9.1,
+          "text": "Will do."
+        }
+      ],
+      "expected_effects": [
+        "outcome:do_not_call"
+      ],
+      "forbidden_effects": [
+        "buying_signal",
+        "callback:*",
+        "park",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person"
+      }
+    },
+    {
+      "id": "41-not-a-stop",
+      "n": 41,
+      "title": "I'm not saying stop calling, just not this week",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 3.6,
+          "text": "Hi Dana, David from Callie. Should I stop calling?"
+        },
+        {
+          "speaker": 1,
+          "start": 4.0,
+          "end": 8.7,
+          "text": "I'm not saying stop calling, just not this week. Try me next week."
+        },
+        {
+          "speaker": 0,
+          "start": 9.1,
+          "end": 10.7,
+          "text": "Understood, next week."
+        }
+      ],
+      "expected_effects": [
+        "outcome:callback_requested"
+      ],
+      "forbidden_effects": [
+        "buying_signal",
+        "outcome:do_not_call",
+        "callback:*",
+        "park",
+        "follow_up",
+        "outcome:wrong_number",
+        "task:*"
+      ],
+      "expected_content": {
+        "reached": "person"
+      }
+    },
+    {
+      "id": "42-no-more-calls",
+      "n": 42,
+      "title": "We get too many of these. No more calls, please",
+      "firmName": "Harbor Lane Property Management",
+      "contactName": "Dana Whitfield",
+      "callStartedAt": "2026-10-05T14:15:00Z",
+      "callLocalTime": "Monday 2026-10-05 10:15",
+      "firmTimeZone": "America/New_York",
+      "hasOpenOpportunity": false,
+      "utterances": [
+        {
+          "speaker": 0,
+          "start": 0.0,
+          "end": 4.4,
+          "text": "Hi, David from Callie, calling about maintenance coordination."
+        },
+        {
+          "speaker": 1,
+          "start": 4.8,
+          "end": 8.2,
+          "text": "We get too many of these. No more calls, please."
+        },
+        {
+          "speaker": 0,
+          "start": 8.6,
+          "end": 10.1,
+          "text": "Understood."
+        }
+      ],
+      "expected_effects": [
+        "outcome:do_not_call",
+        "stop_scope"
+      ],
+      "forbidden_effects": [
+        "buying_signal",
         "callback:*",
         "park",
         "follow_up",

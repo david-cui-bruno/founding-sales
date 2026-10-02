@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3635,
+    "cachedInputTokens": 0,
+    "outputTokens": 359
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. They said they are evaluating tools right now and asked to see a demo. You agreed and asked what they most want to see. Dana said they want to understand how tenant requests turn into work orders for vendors.\",\"facts\":[],\"interest\":{\"level\":\"buying_signal\",\"signals\":[{\"kind\":\"evaluation\",\"quote\":\"We're evaluating a couple of tools right now.\",\"line\":2},{\"kind\":\"demo_request\",\"quote\":\"Can you show us a demo?\",\"line\":2},{\"kind\":\"adoption_question\",\"quote\":\"how a tenant request turns into a work order for our vendors.\",\"line\":4}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect showed strong buying signals by unprompted mention of evaluating tools and requesting a demo. The call ended without scheduling a specific demo time, which should be your next step.\",\"lines\":[2,4]},\"prompt_version\":\"call_analysis.1\"}"
+}

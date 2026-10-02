@@ -20,7 +20,7 @@ import {
 import { modelProviderKey, transportPrice, type ModelTransportKind } from '../classification/modelTransport.ts';
 import type { ClassifierRequest } from '../classification/prompt.ts';
 import { SERVER_SIDE_FALLBACK_BETA } from '../classification/types.ts';
-import { sideOfSpeaker, verbatimIn } from './summaryModel.ts';
+import { fold, sideOfSpeaker, verbatimIn } from './summaryModel.ts';
 
 /**
  * The post-call analysis's prompt, request, output schema, price and reader (slice 3a).
@@ -50,7 +50,7 @@ import { sideOfSpeaker, verbatimIn } from './summaryModel.ts';
  */
 
 /** Bumped whenever a byte of the system prompt or the output schema moves. */
-export const CALL_ANALYSIS_PROMPT_VERSION = 'call_analysis.1';
+export const CALL_ANALYSIS_PROMPT_VERSION = 'call_analysis.2';
 export const CALL_ANALYSIS_SCHEMA_VERSION = 'call_analysis.schema.1';
 
 export const CALL_ANALYSIS_MODELS = ['claude-haiku-4-5-20251001', 'claude-sonnet-5-5'] as const;
@@ -181,30 +181,30 @@ How to quote. Every item that has a "quote" must copy a short clause character f
 
 Fields:
 
-reached: "person" if a person at the firm spoke with the caller, "gatekeeper" if only a receptionist or assistant who screened the call, "machine" for voicemail or a phone menu, "none" if nobody answered.
+reached: "person" if a person spoke with the caller (also when they said it is a wrong number), "gatekeeper" if only a receptionist or assistant who screened the call, "machine" for voicemail or a phone menu, "none" if nobody answered.
 
 summary: two to five plain sentences on what happened, written for the caller ("You", "they").
 
 facts: up to eight short facts the prospect said about their firm or situation (size, current tools, problems), each with the line it came from.
 
 interest: level and signals.
-- level: "buying_signal" only when the prospect shows they are considering Callie for their own firm; "curious" when they asked for information without showing that; "neutral"; "not_interested" when they declined; "unclear" when you cannot tell.
+- level: "buying_signal" when the prospect shows they are considering Callie for their own firm: they ask for a demo or a trial, describe evaluating options for their firm, or ask how it would work in their own operation; "curious" when they asked for information without showing that; "neutral"; "not_interested" when they declined, including for now ("not now", "maybe next year", "we're all set"); "unclear" when you cannot tell.
 - signals: what Them said that bears on interest, each with kind, quote and line. Kinds: "demo_request" (they ask to see it or for a trial); "evaluation" (they describe comparing options or deciding for their own firm); "adoption_question" (they ask how it would work in their own operation, e.g. how their technicians would get work orders); "pricing_question" (they ask what it costs); "information_request" (they ask to be sent information); "other". A question the caller asked and they declined is not a signal. A negated request ("I don't need a demo") is not a signal of that kind.
 
-objections: each reason Them gave against going further, with category, quote, line, and answered_line (the line where You answered it, or 0). Categories: "no_need", "has_solution", "timing", "price", "too_small", "not_decision_maker", "brush_off", "other".
+objections: each reason Them gave against going further, with category, quote, line, and answered_line (the line where You answered it, or 0). Categories: "no_need" (they don't need it, "we're all set"), "has_solution" (they already use or tried something for it), "timing" ("not now", "maybe next year", just renewed), "price", "too_small", "not_decision_maker", "brush_off" (a bare no with no reason, or getting off the phone), "other".
 
-follow_up_request: whether Them asked to be sent something. kind "overview_email" (an overview or information by e-mail), "other_email" (something else by e-mail), "other" (any other channel), or "none" with quote "" and line 0.
+follow_up_request: whether Them asked to be sent something. Them offering to send you something ("I'll send you our list") is a commitment of theirs, not a request. kind "overview_email" (an overview or information by e-mail), "other_email" (something else by e-mail), "other" (any other channel), or "none" with quote "" and line 0.
 
 callback: whether Them asked to be called back, or agreed when You proposed a time.
-- requested: true only if Them asked for a call back or agreed to one.
+- requested: true if Them asked for a call back (including "try later", "call me back", "call later", even with no time) or agreed to one.
 - phrase and line: the words that set the callback, quoted from its line. If You proposed it and Them agreed, quote You's line and set agreed_line to Them's agreeing line, which must come within two lines after it; otherwise agreed_line is 0.
-- exact: true only if both a day (or date) and a clock time were said and agreed. "Next week", "Tuesday afternoon", "at 2" with no day, and "next Tuesday" are not exact.
+- exact: true when both a day and a clock time were said and agreed, e.g. "Tuesday at 2", "tomorrow at 9:30". Not exact: "next week", "Tuesday afternoon", "at 2" with no day, and "next Tuesday" (which Tuesday is unclear).
 - day: the named day, "today", "tomorrow", or "none". If they corrected themselves ("Tuesday at 2, no wait, Wednesday at 10"), use the last one.
 - date_text: the day words exactly as said (e.g. "Wednesday", "tomorrow"), or "".
 - time: the time words exactly as said (e.g. "10", "two thirty", "9:30"), or "". After a correction, the last one.
 If no callback was asked for or agreed, requested is false and the other fields are empty.
 
-stop: whether Them asked not to be contacted. requested; scope "this_number" (stop calling them or this number), "all_contact" (no one at the firm and no contact of any kind), or "unclear" (you cannot tell which); quote and line. "Don't take me off anything" is not a stop. Saying no to the product is not a stop.
+stop: whether Them asked not to be contacted. requested; scope "this_number" (they name only themselves or this number: "stop calling me", "take me off your list"), "all_contact" (no one at the firm and no contact of any kind), or "unclear" (you cannot tell which, e.g. "I don't want these calls"); quote and line. "Stop calling", "don't call me", "take me off your list" and "I don't want these calls" are stops, never only a rejection. "Don't take me off anything" is not a stop. Saying no to the product is not a stop.
 
 wrong_number: is_wrong true only when the number does not reach this firm at all (another business or person). other_number_given: a number they gave for the firm, digits as said, or "". quote and line from Them.
 
@@ -212,7 +212,7 @@ referral: given true when Them pointed to a different person at the firm to talk
 
 voicemail_left: true if the caller left a voicemail message.
 
-commitments: every promise a side made out loud to do something after the call, with speaker ("you" or "them"), quote, line, and due_phrase (the timing words exactly as said, or ""). Not questions, prices or facts.
+commitments: every promise a side made out loud to do something after the call, with speaker ("you" or "them"), quote, line, and due_phrase (the timing words exactly as said, or ""). A promise is a clause in which the speaker says they will do something ("I'll send pricing by Friday"). Not acknowledgements ("Perfect, Thursday at 10"), requests, questions, prices or facts.
 
 coaching: one observation for the caller about how the call went, with the lines it refers to; or "" and no lines.
 
@@ -394,6 +394,55 @@ export interface CallAnalysisReadOptions {
   readonly qualifyingSignals?: readonly CallAnalysisSignalKind[];
 }
 
+/** A clause in which the speaker says they will do something: what makes a commitment a promise. */
+const PROMISE = /\b(?:i'll|i will|i shall|i'm going to|i am going to|i can|we'll|we will|we're going to|we are going to|we can|let me)\b/u;
+
+/** A request to be sent something names the sending. */
+const SEND = /\b(?:send|sending|e ?mail|mail|forward|shoot)\b/u;
+
+/** The speaker's own offer to send ("I'll send you our list"): a commitment, not a request. */
+const OFFER = /\b(?:i'll|i will|i can|i'm going to|i am going to|we'll|we will|we can|we're going to|we are going to|let me)(?: \w+){0,2} (?:send|e ?mail|mail|forward|shoot)\b/u;
+
+/**
+ * Stop language on a Them line, found by the reader itself. Each pattern is negation-guarded
+ * where a negation up to two words before reverses it ("don't take me off anything", "I'm
+ * not saying stop calling"). Folded text: lower case,
+ * apostrophes kept, punctuation removed.
+ */
+const STOP_PATTERNS: readonly RegExp[] = [
+  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\b(?:stop|quit) (?:calling|phoning|ringing|contacting)(?: (?:me|us|here|this number|my \w+|our \w+))?\b/gu,
+  /\b(?:don't|dont|do not|never) (?:call|phone|ring|contact) (?:me|us|here|anyone|anybody|this number|again|anymore|my \w+|our \w+)\b/gu,
+  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\btake (?:me|us|my \w+|our \w+|this number) off\b/gu,
+  /(?<!\b(?:not|never|don't|dont|do not)(?: \w+){0,2} )\bremove (?:me|us|my \w+|our \w+|this number)\b/gu,
+  /\b(?:don't|dont|do not) want (?:these|your|any|any more|anymore|more) (?:phone )?calls\b/gu,
+  /\bno more calls\b/gu,
+  /\bdo not call list\b/gu,
+  /\blose (?:my|our|this) number\b/gu,
+];
+
+/** The stop phrases on Them lines: the policy's safety net under the model's own reading. */
+function stopPhrasesOf(
+  utterances: readonly CallTranscriptUtterance[],
+  lineRef: (n: number) => CallAnalysisLineRef | null,
+): CallAnalysisResult['stopPhrases'] {
+  const found: CallAnalysisResult['stopPhrases'][number][] = [];
+  utterances.forEach((utterance, index) => {
+    if (sideOfSpeaker(utterance.speaker) !== 'them') return;
+    const ref = lineRef(index + 1);
+    if (ref === null) return;
+    const text = fold(utterance.text);
+    for (const pattern of STOP_PATTERNS) {
+      for (const match of text.matchAll(pattern)) {
+        const quote = match[0];
+        if (found.length >= 10 || !verbatimIn(quote, utterance.text)) continue;
+        const personal = /\b(?:me|my|this number)\b/u.test(quote) && !/\b(?:us|our|anyone|anybody|here|these|your|no more)\b/u.test(quote);
+        found.push({ general: !personal, ref: { ...ref, quote } });
+      }
+    }
+  });
+  return found;
+}
+
 const LIMITS = { facts: 12, signals: 10, objections: 10, commitments: 10, coachingLines: 5 } as const;
 
 function trimmed(value: string): string {
@@ -415,6 +464,11 @@ function digitsOf(value: string): string {
  *    by a Them `agreed_line`;
  *  * an item that fails is dropped and counted in `dropped`, never repaired;
  *  * a `buying_signal` level with no surviving qualifying signal becomes `unclear`.
+ *
+ * And three of its own, from the first evaluation run (C2, 1 October 2026):
+ *  * a commitment is a promise: its quote says the speaker will do something (`PROMISE`);
+ *  * a follow-up request names the sending (`SEND`) and is not Them's own offer to send;
+ *  * stop language on any Them line is recorded in `stopPhrases`, whatever the model said.
  */
 export function readCallAnalysisAnswer(
   raw: string,
@@ -500,7 +554,9 @@ export function readCallAnalysisAnswer(
   let followUpRequest: CallAnalysisResult['followUpRequest'] = null;
   if (answer.follow_up_request.kind !== 'none') {
     const ref = quoteRef(answer.follow_up_request.quote, answer.follow_up_request.line, 'them');
-    if (ref === null) drop('follow_up_request');
+    // A request names the sending, and is not Them's own offer to send ("I'll send you…").
+    const words = ref === null ? '' : fold(ref.quote);
+    if (ref === null || !SEND.test(words) || OFFER.test(words)) drop('follow_up_request');
     else followUpRequest = { kind: answer.follow_up_request.kind, ref };
   }
 
@@ -580,7 +636,8 @@ export function readCallAnalysisAnswer(
   const commitments: CallAnalysisResult['commitments'] = [];
   for (const commitment of answer.commitments) {
     const ref = quoteRef(commitment.quote, commitment.line, commitment.speaker);
-    if (ref === null || commitments.length >= LIMITS.commitments) {
+    // A commitment is a promise: an acknowledgement ("Perfect, Thursday at 10") is not one.
+    if (ref === null || !PROMISE.test(fold(ref.quote)) || commitments.length >= LIMITS.commitments) {
       drop('commitments');
       continue;
     }
@@ -619,6 +676,7 @@ export function readCallAnalysisAnswer(
       voicemailLeft: answer.voicemail_left,
       commitments,
       coaching,
+      stopPhrases: stopPhrasesOf(utterances, lineRef),
       dropped,
     },
   };

@@ -199,11 +199,9 @@ describe('A-1: reading an answer', () => {
     if (!read.ok) return;
     expect(read.result.stop?.ref.line).toBe(3);
     expect(read.result.referral).toMatchObject({ name: 'Sarah Kim', role: 'runs maintenance' });
-    expect(read.result.commitments.map(c => [c.speaker, c.ref.line, c.duePhrase])).toEqual([
-      ['you', 4, 'by Friday'],
-      ['you', 6, null],
-    ]);
-    expect(read.result.dropped).toEqual({ commitments: 1, due_phrase: 1 });
+    // "Okay" is on a You line but promises nothing: an acknowledgement is not a commitment.
+    expect(read.result.commitments.map(c => [c.speaker, c.ref.line, c.duePhrase])).toEqual([['you', 4, 'by Friday']]);
+    expect(read.result.dropped).toEqual({ commitments: 2 });
 
     const youStop = readCallAnalysisAnswer(answer({ stop: { requested: true, scope: 'this_number', quote: 'Okay', line: 6 } }), CALL);
     expect(youStop.ok && youStop.result.stop).toBeNull();
@@ -217,5 +215,41 @@ describe('A-1: reading an answer', () => {
     expect(said.ok && said.result.wrongNumber).toMatchObject({ otherNumberGiven: '6175550199' });
     const invented = readCallAnalysisAnswer(answer({ wrong_number: { is_wrong: true, quote: 'Wrong number', line: 2, other_number_given: '617 555 0100' } }), call);
     expect(invented.ok && invented.result.wrongNumber).toMatchObject({ otherNumberGiven: null });
+  });
+
+  it('keeps a follow-up request only when it names the sending and is not Them’s own offer to send', () => {
+    const call = lines(
+      ['Y', 'Hi Dana.'],
+      ['T', "Just send me an overview by e-mail and I'll look at it."],
+      ['T', "I'll send you our unit list."],
+      ['T', 'Sounds interesting.'],
+    );
+    const asked = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'overview_email', quote: "Just send me an overview by e-mail and I'll look at it", line: 2 } }), call);
+    expect(asked.ok && asked.result.followUpRequest?.kind).toBe('overview_email');
+    const offer = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'other_email', quote: "I'll send you our unit list", line: 3 } }), call);
+    expect(offer.ok && offer.result.followUpRequest).toBeNull();
+    const vague = readCallAnalysisAnswer(answer({ follow_up_request: { kind: 'other', quote: 'Sounds interesting', line: 4 } }), call);
+    expect(vague.ok && vague.result.followUpRequest).toBeNull();
+    expect(vague.ok && vague.result.dropped['follow_up_request']).toBe(1);
+  });
+
+  it('records stop language on Them lines itself, negations and You lines excluded, and says when it names more than the speaker', () => {
+    const call = lines(
+      ['Y', 'Should I take you off our list? Stop calling you?'],
+      ['T', "Don't take me off anything, just call later."],
+      ['T', "I'm not saying stop calling, just not this week."],
+      ['T', 'Please take me off your list.'],
+      ['T', "I don't want these calls."],
+      ['T', 'No more calls, please. Remove this number.'],
+    );
+    const read = readCallAnalysisAnswer(answer(), call);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.result.stopPhrases.map(phrase => [phrase.ref.line, phrase.ref.quote, phrase.general])).toEqual([
+      [4, 'take me off', false],
+      [5, "don't want these calls", true],
+      [6, 'remove this number', false],
+      [6, 'no more calls', true],
+    ]);
   });
 });

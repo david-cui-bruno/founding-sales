@@ -257,14 +257,14 @@ export type CompleteCallAnalysisOutcome =
   /** The session (and with it the version) is gone. */
   | { readonly kind: 'gone' };
 
-interface PendingRow {
+type PendingRow = {
   readonly id: string;
   readonly call_session_id: string;
   readonly version: number;
   readonly origin: CallAnalysisOrigin;
   readonly state: CallAnalysisState;
   readonly transcript_sha256: string | null;
-}
+};
 
 /** Steps 1-3 for the version's session, then the version row itself, FOR UPDATE. */
 async function lockVersion(context: RepositoryContext, analysisId: string): Promise<PendingRow | 'gone'> {
@@ -403,7 +403,7 @@ export async function readPolicyContext(context: RepositoryContext, sessionId: s
 // The read
 // ---------------------------------------------------------------------------
 
-interface VersionRow {
+type VersionRow = {
   readonly id: string;
   readonly version: number;
   readonly origin: CallAnalysisOrigin;
@@ -419,7 +419,7 @@ interface VersionRow {
   readonly proposal_hash: string | null;
   readonly created_at: Date;
   readonly completed_at: Date | null;
-}
+};
 
 function notesOf(row: VersionRow): CallAnalysisNotes | null {
   if (row.origin === 'user') return row.notes;

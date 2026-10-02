@@ -222,3 +222,74 @@ describe('A-2: resolveSpokenCallback', () => {
     expect(parseSpokenTime('14:00')).toBe('14:00');
   });
 });
+
+describe('A-2: the safety nets added after the first live run (C2)', () => {
+  it('stop language the model did not read as a stop never becomes a park or a rejection: only outcome_unclear and stop_scope', () => {
+    const call = lines(['Y', 'Hi. I will send you an overview today.'], ['T', "I don't want these calls."]);
+    const raw = answer({
+      interest: { level: 'not_interested', signals: [] },
+      objections: [{ category: 'brush_off', quote: "I don't want these calls", line: 2, answered_line: 0 }],
+      commitments: [{ speaker: 'you', quote: 'I will send you an overview today', line: 1, due_phrase: 'today' }],
+    });
+    expect(labels(raw, call)).toEqual(['outcome_unclear', 'stop_scope']);
+  });
+
+  it('a stop the model scoped to this number, in words that name more, also asks David for the scope', () => {
+    const call = lines(['Y', 'Hi.'], ['T', "I don't want these calls."]);
+    expect(labels(answer({ stop: { requested: true, scope: 'this_number', quote: "I don't want these calls", line: 2 } }), call)).toEqual([
+      'outcome:do_not_call',
+      'stop_scope',
+    ]);
+    const personal = lines(['Y', 'Hi.'], ['T', 'Take me off your list.']);
+    expect(labels(answer({ stop: { requested: true, scope: 'this_number', quote: 'Take me off your list', line: 2 } }), personal)).toEqual([
+      'outcome:do_not_call',
+    ]);
+  });
+
+  it('a verified wrong number is a wrong number even when the model said nobody was reached', () => {
+    const call = lines(['Y', 'Is this Harbor Lane?'], ['T', 'No, you have the wrong number.']);
+    expect(labels(answer({ reached: 'none', wrong_number: { is_wrong: true, quote: 'you have the wrong number', line: 2, other_number_given: '' } }), call)).toEqual([
+      'outcome:wrong_number',
+    ]);
+  });
+
+  it('decides exactness from the verified words, not the model’s flag', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'Not now. Call me Tuesday at 2.']);
+    const raw = answer({ callback: { requested: true, exact: false, phrase: 'Call me Tuesday at 2', line: 2, agreed_line: 0, day: 'tuesday', date_text: 'Tuesday', time: '2' } });
+    expect(labels(raw, call)).toEqual(['outcome:callback_requested', 'callback:2026-10-06T14:00']);
+  });
+
+  it('a qualifying signal makes a buying signal when the model read the call as interested or curious, not otherwise', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'Could you show us a demo?']);
+    const demo = [{ kind: 'demo_request' as const, quote: 'Could you show us a demo?', line: 2 }];
+    expect(labels(answer({ interest: { level: 'curious', signals: demo } }), call)).toEqual(['outcome:interested', 'buying_signal']);
+    expect(labels(answer({ interest: { level: 'neutral', signals: demo } }), call)).toEqual(['outcome_unclear']);
+    // A pricing question qualifies only under Q3's other reading, passed by the evaluation.
+    const price = lines(['Y', 'Hi.'], ['T', 'What does it cost?']);
+    const raw = answer({ interest: { level: 'curious', signals: [{ kind: 'pricing_question', quote: 'What does it cost?', line: 2 }] } });
+    expect(labels(raw, price)).toEqual(['outcome_unclear']);
+    const wide = proposeEffects(read(raw, price), CONTEXT, ['demo_request', 'evaluation', 'adoption_question', 'pricing_question']);
+    expect(effectLabels(wide.proposals)).toEqual(['outcome:interested', 'buying_signal']);
+  });
+
+  it('a neutral call with an unanswered declining objection is a soft rejection; an answered one, or an unclear reading, is not', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'We just renewed, so maybe next year.'], ['Y', 'Most firms switch at renewal.']);
+    const objection = { category: 'timing' as const, quote: 'maybe next year', line: 2, answered_line: 0 };
+    expect(labels(answer({ interest: { level: 'neutral', signals: [] }, objections: [objection] }), call)).toEqual(['outcome:not_interested', 'park']);
+    expect(labels(answer({ interest: { level: 'neutral', signals: [] }, objections: [{ ...objection, answered_line: 3 }] }), call)).toEqual(['outcome_unclear']);
+    expect(labels(answer({ interest: { level: 'unclear', signals: [] }, objections: [objection] }), call)).toEqual(['outcome_unclear']);
+  });
+
+  it('David repeating the callback ("I\'ll call you then") is the callback, not a second task', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'Call me Wednesday at 3.'], ['Y', "Great, Wednesday at 3 then. I'll call you then."]);
+    const raw = answer({
+      callback: { requested: true, exact: true, phrase: 'Call me Wednesday at 3', line: 2, agreed_line: 0, day: 'wednesday', date_text: 'Wednesday', time: '3' },
+      commitments: [
+        { speaker: 'you', quote: "I'll call you then", line: 3, due_phrase: '' },
+        { speaker: 'you', quote: 'Great, Wednesday at 3 then', line: 3, due_phrase: 'Wednesday at 3' },
+      ],
+    });
+    expect(labels(raw, call)).toEqual(['outcome:callback_requested', 'callback:2026-10-07T15:00']);
+  });
+});
+

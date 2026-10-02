@@ -21,7 +21,7 @@ import { CALL_SUMMARY_SIDES } from './callSummaries.ts';
  */
 
 /** Bumped whenever a byte of the policy table (`analysisPolicy.ts`) changes what it proposes. */
-export const CALL_POLICY_VERSION = 'call_policy.1';
+export const CALL_POLICY_VERSION = 'call_policy.2';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -173,6 +173,13 @@ export const callAnalysisResultSchema = z.strictObject({
     )
     .max(10),
   coaching: z.strictObject({ observation: shortText, lines: z.array(callAnalysisLineRefSchema).max(5) }).nullable(),
+  /**
+   * Stop language the reader found itself on Them lines ("stop calling", "take me off",
+   * "I don't want these calls"), whatever the model said: the policy's safety net, so a
+   * stop the model missed or read as a rejection never becomes a park. `general` when the
+   * words do not name only the speaker or this number.
+   */
+  stopPhrases: z.array(z.strictObject({ general: z.boolean(), ref: callAnalysisQuoteRefSchema })).max(10),
   /** Items the reader removed because they failed a rule, per field. Counts only. */
   dropped: z.record(z.string().max(32), z.number().int().min(0)),
 });
