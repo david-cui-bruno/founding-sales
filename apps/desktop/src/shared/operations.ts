@@ -8,6 +8,7 @@ import {
   callProposalKeySchema,
   callRecapResponseSchema,
   proposalAcceptanceResponseSchema,
+  callTrialResponseSchema,
   reviewItemSchema,
   callCadenceSchema,
   callRecordingResponseSchema,
@@ -423,6 +424,8 @@ export const reviewViewSchema = z.strictObject({ items: z.array(reviewItemSchema
 export type ReviewView = z.infer<typeof reviewViewSchema>;
 export const recapViewSchema = z.strictObject({ recap: callRecapResponseSchema.nullable() });
 export const acceptanceViewSchema = z.strictObject({ acceptance: proposalAcceptanceResponseSchema.nullable() });
+/** Slice S3T: the 10-call trial; null when the read did not answer (an older API: the section hides). */
+export const trialViewSchema = z.strictObject({ trial: callTrialResponseSchema.nullable() });
 
 /** One recording's audio for the page to play; `reason` when it could not be read. */
 export const callRecordingViewSchema = z.strictObject({
@@ -697,6 +700,13 @@ export const OPERATIONS = {
     input: nothing,
     output: acceptanceViewSchema,
     transform: 'none: the per-type acceptance counts, read-only; null when the read did not answer',
+  },
+  'calling.trial': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/trial' }],
+    input: nothing,
+    output: trialViewSchema,
+    transform: 'none: the 10-call trial since the 3a release, read-only; null when the read did not answer',
   },
   'review.list': {
     kind: 'read',

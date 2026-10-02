@@ -137,6 +137,7 @@ describe('the operation registry', () => {
       'calling.pendingDismiss',
       'calling.recap',
       'calling.acceptance',
+      'calling.trial',
       'calling.recording',
       // Slice C2: the call's transcript, under its row on the firm page.
       'calling.transcript',

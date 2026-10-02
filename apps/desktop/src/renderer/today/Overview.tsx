@@ -3,6 +3,7 @@ import type { JSX } from 'react';
 import { figureText, type FigureCell, type HomeView } from '../homeView.ts';
 import { cn } from '../lib/utils.ts';
 import { navigate } from '../routes.ts';
+import { Trial } from './Trial.tsx';
 
 /**
  * Today › Overview: the numbers (slice 3a, C0; David's feedback after 1.0.26).
@@ -100,6 +101,10 @@ export function Overview({ home, extras }: { readonly home: HomeView; readonly e
     <div data-testid="today-overview" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-[640px] flex-col px-8 pt-8 pb-16">
         <Figures home={home} />
+        {/* Slice S3T: the 10-call trial; it hides itself when the read does not answer. */}
+        <div className="mt-9 empty:hidden">
+          <Trial />
+        </div>
         {extras == null ? null : <div className="mt-9">{extras}</div>}
       </div>
     </div>
