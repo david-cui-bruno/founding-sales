@@ -11,7 +11,8 @@ import {
   type TodayCounts,
   type TodayItemRow,
 } from './types.ts';
-import type { TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts';
+import type { PreparedBriefDto, TodayCardBlocker, TodayItemKind, TodayLane } from '@fss/contracts';
+import { readPreparedBrief } from '../crm/preparedBriefs.ts';
 
 /**
  * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).
@@ -145,6 +146,11 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
    * desktop that has never heard of it parses the card it always parsed.
    */
   readonly brief: CallBrief | null;
+  /**
+   * The firm's prepared brief, or null (lane PB, migration 0038). Only when the request
+   * negotiated `include: ['preparedBrief']`; absent otherwise.
+   */
+  readonly preparedBrief?: PreparedBriefDto | null;
   /** The firm's editable basics and what is missing from them (slice S2). Version 2 only. */
   readonly basics: FirmBasicsDto;
 }
@@ -161,8 +167,8 @@ export interface FirmBasicsDto {
  * `TodayTaskDtoV2`. What `/today/firm` answers a client that did not ask for version 2,
  * so an older desktop keeps parsing the card it always parsed.
  */
-export function todayFirmVersion1(page: TodayFirmDto): Omit<TodayFirmDto<TodayTaskDto>, 'brief' | 'basics'> {
-  const { brief: _brief, basics: _basics, ...rest } = page;
+export function todayFirmVersion1(page: TodayFirmDto): Omit<TodayFirmDto<TodayTaskDto>, 'brief' | 'basics' | 'preparedBrief'> {
+  const { brief: _brief, basics: _basics, preparedBrief: _preparedBrief, ...rest } = page;
   return {
     ...rest,
     tasks: page.tasks.map(task => ({
@@ -470,7 +476,13 @@ export async function readTodayList(
  */
 export async function readTodayFirm(
   context: RepositoryContext,
-  input: { readonly firmId: string; readonly now: string; readonly includeTasks?: boolean | undefined },
+  input: {
+    readonly firmId: string;
+    readonly now: string;
+    readonly includeTasks?: boolean | undefined;
+    /** Lane PB: `include: ['preparedBrief']` adds the firm's prepared brief. */
+    readonly includePreparedBrief?: boolean | undefined;
+  },
 ): Promise<TodayFirmDto | null> {
   const snapshotDate = await businessDateOf(context, input.now);
   const assignedUserId = assigneeFilter(context);
@@ -550,6 +562,7 @@ export async function readTodayFirm(
     })),
     callingIdentityId,
     brief: await readCallBrief(context, input.firmId),
+    ...(input.includePreparedBrief === true ? { preparedBrief: await readPreparedBrief(context, input.firmId) } : {}),
     basics: (await readFirmBasics(context, [input.firmId])).get(input.firmId) ?? {
       locality: null,
       regionCode: null,

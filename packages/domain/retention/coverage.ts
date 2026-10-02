@@ -254,6 +254,15 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'A promise made on a call (its text and quote key), or the overview an agreement left to send; removed with the firm or the person.',
   ),
 
+  // ------------------------------------------------ prepared briefs (0038, lane PB)
+  // Text somebody prepared about the firm (it can name the person to ask for) and its
+  // source links: removed with the firm. A contact-scoped deletion leaves it, as it leaves
+  // the research facts: it carries no contact id.
+  firm_prepared_briefs: coverage(
+    ['deletion_removes'],
+    'A prepared call brief and its source links for one firm; removed with the firm.',
+  ),
+
   // ------------------------------------------------ transcription jobs (0032, slice C3a)
   // Ids, a provider job name and two object keys: what collecting a Transcribe job needs.
   // Kept past a deletion on purpose, so the workflow can still name the call's objects.

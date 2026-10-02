@@ -467,14 +467,14 @@ async function knownOwners(context: RepositoryContext, candidates: readonly stri
   return new Set(rows.map(row => row.user_id));
 }
 
-interface IndexedFirm {
+export interface IndexedFirm {
   readonly id: string;
   readonly name: string;
   readonly domain: string | null;
 }
 
 /** The workspace's active firms and their people, keyed the way a row is matched. Scoped. */
-interface WorkspaceIndex {
+export interface WorkspaceIndex {
   readonly byExternalId: ReadonlyMap<string, readonly IndexedFirm[]>;
   readonly byDomain: ReadonlyMap<string, readonly IndexedFirm[]>;
   readonly byName: ReadonlyMap<string, readonly IndexedFirm[]>;
@@ -488,7 +488,7 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else if (!list.includes(value)) list.push(value);
 }
 
-async function workspaceIndex(context: RepositoryContext): Promise<WorkspaceIndex> {
+export async function workspaceIndex(context: RepositoryContext): Promise<WorkspaceIndex> {
   const workspaceId = context.scope.workspaceId;
   const firms = await context.db.query<{ id: string; name: string; website: string | null }>(
     `SELECT id, name, website FROM firms WHERE workspace_id = $1 AND status = 'active'`,
@@ -555,7 +555,7 @@ interface FileFirm {
   readonly domain: string | null;
 }
 
-type Matched =
+export type Matched =
   | { readonly kind: 'none' }
   | { readonly kind: 'ambiguous'; readonly column: ImportColumn }
   | { readonly kind: 'match'; readonly match: ImportFirmMatch };
@@ -569,7 +569,7 @@ function nameCompatible(rowDomain: string | null, candidateDomain: string | null
   return rowDomain === null || candidateDomain === null || rowDomain === candidateDomain;
 }
 
-function matchExisting(index: WorkspaceIndex, firm: ImportFirmDraft): Matched {
+export function matchExisting(index: WorkspaceIndex, firm: ImportFirmDraft): Matched {
   const one = (
     found: readonly IndexedFirm[] | undefined,
     matchedOn: 'external_id' | 'domain' | 'name',

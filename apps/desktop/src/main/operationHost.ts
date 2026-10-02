@@ -27,6 +27,7 @@ import {
   type OperationName,
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
+import type { BriefImportHost } from './briefImport.ts';
 import type { CrmBridgeHost } from './crmBridge.ts';
 import type { MailboxBridgeHost } from './mailboxBridge.ts';
 import type { ReplyBridgeHost } from './replyBridge.ts';
@@ -66,6 +67,8 @@ export interface OperationHostDeps {
   readonly sequences: SequenceBridgeHost;
   readonly settings: AdminBridgeHost;
   readonly mailbox: MailboxBridgeHost;
+  /** Lane PB: the prepared-brief import the main process holds. */
+  readonly briefImport: BriefImportHost;
 }
 
 type Handler = (input: never) => Promise<unknown>;
@@ -366,6 +369,10 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
         issues: refusal?.success === true ? (refusal.data.issues ?? []) : [],
       };
     },
+    // Lane PB. Straight through the client, like the basics: the view reads its own state again.
+    'firms.briefImportState': async () => await deps.briefImport.state(),
+    'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
+    'firms.briefImportReset': async () => await deps.briefImport.reset(),
     'calls.logIncoming': async (input: OperationInput<'calls.logIncoming'>) => {
       const answer = await deps.api.command(
         '/calls/log',

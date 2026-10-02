@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron';
 import { DIAL_IPC_CHANNELS, IMPORT_IPC_CHANNELS } from '../shared/operations.ts';
 import { createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
+import { createBriefImport, type BriefImportHost } from './briefImport.ts';
 import { guardIdentity } from './identityReset.ts';
+import type { FileChoice } from './importHandoff.ts';
 import { createImportHandoff, type ImportHandoff } from './importHandoff.ts';
 import { createMailboxBridge, type MailboxBridgeDeps, type MailboxBridgeHost } from './mailboxBridge.ts';
 import { registerOperations } from './operationHost.ts';
@@ -46,6 +48,7 @@ export interface WindowBridges {
   readonly sequences: SequenceBridgeHost;
   readonly settings: AdminBridgeHost;
   readonly mailbox: MailboxBridgeHost;
+  readonly briefImport: BriefImportHost;
 }
 
 export interface WindowBridgeDeps {
@@ -58,6 +61,10 @@ export interface WindowBridgeDeps {
   readonly mailbox: MailboxBridgeDeps;
   /** macOS's open panel, for the one thing the registry does not carry. */
   readonly chooseImportFile: ImportHandoff['choose'];
+  /** Lane PB: macOS's open panel for a prepared-brief JSON file. Absent in tests that never import one. */
+  readonly openBriefDialog?: () => Promise<FileChoice>;
+  /** Reading the chosen brief file; the default is `node:fs`. */
+  readonly readBriefFile?: (path: string) => Promise<string>;
   /**
    * The session's transition counter (1.0.13, P0-A).
    *
@@ -89,7 +96,14 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   const sequences = guard(createSequenceBridge(deps.sequences));
   const settings = guard(createAdminBridge(deps.settings));
   const mailbox = guard(createMailboxBridge(deps.mailbox));
-  registerOperations({ api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox }, handleOnce);
+  const briefImport = guard(
+    createBriefImport({
+      api: deps.today.api,
+      openDialog: deps.openBriefDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
+      ...(deps.readBriefFile === undefined ? {} : { read: deps.readBriefFile }),
+    }),
+  );
+  registerOperations({ api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current
@@ -110,7 +124,10 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
     return file === null ? await crm.state() : await crm.previewImport(file);
   });
 
-  return { today, replies, research, crm, sequences, settings, mailbox };
+  // Lane PB: a prepared-brief file, chosen and previewed here; the window is given the preview.
+  handleOnce(IMPORT_IPC_CHANNELS.chooseBriefs, async () => await briefImport.choose());
+
+  return { today, replies, research, crm, sequences, settings, mailbox, briefImport };
 }
 
 export { createImportHandoff };

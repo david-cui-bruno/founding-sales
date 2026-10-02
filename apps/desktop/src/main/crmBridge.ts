@@ -362,7 +362,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
       firmId,
       pageVersion: FIRM_PAGE_VERSION,
-      include: ['stops'],
+      // Lane PB (migration 0038): and the firm's prepared brief, or null.
+      include: ['stops', 'preparedBrief'],
     });
     if (!page.ok) {
       notice = page.reason;

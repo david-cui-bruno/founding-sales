@@ -29,6 +29,7 @@ import {
   unmatchedMeetingDtoSchema,
   uuid,
 } from '@fss/contracts';
+import { briefImportViewSchema } from './briefImport.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -1549,6 +1550,32 @@ export const OPERATIONS = {
     output: incomingCallAnswerSchema,
     transform: 'direction inbound and nothing a placed call binds: no ticket, session, route or calling identity',
   },
+
+  // --- Lane PB: importing prepared briefs from a JSON file ----------------------------
+  // Briefs are read-only in Callie; a corrected file is the only change path. The import is
+  // held in the main process (`main/briefImport.ts`); the file is chosen on its own channel,
+  // `IMPORT_IPC_CHANNELS.chooseBriefs`.
+  'firms.briefImportState': {
+    kind: 'read',
+    calls: [],
+    input: nothing,
+    output: briefImportViewSchema,
+    transform: 'the prepared-brief import the main process is holding: the preview and any results, never the text',
+  },
+  'firms.briefImportCommit': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/firms/brief/import' }],
+    input: z.strictObject({ previewId: z.number().int().min(1) }),
+    output: briefImportViewSchema,
+    transform: 'one import command with the valid rows of the preview on screen, under the id minted at that preview, so a second press replays',
+  },
+  'firms.briefImportReset': {
+    kind: 'command',
+    calls: [],
+    input: nothing,
+    output: briefImportViewSchema,
+    transform: 'lets the file and its preview go',
+  },
 } as const satisfies Readonly<Record<string, Operation>>;
 
 export type OperationName = keyof typeof OPERATIONS;
@@ -1578,7 +1605,7 @@ export const OPERATION_IPC_CHANNELS = {
 export const DIAL_IPC_CHANNELS = { call: 'callie:dial:call' } as const;
 
 /** Choosing a CSV to import: macOS's open dialog, which belongs to the main process. */
-export const IMPORT_IPC_CHANNELS = { choose: 'callie:import:choose' } as const;
+export const IMPORT_IPC_CHANNELS = { choose: 'callie:import:choose', chooseBriefs: 'callie:import:choose-briefs' } as const;
 
 /**
  * What the renderer is given. Two functions and a closed vocabulary: a view that wants
@@ -1606,6 +1633,11 @@ export interface DialBridge {
  */
 export interface ImportBridge {
   choose(): Promise<OperationOutput<'crm.state'>>;
+  /**
+   * Lane PB: choose a prepared-brief JSON file. The same rule: the main process opens the
+   * panel, reads and previews the file, and answers the preview, never the briefs.
+   */
+  chooseBriefs(): Promise<OperationOutput<'firms.briefImportState'>>;
 }
 
 declare global {

@@ -273,6 +273,10 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   },
   '/enrollments': enrollmentsBody,
   '/import/preview': importPreviewBody,
+  // Lane PB: one prepared-brief row matched, so committing the import reaches the set command.
+  '/firms/brief/match': {
+    rows: [{ status: 'matched', firmId: '11111111-1111-4111-8111-111111111111', firmName: 'Aspen Test Wealth', matchedOn: 'external_id' }],
+  },
   '/replies/card': replyCardBody,
   '/sequences/versions': sequenceVersionsBody,
   '/gmail/status': {

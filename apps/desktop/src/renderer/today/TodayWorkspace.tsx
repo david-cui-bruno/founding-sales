@@ -33,6 +33,7 @@ import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
 import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type Watch } from './useAnalysis.ts';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
+import { PreparedBrief } from '../research/PreparedBrief.tsx';
 import { callTimer } from '../calling/callText.ts';
 import { callHistoryKey, useCallProgress } from './useCallProgress.ts';
 import { todayForm, type Today } from './useToday.ts';
@@ -904,6 +905,13 @@ export function TodayWorkspace({
                 {history.progress !== null && history.latest !== null && recentCall(history.latest) ? (
                   <LatestCall history={history} view={analyses.get(history.latest.sessionId)} waiting={Date.now() - (Number.isFinite(latestEnded) ? latestEnded : Date.now()) < WAITING_WINDOW_MS} />
                 ) : null}
+
+                {/* Lane PB: the prepared brief, negotiated on the card read, above Callie's own research. */}
+                {expanded.preparedBrief == null ? null : (
+                  <div className="mt-6">
+                    <PreparedBrief key={expanded.firmId} brief={expanded.preparedBrief} />
+                  </div>
+                )}
 
                 <div className="mt-6">
                   <TodayBrief

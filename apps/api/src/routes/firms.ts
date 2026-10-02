@@ -1,7 +1,13 @@
-import { recordEvidenceCommandSchema, resolveFirmZoneCommandSchema } from '@fss/contracts';
+import {
+  preparedBriefImportCommandSchema,
+  preparedBriefMatchRequestSchema,
+  recordEvidenceCommandSchema,
+  resolveFirmZoneCommandSchema,
+} from '@fss/contracts';
 import { listFirmsForActor, readFirmForActor } from '@fss/domain/crm/dto.ts';
 import { recordEvidence } from '@fss/domain/crm/evidence.ts';
 import { resolveZoneForFirm } from '@fss/domain/crm/firms.ts';
+import { importPreparedBriefs, matchPreparedBriefRows } from '@fss/domain/crm/preparedBriefs.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -12,8 +18,10 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * * `GET  /firms` — every firm at identity visibility.
  * * `GET  /firms/:id` — one firm at whatever visibility Appendix F gives this caller.
  * * `POST /firms/resolve-zone`, `/firms/evidence` — commands, through `runCommand`.
- *   (`/firms/create`, `/firms/update` and `/firms/reassign` had no caller and went in
- *   wave 2, S6: the Mac adds a firm through `/crm/firms/add` or an import.)
+ * * `POST /firms/brief/match` — admin only and read-only: which firm each row of a
+ *   prepared-brief file names, by the CSV importer's matcher. `POST /firms/brief/import` —
+ *   admin only: a whole file of at most 100 rows as one atomic, idempotent command that
+ *   replaces each matched firm's brief whole (lane PB). Briefs are read-only otherwise.
  *
  * The read is the interesting one: it returns a discriminated DTO rather than a row
  * with fields blanked out, so a salesperson reading a colleague's firm gets an object
@@ -71,7 +79,19 @@ export async function routeFirms(request: ApiRequest, options: RoutingOptions): 
           confidence: body.confidence,
         }),
       );
+    case '/firms/brief/import':
+      return await runRouteCommand(deps, preparedBriefImportCommandSchema, 'firm.prepared_briefs_imported', async (repository, body) =>
+        await importPreparedBriefs(repository, { rows: body.rows }),
+      );
+    case '/firms/brief/match': {
+      const parsed = preparedBriefMatchRequestSchema.safeParse(request.body);
+      if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+      const matched = await matchPreparedBriefRows(context, parsed.data);
+      if (!matched.ok) return { status: 409, body: { status: 'refused', reason: matched.reason } };
+      return { status: 200, body: { rows: matched.value } };
+    }
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }
 }
+

@@ -1,0 +1,199 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  firmPageResponseSchema,
+  preparedBriefImportResultSchema,
+  preparedBriefMatchResponseSchema,
+  todayFirmResponseSchema,
+} from '@fss/contracts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { buildTodaySnapshot } from '@fss/domain/today/build.ts';
+import { businessDateOf } from '@fss/domain/today/snapshots.ts';
+import { localNoopSuppressionJournal } from '../src/journal/index.ts';
+import { dispatch, type ApiRequest } from '../src/server.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
+import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedFirm } from './support/crmSeed.ts';
+import { todayFirmResponseSchema as legacyTodayFirmResponseSchema } from './support/today134dc811.ts';
+
+/**
+ * Lane PB: a firm's prepared brief over the wire (migration 0038).
+ *
+ *   * briefs are read-only: `/firms/brief/set` and `/firms/brief/clear` are not served
+ *     (scope reduction after review PBR); `POST /firms/brief/import` is the only change path.
+ *   * `include: ['preparedBrief']` on `POST /crm/firm-page` and `POST /today/firm`: without it
+ *     the answer is the shape an installed desktop parses strictly; with it, the brief or null.
+ *   * `POST /firms/brief/match`: an administrator's read, by the importer's matcher.
+ */
+describe('prepared briefs over the wire', () => {
+  let fixture: AuthFixture;
+  let adminToken: string;
+  let salesToken: string;
+  let ownFirm: string;
+
+  const options = () => ({
+    session: fixture.db,
+    supportedClientVersions: fixture.deps.config.supportedClientVersions,
+    sendingEnabled: false,
+    auth: fixture.deps,
+    upgradeUrl: 'https://callie.example/downloads/mac',
+    suppressionJournal: localNoopSuppressionJournal(),
+  });
+
+  const call = async (token: string, path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const request: ApiRequest = {
+      method: 'POST',
+      path,
+      query: new URLSearchParams(),
+      headers: { authorization: `Bearer ${token}` },
+      body,
+    };
+    const result = await dispatch(request, options());
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
+  };
+  const envelope = () => ({ commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION });
+
+  const TEXT = 'Who to ask for: Robin Placeholder, Broker (likely)\nBrief: owners in Plano.';
+  const importRow = (externalId: string, brief = TEXT) => ({
+    external_id: externalId,
+    brief,
+    sources: [
+      { url: 'https://firm.example.test/contact', label: 'Phone source' },
+      { url: 'https://firm.example.test/team', label: 'Decision-maker' },
+    ],
+    observed_on: '2026-10-02',
+    prepared_by: 'Callie research agent (web), verified phones',
+  });
+  let emptyFirm: string;
+
+  beforeAll(async () => {
+    fixture = await createAuthFixture();
+    adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
+    salesToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
+    ownFirm = await seedFirm(fixture, {
+      name: 'Prepared Wire Own Test Co',
+      website: 'https://own.example.test',
+      regionCode: 'TX',
+      externalId: 'dfw-20261002-e01',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    emptyFirm = await seedFirm(fixture, {
+      name: 'Prepared Wire Empty Test Co',
+      regionCode: 'TX',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+  });
+
+  afterAll(async () => {
+    await fixture.stop();
+  });
+
+  it('serves no edit route: briefs change only by import', async () => {
+    for (const path of ['/firms/brief/set', '/firms/brief/clear']) {
+      const answer = await call(adminToken, path, { ...envelope(), firmId: ownFirm, brief: 'Edited' });
+      expect(answer.status, path).toBe(404);
+    }
+    const imported = await call(adminToken, '/firms/brief/import', { ...envelope(), rows: [importRow('dfw-20261002-e01')] });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+    expect((imported.body['result'] as { counts: unknown }).counts).toEqual({ saved: 1, unchanged: 0, unmatched: 0, ambiguous: 0 });
+  });
+
+  it('adds the brief to the firm page only when negotiated, so an installed desktop’s strict parse never meets it', async () => {
+    const detail = firmPageResponseSchema.options[1];
+    const legacyPage = detail.omit({ preparedBrief: true });
+
+    const without = await call(salesToken, '/crm/firm-page', { firmId: ownFirm, pageVersion: 2 });
+    expect(without.status).toBe(200);
+    expect('preparedBrief' in without.body).toBe(false);
+    expect(legacyPage.safeParse(without.body).success).toBe(true);
+
+    const withBrief = await call(salesToken, '/crm/firm-page', { firmId: ownFirm, pageVersion: 2, include: ['stops', 'preparedBrief'] });
+    expect(withBrief.status).toBe(200);
+    const parsed = detail.parse(withBrief.body);
+    expect(parsed.preparedBrief).toMatchObject({ brief: TEXT, observedOn: '2026-10-02', sources: [{ label: 'Phone source' }, { label: 'Decision-maker' }] });
+    expect(parsed.stops).toBeDefined();
+    expect(legacyPage.safeParse(withBrief.body).success).toBe(false);
+    // The vocabulary is closed.
+    expect((await call(salesToken, '/crm/firm-page', { firmId: ownFirm, include: ['everything'] })).status).toBe(400);
+  });
+
+  it('adds the brief to the Today card only when negotiated, and null for a firm with none', async () => {
+    const worker = repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'worker' }), fixture.db);
+    const { rows } = await fixture.db.query<{ now: Date }>('SELECT now() AS now');
+    const now = (rows[0]?.now ?? new Date()).toISOString();
+    await buildTodaySnapshot(worker, { businessDate: await businessDateOf(worker, now), now });
+
+    const plain = await call(salesToken, '/today/firm', { firmId: ownFirm, cardVersion: 2 });
+    expect(plain.status, JSON.stringify(plain.body)).toBe(200);
+    expect('preparedBrief' in plain.body).toBe(false);
+    const legacy = await call(salesToken, '/today/firm', { firmId: ownFirm });
+    expect(legacyTodayFirmResponseSchema.safeParse(legacy.body).success).toBe(true);
+
+    const negotiated = await call(salesToken, '/today/firm', { firmId: ownFirm, cardVersion: 2, include: ['tasks', 'preparedBrief'] });
+    expect(negotiated.status).toBe(200);
+    expect(todayFirmResponseSchema.parse(negotiated.body).preparedBrief?.brief).toBe(TEXT);
+
+    // Version 1 never carries it, even when asked.
+    const version1 = await call(salesToken, '/today/firm', { firmId: ownFirm, include: ['preparedBrief'] });
+    expect('preparedBrief' in version1.body).toBe(false);
+
+    const none = await call(salesToken, '/today/firm', { firmId: emptyFirm, cardVersion: 2, include: ['preparedBrief'] });
+    expect(none.status, JSON.stringify(none.body)).toBe(200);
+    expect(none.body['preparedBrief']).toBeNull();
+  });
+
+  it('matches rows by external id for an admin, and refuses a salesperson', async () => {
+    const rows = [{ externalId: 'dfw-20261002-e01' }, { externalId: 'dfw-20261002-x99' }, { website: 'https://www.own.example.test/about' }];
+    const matched = await call(adminToken, '/firms/brief/match', { rows });
+    expect(matched.status).toBe(200);
+    expect(preparedBriefMatchResponseSchema.parse(matched.body).rows).toEqual([
+      { status: 'matched', firmId: ownFirm, firmName: 'Prepared Wire Own Test Co', matchedOn: 'external_id' },
+      { status: 'unmatched' },
+      { status: 'matched', firmId: ownFirm, firmName: 'Prepared Wire Own Test Co', matchedOn: 'domain' },
+    ]);
+    const refused = await call(salesToken, '/firms/brief/match', { rows });
+    expect(refused.status).toBe(409);
+    expect(refused.body['reason']).toBe('admin_only');
+  });
+
+  describe('POST /firms/brief/import (design reset I1)', () => {
+    const fileRow = (fields: Record<string, string>) => ({
+      brief: 'Imported brief text for Robin Placeholder',
+      sources: [{ url: 'https://firm.example.test/contact', label: 'Phone source' }],
+      observed_on: '2026-10-02',
+      prepared_by: 'Callie research agent (web), verified phones',
+      ...fields,
+    });
+
+    it('imports in one command, replays the stored result for the same id, and writes once', async () => {
+      const body = { ...envelope(), rows: [fileRow({ external_id: 'dfw-20261002-e01' }), fileRow({ external_id: 'dfw-20261002-x99' })] };
+      const first = await call(adminToken, '/firms/brief/import', body);
+      expect(first.status, JSON.stringify(first.body)).toBe(200);
+      expect(preparedBriefImportResultSchema.parse(first.body['result'])).toEqual({
+        rows: [
+          { index: 1, status: 'saved', firmId: ownFirm },
+          { index: 2, status: 'unmatched' },
+        ],
+        counts: { saved: 1, unchanged: 0, unmatched: 1, ambiguous: 0 },
+      });
+      const audits = async (): Promise<number> =>
+        (await fixture.db.query(`SELECT 1 FROM audit_events WHERE workspace_id = $1 AND action = 'firm.prepared_briefs_imported'`, [fixture.alpha.workspaceId])).rows.length;
+      const before = await audits();
+      const replay = await call(adminToken, '/firms/brief/import', body);
+      expect(replay.body['replayed']).toBe(true);
+      expect(replay.body['result']).toEqual(first.body['result']);
+      expect(await audits()).toBe(before);
+      const receipt = await fixture.db.query('SELECT result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2', [fixture.alpha.workspaceId, body.commandId]);
+      expect(JSON.stringify(receipt.rows)).not.toContain('Robin Placeholder');
+    });
+
+    it('is an administrator’s command, and takes at most 100 rows', async () => {
+      const refused = await call(salesToken, '/firms/brief/import', { ...envelope(), rows: [fileRow({ external_id: 'dfw-20261002-e01' })] });
+      expect(refused.status).toBe(409);
+      expect(refused.body['reason']).toBe('admin_only');
+      const tooMany = Array.from({ length: 101 }, (_, i) => fileRow({ external_id: `row-${String(i)}` }));
+      expect((await call(adminToken, '/firms/brief/import', { ...envelope(), rows: tooMany })).status).toBe(400);
+      expect((await call(adminToken, '/firms/brief/import', { ...envelope(), rows: [] })).status).toBe(400);
+    });
+  });
+});

@@ -9,6 +9,7 @@ import { createDialHandoff } from './dialHandoff.ts';
 import { allowPermissionCheck, allowPermissionRequest } from './mediaPermission.ts';
 import { createTelLaunchDriver, isBrowserLink } from './telHandoff.ts';
 import { resetBridges } from './identityReset.ts';
+import { BRIEF_FILE_FILTERS } from './briefImport.ts';
 import { createImportHandoff, IMPORT_FILE_FILTERS } from './importHandoff.ts';
 import { registerWindowBridges } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
@@ -261,6 +262,12 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     // The consent screen goes to the system browser exactly as sign-in opens it (5.1).
     mailbox: { api, session, openExternally },
     chooseImportFile: importHandoff.choose,
+    openBriefDialog: async () =>
+      await dialog.showOpenDialog({
+        title: 'Choose a prepared-brief JSON file to import',
+        properties: ['openFile'],
+        filters: [...BRIEF_FILE_FILTERS],
+      }),
     sessionGeneration: () => manager.sessionGeneration(),
   });
 
@@ -280,7 +287,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
    * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
-    void resetBridges([bridges.today, bridges.replies, bridges.crm, bridges.sequences, bridges.settings, bridges.mailbox]);
+    void resetBridges([bridges.today, bridges.replies, bridges.crm, bridges.sequences, bridges.settings, bridges.mailbox, bridges.briefImport]);
     sendSessionChange(change);
   });
 
