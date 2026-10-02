@@ -1,10 +1,11 @@
 // The trial review's logic (slice S3T-E), shared by decrypt.mjs and review.mjs and tested with a
 // stubbed Bedrock client (test/ops/trialReview.check.ts). Runs on David's Mac, never in the app.
 //
-// Nothing here prints transcript text. The only things that leave this module on stdout are ids,
-// kinds, verdicts, categories, the model's reasons (checked for quotes) and cost estimates.
+// Nothing here prints transcript text. What leaves this module for the coordinator (verdicts.json and
+// stdout) is ids, kinds and enums only (OUTPUT_SCHEMA); the model's free-text notes go only to
+// reasons-for-david.txt, whose content is never printed (TE design reset, R2).
 
-import { constants, createDecipheriv, privateDecrypt } from 'node:crypto';
+import { constants, createDecipheriv, createPrivateKey, privateDecrypt } from 'node:crypto';
 
 export const EXPORT_ALG = 'RSA-OAEP-256+A256GCM';
 
@@ -22,7 +23,6 @@ export const ERROR_CODES = Object.freeze([
   'E_BEDROCK',
   'E_RESPONSE',
   'E_SCHEMA',
-  'E_OUTPUT_CHARS',
   'E_QUOTE',
   'E_COST',
   'E_CLEANUP',
@@ -154,9 +154,35 @@ export function decryptExport(parts, privateKey) {
   }
 }
 
-/** A PEM the passphrase protects: PKCS#8 `ENCRYPTED PRIVATE KEY`, or the legacy `Proc-Type: 4,ENCRYPTED`. */
-export function isProtectedPem(pem) {
-  return /-----BEGIN ENCRYPTED PRIVATE KEY-----/u.test(pem) || /^Proc-Type:\s*4,ENCRYPTED\s*$/mu.test(pem);
+/** How many PEM blocks a file holds. */
+export function pemBlockCount(pem) {
+  return (String(pem).match(/-----BEGIN [A-Z0-9 ]+-----/gu) ?? []).length;
+}
+
+/**
+ * Refuse a key the passphrase does not actually protect (TE design reset, R4): the file holds
+ * exactly one PEM block, and loading it WITHOUT a passphrase must throw. Called before the prompt.
+ */
+export function assertPassphraseRequired(pem) {
+  if (pemBlockCount(pem) !== 1) throw new ToolError('E_KEY_UNPROTECTED', 'the key file must hold exactly one PEM block');
+  let loaded = false;
+  try {
+    createPrivateKey({ key: pem, format: 'pem' });
+    loaded = true;
+  } catch {
+    loaded = false;
+  }
+  if (loaded) throw new ToolError('E_KEY_UNPROTECTED', 'the key loads without a passphrase');
+}
+
+/** The key, with the typed passphrase; E_KEY on any failure. */
+export function loadPrivateKey(pem, passphrase) {
+  assertPassphraseRequired(pem);
+  try {
+    return createPrivateKey({ key: pem, format: 'pem', passphrase });
+  } catch {
+    throw new ToolError('E_KEY', 'the passphrase does not open the key');
+  }
 }
 
 /** The calls of a decrypted export, every workspace's, in order. */
@@ -169,19 +195,58 @@ export function callsOf(exported) {
 // The request
 // ---------------------------------------------------------------------------
 
+/**
+ * Why a verdict is what it is: a closed list, so the coordinator-facing output carries no free
+ * text (TE design reset, R2).
+ */
+export const REASON_CODES = Object.freeze([
+  'supported_by_statement',
+  'no_supporting_statement',
+  'value_differs_from_statement',
+  'statement_was_conditional',
+  'speaker_not_decision_maker',
+  'later_statement_reversed',
+  'outcome_mislabelled',
+  'time_or_date_differs',
+  'scope_differs',
+  'transcript_unclear',
+  'other',
+]);
+export const VERDICTS = Object.freeze(['correct', 'incorrect', 'unclear']);
+export const CATEGORIES = Object.freeze(['false_positive', 'wrong_value', 'missed_context', 'none']);
+export const DECISION_MATCHES = Object.freeze(['yes', 'no', 'unclear']);
+/** David's decision on the suggestion, from the export (not the model). */
+export const DECISIONS = Object.freeze(['unchanged', 'edited', 'declined', 'bypassed', 'none']);
+/** `CALL_PROPOSAL_KINDS` (packages/contracts/src/callAnalysis.ts); a test holds the two equal. */
+export const PROPOSAL_KINDS = Object.freeze([
+  'outcome',
+  'callback',
+  'follow_up',
+  'buying_signal',
+  'park',
+  'task',
+  'outcome_unclear',
+  'stop_scope',
+  'stop_with_email',
+  'corrected_number',
+  'referral_contact',
+  'callback_zone_unknown',
+]);
+
 export const REVIEW_SYSTEM = [
   'You review the suggestions an assistant made after a sales call, against the call transcript.',
   'You are given the transcript (numbered lines, "You" is the caller, "Them" is the prospect), every suggestion with its evidence lines,',
   "the caller's decision on each suggestion (unchanged, edited, declined, bypassed; or none), any later correction, and the outcome he logged.",
   'For EVERY suggestion, by its key:',
   '- verdict: "correct" if the transcript supports it as proposed, "incorrect" if it does not, "unclear" if the transcript cannot tell;',
-  '- category, only when incorrect: "false_positive" (nothing in the call called for it), "wrong_value" (right kind, wrong value such as the outcome, time or scope), or "missed_context" (something later or elsewhere in the call changes it); otherwise null;',
-  '- reason: at most 200 characters, in your own words. NEVER quote, copy or closely paraphrase the transcript; refer to lines by number instead (for example "line 7 declines the demo").',
-  '- decisionMatchesEvidence: "yes" if the caller\'s decision fits the transcript, "no" if it does not, "unclear", or "no_decision" when he made none.',
+  '- category: when incorrect, "false_positive" (nothing in the call called for it), "wrong_value" (right kind, wrong value such as the outcome, time or scope), or "missed_context" (something later or elsewhere in the call changes it); otherwise "none";',
+  `- reason_code: one of ${REASON_CODES.map(code => `"${code}"`).join(', ')};`,
+  '- decision_matches_evidence: "yes" if the caller\'s decision fits the transcript, "no" if it does not, "unclear" (also when he made no decision);',
+  '- note: at most 200 characters for the caller alone, in your own words, referring to lines by number. NEVER quote or copy the transcript.',
   'Answer only with the JSON the schema describes, one entry per suggestion key, each key exactly once.',
 ].join('\n');
 
-/** The answer's schema (structured outputs: closed objects, every property required). */
+/** The model's answer (structured outputs: closed objects, every property required). */
 export const VERDICT_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -192,18 +257,85 @@ export const VERDICT_SCHEMA = Object.freeze({
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'verdict', 'category', 'reason', 'decisionMatchesEvidence'],
+        required: ['key', 'verdict', 'category', 'reason_code', 'decision_matches_evidence', 'note'],
         properties: {
           key: { type: 'string' },
-          verdict: { type: 'string', enum: ['correct', 'incorrect', 'unclear'] },
-          category: { anyOf: [{ type: 'string', enum: ['false_positive', 'wrong_value', 'missed_context'] }, { type: 'null' }] },
-          reason: { type: 'string' },
-          decisionMatchesEvidence: { type: 'string', enum: ['yes', 'no', 'unclear', 'no_decision'] },
+          verdict: { type: 'string', enum: [...VERDICTS] },
+          category: { type: 'string', enum: [...CATEGORIES] },
+          reason_code: { type: 'string', enum: [...REASON_CODES] },
+          decision_matches_evidence: { type: 'string', enum: [...DECISION_MATCHES] },
+          note: { type: 'string' },
         },
       },
     },
   },
 });
+
+const UUID = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+const KEY = '^(?:[a-z_]{2,40}|task:[0-9a-f]{16})$';
+
+/**
+ * verdicts.json, the coordinator-facing output: ids, kinds and enums only. No string field is
+ * anything but an id (a pattern) or an enum.
+ */
+export const OUTPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['model', 'reviewed', 'of', 'stoppedAtCap', 'estimatedUsd', 'verdicts'],
+  properties: {
+    model: { type: 'string', enum: ['us.anthropic.claude-sonnet-4-6'] },
+    reviewed: { type: 'integer' },
+    of: { type: 'integer' },
+    stoppedAtCap: { type: 'boolean' },
+    estimatedUsd: { type: 'number' },
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['callSessionId', 'analysisId', 'key', 'kind', 'decision', 'verdict', 'category', 'reason_code', 'decision_matches_evidence'],
+        properties: {
+          callSessionId: { type: 'string', pattern: UUID },
+          analysisId: { type: 'string', pattern: UUID },
+          key: { type: 'string', pattern: KEY },
+          kind: { type: 'string', enum: [...PROPOSAL_KINDS] },
+          decision: { type: 'string', enum: [...DECISIONS] },
+          verdict: { type: 'string', enum: [...VERDICTS] },
+          category: { type: 'string', enum: [...CATEGORIES] },
+          reason_code: { type: 'string', enum: [...REASON_CODES] },
+          decision_matches_evidence: { type: 'string', enum: [...DECISION_MATCHES] },
+        },
+      },
+    },
+  },
+});
+
+/** Validate a value against a schema of the shapes above (object, array, string enum/pattern, integer, number, boolean). */
+export function schemaViolations(value, schema, path = '$') {
+  const problems = [];
+  if (schema.type === 'object') {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return [`${path}: not an object`];
+    const keys = Object.keys(value);
+    for (const key of keys) if (!(key in schema.properties)) problems.push(`${path}.${key}: not allowed`);
+    for (const key of schema.required) if (!keys.includes(key)) problems.push(`${path}.${key}: missing`);
+    for (const [key, child] of Object.entries(schema.properties)) if (key in value) problems.push(...schemaViolations(value[key], child, `${path}.${key}`));
+  } else if (schema.type === 'array') {
+    if (!Array.isArray(value)) return [`${path}: not an array`];
+    value.forEach((item, index) => problems.push(...schemaViolations(item, schema.items, `${path}[${String(index)}]`)));
+  } else if (schema.type === 'string') {
+    if (typeof value !== 'string') return [`${path}: not a string`];
+    if (schema.enum !== undefined && !schema.enum.includes(value)) problems.push(`${path}: not one of its values`);
+    if (schema.pattern !== undefined && !new RegExp(schema.pattern, 'u').test(value)) problems.push(`${path}: not an id`);
+    if (schema.enum === undefined && schema.pattern === undefined) problems.push(`${path}: a free string`);
+  } else if (schema.type === 'integer') {
+    if (!Number.isInteger(value)) problems.push(`${path}: not an integer`);
+  } else if (schema.type === 'number') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) problems.push(`${path}: not a number`);
+  } else if (schema.type === 'boolean') {
+    if (typeof value !== 'boolean') problems.push(`${path}: not a boolean`);
+  } else problems.push(`${path}: an unknown schema`);
+  return problems;
+}
 
 /** What the model reads of one call: the transcript, the suggestions, the decisions, the outcome. */
 export function reviewInputOf(call) {
@@ -256,50 +388,50 @@ export function costUsd(inputTokens, outputTokens) {
 // The answer
 // ---------------------------------------------------------------------------
 
-/** The verdicts of one answer, checked against the schema and the call's keys; throws on any problem. */
+/** David's latest decision on each key of the call's analysis, from the export. */
+function decisionsOf(call) {
+  const latest = new Map();
+  for (const decision of call.decisions ?? []) if (decision.analysisId === call.analysis.analysisId) latest.set(decision.key, decision.result);
+  return latest;
+}
+
+/**
+ * One answer, checked against the model schema and the call's keys; throws E_SCHEMA on any
+ * problem. Returns the enum-only verdicts and, apart, the free-text notes for David.
+ */
 export function validateVerdicts(answer, call) {
-  if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) throw new ToolError('E_SCHEMA', 'answer is not an object');
-  const extra = Object.keys(answer).filter(key => key !== 'verdicts');
-  if (extra.length > 0 || !Array.isArray(answer.verdicts)) throw new ToolError('E_SCHEMA', 'answer is not {verdicts: [...]}');
-  const keys = (call.analysis?.proposals ?? []).map(proposal => proposal.key);
+  const problems = schemaViolations(answer, { ...VERDICT_SCHEMA, properties: { verdicts: { type: 'array', items: { ...VERDICT_SCHEMA.properties.verdicts.items, properties: { ...VERDICT_SCHEMA.properties.verdicts.items.properties, key: { type: 'string', pattern: KEY }, note: { type: 'string', pattern: '^[\\s\\S]*$' } } } } } });
+  if (problems.length > 0) throw new ToolError('E_SCHEMA', 'the answer does not match the schema');
   const kinds = new Map((call.analysis?.proposals ?? []).map(proposal => [proposal.key, proposal.kind]));
+  const decided = decisionsOf(call);
   const seen = new Set();
-  const out = [];
+  const verdicts = [];
+  const notes = [];
   for (const entry of answer.verdicts) {
-    if (entry === null || typeof entry !== 'object') throw new ToolError('E_SCHEMA', 'a verdict is not an object');
-    const allowed = ['key', 'verdict', 'category', 'reason', 'decisionMatchesEvidence'];
-    if (Object.keys(entry).some(key => !allowed.includes(key)) || allowed.some(key => !(key in entry))) throw new ToolError('E_SCHEMA', 'a verdict has the wrong fields');
-    if (typeof entry.key !== 'string' || !kinds.has(entry.key)) throw new ToolError('E_SCHEMA', 'a verdict names a key the call does not have');
+    if (!kinds.has(entry.key)) throw new ToolError('E_SCHEMA', 'a verdict names a key the call does not have');
     if (seen.has(entry.key)) throw new ToolError('E_SCHEMA', 'a key is answered twice');
     seen.add(entry.key);
-    if (!['correct', 'incorrect', 'unclear'].includes(entry.verdict)) throw new ToolError('E_SCHEMA', 'a verdict is not correct, incorrect or unclear');
-    if (entry.verdict === 'incorrect') {
-      if (!['false_positive', 'wrong_value', 'missed_context'].includes(entry.category)) throw new ToolError('E_SCHEMA', 'an incorrect verdict has no category');
-    } else if (entry.category !== null) throw new ToolError('E_SCHEMA', 'only an incorrect verdict has a category');
-    if (typeof entry.reason !== 'string' || entry.reason.trim() === '' || entry.reason.length > REVIEW_REASON_MAX_CHARS) {
-      throw new ToolError('E_SCHEMA', `a reason is empty or longer than ${String(REVIEW_REASON_MAX_CHARS)} characters`);
-    }
-    if (!['yes', 'no', 'unclear', 'no_decision'].includes(entry.decisionMatchesEvidence)) throw new ToolError('E_SCHEMA', 'decisionMatchesEvidence is not one of its values');
-    // Printable ASCII only, after NFKC: an invisible or look-alike character is refused, never
-    // cleaned (TE review, finding 1).
-    for (const field of allowed) {
-      const value = entry[field];
-      if (typeof value === 'string' && !/^[\x20-\x7E]*$/u.test(value.normalize('NFKC'))) throw new ToolError('E_OUTPUT_CHARS', 'a field holds a character outside printable ASCII');
-    }
-    out.push({
+    if ((entry.verdict === 'incorrect') !== (entry.category !== 'none')) throw new ToolError('E_SCHEMA', 'a category is set exactly when the verdict is incorrect');
+    if (entry.note.length > REVIEW_REASON_MAX_CHARS) throw new ToolError('E_SCHEMA', `a note is longer than ${String(REVIEW_REASON_MAX_CHARS)} characters`);
+    const kind = kinds.get(entry.key);
+    if (!PROPOSAL_KINDS.includes(kind)) throw new ToolError('E_SCHEMA', 'a suggestion has an unknown kind');
+    const decision = decided.get(entry.key) ?? 'none';
+    verdicts.push({
       callSessionId: call.callSessionId,
       analysisId: call.analysis.analysisId,
       key: entry.key,
-      kind: kinds.get(entry.key),
+      kind,
+      decision: DECISIONS.includes(decision) ? decision : 'none',
       verdict: entry.verdict,
       category: entry.category,
-      decisionMatchesEvidence: entry.decisionMatchesEvidence,
-      reason: entry.reason,
+      reason_code: entry.reason_code,
+      decision_matches_evidence: entry.decision_matches_evidence,
     });
+    if (entry.note.trim() !== '') notes.push({ callSessionId: call.callSessionId, key: entry.key, note: entry.note });
   }
-  const missing = keys.filter(key => !seen.has(key));
+  const missing = [...kinds.keys()].filter(key => !seen.has(key));
   if (missing.length > 0) throw new ToolError('E_SCHEMA', `${String(missing.length)} suggestion(s) have no verdict`);
-  return out;
+  return { verdicts, notes };
 }
 
 /** The answer's JSON from a Messages response body (Bedrock's InvokeModel answer). */
@@ -375,6 +507,7 @@ export async function reviewCalls({ calls, invoke, capUsd = REVIEW_DEFAULT_CAP_U
   if (!(capUsd > 0)) throw new ToolError('E_ARGS', 'the cap must be above $0');
   let spentUsd = 0;
   const verdicts = [];
+  const notes = [];
   for (const [index, call] of calls.entries()) {
     const request = reviewRequestOf(call);
     const body = JSON.stringify(request);
@@ -382,7 +515,7 @@ export async function reviewCalls({ calls, invoke, capUsd = REVIEW_DEFAULT_CAP_U
     const estimate = costUsd(bound, REVIEW_MAX_OUTPUT_TOKENS);
     if (spentUsd + estimate > capUsd) {
       log(`stop: call ${String(index + 1)} of ${String(calls.length)} could cost up to $${estimate.toFixed(4)} (${String(bound)} input tokens at most, ${String(REVIEW_MAX_OUTPUT_TOKENS)} output), and $${spentUsd.toFixed(4)} is spent of the $${capUsd.toFixed(2)} cap`);
-      return { verdicts, spentUsd, stoppedAtCap: true, reviewed: index };
+      return { verdicts, notes, spentUsd, stoppedAtCap: true, reviewed: index };
     }
     let response;
     try {
@@ -396,15 +529,37 @@ export async function reviewCalls({ calls, invoke, capUsd = REVIEW_DEFAULT_CAP_U
         ? costUsd(usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0), usage.output_tokens)
         : estimate;
     spentUsd += actual;
-    verdicts.push(...validateVerdicts(answerOf(response), call));
+    const checked = validateVerdicts(answerOf(response), call);
+    verdicts.push(...checked.verdicts);
+    notes.push(...checked.notes);
     log(`call ${String(index + 1)} of ${String(calls.length)}: bound ${String(bound)} input + ${String(REVIEW_MAX_OUTPUT_TOKENS)} output tokens = $${estimate.toFixed(4)}, used $${actual.toFixed(4)}, running $${spentUsd.toFixed(4)} of $${capUsd.toFixed(2)}`);
   }
-  return { verdicts, spentUsd, stoppedAtCap: false, reviewed: calls.length };
+  return { verdicts, notes, spentUsd, stoppedAtCap: false, reviewed: calls.length };
 }
 
-/** The printed table: ids, kinds, verdicts, categories and reasons only. */
+/** The printed table: ids, kinds and enums only. */
 export function verdictTable(verdicts) {
-  const header = ['call', 'key', 'kind', 'verdict', 'category', 'decision fits', 'reason'];
-  const rows = verdicts.map(row => [row.callSessionId.slice(0, 8), row.key, row.kind, row.verdict, row.category ?? '-', row.decisionMatchesEvidence, row.reason]);
+  const header = ['call', 'key', 'kind', 'decision', 'verdict', 'category', 'reason_code', 'decision_fits'];
+  const rows = verdicts.map(row => [row.callSessionId.slice(0, 8), row.key, row.kind, row.decision, row.verdict, row.category, row.reason_code, row.decision_matches_evidence]);
   return [header, ...rows].map(cells => cells.join(' | ')).join('\n');
+}
+
+/** Every string the coordinator-facing output emits (verdicts.json and stdout), in order. */
+export function emittedStrings(...values) {
+  const strings = [];
+  const walk = value => {
+    if (typeof value === 'string') strings.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value !== null && typeof value === 'object') Object.values(value).forEach(walk);
+  };
+  values.forEach(walk);
+  return strings;
+}
+
+/**
+ * The quote check over the concatenation of every emitted string (TE design reset, R2): a quote
+ * split across fields, or across a field and a stdout line, is one text here.
+ */
+export function emittedQuoteCount(runs, ...values) {
+  return quotedRunCount(emittedStrings(...values).join(' '), runs);
 }

@@ -96,6 +96,20 @@ function digitsIn(run: string): number {
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
+/**
+ * The canonical form every free-text string is redacted in, and exported as (TE design reset,
+ * R3): NFKC (fullwidth digits and letters become ASCII), then every format character (\p{Cf}:
+ * zero-width space and joiner, bidi marks and overrides, the BOM) and every other default-ignorable
+ * code point removed, then whitespace collapsed. Names are matched in this form on both sides.
+ */
+export function canonicalText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 const tokensOf = (name: string): string[] =>
   name
     .split(/\s+/u)
@@ -103,13 +117,14 @@ const tokensOf = (name: string): string[] =>
     .filter(token => token.length >= 2);
 
 /**
- * The redaction every free-text string goes through. `people` is every person the payload
+ * The redaction every free-text string goes through, on its canonical form (`canonicalText`),
+ * which is what it returns. `people` is every person the payload
  * knows of: every contact at the firm and every name in a proposal's params (a referral); each
  * full name, then each of its words, becomes `[name]`. The firm's name becomes `[firm]`.
  */
 export function redactorFor(names: { readonly people: readonly (string | null)[]; readonly firm: string | null }): (text: string) => string {
-  const firm = names.firm?.trim() ?? '';
-  const people = names.people.filter((name): name is string => name !== null && name.trim().length >= 2).map(name => name.trim());
+  const firm = canonicalText(names.firm ?? '');
+  const people = names.people.map(name => canonicalText(name ?? '')).filter(name => name.length >= 2);
   const phrases = [...new Set(people.filter(name => /\s/u.test(name)))].sort((left, right) => right.length - left.length);
   const tokens = [...new Set(people.flatMap(tokensOf))].sort((left, right) => right.length - left.length);
   const bounded = (alternatives: readonly string[]): RegExp | null =>
@@ -118,7 +133,7 @@ export function redactorFor(names: { readonly people: readonly (string | null)[]
   const phrasePattern = bounded(phrases);
   const tokenPattern = bounded(tokens);
   return (text: string): string => {
-    let out = text.replace(EMAIL, '[email]').replace(SPOKEN_EMAIL, '[email]').replace(URL_LIKE, '[url]').replace(PHONE, '[phone]');
+    let out = canonicalText(text).replace(EMAIL, '[email]').replace(SPOKEN_EMAIL, '[email]').replace(URL_LIKE, '[url]').replace(PHONE, '[phone]');
     out = out.replace(DIGIT_RUN, run => (digitsIn(run) >= 7 ? '[phone]' : run));
     if (firmPattern !== null) out = out.replace(firmPattern, '[firm]');
     if (phrasePattern !== null) out = out.replace(phrasePattern, '[name]');

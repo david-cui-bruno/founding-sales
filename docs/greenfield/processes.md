@@ -312,7 +312,7 @@ fss admin schema-preflight 0019                    the one-off check before migr
 fss admin schema-preflight 0020                    the one-off check before migration 0020
 fss admin release-record put --json <file> | --json-base64 <value>
 fss admin release-record show --reference <releaseGateReference>
-fss admin trial export --public-key-pem-b64 <b64> [--workspace <slug>] [--since <instant>] [--max-calls 12]
+fss admin trial export --public-key-pem-b64 <b64> --workspace-slug <slug> | --workspace-id <uuid> [--since <instant>] [--max-calls 12]
 ```
 
 Every command takes `--report <path>`, which writes the same JSON the command printed, except
@@ -322,8 +322,8 @@ Every command takes `--report <path>`, which writes the same JSON the command pr
 (`GET /calls/trial`) encrypted to David's RSA public key (at least 3072 bits): AES-256-GCM
 under a random key wrapped with RSA-OAEP-SHA256, as numbered lines each under 15 KB, then
 `{"exported": n}`. Transcripts, suggestions, evidence, decisions, corrections and the logged
-outcome only; no audio, number, address or name. One READ ONLY transaction. David decrypts and
-reviews it on his Mac with `tools/trial-review/` (its README).
+outcome only; no audio, number, address or name. One READ ONLY transaction. David reviews it on his
+Mac with `tools/trial-review/review.mjs`, which decrypts in memory (its README).
 
 **`fss verify`** is what a deployment runs between the migration and the first service:
 the applied version and whether each declared range accepts it, the configured-parts

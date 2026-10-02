@@ -1,5 +1,5 @@
 import { constants, createCipheriv, createPublicKey, publicEncrypt, randomBytes, type KeyObject } from 'node:crypto';
-import { CALL_TRIAL_DEFAULT_SINCE, instant } from '@fss/contracts';
+import { CALL_TRIAL_DEFAULT_SINCE, instant, uuid } from '@fss/contracts';
 import { buildTrialExport, type TrialExportPayload } from '@fss/domain/calls/trialExport.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
@@ -11,7 +11,7 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  * Bedrock (`tools/trial-review/`). Read only: one READ ONLY transaction, rolled back.
  *
  * What is selected is what `GET /calls/trial` counts toward ten (`computeCallTrial`) in ONE
- * workspace (`--workspace <slug>`, required when the database holds more than one), oldest
+ * workspace (exactly one of `--workspace-slug` or `--workspace-id`), oldest
  * first, at most `--max-calls` (default 12); what each call carries is `buildTrialExport`'s.
  *
  * ## The envelope
@@ -131,20 +131,26 @@ export function encryptTrialExport(plaintext: Buffer, key: KeyObject, lineLimitB
 const refuse = (reason: string, detail: string): AdminOutcome => ({ ok: false, reason, detail });
 
 /**
- * Which workspace: `--workspace <slug or id>`, or the only one. Never more than one: the trial
- * is one workspace's (as `send-path report` scopes itself).
+ * Which workspace (TE design reset, R5): exactly one of `--workspace-slug <slug>` (the slug column
+ * only) or `--workspace-id <uuid>` (the id only). Two separate lookups, never one that accepts
+ * either: a slug may equal another workspace's id (0001 allows it).
  */
 export async function trialExportWorkspace(
   session: SessionQueryable,
-  named: string | undefined,
+  selector: { readonly slug?: string | undefined; readonly id?: string | undefined },
 ): Promise<{ readonly ok: true; readonly workspaceId: string } | { readonly ok: false; readonly reason: string; readonly detail: string }> {
-  const { rows } = await session.query<{ id: string; slug: string }>('SELECT id::text AS id, slug FROM workspaces ORDER BY id');
-  if (named === undefined) {
-    if (rows.length !== 1) return { ok: false, reason: 'workspace_ambiguous', detail: `this database holds ${String(rows.length)} workspaces; name one with --workspace <slug>` };
-    return { ok: true, workspaceId: rows[0]?.id ?? '' };
+  if ((selector.slug === undefined) === (selector.id === undefined)) {
+    return { ok: false, reason: 'workspace_selection', detail: 'name the workspace with exactly one of --workspace-slug <slug> or --workspace-id <uuid>' };
   }
-  const found = rows.find(row => row.slug === named || row.id === named);
-  return found === undefined ? { ok: false, reason: 'workspace_unknown', detail: 'no workspace on this database has that slug or id' } : { ok: true, workspaceId: found.id };
+  if (selector.id !== undefined) {
+    if (!uuid.safeParse(selector.id).success) return { ok: false, reason: 'workspace_unknown', detail: '--workspace-id is a workspace uuid' };
+    const { rows } = await session.query<{ id: string }>('SELECT id::text AS id FROM workspaces WHERE id = $1::uuid', [selector.id]);
+    const found = rows[0];
+    return found === undefined ? { ok: false, reason: 'workspace_unknown', detail: 'no workspace has that id' } : { ok: true, workspaceId: found.id };
+  }
+  const { rows } = await session.query<{ id: string }>('SELECT id::text AS id FROM workspaces WHERE slug = $1', [selector.slug]);
+  const found = rows[0];
+  return found === undefined ? { ok: false, reason: 'workspace_unknown', detail: 'no workspace has that slug' } : { ok: true, workspaceId: found.id };
 }
 
 /** One workspace's export plaintext, inside the caller's READ ONLY transaction. */
@@ -177,7 +183,7 @@ export async function trialExportCommand(
   let lines: readonly string[];
   let exported: number;
   try {
-    const scope = await trialExportWorkspace(session, invocation.options['--workspace']);
+    const scope = await trialExportWorkspace(session, { slug: invocation.options['--workspace-slug'], id: invocation.options['--workspace-id'] });
     if (!scope.ok) return refuse(scope.reason, scope.detail);
     const payload = await collectTrialExport(session, { workspaceId: scope.workspaceId, since, maxCalls });
     exported = payload.calls.length;

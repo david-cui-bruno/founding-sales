@@ -273,9 +273,10 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     // Slice S3T-E (David's approval, 2 October): what the ten-call trial counts, for his own
     // review on his Mac through AWS Bedrock. Printed encrypted; never a file, never a report.
     path: ['admin', 'trial', 'export'],
-    valueFlags: ['--public-key-pem-b64', '--workspace', '--since', '--max-calls'],
+    valueFlags: ['--public-key-pem-b64', '--workspace-slug', '--workspace-id', '--since', '--max-calls'],
     booleanFlags: [],
     requiredFlags: ['--public-key-pem-b64'],
+    oneOf: ['--workspace-slug', '--workspace-id'],
     summary:
       'the trial calls GET /calls/trial counts (transcripts, suggestions, evidence, decisions, outcome; no audio, numbers, addresses or names), AES-256-GCM under a key wrapped with RSA-OAEP-SHA256 to --public-key-pem-b64 (RSA >= 3072), in one READ ONLY transaction',
   },

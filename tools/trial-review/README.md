@@ -1,34 +1,55 @@
-# Trial review (slice S3T-E)
+# Trial review (slice S3T-E, after the TE design reset)
 
 David's review of the ten-call shadow trial, on his own Mac, through Amazon Bedrock on AWS
 credits: Claude Sonnet 4.6 (`us.anthropic.claude-sonnet-4-6`, us-east-1, the `default` AWS
-profile). No other provider, no retry, a cost cap. Not part of the app.
+profile). No other provider, no retry, a cost cap. Not part of the app. No plaintext ever reaches
+the disk: one process decrypts in memory and writes only its two outputs.
 
-1. Make a key pair once (the private key stays on the Mac, passphrase-protected):
+1. Once, make a passphrase-protected key pair (the private key never leaves the Mac):
 
        mkdir -p ~/trial-review && cd ~/trial-review
        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -aes-256-cbc -out trial-key.pem
        openssl pkey -in trial-key.pem -pubout | base64 | tr -d '\n' > trial-key.pub.b64
 
-2. The coordinator runs the export on the operations task (`--workspace <slug>` when the
-   database holds more than one) with that public key and saves the
-   printed lines as `~/trial-review/trial-export.jsonl` (the lines are ciphertext only).
-3. Decrypt (asks for the passphrase; writes `trial-calls.json`, mode 0600):
+2. The coordinator runs the export on the operations task (exactly one of `--workspace-slug` or
+   `--workspace-id`). The helper fetches the task's log from CloudWatch and prints it; the lines
+   are ciphertext only:
 
-       node tools/trial-review/decrypt.mjs ~/trial-review/trial-export.jsonl ~/trial-review/trial-key.pem
+       ~/conductor/scratch/fss-prod-ops-run.sh trial-export -- admin trial export \
+         --public-key-pem-b64 "$(cat ~/trial-review/trial-key.pub.b64)" --workspace-slug <slug> \
+         | tee ~/trial-review/trial-export.jsonl
 
-4. Review (cap $3 by default; stops before passing it; stops on any error):
+   (If the helper's output was lost, the same lines are in the worker log group, stream
+   `operations/operations/<task id>`: `aws logs get-log-events --log-group-name <group>
+   --log-stream-name <stream> --start-from-head --output json | python3 -c 'import json,sys;
+   [print(e["message"]) for e in json.load(sys.stdin)["events"]]' > ~/trial-review/trial-export.jsonl`.)
 
-       node tools/trial-review/review.mjs ~/trial-review [--cap-usd 3] [--keep]
+3. David, from a checkout of the repository (`npm ci` once, for the AWS SDK):
 
-   It writes `verdicts.json` and prints ids, kinds, verdicts, categories and reasons only, after
-   checking that no 6-word run (or 30 letters in a row) of any transcript appears in them. Then `cleanup.sh` removes
-   `trial-calls.json` and the export, success or failure, unless `--keep`.
+       node tools/trial-review/review.mjs --export ~/trial-review/trial-export.jsonl \
+         --key ~/trial-review/trial-key.pem --cap-usd 3
 
-Exit codes: 0 reviewed all; 1 stopped on an error; 2 bad arguments; 3 the output repeated
-transcript wording or held a non-ASCII character (nothing written); 4 stopped at the cap (what
-was reviewed is written); 5 cleanup failed; 130 interrupted. A failure prints only a fixed code
-(`E_ARGS`, `E_INPUT_PARSE`, `E_KEY`, `E_KEY_UNPROTECTED`, `E_DECRYPT`, `E_WRITE`, `E_BEDROCK`,
-`E_RESPONSE`, `E_SCHEMA`, `E_OUTPUT_CHARS`, `E_QUOTE`, `E_CLEANUP`, `E_INTERRUPTED`,
-`E_INTERNAL`), never an error message. Cleanup runs on every exit, Ctrl-C included, unless
-`--keep`. The private key must be passphrase-protected; decrypt refuses one that is not.
+   It asks for the passphrase, decrypts in memory, sends one InvokeModel request per call, stops
+   before the bounded cost could pass the cap, and writes into the export's folder (or `--out`):
+
+   * `verdicts.json` (0600): ids, kinds and enums only (`verdict`, `category`, `reason_code`,
+     `decision_matches_evidence`, David's `decision`). The coordinator may read this.
+   * `reasons-for-david.txt` (0600): the model's own notes, for David alone. Its path is printed,
+     never its content.
+
+   The export file is removed on every exit once the arguments parse (success, any failure, a
+   wrong passphrase, Ctrl-C); re-exporting is step 2 again.
+
+Reason codes: `supported_by_statement`, `no_supporting_statement`, `value_differs_from_statement`,
+`statement_was_conditional`, `speaker_not_decision_maker`, `later_statement_reversed`,
+`outcome_mislabelled`, `time_or_date_differs`, `scope_differs`, `transcript_unclear`, `other`.
+
+Exit codes: 0 reviewed all; 1 stopped on an error; 2 bad arguments (nothing removed); 3 the
+output repeated transcript wording (nothing written); 4 stopped at the cap (what was reviewed is
+written); 130 interrupted. A failure prints only a fixed code (`E_ARGS`, `E_INPUT_PARSE`, `E_KEY`,
+`E_KEY_UNPROTECTED`, `E_DECRYPT`, `E_WRITE`, `E_BEDROCK`, `E_RESPONSE`, `E_SCHEMA`, `E_QUOTE`,
+`E_COST`, `E_CLEANUP`, `E_INTERRUPTED`, `E_INTERNAL`). The key must need its passphrase: a PEM
+that loads without one, or a file holding more than one PEM block, is refused.
+
+`bash tools/trial-review/cleanup.sh <folder> [--all]` is a manual sweep: it removes export files
+and `verdicts.json`, and `reasons-for-david.txt` only with `--all`.

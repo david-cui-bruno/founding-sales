@@ -17,10 +17,16 @@ export interface ReviewVerdict {
   readonly analysisId: string;
   readonly key: string;
   readonly kind: string;
-  readonly verdict: 'correct' | 'incorrect' | 'unclear';
-  readonly category: 'false_positive' | 'wrong_value' | 'missed_context' | null;
-  readonly decisionMatchesEvidence: 'yes' | 'no' | 'unclear' | 'no_decision';
-  readonly reason: string;
+  readonly decision: string;
+  readonly verdict: string;
+  readonly category: string;
+  readonly reason_code: string;
+  readonly decision_matches_evidence: string;
+}
+export interface ReviewNote {
+  readonly callSessionId: string;
+  readonly key: string;
+  readonly note: string;
 }
 export type ReviewCall = Readonly<Record<string, unknown>> & {
   readonly callSessionId: string;
@@ -41,7 +47,19 @@ export class ToolError extends Error {
   readonly detail: string;
 }
 export function codeOf(error: unknown, fallback?: string): string;
-export function isProtectedPem(pem: string): boolean;
+export function pemBlockCount(pem: string): number;
+export function assertPassphraseRequired(pem: string): void;
+export function loadPrivateKey(pem: string, passphrase: string): KeyObject;
+export const REASON_CODES: readonly string[];
+export const VERDICTS: readonly string[];
+export const CATEGORIES: readonly string[];
+export const DECISION_MATCHES: readonly string[];
+export const DECISIONS: readonly string[];
+export const PROPOSAL_KINDS: readonly string[];
+export const OUTPUT_SCHEMA: Readonly<Record<string, unknown>>;
+export function schemaViolations(value: unknown, schema: unknown, path?: string): string[];
+export function emittedStrings(...values: unknown[]): string[];
+export function emittedQuoteCount(runs: TranscriptRuns, ...values: unknown[]): number;
 export function partAad(part: ExportPart): Buffer;
 export function foldForQuoteCheck(text: string): string;
 export const QUOTE_RUN_CHARACTERS: number;
@@ -60,7 +78,7 @@ export function reviewInputOf(call: ReviewCall): unknown;
 export function reviewRequestOf(call: ReviewCall): Record<string, unknown>;
 export function inputTokenBound(body: string): number;
 export function costUsd(inputTokens: number, outputTokens: number): number;
-export function validateVerdicts(answer: unknown, call: ReviewCall): ReviewVerdict[];
+export function validateVerdicts(answer: unknown, call: ReviewCall): { readonly verdicts: ReviewVerdict[]; readonly notes: ReviewNote[] };
 export function answerOf(response: unknown): unknown;
 export interface TranscriptRuns {
   readonly words: ReadonlySet<string>;
@@ -73,5 +91,5 @@ export function reviewCalls(input: {
   readonly invoke: (modelId: string, body: string) => Promise<unknown>;
   readonly capUsd?: number;
   readonly log?: (line: string) => void;
-}): Promise<{ readonly verdicts: ReviewVerdict[]; readonly spentUsd: number; readonly stoppedAtCap: boolean; readonly reviewed: number }>;
+}): Promise<{ readonly verdicts: ReviewVerdict[]; readonly notes: ReviewNote[]; readonly spentUsd: number; readonly stoppedAtCap: boolean; readonly reviewed: number }>;
 export function verdictTable(verdicts: readonly ReviewVerdict[]): string;

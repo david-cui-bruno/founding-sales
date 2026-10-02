@@ -38,11 +38,15 @@ async function run(argv: readonly string[]): Promise<{ readonly code: number; re
     errors.push(String(chunk));
     return true;
   });
+  const usage = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    errors.push(args.map(String).join(' '));
+  });
   try {
     return { code: await main(argv, { DATABASE_URL: url }), stdout: printed.join(''), stderr: errors.join('') };
   } finally {
     out.mockRestore();
     err.mockRestore();
+    usage.mockRestore();
   }
 }
 
@@ -148,7 +152,7 @@ describe('fss admin trial export', () => {
   });
 
   it('round trip: the trial calls, oldest first, decrypted with the private key; one line about the content', async () => {
-    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', SINCE]);
+    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE]);
     expect(result.code, result.stderr).toBe(0);
     const printed = result.stdout.trim().split('\n');
     expect(printed[printed.length - 1]).toBe('{"exported":3}');
@@ -179,7 +183,7 @@ describe('fss admin trial export', () => {
   });
 
   it('carries no audio, recording path, number, address or name; the transcript is redacted in place', async () => {
-    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', SINCE]);
+    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE]);
     const plaintext = JSON.stringify(decrypt(result.stdout));
     for (const absent of [
       'Dana',
@@ -223,7 +227,7 @@ describe('fss admin trial export', () => {
   });
 
   it('logs nothing of the content: no transcript word, no id, on stdout or stderr', async () => {
-    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', SINCE]);
+    const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE]);
     for (const absent of ['evaluating', 'demo', 'Riley', first.sessionId, second.sessionId, third.sessionId, first.firm.firmId, first.analysisId]) {
       expect(result.stdout).not.toContain(absent);
       expect(result.stderr).not.toContain(absent);
@@ -231,10 +235,10 @@ describe('fss admin trial export', () => {
   });
 
   it('--max-calls takes the oldest; the default since is the 3a release', async () => {
-    const one = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', SINCE, '--max-calls', '1']);
+    const one = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE, '--max-calls', '1']);
     expect(one.stdout.trim().split('\n').pop()).toBe('{"exported":1}');
     expect((decrypt(one.stdout) as Exported).workspaces[0]?.calls.map(entry => entry.callSessionId)).toEqual([first.sessionId]);
-    const defaulted = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug]);
+    const defaulted = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug]);
     expect(defaulted.code).toBe(0);
     // These calls were placed now, after 2 Oct 07:14Z, so the default still counts them.
     expect(defaulted.stdout.trim().split('\n').pop()).toBe('{"exported":3}');
@@ -244,13 +248,13 @@ describe('fss admin trial export', () => {
     const weak = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
     const ec = generateKeyPairSync('ec', { namedCurve: 'P-256', publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
     for (const [argv, reason] of [
-      [['--public-key-pem-b64', Buffer.from(weak.publicKey).toString('base64')], 'public_key_weak'],
-      [['--public-key-pem-b64', Buffer.from(ec.publicKey).toString('base64')], 'public_key_weak'],
-      [['--public-key-pem-b64', 'bm90IGEga2V5'], 'public_key_unreadable'],
-      [['--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--max-calls', '0'], 'max_calls_invalid'],
-      [['--public-key-pem-b64', publicB64], 'workspace_ambiguous'],
-      [['--public-key-pem-b64', publicB64, '--workspace', 'no-such-workspace'], 'workspace_unknown'],
-      [['--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', 'yesterday'], 'since_invalid'],
+      [['--public-key-pem-b64', Buffer.from(weak.publicKey).toString('base64'), '--workspace-slug', alphaSlug], 'public_key_weak'],
+      [['--public-key-pem-b64', Buffer.from(ec.publicKey).toString('base64'), '--workspace-slug', alphaSlug], 'public_key_weak'],
+      [['--public-key-pem-b64', 'bm90IGEga2V5', '--workspace-slug', alphaSlug], 'public_key_unreadable'],
+      [['--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--max-calls', '0'], 'max_calls_invalid'],
+      [['--public-key-pem-b64', publicB64, '--workspace-slug', 'no-such-workspace'], 'workspace_unknown'],
+      [['--public-key-pem-b64', publicB64, '--workspace-id', '00000000-0000-4000-8000-000000000000'], 'workspace_unknown'],
+      [['--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', 'yesterday'], 'since_invalid'],
     ] as const) {
       const result = await run(['admin', 'trial', 'export', ...argv]);
       expect(result.code).toBe(20);
@@ -260,10 +264,39 @@ describe('fss admin trial export', () => {
     expect(readTrialExportPublicKey(Buffer.from(weak.publicKey).toString('base64'))).toMatchObject({ ok: false, reason: 'public_key_weak' });
   });
 
+  it('needs exactly one of --workspace-slug and --workspace-id', async () => {
+    for (const argv of [[], ['--workspace-slug', alphaSlug, '--workspace-id', world.seeded.alpha.workspaceId]]) {
+      const result = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, ...argv]);
+      expect(result.code).toBe(64);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('selection_missing');
+    }
+  });
+
+  it('R5: a slug equal to another workspace\'s id selects by slug only, and an id by id only', async () => {
+    const alpha = world.seeded.alpha.workspaceId;
+    const beta = world.seeded.beta.workspaceId;
+    const { rows } = await world.session.query<{ slug: string }>('SELECT slug FROM workspaces WHERE id = $1', [alpha]);
+    const original = rows[0]?.slug ?? '';
+    // Workspace A's slug is workspace B's id: both are valid under 0001.
+    await world.session.query('UPDATE workspaces SET slug = $2 WHERE id = $1', [alpha, beta]);
+    try {
+      const byId = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-id', beta, '--since', SINCE]);
+      expect(byId.code, byId.stderr).toBe(0);
+      expect(byId.stdout.trim().split('\n').pop()).toBe('{"exported":0}');
+      expect((decrypt(byId.stdout) as Exported).workspaces[0]?.workspaceId).toBe(beta);
+      const bySlug = await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', beta, '--since', SINCE]);
+      expect(bySlug.stdout.trim().split('\n').pop()).toBe('{"exported":3}');
+      expect((decrypt(bySlug.stdout) as Exported).workspaces[0]?.workspaceId).toBe(alpha);
+    } finally {
+      await world.session.query('UPDATE workspaces SET slug = $2 WHERE id = $1', [alpha, original]);
+    }
+  });
+
   it('is read only: the transaction is rolled back and nothing is written', async () => {
     const count = async () => (await world.session.query<{ n: number }>('SELECT count(*)::int AS n FROM audit_events')).rows[0]?.n ?? 0;
     const before = await count();
-    expect((await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace', alphaSlug, '--since', SINCE])).code).toBe(0);
+    expect((await run(['admin', 'trial', 'export', '--public-key-pem-b64', publicB64, '--workspace-slug', alphaSlug, '--since', SINCE])).code).toBe(0);
     expect(await count()).toBe(before);
   });
 });
