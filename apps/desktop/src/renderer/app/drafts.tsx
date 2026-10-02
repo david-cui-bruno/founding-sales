@@ -15,6 +15,8 @@ import { createContext, useCallback, useContext, useMemo, useState, type JSX, ty
  */
 
 interface DraftStore {
+  /** One object per provider instance: a new session is a new provider, so a new token. */
+  readonly epoch: object;
   readonly values: Readonly<Record<string, string>>;
   set(key: string, value: string): void;
   clear(prefix: string): void;
@@ -24,6 +26,7 @@ const DraftContext = createContext<DraftStore | null>(null);
 
 export function DraftsProvider({ children }: { readonly children: ReactNode }): JSX.Element {
   const [values, setValues] = useState<Readonly<Record<string, string>>>({});
+  const [epoch] = useState<object>(() => ({}));
 
   const set = useCallback((key: string, value: string): void => {
     setValues(current => ({ ...current, [key]: value }));
@@ -36,7 +39,7 @@ export function DraftsProvider({ children }: { readonly children: ReactNode }): 
     });
   }, []);
 
-  const store = useMemo<DraftStore>(() => ({ values, set, clear }), [values, set, clear]);
+  const store = useMemo<DraftStore>(() => ({ epoch, values, set, clear }), [epoch, values, set, clear]);
   return <DraftContext.Provider value={store}>{children}</DraftContext.Provider>;
 }
 
@@ -108,4 +111,13 @@ export function useClearDrafts(): (prefix: string) => void {
  */
 export function useDraftStoreAvailable(): boolean {
   return useContext(DraftContext) !== null;
+}
+
+/**
+ * The token of the session these drafts belong to, or null outside a provider. Views that keep
+ * state of their own across navigation (the CRM memory) reset when it changes, so a sign-out
+ * and a new session start clean in the same moment the drafts do (UI kept-state rule K1).
+ */
+export function useSessionEpoch(): object | null {
+  return useContext(DraftContext)?.epoch ?? null;
 }

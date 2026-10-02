@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react';
-import { useKeptText } from '../firms/crmMemory.ts';
+import { useBaseGuard, useKeptText } from '../firms/crmMemory.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Select } from '../ui/select.tsx';
@@ -28,15 +28,26 @@ export function ValueDialog({
   onCancel(): void;
 }): JSX.Element {
   // Kept above the card, so closing the dialog (a second click, Escape) or leaving the
-  // Pipeline never discards what was typed (criteria 2 and 7).
-  const [text, setText] = useKeptText(`value:${opportunityId}:text`, initial === null ? '' : String(initial.monthlyCents / 100));
-  const [kindText, setKindText] = useKeptText(`value:${opportunityId}:kind`, initial?.kind ?? 'estimated');
+  // Pipeline never discards what was typed (criteria 2 and 7). The value the edit started
+  // from is kept with it: if the server's value moves meanwhile the draft is dropped (K2).
+  const serverText = initial === null ? '' : String(initial.monthlyCents / 100);
+  const serverKind = initial?.kind ?? 'estimated';
+  const guard = useBaseGuard(`value:${opportunityId}`, `${serverText}|${serverKind}`);
+  const [text, setTextKept] = useKeptText(`value:${opportunityId}:text`, serverText);
+  const [kindText, setKindText] = useKeptText(`value:${opportunityId}:kind`, serverKind);
   const kind: 'estimated' | 'agreed' = kindText === 'agreed' ? 'agreed' : 'estimated';
+  const setText = (next: string): void => {
+    guard.begin();
+    setTextKept(next);
+  };
   const setKind = (next: 'estimated' | 'agreed'): void => {
+    guard.begin();
     setKindText(next);
   };
   const [touched, setTouched] = useState(false);
   const parsed = parseMonthlyDollars(text);
+  // Nothing to send while neither field differs from what the server has (K2).
+  const changed = text !== serverText || kind !== serverKind;
   const problem = touched && !parsed.ok ? VALUE_PROBLEMS[parsed.problem] : null;
 
   return (
@@ -75,6 +86,11 @@ export function ValueDialog({
           <option value="agreed">Agreed</option>
         </Select>
       </label>
+      {guard.changedElsewhere ? (
+        <p data-testid="value-changed-elsewhere" role="status" className="text-muted-foreground">
+          Changed elsewhere. Your earlier edit was dropped; this is the current value.
+        </p>
+      ) : null}
       <div className="flex justify-end gap-1">
         <Button size="sm" variant="quiet" data-testid="value-cancel" onClick={onCancel}>
           Close
@@ -82,7 +98,7 @@ export function ValueDialog({
         <Button
           size="sm"
           data-testid="value-save"
-          disabled={!parsed.ok || busy}
+          disabled={!parsed.ok || busy || !changed}
           onClick={() => {
             setTouched(true);
             if (parsed.ok) onSave({ opportunityId, monthlyCents: parsed.monthlyCents, kind });

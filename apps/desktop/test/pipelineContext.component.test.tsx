@@ -6,6 +6,8 @@ import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BoardCard } from '@fss/contracts';
 import { createGeneration } from '../src/renderer/app/generation.ts';
+import { FirmPage } from '../src/renderer/firms/FirmPage.tsx';
+import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { FirmsRoute } from '../src/renderer/firms/FirmsRoute.tsx';
 import { resetCrmMemory } from '../src/renderer/firms/crmMemory.ts';
 import { StageWhy } from '../src/renderer/firms/StageWhy.tsx';
@@ -93,7 +95,7 @@ function install(state: CrmState): Fake {
 const source = createGeneration();
 
 function View({ route }: { readonly route: 'pipeline' | 'firms' }): JSX.Element {
-  return <FirmsRoute route={{ name: route }} identity="person-1" generation={0} guard={source.guard} />;
+  return <FirmsRoute route={{ name: route }} identity="person-1" generation={source.current()} guard={source.guard} />;
 }
 
 const mount = (route: 'pipeline' | 'firms' = 'pipeline') => {
@@ -107,6 +109,7 @@ const mount = (route: 'pipeline' | 'firms' = 'pipeline') => {
 
 beforeEach(() => {
   resetCrmMemory();
+  source.note(0);
 });
 afterEach(() => {
   cleanup();
@@ -312,5 +315,297 @@ describe('opening a card shows the firm beside the board (acceptance 1)', () => 
     });
     await board();
     expect(fake.calls.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The kept-state rules (S4 review, findings 5-9). Each test names the rule it holds.
+// ---------------------------------------------------------------------------------------
+
+type DetailPage = Extract<NonNullable<CrmState['firm']>, { visibility: 'assigned_or_admin'; opportunity: unknown }> & {
+  read: { firm: { contacts: { id: string; fullName: string; title: string | null; status: 'active' | 'inactive' | 'merged'; isPrimary: boolean }[] } };
+};
+
+function firmPageOf(id: string, over: Partial<DetailPage['read']['firm']> = {}): DetailPage {
+  const base = assigneeFirmPage() as DetailPage;
+  return { ...base, read: { ...base.read, firm: { ...base.read.firm, id, ...over } } } as DetailPage;
+}
+
+function drawPage(page: DetailPage, onSaveContact: (edit: unknown) => void = () => undefined): void {
+  render(
+    <DraftsProvider>
+      <FirmPage
+        page={page}
+        sequences={null}
+        actionsEnabled
+        busy={() => false}
+        redactionNotice={null}
+        onSaveContact={onSaveContact}
+        onCheckRoute={() => undefined}
+        onOpenOpportunity={() => undefined}
+        onEnroll={() => undefined}
+        onTakeOver={() => undefined}
+      />
+    </DraftsProvider>,
+  );
+}
+
+function delayCommand(): () => Promise<void> {
+  const original = globalThis.callieApi as unknown as { command(name: string, input: unknown): Promise<unknown> };
+  const command = original.command.bind(original);
+  let release: () => Promise<void> = async () => undefined;
+  original.command = (name, input) =>
+    new Promise(resolve => {
+      release = async () => {
+        resolve(await command(name, input));
+      };
+    });
+  return async () => {
+    await release();
+  };
+}
+
+async function sendMove(index = 0): Promise<void> {
+  const row = screen.getAllByTestId('pipeline-firm')[index] as HTMLElement;
+  await userEvent.click(within(row).getByTestId('card-move'));
+  await userEvent.selectOptions(within(row).getByTestId('stage-select'), 'engaged');
+  await userEvent.click(within(row).getByTestId('stage-submit'));
+}
+
+describe('K1: kept state is keyed by entity and session (findings 5 and 9)', () => {
+  it('a takeover reason typed for one firm is not in another firm\'s box', () => {
+    drawPage(firmPageOf(FIRM_ID));
+    fireEvent.change(screen.getByTestId('take-over-reason'), { target: { value: 'A asked me to take over' } });
+    cleanup();
+    drawPage(firmPageOf(OTHER_FIRM_ID));
+    expect((screen.getByTestId('take-over-reason') as HTMLInputElement).value).toBe('');
+    cleanup();
+    drawPage(firmPageOf(FIRM_ID));
+    expect((screen.getByTestId('take-over-reason') as HTMLInputElement).value).toBe('A asked me to take over');
+  });
+
+  it('every kept draft key names its entity', async () => {
+    install(boardState({ [FIRM_ID]: card() }));
+    mount();
+    await board();
+    const row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    await userEvent.click(within(row).getByTestId('card-set-value'));
+    await userEvent.type(within(row).getByTestId('value-amount'), '5');
+    cleanup();
+    drawPage(firmPageOf(FIRM_ID));
+    fireEvent.change(screen.getByTestId('take-over-reason'), { target: { value: 'x' } });
+    fireEvent.change(screen.getAllByTestId('contact-name')[0] as HTMLElement, { target: { value: 'Someone Else' } });
+    const { currentCrmMemory } = await import('../src/renderer/firms/crmMemory.ts');
+    const keys = Object.keys(currentCrmMemory().drafts).filter(key => !key.endsWith(':base'));
+    expect(keys.length).toBeGreaterThan(2);
+    for (const key of keys) expect(key, key).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/u);
+  });
+
+  it('a new session as the same person starts with no kept editor or draft (generation moves)', async () => {
+    install(boardState());
+    const first = mount();
+    await board();
+    await userEvent.click(screen.getAllByTestId('card-set-value')[0] as HTMLElement);
+    await userEvent.type(screen.getByTestId('value-amount'), '1850');
+    first.unmount();
+    source.note(source.current() + 1);
+    mount();
+    await board();
+    expect(screen.queryByTestId('value-amount')).toBeNull();
+  });
+
+  it('a new drafts provider (sign-out, then sign-in as the same person) starts clean', async () => {
+    install(boardState());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    const tree = (): JSX.Element => (
+      <QueryClientProvider client={client}>
+        <DraftsProvider>
+          <View route="pipeline" />
+        </DraftsProvider>
+      </QueryClientProvider>
+    );
+    const first = render(tree());
+    await board();
+    await userEvent.click(screen.getAllByTestId('card-set-value')[0] as HTMLElement);
+    await userEvent.type(screen.getByTestId('value-amount'), '1850');
+    first.unmount();
+    render(tree());
+    await board();
+    expect(screen.queryByTestId('value-amount')).toBeNull();
+  });
+});
+
+describe('K3: a command and its answer belong to their card (findings 6 and 7)', () => {
+  it('a refusal that arrives after the view was left is there, with its draft, when it comes back', async () => {
+    const fake = install(boardState());
+    fake.stageAnswer = 'stage_retired';
+    const release = delayCommand();
+    const first = mount();
+    await board();
+    await sendMove();
+    first.unmount();
+    await act(async () => {
+      await release();
+    });
+    mount();
+    await board();
+    expect(screen.getByTestId('card-feedback').textContent).toContain('retired');
+    expect((screen.getByTestId('stage-select') as HTMLSelectElement).value).toBe('engaged');
+    // And it was not also hidden as a page notice: the card shows it, so the banner is not needed.
+    expect(screen.queryByTestId('banner-warning')).toBeNull();
+  });
+
+  it('a late refusal does not reopen an editor that was closed after sending', async () => {
+    const fake = install(boardState());
+    fake.stageAnswer = 'stage_retired';
+    const release = delayCommand();
+    mount();
+    await board();
+    await sendMove();
+    const row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    await userEvent.click(within(row).getByTestId('card-move'));
+    await userEvent.click(within(row).getByTestId('stage-cancel'));
+    await act(async () => {
+      await release();
+    });
+    await screen.findByTestId('card-feedback');
+    expect(screen.queryByTestId('stage-select')).toBeNull();
+  });
+
+  it('a late refusal does not replace the editor David is using', async () => {
+    const fake = install(boardState());
+    fake.stageAnswer = 'stage_retired';
+    const release = delayCommand();
+    mount();
+    await board();
+    await sendMove();
+    const row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    await userEvent.click(within(row).getByTestId('card-set-value'));
+    await userEvent.type(within(row).getByTestId('value-amount'), '42');
+    await act(async () => {
+      await release();
+    });
+    await screen.findByTestId('card-feedback');
+    expect(screen.queryByTestId('stage-select')).toBeNull();
+    expect((screen.getByTestId('value-amount') as HTMLInputElement).value).toBe('42');
+  });
+
+  it('overlapping commands on two cards each keep their own answer', async () => {
+    const two = boardState();
+    const fake = install({
+      ...two,
+      pipeline: { ...two.pipeline!, opportunityIdByFirmId: { ...two.pipeline!.opportunityIdByFirmId, [OTHER_FIRM_ID]: 'other-opportunity' } },
+    });
+    const releases: ((notice: string) => void)[] = [];
+    (globalThis.callieApi as unknown as { command: unknown }).command = async () =>
+      await new Promise(resolve => {
+        releases.push(notice => {
+          resolve({ ...fake.state, notice, screen: 'pipeline' });
+        });
+      });
+    mount();
+    await board();
+    for (const index of [0, 1]) await sendMove(index);
+    await act(async () => {
+      releases[0]?.('stage_retired');
+    });
+    await act(async () => {
+      releases[1]?.('stage_changed');
+    });
+    const rows = screen.getAllByTestId('pipeline-firm');
+    await within(rows[1] as HTMLElement).findByTestId('card-feedback');
+    expect(within(rows[0] as HTMLElement).getByTestId('card-feedback').textContent).toContain('retired');
+    expect(within(rows[1] as HTMLElement).getByTestId('card-feedback').textContent).toBe('Stage changed.');
+  });
+
+  it('a refusal no card shows stays a page notice', async () => {
+    const fake = install(boardState());
+    mount();
+    await board();
+    const api = globalThis.callieApi as unknown as { read(name: string, input: unknown): Promise<unknown> };
+    const original = api.read.bind(api);
+    api.read = async (name, input) => {
+      const answer = (await original(name, input)) as CrmState;
+      return name === 'crm.openPipeline' ? { ...answer, notice: 'not_assigned' } : answer;
+    };
+    await userEvent.click(screen.getByTestId('show-lost'));
+    expect((await screen.findByTestId('banner-warning')).textContent).toContain('assigned to somebody else');
+    expect(fake.calls.some(call => call.name === 'crm.openPipeline')).toBe(true);
+  });
+});
+
+describe('K7: a stale read never replaces the selected firm (finding 8)', () => {
+  it('an older firm read that lands last is followed by a read of the selected firm', async () => {
+    install(boardState());
+    const api = globalThis.callieApi as unknown as { read(name: string, input: { firmId?: string }): Promise<unknown> };
+    const original = api.read.bind(api);
+    let release: () => Promise<void> = async () => undefined;
+    api.read = (name, input) => {
+      if (name === 'crm.openFirm' && input.firmId === FIRM_ID) {
+        return new Promise(resolve => {
+          release = async () => {
+            resolve(await original(name, input));
+          };
+        });
+      }
+      return original(name, input);
+    };
+    mount();
+    await board();
+    await userEvent.click(screen.getAllByTestId('pipeline-open-firm')[0] as HTMLElement);
+    await userEvent.click(screen.getAllByTestId('pipeline-open-firm')[1] as HTMLElement);
+    await within(screen.getByTestId('firm-panel')).findByTestId('firm-identity');
+    await act(async () => {
+      await release();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('firm-panel-loading')).toBeNull();
+    });
+    expect(within(screen.getByTestId('firm-panel')).getByTestId('firm-identity')).toBeTruthy();
+  });
+});
+
+describe('K2: an untouched or stale server value is never sent (value, contacts)', () => {
+  it('the value dialog cannot save while nothing differs from the server', async () => {
+    install(boardState({ [FIRM_ID]: card({ value: { monthlyCents: 120_000, kind: 'estimated' } }) }));
+    mount();
+    await board();
+    const row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    await userEvent.click(within(row).getByTestId('card-set-value'));
+    expect((within(row).getByTestId('value-save') as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.type(within(row).getByTestId('value-amount'), '5');
+    expect((within(row).getByTestId('value-save') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a kept value edit is dropped, and says so, when the server value moved since it began', async () => {
+    const fake = install(boardState({ [FIRM_ID]: card({ value: { monthlyCents: 120_000, kind: 'estimated' } }) }));
+    const first = mount();
+    await board();
+    let row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    await userEvent.click(within(row).getByTestId('card-set-value'));
+    await userEvent.type(within(row).getByTestId('value-amount'), '9');
+    first.unmount();
+    // Somebody else lowered it meanwhile.
+    fake.state = { ...fake.state, pipeline: { ...fake.state.pipeline!, cards: { [FIRM_ID]: card({ value: { monthlyCents: 20_000, kind: 'estimated' } }) } } };
+    mount();
+    await board();
+    row = screen.getAllByTestId('pipeline-firm')[0] as HTMLElement;
+    expect(within(row).getByTestId('value-changed-elsewhere')).toBeTruthy();
+    expect((within(row).getByTestId('value-amount') as HTMLInputElement).value).toBe('200');
+    expect((within(row).getByTestId('value-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('a kept contact edit is dropped when the contact changed meanwhile, and the save sends the current value', () => {
+    const saved: unknown[] = [];
+    drawPage(firmPageOf(FIRM_ID), edit => saved.push(edit));
+    fireEvent.change(screen.getAllByTestId('contact-title')[0] as HTMLElement, { target: { value: 'My old edit' } });
+    cleanup();
+    const page = firmPageOf(FIRM_ID);
+    const changed = { ...page, read: { ...page.read, firm: { ...page.read.firm, contacts: page.read.firm.contacts.map((contact, index) => (index === 0 ? { ...contact, title: 'Set by somebody else' } : contact)) } } } as DetailPage;
+    drawPage(changed, edit => saved.push(edit));
+    expect(screen.getByTestId('contact-changed-elsewhere')).toBeTruthy();
+    expect((screen.getAllByTestId('contact-title')[0] as HTMLInputElement).value).toBe('Set by somebody else');
+    expect((screen.getAllByTestId('contact-save')[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(saved).toEqual([]);
   });
 });

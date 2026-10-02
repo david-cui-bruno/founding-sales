@@ -1,5 +1,5 @@
 import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmDetailDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
-import { useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useState, type JSX, type ReactNode } from 'react';
 import type { BoardCard } from '@fss/contracts';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
 import type {
@@ -15,7 +15,8 @@ import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Tag } from '../ui/layout.tsx';
 import { Chip, Group } from '../v2/parts.tsx';
-import { currentCrmMemory, useKeptText } from './crmMemory.ts';
+import { currentCrmMemory, useBaseGuard, useKeptText } from './crmMemory.ts';
+import { useClearDrafts, useHasDrafts } from '../app/drafts.tsx';
 import { StageEventRow, StageWhy } from './StageWhy.tsx';
 import { Select } from '../ui/select.tsx';
 import { CallHistory } from '../calling/CallHistory.tsx';
@@ -72,6 +73,26 @@ function Identity({
   // The number a new one replaces: the firm's own callable line, else its first callable one.
   const callable = detail?.phoneRoutes.filter(route => route.eligibility === 'usable') ?? [];
   const phone = callable.find(route => route.contactId === null) ?? callable[0] ?? null;
+  // The basics editor's drafts are the shell's (`firm-basics:<firm>:`). They remember what they
+  // started from: if the firm's number, place or zone changed since, they are dropped, so a
+  // save can never send the old value back over the new one (K2).
+  const clearBasics = useClearDrafts();
+  const basicsBase = JSON.stringify([firm.locality, firm.regionCode, firm.timeZone, phone?.value ?? null]);
+  const [basicsChanged, setBasicsChanged] = useState(false);
+  const baseKey = `basics:${firm.id}:base`;
+  const seen = memory.drafts[baseKey];
+  if (seen === undefined) memory.drafts[baseKey] = basicsBase;
+  const hasBasicsDrafts = useHasDrafts(`firm-basics:${firm.id}:`);
+  useEffect(() => {
+    const kept = currentCrmMemory().drafts[baseKey];
+    if (kept === undefined || kept === basicsBase) return;
+    currentCrmMemory().drafts[baseKey] = basicsBase;
+    // Only an edit that was in progress is "changed elsewhere"; the page's own save also moves the base.
+    if (hasBasicsDrafts) {
+      clearBasics(`firm-basics:${firm.id}:`);
+      setBasicsChanged(true);
+    }
+  }, [baseKey, basicsBase, clearBasics, firm.id, hasBasicsDrafts]);
   const where = [firm.locality, firm.regionCode].filter(part => part !== null).join(', ');
   const rows: readonly (readonly [string, string])[] = [
     ['Website', firm.website ?? '—'],
@@ -115,6 +136,11 @@ function Identity({
           >
             {editing ? 'Close phone and location' : 'Edit phone and location'}
           </Button>
+          {basicsChanged ? (
+            <p data-testid="basics-changed-elsewhere" role="status" className="mt-1 text-xs text-muted-foreground">
+              Changed elsewhere. Your earlier edit was dropped; these are the current details.
+            </p>
+          ) : null}
           {opened ? (
             <div
               className="callie-v2 mt-2 max-w-[560px]"
@@ -265,11 +291,23 @@ function ContactRow({
   onSave(edit: ContactEdit): void;
 }): JSX.Element {
   // Kept above the route: a half-edited contact survives a visit elsewhere (criterion 7).
-  const [fullName, setFullName] = useKeptText(`contact:${contact.id}:name`, contact.fullName);
-  const [title, setTitle] = useKeptText(`contact:${contact.id}:title`, contact.title ?? '');
+  // A kept edit remembers what it started from; if the contact changed meanwhile it is dropped
+  // rather than sent over the newer value (K2).
+  const guard = useBaseGuard(`contact:${contact.id}`, JSON.stringify([contact.fullName, contact.title, contact.isPrimary]));
+  const [fullName, setFullNameKept] = useKeptText(`contact:${contact.id}:name`, contact.fullName);
+  const [title, setTitleKept] = useKeptText(`contact:${contact.id}:title`, contact.title ?? '');
   const [primaryText, setPrimaryText] = useKeptText(`contact:${contact.id}:primary`, contact.isPrimary ? 'yes' : 'no');
   const primary = primaryText === 'yes';
+  const setFullName = (next: string): void => {
+    guard.begin();
+    setFullNameKept(next);
+  };
+  const setTitle = (next: string): void => {
+    guard.begin();
+    setTitleKept(next);
+  };
   const setPrimary = (next: boolean): void => {
+    guard.begin();
     setPrimaryText(next ? 'yes' : 'no');
   };
   const changed = fullName !== contact.fullName || title !== (contact.title ?? '') || (primary && !contact.isPrimary);
@@ -313,6 +351,11 @@ function ContactRow({
         Main contact
       </label>
       <Tag data-testid="contact-status">{contact.status}</Tag>
+      {guard.changedElsewhere ? (
+        <span data-testid="contact-changed-elsewhere" role="status" className="basis-full text-xs text-muted-foreground">
+          Changed elsewhere. Your earlier edit was dropped.
+        </span>
+      ) : null}
       <RowActions>
         <Button
           size="sm"
@@ -362,8 +405,14 @@ function Sequences({
 }): JSX.Element {
   const names = new Map(contacts.map(contact => [contact.id, contact.fullName] as const));
   const active = contacts.filter(contact => contact.status === 'active');
-  const [contactId, setContactId] = useKeptText(`enroll:${page.read.firm.id}:contact`, active[0]?.id ?? '');
-  const [sequenceVersionId, setSequenceVersionId] = useKeptText(`enroll:${page.read.firm.id}:sequence`, view.published[0]?.sequenceVersionId ?? '');
+  const [keptContact, setContactId] = useKeptText(`enroll:${page.read.firm.id}:contact`, active[0]?.id ?? '');
+  const [keptSequence, setSequenceVersionId] = useKeptText(`enroll:${page.read.firm.id}:sequence`, view.published[0]?.sequenceVersionId ?? '');
+  // A kept choice that is no longer on offer (the contact left, the version was retired) is
+  // not sent: the first current option stands in for it (K2).
+  const contactId = active.some(entry => entry.id === keptContact) ? keptContact : (active[0]?.id ?? '');
+  const sequenceVersionId = view.published.some(entry => entry.sequenceVersionId === keptSequence)
+    ? keptSequence
+    : (view.published[0]?.sequenceVersionId ?? '');
   const opportunity = page.opportunity;
 
   const body = ((): JSX.Element => {
@@ -558,15 +607,18 @@ export function HeldOutgoing({
  * here reverses manual mode, because automation never does.
  */
 function TakeOver({
+  firmId,
   enabled,
   saving,
   onTakeOver,
 }: {
+  /** Whose reason this is: the draft is kept per firm, never shared between firms (K1). */
+  readonly firmId: string;
   readonly enabled: boolean;
   readonly saving: boolean;
   onTakeOver(reason: string): void;
 }): JSX.Element {
-  const [reason, setReason] = useKeptText('take-over:reason');
+  const [reason, setReason] = useKeptText(`take-over:${firmId}:reason`);
   return (
     <div data-testid="take-over" className="flex items-center gap-2 py-2">
       <Input
@@ -639,7 +691,7 @@ function Opportunity({
           </p>
           <StageWhy history={page.stageHistory} card={card} stageName={stageName} />
           {takeoverOffered(opportunity) ? (
-            <TakeOver enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
+            <TakeOver firmId={page.read.firm.id} enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
           ) : null}
           <ol data-testid="stage-history" className="mt-1 flex flex-col border-t border-border">
             {page.stageHistory.map(event => (

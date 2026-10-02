@@ -13,7 +13,7 @@ import { FirmPage } from './FirmPage.tsx';
 import { FirmsList, firmsOf } from './FirmsList.tsx';
 import { ImportScreen } from './ImportScreen.tsx';
 import { PipelineBoard } from './PipelineBoard.tsx';
-import { clearKeptText, useCrmMemory, type CardEditor } from './crmMemory.ts';
+import { clearKeptText, nextCommandId, useCrmMemory, type CardEditor } from './crmMemory.ts';
 import { BookingsToMatch } from '../meetings/BookingsToMatch.tsx';
 import { FirmPanel } from '../pipeline/FirmPanel.tsx';
 import { FirmResearch } from '../research/FirmResearch.tsx';
@@ -78,7 +78,7 @@ export function FirmsRoute({
   readonly generation: number;
   readonly guard: Generation;
 }): JSX.Element {
-  const { memory, touch } = useCrmMemory(identity);
+  const { memory, touch } = useCrmMemory(identity, generation);
   const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId);
   const state = crm.state;
   // Which row asked for this view. The board answer is the same answer on both, so the
@@ -88,35 +88,30 @@ export function FirmsRoute({
   const boardMemory = useRef(memory.board);
   boardMemory.current = memory.board;
 
-  // The command whose answer belongs next to a card, until that answer arrives.
-  const target = useRef<{ readonly opportunityId: string; readonly editor: CardEditor } | null>(null);
   const panelFirmId = onPipelineRow ? memory.panelFirmId : null;
 
+  // The panel's firm is read again whenever the board has been read (a command, Back from the
+  // firm page, a Lost filter): the board read leaves the bridge's firm as it was. It is read
+  // again as well when an OLDER read landed last and left another firm in the shared state
+  // (rule K7): without this the selected panel would wait for an answer that already came.
+  const attempts = useRef<{ readonly firm: string; count: number } | null>(null);
   useEffect(() => {
-    if (state === null || crm.pending > 0) return;
-    let captured = false;
-    const aimed = target.current;
-    if (aimed !== null && state.notice !== null) {
-      target.current = null;
-      captured = true;
-      memory.feedback[aimed.opportunityId] = { code: state.notice };
-      if (state.notice === 'stage_changed' || state.notice === 'value_recorded') {
-        // It went through: the draft has done its job.
-        clearKeptText(`${aimed.editor}:${aimed.opportunityId}`);
-        delete memory.cardEditor[aimed.opportunityId];
-      } else {
-        // Refused: the editor opens again with what was typed still in it, next to the card.
-        memory.cardEditor[aimed.opportunityId] = aimed.editor;
-      }
-      touch();
+    if (state === null || crm.pending > 0 || panelFirmId === null || state.pipeline === null) return;
+    const shownId = state.firm?.read.firm.id ?? null;
+    if (state.screen === 'firm' && shownId === panelFirmId) {
+      attempts.current = null;
+      return;
     }
-    // The panel's firm is read again whenever the board has been (a command, Back from the
-    // firm page, a Lost filter): the board read leaves the bridge's firm as it was.
-    if (panelFirmId !== null && state.screen === 'pipeline' && state.pipeline !== null && (state.notice === null || captured)) {
-      crm.actions.openPanel(panelFirmId);
-    }
+    const outcome = state.notice === null || state.notice === 'stage_changed' || state.notice === 'value_recorded';
+    const stale = state.screen === 'firm' && shownId !== panelFirmId;
+    if (!(stale || (state.screen === 'pipeline' && outcome))) return;
+    // A read that keeps failing must not loop: three tries per selection, then Retry.
+    const tries = attempts.current?.firm === panelFirmId ? attempts.current.count : 0;
+    if (tries >= 3) return;
+    attempts.current = { firm: panelFirmId, count: tries + 1 };
+    crm.actions.openPanel(panelFirmId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, crm.pending]);
+  }, [state, crm.pending, panelFirmId]);
 
   const hasEditors = Object.values(memory.cardEditor).some(editor => editor !== undefined);
   useShortcuts({
@@ -124,6 +119,7 @@ export function FirmsRoute({
       if (!onPipelineRow) return;
       if (hasEditors) {
         // Escape closes an editor and keeps its draft; it never discards (criterion 2).
+        for (const opportunityId of Object.keys(memory.cardEditor)) touchPending(opportunityId);
         memory.cardEditor = {};
         touch();
       } else if (memory.panelFirmId !== null) {
@@ -177,23 +173,63 @@ export function FirmsRoute({
   const stageName = (key: string): string => stageNames.get(key) ?? inWords(key);
   // On the board, a stage or value answer is said next to its card (criterion 6), so it is
   // not also a banner across the page. Offline and "update required" stay: they block everything.
-  const boardNotice = onPipelineRow && state.notice !== null && state.notice !== 'offline' && state.notice !== 'client_upgrade_required';
-  const view = buildFirmWorkspaceView(boardNotice ? { ...state, notice: null } : state);
+  // Only while a card on screen actually shows it (rule K3): otherwise the notice is the
+  // only place the answer is said, and it stays a banner.
+  const onBoard = new Set(Object.values(state.pipeline?.opportunityIdByFirmId ?? {}));
+  const cardShowsNotice =
+    onPipelineRow &&
+    state.notice !== null &&
+    Object.entries(memory.feedback).some(([opportunityId, entry]) => entry?.code === state.notice && onBoard.has(opportunityId));
+  const view = buildFirmWorkspaceView(cardShowsNotice ? { ...state, notice: null } : state);
   // Add firm and Import put a firm on file, so they belong to Firms and not to the board.
   const onFirmsList = state.screen === 'pipeline' && !onPipelineRow;
   const cardOf = (id: string) => state.pipeline?.cards?.[id];
 
-  const changeStage = (change: StageChange): void => {
-    delete memory.feedback[change.opportunityId];
-    target.current = { opportunityId: change.opportunityId, editor: 'move' };
-    crm.actions.changeStage(change);
+  /** David opened or closed this card's editor: a late answer must leave it alone. */
+  function touchPending(opportunityId: string): void {
+    const pending = memory.pending[opportunityId];
+    if (pending === undefined) return;
+    if (pending.submitClose) {
+      pending.submitClose = false;
+      return;
+    }
+    pending.touched = true;
+  }
+
+  /**
+   * This command's own answer, whenever it arrives (K3). It is said beside its card, it
+   * clears the draft when it went through, and when it was refused it brings the editor back
+   * only if David has not touched that card's editor since he sent it.
+   */
+  const settle = (opportunityId: string, commandId: number, editor: CardEditor) => (notice: string | null): void => {
+    const pending = memory.pending[opportunityId];
+    if (pending?.commandId !== commandId) return;
+    delete memory.pending[opportunityId];
+    const code = notice ?? 'malformed_body';
+    memory.feedback[opportunityId] = { code };
+    if (code === 'stage_changed' || code === 'value_recorded') {
+      clearKeptText(`${editor}:${opportunityId}`);
+    } else if (!pending.touched && memory.cardEditor[opportunityId] === undefined) {
+      memory.cardEditor[opportunityId] = editor;
+    }
     touch();
   };
-  const setValue = (change: ValueChange): void => {
-    delete memory.feedback[change.opportunityId];
-    target.current = { opportunityId: change.opportunityId, editor: 'value' };
-    crm.actions.setValue(change);
+  const send = (opportunityId: string, editor: CardEditor, run: (onAnswer: (notice: string | null) => void) => void): void => {
+    delete memory.feedback[opportunityId];
+    const commandId = nextCommandId();
+    memory.pending[opportunityId] = { editor, commandId, touched: false, submitClose: true };
+    run(settle(opportunityId, commandId, editor));
     touch();
+  };
+  const changeStage = (change: StageChange): void => {
+    send(change.opportunityId, 'move', onAnswer => {
+      crm.actions.changeStage(change, onAnswer);
+    });
+  };
+  const setValue = (change: ValueChange): void => {
+    send(change.opportunityId, 'value', onAnswer => {
+      crm.actions.setValue(change, onAnswer);
+    });
   };
 
   const firmBody = (variant: 'page' | 'panel', firm: NonNullable<CrmState['firm']>): JSX.Element => (
@@ -283,6 +319,7 @@ export function FirmsRoute({
             selectedFirmId={panelFirmId}
             cardEditors={memory.cardEditor}
             onCardEditor={(opportunityId, editor) => {
+              touchPending(opportunityId);
               if (editor === null) delete memory.cardEditor[opportunityId];
               else memory.cardEditor[opportunityId] = editor;
               touch();

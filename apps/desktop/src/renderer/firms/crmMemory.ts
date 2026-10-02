@@ -1,4 +1,5 @@
-import { useCallback, useReducer } from 'react';
+import { useCallback, useEffect, useReducer, useState } from 'react';
+import { useSessionEpoch } from '../app/drafts.tsx';
 
 export interface BoardMemory {
   /** Horizontal offset of the board, and each column's vertical offset by stage key. */
@@ -47,8 +48,26 @@ export interface CrmMemory {
   pageScroll: Record<string, number | undefined>;
   /** Which inline editors are open on the firm page, by firm and editor. */
   pageEditors: Record<string, boolean | undefined>;
-  /** Text typed into this view's own editors, by key. A key never typed in is absent. */
+  /**
+   * Text typed into this view's own editors, by key. A key never typed in is absent. Every
+   * key names its entity (`value:<opportunity>:text`): a key without one would cross firms.
+   */
   drafts: Record<string, string | undefined>;
+  /**
+   * The command last sent for each card, by opportunity (rule K3): what it was, and whether
+   * David has touched that card's editor since. Its answer lands in `feedback` whenever it
+   * arrives, even after the view was left.
+   */
+  pending: Record<string, PendingCommand | undefined>;
+}
+
+export interface PendingCommand {
+  readonly editor: CardEditor;
+  readonly commandId: number;
+  /** David opened or closed the editor after sending: a late refusal must leave it alone. */
+  touched: boolean;
+  /** The editor closes itself right after sending; that one close is not David touching it. */
+  submitClose: boolean;
 }
 
 const fresh = (): CrmMemory => ({
@@ -62,28 +81,38 @@ const fresh = (): CrmMemory => ({
   pageScroll: {},
   pageEditors: {},
   drafts: {},
+  pending: {},
 });
 
-let current: { identity: string | null; memory: CrmMemory } = { identity: null, memory: fresh() };
+let current: { session: string; epoch: object | null; memory: CrmMemory } = { session: '', epoch: null, memory: fresh() };
 
-/** The memory for this identity; a different one starts clean. */
-export function crmMemoryFor(identity: string | null): CrmMemory {
-  if (current.identity !== identity) current = { identity, memory: fresh() };
+/**
+ * The memory for this session: the person, the shell's session generation and the drafts
+ * provider's epoch together. Any of them changing (a sign-out, another workspace, signing back
+ * in as the same person) starts clean; so does a different identity (rule K1).
+ */
+export function crmMemoryFor(identity: string | null, generation = 0, epoch: object | null = null): CrmMemory {
+  const session = `${identity ?? ''}:${String(generation)}`;
+  if (current.session !== session || current.epoch !== epoch) current = { session, epoch, memory: fresh() };
   return current.memory;
 }
 
+let commandCounter = 0;
+export const nextCommandId = (): number => (commandCounter += 1);
+
 /** Tests: forget everything, as a sign-out does. */
 export function resetCrmMemory(): void {
-  current = { identity: null, memory: fresh() };
+  current = { session: '', epoch: null, memory: fresh() };
 }
 
 /** The memory and a `touch()` that redraws the caller after changing it. */
-export function useCrmMemory(identity: string | null): { readonly memory: CrmMemory; touch(): void } {
+export function useCrmMemory(identity: string | null, generation = 0): { readonly memory: CrmMemory; touch(): void } {
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const touch = useCallback((): void => {
     bump();
   }, []);
-  return { memory: crmMemoryFor(identity), touch };
+  const epoch = useSessionEpoch();
+  return { memory: crmMemoryFor(identity, generation, epoch), touch };
 }
 
 /** The memory of whoever is signed in now (set by `useCrmMemory`); for the small editors. */
@@ -110,4 +139,33 @@ export function useKeptText(key: string, fallback = ''): readonly [string, (valu
 export function clearKeptText(prefix: string): void {
   const drafts = currentCrmMemory().drafts;
   for (const key of Object.keys(drafts)) if (key.startsWith(prefix)) delete drafts[key];
+}
+
+/**
+ * Rule K2: an edit of a value the server owns remembers the value it started from. Called as
+ * the edit is shown: when the server's value has moved since, the kept edit is dropped (it
+ * would otherwise be sent over somebody else's change) and `changedElsewhere` says so.
+ */
+export function useBaseGuard(prefix: string, base: string): { readonly changedElsewhere: boolean; begin(): void } {
+  const reconcile = (): boolean => {
+    const drafts = currentCrmMemory().drafts;
+    const kept = drafts[`${prefix}:base`];
+    if (kept === undefined || kept === base) return false;
+    clearKeptText(`${prefix}:`);
+    return true;
+  };
+  const [changedElsewhere, setChanged] = useState(reconcile);
+  useEffect(() => {
+    if (reconcile()) setChanged(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefix, base]);
+  const begin = useCallback((): void => {
+    const drafts = currentCrmMemory().drafts;
+    // The first edit of a fresh draft starts from what the server has now; an edit already in
+    // progress keeps the base it began with.
+    const inProgress = Object.keys(drafts).some(key => key.startsWith(`${prefix}:`) && key !== `${prefix}:base`);
+    if (!inProgress || drafts[`${prefix}:base`] === undefined) drafts[`${prefix}:base`] = base;
+    setChanged(false);
+  }, [prefix, base]);
+  return { changedElsewhere, begin };
 }
