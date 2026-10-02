@@ -460,6 +460,20 @@ fewer than two paid attempts is owed its remaining attempt by whichever job asks
 finding 5), and the lock, the open check and the one-open index keep that to one obligation at a
 time. A summary request in flight (`calling`) counts in transcription's "still finishing" line.
 
+**Post-call analysis (slice 3a, migration 0035).** A channel-labelled transcript is read by a
+model once per **version** (`call_analyses`): one structured reading of the call
+(prompt `call_analysis.2`), checked against the transcript by
+`readCallAnalysisAnswer`, and stored with the proposal set the pure policy computes from it
+(`proposeEffects`, `call_policy.2`) and that set's hash. Nothing in an analysis acts: every
+proposal is applied only by David's click, checked against one exact version and its stored
+hash. David's edited notes are a version of their own (origin `user`) and stay the current
+notes whatever model version completes later. Every writer of one call's analysis
+(`calls/analysis.ts`) takes the call's **firm row** (`FOR UPDATE`), then the advisory lock
+**`call_analysis:<session>`** (`lockCallAnalysis`, keyed `<workspace>:call_analysis:<session>`),
+then the session row (`FOR KEY SHARE`), then its own rows; an apply takes the same three in the
+same order after its own earlier locks (Today, the send gate, a touched route). The paid
+pattern, the switch and the deletion lock for analyses arrive with the analysis job (A2).
+
 **Provider errors in the logs (C3 review, finding 6).** A request the API refuses with a 4xx
 (not 408) is `provider_refused`: refused before generation, settled at 0, not retried; a 5xx,
 408 or dropped connection is `provider_error`, estimated and retried once. The classifier and the
@@ -472,8 +486,8 @@ firm and before the sessions' own locks.
 
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
 
-routing → send gate → firm (and contact) → the subject's own lock (call summary, call session
-row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
+routing → send gate → firm (and contact) → the subject's own lock (call summary, call analysis
+`call_analysis:<session>`, call session row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
 `transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`) → the
 workspace monthly lock →
 rows: reservations, ledger, and the rows that reference a message (classifier attempts).
