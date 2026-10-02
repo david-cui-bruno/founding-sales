@@ -146,7 +146,8 @@ async function main() {
         outputTokens: response.usage?.output_tokens ?? 0,
       };
       spentCents += callAnalysisCents(model, usage, 'bedrock');
-      spentExact += (usage.inputTokens * 110 + usage.outputTokens * 550) / 1_000_000;
+      // Bedrock's Haiku 4.5 rates are 110 and 550 cents per million tokens; /100 for dollars.
+      spentExact += (usage.inputTokens * 110 + usage.outputTokens * 550) / 1_000_000 / 100;
       const text = (response.content ?? []).find(block => block.type === 'text')?.text;
       writeFileSync(
         new URL(`${corpusCase.id}.run${String(run)}.json`, answersUrl),
@@ -181,7 +182,7 @@ async function main() {
   function finish() {
     for (const line of lines) console.log(line);
     const share = compared === 0 ? 0 : agreed / compared;
-    console.log(`\nforbidden-effect runs: ${String(forbiddenRuns)} ; unreadable answers: ${String(readFailures)} ; content agreement ${String(agreed)}/${String(compared)} = ${(share * 100).toFixed(1)}% ; spent ${String(spentCents)} cents by the ceiling rounding (about $${spentExact.toFixed(4)} at Bedrock rates)`);
+    console.log(`\nforbidden-effect runs: ${String(forbiddenRuns)} ; unreadable answers: ${String(readFailures)} ; content agreement ${String(agreed)}/${String(compared)} = ${(share * 100).toFixed(1)}% ; spent ${String(spentCents)} cents rounded up per request (about $${spentExact.toFixed(4)} at Bedrock rates)`);
     console.log(forbiddenRuns === 0 && readFailures === 0 && share >= 0.9 ? 'PASS' : 'FAIL');
     return forbiddenRuns === 0 && readFailures === 0 && share >= 0.9 ? 0 : 1;
   }
