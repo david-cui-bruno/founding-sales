@@ -4,9 +4,9 @@ import { inertSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Field, Row, RowActions, RowMain, Rows } from '../ui/layout.tsx';
-import { FormNotice } from './FormNotice.tsx';
+import { ChangedElsewhere, FormNotice } from './FormNotice.tsx';
 import { Section } from './Group.tsx';
-import { useKept } from '../replies/kept.ts';
+import { useKept, useKeptBased } from '../replies/kept.ts';
 import { Textarea } from '../ui/textarea.tsx';
 import { CallingNumberSection } from './CallingNumberSection.tsx';
 import { PosturesSection } from './PosturesSection.tsx';
@@ -47,7 +47,8 @@ function Holidays({
   const holidays = view.holidays;
   // Typed and not yet replaced: kept above the route, with the calendar as the fallback (S4R).
   const [version, setVersion] = useKept('settings:holidays:version', '');
-  const [text, setDates] = useKept('settings:holidays:dates', holidays?.dates.join('\n') ?? '');
+  const datesKept = useKeptBased('settings:holidays:dates', holidays === null ? null : holidays.dates.join('\n'));
+  const [text, setDates] = [datesKept.value, datesKept.set] as const;
   if (holidays === null) return null;
   return (
     <Section data-testid="holidays" title="Workspace holidays" count={holidays.dates.length}>
@@ -101,6 +102,7 @@ function Holidays({
             Replace calendar
           </Button>
           <FormNotice forms={['holidays']} />
+          <ChangedElsewhere show={datesKept.elsewhere} />
         </div>
         {holidays.notEditableBecause === null ? null : (
           <p className="text-xs text-muted-foreground">{inertSentence(holidays.notEditableBecause)}</p>

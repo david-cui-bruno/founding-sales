@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useState, type JSX } from 'react';
 import { POSTURES_HEADING, POSTURE_CONFIRMATION, POSTURE_HINT, allowStatesIssues, type PosturesSectionView } from '../postureView.ts';
 import type { AllowStatesInput } from '../settingsContract.ts';
 import { Button } from '../ui/button.tsx';
@@ -52,25 +52,13 @@ export function PosturesSection({
   const [shown, setShown] = useState(false);
 
   /*
-   * A refused add comes back as it was sent, and an accepted one empties the form.
-   *
-   * Which it was is read off the list rather than off a notice: a state that went on
-   * the list is no longer offered, so the ticks clear themselves, and the list growing
-   * is the one signal that the confirmation and the note have been used. Clearing on
-   * the press instead would throw away what a person typed every time the server said
-   * no, which is exactly when they need it.
+   * A refused add comes back as it was sent. An accepted one empties the form, and that is
+   * done by the command's own success answer (`useAdmin`, K6), not by comparing the list
+   * here: a form mounted after the answer has nothing to compare with, and a consumed
+   * confirmation must never be left to authorise the next state chosen.
    */
   const offered = new Set(section.stateOptions.map(option => option.value));
   const selected = chosen.filter(state => offered.has(state));
-  const allowed = section.rows.length;
-  const lastAllowed = useRef(allowed);
-  useEffect(() => {
-    if (allowed === lastAllowed.current) return;
-    lastAllowed.current = allowed;
-    setConfirmedText('');
-    setNote('');
-    setShown(false);
-  }, [allowed, setConfirmedText, setNote]);
 
   const issues = allowStatesIssues({ states: selected, confirmed, note });
   const issueFor = (field: 'states' | 'confirmed' | 'note'): readonly { readonly testId: string; readonly text: string }[] =>

@@ -534,14 +534,33 @@ export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Ele
     [],
   );
 
-  const rows = (): HTMLElement[] => (list.current === null ? [] : [...list.current.querySelectorAll<HTMLElement>('[data-testid="reply-open"]')]);
+  // Navigation keys never run a command (K4): they move focus among the rows that can take it,
+  // skipping a row whose own command is on the wire, and focus never stays on a command button.
+  const rows = (): HTMLButtonElement[] =>
+    list.current === null ? [] : [...list.current.querySelectorAll<HTMLButtonElement>('[data-testid="reply-open"]')];
   const step = (by: 1 | -1): void => {
     const all = rows();
-    if (all.length === 0) return;
-    const here = all.findIndex(row => row === document.activeElement);
-    const start = here >= 0 ? here : all.findIndex(row => row.getAttribute('aria-current') === 'true');
-    const next = start < 0 ? (by === 1 ? 0 : all.length - 1) : Math.min(all.length - 1, Math.max(0, start + by));
-    all[next]?.focus();
+    const enabled = all.filter(row => !row.disabled);
+    const leave = (): void => {
+      if (document.activeElement instanceof HTMLElement && !all.includes(document.activeElement as HTMLButtonElement)) document.activeElement.blur();
+    };
+    if (enabled.length === 0) {
+      leave();
+      return;
+    }
+    const current = all.findIndex(row => row === document.activeElement);
+    const anchor = current >= 0 ? current : all.findIndex(row => row.getAttribute('aria-current') === 'true');
+    let target: HTMLButtonElement | undefined;
+    if (anchor < 0) target = by === 1 ? enabled[0] : enabled[enabled.length - 1];
+    else {
+      const rest = by === 1 ? all.slice(anchor + 1) : all.slice(0, anchor).reverse();
+      target = rest.find(row => !row.disabled) ?? (current >= 0 ? all[current] : undefined);
+    }
+    if (target === undefined || target.disabled) {
+      leave();
+      return;
+    }
+    target.focus();
   };
   useShortcuts({
     next: () => step(1),

@@ -12,7 +12,8 @@ import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowMain, Rows, Unread } from '../ui/layout.tsx';
-import { useKept } from '../replies/kept.ts';
+import { useKeptBased } from '../replies/kept.ts';
+import { ChangedElsewhere } from './FormNotice.tsx';
 import { Section } from './Group.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
@@ -47,6 +48,11 @@ export const CALLING_NEEDS_SETUP = 'In-app calling needs the calling account to 
 export const CALLING_NEEDS_BUDGET = 'Calling stays off until a daily budget is set.';
 export const CALCOM_NEEDS_SECRET = 'Cal.com bookings need the Cal.com webhook secret to be set up on the server first.';
 export const BUDGET_RANGE = 'Enter an amount from $0 to $100.';
+/** A typed amount and a saved one are the same if they are the same number: "10" is "10.00". */
+function sameNumber(typed: string, saved: string): boolean {
+  return Number(typed) === Number(saved);
+}
+
 export const MINUTES_RANGE = 'Enter a whole number of minutes from 1 to 240.';
 /**
  * No running worker can transcribe (slice C3a): with Amazon Transcribe that is the call-audio
@@ -163,9 +169,15 @@ function Loaded({
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
   const budget = integrations.telephonyBudget;
-  const [dollars, setDollars] = useKept('settings:calling:budget-dollars', (budget.dailyCeilingCents / 100).toFixed(2));
-  const [minutes, setMinutes] = useKept('settings:calling:minutes', String(budget.maxMinutesPerCall));
-  const [script, setScript] = useKept('settings:calling:voicemail', integrations.voicemailScript);
+  // Kept above the route with the server value each edit began from (K2): an edit whose base
+  // is no longer what the server holds is dropped, and a save sends the CURRENT server value
+  // for every field that was not touched.
+  const dollarsKept = useKeptBased('settings:calling:budget-dollars', (budget.dailyCeilingCents / 100).toFixed(2), sameNumber);
+  const minutesKept = useKeptBased('settings:calling:minutes', String(budget.maxMinutesPerCall), sameNumber);
+  const scriptKept = useKeptBased('settings:calling:voicemail', integrations.voicemailScript);
+  const [dollars, setDollars] = [dollarsKept.value, dollarsKept.set] as const;
+  const [minutes, setMinutes] = [minutesKept.value, minutesKept.set] as const;
+  const [script, setScript] = [scriptKept.value, scriptKept.set] as const;
 
   const callingOn = integrations.callingProvider === 'twilio';
   const calcomOn = integrations.calendarIntegration === 'calcom';
@@ -256,6 +268,7 @@ function Loaded({
                 Save
               </Button>
             </span>
+            <ChangedElsewhere show={dollarsKept.elsewhere || minutesKept.elsewhere} />
             {budgetIssue === null ? null : (
               <span data-testid="budget-issue" className="text-xs text-destructive">
                 {budgetIssue}
@@ -301,6 +314,7 @@ function Loaded({
                 setScript(event.target.value);
               }}
             />
+            <ChangedElsewhere show={scriptKept.elsewhere} />
             <span data-testid="voicemail-placeholders" className="text-xs text-muted-foreground">
               {`Filled in for each call: ${VOICEMAIL_PLACEHOLDERS.map(name => `{${name}}`).join(', ')}.`}
             </span>
@@ -374,7 +388,8 @@ function TranscriptionRows({
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
   const setting = transcription.setting;
-  const [dollars, setDollars] = useKept('settings:calling:transcription-dollars', (setting.dailyCeilingCents / 100).toFixed(2));
+  const kept = useKeptBased('settings:calling:transcription-dollars', (setting.dailyCeilingCents / 100).toFixed(2), sameNumber);
+  const [dollars, setDollars] = [kept.value, kept.set] as const;
   const on = setting.enabled;
   const keyMissing = !transcription.configured.ok;
   const noBudget = setting.dailyCeilingCents <= 0;
@@ -448,6 +463,7 @@ function TranscriptionRows({
               Save
             </Button>
           </span>
+          <ChangedElsewhere show={kept.elsewhere} />
           {cents === null ? (
             <span data-testid="transcription-budget-issue" className="text-xs text-destructive">
               {TRANSCRIPTION_BUDGET_RANGE}
@@ -471,7 +487,8 @@ function MonthRow({
   busy(settingKey: SaveIntegrationInput['settingKey']): boolean;
   onSave(input: SaveIntegrationInput): void;
 }): JSX.Element {
-  const [dollars, setDollars] = useKept('settings:calling:month-dollars', (month.ceilingCents / 100).toFixed(2));
+  const kept = useKeptBased('settings:calling:month-dollars', (month.ceilingCents / 100).toFixed(2), sameNumber);
+  const [dollars, setDollars] = [kept.value, kept.set] as const;
   const cents = monthCentsFromDollars(dollars);
   const saving = busy('monthly_cash_ceiling_cents');
   return (
@@ -514,6 +531,7 @@ function MonthRow({
             Save
           </Button>
         </span>
+        <ChangedElsewhere show={kept.elsewhere} />
         {cents === null ? (
           <span data-testid="month-issue" className="text-xs text-destructive">
             {MONTH_RANGE}
