@@ -8,7 +8,7 @@ import {
 } from '../../../calls/correctOutcome.ts';
 import type { CorrectCallOutcomeResult } from '@fss/contracts';
 import { withTransaction, type SessionQueryable } from '../../../db/queryable.ts';
-import type { RepositoryContext } from '../../../db/workspaceScope.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '../../../db/workspaceScope.ts';
 import { logCallOutcome, type LogCallOutcomeInput } from '../../../dial/calls.ts';
 import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '../../../suppression/journal.ts';
 import type { ApplyWorld, PlacedCall, TestFirm } from './applyWorld.ts';
@@ -22,16 +22,29 @@ import { lines } from '../analysisFixtures.ts';
 
 export const QUIET_CALL = lines(['Y', 'Hi, this is David from Callie.'], ['T', 'Hello?']);
 
-/** Log a call from the form (no session), as the salesperson. */
+/**
+ * David as he is in production: the one member, the firm's assignee, the person who made the
+ * call, and the workspace's admin (DESIGN-S3X §1.2). The salesperson user with the admin role,
+ * so the calls he placed are his and a stop's follow-up lift is open to him.
+ */
+export function david(world: ApplyWorld, db: SessionQueryable = world.session): RepositoryContext {
+  return repositoryContext(
+    workspaceScope(world.seeded.alpha.workspaceId, { kind: 'user', userId: world.seeded.alpha.salesperson.userId, role: 'admin' }),
+    db,
+  );
+}
+
+/** Log a call from the form (no session), as the salesperson (or `as`). */
 export async function logFormCall(
   world: ApplyWorld,
   firm: TestFirm,
   outcome: CallOutcome,
   extra: Partial<LogCallOutcomeInput> = {},
   db: SessionQueryable = world.session,
+  as?: (db: SessionQueryable) => RepositoryContext,
 ): Promise<string> {
   const logged = await withTransaction(db, async () =>
-    await logCallOutcome(world.salesperson(db), {
+    await logCallOutcome((as ?? world.salesperson)(db), {
       firmId: firm.firmId,
       contactId: firm.contactId,
       routeId: firm.routeId,
