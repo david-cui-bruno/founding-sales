@@ -106,7 +106,7 @@ export function useCrm(
   const panelRef = useRef(panelFirm);
   panelRef.current = panelFirm;
   /** Whether the firm on screen was asked for as a full page (true) or for the panel. */
-  const fullPage = useRef(route.name === 'firm');
+  const [fullPage, setFullPage] = useState(route.name === 'firm');
   const first = useMemo(
     () =>
       async (api: OperationApi): Promise<CrmState> => {
@@ -132,15 +132,15 @@ export function useCrm(
   const actions = useMemo<CrmActions>(
     () => ({
       openFirm: firmId => {
-        fullPage.current = true;
+        setFullPage(true);
         read(api => api.read('crm.openFirm', { firmId }));
       },
       openPanel: firmId => {
-        fullPage.current = false;
+        setFullPage(false);
         read(api => api.read('crm.openFirm', { firmId }));
       },
       openPipeline: includeLost => {
-        fullPage.current = false;
+        setFullPage(false);
         // `onClick={openPipeline}` hands over the event; only a real boolean is a filter.
         read(api => api.read('crm.openPipeline', typeof includeLost === 'boolean' ? { includeLost } : {}));
       },
@@ -208,12 +208,12 @@ export function useCrm(
   const shown = useRef<string | null>(null);
   useEffect(() => {
     if (state === null) return;
-    const next = routeOfState(state, from, route.name === 'pipeline' && !fullPage.current);
+    const next = routeOfState(state, from, route.name === 'pipeline' && !fullPage);
     const text = next.name === 'firm' ? `firm/${next.firmId}` : next.name;
     if (shown.current === text) return;
     shown.current = text;
     routeShown(next);
-  }, [state, from, route.name]);
+  }, [state, from, route.name, fullPage]);
 
   return useMemo(() => ({ ...view, actions, origin: from }), [view, actions, from]);
 }

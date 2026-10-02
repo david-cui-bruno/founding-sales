@@ -274,8 +274,8 @@ function ContactRow({
   };
   const changed = fullName !== contact.fullName || title !== (contact.title ?? '') || (primary && !contact.isPrimary);
   return (
-    <Row data-testid="contact-row" data-contact-id={contact.id}>
-      <span className="flex min-w-0 flex-1 items-center gap-2">
+    <Row data-testid="contact-row" data-contact-id={contact.id} className="flex-wrap gap-y-1 py-2">
+      <span className="flex min-w-0 basis-full flex-col gap-0.5">
         <Input
           data-testid="contact-name"
           aria-label="Name"
@@ -285,7 +285,7 @@ function ContactRow({
           onChange={event => {
             setFullName(event.target.value);
           }}
-          className="h-7 flex-1 border-transparent bg-transparent px-1 hover:border-input focus:border-input"
+          className="h-7 border-transparent bg-transparent px-1 font-medium hover:border-input focus:border-input"
         />
         <Input
           data-testid="contact-title"
@@ -296,7 +296,7 @@ function ContactRow({
           onChange={event => {
             setTitle(event.target.value);
           }}
-          className="h-7 flex-1 border-transparent bg-transparent px-1 text-muted-foreground hover:border-input focus:border-input"
+          className="h-7 border-transparent bg-transparent px-1 text-muted-foreground hover:border-input focus:border-input"
         />
       </span>
       <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">

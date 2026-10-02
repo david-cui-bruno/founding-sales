@@ -236,7 +236,7 @@ export function BoardCard({
         }
       }}
       className={cn(
-        'group flex flex-col gap-1.5 rounded-lg border bg-background p-2.5 transition-[box-shadow,border-color]',
+        'group relative flex flex-col gap-1.5 rounded-lg border bg-background p-2.5 transition-[box-shadow,border-color]',
         selected ? 'border-link/60 shadow-md' : 'border-border hover:border-strong hover:shadow-sm focus-within:border-strong',
       )}
     >
@@ -292,7 +292,16 @@ export function BoardCard({
         <EvidencePopover card={card} line={line} fromName={fromKey === null ? null : nameOf(fromKey)} />
       ) : null}
       {canAct && !lost ? (
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div
+          className={cn(
+            'flex items-center gap-0.5 transition-opacity',
+            // At rest the actions float over the card's corner so it keeps its height; with an
+            // editor open they sit in the flow above it, so nothing is covered.
+            panel === null
+              ? 'absolute right-1.5 bottom-1.5 rounded-md bg-background/95 opacity-0 shadow-sm group-hover:opacity-100 group-focus-within:opacity-100'
+              : '-ml-2',
+          )}
+        >
           <Button
             size="sm"
             variant="quiet"

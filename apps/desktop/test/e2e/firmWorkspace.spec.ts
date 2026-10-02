@@ -184,7 +184,9 @@ test('a Lost change asks for a reason and will not go without one', async ({ pag
   await expect(change.getByTestId('stage-submit')).toBeEnabled();
   await change.getByTestId('stage-submit').click();
 
-  await expect(page.getByTestId('banner-info')).toContainText('Stage changed.');
+  // The answer is said next to the card it belongs to, never as a page banner (S4, criterion 6).
+  await expect(page.getByTestId('card-feedback')).toContainText('Stage changed.');
+  await expect(page.getByTestId('banner-info')).toHaveCount(0);
   expect(server.calls.find(entry => entry.method === 'changeStage')?.argument).toEqual({
     opportunityId: OPPORTUNITY_ID,
     toStageKey: 'lost',
@@ -215,8 +217,13 @@ test('a firm with no open opportunity offers no stage control at all', async ({ 
 test('opening a firm from the board asks for that firm', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
   await page.getByTestId('pipeline-open-firm').first().click();
-  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
+  // A card opens the firm in a side panel and the board stays where it is (S4); the full
+  // page is one press further.
+  await expect(page.getByTestId('firm-panel-name')).toHaveText('Northwind Test Holdings');
+  await expect(page.getByTestId('pipeline-board')).toBeVisible();
   expect(server.calls.find(entry => entry.method === 'openFirm')?.argument).toEqual({ firmId: FIRM_ID });
+  await page.getByTestId('firm-panel-full').click();
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
 });
 
 // ------------------------------------------------------------ merge resolution
