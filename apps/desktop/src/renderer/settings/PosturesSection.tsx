@@ -43,12 +43,6 @@ export function PosturesSection({
   const setChosen = (next: (current: readonly string[]) => readonly string[]): void => {
     setChosenText(next(chosen).join(','));
   };
-  const [confirmedText, setConfirmedText] = useKept('settings:postures:confirmed', '');
-  const confirmed = confirmedText === 'yes';
-  const setConfirmed = (next: boolean): void => {
-    setConfirmedText(next ? 'yes' : '');
-  };
-  const [note, setNote] = useKept('settings:postures:note', '');
   const [shown, setShown] = useState(false);
 
   /*
@@ -59,6 +53,16 @@ export function PosturesSection({
    */
   const offered = new Set(section.stateOptions.map(option => option.value));
   const selected = chosen.filter(state => offered.has(state));
+  // The confirmation and the note belong to the states they were given for (K1): keyed by the
+  // selected set, so choosing different states shows an unticked box and an empty note, and a
+  // confirmation already used for one state can never ride along to another.
+  const scope = [...selected].sort().join(',');
+  const [confirmedText, setConfirmedText] = useKept(`settings:postures:${scope}:confirmed`, '');
+  const confirmed = confirmedText === 'yes';
+  const setConfirmed = (next: boolean): void => {
+    setConfirmedText(next ? 'yes' : '');
+  };
+  const [note, setNote] = useKept(`settings:postures:${scope}:note`, '');
 
   const issues = allowStatesIssues({ states: selected, confirmed, note });
   const issueFor = (field: 'states' | 'confirmed' | 'note'): readonly { readonly testId: string; readonly text: string }[] =>

@@ -13,6 +13,8 @@ import type { AdminState } from '../src/renderer/settingsContract.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import { adminState } from './e2e/support/adminFixtures.ts';
 import { fireEvent } from '@testing-library/react';
+import { PosturesSection } from '../src/renderer/settings/PosturesSection.tsx';
+import { recordedPosture } from './e2e/support/adminFixtures.ts';
 import { CallingCalendarSection } from '../src/renderer/settings/CallingCalendarSection.tsx';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
 import { SendingSection } from '../src/renderer/settings/SendingSection.tsx';
@@ -344,5 +346,43 @@ describe('a consumed posture confirmation is cleared by the success answer (K6)'
     await user.click(await screen.findByTestId('posture-state-AL'));
     expect((screen.getByTestId('posture-confirmed') as HTMLInputElement).checked).toBe(false);
     expect((screen.getByTestId('posture-note') as HTMLTextAreaElement).value).toBe('');
+  });
+});
+
+describe('a posture confirmation belongs to the states it was given for (K1)', () => {
+  it('spent while away, it cannot authorise a later, different state (the section on its own)', () => {
+    const onAllow = vi.fn();
+    const base = adminState();
+    const added: AdminState = {
+      ...base,
+      postures: base.postures === null ? null : { ...base.postures, records: [...(base.postures.records ?? []), recordedPosture({ id: 'new', state: 'AL' })] },
+    };
+    const tree = (on: boolean, from: AdminState): JSX.Element => (
+      <DraftsProvider>
+        {on ? (
+          <PosturesSection
+            section={adminViewOf(from).postures as NonNullable<ReturnType<typeof adminViewOf>['postures']>}
+            adding={false}
+            revoking={() => false}
+            onAllow={onAllow}
+            onRevoke={() => undefined}
+            onRetry={() => undefined}
+          />
+        ) : null}
+      </DraftsProvider>
+    );
+    const view = render(tree(true, base));
+    fireEvent.click(screen.getByTestId('posture-state-AL'));
+    fireEvent.click(screen.getByTestId('posture-confirmed'));
+    fireEvent.change(screen.getByTestId('posture-note'), { target: { value: 'Checked AL' } });
+    fireEvent.click(screen.getByTestId('posture-record'));
+    expect(onAllow).toHaveBeenCalledTimes(1);
+    view.rerender(tree(false, base));
+    view.rerender(tree(true, added));
+    fireEvent.click(screen.getByTestId('posture-state-TX'));
+    expect((screen.getByTestId('posture-confirmed') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('posture-note') as HTMLTextAreaElement).value).toBe('');
+    fireEvent.click(screen.getByTestId('posture-record'));
+    expect(onAllow, 'TX needs a fresh confirmation').toHaveBeenCalledTimes(1);
   });
 });
