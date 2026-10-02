@@ -302,6 +302,9 @@ export function todayAnswer(state: TodayState, method: string, argument: unknown
     return { ...state, followUpPreview: agreedSequencePreview(input) };
   }
   if (method === 'recordOutcome') {
+    // The bridge's answer to the form's own command (rules K5/K6): recorded, by its id.
+    const commandId = (argument as { commandId?: string } | null)?.commandId;
+    const answered = commandId === undefined ? {} : { outcomeAnswer: { commandId, recorded: true, reason: null } };
     const agreed = (argument as { followUpPermission?: { scope?: string; sequenceVersionId?: string } | null } | null)
       ?.followUpPermission;
     if (agreed?.scope === 'agreed_sequence') {
@@ -310,6 +313,7 @@ export function todayAnswer(state: TodayState, method: string, argument: unknown
         state.followUpSequences?.find(entry => entry.sequenceVersionId === agreed.sequenceVersionId)?.name ?? '';
       return {
         ...state,
+        ...answered,
         notice: 'outcome_recorded_sequence_started',
         agreement: { scope: 'agreed_sequence', name, granted: true, started: true, reason: null },
         followUpPreview: null,
@@ -319,7 +323,7 @@ export function todayAnswer(state: TodayState, method: string, argument: unknown
     // as the real bridge reports the server's `followUps`.
     const input = argument as { outcome?: string; callback?: unknown } | null;
     const needsTime = input?.outcome === 'callback_requested' && input.callback === null;
-    return { ...state, notice: needsTime ? 'outcome_recorded_callback_time_needed' : 'outcome_recorded' };
+    return { ...state, ...answered, notice: needsTime ? 'outcome_recorded_callback_time_needed' : 'outcome_recorded' };
   }
   if (method === 'scheduleCallback') return { ...state, notice: 'callback_scheduled' };
   if (method === 'releasePause') return { ...state, notice: 'pause_released' };

@@ -961,6 +961,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           const parsed = loggedCallResultSchema.safeParse(value);
           return parsed.success ? parsed.data : null;
         },
+        // The form's id (rules K5/K6): its retry after a lost answer is this same command.
+        input.commandId === undefined ? {} : { commandId: input.commandId },
       );
       // The person who recorded this call has left this Mac while it was on the wire:
       // nothing of theirs — the pending agreement's call, contact and sequence ids, the
@@ -1000,7 +1002,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // number. Re-read rather than patching the page: the server decided, not us.
       await reloadAfterMutation({ refreshList: true }, mine);
       if (!stale(mine) && pendingAgreement !== null) await loadPreview(pendingAgreement, mine);
-      return await answerFor(mine);
+      const state = await answerFor(mine);
+      // The form's own answer, on this state only (rules K5/K6): it clears its draft on
+      // `recorded` and keeps it on anything else. A state for a newer generation carries none.
+      if (input.commandId === undefined || stale(mine)) return state;
+      return todayStateSchema.parse({
+        ...state,
+        outcomeAnswer: { commandId: input.commandId, recorded: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) },
+      });
     },
 
     async recordAgreedDates(input) {

@@ -582,6 +582,9 @@ test('the outcome names the task it was for and the number just called (lane g79
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
+      // The form's own command id (rules K5/K6).
+      commandId: expect.any(String),
     },
   ]);
 });
@@ -645,7 +648,9 @@ test('“do not call” says how wide the suppression is before it is recorded',
   await settled(page);
   await openOutcome(page);
   await page.getByTestId('outcome-select').selectOption('do_not_call');
-  await expect(page.getByTestId('outcome-warning')).toContainText('stops Callie calling this number');
+  // Migration 0037: the default stop is calls to this person, and it says e-mail is not stopped.
+  await expect(page.getByTestId('outcome-warning')).toContainText('stops Callie calling this person');
+  await expect(page.getByTestId('outcome-warning')).toContainText('does not stop e-mail');
 });
 
 test('an outage is a banner over Home, and nothing on it is disabled for it (wave 1)', async ({ page }) => {

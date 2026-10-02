@@ -535,6 +535,37 @@ describe('the Today bridge', () => {
     expect(logged()).not.toHaveProperty('doNotCallCoversAllContact');
   });
 
+  it('K5/K6: the form’s command id is the request’s, and the answer to it says recorded, refused or nothing', async () => {
+    const COMMAND = '12121212-1212-4212-8212-121212121212';
+    const base = { firmId: FIRM_ID, contactId: null, routeId: null, itemId: null, outcome: 'voicemail_left' as const, note: '', callback: null, doNotCallCoversAllContact: false, followUpPermission: null };
+    const bridgeAnswering = (log: HttpAnswer) => {
+      const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/calls/log': log });
+      const bridge = createTodayBridge({
+        api,
+        handoff: opening(),
+        session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+      });
+      return { bridge, calls };
+    };
+
+    const ok = bridgeAnswering(accepted(null));
+    await ok.bridge.expand({ firmId: FIRM_ID });
+    const recorded = await ok.bridge.recordOutcome({ ...base, commandId: COMMAND });
+    // The id the form minted is the envelope's, so a retry is answered from the receipt.
+    expect((ok.calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>)['commandId']).toBe(COMMAND);
+    expect(recorded.outcomeAnswer).toEqual({ commandId: COMMAND, recorded: true, reason: null });
+
+    const no = bridgeAnswering({ status: 409, body: { status: 'refused', reason: 'step_ineligible' } });
+    await no.bridge.expand({ firmId: FIRM_ID });
+    const refused = await no.bridge.recordOutcome({ ...base, commandId: COMMAND });
+    expect(refused.outcomeAnswer).toEqual({ commandId: COMMAND, recorded: false, reason: 'step_ineligible' });
+
+    // A form that sent no id is answered as before: no answer of its own on the state.
+    const old = bridgeAnswering(accepted(null));
+    await old.bridge.expand({ firmId: FIRM_ID });
+    expect((await old.bridge.recordOutcome(base)).outcomeAnswer ?? null).toBeNull();
+  });
+
   it('S3CF-2: a named session borrows no route from the last call; an unnamed outcome still does', async () => {
     const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice(), '/calls/log': accepted(null) });
     const bridge = createTodayBridge({

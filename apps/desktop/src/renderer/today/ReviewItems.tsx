@@ -7,6 +7,7 @@ import { Block, Label, dense } from '../v2/parts.tsx';
 import type { TodayCard } from '../todayContract.ts';
 import { BasicsEditor, type BasicsField, type BasicsValues } from './BasicsEditor.tsx';
 import { evidenceLines } from './afterCallModel.ts';
+import { announceKept, nextStopCommandId, useTodayKept, type StopEditor } from './keptCommands.ts';
 
 /**
  * Needs review (slice 3a, lane C; DESIGN-S3A §2.4): the group in the Queue, and each item's
@@ -188,9 +189,24 @@ function ItemCard({
   onLog(callSessionId: string): void;
 }): JSX.Element {
   const key = itemKey(item);
-  const [editor, setEditor] = useState<Editor | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [editor, setEditorState] = useState<Editor | null>(null);
+  // Rule K3: the stop on the wire and the sentence the item's last command answered live in
+  // the shell's store, by item, so an answer that lands after David opened another firm or
+  // left Today is waiting beside the item when he comes back.
+  const kept = useTodayKept();
+  const note = kept.notes.get(key) ?? null;
+  const setNote = (sentence: string): void => {
+    kept.notes.set(key, sentence);
+    announceKept();
+  };
   const [copied, setCopied] = useState(false);
+  // Any opening, closing or switching of an editor after a stop was sent is David's: the late
+  // answer to that stop must leave the editor he has now alone.
+  const setEditor = (next: Editor | null): void => {
+    const pending = kept.stops.get(key);
+    if (pending !== undefined) pending.touched = true;
+    setEditorState(next);
+  };
   const toggle = (next: Editor): void => setEditor(editor === next ? null : next);
   const proposal = item.source === 'proposal' ? item.proposal : null;
   const logged = item.source !== 'stage' && firm.loggedSessions.has(item.callSessionId);
@@ -208,18 +224,38 @@ function ItemCard({
     );
   };
   // Migration 0037: two firm stops, calls only or all contact, each with its own confirm.
-  const stop = (channel: 'phone' | 'all'): void => {
+  // Rule K3: the answer is the item's whenever it lands; only the latest stop sent for the item
+  // speaks, and a success closes the editor that sent it only if David has not touched the
+  // editors since (a late success never closes the other stop's confirm he opened meanwhile).
+  const stop = (sentFrom: StopEditor, channel: 'phone' | 'all'): void => {
     const bridge = api();
     if (bridge === undefined) return;
+    const pending = { commandId: nextStopCommandId(), editor: sentFrom, touched: false };
+    kept.stops.set(key, pending);
+    kept.notes.delete(key);
+    announceKept();
+    const settle = (stopped: boolean): void => {
+      if (kept.stops.get(key) !== pending) return;
+      kept.stops.delete(key);
+      kept.notes.set(
+        key,
+        !stopped
+          ? 'Could not record the stop. Nothing was changed.'
+          : channel === 'all'
+            ? 'Stopped: nobody at this firm will be contacted.'
+            : 'Stopped: nobody at this firm will be called.',
+      );
+      if (stopped && !pending.touched) setEditorState(null);
+      announceKept();
+      if (stopped) onChanged();
+    };
     void bridge.command('suppressions.firmStop', { firmId: firm.firmId, channel }).then(
       answer => {
-        if (answer.stopped) {
-          setEditor(null);
-          setNote(channel === 'all' ? 'Stopped: nobody at this firm will be contacted.' : 'Stopped: nobody at this firm will be called.');
-          onChanged();
-        } else setNote('Could not record the stop. Nothing was changed.');
+        settle(answer.stopped);
       },
-      () => setNote('Could not record the stop. Nothing was changed.'),
+      () => {
+        settle(false);
+      },
     );
   };
 
@@ -359,7 +395,7 @@ function ItemCard({
                   <div data-testid="review-stop-calls-confirm" className="flex flex-col gap-2 rounded-md border border-border bg-warn-soft/40 p-2.5">
                     <p className="text-xs">Callie will not call anyone at this firm again. E-mail is not stopped, and no permission to e-mail is given.</p>
                     <div className="flex gap-2">
-                      <Button data-testid="review-stop-calls-confirm-button" className={dense.md} onClick={() => stop('phone')}>
+                      <Button data-testid="review-stop-calls-confirm-button" className={dense.md} onClick={() => stop('stopCalls', 'phone')}>
                         Confirm: stop calls
                       </Button>
                       <Button variant="ghost" className={dense.md} onClick={() => setEditor(null)}>
@@ -372,7 +408,7 @@ function ItemCard({
                   <div data-testid="review-stop-confirm" className="flex flex-col gap-2 rounded-md border border-border bg-warn-soft/40 p-2.5">
                     <p className="text-xs">Callie will not call or e-mail anyone at this firm again. This is recorded as a firm-wide stop.</p>
                     <div className="flex gap-2">
-                      <Button data-testid="review-stop-confirm-button" className={dense.md} onClick={() => stop('all')}>
+                      <Button data-testid="review-stop-confirm-button" className={dense.md} onClick={() => stop('stop', 'all')}>
                         Confirm: stop all contact
                       </Button>
                       <Button variant="ghost" className={dense.md} onClick={() => setEditor(null)}>

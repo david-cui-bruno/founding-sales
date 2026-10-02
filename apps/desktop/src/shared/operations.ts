@@ -125,6 +125,8 @@ const outcomeInput = z.strictObject({
   doNotCallCoversAllContact: z.boolean(),
   /** What a `do_not_call` stops (migration 0037, P1). Absent is the checkbox above. */
   doNotCall: doNotCallChoiceSchema.optional(),
+  /** The form's own command id (rules K5/K6): a retry resends the request under it. */
+  commandId: uuid.optional(),
   /**
    * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
    * "none", which is the default the form offers, and the only value the server accepts

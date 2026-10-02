@@ -227,6 +227,13 @@ page shows "Email stopped", "Calls stopped" or "All contact stopped" on the firm
 contact (`POST /crm/firm-page` with `include: ['stops']`). `docs/greenfield/suppression.md`
 has the whole table of which stop blocks which action.
 
+The choice is kept per call (the session, or the call just placed), never per firm alone. The
+outcome form keeps it, and every other field, until the server says the call was recorded: a
+refusal leaves the form as it was, and a lost answer locks it and offers "Record again", which
+resends the same request under the form's own command id so the server answers it from its
+receipt. A Needs review stop's answer is kept by item and waits beside it after David moves on;
+a late success closes the confirm that sent it only if he has not touched the editors since.
+
 ### Recordings
 
 `<Dial record="record-from-answer-dual">` records every call. **`GET /calls/history?firmId=`**
