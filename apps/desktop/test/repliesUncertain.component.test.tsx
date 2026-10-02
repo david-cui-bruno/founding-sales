@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { JSX } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -76,29 +76,28 @@ describe('kept state for the uncertain read (K1, K4, K7)', () => {
     expect(screen.getByTestId('count-uncertain').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('a sign-out in the middle of a read discards its answer', async () => {
+  it('a sign-out in the middle of a command discards its answer: nothing opens afterwards', async () => {
     install(threeReplies());
-    let release: (value: ReplyState) => void = () => undefined;
-    const slow = new Promise<ReplyState>(resolve => {
-      release = resolve;
-    });
-    (globalThis.callieApi as unknown as { read: unknown }).read = async (operation: OperationName) => {
-      if (operation === 'replies.state') return await slow;
-      return replyWire(lane);
-    };
+    let answer: (state: ReplyState) => void = () => undefined;
+    (globalThis.callieApi as unknown as { command: unknown }).command = () =>
+      new Promise<ReplyState>(resolve => {
+        answer = resolve;
+      });
+    const user = userEvent.setup();
     const view = render(
       <DraftsProvider key="a">
         <RepliesRoute column={column} />
       </DraftsProvider>,
     );
+    await user.click((await screen.findAllByTestId('reply-open'))[0] as HTMLElement);
+    await user.click(await screen.findByTestId('confirm'));
+    const before = calls.filter(call => call.method === 'open').length;
     view.rerender(<p data-testid="signed-out">signed out</p>);
-    act(() => {
-      release(replyWire(threeReplies()));
-    });
-    await slow;
-    await Promise.resolve();
+    answer(replyWire({ ...lane, open: null, notice: 'confirmed' }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // The success answer would open the next reply; for a view that is gone it opens nothing.
+    expect(calls.filter(call => call.method === 'open')).toHaveLength(before);
     expect(screen.queryByTestId('reply-list')).toBeNull();
-    expect(document.body.textContent).not.toContain('Firm');
   });
 
   it('K7: a late answer for a reply that is no longer selected does not replace the selected one', async () => {
