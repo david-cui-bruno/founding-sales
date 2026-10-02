@@ -37,6 +37,19 @@ async function markFirstCard(page: Page): Promise<void> {
   });
 }
 
+/**
+ * How old the list is, as Settings › Status says it (slice 3a, C0: it was a line in Today's
+ * header). Visiting Settings remounts Today on the way back, so a mark set on a card
+ * before the visit is gone after it — which is why the marks are checked first.
+ */
+async function listLine(page: Page): Promise<string | null> {
+  await page.getByTestId('nav-settings').click();
+  const text = await page.getByTestId('status-list').textContent();
+  await page.getByTestId('nav-today').click();
+  await expect(page.getByTestId('queue-row').first()).toBeVisible();
+  return text;
+}
+
 async function focusWindow(page: Page): Promise<void> {
   const reads = called('settings.state').length;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -51,13 +64,14 @@ test('the list says how old it is, and the minutes move without redrawing anythi
   await page.goto(server.url());
   await settled(page);
 
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
+  // Not in Today's header any more: routine, so it is Settings › Status's line.
+  await expect(page.getByTestId('today-updated-text')).toHaveCount(0);
   await markFirstCard(page);
   await page.clock.runFor(5 * 60_000);
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 5 min ago');
   await expect(page.getByTestId('queue-row').first()).toHaveAttribute('data-mark', 'kept');
   // Five minutes of ticks at 09:05 in New York is no reason to read the list again.
   expect(called('today.refresh')).toHaveLength(1);
+  expect(await listLine(page)).toBe('Today’s list: updated 5 min ago');
 });
 
 test('a focus a minute after the last read reads the list again, quietly, and keeps the lanes', async ({ page }) => {
@@ -75,12 +89,13 @@ test('a focus a minute after the last read reads the list again, quietly, and ke
   expect(called('today.refresh')).toHaveLength(1);
 
   await page.clock.runFor(5 * 60_000);
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 5 min ago');
+  expect(await listLine(page)).toBe('Today’s list: updated 5 min ago');
+  await markFirstCard(page);
   await focusWindow(page);
   await expect.poll(() => called('today.refresh')).toEqual([{}, { quiet: true }]);
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
   // Only the read time changed, so the lanes on screen are the ones drawn before.
   await expect(page.getByTestId('queue-row').first()).toHaveAttribute('data-mark', 'kept');
+  expect(await listLine(page)).toBe('Today’s list: updated just now');
 
   // And not again straight away.
   await focusWindow(page);
@@ -144,8 +159,9 @@ test('a failed read says so beside Retry, over the list it kept, and Retry reads
 
   await page.clock.runFor(2 * 60_000);
   await focusWindow(page);
-  await expect(page.getByTestId('today-refresh-failed')).toHaveText(' · Could not refresh.');
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 2 min ago');
+  // Only the failure is said on Today, beside Retry (the age is Settings › Status's).
+  await expect(page.getByTestId('today-refresh-failed')).toHaveText('Could not refresh.');
+  await expect(page.getByTestId('today-updated-text')).toHaveCount(0);
   // The existing lines say why, and the list stays readable.
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
   await expect(page.getByTestId('queue-row')).toHaveCount(4);
@@ -153,5 +169,5 @@ test('a failed read says so beside Retry, over the list it kept, and Retry reads
   await page.getByTestId('today-retry').click();
   await expect.poll(() => called('today.refresh')).toHaveLength(3);
   await expect(page.getByTestId('today-refresh-failed')).toHaveCount(0);
-  await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
+  expect(await listLine(page)).toBe('Today’s list: updated just now');
 });

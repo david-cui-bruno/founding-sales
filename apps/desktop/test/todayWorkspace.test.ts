@@ -40,11 +40,20 @@ describe('the queue', () => {
   });
 
   it('keeps a reply with the replies whatever it is missing, and says why a blocked firm cannot be called', () => {
-    expect(queueLine(cards[0] as TodayCard)).toBe('Replied');
+    // A reply under "Replies waiting" is not told it replied (slice 3a, C0).
+    expect(queueLine(cards[0] as TodayCard)).toBeNull();
     expect(queueLine(cards[3] as TodayCard)).toBe('No location or time zone');
     expect(blockerLine(card('9', 'new_firm', ['no_phone', 'no_location']))).toBe('No phone number · No location or time zone');
     // A list from an API before slice S2 has no blockers at all: nothing is blocked.
     expect(queueGroups([card('7', 'new_firm')])[0]?.id).toBe('prospects');
+  });
+
+  it('adds a grey line only where it says something the group heading does not (slice 3a, C0)', () => {
+    expect(queueLine(card('1', 'callback'))).toBeNull();
+    expect(queueLine(card('2', 'new_firm'))).toBeNull();
+    expect(queueLine({ ...card('3', 'reply'), counts: { replies: 2, emailsDue: 0, callsDue: 0 } })).toBe('2 replies');
+    expect(queueLine({ ...card('4', 'due_work'), counts: { replies: 0, emailsDue: 1, callsDue: 2 } })).toBe('2 calls, 1 email');
+    expect(queueLine(card('5', 'new_firm', ['no_phone']))).toBe('No phone number');
   });
 
   it('walks the queue’s own order with J and K, and stops at either end', () => {

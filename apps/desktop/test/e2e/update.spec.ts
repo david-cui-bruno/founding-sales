@@ -26,7 +26,9 @@ test('a staged update is one line under the version, and Restart to update insta
 
   const row = page.getByTestId('status-update');
   await expect(row).toContainText('Callie 1.0.6 is ready');
-  await expect(page.getByTestId('status').getByRole('listitem').nth(-2)).toHaveText('Callie 1.0.3 · online');
+  // The routine rows (version, mailbox, number) are Settings › Status's since slice 3a
+  // (C0); the update is the one row left in the sidebar, because it has a control.
+  await expect(page.getByTestId('status').getByRole('listitem')).toHaveCount(1);
   // The only control in the status list.
   await expect(page.getByTestId('status').getByRole('button')).toHaveCount(1);
 
@@ -39,7 +41,7 @@ test('a staged update is one line under the version, and Restart to update insta
 test('the line appears when the main process says the state changed', async ({ page }) => {
   server = await startAppServer({ update: { kind: 'none' } });
   await page.goto(server.url());
-  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
+  await expect(page.getByTestId('status').getByRole('listitem')).toHaveCount(0);
   await expect(page.getByTestId('status-update')).toHaveCount(0);
 
   server.update.setState({ kind: 'installing', version: '1.0.6' });
@@ -80,8 +82,10 @@ test('reading the update state on focus does not empty the sign-in form', async 
 test('a page without the update bridge draws no update line', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
-  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
+  await expect(page.getByTestId('status').getByRole('listitem')).toHaveCount(0);
   await expect(page.getByTestId('status-update')).toHaveCount(0);
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
 });
 
 // ------------------------------------------------------------- wave 1: Update now

@@ -80,20 +80,25 @@ export function blockerLine(card: TodayCard): string | null {
   return blockers.length === 0 ? null : blockers.map(code => BLOCKER_SENTENCES[code]).join(' · ');
 }
 
-/** The grey line under a firm's name in the queue. */
-export function queueLine(card: TodayCard): string {
+/**
+ * The grey line under a firm's name in the queue, or null when it would only repeat the
+ * group the firm is already under (slice 3a, C0). "Callback" under Callbacks, "Replied"
+ * under Replies waiting and "Not yet contacted" under New prospects said nothing the
+ * heading had not. What is left is what the heading does not say: how many replies, which
+ * of calls and e-mails are due, and why a firm cannot be called.
+ */
+export function queueLine(card: TodayCard): string | null {
   const blocked = card.lane === 'reply' ? null : blockerLine(card);
   if (blocked !== null) return blocked;
-  if (card.lane === 'callback') return 'Callback';
-  if (card.lane === 'reply') return card.counts.replies > 1 ? `${String(card.counts.replies)} replies` : 'Replied';
+  if (card.lane === 'reply') return card.counts.replies > 1 ? `${String(card.counts.replies)} replies` : null;
   if (card.lane === 'due_work') {
     const parts = [
       card.counts.callsDue > 0 ? `${String(card.counts.callsDue)} call${card.counts.callsDue === 1 ? '' : 's'}` : null,
       card.counts.emailsDue > 0 ? `${String(card.counts.emailsDue)} email${card.counts.emailsDue === 1 ? '' : 's'}` : null,
     ].filter((part): part is string => part !== null);
-    return parts.length === 0 ? 'Due today' : `Due: ${parts.join(', ')}`;
+    return parts.length === 0 ? null : parts.join(', ');
   }
-  return 'Not yet contacted';
+  return null;
 }
 
 /**

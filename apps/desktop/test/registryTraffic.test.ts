@@ -109,6 +109,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'replies.open': { messageId: UUID },
   'replies.confirm': { messageId: FIXTURE_IDS.message, classification: 'human_reply', callback: null },
   'replies.resolve': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
+  'replies.saveModel': { modelName: 'claude-haiku-4-5-20251001' },
   'research.open': { firmId: UUID },
   'research.run': { firmId: UUID },
   'research.addLink': { firmId: UUID, url: 'https://news.example.test/piece' },

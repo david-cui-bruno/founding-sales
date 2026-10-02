@@ -1,11 +1,12 @@
 import type { JSX } from 'react';
 import { navigate, type Route } from '../routes.ts';
-import { UNAVAILABLE, type HomeView, type NeedsRow } from '../homeView.ts';
+import { NOTHING_NEEDS_YOU, UNAVAILABLE, type HomeView, type NeedsRow } from '../homeView.ts';
 import type { TodayState } from '../todayContract.ts';
 import { refreshFailed, updatedLine, type TodayScreenView } from '../todayView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Lanes } from './Lanes.tsx';
+import { Figures } from './Overview.tsx';
 import type { TodayActions } from './useToday.ts';
 
 /**
@@ -25,21 +26,25 @@ export function UpdatedLine({
   now,
   refreshAnswered,
   onRefresh,
+  failureOnly = false,
 }: {
   readonly state: TodayState;
   readonly now: number;
   readonly refreshAnswered: boolean;
   onRefresh(): void;
+  /** Slice 3a (C0): draw nothing unless the refresh failed. "Updated 2 min ago" is Settings › Status's. */
+  readonly failureOnly?: boolean;
 }): JSX.Element {
   const failed = refreshAnswered && refreshFailed(state);
+  if (failureOnly && !failed) return <></>;
   return (
     <p data-testid="today-updated" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span data-testid="today-updated-text">{updatedLine(state.asOf, now) ?? ''}</span>
+      {failureOnly ? null : <span data-testid="today-updated-text">{updatedLine(state.asOf, now) ?? ''}</span>}
       {failed ? (
         <>
           {/* Why it failed is the offline or stale line above the lanes, which the
               column already shows; this says once that it did, beside Retry. */}
-          <span data-testid="today-refresh-failed">{state.asOf === null ? 'Could not refresh.' : ' · Could not refresh.'}</span>
+          <span data-testid="today-refresh-failed">{state.asOf === null || failureOnly ? 'Could not refresh.' : ' · Could not refresh.'}</span>
           <Button variant="quiet" size="sm" data-testid="today-retry" onClick={onRefresh}>
             Retry
           </Button>
@@ -162,41 +167,24 @@ export function HomeExtras({
   home,
   onConnectMailbox,
   compact = false,
+  showFigures = true,
 }: {
   readonly home: HomeView;
   onConnectMailbox(): void;
   readonly compact?: boolean;
+  /** False under the queue since slice 3a (C0): the numbers are Today › Overview's. */
+  readonly showFigures?: boolean;
 }): JSX.Element {
   return (
     <div className={compact ? 'flex flex-col gap-1 px-2 [&>section]:mt-5' : 'contents'}>
-      <section data-testid="figures" className="mt-9">
-        <h2 data-testid="figures-label" className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          {home.figures.label}
-        </h2>
-        <div className={compact ? 'grid grid-cols-2 gap-x-4 gap-y-2' : 'grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4'}>
-          {home.figures.cells.map(cell => (
-            <div key={cell.key} data-testid={`figure-${cell.key}`} className="flex flex-col gap-0.5">
-              <div className="text-xs text-muted-foreground">{cell.label}</div>
-              <div className="flex items-baseline gap-1.5">
-                <span data-testid="figure-value" className="text-xl tabular-nums">
-                  {cell.value}
-                </span>
-                {cell.note === null ? null : (
-                  <small data-testid="figure-note" className="text-xs text-muted-foreground">
-                    {cell.note}
-                  </small>
-                )}
-              </div>
-            </div>
-          ))}
+      {showFigures ? (
+        <div className="mt-9">
+          <Figures home={home} compact={compact} />
         </div>
-        {home.figures.line === null ? null : (
-          <p data-testid="figures-line" className="mt-2 text-xs text-muted-foreground">
-            {home.figures.line}
-          </p>
-        )}
-      </section>
+      ) : null}
 
+      {/* Under the queue, "Nothing needs you." is a sentence about nothing (slice 3a, C0). */}
+      {compact && home.needsLine === NOTHING_NEEDS_YOU ? null : (
       <section data-testid="needs" className="mt-9">
         <h2 className="mb-1 flex items-baseline gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
           <span>Needs you</span>
@@ -218,6 +206,7 @@ export function HomeExtras({
           </p>
         )}
       </section>
+      )}
     </div>
   );
 }

@@ -5,8 +5,11 @@ import {
   replyListResponseSchema,
 } from '@fss/contracts';
 import {
+  replyModelStateSchema,
   replyStateSchema,
   replySummaryOf,
+  type ReplyModel,
+  type ReplyModelState,
   type ConfirmReplyRequest,
   type ReplyCard,
   type ReplyState,
@@ -92,6 +95,16 @@ export interface ReplyBridgeHost {
    * longer the person at this Mac.
    */
   forget(): Promise<ReplyState>;
+  /**
+   * The reply-suggestions model, read on its own (slice 3a, C0): `/replies/settings` and
+   * nothing else, so Settings never loads the lane or a card to show one line.
+   */
+  model(): Promise<ReplyModelState>;
+  /**
+   * Choose the model, through the existing `POST /replies/settings/update`. Only
+   * `modelName` is sent: the effort and the caps are never in this command.
+   */
+  saveModel(input: { readonly modelName: ReplyModel }): Promise<ReplyModelState>;
 }
 
 export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
@@ -184,8 +197,50 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     notice = null;
   };
 
+  let modelClassifier: ReplyModelState['classifier'] = null;
+  let modelNotice: string | null = null;
+  const modelSnapshot = async (): Promise<ReplyModelState> => {
+    const session = await deps.session.state();
+    return replyModelStateSchema.parse({
+      classifier: modelClassifier,
+      online: session.online,
+      mayMutate: session.mayMutate,
+      notice: modelNotice,
+    });
+  };
+  const readModel = async (): Promise<boolean> => {
+    const mine = generation;
+    const settings = await deps.api.read('/replies/settings', value => classifierSettingsResponseSchema.parse(value), {});
+    if (mine !== generation) return false;
+    modelClassifier = settings.ok
+      ? { enabled: settings.value.enabled, modelName: settings.value.modelName, effort: settings.value.effort }
+      : null;
+    if (!settings.ok) modelNotice = settings.reason;
+    return settings.ok;
+  };
+
   return {
     state: snapshot,
+
+    async model() {
+      modelNotice = null;
+      await readModel();
+      return await modelSnapshot();
+    },
+
+    async saveModel(input) {
+      const mine = generation;
+      const answer = await deps.api.command('/replies/settings/update', { modelName: input.modelName }, () => null);
+      if (mine !== generation) return await modelSnapshot();
+      if (!answer.ok) {
+        modelNotice = answer.reason;
+        return await modelSnapshot();
+      }
+      // The server decided; read it back so the line shows what is stored, not what was asked.
+      modelNotice = 'reply_model_saved';
+      await readModel();
+      return await modelSnapshot();
+    },
 
     async refresh() {
       const mine = generation;
@@ -208,6 +263,8 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
 
     async forget() {
       generation += 1;
+      modelClassifier = null;
+      modelNotice = null;
       cards = [];
       businessDate = null;
       open = null;

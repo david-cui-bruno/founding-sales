@@ -15,7 +15,7 @@ import {
   uuid,
 } from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
-import { replyStateSchema, REPLY_DISPOSITIONS } from '../renderer/replyContract.ts';
+import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
 import { researchStateSchema } from '../renderer/researchContract.ts';
 import { todayStateSchema } from '../renderer/todayContract.ts';
@@ -707,6 +707,25 @@ export const OPERATIONS = {
     input: z.strictObject({ messageId: uuid, opportunityId: uuid }),
     output: replyStateSchema,
     transform: 'refuses a candidate that is not one of this card’s own before it asks the server',
+  },
+
+  // --- Settings › Reply suggestions (slice 3a, C0) -------------------------
+  'replies.model': {
+    kind: 'read',
+    calls: [{ method: 'POST', path: '/replies/settings' }],
+    input: nothing,
+    output: replyModelStateSchema,
+    transform: 'the model, the effort and whether suggestions are on, and nothing else; the caps stay on the server',
+  },
+  'replies.saveModel': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/replies/settings/update' },
+      { method: 'POST', path: '/replies/settings' },
+    ],
+    input: z.strictObject({ modelName: z.enum(REPLY_MODELS) }),
+    output: replyModelStateSchema,
+    transform: 'sends the model name alone, never the effort or a cap, then reads the setting back',
   },
 
   // --- Settings › Diagnostics --------------------------------------------

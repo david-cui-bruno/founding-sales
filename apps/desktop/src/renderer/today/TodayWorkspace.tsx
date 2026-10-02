@@ -1,4 +1,4 @@
-import { ArrowUpRight, CalendarClock, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
+import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { TodayCardBlocker } from '@fss/contracts';
 import type { FirmBasicsAnswer } from '../../shared/operations.ts';
@@ -22,8 +22,11 @@ import { OutcomeForm } from './OutcomeForm.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { BLOCKER_FIXES, BLOCKER_SENTENCES, blockersOf, groupOf, nextToCall, stepFrom } from './queueView.ts';
 import { TaskRow } from './TaskRow.tsx';
+import { Feedback } from './Feedback.tsx';
+import { Overview } from './Overview.tsx';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
+import { callTimer } from '../calling/callText.ts';
 import { useCallProgress } from './useCallProgress.ts';
 import { todayForm, type Today } from './useToday.ts';
 
@@ -54,16 +57,29 @@ export interface TodayMemory {
   markDone(firmId: string): void;
   readonly queueScroll: { current: number };
   readonly firmScroll: { current: Map<string, number> };
+  /**
+   * Which of the firm's two forms was open, and for which firm (slice 3a, C0). The text in
+   * them was always kept; now leaving Today and coming back also finds the form open, so
+   * the draft is on screen rather than behind a button.
+   */
+  readonly panels: { current: OpenPanels };
+}
+
+export interface OpenPanels {
+  readonly firmId: string | null;
+  readonly editing: BasicsField | null;
+  readonly outcomeOpen: boolean;
 }
 
 export function useTodayMemory(): TodayMemory {
   const [done, setDone] = useState<ReadonlySet<string>>(() => new Set());
   const queueScroll = useRef(0);
   const firmScroll = useRef(new Map<string, number>());
+  const panels = useRef<OpenPanels>({ firmId: null, editing: null, outcomeOpen: false });
   const markDone = useCallback((firmId: string): void => {
     setDone(current => (current.has(firmId) ? current : new Set([...current, firmId])));
   }, []);
-  return useMemo(() => ({ done, markDone, queueScroll, firmScroll }), [done, markDone]);
+  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels }), [done, markDone]);
 }
 
 /** A call worth showing the steps of: placed in the last day. Older ones are history. */
@@ -74,14 +90,16 @@ function recentCall(call: { readonly startedAt: string | null; readonly endedAt:
 
 const SUPPORTED: readonly ShortcutAction[] = ['next', 'previous', 'search', 'edit', 'help', 'close'];
 
-function laneChip(card: TodayCard | undefined, blockers: readonly TodayCardBlocker[]): JSX.Element {
+/**
+ * The one chip above a firm's name, and only when it says something the queue beside it
+ * does not. The lane — callback, replied, due, new — is the queue's group heading and the
+ * task rows' own words (slice 3a, C0), so repeating it here was noise; what stays is the
+ * firm that is not on the list at all and the one that cannot be called, with the reason.
+ */
+function laneChip(card: TodayCard | undefined, blockers: readonly TodayCardBlocker[]): JSX.Element | null {
   if (card === undefined) return <Chip tone="outline">Not on today’s list</Chip>;
-  const group = groupOf(card);
-  if (group === 'blocked') return <Chip tone="warn">Can’t call yet · {blockers.map(code => BLOCKER_SENTENCES[code].toLowerCase()).join(', ')}</Chip>;
-  if (group === 'callbacks') return <Chip icon={<CalendarClock />}>Callback</Chip>;
-  if (group === 'replies') return <Chip tone="info">Replied</Chip>;
-  if (group === 'due') return <Chip tone="outline">Due today</Chip>;
-  return <Chip tone="outline">New prospect</Chip>;
+  if (groupOf(card) === 'blocked' && blockers.length > 0) return <Chip tone="warn">Can’t call yet</Chip>;
+  return null;
 }
 
 function SearchDialog({
@@ -144,6 +162,8 @@ function FirmHeader({
   name,
   blockers,
   meta,
+  editing,
+  outcomeOpen,
   onEdit,
   onOpen,
   onOutcome,
@@ -152,22 +172,26 @@ function FirmHeader({
   readonly name: string;
   readonly blockers: readonly TodayCardBlocker[];
   readonly meta: readonly string[];
+  /** Whether each of the two forms is open: its button is then a toggle that closes it. */
+  readonly editing: boolean;
+  readonly outcomeOpen: boolean;
   onEdit(): void;
   onOpen(): void;
   onOutcome(): void;
 }): JSX.Element {
+  const chip = laneChip(card, blockers);
   return (
     <header data-testid="firm-header" className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">{laneChip(card, blockers)}</div>
+      {chip === null ? null : <div className="flex flex-wrap items-center gap-1.5">{chip}</div>}
       <div className="flex items-start justify-between gap-4">
         <h1 data-testid="firm-name" title={name} className="line-clamp-2 min-w-0 text-2xl font-semibold tracking-tight text-balance">
           {name}
         </h1>
         <div className="flex shrink-0 items-center gap-1 pt-0.5">
-          <Button variant="ghost" data-testid="firm-outcome" title="Notes and outcome" aria-label="Notes and outcome" className={cn(dense.md, 'text-muted-foreground')} onClick={onOutcome}>
+          <Button variant="ghost" data-testid="firm-outcome" aria-expanded={outcomeOpen} title="Notes and outcome" aria-label="Notes and outcome" className={cn(dense.md, 'text-muted-foreground')} onClick={onOutcome}>
             <NotebookPen /> <span className="hidden min-[1440px]:inline">Notes and outcome</span>
           </Button>
-          <Button variant="ghost" data-testid="firm-edit" className={cn(dense.md, 'text-muted-foreground')} onClick={onEdit}>
+          <Button variant="ghost" data-testid="firm-edit" aria-expanded={editing} className={cn(dense.md, 'text-muted-foreground')} onClick={onEdit}>
             <Pencil /> Edit <Kbd className="ml-0.5">E</Kbd>
           </Button>
           <Button
@@ -195,6 +219,36 @@ function FirmHeader({
         ))}
       </p>
     </header>
+  );
+}
+
+/** What needs acting on, whichever subtab is open and however narrow the window is. */
+function Warnings({ warnings, onConnectMailbox }: { readonly warnings: HomeView['warnings']; onConnectMailbox(): void }): JSX.Element | null {
+  if (warnings.length === 0) return null;
+  return (
+    <ul data-testid="today-warnings" className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border bg-warn-soft/50 px-5 py-1.5">
+      {warnings.map(row => (
+        <li key={row.key} data-testid={`warning-${row.key}`} className="flex items-center gap-2 text-sm text-warn-ink">
+          <span>{row.text}</span>
+          {row.action === null ? null : row.action.kind === 'connect_mailbox' ? (
+            <Button variant="outline" className={cn(dense.sm, 'bg-background')} data-testid="warning-action" disabled={!row.action.enabled} onClick={onConnectMailbox}>
+              {row.action.label}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              className={cn(dense.sm, 'bg-background')}
+              data-testid="warning-action"
+              onClick={() => {
+                if (row.action?.kind === 'open') navigate(row.action.route);
+              }}
+            >
+              {row.action.label}
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -229,8 +283,11 @@ export function TodayWorkspace({
   const status = useCallingStatus(firmId);
   const history = useCallProgress(firmId);
   const [dialog, setDialog] = useState<'search' | 'help' | 'incoming' | null>(null);
-  const [editing, setEditing] = useState<BasicsField | null>(null);
-  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  // Today opens on the Queue every time it is mounted; Overview is a look away from it.
+  const [subtab, setSubtab] = useState<'queue' | 'overview'>('queue');
+  // The two forms come back open when the person does, with the text they left in them.
+  const [editing, setEditing] = useState<BasicsField | null>(() => memory.panels.current.editing);
+  const [outcomeOpen, setOutcomeOpen] = useState(() => memory.panels.current.outcomeOpen);
   const [queueOpen, setQueueOpen] = useState(false);
   const [incomingNotice, setIncomingNotice] = useState<string | null>(null);
 
@@ -285,13 +342,24 @@ export function TodayWorkspace({
     if (before === firmId) return;
     if (before !== null && region !== null) memory.firmScroll.current.set(before, region.scrollTop);
     shown.current = firmId;
-    setEditing(null);
-    setOutcomeOpen(false);
+    // Coming back to the firm that was open keeps its forms open; any other move closes them
+    // (their drafts stay either way).
+    const returning = before === null && memory.panels.current.firmId === firmId;
+    if (!returning) {
+      setEditing(null);
+      setOutcomeOpen(false);
+    }
     if (region !== null) region.scrollTop = firmId === null ? 0 : (memory.firmScroll.current.get(firmId) ?? 0);
     if (call.state.phase === 'ended' || call.state.phase === 'refused') {
       if (callFirm !== firmId) call.dismiss();
     }
   }, [firmId, memory, call, callFirm]);
+
+  // What is open, kept for the next visit. Not written while no firm is open, so a visit
+  // that starts before the firm has been read does not forget the last one's forms.
+  useEffect(() => {
+    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen };
+  }, [firmId, editing, outcomeOpen, memory]);
 
   // A call that ended: read the card and the cadence again, read the history now (and
   // while its steps are on their way), and tick the firm off for this sitting.
@@ -370,21 +438,43 @@ export function TodayWorkspace({
       <Button
         variant="ghost"
         data-testid="queue-toggle"
-        className={cn(dense.md, 'text-muted-foreground min-[1280px]:hidden')}
+        className={cn(dense.md, 'text-muted-foreground min-[1280px]:hidden', subtab !== 'queue' && 'hidden')}
         aria-expanded={queueOpen}
+        aria-label="Show the list of firms"
+        title="Show the list of firms"
         onClick={() => setQueueOpen(!queueOpen)}
       >
-        <ListTodo /> Queue
+        <ListTodo />
       </Button>
       <h1 data-testid="heading" className="shrink-0 text-sm font-semibold whitespace-nowrap">
         {home.heading}
       </h1>
+      <nav aria-label="Today" className="flex shrink-0 items-center gap-0.5">
+        {(['queue', 'overview'] as const).map(name => (
+          <button
+            key={name}
+            type="button"
+            role="tab"
+            aria-selected={subtab === name}
+            data-testid={`today-tab-${name}`}
+            onClick={() => setSubtab(name)}
+            className={cn(
+              'rounded-md px-2 py-1 text-sm transition-colors',
+              subtab === name ? 'bg-selected font-medium text-foreground' : 'text-muted-foreground hover:bg-pressed hover:text-foreground',
+            )}
+          >
+            {name === 'queue' ? 'Queue' : 'Overview'}
+          </button>
+        ))}
+      </nav>
       <span data-testid="summary" className="hidden truncate text-sm text-muted-foreground empty:hidden min-[1100px]:inline">
         {home.summary ?? ''}
       </span>
+      {/* "Updated 2 min ago" is routine and lives in Settings › Status. Only the failure
+          stays here, with its Retry: that is something to act on. */}
       {state === null || !hasTodayBridge ? null : (
         <span className="hidden whitespace-nowrap min-[1280px]:inline">
-          <UpdatedLine state={state} now={today.now} refreshAnswered={today.refreshAnswered} onRefresh={onRefresh} />
+          <UpdatedLine state={state} now={today.now} refreshAnswered={today.refreshAnswered} onRefresh={onRefresh} failureOnly />
         </span>
       )}
       <div className="ml-auto flex items-center gap-1">
@@ -416,11 +506,22 @@ export function TodayWorkspace({
     </div>
   );
 
-  const notices = [...home.notices, ...(incomingNotice === null ? [] : [{ tone: 'info' as const, text: incomingNotice }])];
+  // What is true of the whole list. A command's answer is drawn where it was pressed.
+  const notices = home.notices;
+  const feedback = todayView?.feedback == null ? null : {
+    ...todayView.feedback,
+    zone:
+      todayView.feedback.zone === 'outcome' && !outcomeOpen
+        ? ('firm' as const)
+        : todayView.feedback.zone === 'tasks' && todayView.tasks.length === 0
+          ? ('firm' as const)
+          : todayView.feedback.zone,
+  };
 
   return (
     <div data-testid="home" data-region="today" aria-busy={today.pending > 0} className="callie-v2 flex h-screen min-w-0 flex-col">
       {header}
+      <Warnings warnings={home.warnings ?? []} onConnectMailbox={onConnectMailbox} />
       {notices.length === 0 ? null : (
         <div data-testid="banners" className="flex flex-col gap-1.5 border-b border-border px-5 py-2">
           {notices.map(notice => (
@@ -430,6 +531,19 @@ export function TodayWorkspace({
           ))}
         </div>
       )}
+      {live && subtab === 'overview' ? (
+        // The call and the recording stay visible whichever tab is open.
+        <div data-testid="today-live-call" className="flex items-center gap-3 border-b border-border bg-ok-soft px-5 py-1.5 text-sm">
+          <span className="size-1.5 animate-pulse rounded-full bg-ok" aria-hidden />
+          <span data-testid="today-live-call-status" className="flex-1 text-ok-ink">
+            {call.state.phase === 'connected' ? 'On a call · recording' : call.state.phase === 'ringing' ? 'Ringing…' : 'Starting the call…'}
+            {call.state.phase === 'connected' ? <span className="ml-2 font-mono tabular">{callTimer(call.seconds)}</span> : null}
+          </span>
+          <button type="button" data-testid="today-live-call-show" className="text-sm font-medium underline-offset-2 hover:underline" onClick={() => setSubtab('queue')}>
+            Back to the call
+          </button>
+        </div>
+      ) : null}
       {unavailable ? (
         <div className="max-w-[640px] p-6">
           <p data-testid="today-unavailable" className="text-sm text-muted-foreground">
@@ -439,6 +553,8 @@ export function TodayWorkspace({
         </div>
       ) : loading ? (
         <div data-testid="today" aria-busy={today.pending > 0} className="flex-1" />
+      ) : subtab === 'overview' ? (
+        <Overview home={home} />
       ) : (
         <div data-testid="today" aria-busy={today.pending > 0} className="relative flex min-h-0 flex-1">
           <div
@@ -459,7 +575,7 @@ export function TodayWorkspace({
                 memory.queueScroll.current = top;
               }}
               onSelect={select}
-              footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact />}
+              footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} />}
             />
           </div>
 
@@ -475,10 +591,18 @@ export function TodayWorkspace({
                   name={expanded.firmName}
                   blockers={blockers}
                   meta={meta}
-                  onEdit={() => setEditing(editFirst())}
+                  editing={editing !== null}
+                  outcomeOpen={outcomeOpen}
+                  onEdit={() => setEditing(editing === null ? editFirst() : null)}
                   onOpen={() => navigate({ name: 'firm', firmId: expanded.firmId })}
-                  onOutcome={() => setOutcomeOpen(true)}
+                  onOutcome={() => setOutcomeOpen(!outcomeOpen)}
                 />
+                {incomingNotice === null ? null : (
+                  <p data-testid="feedback-incoming" role="status" className="py-1 text-sm text-muted-foreground">
+                    {incomingNotice}
+                  </p>
+                )}
+                <Feedback feedback={feedback} zone="firm" />
                 {editing !== null || blockers.length > 0 ? (
                   <div className="mt-4">
                     {editing === null ? (
@@ -516,16 +640,28 @@ export function TodayWorkspace({
                 ) : null}
 
                 {outcomeOpen ? (
+                  <div
+                    data-testid="outcome-panel"
+                    onKeyDown={event => {
+                      // Escape closes the form and keeps what was typed: the text is in the
+                      // shell's draft store, not in this form.
+                      if (event.key === 'Escape') {
+                        event.stopPropagation();
+                        setOutcomeOpen(false);
+                      }
+                    }}
+                  >
                   <Block className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
                     <Label
                       actions={
                         <Button variant="ghost" className={dense.sm} onClick={() => setOutcomeOpen(false)}>
-                          Close
+                          Close <Kbd className="ml-0.5">Esc</Kbd>
                         </Button>
                       }
                     >
                       Notes and outcome
                     </Label>
+                    <Feedback feedback={feedback} zone="outcome" />
                     <OutcomeForm
                       state={state}
                       view={todayView}
@@ -534,11 +670,13 @@ export function TodayWorkspace({
                       callSessionId={call.state.phase === 'ended' && callFirm === expanded.firmId ? call.state.sessionId : null}
                     />
                   </Block>
+                  </div>
                 ) : null}
 
                 {todayView.tasks.length === 0 ? null : (
                   <Block className="mt-4">
                     <Label>On today’s list</Label>
+                    <Feedback feedback={feedback} zone="tasks" />
                     <ul data-testid="today-tasks" className="flex flex-col">
                       {todayView.tasks.map(entry => (
                         <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={todayView.actionsEnabled} actions={actions} />
@@ -595,6 +733,7 @@ export function TodayWorkspace({
               onFix={blocker => setEditing(blocker === 'no_phone' ? 'phone' : 'regionCode')}
               onNext={goNext}
               onOutcome={() => setOutcomeOpen(true)}
+              feedback={feedback}
             />
           </div>
         </div>
