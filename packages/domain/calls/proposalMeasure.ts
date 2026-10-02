@@ -55,11 +55,23 @@ export interface MeasuredAnalysis {
   readonly proposals: readonly CallProposal[];
 }
 
-/** Write one decision row per key, in the caller's transaction. */
+/**
+ * Write one decision row per key, in the caller's transaction.
+ *
+ * S3X (RESET D): an applied decision carries `detail.effectIds`, the ids of the rows that key
+ * created — the call log and its stops for `outcome`, the callback, the permission, the task,
+ * the park hold, the opened deal. An outcome correction reads them to decide, by exact id,
+ * which effects came from an applied suggestion (§3.7). Additive: the acceptance read ignores
+ * it, and a row without it is an older row.
+ */
 export async function recordProposalDecisions(
   context: RepositoryContext,
   analysis: MeasuredAnalysis,
-  decisions: readonly { readonly key: string; readonly result: CallProposalDecision }[],
+  decisions: readonly {
+    readonly key: string;
+    readonly result: CallProposalDecision;
+    readonly effectIds?: readonly string[] | undefined;
+  }[],
 ): Promise<void> {
   const byKey = new Map(analysis.proposals.map(proposal => [proposal.key, proposal] as const));
   for (const decision of decisions) {
@@ -78,6 +90,7 @@ export async function recordProposalDecisions(
         kind: proposal?.kind ?? null,
         type: acceptanceTypeOf(proposal),
         result: decision.result,
+        ...(decision.effectIds === undefined ? {} : { effectIds: [...decision.effectIds] }),
       },
     });
   }
