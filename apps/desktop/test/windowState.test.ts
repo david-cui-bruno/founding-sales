@@ -38,6 +38,12 @@ describe('the window’s first size and the one it remembers', () => {
     expect(r.maximized).toBe(false);
   });
 
+  it('falls back when only a sliver of the saved window is still on a connected display', () => {
+    // 140 of its 900 columns overlap the laptop; the rest was on the unplugged monitor.
+    const r = chooseWindowBounds({ saved: parseWindowState(saved(1300, 100, 900, 600)), displays: [laptop], preferred: laptop, minimum });
+    expect(r.bounds).toEqual({ x: 72, y: 65, width: 1296, height: 720 });
+  });
+
   it('clamps a too-small saved size to the minimum', () => {
     const r = chooseWindowBounds({ saved: parseWindowState(saved(100, 100, 200, 100)), displays: [laptop], preferred: laptop, minimum });
     expect(r.bounds).toEqual({ x: 100, y: 100, width: 760, height: 480 });
