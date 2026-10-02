@@ -46,11 +46,11 @@ happens to *enrollments*, not whether the handle is suppressed.
 
 - **J1: every write that creates or copies a stop is journalled before its commit.** A stop's
   `journal.append` is awaited inside the command transaction and before its `INSERT`, and a
-  firm merge journals each copied stop (`merge:<event>`, under the survivor's key) the same
+  firm merge journals each copied stop (`merge:<event>:<survivor>`, under the survivor's key) the same
   way. A commit that then fails leaves the journal holding a stop the database lacks: a
   replay adds an extra stop, never loses one.
 - **J2: every release is journalled only after its commit, marked `committed: true`.** An
-  admin lift, a correction, each merge copy a lift carries onto (`merge:<lift>`), and each
+  admin lift, a correction, each merge copy a lift carries onto (`merge:<lift>:<survivor>`), and each
   lift a merge copies: `recordAdminSupersession`, `recordCorrection` and `mergeFirms` return
   the records, and the route appends them once `runCommand` answered a fresh acceptance
   (`journalCommittedLifts`), with a bounded retry. One whose write still fails stays committed
@@ -173,7 +173,7 @@ terminal stops end exactly the enrollments whose e-mail steps eligibility refuse
 | Apply's outcome | `edits.outcome.doNotCall`, the same rule |
 | an e-mail opt-out (`mail/effects.ts`, a confirmed reply) | handle `email`; the firm (one candidate, or ticked) `email` |
 | a deletion tombstone | `all` |
-| a merge | the original's channel, and its lift: a stop the source had lifted is copied with the lift linked to the copy, so it stays lifted on the target (brief RF, X7); a lift of a source stop after the merge lifts the target's copy too, as `merge:<lift>` |
+| a merge | the original's channel, and its lift: a stop the source had lifted is copied with the lift linked to the copy, so it stays lifted on the target (brief RF, X7); a lift of a source stop after the merge lifts the target's copy too, as `merge:<lift>:<survivor>`. A copy's id names its survivor (review RFR): a merge that rolled back after journalling its copy for one survivor never owns the id, or the journal object, a later merge of the same source to another survivor needs, and a retry of the same merge reaches the same id. Copies made before this repair keep the form `merge:<event>`, and a later lift of one is copied as `merge:<lift>` |
 | a correction or an admin supersession | the original's channel; the trigger refuses another |
 | replay | the journalled channel, absent `all` |
 | the same command again, across the 0037 boundary | the earlier event, when its channel covers the one asked for (`all` covers all): an opt-out journalled before 0037 as `all` and reprocessed after a restore as `email` is that event, not a second one (brief RF, X6) |

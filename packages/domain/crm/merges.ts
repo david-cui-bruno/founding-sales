@@ -1,7 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { lockSuppressionHistory, readSuppressionEvent } from '../suppression/events.ts';
+import { lockSuppressionHistory, mergeCopyId, readSuppressionEvent } from '../suppression/events.ts';
 import type { SuppressionJournal, SuppressionJournalRecord } from '../suppression/journal.ts';
 import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { decideFirmMutation } from './authorization.ts';
@@ -478,8 +478,9 @@ async function insertAlias(
  *
  * `suppression_events` is insert-only by privilege, so nothing is moved. Each
  * firm-scoped event on the source becomes a new event on the target with a
- * deterministic id derived from the original, so replaying the merge inserts nothing
- * twice. Handle-scoped suppressions need no work at all: section 10.2 makes a handle
+ * deterministic id derived from the original and the target (`mergeCopyId`), so replaying
+ * or retrying the merge inserts nothing twice, and a copy for one survivor is never another
+ * survivor's. Handle-scoped suppressions need no work at all: section 10.2 makes a handle
  * suppression "global across the workspace", so it already covers the target. Each copy
  * keeps its original's channel (migration 0037): a firm that asked not to be called is,
  * after the merge, a firm that asked not to be called, not one that asked for silence.
@@ -520,7 +521,10 @@ async function preserveFirmSuppressions(
       if (!onSource.has(supersedes)) return;
       await copy(supersedes);
     }
-    const copyId = `merge:${eventId}`;
+    // Per survivor (review RFR): the existence check and the journal object are this
+    // destination's, so a copy journalled for another survivor by a merge that rolled back
+    // never stands in for this one.
+    const copyId = mergeCopyId(eventId, targetFirmId);
     if ((await readSuppressionEvent(context, copyId)) !== null) return;
     const original = await readSuppressionEvent(context, eventId);
     if (original === null) return;
@@ -533,7 +537,7 @@ async function preserveFirmSuppressions(
       source: original.source,
       actorUserId: original.actorUserId,
       commandId: commandId ?? null,
-      supersedesEventId: supersedes === null ? null : `merge:${supersedes}`,
+      supersedesEventId: supersedes === null ? null : mergeCopyId(supersedes, targetFirmId),
       supersessionReason: original.supersessionReason,
       recordedAt: now,
       channel: original.channel,

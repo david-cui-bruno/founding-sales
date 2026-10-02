@@ -4,11 +4,12 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { mergeFirms } from '../../crm/merges.ts';
-import { recordAdminSupersession, recordSuppression } from '../../suppression/events.ts';
+import { mergeCopyId, recordAdminSupersession, recordSuppression } from '../../suppression/events.ts';
 import {
   deterministicEventId,
   journalObjectBody,
   recordingSuppressionJournal,
+  type SuppressionJournal,
   type SuppressionJournalRecord,
 } from '../../suppression/journal.ts';
 import { parseSuppressionJournalRecord, replaySuppressionJournal } from '../../suppression/replay.ts';
@@ -340,9 +341,9 @@ describe('X7: a merge keeps a lifted stop lifted and an active stop active', () 
       `SELECT event_id, channel FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
       [seeded.alpha.workspaceId, target.firmId],
     );
-    expect(effective.rows).toEqual([{ event_id: `merge:${active}`, channel: 'email' }]);
-    expect(await supersessionsOf(`merge:${lifted}`)).toEqual([`merge:${lift.ok ? lift.value.supersessionEventId : ''}`]);
-    expect(await supersessionsOf(`merge:${active}`)).toEqual([]);
+    expect(effective.rows).toEqual([{ event_id: `merge:${active}:${target.firmId}`, channel: 'email' }]);
+    expect(await supersessionsOf(`merge:${lifted}:${target.firmId}`)).toEqual([`merge:${lift.ok ? lift.value.supersessionEventId : ''}:${target.firmId}`]);
+    expect(await supersessionsOf(`merge:${active}:${target.firmId}`)).toEqual([]);
   });
 });
 
@@ -557,15 +558,15 @@ describe('RF reset J1 and J2: a merge’s copies survive a restore', () => {
     const journal = recordingSuppressionJournal();
     const { target, stopId } = await stoppedPair(journal);
     // The copy was journalled before the merge committed, with the survivor's key.
-    expect(journal.appended.map(record => [record.eventId, record.canonicalKey])).toContainEqual([`merge:${stopId}`, target.firmId]);
-    await remove([`merge:${stopId}`]);
+    expect(journal.appended.map(record => [record.eventId, record.canonicalKey])).toContainEqual([`merge:${stopId}:${target.firmId}`, target.firmId]);
+    await remove([`merge:${stopId}:${target.firmId}`]);
     expect(await effectiveOn(target.firmId)).toEqual([]);
     await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
-    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}`]);
+    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}:${target.firmId}`]);
     // Live, a copy is the row alone: no finalization claim.
     const claims = await database.session.query('SELECT 1 FROM suppression_finalizations WHERE workspace_id = $1 AND event_id = $2', [
       seeded.alpha.workspaceId,
-      `merge:${stopId}`,
+      `merge:${stopId}:${target.firmId}`,
     ]);
     expect(claims.rows).toEqual([]);
   });
@@ -582,12 +583,125 @@ describe('RF reset J1 and J2: a merge’s copies survive a restore', () => {
     );
     if (!lifted.ok) throw new Error(lifted.reason);
     // The lift and its copy, journalled after the commit and marked, as the route does.
-    expect(lifted.value.journalRecords.map(record => record.supersedesEventId)).toEqual([stopId, `merge:${stopId}`]);
+    expect(lifted.value.journalRecords.map(record => record.supersedesEventId)).toEqual([stopId, `merge:${stopId}:${target.firmId}`]);
     for (const record of lifted.value.journalRecords) await journal.append({ ...record, committed: true });
     await remove(lifted.value.journalRecords.map(record => record.eventId));
-    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}`]);
+    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}:${target.firmId}`]);
     await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
     expect(await effectiveOn(target.firmId)).toEqual([]);
     expect(await effectiveOn(source.firmId)).toEqual([]);
+  });
+});
+
+describe('review RFR: a merge copy is per survivor', () => {
+  /** The S3 journal's conditional put: the first object at a key is kept; a second is "already present". */
+  function conditionalJournal(): SuppressionJournal & { readonly objects: Map<string, SuppressionJournalRecord> } {
+    const objects = new Map<string, SuppressionJournalRecord>();
+    return {
+      objects,
+      async append(record: SuppressionJournalRecord): Promise<void> {
+        if (!objects.has(record.eventId)) objects.set(record.eventId, record);
+        await Promise.resolve();
+      },
+    };
+  }
+
+  async function stoppedFirm(journal: SuppressionJournal): Promise<{ firm: ChannelFirm; stopId: string }> {
+    const firm = await seedChannelFirm(database.session, seeded.alpha);
+    const recorded = await withTransaction(database.session, async () =>
+      await recordSuppression(userContext(database.session, seeded.alpha), {
+        scope: 'firm',
+        firmId: firm.firmId,
+        source: 'prospect_do_not_call',
+        channel: 'all',
+        commandId: randomUUID(),
+        journal,
+      }),
+    );
+    if (!recorded.ok) throw new Error(recorded.reason);
+    return { firm, stopId: recorded.value.eventId };
+  }
+
+  /** A merge that journals its copies and then rolls back, as a failed commit would. */
+  async function rolledBackMerge(journal: SuppressionJournal, sourceFirmId: string, targetFirmId: string): Promise<void> {
+    await database.session.query('BEGIN');
+    try {
+      const merged = await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { journal, sourceFirmId, targetFirmId });
+      expect(merged.ok, JSON.stringify(merged)).toBe(true);
+    } finally {
+      await database.session.query('ROLLBACK');
+    }
+  }
+
+  async function merge(journal: SuppressionJournal, sourceFirmId: string, targetFirmId: string): Promise<void> {
+    const merged = await withTransaction(database.session, async () =>
+      await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { journal, sourceFirmId, targetFirmId }),
+    );
+    expect(merged.ok, JSON.stringify(merged)).toBe(true);
+  }
+
+  const stoppedOn = async (firmId: string): Promise<boolean> =>
+    (
+      await database.session.query(`SELECT 1 FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`, [
+        seeded.alpha.workspaceId,
+        firmId,
+      ])
+    ).rows.length > 0;
+
+  it('A→B rolls back after journalling, A→C commits: a restore before A→C still gives C its stop', async () => {
+    const journal = conditionalJournal();
+    const { firm: a, stopId } = await stoppedFirm(journal);
+    const b = await seedChannelFirm(database.session, seeded.alpha);
+    const c = await seedChannelFirm(database.session, seeded.alpha);
+    await rolledBackMerge(journal, a.firmId, b.firmId);
+    await merge(journal, a.firmId, c.firmId);
+    expect(await stoppedOn(c.firmId)).toBe(true);
+    // C's copy has its own durable object, not B's.
+    expect(journal.objects.get(mergeCopyId(stopId, c.firmId))).toMatchObject({ canonicalKey: c.firmId });
+    // A restore to before A→C.
+    await database.session.query('DELETE FROM suppression_events WHERE workspace_id = $1 AND event_id = $2', [
+      seeded.alpha.workspaceId,
+      mergeCopyId(stopId, c.firmId),
+    ]);
+    expect(await stoppedOn(c.firmId)).toBe(false);
+    await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [...journal.objects.values()] }));
+    expect(await stoppedOn(c.firmId)).toBe(true);
+  });
+
+  it('a replay that finds B’s copy restored first still inserts C’s', async () => {
+    const journal = recordingSuppressionJournal();
+    const { firm: a, stopId } = await stoppedFirm(journal);
+    const b = await seedChannelFirm(database.session, seeded.alpha);
+    const c = await seedChannelFirm(database.session, seeded.alpha);
+    await rolledBackMerge(journal, a.firmId, b.firmId);
+    await merge(journal, a.firmId, c.firmId);
+    const copies = journal.appended.filter(record => record.eventId.startsWith('merge:'));
+    const forB = copies.find(record => record.canonicalKey === b.firmId)!;
+    const forC = copies.find(record => record.canonicalKey === c.firmId)!;
+    expect(forB.eventId).not.toBe(forC.eventId);
+    // The database has B's copy (restored first) and has lost C's.
+    await database.session.query('DELETE FROM suppression_events WHERE workspace_id = $1 AND event_id = $2', [seeded.alpha.workspaceId, forC.eventId]);
+    await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [forB] }));
+    expect(await stoppedOn(b.firmId)).toBe(true);
+    const report = await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: [forB, forC] }));
+    expect(report).toMatchObject({ inserted: 1, alreadyPresent: 1 });
+    expect(await stoppedOn(c.firmId)).toBe(true);
+    void stopId;
+  });
+
+  it('a retry of the same A→B merge reaches the same copy id and the same journal object', async () => {
+    const journal = conditionalJournal();
+    const { firm: a, stopId } = await stoppedFirm(journal);
+    const b = await seedChannelFirm(database.session, seeded.alpha);
+    await rolledBackMerge(journal, a.firmId, b.firmId);
+    expect([...journal.objects.keys()]).toContain(mergeCopyId(stopId, b.firmId));
+    const before = journal.objects.size;
+    await merge(journal, a.firmId, b.firmId);
+    expect(journal.objects.size).toBe(before);
+    const { rows } = await database.session.query<{ event_id: string }>(
+      `SELECT event_id FROM suppression_events WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
+      [seeded.alpha.workspaceId, b.firmId],
+    );
+    expect(rows.map(row => row.event_id)).toEqual([`merge:${stopId}:${b.firmId}`]);
   });
 });

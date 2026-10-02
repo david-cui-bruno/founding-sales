@@ -525,7 +525,7 @@ describe('RF reset J1: a merge that fails to commit leaves at most an extra stop
     expect(await onTarget()).toBe(0);
     // The journal already holds the copy, under the survivor's key: a restore replay adds a
     // stop the database does not have (an extra one), and never loses one it does.
-    const copy = appended.find(record => record.eventId === `merge:${stopId}`);
+    const copy = appended.find(record => record.eventId === `merge:${stopId}:${targetFirmId}`);
     expect(copy).toMatchObject({ scope: 'firm', canonicalKey: targetFirmId, supersedesEventId: null });
     const restore = repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'migration' }), fixture.db);
     await withTransaction(fixture.db, async () => await replaySuppressionJournal(restore, { records: appended }));
@@ -553,8 +553,8 @@ describe('RF reset J1: a merge that fails to commit leaves at most an extra stop
     expect(((merged.body as Record<string, unknown>)['result'] as Record<string, unknown>)['journalAfterCommit']).toBeUndefined();
     const copies = appended.filter(record => record.eventId.startsWith('merge:'));
     expect(copies.map(record => [record.eventId, record.committed ?? false])).toEqual([
-      [`merge:${stopId}`, false],
-      [`merge:${liftId}`, true],
+      [`merge:${stopId}:${targetFirmId}`, false],
+      [`merge:${liftId}:${targetFirmId}`, true],
     ]);
   });
 });

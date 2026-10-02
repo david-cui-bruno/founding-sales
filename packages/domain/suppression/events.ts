@@ -498,10 +498,11 @@ export async function lockSuppressionHistory(context: RepositoryContext): Promis
 /**
  * Carry a supersession onto every merge copy of the event it lifted (brief RF, review P2).
  *
- * A firm merge copies each source stop to the survivor as `merge:<event>`. A lift of the
- * source's event after the merge is a lift of the stop the survivor inherited, so the copy
- * is lifted with it, as `merge:<supersession>` — exactly the row the merge would have
- * copied had the lift come first. Copies of copies follow. Each copied lift is a release, so
+ * A firm merge copies each source stop to the survivor as `mergeCopyId(event, survivor)`
+ * (before RF's last repair, `merge:<event>`). A lift of the source's event after the merge is
+ * a lift of the stop the survivor inherited, so each copy is lifted with it, as
+ * `mergeCopyId(supersession, survivor)` — exactly the row the merge would have copied had the
+ * lift come first (a pre-repair copy gets the pre-repair form, `merge:<supersession>`). Copies of copies follow. Each copied lift is a release, so
  * its journal record is returned for the caller to append after the commit (RF reset, J2),
  * with the supersession's own.
  */
@@ -510,9 +511,10 @@ async function liftMergeCopies(
   originalEventId: string,
   supersessionEventId: string,
 ): Promise<readonly SuppressionJournalRecord[]> {
-  const { rows } = await context.db.query<{ event_id: string }>(
-    `SELECT copy.event_id FROM suppression_events copy
-      WHERE copy.workspace_id = $1 AND copy.event_id = 'merge:' || $2
+  const { rows } = await context.db.query<{ event_id: string; canonical_key: string }>(
+    `SELECT copy.event_id, copy.canonical_key FROM suppression_events copy
+      WHERE copy.workspace_id = $1 AND copy.scope = 'firm'
+        AND copy.event_id IN ('merge:' || $2, 'merge:' || $2 || ':' || copy.canonical_key)
         AND NOT EXISTS (
           SELECT 1 FROM suppression_events lift
            WHERE lift.workspace_id = copy.workspace_id AND lift.supersedes_event_id = copy.event_id
@@ -521,7 +523,8 @@ async function liftMergeCopies(
   );
   const records: SuppressionJournalRecord[] = [];
   for (const copy of rows) {
-    const copiedLift = `merge:${supersessionEventId}`;
+    const copiedLift =
+      copy.event_id === `merge:${originalEventId}` ? `merge:${supersessionEventId}` : mergeCopyId(supersessionEventId, copy.canonical_key);
     const inserted = await context.db.query<EventDbRow>(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id,
@@ -539,6 +542,18 @@ async function liftMergeCopies(
     records.push(...(await liftMergeCopies(context, copy.event_id, copiedLift)));
   }
   return records;
+}
+
+/**
+ * The id of a merge's copy of `eventId` on the survivor `survivorFirmId` (RF, review RFR).
+ *
+ * The survivor is part of it: a copy is a different stop on each firm it is copied to, and a
+ * merge that rolled back after journalling its copy for one survivor must not own the id (and
+ * so the conditional journal object) a later merge to another survivor needs. Deterministic,
+ * so a retry of the same merge reaches the same id and the same object.
+ */
+export function mergeCopyId(eventId: string, survivorFirmId: string): string {
+  return `merge:${eventId}:${survivorFirmId.toLowerCase()}`;
 }
 
 /** An event as the journal holds it. */
