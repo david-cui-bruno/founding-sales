@@ -760,7 +760,14 @@ function noticesOf(input: HomeInput, desktopBanners: readonly BannerView[]): rea
 
 function warningRows(input: HomeInput, needs: readonly NeedsRow[]): readonly WarningRow[] {
   const rows: WarningRow[] = [];
-  if (input.hasOperations && input.admin?.settings?.effectiveSendingEnabled === false) {
+  // Two switches stop automated sending: the workspace attestation (`effectiveSendingEnabled`)
+  // and the sending domain's own `automatedSendingEnabled`. Production's pause is the domain
+  // one, so either off is "paused". The domain read is an admin's; where it was not read
+  // (a salesperson, or before it answers) nothing is claimed about it.
+  const attestationOff = input.admin?.settings?.effectiveSendingEnabled === false;
+  const posture = input.admin?.sendingAdmin ?? null;
+  const domainOff = posture !== null && (posture.domain === null || !posture.domain.automatedSendingEnabled);
+  if (input.hasOperations && (attestationOff || domainOff)) {
     rows.push({ key: 'sending', text: 'Sending is paused', action: null });
   }
   const mailbox = needs.find(need => need.key === 'connect_gmail');

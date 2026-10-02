@@ -548,11 +548,28 @@ describe('Needs you', () => {
 describe('the warnings line (C0 review, P1)', () => {
   it('names only actionable states: sending off, a mailbox to reconnect, no calling number', () => {
     const on = { effectiveSendingEnabled: true } as unknown as AdminState['settings'];
-    const healthy = buildHomeView(input({ mailbox: connected, admin: admin({ settings: on }) }), []);
+    const healthy = buildHomeView(input({ mailbox: connected, admin: admin({ settings: on, sendingAdmin: null }) }), []);
     expect(healthy.warnings).toEqual([]);
     const sendingOff = buildHomeView(input({ admin: admin({ settings: { effectiveSendingEnabled: false } as unknown as AdminState['settings'] }) }), []);
     expect(sendingOff.warnings).toEqual([{ key: 'sending', text: 'Sending is paused', action: null }]);
-    const broken = buildHomeView(input({ mailbox: notConnected, admin: admin({ settings: on, callingNumbers: [] }) }), []);
+    // Production's pause: the attestation is on and the domain's own switch is off.
+    const domainOff = buildHomeView(
+      input({
+        mailbox: connected,
+        admin: admin({ settings: on, sendingAdmin: { domain: { ...passingDomain, automatedSendingEnabled: false }, ramps: [] } }),
+      }),
+      [],
+    );
+    expect(domainOff.warnings).toEqual([{ key: 'sending', text: 'Sending is paused', action: null }]);
+    const domainOn = buildHomeView(
+      input({
+        mailbox: connected,
+        admin: admin({ settings: on, sendingAdmin: { domain: { ...passingDomain, automatedSendingEnabled: true }, ramps: [] } }),
+      }),
+      [],
+    );
+    expect(domainOn.warnings).toEqual([]);
+    const broken = buildHomeView(input({ mailbox: notConnected, admin: admin({ settings: on, sendingAdmin: null, callingNumbers: [] }) }), []);
     expect(broken.warnings.map(row => row.key)).toEqual(['mailbox', 'calling']);
     expect(broken.warnings[0]?.action).toMatchObject({ kind: 'connect_mailbox' });
   });
