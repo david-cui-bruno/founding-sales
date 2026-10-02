@@ -1,5 +1,8 @@
 import {
   applyCallProposalsResultSchema,
+  callLogsResponseSchema,
+  correctCallOutcomeResultSchema,
+  correctionPreviewResponseSchema,
   applyKeyReasonsSchema,
   callAnalysisResponseSchema,
   callRecapResponseSchema,
@@ -309,6 +312,31 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return { stopped: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
     },
     'today.completeTask': async (input: Parameters<TodayBridgeHost['completeTask']>[0]) => await deps.today.completeTask(input),
+
+    // S3X lane X2. Straight through the client, like lane C: each answer is the value or null
+    // with the server's code.
+    'calling.logs': async (input: OperationInput<'calling.logs'>) => {
+      const answer = await deps.api.read(`/calls?firmId=${encodeURIComponent(input.firmId)}&include=corrections`, value =>
+        callLogsResponseSchema.parse(value),
+      );
+      return { calls: answer.ok ? answer.value.calls : null };
+    },
+    'calling.correctionPreview': async (input: OperationInput<'calling.correctionPreview'>) => {
+      const answer = await deps.api.read('/calls/logs/correction-preview', value => correctionPreviewResponseSchema.parse(value), input);
+      return answer.ok ? { preview: answer.value, reason: null } : { preview: null, reason: answer.reason.slice(0, 80) };
+    },
+    'calling.correctOutcome': async (input: OperationInput<'calling.correctOutcome'>) => {
+      const { commandId, ...body } = input;
+      const answer = await deps.api.command('/calls/logs/correct', body, value => correctCallOutcomeResultSchema.parse(value), { commandId });
+      return answer.ok ? { corrected: answer.value, reason: null } : { corrected: null, reason: answer.reason.slice(0, 80) };
+    },
+    'suppressions.supersede': async (input: OperationInput<'suppressions.supersede'>) => {
+      // The unchanged admin supersession, for the one stop David confirmed (DESIGN-S3X §3.4a).
+      const answer = await deps.api.command('/suppressions/supersede', { eventId: input.eventId, reason: 'correction' }, value => value, {
+        commandId: input.commandId,
+      });
+      return { lifted: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
+    },
 
     // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
     'meetings.forFirm': async (input: { readonly firmId: string }) => {

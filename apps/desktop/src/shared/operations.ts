@@ -2,6 +2,11 @@ import { z } from 'zod';
 import {
   CALL_OUTCOMES,
   applyCallProposalsResultSchema,
+  callLogRowSchema,
+  correctCallOutcomeCommandSchema,
+  correctCallOutcomeResultSchema,
+  correctionPreviewRequestSchema,
+  correctionPreviewResponseSchema,
   callAnalysisNotesSchema,
   callAnalysisResponseSchema,
   callProposalEditsSchema,
@@ -432,6 +437,21 @@ export const acceptanceViewSchema = z.strictObject({ acceptance: proposalAccepta
 /** Slice S3T: the 10-call trial; null when the read did not answer (an older API: the section hides). */
 export const trialViewSchema = z.strictObject({ trial: callTrialResponseSchema.nullable() });
 
+/**
+ * S3X lane X2: correcting a logged outcome. Each view is the answer or null with the server's
+ * code, never a thrown error, so a route an older API does not serve hides the control.
+ */
+export const callLogsViewSchema = z.strictObject({ calls: z.array(callLogRowSchema).nullable() });
+export type CallLogsView = z.infer<typeof callLogsViewSchema>;
+export const correctionPreviewViewSchema = z.strictObject({ preview: correctionPreviewResponseSchema.nullable(), reason: reasonCode });
+export type CorrectionPreviewView = z.infer<typeof correctionPreviewViewSchema>;
+export const correctedViewSchema = z.strictObject({ corrected: correctCallOutcomeResultSchema.nullable(), reason: reasonCode });
+export type CorrectedView = z.infer<typeof correctedViewSchema>;
+export const liftedViewSchema = z.strictObject({ lifted: z.boolean(), reason: reasonCode });
+/** The correction's body as the renderer sends it: its own command id, kept for a retry. */
+export const correctOutcomeInputSchema = correctCallOutcomeCommandSchema.omit({ clientVersion: true }).extend({ commandId: uuid });
+export type CorrectOutcomeInput = z.infer<typeof correctOutcomeInputSchema>;
+
 /** One recording's audio for the page to play; `reason` when it could not be read. */
 export const callRecordingViewSchema = z.strictObject({
   recording: callRecordingResponseSchema.nullable(),
@@ -735,6 +755,35 @@ export const OPERATIONS = {
     input: z.strictObject({ firmId: uuid, channel: z.enum(['phone', 'all']).optional() }),
     output: stoppedViewSchema,
     transform: 'sends scope firm, the firm, source prospect_do_not_call and the channel when one is chosen, and nothing else; the explicit confirm is the caller’s',
+  },
+  // --- S3X lane X2: correcting a logged outcome -----------------------------------
+  'calling.logs': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls?firmId={uuid}&include=corrections' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: callLogsViewSchema,
+    transform: 'none: every call log of the firm from the database alone, each with its corrections; null when the read did not answer',
+  },
+  'calling.correctionPreview': {
+    kind: 'read',
+    calls: [{ method: 'POST', path: '/calls/logs/correction-preview' }],
+    input: correctionPreviewRequestSchema,
+    output: correctionPreviewViewSchema,
+    transform: 'none: what correcting this log to this outcome would meet, or the refusal code',
+  },
+  'calling.correctOutcome': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/logs/correct' }],
+    input: correctOutcomeInputSchema,
+    output: correctedViewSchema,
+    transform: 'the review’s body under the renderer’s own command id, so a retry is answered from its receipt; a refusal’s code is the reason',
+  },
+  'suppressions.supersede': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/suppressions/supersede' }],
+    input: z.strictObject({ eventId: z.string().min(1).max(200), commandId: uuid }),
+    output: liftedViewSchema,
+    transform: 'the existing single-stop lift, reason correction, under the renderer’s command id; the explicit confirm is the caller’s',
   },
   'calling.recording': {
     kind: 'read',
