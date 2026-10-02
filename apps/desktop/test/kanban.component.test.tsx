@@ -7,6 +7,7 @@ import type { BoardCard as BoardCardData, FirmIdentityDto } from '@fss/contracts
 import type { PipelineView, StageChange, ValueChange } from '../src/renderer/firmWorkspaceContract.ts';
 import { BoardCard } from '../src/renderer/pipeline/BoardCard.tsx';
 import { Board, emptyBoardMemory, type BoardMemory } from '../src/renderer/pipeline/Board.tsx';
+import { resetCrmMemory } from '../src/renderer/firms/crmMemory.ts';
 import { ValueDialog } from '../src/renderer/pipeline/ValueDialog.tsx';
 import {
   evidencePhrase,
@@ -123,7 +124,10 @@ function Harness({
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetCrmMemory();
+});
 
 describe('the columns', () => {
   it('renders the board\'s columns in order, hides the retired empty one, and puts each firm under its stage', () => {

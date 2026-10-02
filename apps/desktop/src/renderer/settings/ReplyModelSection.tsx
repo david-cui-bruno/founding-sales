@@ -1,9 +1,11 @@
-import { useMemo, useState, type JSX } from 'react';
+import { useMemo, type JSX } from 'react';
 import type { Generation } from '../app/generation.ts';
 import { useViewState } from '../app/useViewState.ts';
 import { REPLY_MODELS, type ReplyModel, type ReplyModelState } from '../replyContract.ts';
 import { Button } from '../ui/button.tsx';
-import { Section } from '../ui/layout.tsx';
+import { useKeptBased } from '../replies/kept.ts';
+import { ChangedElsewhere } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 import { Select } from '../ui/select.tsx';
 
 /**
@@ -51,11 +53,17 @@ export function ReplyModelSection({
     guard,
     first: useMemo(() => async api => await api.read('replies.model', {}), []),
   });
-  const [choice, setChoice] = useState<ReplyModel | null>(null);
+  // The model picked and not yet saved: kept above the route with the model that was in force
+  // when it was picked (K2); if another admin changed the model meanwhile, the pick is dropped.
+  const currentModel = view.state?.classifier?.modelName ?? null;
+  const choiceKept = useKeptBased('settings:reply-model:choice', currentModel);
+  const chosenText = choiceKept.touched ? choiceKept.value : '';
+  const setChosenText = choiceKept.set;
+  const choice: ReplyModel | null = REPLY_MODELS.find(name => name === chosenText) ?? null;
   if (!isAdmin || !view.available) return null;
 
   const state = view.state;
-  const current = state?.classifier?.modelName ?? null;
+  const current = currentModel;
   const known = current === 'claude-haiku-4-5' ? REPLY_MODELS[0] : current;
   const shown: string = choice ?? (known !== null && (REPLY_MODELS as readonly string[]).includes(known) ? known : '');
   const saving = view.busy('reply-model');
@@ -81,7 +89,7 @@ export function ReplyModelSection({
           disabled={saving || state?.classifier == null}
           value={shown}
           onChange={event => {
-            setChoice(event.target.value as ReplyModel);
+            setChosenText(event.target.value);
           }}
         >
           {shown === '' ? <option value="">{current ?? '—'}</option> : null}
@@ -100,7 +108,7 @@ export function ReplyModelSection({
             if (choice === null) return;
             const modelName = choice;
             view.command('reply-model', async api => await api.command('replies.saveModel', { modelName }));
-            setChoice(null);
+            choiceKept.clear();
           }}
         >
           Save
@@ -111,6 +119,7 @@ export function ReplyModelSection({
           </span>
         )}
       </div>
+      <ChangedElsewhere show={choiceKept.elsewhere} />
       <p className="mt-2 text-xs text-muted-foreground">Only the model changes here. The effort and the daily caps are left as they are.</p>
     </Section>
   );

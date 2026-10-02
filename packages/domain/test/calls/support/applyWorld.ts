@@ -95,6 +95,13 @@ export async function createApplyWorld(): Promise<ApplyWorld> {
     if (!saved.ok) throw new Error(saved.reason);
   };
   await setting('telephony_budget', { dailyCeilingCents: 10_000, maxMinutesPerCall: 30, unitPriceMicros: 14_000 });
+  // A worker that can transcribe is up (its heartbeat says so), so the callbacks queue the
+  // transcription and admit the pending hold (`admitToAnalysisPath`, review S3T finding 2).
+  // Observed ahead of now so it stays fresh for the whole file.
+  await session.query(
+    `INSERT INTO heartbeats (component, instance_key, observed_at, detail)
+     VALUES ('worker', 'apply-world', now() + interval '1 day', '{"call_transcribe": true}'::jsonb)`,
+  );
 
   const connections: SessionQueryable[] = [];
 

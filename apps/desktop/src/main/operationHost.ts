@@ -4,6 +4,7 @@ import {
   callAnalysisResponseSchema,
   callRecapResponseSchema,
   proposalAcceptanceResponseSchema,
+  callTrialResponseSchema,
   reviewListResponseSchema,
   firmBasicsRefusalSchema,
   firmBasicsResultSchema,
@@ -275,6 +276,10 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'calling.acceptance': async () => {
       const answer = await deps.api.read('/calls/proposals/acceptance', value => proposalAcceptanceResponseSchema.parse(value));
       return { acceptance: answer.ok ? answer.value : null };
+    },
+    'calling.trial': async () => {
+      const answer = await deps.api.read('/calls/trial', value => callTrialResponseSchema.parse(value));
+      return { trial: answer.ok ? answer.value : null };
     },
     'review.list': async () => {
       const answer = await deps.api.read('/review', value => reviewListResponseSchema.parse(value));

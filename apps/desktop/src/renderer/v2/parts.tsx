@@ -256,3 +256,34 @@ export const dense = {
   lg: 'h-9 rounded-md px-3.5 text-sm',
   icon: 'size-7 rounded-md',
 } as const;
+
+/**
+ * A titled group in a page or panel (S4): a sentence-case grey label with an optional count and
+ * actions, then its content. Where the older `Section` shouts in capitals, this reads like the
+ * rest of the v2 views. The props are `Section`'s, so a view swaps one for the other.
+ */
+export function Group({
+  title,
+  count,
+  actions,
+  children,
+  className,
+  ...props
+}: Omit<ComponentProps<'section'>, 'title'> & {
+  readonly title: string;
+  readonly count?: number;
+  readonly actions?: ReactNode;
+}): JSX.Element {
+  return (
+    <section {...props} className={cn('mt-7 first:mt-0', className)}>
+      <div className="mb-1.5 flex min-h-6 items-center justify-between gap-3">
+        <h2 className="flex items-baseline gap-1.5 text-xs font-medium text-muted-foreground">
+          <span>{title}</span>
+          {count === undefined ? null : <small className="font-normal text-faint tabular-nums">{count}</small>}
+        </h2>
+        {actions === undefined ? null : <div className="flex shrink-0 items-center gap-1">{actions}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}

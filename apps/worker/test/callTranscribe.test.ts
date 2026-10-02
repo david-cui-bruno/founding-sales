@@ -260,6 +260,12 @@ describe('the call.transcribe job', () => {
       [sessionId],
     );
     await withTransaction(database.session, async () => {
+      // Since S3T the callbacks queue the transcription themselves (`admitToAnalysisPath`) when a
+      // worker that can transcribe is up. These tests queue each call's job explicitly
+      // (`enqueue`), and some never do, so the flag is hidden for the deliveries and put back in
+      // the same transaction: placing a call here queues nothing.
+      const { rows: beats } = await database.session.query<{ id: string; detail: unknown }>("SELECT id, detail FROM heartbeats WHERE component = 'worker'");
+      await database.session.query("UPDATE heartbeats SET detail = detail - 'call_transcribe' WHERE component = 'worker'");
       if (options.answered !== false) await recordCallStatus(database.session, { callSid: sid, providerStatus: 'in-progress' });
       await recordCallStatus(database.session, {
         callSid: sid,
@@ -272,6 +278,7 @@ describe('the call.transcribe job', () => {
         recordingUrl: `https://api.twilio.com/2010-04-01/Accounts/AC${'a'.repeat(32)}/Recordings/RE${randomBytes(16).toString('hex')}`,
         durationSeconds: seconds,
       });
+      for (const beat of beats) await database.session.query('UPDATE heartbeats SET detail = $2::jsonb WHERE id = $1', [beat.id, JSON.stringify(beat.detail)]);
     });
     return sessionId;
   }

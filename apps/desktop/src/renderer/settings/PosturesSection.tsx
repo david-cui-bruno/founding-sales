@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useState, type JSX } from 'react';
 import { POSTURES_HEADING, POSTURE_CONFIRMATION, POSTURE_HINT, allowStatesIssues, type PosturesSectionView } from '../postureView.ts';
 import type { AllowStatesInput } from '../settingsContract.ts';
 import { Button } from '../ui/button.tsx';
-import { Field, Row, RowActions, RowMain, Rows, Section, Unread } from '../ui/layout.tsx';
+import { Field, Row, RowActions, RowMain, Rows, Unread } from '../ui/layout.tsx';
+import { useKept } from '../replies/kept.ts';
+import { FormNotice } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 
 /**
@@ -34,31 +37,32 @@ export function PosturesSection({
   onRevoke(postureId: string): void;
   onRetry(): void;
 }): JSX.Element {
-  const [chosen, setChosen] = useState<readonly string[]>([]);
-  const [confirmed, setConfirmed] = useState(false);
-  const [note, setNote] = useState('');
+  // What was ticked, confirmed and typed is the person's: kept above the route (S4R).
+  const [chosenText, setChosenText] = useKept('settings:postures:chosen', '');
+  const chosen = chosenText === '' ? [] : chosenText.split(',');
+  const setChosen = (next: (current: readonly string[]) => readonly string[]): void => {
+    setChosenText(next(chosen).join(','));
+  };
   const [shown, setShown] = useState(false);
 
   /*
-   * A refused add comes back as it was sent, and an accepted one empties the form.
-   *
-   * Which it was is read off the list rather than off a notice: a state that went on
-   * the list is no longer offered, so the ticks clear themselves, and the list growing
-   * is the one signal that the confirmation and the note have been used. Clearing on
-   * the press instead would throw away what a person typed every time the server said
-   * no, which is exactly when they need it.
+   * A refused add comes back as it was sent. An accepted one empties the form, and that is
+   * done by the command's own success answer (`useAdmin`, K6), not by comparing the list
+   * here: a form mounted after the answer has nothing to compare with, and a consumed
+   * confirmation must never be left to authorise the next state chosen.
    */
   const offered = new Set(section.stateOptions.map(option => option.value));
   const selected = chosen.filter(state => offered.has(state));
-  const allowed = section.rows.length;
-  const lastAllowed = useRef(allowed);
-  useEffect(() => {
-    if (allowed === lastAllowed.current) return;
-    lastAllowed.current = allowed;
-    setConfirmed(false);
-    setNote('');
-    setShown(false);
-  }, [allowed]);
+  // The confirmation and the note belong to the states they were given for (K1): keyed by the
+  // selected set, so choosing different states shows an unticked box and an empty note, and a
+  // confirmation already used for one state can never ride along to another.
+  const scope = [...selected].sort().join(',');
+  const [confirmedText, setConfirmedText] = useKept(`settings:postures:${scope}:confirmed`, '');
+  const confirmed = confirmedText === 'yes';
+  const setConfirmed = (next: boolean): void => {
+    setConfirmedText(next ? 'yes' : '');
+  };
+  const [note, setNote] = useKept(`settings:postures:${scope}:note`, '');
 
   const issues = allowStatesIssues({ states: selected, confirmed, note });
   const issueFor = (field: 'states' | 'confirmed' | 'note'): readonly { readonly testId: string; readonly text: string }[] =>
@@ -206,6 +210,7 @@ export function PosturesSection({
           </Button>
           <p className="text-xs text-muted-foreground">{POSTURE_HINT}</p>
         </div>
+        <FormNotice forms={['postures', 'posture']} />
         {section.notEditableBecause === null ? null : (
           <p data-testid="posture-inert" className="text-xs text-muted-foreground">
             {section.notEditableBecause}

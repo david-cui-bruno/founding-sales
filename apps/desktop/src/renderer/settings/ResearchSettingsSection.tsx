@@ -1,10 +1,12 @@
-import { useState, type JSX } from 'react';
+import type { JSX } from 'react';
 import type { ResearchSettingsEdit, ResearchState } from '../researchContract.ts';
 import { dollars, researchNotice, spendLine } from '../researchView.ts';
 import { finishingSentence } from '../settingsView.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
-import { Section } from '../ui/layout.tsx';
+import { useKeptBased } from '../replies/kept.ts';
+import { ChangedElsewhere } from './FormNotice.tsx';
+import { Section } from './Group.tsx';
 
 /**
  * Settings › Research: the ceilings, the model, and what has been spent (lane R).
@@ -40,15 +42,26 @@ export function ResearchSettingsSection({
   readonly saving: boolean;
   onSave(edit: ResearchSettingsEdit): void;
 }): JSX.Element | null {
-  const [draft, setDraft] = useState<Readonly<Record<string, string>>>({});
   const settings = state?.settings ?? null;
+  // Typed and not yet saved: kept above the route, per field, each with the saved value it
+  // began from (K2). A field nobody touched is sent as the CURRENT saved value.
+  const firms = useKeptBased('settings:research:dailyFirmCeiling', settings === null ? null : String(settings.dailyFirmCeiling));
+  const day = useKeptBased('settings:research:dailyCostCeilingCents', settings === null ? null : String(settings.dailyCostCeilingCents));
+  const month = useKeptBased('settings:research:monthlyCostCeilingCents', settings === null ? null : String(settings.monthlyCostCeilingCents));
+  const pages = useKeptBased('settings:research:maxPagesPerFirm', settings === null ? null : String(settings.maxPagesPerFirm));
+  const kept: Readonly<Record<string, ReturnType<typeof useKeptBased>>> = {
+    dailyFirmCeiling: firms,
+    dailyCostCeilingCents: day,
+    monthlyCostCeilingCents: month,
+    maxPagesPerFirm: pages,
+  };
   if (settings === null) return null;
   const spend = spendLine(state as ResearchState);
   const finishingLine = finishingSentence('research', state?.finishing);
 
   const numberOf = (key: string, current: number): number => {
-    const typed = draft[key];
-    if (typed === undefined || typed.trim() === '') return current;
+    const typed = kept[key]?.touched === true ? kept[key].value : '';
+    if (typed.trim() === '') return current;
     const parsed = Number(typed);
     return Number.isFinite(parsed) ? Math.trunc(parsed) : current;
   };
@@ -87,15 +100,16 @@ export function ResearchSettingsSection({
               data-testid={`research-${field.key}`}
               inputMode="numeric"
               disabled={saving}
-              value={draft[field.key] ?? String(settings[field.key])}
+              value={kept[field.key]?.value ?? ''}
               onChange={event => {
-                setDraft(current => ({ ...current, [field.key]: event.target.value }));
+                kept[field.key]?.set(event.target.value);
               }}
             />
           </label>
         ))}
       </div>
 
+      <ChangedElsewhere show={Object.values(kept).some(entry => entry.elsewhere)} />
       <div className="mt-3 flex items-center gap-3">
         <Button
           size="sm"
@@ -109,7 +123,7 @@ export function ResearchSettingsSection({
               monthlyCostCeilingCents: numberOf('monthlyCostCeilingCents', settings.monthlyCostCeilingCents),
               maxPagesPerFirm: numberOf('maxPagesPerFirm', settings.maxPagesPerFirm),
             });
-            setDraft({});
+            for (const entry of Object.values(kept)) entry.clear();
           }}
         >
           Save
