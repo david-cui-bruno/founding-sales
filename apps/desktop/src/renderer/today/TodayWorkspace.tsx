@@ -410,9 +410,11 @@ export function TodayWorkspace({
         data-testid="queue-toggle"
         className={cn(dense.md, 'text-muted-foreground min-[1280px]:hidden', subtab !== 'queue' && 'hidden')}
         aria-expanded={queueOpen}
+        aria-label="Show the list of firms"
+        title="Show the list of firms"
         onClick={() => setQueueOpen(!queueOpen)}
       >
-        <ListTodo /> Queue
+        <ListTodo />
       </Button>
       <h1 data-testid="heading" className="shrink-0 text-sm font-semibold whitespace-nowrap">
         {home.heading}

@@ -109,6 +109,8 @@ export function SettingsView({
         ))}
       </nav>
 
+      {/* The routine status needs no read of its own: it is drawn from what the shell holds. */}
+      {tab === 'administration' && view === null ? <StatusSection rows={status} /> : null}
       {view === null ? null : (
         <>
           <div data-testid="banners" className="mt-3 flex flex-col gap-2 empty:hidden">

@@ -319,3 +319,32 @@ describe('local feedback (item 6)', () => {
     expect(view.feedback).toBeNull();
   });
 });
+
+describe('quieter text (item 4)', () => {
+  it('says nothing in the firm header, the queue or the call panel that the screen already says', () => {
+    mount();
+    // The lane — callback, replied, due, new — is the queue's group heading; no chip repeats it.
+    expect(screen.getByTestId('firm-header').textContent).not.toMatch(/New prospect|Due today|Callback|Replied/u);
+    // A firm that can be called has no "can't call" chip, and one that is not on the list says so.
+    expect(screen.queryByText('Can’t call yet')).toBeNull();
+    // The call panel does not repeat the firm's local time (the header has it) or the rule
+    // that no shortcut dials (the shortcuts dialog has it).
+    expect(screen.queryByText('Their time')).toBeNull();
+    expect(screen.queryByText(/No shortcut dials/u)).toBeNull();
+    // "Nothing needs you." under the queue is a sentence about nothing.
+    expect(screen.queryByTestId('needs-empty')).toBeNull();
+  });
+
+  it('keeps monospace to the numbers that must align: the phone number and the call timer', async () => {
+    const { readFile, readdir } = await import('node:fs/promises');
+    const dir = `${process.cwd()}/src/renderer/today/`;
+    const counts: Record<string, number> = {};
+    for (const name of (await readdir(dir)).filter(entry => entry.endsWith('.tsx'))) {
+      const uses = (await readFile(`${dir}${name}`, 'utf8')).split('font-mono').length - 1;
+      if (uses > 0) counts[name] = uses;
+    }
+    // The call timer and the Call button's number (CallPanel), the phone field
+    // (BasicsEditor) and the live-call strip's timer (TodayWorkspace). Nothing else.
+    expect(counts).toEqual({ 'BasicsEditor.tsx': 1, 'CallPanel.tsx': 2, 'TodayWorkspace.tsx': 1 });
+  });
+});
