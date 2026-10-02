@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { callAnalysisResultSchema } from '@fss/contracts';
 import {
   CALL_ANALYSIS_JSON_SCHEMA,
+  CALL_ANALYSIS_MODEL_TABLE,
   CALL_ANALYSIS_PROMPT_VERSION,
   CALL_ANALYSIS_SYSTEM_PROMPT,
   buildCallAnalysisRequest,
@@ -11,6 +12,7 @@ import {
   callAnalysisInputTokenBound,
   callAnalysisProviderKey,
   callAnalysisUserText,
+  isCallAnalysisModel,
   numberedTranscriptText,
   readCallAnalysisAnswer,
   transcriptSha256,
@@ -298,3 +300,24 @@ describe('A-1: reading an answer', () => {
   });
 });
 
+
+describe('the reservation bound (review S3A2, minor)', () => {
+  it('the byte bound is never below the provider’s own input-token count for any recorded corpus request', () => {
+    const dir = new URL('../corpus/calls/answers/call_analysis.3/', import.meta.url);
+    let compared = 0;
+    for (const file of readdirSync(dir)) {
+      const recorded = JSON.parse(readFileSync(new URL(file, dir), 'utf8')) as { model: string; usage?: { inputTokens?: number } };
+      const corpusCase = CORPUS.cases.find(entry => entry.id === file.replace(/\.run\d\.json$/u, ''));
+      const tokens = recorded.usage?.inputTokens;
+      if (corpusCase === undefined || tokens === undefined || !isCallAnalysisModel(recorded.model)) continue;
+      const request = buildCallAnalysisRequest({
+        model: recorded.model,
+        maxOutputTokens: CALL_ANALYSIS_MODEL_TABLE[recorded.model].maxOutputTokens,
+        call: { firmName: corpusCase.firmName, contactName: corpusCase.contactName, callLocalTime: corpusCase.callLocalTime, utterances: corpusCase.utterances },
+      });
+      expect(callAnalysisInputTokenBound(request), file).toBeGreaterThanOrEqual(tokens);
+      compared += 1;
+    }
+    expect(compared).toBeGreaterThan(100);
+  });
+});

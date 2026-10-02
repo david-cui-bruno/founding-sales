@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { messagesCallAnalyzer } from '@fss/domain/calls/analysisAdapter.ts';
+import { editCallAnalysis } from '@fss/domain/calls/analysis.ts';
 import { postCallModelPath, sweepCallAnalysisReservations } from '@fss/domain/calls/analysisPaid.ts';
 import { CALL_SUMMARY_SUBJECT_KIND, sweepCallSummaryReservations } from '@fss/domain/calls/summary.ts';
 import { anthropicCallSummarizer } from '@fss/domain/calls/summaryAdapter.ts';
@@ -31,7 +32,8 @@ import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
  *   * a **queued** job;
  *   * a job whose chunk 1 left a **reserved** summary reservation, and one whose chunk 2
  *     left it **calling** (both claims gone);
- *   * a **completed** summary.
+ *   * a **completed** summary;
+ *   * a held job on a call David then wrote notes on (review S3A2: notes never decide the path).
  *
  * Every one of them stays on the summary path: none is ever owed an analysis, none gets an
  * analysis job or version, and the legacy source re-owes each unfinished one once the switch
@@ -130,7 +132,9 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     );
   }
   const analysesOf = async (ids: readonly string[]): Promise<number> =>
-    Number((await session.query<{ n: number }>('SELECT count(*)::int AS n FROM call_analyses WHERE call_session_id = ANY($1::uuid[])', [[...ids]])).rows[0]?.n);
+    Number(
+      (await session.query<{ n: number }>("SELECT count(*)::int AS n FROM call_analyses WHERE origin = 'model' AND call_session_id = ANY($1::uuid[])", [[...ids]])).rows[0]?.n,
+    );
   const analyzeJobsOf = async (ids: readonly string[]): Promise<number> =>
     Number(
       (await session.query<{ n: number }>("SELECT count(*)::int AS n FROM jobs WHERE kind = 'call.analyze' AND payload ->> 'callSessionId' = ANY($1::text[])", [[...ids]]))
@@ -141,7 +145,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
       .map(row => row.id)
       .sort();
 
-  const legacy = { held: '', queued: '', reserved: '', calling: '', completed: '' };
+  const legacy = { held: '', queued: '', reserved: '', calling: '', completed: '', heldWithNotes: '' };
   let all: string[] = [];
 
   beforeAll(async () => {
@@ -156,6 +160,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     for (const key of Object.keys(legacy) as (keyof typeof legacy)[]) legacy[key] = await placeTranscribedCall(session, { seeded, crm, policy }, UTTERANCES);
     all = Object.values(legacy);
     await legacyJob(legacy.held, 'done');
+    await legacyJob(legacy.heldWithNotes, 'done');
     await legacyJob(legacy.queued, 'queued');
     await legacyJob(legacy.reserved, 'queued');
     await legacyReservation(legacy.reserved, 'reserved');
@@ -170,6 +175,16 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     );
     const { applyMigrations } = await import('@fss/domain/db/migrationRunner.ts');
     await applyMigrations(session, { throughVersion: 35 });
+    // After the release David writes notes on one held legacy call (S3A2, P1): they never
+    // move it off the summary path.
+    const salesperson = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.salesperson.userId, role: 'salesperson' }),
+      session,
+    );
+    const edited = await withTransaction(session, async () =>
+      await editCallAnalysis(salesperson, { sessionId: legacy.heldWithNotes, notes: { summary: 'Notes on a held call.', facts: [] } }),
+    );
+    if (!edited.ok) throw new Error(edited.reason);
   });
 
   afterAll(async () => {
@@ -205,7 +220,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     await transcriptionOn(true);
     const control = await placeTranscribedCall(session, { seeded, crm, policy }, UTTERANCES);
     const summaries = await owedSummaries();
-    expect(summaries.filter(id => all.includes(id)).sort()).toEqual([legacy.calling, legacy.held, legacy.queued, legacy.reserved].sort());
+    expect(summaries.filter(id => all.includes(id)).sort()).toEqual([legacy.calling, legacy.held, legacy.heldWithNotes, legacy.queued, legacy.reserved].sort());
     // The control is never owed a first summary; it is owed an analysis, and only it is.
     expect(summaries).not.toContain(control);
     expect((await owedAnalyses()).filter(id => all.includes(id) || id === control)).toEqual([control]);
@@ -217,7 +232,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     expect(await summarized([control])).toEqual([]);
     const { rows } = await session.query<{ state: string }>('SELECT state FROM call_analyses WHERE call_session_id = $1', [control]);
     expect(rows.map(row => row.state)).toEqual(['completed']);
-    expect(asked.filter(entry => entry.kind === 'summary')).toHaveLength(4);
+    expect(asked.filter(entry => entry.kind === 'summary')).toHaveLength(5);
     expect(asked.filter(entry => entry.kind === 'analysis')).toHaveLength(1);
     // And then nothing more for anyone.
     await transcriptionOn(true);

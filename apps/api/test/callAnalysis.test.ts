@@ -229,14 +229,18 @@ describe('the post-call analysis API (slice 3a, A-6)', () => {
     await fixture.stop();
   });
 
-  it('POST /calls/analysis/retry queues one job per command; a replay queues nothing more; a pending version is in flight', async () => {
+  it('POST /calls/analysis/retry queues one job per intent; a replay or a second command queues nothing; a retry after success is refused; a live job is in flight', async () => {
     const body = command({ callSessionId: fresh.sessionId, reason: 'retry' });
     const queued = await post('/calls/analysis/retry', salespersonToken, body);
     expect(queued.status, queued.text).toBe(200);
     expect(queued.body).toMatchObject({ status: 'accepted', replayed: false, result: { callSessionId: fresh.sessionId, queued: true } });
     const replay = await post('/calls/analysis/retry', salespersonToken, body);
     expect(replay.body).toMatchObject({ status: 'accepted', replayed: true, result: { callSessionId: fresh.sessionId, queued: true } });
-    expect(await jobsOf(fresh.sessionId)).toEqual([`call-analyze:${fresh.sessionId}:c:${String(body['commandId'])}`]);
+    expect(await jobsOf(fresh.sessionId)).toEqual([`call-analyze:${fresh.sessionId}:v1:j0`]);
+    // A second command, another id, before the worker starts: in flight, and one job (S3A2, P2).
+    const second = await post('/calls/analysis/retry', salespersonToken, command({ callSessionId: fresh.sessionId, reason: 'retry' }));
+    expect(second.body).toMatchObject({ status: 'refused', reason: 'analysis_in_flight' });
+    expect(await jobsOf(fresh.sessionId)).toHaveLength(1);
     await drain();
     expect(requests).toBe(1);
     const read = await get(`/calls/analysis?callSessionId=${fresh.sessionId}`, salespersonToken);
@@ -245,7 +249,10 @@ describe('the post-call analysis API (slice 3a, A-6)', () => {
     expect((read.body['authoritative'] as { proposals: { key: string }[] }).proposals.map(proposal => proposal.key)).toEqual(
       expect.arrayContaining(['outcome', 'buying_signal']),
     );
-    // With the switch off, a retry's job holds a new pending version; a second retry is in flight.
+    // A plain retry after a success is refused: another reading is an explicit reanalysis (S3A2, P2).
+    const again = await post('/calls/analysis/retry', salespersonToken, command({ callSessionId: fresh.sessionId, reason: 'retry' }));
+    expect(again.body).toMatchObject({ status: 'refused', reason: 'reanalysis_required' });
+    // With the switch off, a reanalysis job holds a new pending version.
     const off = await post('/settings/update', adminToken, command({ settingKey: 'call_transcription', value: { enabled: false, dailyCeilingCents: 100, unitPriceMicros: 4_300 } }));
     expect(off.status, off.text).toBe(200);
     try {
@@ -253,8 +260,13 @@ describe('the post-call analysis API (slice 3a, A-6)', () => {
       await drain();
       expect(requests).toBe(1);
       expect((await get(`/calls/analysis?callSessionId=${fresh.sessionId}`, salespersonToken)).body).toMatchObject({ pending: { version: 2 } });
+      // A retry on the held, non-live version queues it again; while that job is queued, another is in flight.
+      const requeued = await post('/calls/analysis/retry', salespersonToken, command({ callSessionId: fresh.sessionId, reason: 'retry' }));
+      expect(requeued.body).toMatchObject({ status: 'accepted', result: { queued: true } });
       const inFlight = await post('/calls/analysis/retry', salespersonToken, command({ callSessionId: fresh.sessionId, reason: 'retry' }));
       expect(inFlight.body).toMatchObject({ status: 'refused', reason: 'analysis_in_flight' });
+      await drain();
+      expect(requests).toBe(1);
     } finally {
       await post('/settings/update', adminToken, command({ settingKey: 'call_transcription', value: { enabled: true, dailyCeilingCents: 100, unitPriceMicros: 4_300 } }));
     }

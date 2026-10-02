@@ -578,9 +578,10 @@ export async function listOwedSummaries(db: Queryable, limit = 50): Promise<read
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
         -- Slice 3a: legacy only. A call is re-owed a summary only when it already has a
         -- call.summarize job (held, after a change of the setting); a first job is never made,
-        -- and a call that has entered the analysis path is never summarized.
+        -- and a call with a model analysis is never summarized (David's notes do not count).
         AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at
-        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id)
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id
+                         AND a.origin = 'model')
         AND NOT EXISTS (SELECT 1 FROM call_summaries x WHERE x.workspace_id = t.workspace_id AND x.call_session_id = t.call_session_id)
         AND NOT EXISTS (
           SELECT 1 FROM provider_reservations r

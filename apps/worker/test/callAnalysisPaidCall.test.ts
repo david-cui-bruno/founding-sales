@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { completeCallAnalysis, readCallAnalysis, readPolicyContext } from '@fss/domain/calls/analysis.ts';
+import { completeCallAnalysis, editCallAnalysis, readCallAnalysis, readPolicyContext } from '@fss/domain/calls/analysis.ts';
 import { messagesCallAnalyzer } from '@fss/domain/calls/analysisAdapter.ts';
 import { callAnalysisProviderKey } from '@fss/domain/calls/analysisModel.ts';
 import {
@@ -19,6 +19,8 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { JOB_KIND_CLASS } from '@fss/domain/jobs/jobKinds.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { readSpend, workspaceBusinessZone } from '@fss/domain/research/ledger.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { providerFunding } from '@fss/domain/settings/funding.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
@@ -264,8 +266,8 @@ describe('call.analyze on the paid-call pattern (slice 3a, A-4 and A-5)', () => 
     expect(await versions(id)).toEqual([]);
     expect(await retry(id, 'retry', 'historical-retry')).toEqual({ ok: false, reason: 'reanalysis_required' });
     expect(await retry(id, 'reanalysis', 'historical-reanalysis')).toEqual({ ok: true, value: { callSessionId: id, queued: true } });
-    // The same command again queues nothing new.
-    expect(await retry(id, 'reanalysis', 'historical-reanalysis')).toEqual({ ok: true, value: { callSessionId: id, queued: false } });
+    // A second command before the worker starts: the queued job is in flight (S3A2, P2).
+    expect(await retry(id, 'reanalysis', 'historical-reanalysis-2')).toEqual({ ok: false, reason: 'analysis_in_flight' });
     await drain();
     expect(requests - before).toBe(1);
     expect(await versions(id)).toEqual([[1, 'reanalysis', 'completed', null]]);
@@ -288,12 +290,17 @@ describe('call.analyze on the paid-call pattern (slice 3a, A-4 and A-5)', () => 
       expect(requests - before).toBe(0);
       expect(await attempts(id)).toEqual([]);
       expect(await versions(id)).toEqual([[1, 'transcript', 'pending', null]]);
-      expect(await retry(id, 'retry', 'while-held')).toEqual({ ok: false, reason: 'analysis_in_flight' });
+      // A retry on a held, non-live version queues it again (S3A2, P2): still off, so held again.
+      expect(await retry(id, 'retry', 'while-held')).toEqual({ ok: true, value: { callSessionId: id, queued: true } });
+      expect(await retry(id, 'retry', 'while-held-2')).toEqual({ ok: false, reason: 'analysis_in_flight' });
+      await drain();
+      expect(requests - before).toBe(0);
+      expect(await versions(id)).toEqual([[1, 'transcript', 'pending', null]]);
     } finally {
       await transcriptionOn(true);
     }
-    expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}:r1`]);
-    await enqueue(id, `call-analyze:${id}:r1`);
+    expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}:r2`]);
+    await enqueue(id, `call-analyze:${id}:r2`);
     await drain();
     expect(requests - before).toBe(1);
     expect(await versions(id)).toEqual([[1, 'transcript', 'completed', null]]);
@@ -456,6 +463,30 @@ describe('call.analyze on the paid-call pattern (slice 3a, A-4 and A-5)', () => 
       expect(begun).toMatchObject({ kind: 'done', reason: 'capped' });
       expect(await attempts(id)).toEqual([]);
       expect(await versions(id)).toEqual([[1, 'transcript', 'pending', null]]);
+      // S3A2 [4]: held by the day's cap, offered by the source (no job yet); its job is capped
+      // again and then not offered within the backoff, so it cannot spin.
+      expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}`]);
+      // No setting written since well before: only the backoff can offer it again.
+      await session.query(
+        "UPDATE workspace_settings SET changed_at = now() - interval '2 hours' WHERE workspace_id = $1 AND superseded_at IS NULL AND setting_key IN ('call_transcription', 'monthly_cash_ceiling_cents')",
+        [seeded.alpha.workspaceId],
+      );
+      await enqueue(id, `call-analyze:${id}`);
+      const before = requests;
+      await drain();
+      expect(requests - before).toBe(0);
+      expect(await owedFor(id)).toEqual([]);
+      // The next business day: the fill is yesterday's, and the backoff has passed.
+      await session.query(
+        "UPDATE provider_reservations SET business_date = business_date - 1 WHERE subject_kind = $1 AND subject_id = $2 AND attempt > 100",
+        [CALL_ANALYSIS_SUBJECT_KIND, analysisId],
+      );
+      await backdateJobs(id, 16);
+      expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}:r1`]);
+      await enqueue(id, `call-analyze:${id}:r1`);
+      await drain();
+      expect(requests - before).toBe(1);
+      expect(await versions(id)).toEqual([[1, 'transcript', 'completed', null]]);
     } finally {
       await session.query('DELETE FROM provider_reservations WHERE subject_kind = $1 AND subject_id = $2 AND attempt > 100', [CALL_ANALYSIS_SUBJECT_KIND, analysisId]);
     }
@@ -489,6 +520,98 @@ describe('call.analyze on the paid-call pattern (slice 3a, A-4 and A-5)', () => 
     expect(await attempts(lost)).toEqual([{ version: 1, attempt: 1, state: 'estimated', cents: C, settled_cents: C }]);
     expect((await attempts(held)).map(row => row.state)).toEqual(['reserved']);
     expect(await withTransaction(session, async () => await sweepCallAnalysisReservations(system()))).toEqual({ released: 1, estimated: 0 });
+  });
+
+  async function notes(sessionId: string): Promise<void> {
+    const edited = await withTransaction(session, async () =>
+      await editCallAnalysis(salesperson(), { sessionId, notes: { summary: 'David’s notes before any reading.', facts: [] } }),
+    );
+    if (!edited.ok) throw new Error(edited.reason);
+  }
+  /** A held version's last job, finished long enough ago for the backoff, and its fill rows a day back. */
+  const backdateJobs = async (sessionId: string, minutes: number): Promise<void> => {
+    await session.query(
+      "UPDATE jobs SET updated_at = now() - make_interval(mins => $2), completed_at = now() - make_interval(mins => $2) WHERE kind = 'call.analyze' AND payload ->> 'callSessionId' = $1 AND state = 'done'",
+      [sessionId, minutes],
+    );
+  };
+
+  it('S3A2 [1]: David’s notes before the first scan never cancel the analysis, nor let a plain retry past a historical call', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    await notes(id);
+    expect(await postCallModelPath(session, seeded.alpha.workspaceId, id)).toBe('analysis');
+    expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}`]);
+    await enqueue(id, `call-analyze:${id}`);
+    const before = requests;
+    await drain();
+    expect(requests - before).toBe(1);
+    expect(await versions(id)).toEqual([
+      [1, 'user_edit', 'completed', null],
+      [2, 'transcript', 'completed', null],
+    ]);
+    // The notes keep display precedence.
+    expect((await readCallAnalysis(salesperson(), id))?.current).toMatchObject({ origin: 'user' });
+    // A summarised (historical) call with notes: still the summary path, still reanalysis_required.
+    const historical = await transcribedCall();
+    await enqueue(historical, `call-summarize:${historical}`, 'call.summarize');
+    await session.query("UPDATE jobs SET state = 'done', completed_at = now() WHERE idempotency_key = $1", [`call-summarize:${historical}`]);
+    await notes(historical);
+    expect(await postCallModelPath(session, seeded.alpha.workspaceId, historical)).toBe('summary');
+    expect(await owedFor(historical)).toEqual([]);
+    expect(await retry(historical, 'retry', 'notes-historical')).toEqual({ ok: false, reason: 'reanalysis_required' });
+    // And a plain retry after a model success is refused the same way (S3A2 [2]).
+    expect(await retry(id, 'retry', 'after-success')).toEqual({ ok: false, reason: 'reanalysis_required' });
+  });
+
+  it('S3A2 [3]: a historical reanalysis paused before it ran resumes once, whatever the transcript’s age', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    await session.query("UPDATE call_transcripts SET created_at = now() - interval '30 days' WHERE call_session_id = $1", [id]);
+    await enqueue(id, `call-summarize:${id}`, 'call.summarize');
+    await session.query("UPDATE jobs SET state = 'done', completed_at = now() WHERE idempotency_key = $1", [`call-summarize:${id}`]);
+    await transcriptionOn(false);
+    const before = requests;
+    try {
+      expect(await retry(id, 'reanalysis', 'old-reanalysis')).toMatchObject({ ok: true });
+      await drain();
+      expect(requests - before).toBe(0);
+      expect(await versions(id)).toEqual([[1, 'reanalysis', 'pending', null]]);
+    } finally {
+      await transcriptionOn(true);
+    }
+    const owed = await owedFor(id);
+    expect(owed.map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}:r1`]);
+    await enqueue(id, `call-analyze:${id}:r1`);
+    await drain();
+    expect(requests - before).toBe(1);
+    expect(await versions(id)).toEqual([[1, 'reanalysis', 'completed', null]]);
+    expect(await owedFor(id)).toEqual([]);
+  });
+
+  it('S3A2 [4]: a version held by the cash ceiling runs once the ceiling is raised, and is not offered again before', async () => {
+    mode = 'answer';
+    const id = await transcribedCall();
+    const zone = await workspaceBusinessZone(system());
+    const spent = (await readSpend(system(), { businessTimeZone: zone, at: await databaseNow(system()) })).monthToDateCents;
+    await setting('monthly_cash_ceiling_cents', { cents: spent });
+    const before = requests;
+    try {
+      await enqueue(id, `call-analyze:${id}`);
+      await drain();
+      expect(requests - before).toBe(0);
+      expect(await versions(id)).toEqual([[1, 'transcript', 'pending', null]]);
+      // Not offered again straight away: the backoff, so a capped version cannot spin.
+      expect(await owedFor(id)).toEqual([]);
+    } finally {
+      await setting('monthly_cash_ceiling_cents', { cents: 5000 });
+    }
+    // The ceiling raised: runnable now, offered at once.
+    expect((await owedFor(id)).map(spec => spec.idempotencyKey)).toEqual([`call-analyze:${id}:r1`]);
+    await enqueue(id, `call-analyze:${id}:r1`);
+    await drain();
+    expect(requests - before).toBe(1);
+    expect(await versions(id)).toEqual([[1, 'transcript', 'completed', null]]);
   });
 
   it('A-5: a deletion waits for a chunk 3 that holds call_analysis:<session>, then removes the version it completed', async () => {

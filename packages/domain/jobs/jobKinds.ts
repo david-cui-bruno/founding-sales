@@ -217,8 +217,12 @@ export const jobIdempotencyKey = Object.freeze({
   /** One analysis of one transcribed call (slice 3a); `revision` re-owes a version the switch held. */
   callAnalyze: (callSessionId: string, revision = 0): string =>
     revision === 0 ? `call-analyze:${callSessionId}` : `call-analyze:${callSessionId}:r${String(revision)}`,
-  /** David's retry or reanalysis of one call (slice 3a), one job per command. */
-  callAnalyzeRequested: (callSessionId: string, commandId: string): string => `call-analyze:${callSessionId}:c:${commandId}`,
+  /**
+   * David's retry or reanalysis of one call (slice 3a): keyed by the version it will work on
+   * and the call's job count, so two commands with the same intent queue one job (S3A2).
+   */
+  callAnalyzeRequested: (callSessionId: string, version: number, jobsSoFar: number): string =>
+    `call-analyze:${callSessionId}:v${String(version)}:j${String(jobsSoFar)}`,
 });
 
 /** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */

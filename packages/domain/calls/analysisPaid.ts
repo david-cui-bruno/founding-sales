@@ -127,10 +127,15 @@ async function analysesOn(context: RepositoryContext): Promise<boolean> {
 
 export type PostCallModelPath = 'summary' | 'analysis';
 
-/** Which post-call model a call is on (see the file note). */
+/**
+ * Which post-call model a call is on (see the file note). Only model work counts: a model
+ * version puts it on the analysis path; a `call.summarize` job, a summary reservation or a
+ * summary on the summary path. David's notes (an `origin = 'user'` version) never decide the
+ * path (review S3A2, P1): they only take display precedence.
+ */
 export async function postCallModelPath(db: Queryable, workspaceId: string, sessionId: string): Promise<PostCallModelPath> {
   const { rows } = await db.query<{ analysed: boolean; summarised: boolean }>(
-    `SELECT EXISTS (SELECT 1 FROM call_analyses WHERE workspace_id = $1 AND call_session_id = $2) AS analysed,
+    `SELECT EXISTS (SELECT 1 FROM call_analyses WHERE workspace_id = $1 AND call_session_id = $2 AND origin = 'model') AS analysed,
             (EXISTS (SELECT 1 FROM jobs WHERE workspace_id = $1 AND kind = 'call.summarize' AND payload ->> 'callSessionId' = $2::text)
              OR EXISTS (SELECT 1 FROM provider_reservations
                          WHERE workspace_id = $1 AND subject_kind = 'call_summary' AND subject_id = $2)
@@ -613,15 +618,22 @@ export interface OwedAnalysis {
   readonly revision: number;
 }
 
+/** How long after its last job a held version is offered again (a backoff, so a capped one cannot spin). */
+export const CALL_ANALYSIS_REOFFER_MINUTES = 15;
+
 /**
- * Calls owed an analysis job, for the `call-analyze` source. A channel-labelled transcript of
- * the last `CALL_ANALYSIS_RESUME_DAYS`, the transcription switch on, no open analysis
- * reservation, and either:
+ * Calls owed an analysis job, for the `call-analyze` source: the transcription switch on, a
+ * channel-labelled transcript, no open analysis reservation and no live `call.analyze` job,
+ * and either:
  *
- *   * the first: an `analysis`-path call (no analysis version yet, and no summarize job,
- *     `call_summary` reservation or summary) with no `call.analyze` job yet; or
- *   * a held version: a pending model version, every earlier `call.analyze` job of the call
- *     finished before the setting was last written — once per change of the setting.
+ *   * the first: a transcript of the last `CALL_ANALYSIS_RESUME_DAYS` on the `analysis` path
+ *     (no model version, and no summarize job, `call_summary` reservation or summary) with no
+ *     `call.analyze` job yet — David's notes do not count (review S3A2, P1); or
+ *   * a held version: a pending model version, whatever its age (S3A2, P2), offered again
+ *     when it is runnable now — at once after a write of the switch or of the monthly cash
+ *     ceiling, otherwise `CALL_ANALYSIS_REOFFER_MINUTES` after its last job finished. The caps
+ *     decide inside chunk 1, so an offer while still capped ends cheaply, held again; the
+ *     backoff bounds that to one short job per held version per quarter hour.
  */
 export async function listOwedAnalyses(db: Queryable, limit = 50): Promise<readonly OwedAnalysis[]> {
   const { rows } = await db.query<{ workspace_id: string; session_id: string; jobs: string }>(
@@ -629,22 +641,27 @@ export async function listOwedAnalyses(db: Queryable, limit = 50): Promise<reado
        FROM call_transcripts t
        JOIN workspace_settings s
          ON s.workspace_id = t.workspace_id AND s.setting_key = 'call_transcription' AND s.superseded_at IS NULL
+       LEFT JOIN workspace_settings c
+         ON c.workspace_id = t.workspace_id AND c.setting_key = 'monthly_cash_ceiling_cents' AND c.superseded_at IS NULL
        CROSS JOIN LATERAL (
-         SELECT count(*) AS jobs, max(updated_at) AS finished_at, bool_and(state = 'done') AS all_done
+         SELECT count(*) AS jobs, max(updated_at) AS finished_at,
+                coalesce(bool_or(state IN ('queued', 'running', 'retryable')), false) AS live
            FROM jobs
           WHERE workspace_id = t.workspace_id AND kind = 'call.analyze'
             AND payload ->> 'callSessionId' = t.call_session_id::text
        ) j
-      WHERE t.created_at > now() - make_interval(days => $1)
-        AND t.provider || '/' || t.model = ANY($4::text[])
+      WHERE t.provider || '/' || t.model = ANY($4::text[])
         AND (s.value ->> 'enabled')::boolean AND (s.value ->> 'dailyCeilingCents')::integer > 0
+        AND NOT j.live
         AND NOT EXISTS (
           SELECT 1 FROM provider_reservations r JOIN call_analyses a ON a.workspace_id = r.workspace_id AND a.id = r.subject_id
            WHERE r.workspace_id = t.workspace_id AND r.subject_kind = $2 AND a.call_session_id = t.call_session_id
              AND r.state IN ('reserved', 'calling'))
         AND (
-          (j.jobs = 0
-            AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id)
+          (t.created_at > now() - make_interval(days => $1)
+            AND j.jobs = 0
+            AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id
+                             AND a.origin = 'model')
             AND NOT EXISTS (SELECT 1 FROM jobs x WHERE x.workspace_id = t.workspace_id AND x.kind = 'call.summarize'
                              AND x.payload ->> 'callSessionId' = t.call_session_id::text)
             AND NOT EXISTS (SELECT 1 FROM provider_reservations r WHERE r.workspace_id = t.workspace_id
@@ -652,11 +669,14 @@ export async function listOwedAnalyses(db: Queryable, limit = 50): Promise<reado
             AND NOT EXISTS (SELECT 1 FROM call_summaries x WHERE x.workspace_id = t.workspace_id AND x.call_session_id = t.call_session_id))
           OR (EXISTS (SELECT 1 FROM call_analyses a WHERE a.workspace_id = t.workspace_id AND a.call_session_id = t.call_session_id
                        AND a.origin = 'model' AND a.state = 'pending')
-              AND j.jobs > 0 AND j.all_done AND s.changed_at > j.finished_at)
+              AND (j.jobs = 0
+                   OR j.finished_at <= now() - make_interval(mins => $5)
+                   OR s.changed_at > j.finished_at
+                   OR c.changed_at > j.finished_at))
         )
       ORDER BY t.created_at, t.workspace_id, t.call_session_id
       LIMIT $3`,
-    [CALL_ANALYSIS_RESUME_DAYS, CALL_ANALYSIS_SUBJECT_KIND, limit, [...CHANNEL_LABELLED_TRANSCRIPTS]],
+    [CALL_ANALYSIS_RESUME_DAYS, CALL_ANALYSIS_SUBJECT_KIND, limit, [...CHANNEL_LABELLED_TRANSCRIPTS], CALL_ANALYSIS_REOFFER_MINUTES],
   );
   return rows.map(row => ({ workspaceId: row.workspace_id, sessionId: row.session_id, revision: Number(row.jobs) }));
 }
@@ -670,10 +690,18 @@ export type RequestAnalysisOutcome =
   | { readonly ok: false; readonly reason: 'not_found' | 'reanalysis_required' | 'analysis_in_flight' | 'transcript_missing' };
 
 /**
- * `POST /calls/analysis/retry`: queue a `call.analyze` for one call, with the reason the
- * version will be created under (`retry` after a failure, `reanalysis` for a new reading).
- * A call on the `summary` path (a historical one) is analysed only for `reanalysis`. The
- * version is created by the job's chunk 1, with the deployment's model.
+ * `POST /calls/analysis/retry`: queue a `call.analyze` for one call, under its analysis lock,
+ * so two commands are decided one after the other (review S3A2):
+ *
+ *   * a live `call.analyze` job for the call (queued, running or retryable) is in flight;
+ *   * a held version (pending, no live job) is queued again, whatever the reason;
+ *   * a historical call (summary path) is analysed only for `reanalysis`, and so is a call
+ *     with a completed model version of its current transcript: a plain `retry` after a
+ *     success is `reanalysis_required`;
+ *   * otherwise one job, keyed by the version it will work on and the call's job count, so a
+ *     second command for the same intent queues nothing.
+ *
+ * David's notes count for none of these. The version is created by the job's chunk 1.
  */
 export async function requestCallAnalysis(
   context: RepositoryContext,
@@ -683,13 +711,33 @@ export async function requestCallAnalysis(
   if (locked === null || !locked.permitted) return { ok: false, reason: 'not_found' };
   const transcript = await readStoredTranscript(context, input.sessionId);
   if (transcript === null || !transcript.channelLabelled || transcript.utterances.length === 0) return { ok: false, reason: 'transcript_missing' };
-  if ((await pendingVersionOf(context, input.sessionId)) !== null) return { ok: false, reason: 'analysis_in_flight' };
-  const path = await postCallModelPath(context.db, context.scope.workspaceId, input.sessionId);
-  if (path === 'summary' && input.reason !== 'reanalysis') return { ok: false, reason: 'reanalysis_required' };
+  const { rows: jobs } = await context.db.query<{ jobs: number; live: boolean }>(
+    `SELECT count(*)::int AS jobs, coalesce(bool_or(state IN ('queued', 'running', 'retryable')), false) AS live
+       FROM jobs WHERE workspace_id = $1 AND kind = 'call.analyze' AND payload ->> 'callSessionId' = $2::text`,
+    [context.scope.workspaceId, input.sessionId],
+  );
+  if (jobs[0]?.live === true) return { ok: false, reason: 'analysis_in_flight' };
+  const pending = await pendingVersionOf(context, input.sessionId);
+  let version: number;
+  if (pending !== null) {
+    version = pending.version;
+  } else {
+    const path = await postCallModelPath(context.db, context.scope.workspaceId, input.sessionId);
+    if (path === 'summary' && input.reason !== 'reanalysis') return { ok: false, reason: 'reanalysis_required' };
+    const { rows } = await context.db.query<{ done: boolean; next: number }>(
+      `SELECT EXISTS (SELECT 1 FROM call_analyses WHERE workspace_id = $1 AND call_session_id = $2
+                       AND origin = 'model' AND state = 'completed' AND transcript_sha256 = $3) AS done,
+              coalesce(max(version), 0)::int + 1 AS next
+         FROM call_analyses WHERE workspace_id = $1 AND call_session_id = $2`,
+      [context.scope.workspaceId, input.sessionId, transcript.sha256],
+    );
+    if (rows[0]?.done === true && input.reason !== 'reanalysis') return { ok: false, reason: 'reanalysis_required' };
+    version = rows[0]?.next ?? 1;
+  }
   const queued = await enqueueJob(context.db, {
     workspaceId: context.scope.workspaceId,
     kind: 'call.analyze',
-    idempotencyKey: jobIdempotencyKey.callAnalyzeRequested(input.sessionId, input.commandId),
+    idempotencyKey: jobIdempotencyKey.callAnalyzeRequested(input.sessionId, version, jobs[0]?.jobs ?? 0),
     payload: { callSessionId: input.sessionId, reason: input.reason },
     maxAttempts: CALL_ANALYZE_JOB_MAX_ATTEMPTS,
   });

@@ -489,16 +489,24 @@ under `call_analysis_budget` — the month, and a reservation (one open per vers
 SHARED to the commit that marks `calling`; chunk 3 the request, then the settlement by id, then
 A1's `completeCallAnalysis` in the same transaction — there is no second completion path. An
 unreadable or ambiguous answer is retried once within the two. The switch is transcription's,
-`call_transcription`: off, a version is created and held (pending, nothing reserved), and the
-`call-analyze` source resumes it once per change of the setting. The model is the deployment's
-(`FSS_CALL_ANALYSIS_MODEL`, Haiku 4.5 unless set; not set in the infrastructure). David's
-`POST /calls/analysis/retry` (reason `retry` or `reanalysis`) queues one job per command.
+`call_transcription`: off, a version is created and held (pending, nothing reserved). A held
+version — by the switch, the day's cap or the cash ceiling — is offered again by the
+`call-analyze` source whenever it is runnable now (the switch on, no open reservation, no live
+job), whatever its transcript's age: at once after a write of the switch or of the monthly cash
+ceiling, otherwise fifteen minutes after its last job (`CALL_ANALYSIS_REOFFER_MINUTES`), so a
+version still capped finishes cheaply as held again and cannot spin. The model is the
+deployment's (`FSS_CALL_ANALYSIS_MODEL`, Haiku 4.5 unless set; not set in the infrastructure).
+David's `POST /calls/analysis/retry` (reason `retry` or `reanalysis`), under the call's analysis
+lock: a live `call.analyze` job is `analysis_in_flight`; a held version is queued again; a
+historical call, or one with a completed model reading of its current transcript, needs
+`reanalysis` (`reanalysis_required`); otherwise one job keyed by the version it will work on.
+David's notes count for none of this, nor for the path below (review S3A2).
 
-**The summary cutover.** `postCallModelPath(session)` is `analysis` for a call with an analysis
-version; `summary` for one with any `call.summarize` job, `call_summary` reservation or summary;
+**The summary cutover.** `postCallModelPath(session)` is `analysis` for a call with a model
+analysis version; `summary` for one with any `call.summarize` job, `call_summary` reservation or summary;
 `analysis` otherwise. The summary handler refuses a call on the `analysis` path; the
 `call-summarize` source is **legacy only** — it re-owes a summary the switch held for a call that
-already has a `call.summarize` job (and no analysis version), and never makes a first one. So
+already has a `call.summarize` job (and no model analysis version), and never makes a first one. So
 every obligation started before the release finishes as a summary, every new call is analysed,
 and a historical call is analysed only by David's `reanalysis`. `GET /calls/history?include=summary`
 maps the current analysis (David's notes, else the latest completed model reading) to the
