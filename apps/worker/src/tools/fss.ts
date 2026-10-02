@@ -16,6 +16,7 @@ import {
   releaseRecordShowCommand,
   sendPathPreviewCommand,
   sendPathReportCommand,
+  stopChannelsReportCommand,
   pipelineStageCountsCommand,
   suppressionJournalReplayCommand,
   type AdminInvocation,
@@ -173,6 +174,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   // Lane RB: the read-before-lift reads of
   // docs/greenfield/send-path-verification-20260929.md, in one READ ONLY transaction.
   'send-path report': sendPathReportCommand,
+  // Slice S3X (CC2b): the contacts migration 0037 made undialable.
+  'stop-channels report': stopChannelsReportCommand,
   // Call-to-booking A2: the mailbox switch's preflight and the per-condition preview.
   'mailbox switch-preflight': mailboxSwitchPreflightCommand,
   'send-path preview': sendPathPreviewCommand,

@@ -167,6 +167,13 @@ reads a body without it as `all` (any other value is `field_missing`). The deter
 id hashes the channel **only when it is not `all`**, so every id written before 0037, and
 every replay of an old object, is unchanged.
 
+**Who 0037 made undialable.** Every stop before 0037 reads `all`, and a person's addresses
+are now dial keys, so an old opt-out on an address now stops calls to that person.
+`fss admin stop-channels report` (one READ ONLY transaction, ids and counts only) lists, per
+workspace, the contacts with such a stop recorded before 0037 was applied, a phone route,
+and no other stop on calls (no `phone`/`all` stop on their numbers or their firm). It is read
+once after the release that applies 0037 (contract check CC2b).
+
 ## Who may undo what
 
 | Source | Salesperson correction | Admin supersession |

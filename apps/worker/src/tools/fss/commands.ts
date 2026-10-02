@@ -78,6 +78,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // and nothing else, so a report of what the send path would do cannot itself reach a
   // mailbox.
   'send-path report': 'database',
+  // Slice S3X (CC2b): the contacts 0037 made undialable, ids and counts, READ ONLY.
+  'stop-channels report': 'database',
   // Call-to-booking A2: the mailbox switch's two reads, each one READ ONLY transaction.
   'mailbox switch-preflight': 'database',
   'send-path preview': 'database',
@@ -264,6 +266,16 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary:
       'the nine read-before-lift reads of the send-path verification, in one READ ONLY transaction. Reads only, and decides nothing',
+  },
+  {
+    // Slice S3X (contract check CC2b, DESIGN-S3X §0.1): read once right after the release
+    // that applies 0037, because production has no read path before it.
+    path: ['admin', 'stop-channels', 'report'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary:
+      'the contacts migration 0037 made undialable (a pre-0037 stop on their address, a phone route, nothing else stopping calls), as ids and counts, in one READ ONLY transaction',
   },
   {
     // Call-to-booking A2. What the operator reads before David consents to the new

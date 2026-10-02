@@ -2318,6 +2318,83 @@ export async function sendPathPreviewCommand(invocation: AdminInvocation): Promi
 }
 
 // ---------------------------------------------------------------------------
+// The stop-channels report (slice S3X, migration 0037; contract check CC2b).
+// ---------------------------------------------------------------------------
+
+/** The migration that gave every stop a channel. The report needs it applied. */
+const STOP_CHANNELS_MIGRATION = 37;
+
+/**
+ * `fss admin stop-channels report`: the contacts migration 0037 made undialable (DESIGN-S3X
+ * §0.1, CC2b), measured after the release because production has no read path before it.
+ *
+ * Before 0037 the dial keys were phone-only, so a stop on a person's e-mail address never
+ * stopped a call. 0037 made every earlier stop `all` and put the person's addresses into the
+ * dial keys, so such a stop now does. A contact is counted when, in one workspace:
+ *
+ *   * an effective handle stop on one of their addresses is `all` and was recorded before
+ *     0037 was applied (`schema_versions.applied_at` for version 37) — a stop of before;
+ *   * they have a phone route at their firm — there is somebody one could dial;
+ *   * nothing else stops dialling them: no effective `phone`/`all` stop on any of their
+ *     numbers, and none on their firm — those were undialable before 0037 as well.
+ *
+ * An address stop recorded after 0037 is not counted: an opt-out since then is `email` and
+ * stops no call, and an `all` one was chosen as all. The output is ids and counts only — no
+ * name, address or number — because it is printed to the operations task's log. One READ
+ * ONLY transaction, rolled back; it writes nothing and decides nothing. Refused below 0037.
+ */
+export async function stopChannelsReportCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const { session } = invocation;
+  await session.query('BEGIN TRANSACTION READ ONLY');
+  try {
+    const schemaVersion = await readAppliedSchemaVersion(session);
+    if (schemaVersion < STOP_CHANNELS_MIGRATION) {
+      return refuse('schema_too_old', `the stop channels arrive with migration 0037; this database is at schema ${String(schemaVersion)}`);
+    }
+    const applied = await session.query<{ applied_at: Date | string }>(
+      'SELECT applied_at FROM schema_versions WHERE version = $1',
+      [STOP_CHANNELS_MIGRATION],
+    );
+    const appliedAt = asInstant(applied.rows[0]?.applied_at);
+    const { rows } = await session.query<{ workspace_id: string; firm_id: string; contact_id: string }>(
+      `SELECT DISTINCT a.workspace_id, a.firm_id::text AS firm_id, a.contact_id::text AS contact_id
+         FROM effective_suppressions s
+         JOIN email_addresses a
+           ON a.workspace_id = s.workspace_id AND a.address = s.canonical_key
+        WHERE s.scope = 'handle'
+          AND position('@' in s.canonical_key) > 0
+          AND s.channel = 'all'
+          AND s.recorded_at < $1::timestamptz
+          AND a.contact_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM phone_routes p
+                       WHERE p.workspace_id = a.workspace_id AND p.firm_id = a.firm_id AND p.contact_id = a.contact_id)
+          AND NOT EXISTS (SELECT 1 FROM effective_suppressions f
+                           WHERE f.workspace_id = a.workspace_id AND f.scope = 'firm'
+                             AND f.canonical_key = a.firm_id::text AND f.channel IN ('phone', 'all'))
+          AND NOT EXISTS (SELECT 1 FROM effective_suppressions h
+                            JOIN phone_routes p ON p.workspace_id = h.workspace_id AND p.e164 = h.canonical_key
+                           WHERE h.workspace_id = a.workspace_id AND h.scope = 'handle' AND h.channel IN ('phone', 'all')
+                             AND p.firm_id = a.firm_id AND p.contact_id = a.contact_id)
+        ORDER BY a.workspace_id, firm_id, contact_id`,
+      [appliedAt],
+    );
+    const workspaceIds = await listWorkspaceIds(session);
+    const workspaces = workspaceIds.map(workspaceId => {
+      const mine = rows.filter(row => row.workspace_id === workspaceId);
+      return {
+        workspaceId,
+        newlyUndialableContacts: mine.length,
+        atFirms: new Set(mine.map(row => row.firm_id)).size,
+        contacts: mine.map(row => ({ contactId: row.contact_id, firmId: row.firm_id })),
+      };
+    });
+    return accept({ ok: true, report: { schemaVersion, migration0037AppliedAt: appliedAt, workspaces } });
+  } finally {
+    await session.query('ROLLBACK');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The pipeline remap report (call-to-booking slice W, migration 0028).
 // ---------------------------------------------------------------------------
 
