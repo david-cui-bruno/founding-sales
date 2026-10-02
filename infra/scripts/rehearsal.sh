@@ -879,22 +879,37 @@ EOF
   return 0
 }
 
+# An account-wide listing grows with the account, and one environment variable or argument
+# is capped at 128 KiB on Linux (MAX_ARG_STRLEN): run 36945637809 failed with "Argument list
+# too long" on a 131,600 byte tagging listing. A listing goes to its reader in a file, whose
+# path is the only thing passed. `printf` is a builtin, so writing it is not an exec either.
+# The caller removes the file after the reader has run.
+rehearsal_listing_file() {
+  REHEARSAL_LISTING_FILE="$(mktemp "${TMPDIR:-/tmp}/fss-rehearsal-listing.XXXXXX")" \
+    || rehearsal_fail "a scratch file for a cloud listing could not be made"
+  printf '%s' "$1" >"$REHEARSAL_LISTING_FILE" \
+    || { rm -f "$REHEARSAL_LISTING_FILE"; rehearsal_fail "a cloud listing could not be written to $REHEARSAL_LISTING_FILE"; }
+}
+
 # The tagging API's wide net. Every row is judged; a row of a settling class is asked of
 # its own service what state it is in before it is set aside.
 rehearsal_tagged_leftovers() {
-  local prefix=$1 listed judged verdict kind arn aside='' summary
+  local prefix=$1 listed judged verdict kind arn aside='' summary file status=0
   # shellcheck disable=SC2016 # a JMESPath expression, not a shell one
   listed="$(rehearsal_aws resourcegroupstaggingapi get-resources --tag-filters "Key=Name" \
     --query 'ResourceTagMappingList[].{arn:ResourceARN,name:Tags[?Key==`Name`]|[0].Value}' --output json)" \
     || rehearsal_fail "the resources tagged for $prefix could not be listed; the guard cannot say the run left nothing"
-  judged="$(FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY'
+  rehearsal_listing_file "$listed"
+  file=$REHEARSAL_LISTING_FILE
+  judged="$(FSS_JSON_FILE="$file" FSS_PREFIX="$prefix" python3 - <<'PY'
 # rehearsal-tagged-leftovers: one line per row of this run, either
 #   leftover tagged <arn>            nothing about it settles; it is left behind
 #   candidate <class> <arn>          a class AWS keeps listing; its state decides
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-raw = env["FSS_JSON"]
+with open(env["FSS_JSON_FILE"]) as handle:
+    raw = handle.read()
 try:
     rows = json.loads(raw) if raw.strip() else None
 except ValueError:
@@ -939,7 +954,9 @@ for row in rows:
     kind = candidate(arn)
     print("leftover tagged " + arn if kind is None else "candidate {} {}".format(kind, arn))
 PY
-)" || return 1
+)" || status=$?
+  rm -f "$file"
+  [ "$status" -eq 0 ] || return 1
   while read -r verdict kind arn; do
     [ -n "$arn" ] || continue
     if [ "$verdict" = leftover ]; then
@@ -971,19 +988,24 @@ EOF
 
 # RDS by identifier: an instance being created carries no tag yet.
 rehearsal_rds_leftovers() {
-  local prefix=$1 instances snapshots
+  local prefix=$1 instances snapshots file_instances file_snapshots status=0
   instances="$(rehearsal_aws rds describe-db-instances --query 'DBInstances[].DBInstanceIdentifier' --output json)" \
     || rehearsal_fail "the RDS instances could not be listed; the guard cannot say the run left none"
   snapshots="$(rehearsal_aws rds describe-db-snapshots --snapshot-type manual \
     --query 'DBSnapshots[].DBSnapshotIdentifier' --output json)" \
     || rehearsal_fail "the RDS snapshots could not be listed; the guard cannot say the run left none"
-  FSS_INSTANCES="$instances" FSS_SNAPSHOTS="$snapshots" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
+  rehearsal_listing_file "$instances"
+  file_instances=$REHEARSAL_LISTING_FILE
+  rehearsal_listing_file "$snapshots"
+  file_snapshots=$REHEARSAL_LISTING_FILE
+  FSS_INSTANCES_FILE="$file_instances" FSS_SNAPSHOTS_FILE="$file_snapshots" FSS_PREFIX="$prefix" python3 - <<'PY' || status=$?
 # rehearsal-rds-leftovers
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-for variable, kind, what in (("FSS_INSTANCES", "database", "instances"), ("FSS_SNAPSHOTS", "snapshot", "snapshots")):
-    raw = env[variable]
+for variable, kind, what in (("FSS_INSTANCES_FILE", "database", "instances"), ("FSS_SNAPSHOTS_FILE", "snapshot", "snapshots")):
+    with open(env[variable]) as handle:
+        raw = handle.read()
     try:
         names = json.loads(raw) if raw.strip() else None
     except ValueError:
@@ -994,18 +1016,22 @@ for variable, kind, what in (("FSS_INSTANCES", "database", "instances"), ("FSS_S
         if name == prefix or name.startswith(prefix + "-"):
             print("{} {}".format(kind, name))
 PY
+  rm -f "$file_instances" "$file_snapshots"
+  return "$status"
 }
 
 # CloudFront: a distribution is visible the moment it exists, tagged or not.
 rehearsal_cloudfront_leftovers() {
-  local prefix=$1 listed
+  local prefix=$1 listed file status=0
   # `--no-paginate`, because the CLI's own pagination merges the pages into an answer with
   # an Items member and nothing else: no Quantity to check the count against, and no
   # IsTruncated to say whether it is the whole list (the admin profile's reading, 27
   # September 2026). One page, in the shape the API returns it.
   listed="$(rehearsal_aws cloudfront list-distributions --no-paginate --query 'DistributionList' --output json)" \
     || rehearsal_fail "the CloudFront distributions could not be listed; the guard cannot say the run left none"
-  FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
+  rehearsal_listing_file "$listed"
+  file=$REHEARSAL_LISTING_FILE
+  FSS_JSON_FILE="$file" FSS_PREFIX="$prefix" python3 - <<'PY' || status=$?
 # rehearsal-cloudfront-leftovers: one page of the distribution list, read whole. It must
 # say it is the only page, count what it lists, and list what it counts. An account with no
 # distribution answers Quantity 0 and an empty or absent Items (absent or [], never null),
@@ -1016,7 +1042,8 @@ rehearsal_cloudfront_leftovers() {
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-raw = env["FSS_JSON"]
+with open(env["FSS_JSON_FILE"]) as handle:
+    raw = handle.read()
 try:
     listed = json.loads(raw) if raw.strip() else False
 except ValueError:
@@ -1054,18 +1081,24 @@ for item in items or []:
     if prefix in comment or any(isinstance(name, str) and (name.startswith(prefix + "-") or name.startswith(prefix + ".")) for name in names):
         print("distribution {}".format(item["Id"]))
 PY
+  rm -f "$file"
+  return "$status"
 }
 
 # Log groups by name: a group outlives the tasks that wrote to it.
 rehearsal_log_group_leftovers() {
-  local prefix=$1 start listed
+  local prefix=$1 start listed file status
   for start in "/fss/$prefix" "$prefix"; do
     listed="$(rehearsal_aws logs describe-log-groups --log-group-name-prefix "$start" \
       --query 'logGroups[].logGroupName' --output json)" \
       || rehearsal_fail "the log groups beginning $start could not be listed; the guard cannot say the run left none"
-    FSS_JSON="$listed" FSS_START="$start" python3 -c '
+    rehearsal_listing_file "$listed"
+    file=$REHEARSAL_LISTING_FILE
+    status=0
+    FSS_JSON_FILE="$file" FSS_START="$start" python3 -c '
 import json, os, sys
-raw = os.environ["FSS_JSON"]
+with open(os.environ["FSS_JSON_FILE"]) as handle:
+    raw = handle.read()
 try:
     names = json.loads(raw) if raw.strip() else None
 except ValueError:
@@ -1075,7 +1108,9 @@ if not isinstance(names, list) or not all(isinstance(name, str) for name in name
              + " answered something that is not a list of names: " + raw[:200])
 for name in names:
     print("log group " + name)
-' || return 1
+' || status=$?
+    rm -f "$file"
+    [ "$status" -eq 0 ] || return 1
   done
 }
 
