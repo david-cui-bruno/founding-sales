@@ -139,6 +139,15 @@ What a commit does:
   a statement in the wrong place would be a foreign-key violation on a command an admin
   had already approved (`test/research/deletion.test.ts`).
 
+  `firm_prepared_briefs` (migration 0038, lane PB) is firm-scoped only too, on the
+  same rule: a firm deletion removes the firm's prepared brief and its source links,
+  and a contact deletion leaves it. **Known retention behaviour:** the brief is free
+  text prepared outside Callie and its "Who to ask for" line usually names a person, so
+  a contact deletion for that person leaves their name in the brief, exactly as it
+  leaves it in a research quote that names them. An admin who needs it gone clears the
+  brief (`POST /firms/brief/clear`, or Clear on the firm page) or deletes the firm
+  (`test/crm/preparedBriefs.test.ts`).
+
   A firm deletion also **closes the money before it removes the runs**. A run still
   `running` when the firm is deleted has an open `provider_reservations` row, and that
   table is `operational` and has no foreign key to `research_runs` — cents authorized
