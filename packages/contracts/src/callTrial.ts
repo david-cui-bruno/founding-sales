@@ -13,9 +13,15 @@ import { instant, uuid } from './foundationRows.ts';
  * the one the analysis path already applies (`packages/domain/calls/analysisEligibility.ts`).
  */
 
-/** A later decision row's result for a correction, and its reasons (the outcome-correction slice). */
-export const CALL_PROPOSAL_CORRECTED = 'corrected' as const;
-export const CALL_PROPOSAL_CORRECTION_REASONS = ['original_error', 'new_information'] as const;
+/**
+ * The audit action a later correction of a decided suggestion writes (the outcome-correction
+ * slice, S3X): `{analysisId, key, reason: original_error | new_information, priorResult,
+ * before, after}`. The decision row it corrects is never rewritten.
+ *
+ * TODO(S3X lane X2): the action moves to `packages/contracts/src/callCorrections.ts`; import it
+ * from there and delete this one.
+ */
+export const CALL_PROPOSAL_CORRECTED_ACTION = 'call.proposal_corrected';
 
 /** The 3a release: the trial's default start. */
 export const CALL_TRIAL_DEFAULT_SINCE = '2026-10-02T07:14:00.000Z';
@@ -86,18 +92,19 @@ const trialTypeSchema = z.object({
   /** No decision yet: "unresolved" on screen. */
   undecided: count,
   /**
-   * Applied unchanged, then corrected later (the outcome-correction slice; 0 until it ships).
-   * A later decision row with result `corrected` leaves the first one intact, so `unchanged`
-   * stays the initial acceptance. A correction that fixes the model's original error
-   * (`original_error`) counts against the bar; one that follows genuinely new information
-   * (`new_information`) is recorded and is not a model error.
+   * Decided, then corrected later (the outcome-correction slice, S3X; 0 until it ships): the
+   * distinct (analysis, key) pairs with at least one `call.proposal_corrected` row, counted as
+   * `original_error` if any of its rows says so, else as `new_information`. The decision rows
+   * are never rewritten, so `unchanged` stays the initial acceptance. A correction of an
+   * original model error counts against the bar; one for genuinely new information is not a
+   * model error.
    */
   correctedOriginalError: count.default(0),
   correctedNewInformation: count.default(0),
   /**
-   * The bar's share: (unchanged − correctedOriginalError) / decided, decided = unchanged +
-   * edited + declined + bypassed; null with nothing decided. A correction is not a second
-   * decision, so it never changes `decided`.
+   * The bar's share: (unchanged − the unchanged pairs corrected for an original error) /
+   * decided, decided = unchanged + edited + declined + bypassed; null with nothing decided. A
+   * correction is not a second decision, so it never changes `decided`.
    */
   acceptedUnchangedShare: z.number().min(0).max(1).nullable(),
   /** Fewer than `minimumDecided` decided: the type stays manual. */

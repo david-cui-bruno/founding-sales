@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { callTrialResponseSchema, type CallTrialResponse } from '@fss/contracts';
+import { CALL_PROPOSAL_CORRECTED_ACTION, callTrialResponseSchema, type CallTrialResponse } from '@fss/contracts';
 import { createAnalysisVersion, failCallAnalysis } from '../../calls/analysis.ts';
 import { declineCallProposals } from '../../calls/proposalMeasure.ts';
 import { readCallTrial } from '../../calls/trialReport.ts';
@@ -164,28 +164,37 @@ describe('the trial read', () => {
     ]);
   });
 
-  it('a later correction for an original error keeps the first acceptance and lowers the bar share; new information does not', async () => {
+  it('corrections (a separate action): none means zero; an original error lowers the share among unchanged only; new information does not', async () => {
+    // No `call.proposal_corrected` rows: zero everywhere (asserted above too).
+    for (const type of trial.types) expect([type.correctedOriginalError, type.correctedNewInformation]).toEqual([0, 0]);
     const correction = async (shown: Analysed, key: string, reason: string) =>
       await world.session.query(
         `INSERT INTO audit_events (workspace_id, actor_kind, actor_user_id, action, subject_kind, subject_id, detail)
-         VALUES ($1, 'user', $2, 'call.proposal_decided', 'call_analysis', $3, $4::jsonb)`,
+         VALUES ($1, 'user', $2, $3, 'call_analysis', $4, $5::jsonb)`,
         [
           world.seeded.alpha.workspaceId,
           world.seeded.alpha.salesperson.userId,
+          CALL_PROPOSAL_CORRECTED_ACTION,
           shown.analysisId,
-          JSON.stringify({ analysisId: shown.analysisId, callSessionId: shown.sessionId, key, type: 'outcome:interested', result: 'corrected', reason }),
+          JSON.stringify({ analysisId: shown.analysisId, key, reason, priorResult: 'unchanged', before: {}, after: {} }),
         ],
       );
-    await correction(applied, 'outcome', 'original_error');
-    const after = (await read()).types.find(type => type.type === 'outcome:interested');
-    expect(after).toMatchObject({ unchanged: 1, bypassed: 1, correctedOriginalError: 1, correctedNewInformation: 0, acceptedUnchangedShare: 0 });
+    const outcome = async () => (await read()).types.find(type => type.type === 'outcome:interested');
+    // New information on the unchanged outcome: recorded, not a model error.
     await correction(applied, 'outcome', 'new_information');
-    expect((await read()).types.find(type => type.type === 'outcome:interested')).toMatchObject({
-      unchanged: 1,
-      correctedOriginalError: 0,
-      correctedNewInformation: 1,
-      acceptedUnchangedShare: 0.5,
-    });
+    expect(await outcome()).toMatchObject({ unchanged: 1, bypassed: 1, correctedOriginalError: 0, correctedNewInformation: 1, acceptedUnchangedShare: 0.5 });
+    // An original error on the bypassed one: counted, but the share is of unchanged only.
+    await correction(bypassed, 'outcome', 'original_error');
+    expect(await outcome()).toMatchObject({ correctedOriginalError: 1, correctedNewInformation: 1, acceptedUnchangedShare: 0.5 });
+    // An original error on the unchanged one too: that pair now counts once, as original_error.
+    await correction(applied, 'outcome', 'original_error');
+    expect(await outcome()).toMatchObject({ unchanged: 1, bypassed: 1, correctedOriginalError: 2, correctedNewInformation: 0, acceptedUnchangedShare: 0 });
+    // A deal suggestion corrected for an original error is incorrect; the decline stays listed.
+    await correction(bypassed, 'buying_signal', 'original_error');
+    expect((await read()).incorrect.map(row => [row.key, row.result])).toEqual([
+      ['buying_signal', 'declined'],
+      ['buying_signal', 'corrected'],
+    ]);
   });
 
   it('the since filter: a call before it is not counted anywhere; an earlier since counts it', async () => {

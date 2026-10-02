@@ -4,7 +4,7 @@ import {
   CALL_ANALYSIS_FAILURE_REASONS,
   CALL_ANALYSIS_MINIMUM_RECORDING_SECONDS,
   CALL_ANALYSIS_PENDING_SOURCE,
-  CALL_PROPOSAL_CORRECTED,
+  CALL_PROPOSAL_CORRECTED_ACTION,
   CALL_TRIAL_DEFAULT_SINCE,
   CALL_TRIAL_TARGET_CALLS,
   transcriptIsChannelLabelled,
@@ -42,11 +42,13 @@ import { TRANSCRIPTION_MAX_ATTEMPTS, TRANSCRIPTION_SUBJECT_KIND } from './transc
  *   * **incorrect** — every stop or deal-opening suggestion on these calls David declined or
  *     edited, by id.
  *
- * Corrections (the outcome-correction slice, later): a later decision row with result
- * `corrected` and `detail.reason` `original_error` | `new_information`, the first row intact.
- * `unchanged` stays the initial acceptance; the per-type `correctedOriginalError` and
- * `correctedNewInformation` count them; the bar's share is (unchanged − correctedOriginalError)
- * / decided; and a stop or deal suggestion corrected for an original error is incorrect.
+ * Corrections (the outcome-correction slice, S3X, later): a separate audit action,
+ * `call.proposal_corrected`, `{analysisId, key, reason: original_error | new_information,
+ * priorResult, before, after}`; the decision row is never rewritten. `unchanged` stays the
+ * initial acceptance; `correctedOriginalError` and `correctedNewInformation` count the
+ * distinct (analysis, key) pairs with such a row (`original_error` if any row says so); the
+ * bar's share is (unchanged − those unchanged pairs corrected for an original error) /
+ * decided; and a stop or deal suggestion corrected for an original error is incorrect.
  */
 
 type SessionRow = {
@@ -85,7 +87,7 @@ type DecisionRow = {
   readonly call_session_id: string;
   readonly key: string;
   readonly type: string;
-  readonly result: CallProposalDecision | typeof CALL_PROPOSAL_CORRECTED;
+  readonly result: CallProposalDecision;
   readonly occurred_at: Date;
 };
 
@@ -186,31 +188,40 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
             detail->>'key' AS key, detail->>'type' AS type, detail->>'result' AS result, occurred_at
        FROM audit_events
       WHERE workspace_id = $1 AND action = $2 AND detail->>'callSessionId' = ANY($3::text[])
-        AND detail->>'result' <> $4
       ORDER BY detail->>'analysisId', detail->>'key', occurred_at DESC, id DESC`,
-    [workspaceId, PROPOSAL_DECIDED_ACTION, sessionIds, CALL_PROPOSAL_CORRECTED],
+    [workspaceId, PROPOSAL_DECIDED_ACTION, sessionIds],
   );
-  const decided = new Set(decisions.map(row => `${row.analysis_id}\u0000${row.key}`));
-  // Corrections (the outcome-correction slice): a later row, result `corrected`, with
-  // `detail.reason` `original_error` or `new_information`; the first decision stays the one
-  // counted above. The latest correction per (analysis, key) is the one counted.
-  const { rows: corrections } = await context.db.query<DecisionRow & { readonly reason: string | null }>(
-    `SELECT DISTINCT ON (detail->>'analysisId', detail->>'key')
-            detail->>'analysisId' AS analysis_id, detail->>'callSessionId' AS call_session_id,
-            detail->>'key' AS key, detail->>'type' AS type, detail->>'result' AS result, detail->>'reason' AS reason, occurred_at
+  const pairOf = (analysisId: string, key: string): string => `${analysisId}\u0000${key}`;
+  const decisionOf = new Map(decisions.map(row => [pairOf(row.analysis_id, row.key), row] as const));
+  const decided = new Set(decisionOf.keys());
+
+  // Corrections (the outcome-correction slice, S3X): a separate action, never a rewrite of the
+  // decision row, so the counts above stay intact. One pair counts once: `original_error` if
+  // any of its rows says so, else `new_information`. Only a pair with a decision here counts.
+  const { rows: correctionRows } = await context.db.query<{ analysis_id: string; key: string; original_error: boolean; new_information: boolean; at: Date }>(
+    `SELECT detail->>'analysisId' AS analysis_id, detail->>'key' AS key,
+            bool_or(detail->>'reason' = 'original_error') AS original_error,
+            bool_or(detail->>'reason' = 'new_information') AS new_information,
+            max(occurred_at) FILTER (WHERE detail->>'reason' = 'original_error') AS at
        FROM audit_events
-      WHERE workspace_id = $1 AND action = $2 AND detail->>'callSessionId' = ANY($3::text[])
-        AND detail->>'result' = $4
-      ORDER BY detail->>'analysisId', detail->>'key', occurred_at DESC, id DESC`,
-    [workspaceId, PROPOSAL_DECIDED_ACTION, sessionIds, CALL_PROPOSAL_CORRECTED],
+      WHERE workspace_id = $1 AND action = $2 AND detail->>'analysisId' = ANY($3::text[])
+      GROUP BY 1, 2`,
+    [workspaceId, CALL_PROPOSAL_CORRECTED_ACTION, [...new Set(decisions.map(row => row.analysis_id))]],
   );
-  const correctedOf = new Map<string, { originalError: number; newInformation: number }>();
-  for (const row of corrections) {
-    if (!decided.has(`${row.analysis_id}\u0000${row.key}`)) continue;
-    const entry = correctedOf.get(row.type) ?? { originalError: 0, newInformation: 0 };
-    if (row.reason === 'original_error') entry.originalError += 1;
-    else if (row.reason === 'new_information') entry.newInformation += 1;
-    correctedOf.set(row.type, entry);
+  const correctedOf = new Map<string, { originalError: number; originalErrorAmongUnchanged: number; newInformation: number }>();
+  const correctedIncorrect: { readonly decision: DecisionRow; readonly at: Date }[] = [];
+  for (const row of correctionRows) {
+    const decision = decisionOf.get(pairOf(row.analysis_id, row.key));
+    if (decision === undefined) continue;
+    const entry = correctedOf.get(decision.type) ?? { originalError: 0, originalErrorAmongUnchanged: 0, newInformation: 0 };
+    if (row.original_error) {
+      entry.originalError += 1;
+      if (decision.result === 'unchanged') entry.originalErrorAmongUnchanged += 1;
+      correctedIncorrect.push({ decision, at: row.at });
+    } else if (row.new_information) {
+      entry.newInformation += 1;
+    }
+    correctedOf.set(decision.type, entry);
   }
 
   let answered = 0;
@@ -308,7 +319,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
     counts.set(type, fresh);
     return fresh;
   };
-  for (const row of decisions) if (row.result !== CALL_PROPOSAL_CORRECTED) bucket(row.type)[row.result] += 1;
+  for (const row of decisions) bucket(row.type)[row.result] += 1;
   for (const type of undecided.keys()) bucket(type);
   for (const type of modes.keys()) bucket(type);
 
@@ -317,15 +328,16 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
     .map(([type, c]) => {
       const decidedCount = c.unchanged + c.edited + c.declined + c.bypassed;
       const mode = modes.get(type);
-      const corrected = correctedOf.get(type) ?? { originalError: 0, newInformation: 0 };
+      const corrected = correctedOf.get(type) ?? { originalError: 0, originalErrorAmongUnchanged: 0, newInformation: 0 };
       return {
         type,
         ...c,
         undecided: undecided.get(type) ?? 0,
         correctedOriginalError: corrected.originalError,
         correctedNewInformation: corrected.newInformation,
-        // The bar's share: an acceptance later corrected for an original model error is not one.
-        acceptedUnchangedShare: decidedCount === 0 ? null : Math.max(0, c.unchanged - corrected.originalError) / decidedCount,
+        // The bar's share: an unchanged acceptance later corrected for an original model error
+        // is not one.
+        acceptedUnchangedShare: decidedCount === 0 ? null : (c.unchanged - corrected.originalErrorAmongUnchanged) / decidedCount,
         insufficient: decidedCount < ACCEPTANCE_MINIMUM_DECIDED,
         applyMode: mode?.apply ?? 0,
         reviewMode: mode?.review ?? 0,
@@ -334,18 +346,20 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
     });
 
   const incorrect = [
-    ...decisions.filter(row => row.result === 'declined' || row.result === 'edited'),
-    ...corrections.filter(row => row.reason === 'original_error' && decided.has(`${row.analysis_id}\u0000${row.key}`)),
+    ...decisions
+      .filter((row): row is DecisionRow & { result: 'declined' | 'edited' } => row.result === 'declined' || row.result === 'edited')
+      .map(row => ({ row, result: row.result, at: row.occurred_at })),
+    ...correctedIncorrect.map(entry => ({ row: entry.decision, result: 'corrected' as const, at: entry.at })),
   ]
-    .filter(row => row.type === 'buying_signal' || row.type === 'stop')
-    .sort((left, right) => left.occurred_at.getTime() - right.occurred_at.getTime())
-    .map(row => ({
-      analysisId: row.analysis_id,
-      callSessionId: row.call_session_id,
-      key: row.key,
-      type: row.type as 'buying_signal' | 'stop',
-      result: row.result as 'declined' | 'edited' | 'corrected',
-      decidedAt: row.occurred_at.toISOString(),
+    .filter(entry => entry.row.type === 'buying_signal' || entry.row.type === 'stop')
+    .sort((left, right) => left.at.getTime() - right.at.getTime())
+    .map(entry => ({
+      analysisId: entry.row.analysis_id,
+      callSessionId: entry.row.call_session_id,
+      key: entry.row.key,
+      type: entry.row.type as 'buying_signal' | 'stop',
+      result: entry.result,
+      decidedAt: entry.at.toISOString(),
     }));
 
   return {
