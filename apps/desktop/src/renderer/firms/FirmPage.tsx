@@ -937,7 +937,7 @@ export function FirmPage({
   const calls = (
     <>
       {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
-      <CallHistory firmId={page.read.firm.id} />
+      <CallHistory firmId={page.read.firm.id} timeZone={page.read.firm.timeZone} />
       {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}
       {variant === 'page' ? <FirmMeetings firmId={page.read.firm.id} /> : null}
     </>

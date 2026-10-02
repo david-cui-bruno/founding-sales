@@ -29,6 +29,7 @@ import {
   type FieldDrafts,
 } from './afterCallModel.ts';
 import { phaseOf } from './useAnalysis.ts';
+import { ChangeOutcome } from '../calling/ChangeOutcome.tsx';
 import { StopChoice } from './StopChoice.tsx';
 
 /**
@@ -164,6 +165,15 @@ export interface AfterCallAnalysisProps {
   /** A log exists for this call, and its outcome when this panel knows it. */
   readonly logged: boolean;
   readonly loggedOutcome?: CallOutcome | null;
+  /**
+   * S3X lane X2: the call's log, when it is known, so the "Logged:" line offers "Change"
+   * (`calling/ChangeOutcome.tsx`); with `onCorrected` absent the line is text only.
+   */
+  readonly loggedCallLogId?: string | null;
+  /** The firm's zone, for a corrected callback's day and time. */
+  readonly timeZone?: string | null;
+  /** An outcome was corrected or a stop lifted: the history, the card and the analysis are read again. */
+  onCorrected?(): void;
   /** The approved e-mails the follow-up may be promised as. */
   readonly templates: readonly { readonly id: string; readonly name: string }[];
   /**
@@ -245,6 +255,9 @@ function Completed({
   sessionId,
   logged,
   loggedOutcome = null,
+  loggedCallLogId = null,
+  timeZone = null,
+  onCorrected,
   templates,
   commands,
   onReload,
@@ -404,7 +417,10 @@ function Completed({
               return (
                 <li key={row.key} data-testid={`suggestion-${row.key}`} data-ticked={ticked.has(row.key)} className="flex flex-col gap-1 border-b border-border py-2 last:border-b-0">
                   <div className="flex items-start gap-2">
-                    {loggedRow ? (
+                    {loggedRow && loggedCallLogId !== null && loggedOutcome !== null && onCorrected !== undefined ? (
+                      // The current outcome, from the history read, with "Change" (S3X lane X2).
+                      <ChangeOutcome key={loggedCallLogId} callLogId={loggedCallLogId} currentOutcome={loggedOutcome} timeZone={timeZone} prefix="Logged: " onChanged={onCorrected} />
+                    ) : loggedRow ? (
                       <span data-testid="suggestion-logged" className="text-sm">
                         Logged{shownOutcome === null ? '' : `: ${OUTCOME_LABELS[shownOutcome]}`}
                       </span>

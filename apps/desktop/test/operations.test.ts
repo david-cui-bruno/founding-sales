@@ -138,6 +138,10 @@ describe('the operation registry', () => {
       'calling.recap',
       'calling.acceptance',
       'calling.trial',
+      // S3X lane X2: every call log of the firm, and correcting one.
+      'calling.logs',
+      'calling.correctionPreview',
+      'calling.correctOutcome',
       'calling.recording',
       // Slice C2: the call's transcript, under its row on the firm page.
       'calling.transcript',

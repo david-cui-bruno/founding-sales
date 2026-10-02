@@ -4,10 +4,12 @@ import {
   reasonSentence,
   transcriptIsChannelLabelled,
   transcriptSpeakerLabels,
+  type CallLogRowDto,
   type CallSessionDto,
   type CallTranscriptResponse,
 } from '@fss/contracts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
+import { ChangeOutcome, type CorrectionPorts } from './ChangeOutcome.tsx';
 import { CallSummaryBlock } from './CallSummary.tsx';
 import { Button } from '../ui/button.tsx';
 import { callTimer } from './callText.ts';
@@ -28,6 +30,13 @@ import { playRecording, type Playback } from './playRecording.ts';
  *
  * Slice C3b: a call with a summary shows it under its row, above the transcript: a few
  * sentences, the suggested next steps and the commitments heard (`CallSummary.tsx`).
+ *
+ * S3X lane X2 (RESET C): the history also reads every call log of the firm from the database
+ * alone (`calling.logs`, `GET /calls?firmId=&include=corrections`). Each session row with a log
+ * gains its outcome with "Change" (`ChangeOutcome.tsx`), showing "Interested · corrected from
+ * No answer, 2 Oct"; every log no session row shows — a form or incoming log, a log linked to an
+ * unconsumed session, or every log while the session read failed — gets a row of its own,
+ * newest first. A correction or a lift re-fetches both reads.
  */
 
 const STATUS_WORDS: Readonly<Record<CallSessionDto['status'], string>> = Object.freeze({
@@ -56,6 +65,10 @@ export interface CallHistoryPorts {
     readonly transcript: CallTranscriptResponse | null;
     readonly reason: string | null;
   }>;
+  /** S3X lane X2: every call log of the firm. Absent (an older host) means no outcome can be changed. */
+  logs?: (firmId: string) => Promise<{ readonly calls: readonly CallLogRowDto[] | null }>;
+  /** S3X lane X2: the correction's three operations; absent means the registry's. */
+  correction?: CorrectionPorts | null;
 }
 
 export function registryHistoryPorts(): CallHistoryPorts | null {
@@ -65,6 +78,7 @@ export function registryHistoryPorts(): CallHistoryPorts | null {
     history: async firmId => await api.read('calling.history', { firmId }),
     recording: async sessionId => await api.read('calling.recording', { sessionId }),
     transcript: async callSessionId => await api.read('calling.transcript', { callSessionId }),
+    logs: async firmId => await api.read('calling.logs', { firmId }),
   };
 }
 
@@ -157,8 +171,20 @@ function TranscriptLines({ transcript }: { readonly transcript: CallTranscriptRe
   );
 }
 
-export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readonly firmId: string; readonly ports?: CallHistoryPorts | null }): JSX.Element | null {
+export function CallHistory({
+  firmId,
+  timeZone = null,
+  ports = registryHistoryPorts(),
+}: {
+  readonly firmId: string;
+  /** The firm's zone, for a corrected callback's day and time. */
+  readonly timeZone?: string | null;
+  readonly ports?: CallHistoryPorts | null;
+}): JSX.Element | null {
   const [calls, setCalls] = useState<readonly CallSessionDto[] | null | undefined>(undefined);
+  const [logs, setLogs] = useState<readonly CallLogRowDto[] | null>(null);
+  // A correction or a lift asks for both reads again (this view does not use React Query).
+  const [reads, setReads] = useState(0);
   const [playing, setPlaying] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const playback = useRef<Playback | null>(null);
@@ -178,7 +204,7 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
 
   useEffect(() => {
     let current = true;
-    setCalls(undefined);
+    if (reads === 0) setCalls(undefined);
     void portsRef.current?.history(firmId).then(
       answer => {
         if (current) setCalls(answer.calls);
@@ -187,21 +213,76 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
         if (current) setCalls(null);
       },
     );
+    // K7: an answer for a firm no longer shown, or for an older read, is dropped.
+    void portsRef.current?.logs?.(firmId).then(
+      answer => {
+        if (current) setLogs(answer.calls);
+      },
+      () => {
+        if (current) setLogs(null);
+      },
+    );
     return () => {
       current = false;
-      stopPlayback();
     };
-  }, [firmId]);
+  }, [firmId, reads]);
+  useEffect(() => () => stopPlayback(), [firmId]);
+
+  const logById = new Map((logs ?? []).map(log => [log.id, log] as const));
+  const shownLogIds = new Set((calls ?? []).flatMap(call => (call.callLogId === null ? [] : [call.callLogId])));
+  const ownRows = (logs ?? []).filter(log => !shownLogIds.has(log.id));
+  const reread = (): void => {
+    setReads(count => count + 1);
+  };
+  const outcomeCell = (callLogId: string, fallback: CallSessionDto['outcome']): JSX.Element | null => {
+    const log = logById.get(callLogId);
+    if (log === undefined) {
+      return fallback == null ? null : (
+        <span data-testid="call-history-outcome" className="text-xs font-medium">
+          {OUTCOME_LABELS[fallback]}
+        </span>
+      );
+    }
+    return (
+      <ChangeOutcome
+        key={callLogId}
+        callLogId={callLogId}
+        currentOutcome={log.outcome}
+        corrections={log.corrections}
+        timeZone={timeZone}
+        onChanged={reread}
+        {...(ports?.correction === undefined ? {} : { ports: ports.correction })}
+      />
+    );
+  };
 
   if (ports === null || calls === undefined) return null;
-  if (calls === null) {
+  if (calls === null && ownRows.length === 0) {
     return (
       <p data-testid="call-history-unavailable" className="text-xs text-muted-foreground">
         Callie could not read this firm’s calls just now.
       </p>
     );
   }
-  if (calls.length === 0) return null;
+  if ((calls ?? []).length === 0 && ownRows.length === 0) return null;
+  // One list, newest first: the placed calls in their order, each log of its own at its time.
+  const atOf = (value: string | null): number => (value === null ? 0 : Date.parse(value));
+  const merged: ({ readonly kind: 'session'; readonly call: CallSessionDto; readonly at: number } | { readonly kind: 'log'; readonly log: CallLogRowDto; readonly at: number })[] = [];
+  const sessions = (calls ?? []).map(call => ({ kind: 'session' as const, call, at: atOf(call.startedAt ?? call.endedAt) }));
+  const own = ownRows.map(log => ({ kind: 'log' as const, log, at: atOf(log.occurredAt) }));
+  let i = 0;
+  let j = 0;
+  while (i < sessions.length || j < own.length) {
+    const session = sessions[i];
+    const log = own[j];
+    if (log === undefined || (session !== undefined && session.at >= log.at)) {
+      if (session !== undefined) merged.push(session);
+      i += 1;
+    } else {
+      merged.push(log);
+      j += 1;
+    }
+  }
 
   const play = async (sessionId: string): Promise<void> => {
     stopPlayback();
@@ -238,15 +319,22 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
     <section data-testid="call-history" className="flex flex-col">
       <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">Calls</h3>
       <ul className="flex flex-col border-t border-border">
-        {calls.map(call => (
+        {merged.map(entry => entry.kind === 'log' ? logRow(entry.log) : sessionRow(entry.call))}
+      </ul>
+      {problem === null ? null : (
+        <p data-testid="call-history-problem" className="mt-1 text-xs text-muted-foreground">
+          {problem}
+        </p>
+      )}
+    </section>
+  );
+
+  function sessionRow(call: CallSessionDto): JSX.Element {
+    return (
           <li key={call.sessionId} data-testid="call-history-row" className="group/row flex flex-col border-b border-border py-1.5 text-sm">
             <div className="flex items-center gap-3">
               <span className="flex-1 truncate">{when(call.startedAt ?? call.endedAt)}</span>
-              {call.outcome == null ? null : (
-                <span data-testid="call-history-outcome" className="text-xs font-medium">
-                  {OUTCOME_LABELS[call.outcome]}
-                </span>
-              )}
+              {call.callLogId === null ? null : outcomeCell(call.callLogId, call.outcome ?? null)}
               <span className="text-xs text-muted-foreground">{STATUS_WORDS[call.status]}</span>
               <span data-testid="call-history-duration" className="w-14 text-right text-xs text-muted-foreground tabular-nums">
                 {call.durationSeconds === null ? '—' : callTimer(call.durationSeconds)}
@@ -272,17 +360,28 @@ export function CallHistory({ firmId, ports = registryHistoryPorts() }: { readon
               )}
             </div>
             {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
-            {call.hasTranscript === true && ports.transcript !== undefined ? (
+            {call.hasTranscript === true && ports?.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
             ) : null}
           </li>
-        ))}
-      </ul>
-      {problem === null ? null : (
-        <p data-testid="call-history-problem" className="mt-1 text-xs text-muted-foreground">
-          {problem}
-        </p>
-      )}
-    </section>
-  );
+    );
+  }
+
+  function logRow(log: CallLogRowDto): JSX.Element {
+    return (
+          <li key={log.id} data-testid="call-history-log-row" className="flex flex-col border-b border-border py-1.5 text-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex-1 truncate">
+                {when(log.occurredAt)}
+                <span className="ml-2 text-xs text-muted-foreground">{log.direction === 'inbound' ? 'Incoming' : 'Logged'}</span>
+              </span>
+              {outcomeCell(log.id, log.outcome)}
+              <span className="w-14 text-right text-xs text-muted-foreground tabular-nums">
+                {log.durationSeconds === null ? '—' : callTimer(log.durationSeconds)}
+              </span>
+              <span className="w-12" />
+            </div>
+          </li>
+    );
+  }
 }
