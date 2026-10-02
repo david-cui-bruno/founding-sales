@@ -507,6 +507,44 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(now.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true nothing_left=true state_read=true');
   });
 
+  it('reads account-wide listings larger than a single argument or variable can hold (run 36945637809: E2BIG at 131,600 bytes)', () => {
+    // Linux caps one argv/env string at 131072 bytes; macOS caps the lot near 1 MiB. About
+    // 1.5 MB of settled rows from other runs and production fails the old pass-through on both.
+    const rows = Array.from({ length: 12_000 }, (_, index) => ({
+      arn: `arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-worker:${index}`,
+      name: `fss-prod-worker-${index}`,
+    }));
+    const names = Array.from({ length: 30_000 }, (_, index) => `fss-prod-snapshot-padding-${index}`);
+    const directory = mkdtempSync(join(tmpdir(), 'fss-guard-big-'));
+    const tagged = join(directory, 'tagged.json');
+    const snapshots = join(directory, 'snapshots.json');
+    const groups = join(directory, 'groups.json');
+    writeFileSync(tagged, JSON.stringify(rows));
+    writeFileSync(snapshots, JSON.stringify(names));
+    writeFileSync(groups, JSON.stringify(names.map(name => `/fss/${name}`)));
+    const leftovers = [
+      'case "$1 $2" in',
+      `  "resourcegroupstaggingapi get-resources") cat '${tagged}'; exit 0 ;;`,
+      `  "rds describe-db-snapshots") cat '${snapshots}'; exit 0 ;;`,
+      '  "logs describe-log-groups") echo \'[]\'; exit 0 ;;',
+      'esac',
+    ].join('\n');
+    expect(readFileSync(tagged).length).toBeGreaterThan(1_000_000);
+    const clean = guard({ terraform: 'exit 0', leftovers });
+    expect(clean.code, clean.output).toBe(0);
+    expect(clean.output).not.toContain('Argument list too long');
+    expect(clean.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true nothing_left=true state_read=true');
+    // The same size, with one row of the run among them: the verdict is still reached and named.
+    writeFileSync(
+      tagged,
+      JSON.stringify([...rows, { arn: 'arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fss-rh-nothing-alb/1', name: 'fss-rh-nothing-alb' }]),
+    );
+    const left = guard({ terraform: 'exit 0', leftovers });
+    expect(left.code, left.output).not.toBe(0);
+    expect(left.output).not.toContain('Argument list too long');
+    expect(left.output).toContain('tagged arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fss-rh-nothing-alb/1');
+  });
+
   it('fails on an orphan of each class the state never recorded, naming it', () => {
     // Run 35944594998 left exactly these outside state, and a teardown reported success.
     for (const [what, answer, named] of [
