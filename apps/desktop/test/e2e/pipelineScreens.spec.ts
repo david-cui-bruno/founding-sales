@@ -126,7 +126,7 @@ const operations = {
         endedAt: '2026-09-29T15:04:00.000Z',
         durationSeconds: 232,
         hasRecording: true,
-        callLogId: null,
+        callLogId: 'aaaaaaaa-aaaa-4aaa-8aaa-bbbbbbbbbbbb',
         outcome: 'interested',
       },
     ],
