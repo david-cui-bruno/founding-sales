@@ -346,7 +346,7 @@ export type CallSummaryRead =
   | { readonly ok: false; readonly failure: 'malformed' | 'schema_invalid' };
 
 /** Lower case, punctuation and whitespace folded: what "word for word" can mean for speech. */
-function fold(text: string): string {
+export function fold(text: string): string {
   return text
     .toLowerCase()
     .replace(/[’‘]/gu, "'")

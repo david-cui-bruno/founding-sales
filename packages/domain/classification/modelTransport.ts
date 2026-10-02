@@ -53,7 +53,7 @@ export function readModelTransport(
 // ---------------------------------------------------------------------------
 
 /** What a model call is for. One `provider_key` per purpose and transport. */
-export type ModelCallPurpose = 'classifier' | 'call_summary' | 'extraction';
+export type ModelCallPurpose = 'classifier' | 'call_summary' | 'call_analysis' | 'extraction';
 
 /** The `provider_key` kind every Bedrock model call is filed under. Credit-funded. */
 export const BEDROCK_PROVIDER_KIND = 'aws_bedrock';

@@ -1,0 +1,155 @@
+import type { CallAnalysisResult, CallProposal, CallTranscriptUtterance, CallAnalysisSignalKind } from '@fss/contracts';
+import { readCallAnalysisAnswer } from '../../../calls/analysisModel.ts';
+import { proposeEffects, type CallPolicyContext } from '../../../calls/analysisPolicy.ts';
+
+/**
+ * The C2 evaluation's scoring (slice 3a), shared by `scripts/callAnalysisEval.mjs`, which
+ * records answers from the live model, and the corpus replay test, which scores the
+ * recorded ones. One answer is read (`readCallAnalysisAnswer`), then proposed
+ * (`proposeEffects`), then its proposals become labels; a run fails on any forbidden label
+ * the case does not also expect.
+ */
+
+export interface CorpusExpectation {
+  readonly expected_effects: readonly string[];
+  readonly forbidden_effects: readonly string[];
+}
+
+export interface CorpusCase extends CorpusExpectation {
+  readonly id: string;
+  readonly n: number;
+  readonly title: string;
+  readonly firmName: string;
+  readonly contactName: string | null;
+  readonly callStartedAt: string;
+  readonly callLocalTime: string;
+  readonly firmTimeZone: string | null;
+  readonly hasOpenOpportunity: boolean;
+  readonly utterances: readonly CallTranscriptUtterance[];
+  readonly expected_content: Readonly<Record<string, unknown>>;
+  readonly awaiting?: string;
+  readonly with_open_opportunity?: CorpusExpectation;
+  readonly q3_yes?: CorpusExpectation & { readonly qualifyingSignals: readonly CallAnalysisSignalKind[] };
+}
+
+/** The labels a proposal set shows. */
+export function effectLabels(proposals: readonly CallProposal[]): string[] {
+  return proposals.map(proposal => {
+    switch (proposal.kind) {
+      case 'outcome':
+        return `outcome:${proposal.params.outcome}`;
+      case 'callback':
+        return `callback:${proposal.params.localDate}T${proposal.params.localTime}`;
+      case 'task':
+        return proposal.params.text.startsWith('Send overview to ') ? 'task:overview' : 'task:commitment';
+      default:
+        return proposal.kind;
+    }
+  });
+}
+
+function matches(pattern: string, label: string): boolean {
+  return pattern.endsWith('*') ? label.startsWith(pattern.slice(0, -1)) : pattern === label;
+}
+
+export interface RunVerdict {
+  readonly variant: string;
+  readonly labels: readonly string[];
+  /** Labels the case forbids and does not expect: any one fails the evaluation. */
+  readonly forbidden: readonly string[];
+  /** Expected labels that did not appear: a miss, not a failure. */
+  readonly missing: readonly string[];
+}
+
+export function judge(variant: string, labels: readonly string[], expectation: CorpusExpectation): RunVerdict {
+  const expected = new Set(expectation.expected_effects);
+  return {
+    variant,
+    labels,
+    forbidden: labels.filter(label => !expected.has(label) && expectation.forbidden_effects.some(pattern => matches(pattern, label))),
+    missing: expectation.expected_effects.filter(label => !labels.includes(label)),
+  };
+}
+
+/** Field agreement on content that triggers no action: [agreed, compared]. */
+export function contentAgreement(result: CallAnalysisResult, expected: Readonly<Record<string, unknown>>): [number, number] {
+  let agreed = 0;
+  let compared = 0;
+  for (const [field, want] of Object.entries(expected)) {
+    compared += 1;
+    let got: unknown;
+    switch (field) {
+      case 'reached':
+        got = result.reached;
+        break;
+      case 'interest_level':
+        got = result.interest.level;
+        break;
+      case 'follow_up_kind':
+        got = result.followUpRequest?.kind ?? 'none';
+        break;
+      case 'stop_scope':
+        got = result.stop?.scope ?? null;
+        break;
+      case 'voicemail_left':
+        got = result.voicemailLeft;
+        break;
+      case 'objection_categories':
+        got = (want as string[]).every(category => result.objections.some(objection => objection.category === category)) ? want : null;
+        break;
+      default:
+        got = undefined;
+    }
+    if (JSON.stringify(got) === JSON.stringify(want)) agreed += 1;
+  }
+  return [agreed, compared];
+}
+
+export interface CaseScore {
+  readonly caseId: string;
+  readonly read: 'ok' | 'malformed' | 'schema_invalid';
+  readonly verdicts: readonly RunVerdict[];
+  readonly content: [number, number];
+  /** Whether this case counts toward the pass rule (case 2 waits for Q3). */
+  readonly counted: boolean;
+}
+
+function contextOf(corpusCase: CorpusCase, hasOpenOpportunity: boolean): CallPolicyContext {
+  return {
+    callStartedAt: corpusCase.callStartedAt,
+    firmTimeZone: corpusCase.firmTimeZone,
+    contactName: corpusCase.contactName,
+    hasOpenOpportunity,
+  };
+}
+
+/**
+ * Score one raw answer for one case: the base expectation, the open-opportunity variant
+ * (the same answer, the policy run again with an open opportunity), and for case 2 the Q3
+ * "yes" reading (the same answer, read with pricing questions qualifying).
+ */
+export function scoreAnswer(corpusCase: CorpusCase, raw: string): CaseScore {
+  const read = readCallAnalysisAnswer(raw, corpusCase.utterances);
+  if (!read.ok) return { caseId: corpusCase.id, read: read.failure, verdicts: [], content: [0, 0], counted: corpusCase.awaiting === undefined };
+  const verdicts: RunVerdict[] = [];
+  const base = proposeEffects(read.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity));
+  verdicts.push(judge(corpusCase.awaiting === 'Q3' ? 'q3_no' : 'base', effectLabels(base.proposals), corpusCase));
+  if (corpusCase.with_open_opportunity !== undefined) {
+    const open = proposeEffects(read.result, contextOf(corpusCase, true));
+    verdicts.push(judge('open_opportunity', effectLabels(open.proposals), corpusCase.with_open_opportunity));
+  }
+  if (corpusCase.q3_yes !== undefined) {
+    const wide = readCallAnalysisAnswer(raw, corpusCase.utterances, { qualifyingSignals: corpusCase.q3_yes.qualifyingSignals });
+    if (wide.ok) {
+      const yes = proposeEffects(wide.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity));
+      verdicts.push(judge('q3_yes', effectLabels(yes.proposals), corpusCase.q3_yes));
+    }
+  }
+  return {
+    caseId: corpusCase.id,
+    read: 'ok',
+    verdicts,
+    content: contentAgreement(read.result, corpusCase.expected_content),
+    counted: corpusCase.awaiting === undefined,
+  };
+}
