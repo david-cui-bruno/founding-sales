@@ -18,6 +18,15 @@ describe('redaction on the canonical text', () => {
     expect(redact('Call 401-555‮-0142‬.')).toBe('Call [phone].');
   });
 
+  it('any dash, any space separator and any script of digits (review TERF, finding 2)', () => {
+    expect(redact('Call 401\u2011555\u20110142.')).toBe('Call [phone].');
+    expect(redact('Call 401\u2010555\u20100142.')).toBe('Call [phone].');
+    expect(redact('Call \u0664\u0660\u0661\u0665\u0665\u0665\u0660\u0661\u0664\u0662.')).toBe('Call [phone].');
+    expect(redact('Call 401\u2014555\u2003\u20130142 or 401/555/0142.')).toBe('Call [phone] or [phone].');
+    // Combined: fullwidth digits, U+2011 and a bidi mark in one number.
+    expect(redact('Call \uff14\uff10\uff11\u2011555\u200f\u20110142.')).toBe('Call [phone].');
+  });
+
   it('a zero-width space or an LRM inside a known name does not hide it', () => {
     expect(redact('Talk to Ri​ley Sm‎ith.')).toBe('Talk to [name].');
     expect(redact('Ask for Da⁠na.')).toBe('Ask for [name].');

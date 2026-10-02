@@ -73,8 +73,13 @@ const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+/giu;
 const SPOKEN_EMAIL = /\b[\p{L}\p{N}._-]+\s+at\s+[\p{L}\p{N}-]+(?:\s+dot\s+[\p{L}\p{N}-]+)+\b/giu;
 /** A web address: a scheme, `www.`, or a dotted host with a common top-level domain. */
 const URL_LIKE = /\b(?:https?:\/\/\S+|www\.\S+|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.(?:com|net|org|io|co|us|biz|info|app|dev|test)(?:\/\S*)?)\b/giu;
-/** Seven or more digits, with the separators people write numbers with. */
-const PHONE = /\+?\d(?:[\s().-]*\d){6,}/gu;
+/**
+ * Seven or more digits of any script (\p{Nd}: ASCII, Arabic-Indic, Devanagari, ...), with any
+ * dash (\p{Pd}: the non-breaking hyphen U+2011 and the hyphen U+2010 that NFKC makes of it), any
+ * space separator (\p{Zs}) or `.()/` between them (review TERF, finding 2). Over-redaction (a
+ * date written with slashes) is accepted.
+ */
+const PHONE = /\+?\p{Nd}(?:[\s\p{Pd}\p{Zs}.()/]*\p{Nd}){6,}/gu;
 /**
  * Seven or more digits spoken as words, alone or mixed with numerals ("four one zero five five
  * five oh one four two", "401 five five five 0142"), best effort: a run of digit words and digit

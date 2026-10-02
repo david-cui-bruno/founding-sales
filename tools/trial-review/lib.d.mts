@@ -17,16 +17,13 @@ export interface ReviewVerdict {
   readonly analysisId: string;
   readonly key: string;
   readonly kind: string;
+  readonly report_type: string;
+  readonly proposed_value: string;
   readonly decision: string;
   readonly verdict: string;
   readonly category: string;
   readonly reason_code: string;
   readonly decision_matches_evidence: string;
-}
-export interface ReviewNote {
-  readonly callSessionId: string;
-  readonly key: string;
-  readonly note: string;
 }
 export type ReviewCall = Readonly<Record<string, unknown>> & {
   readonly callSessionId: string;
@@ -56,6 +53,13 @@ export const CATEGORIES: readonly string[];
 export const DECISION_MATCHES: readonly string[];
 export const DECISIONS: readonly string[];
 export const PROPOSAL_KINDS: readonly string[];
+export const OUTCOMES: readonly string[];
+export const REPORT_TYPES: readonly string[];
+export const PROPOSED_VALUES: readonly string[];
+export const PASSPHRASE_MIN_CHARS: number;
+export function assertCanonicalCall(call: unknown): void;
+export function reportTypeOf(proposal: { readonly kind: string; readonly params?: Readonly<Record<string, unknown>> }): string;
+export function proposedValueOf(proposal: { readonly kind: string; readonly params?: Readonly<Record<string, unknown>> }): string;
 export const OUTPUT_SCHEMA: Readonly<Record<string, unknown>>;
 export function schemaViolations(value: unknown, schema: unknown, path?: string): string[];
 export function emittedStrings(...values: unknown[]): string[];
@@ -67,7 +71,6 @@ export const REVIEW_MODEL: { readonly inferenceProfileId: string; readonly found
 export const REVIEW_PRICE: { readonly inputUsdPerMillion: number; readonly outputUsdPerMillion: number };
 export const REVIEW_MAX_OUTPUT_TOKENS: number;
 export const REVIEW_DEFAULT_CAP_USD: number;
-export const REVIEW_REASON_MAX_CHARS: number;
 export const QUOTE_RUN_WORDS: number;
 export const REVIEW_SYSTEM: string;
 export const VERDICT_SCHEMA: Readonly<Record<string, unknown>>;
@@ -78,7 +81,7 @@ export function reviewInputOf(call: ReviewCall): unknown;
 export function reviewRequestOf(call: ReviewCall): Record<string, unknown>;
 export function inputTokenBound(body: string): number;
 export function costUsd(inputTokens: number, outputTokens: number): number;
-export function validateVerdicts(answer: unknown, call: ReviewCall): { readonly verdicts: ReviewVerdict[]; readonly notes: ReviewNote[] };
+export function validateVerdicts(answer: unknown, call: ReviewCall): { readonly verdicts: ReviewVerdict[] };
 export function answerOf(response: unknown): unknown;
 export interface TranscriptRuns {
   readonly words: ReadonlySet<string>;
@@ -91,5 +94,5 @@ export function reviewCalls(input: {
   readonly invoke: (modelId: string, body: string) => Promise<unknown>;
   readonly capUsd?: number;
   readonly log?: (line: string) => void;
-}): Promise<{ readonly verdicts: ReviewVerdict[]; readonly notes: ReviewNote[]; readonly spentUsd: number; readonly stoppedAtCap: boolean; readonly reviewed: number }>;
+}): Promise<{ readonly verdicts: ReviewVerdict[]; readonly spentUsd: number; readonly stoppedAtCap: boolean; readonly reviewed: number }>;
 export function verdictTable(verdicts: readonly ReviewVerdict[]): string;

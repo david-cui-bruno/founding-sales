@@ -4,20 +4,20 @@
 //
 //   node tools/trial-review/review.mjs --export <trial-export.jsonl> --key <private.pem> [--cap-usd 3] [--out <dir>]
 //
-// ONE process: it asks for the key's passphrase (typed, never an argument), decrypts the export IN
-// MEMORY, reviews each call with one InvokeModel request, and writes only:
-//
-//   * <out>/verdicts.json (0600): ids, kinds and enums only (lib.mjs OUTPUT_SCHEMA), which the
-//     coordinator may read;
-//   * <out>/reasons-for-david.txt (0600): the model's free-text notes, for David alone. Its path is
-//     printed, never its content.
+// ONE process: it asks for the key's passphrase (typed, never an argument; at least 8 characters),
+// decrypts the export IN MEMORY, checks every proposal key and kind against the contract, reviews
+// each call with one InvokeModel request, and writes only <out>/verdicts.json (0600): ids, kinds
+// and enums only (lib.mjs OUTPUT_SCHEMA), which the coordinator may read. Nothing free-text is
+// written anywhere (review TERF, finding 1).
 //
 // No plaintext file ever exists. Once the arguments parse, the export file is removed on EVERY exit:
 // success, any failure (a wrong passphrase included: re-exporting is one command), an uncaught
-// error, and SIGINT/SIGTERM/SIGHUP (exit 130). A failure prints only a fixed code.
-// <out> defaults to the export's folder.
+// error, SIGINT/SIGTERM/SIGHUP/SIGQUIT (exit 130), and, through a last synchronous guard on
+// process 'exit', any exit no handler saw (Node's exit 13 for an unsettled top-level await). If the
+// export cannot be removed, the run prints E_CLEANUP and exits 3 (review TERF, finding 4). A failure
+// prints only a fixed code. <out> defaults to the export's folder.
 
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
@@ -71,28 +71,53 @@ try {
 }
 const { exportFile, keyFile, capUsd, out } = parsed;
 
-let removed = false;
-/** The export goes on every exit from here on. */
-function removeExport() {
-  if (removed) return;
-  removed = true;
+/** Synchronous, so it holds inside the 'exit' listener too. */
+const say = line => {
   try {
-    rmSync(exportFile, { force: true });
-    process.stderr.write(`removed the export ${exportFile}\n`);
+    writeSync(2, `${line}\n`);
   } catch {
-    process.stderr.write('review stopped: E_CLEANUP (remove the export by hand)\n');
+    // stderr gone: nothing else to do.
   }
+};
+
+/** The exit code when the export could not be removed. */
+const CLEANUP_EXIT = 3;
+
+/** Remove the export, synchronously; true once it is gone. A failure prints E_CLEANUP. */
+function removeExport() {
+  try {
+    unlinkSync(exportFile);
+  } catch {
+    // Already gone is fine; anything else is checked below.
+  }
+  if (!existsSync(exportFile)) {
+    say(`removed the export ${exportFile}`);
+    return true;
+  }
+  say('review stopped: E_CLEANUP (remove the export by hand)');
+  return false;
 }
 
+let finished = false;
 function exitWith(code, exitCode) {
-  if (code !== null) process.stderr.write(`review stopped: ${code}\n`);
-  removeExport();
-  process.exit(exitCode);
+  if (code !== null) say(`review stopped: ${code}`);
+  const gone = removeExport();
+  finished = true;
+  process.exit(gone ? exitCode : CLEANUP_EXIT);
 }
 
 process.on('uncaughtException', () => exitWith('E_INTERNAL', 1));
 process.on('unhandledRejection', () => exitWith('E_INTERNAL', 1));
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => exitWith('E_INTERRUPTED', 130));
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) process.on(signal, () => exitWith('E_INTERRUPTED', 130));
+// The last guard: an exit that went through none of the above (Node exits 13 when the top-level
+// await can never settle, without running `finally`). Synchronous only.
+process.on('exit', exitCode => {
+  if (finished) return;
+  finished = true;
+  say('review stopped: E_INTERNAL');
+  const gone = removeExport();
+  process.exitCode = gone ? (exitCode === 0 ? 1 : exitCode) : CLEANUP_EXIT;
+});
 
 /** The passphrase: hidden on a terminal; one line from stdin otherwise. */
 async function askPassphrase() {
@@ -187,14 +212,12 @@ async function run() {
   if (schemaViolations(output, OUTPUT_SCHEMA).length > 0) throw new ToolError('E_SCHEMA');
   const table = verdictTable(result.verdicts);
   const verdictFile = join(out, 'verdicts.json');
-  const reasonsFile = join(out, 'reasons-for-david.txt');
-  const closing = `reviewed ${String(result.reviewed)} of ${String(calls.length)}; estimated $${result.spentUsd.toFixed(4)}; verdicts in ${verdictFile}; David's notes in ${reasonsFile} (not printed)`;
+  const closing = `reviewed ${String(result.reviewed)} of ${String(calls.length)}; estimated $${result.spentUsd.toFixed(4)}; verdicts in ${verdictFile}`;
   // Defence in depth: no run of any transcript in everything the coordinator can see, as one text.
   if (emittedQuoteCount(transcriptRuns(calls), output, table, closing) > 0) throw new ToolError('E_QUOTE');
   try {
     mkdirSync(out, { recursive: true, mode: 0o700 });
     writePrivate(verdictFile, `${JSON.stringify(output, null, 2)}\n`);
-    writePrivate(reasonsFile, result.notes.map(entry => `${entry.callSessionId} ${entry.key}: ${entry.note}`).join('\n') + (result.notes.length > 0 ? '\n' : ''));
   } catch {
     throw new ToolError('E_WRITE');
   }

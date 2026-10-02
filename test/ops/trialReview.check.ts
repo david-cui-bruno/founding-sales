@@ -1,28 +1,35 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CALL_PROPOSAL_KINDS } from '@fss/contracts';
+import { CALL_OUTCOMES, CALL_PROPOSAL_KINDS, type CallProposal } from '@fss/contracts';
 import { afterAll, describe, expect, it } from 'vitest';
 import { encryptTrialExport, readTrialExportPublicKey } from '../../apps/worker/src/tools/fss/trialExport.ts';
+import { acceptanceTypeOf } from '../../packages/domain/calls/proposalMeasure.ts';
 import { schemaProblems } from '../../packages/domain/test/support/structuredOutputsSchema.ts';
 import {
+  OUTCOMES,
   OUTPUT_SCHEMA,
+  PASSPHRASE_MIN_CHARS,
   PROPOSAL_KINDS,
+  REPORT_TYPES,
   REASON_CODES,
   REVIEW_MODEL,
   ToolError,
   VERDICT_SCHEMA,
+  assertCanonicalCall,
   assertPassphraseRequired,
   callsOf,
   decryptExport,
   emittedQuoteCount,
   foldForQuoteCheck,
   inputTokenBound,
+  loadPrivateKey,
   quotedRunCount,
   readExportParts,
+  reportTypeOf,
   reviewCalls,
   reviewRequestOf,
   schemaViolations,
@@ -36,11 +43,13 @@ import { repositoryPath } from './support/repository.ts';
  * Slice S3T-E after the TE design reset: `tools/trial-review/review.mjs` as David runs it — one
  * process that decrypts in memory, reviews through a stubbed Bedrock client
  * (`FSS_TRIAL_REVIEW_STUB`, a module the test writes; no request leaves the machine) and writes
- * only an enum-only verdicts.json and David's reasons-for-david.txt. Covers: R1 (no plaintext file;
+ * only an enum-only verdicts.json (no free text anywhere: review TERF). Covers: R1 (no plaintext file;
  * the export removed on every exit after the arguments parse, signals included), R2 (no free text
  * in verdicts.json or stdout; the quote check over the concatenation of everything emitted), R4
  * (a key that loads without a passphrase is refused, the appended-marker case included), and the
- * earlier fixes still standing (GCM, codes only, the byte cost bound, the cap).
+ * earlier fixes still standing (GCM, codes only, the byte cost bound, the cap), and the TERF round:
+ * no notes, canonical proposal keys (E_PAYLOAD), every exit removes the export or fails with
+ * E_CLEANUP, an empty or short passphrase refused, and the reporting type per row.
  *
  * Fictional throughout: "Dana", `example.test`.
  */
@@ -81,7 +90,10 @@ function call(id: string, keys: readonly string[] = ['outcome', 'buying_signal']
     analysis: {
       analysisId: '33333333-3333-4333-8333-333333333333',
       version: 1,
-      proposals: keys.map(key => ({ key, kind: key, mode: 'apply', reason: 'From the call.', params: { evidence: [{ line: 2, side: 'them', start: 5, end: 9, quote: 'a short demo next week' }] } })),
+      proposals: keys.map(key => {
+        const evidence = [{ line: 2, side: 'them', start: 5, end: 9, quote: 'a short demo next week' }];
+        return { key, kind: key, mode: 'apply', reason: 'From the call.', params: key === 'outcome' ? { outcome: 'interested', evidence } : { evidence } };
+      }),
     },
     decisions: [{ analysisId: '33333333-3333-4333-8333-333333333333', key: 'outcome', type: 'outcome:interested', result: 'unchanged', at: '2026-10-02T15:05:00.000Z' }],
     corrections: [],
@@ -92,14 +104,12 @@ function call(id: string, keys: readonly string[] = ['outcome', 'buying_signal']
 const CALLS = [call('55555555-5555-4555-8555-555555555555'), call('66666666-6666-4666-8666-666666666666')];
 const exported = { format: 'fss.trial-export.v1', since: '2026-10-02T07:14:00.000Z', workspaces: [{ workspaceId: '11111111-1111-4111-8111-111111111111', calls: CALLS }] };
 
-const NOTE = 'Line 2 asks for a demo, which supports it.';
 const entry = (key: string, patch: Record<string, unknown> = {}) => ({
   key,
   verdict: 'correct',
   category: 'none',
   reason_code: 'supported_by_statement',
   decision_matches_evidence: key === 'outcome' ? 'yes' : 'unclear',
-  note: NOTE,
   ...patch,
 });
 const answerOfEntries = (entries: readonly unknown[]) => ({
@@ -110,12 +120,12 @@ const answerOfEntries = (entries: readonly unknown[]) => ({
 const goodAnswer = (keys: readonly string[] = ['outcome', 'buying_signal'], patch: Record<string, unknown> = {}) => answerOfEntries(keys.map(key => entry(key, patch)));
 
 /** A folder holding the export as the ops helper prints it (indented, among other log lines), and the key. */
-function exportFolder(pem: string = pair.privateKey): string {
+function exportFolder(pem: string = pair.privateKey, payload: unknown = exported): string {
   const folder = mkdtempSync(join(tmpdir(), 'fss-trial-review-'));
   folders.push(folder);
   const key = readTrialExportPublicKey(Buffer.from(pair.publicKey).toString('base64'));
   if (!key.ok) throw new Error(key.reason);
-  const lines = encryptTrialExport(Buffer.from(JSON.stringify(exported)), key.key, 2_000);
+  const lines = encryptTrialExport(Buffer.from(JSON.stringify(payload)), key.key, 2_000);
   writeFileSync(join(folder, 'trial-export.jsonl'), ['operations: log stream …', ...lines.map(line => `  ${line}`), '  {"exported":2}', ''].join('\n'));
   writeFileSync(join(folder, 'key.pem'), pem, { mode: 0o600 });
   return folder;
@@ -137,6 +147,7 @@ export async function invoke(modelId, body) {
   const asked = readFileSync(${JSON.stringify(record)}, 'utf8').trim().split('\\n').length;
   const answer = answers[asked - 1];
   if (answer === 'hang') return await new Promise(resolve => setTimeout(resolve, 60_000));
+  if (answer === 'unsettled') return await new Promise(() => undefined);
   if (answer === undefined || answer === 'throw') throw new Error('stubbed Bedrock failure: evaluating three tools this quarter');
   return answer;
 }
@@ -157,8 +168,8 @@ const review = (folder: string, env: NodeJS.ProcessEnv, extra: readonly string[]
   });
 
 const exportGone = (folder: string): boolean => !existsSync(join(folder, 'trial-export.jsonl'));
-/** No file in the folder holds plaintext: only the key and the two outputs may be there. */
-const onlyOutputs = (folder: string): string[] => readdirSync(folder).filter(name => !['key.pem', 'verdicts.json', 'reasons-for-david.txt'].includes(name));
+/** No file in the folder holds plaintext: only the key and verdicts.json may be there. */
+const onlyOutputs = (folder: string): string[] => readdirSync(folder).filter(name => !['key.pem', 'verdicts.json'].includes(name));
 
 function thrown(action: () => unknown): { readonly code: string; readonly detail: string } {
   try {
@@ -171,7 +182,7 @@ function thrown(action: () => unknown): { readonly code: string; readonly detail
 }
 
 describe('R1: one process, no plaintext on disk, the export removed on every exit', () => {
-  it('reviews in memory: verdicts.json and reasons-for-david.txt (both 0600) are the only files written, and the export is gone', () => {
+  it('reviews in memory: verdicts.json (0600) is the only file written, and the export is gone', () => {
     const folder = exportFolder();
     writeFileSync(join(folder, 'verdicts.json'), '{}', { mode: 0o644 });
     const stubbed = stub(folder, [goodAnswer(), goodAnswer()]);
@@ -179,14 +190,14 @@ describe('R1: one process, no plaintext on disk, the export removed on every exi
     expect(result.status, String(result.stderr)).toBe(0);
     expect(stubbed.asked()).toBe(2);
     expect(exportGone(folder)).toBe(true);
-    expect(onlyOutputs(folder)).toEqual([]);
-    for (const name of ['verdicts.json', 'reasons-for-david.txt']) expect(statSync(join(folder, name)).mode & 0o777).toBe(0o600);
+    expect(readdirSync(folder).sort()).toEqual(['key.pem', 'verdicts.json']);
+    expect(statSync(join(folder, 'verdicts.json')).mode & 0o777).toBe(0o600);
     expect(String(result.stderr)).toContain('removed the export');
   });
 
   it('a wrong passphrase removes the export too, with a code only', () => {
     const folder = exportFolder();
-    const result = review(folder, stub(folder, []).env, [], 'wrong');
+    const result = review(folder, stub(folder, []).env, [], 'wrong-passphrase');
     expect(result.status).toBe(1);
     expect(String(result.stderr)).toMatch(/^review stopped: E_KEY\nremoved the export /u);
     expect(exportGone(folder)).toBe(true);
@@ -213,8 +224,8 @@ describe('R1: one process, no plaintext on disk, the export removed on every exi
     for (const folder of [malformed, schema, bedrock]) expect(onlyOutputs(folder)).toEqual([]);
   });
 
-  it('SIGINT, SIGTERM and SIGHUP during a Bedrock request remove the export and exit 130', async () => {
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  it('SIGINT, SIGTERM, SIGHUP and SIGQUIT during a Bedrock request remove the export and exit 130', async () => {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const) {
       const folder = exportFolder();
       const stubbed = stub(folder, ['hang']);
       const child = spawn(node, [tool('review.mjs'), '--export', join(folder, 'trial-export.jsonl'), '--key', join(folder, 'key.pem')], {
@@ -257,13 +268,13 @@ describe('R1: one process, no plaintext on disk, the export removed on every exi
     folders.push(out);
     const result = review(folder, stub(folder, [goodAnswer(), goodAnswer()]).env, ['--out', out]);
     expect(result.status, String(result.stderr)).toBe(0);
-    expect(readdirSync(out).sort()).toEqual(['reasons-for-david.txt', 'verdicts.json']);
+    expect(readdirSync(out)).toEqual(['verdicts.json']);
     expect(existsSync(tool('decrypt.mjs'))).toBe(false);
   });
 });
 
 describe('R2: the coordinator-facing output has no free text', () => {
-  it('verdicts.json is ids, kinds and enums only; stdout prints the notes path, never a note', () => {
+  it('verdicts.json is ids, kinds and enums only, with the reporting type and proposed value from the export', () => {
     const folder = exportFolder();
     const result = review(folder, stub(folder, [goodAnswer(), goodAnswer()]).env);
     expect(result.status, String(result.stderr)).toBe(0);
@@ -276,6 +287,8 @@ describe('R2: the coordinator-facing output has no free text', () => {
           analysisId: '33333333-3333-4333-8333-333333333333',
           key: 'outcome',
           kind: 'outcome',
+          report_type: 'outcome:interested',
+          proposed_value: 'interested',
           decision: 'unchanged',
           verdict: 'correct',
           category: 'none',
@@ -284,32 +297,38 @@ describe('R2: the coordinator-facing output has no free text', () => {
         },
       ]),
     );
-    const notes = readFileSync(join(folder, 'reasons-for-david.txt'), 'utf8');
-    expect(notes).toContain(NOTE);
-    for (const text of [String(result.stdout), readFileSync(join(folder, 'verdicts.json'), 'utf8')]) {
-      expect(text).not.toContain('Line 2 asks');
-      expect(text).not.toContain('evaluating');
-    }
-    expect(String(result.stdout)).toContain('55555555 | outcome | outcome | unchanged | correct | none | supported_by_statement | yes');
-    expect(String(result.stdout)).toContain(`David's notes in ${join(folder, 'reasons-for-david.txt')} (not printed)`);
+    for (const text of [String(result.stdout), readFileSync(join(folder, 'verdicts.json'), 'utf8')]) expect(text).not.toContain('evaluating');
+    expect(String(result.stdout)).toContain('55555555 | outcome | outcome | outcome:interested | interested | unchanged | correct | none | supported_by_statement | yes');
+    expect(String(result.stdout)).toContain('55555555 | buying_signal | buying_signal | buying_signal | none | none | correct');
+    expect(String(result.stdout)).toMatch(/reviewed 2 of 2; estimated \$[\d.]+; verdicts in \S+verdicts\.json\n$/u);
   });
 
-  it('a note quoting the transcript reaches only reasons-for-david.txt', () => {
+  it('TERF 1: the model writes no note; an answer carrying one is refused (E_SCHEMA), nothing is written, the export goes', () => {
+    const items = (VERDICT_SCHEMA['properties'] as { verdicts: { items: { required: string[]; properties: Record<string, unknown> } } }).verdicts.items;
+    expect(items.required).not.toContain('note');
+    expect(Object.keys(items.properties)).not.toContain('note');
     const folder = exportFolder();
     const leaky = goodAnswer(['outcome', 'buying_signal'], { note: SPOKEN.slice(0, 120) });
-    const result = review(folder, stub(folder, [leaky, leaky]).env);
-    expect(result.status, String(result.stderr)).toBe(0);
-    expect(String(result.stdout)).not.toContain('three tools');
-    expect(readFileSync(join(folder, 'verdicts.json'), 'utf8')).not.toContain('three tools');
+    const stubbed = stub(folder, [leaky, leaky]);
+    const result = review(folder, stubbed.env);
+    expect([result.status, String(result.stderr).split('\n')[0]]).toEqual([1, 'review stopped: E_SCHEMA']);
+    expect(stubbed.asked()).toBe(1);
+    expect(readdirSync(folder)).toEqual(['key.pem']);
+    expect(String(result.stdout) + String(result.stderr)).not.toContain('three tools');
+    expect(readFileSync(tool('review.mjs'), 'utf8')).not.toContain('reasons-for-david');
   });
 
   it('the output schema refuses any free string, extra field or value off its list', () => {
-    const one = { callSessionId: '55555555-5555-4555-8555-555555555555', analysisId: '33333333-3333-4333-8333-333333333333', key: 'outcome', kind: 'outcome', decision: 'none', verdict: 'correct', category: 'none', reason_code: 'other', decision_matches_evidence: 'yes' };
+    const one = { callSessionId: '55555555-5555-4555-8555-555555555555', analysisId: '33333333-3333-4333-8333-333333333333', key: 'outcome', kind: 'outcome', report_type: 'stop', proposed_value: 'do_not_call', decision: 'none', verdict: 'correct', category: 'none', reason_code: 'other', decision_matches_evidence: 'yes' };
     const base = { model: 'us.anthropic.claude-sonnet-4-6', reviewed: 1, of: 1, stoppedAtCap: false, estimatedUsd: 0.1, verdicts: [one] };
     expect(schemaViolations(base, OUTPUT_SCHEMA)).toEqual([]);
     expect(schemaViolations({ ...base, verdicts: [{ ...one, note: 'we can do it' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
     expect(schemaViolations({ ...base, verdicts: [{ ...one, reason_code: 'we can do it' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
     expect(schemaViolations({ ...base, verdicts: [{ ...one, key: 'we can do it if you ask us' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
+    expect(schemaViolations({ ...base, verdicts: [{ ...one, key: 'we_can_do_it' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
+    expect(schemaViolations({ ...base, verdicts: [{ ...one, key: 'task:0123456789abcdef' }] }, OUTPUT_SCHEMA)).toEqual([]);
+    expect(schemaViolations({ ...base, verdicts: [{ ...one, report_type: 'outcome:do_not_call' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
+    expect(schemaViolations({ ...base, verdicts: [{ ...one, proposed_value: 'maybe' }] }, OUTPUT_SCHEMA)).not.toEqual([]);
     expect(schemaViolations({ ...base, extra: 'x' }, OUTPUT_SCHEMA)).not.toEqual([]);
   });
 
@@ -323,7 +342,8 @@ describe('R2: the coordinator-facing output has no free text', () => {
     expect(bad([entry('outcome', { verdict: 'incorrect' }), entry('buying_signal')]).detail).toMatch(/exactly when/u);
     expect(bad([entry('outcome', { reason_code: 'they said so' }), entry('buying_signal')]).code).toBe('E_SCHEMA');
     expect(bad([entry('outcome', { extra: 1 }), entry('buying_signal')]).code).toBe('E_SCHEMA');
-    expect(bad([entry('outcome', { note: 'x'.repeat(201) }), entry('buying_signal')]).detail).toMatch(/200/u);
+    expect(bad([entry('outcome', { note: 'Line 2 supports it.' }), entry('buying_signal')])).toEqual({ code: 'E_SCHEMA', detail: 'the answer does not match the schema' });
+    expect(bad([entry('outcome', { note: '' }), entry('buying_signal')]).code).toBe('E_SCHEMA');
     expect(bad([entry('park'), entry('outcome'), entry('buying_signal')]).detail).toMatch(/key the call does not have/u);
   });
 
@@ -342,6 +362,7 @@ describe('R2: the coordinator-facing output has no free text', () => {
       'other',
     ]);
     expect([...PROPOSAL_KINDS]).toEqual([...CALL_PROPOSAL_KINDS]);
+    expect([...OUTCOMES]).toEqual([...CALL_OUTCOMES]);
     expect(schemaProblems(VERDICT_SCHEMA)).toEqual([]);
     const request = reviewRequestOf(CALLS[0] as ReviewCall);
     expect(schemaProblems((request['output_config'] as { format: { schema: unknown } }).format.schema)).toEqual([]);
@@ -357,6 +378,124 @@ describe('R2: the coordinator-facing output has no free text', () => {
     expect(emittedQuoteCount(transcriptRuns(CALLS), { verdict: 'correct', reason_code: 'supported_by_statement' })).toBe(0);
     // The folding still holds.
     expect(foldForQuoteCheck('Démo​­')).toBe('demo');
+  });
+});
+
+describe('TERF 3: every proposal key and kind is the contract\'s', () => {
+  const aliased = (): ReviewCall => {
+    const base = call('55555555-5555-4555-8555-555555555555');
+    return {
+      ...base,
+      analysis: {
+        ...base.analysis,
+        proposals: [
+          { key: 'we_can_do_it', kind: 'outcome', mode: 'apply', reason: 'Line 1.', params: { outcome: 'interested' } },
+          { key: 'if_you_ask_us', kind: 'buying_signal', mode: 'apply', reason: 'Line 1.', params: {} },
+        ],
+      },
+    };
+  };
+
+  it('the reviewer\'s phrase keys stop the run with E_PAYLOAD before any request, and no key is printed', () => {
+    const folder = exportFolder(pair.privateKey, { ...exported, workspaces: [{ workspaceId: '11111111-1111-4111-8111-111111111111', calls: [aliased()] }] });
+    const stubbed = stub(folder, [answerOfEntries([entry('we_can_do_it'), entry('if_you_ask_us')])]);
+    const result = review(folder, stubbed.env);
+    expect([result.status, String(result.stderr).split('\n')[0]]).toEqual([1, 'review stopped: E_PAYLOAD']);
+    expect(stubbed.asked()).toBe(0);
+    for (const text of [String(result.stdout), String(result.stderr)]) expect(text).not.toMatch(/we_can_do_it|if_you_ask_us/u);
+    expect(readdirSync(folder)).toEqual(['key.pem']);
+  });
+
+  it('refuses a key off the contract, a kind off the contract, a key that is not its kind, a repeated key and an outcome off the list', () => {
+    const with_ = (proposals: readonly Record<string, unknown>[]) => {
+      const base = call('55555555-5555-4555-8555-555555555555');
+      return { ...base, analysis: { ...base.analysis, proposals } } as unknown as ReviewCall;
+    };
+    const outcome = { key: 'outcome', kind: 'outcome', mode: 'apply', reason: 'r', params: { outcome: 'interested' } };
+    expect(thrown(() => assertCanonicalCall(aliased())).code).toBe('E_PAYLOAD');
+    expect(thrown(() => validateVerdicts({ verdicts: [entry('we_can_do_it'), entry('if_you_ask_us')] }, aliased())).code).toBe('E_PAYLOAD');
+    expect(thrown(() => assertCanonicalCall(with_([{ ...outcome, kind: 'we_can_do_it', key: 'we_can_do_it' }]))).detail).not.toMatch(/we_can/u);
+    expect(thrown(() => assertCanonicalCall(with_([{ ...outcome, key: 'park' }]))).code).toBe('E_PAYLOAD');
+    expect(thrown(() => assertCanonicalCall(with_([{ ...outcome, key: 'task:0123456789abcdef' }]))).code).toBe('E_PAYLOAD');
+    expect(thrown(() => assertCanonicalCall(with_([{ ...outcome, kind: 'task' }]))).code).toBe('E_PAYLOAD');
+    expect(thrown(() => assertCanonicalCall(with_([outcome, outcome]))).code).toBe('E_PAYLOAD');
+    expect(thrown(() => assertCanonicalCall(with_([{ ...outcome, params: { outcome: 'we can do it' } }]))).code).toBe('E_PAYLOAD');
+    expect(() => assertCanonicalCall(with_([outcome, { key: 'task:0123456789abcdef', kind: 'task', mode: 'apply', reason: 'r', params: {} }]))).not.toThrow();
+  });
+});
+
+describe('TERF 4: every exit removes the export, or fails', () => {
+  it('an unsettled await (Node exits 13 without running finally) still removes the export', () => {
+    const folder = exportFolder();
+    const result = review(folder, stub(folder, ['unsettled']).env);
+    expect(result.status).toBe(13);
+    expect(String(result.stderr)).toMatch(/review stopped: E_INTERNAL\nremoved the export /u);
+    expect(readdirSync(folder)).toEqual(['key.pem']);
+  });
+
+  it('an export that cannot be deleted prints E_CLEANUP and exits 3, even after a review that succeeded', () => {
+    const folder = exportFolder();
+    const out = mkdtempSync(join(tmpdir(), 'fss-trial-out-'));
+    folders.push(out);
+    const stubbed = stub(folder, [goodAnswer(), goodAnswer()]);
+    chmodSync(folder, 0o500);
+    let result;
+    try {
+      result = review(folder, stubbed.env, ['--out', out]);
+    } finally {
+      chmodSync(folder, 0o700);
+    }
+    expect(result.status).toBe(3);
+    expect(String(result.stderr)).toContain('review stopped: E_CLEANUP');
+    expect(exportGone(folder)).toBe(false);
+    expect(readdirSync(out)).toEqual(['verdicts.json']);
+  });
+});
+
+describe('TERF 5: an empty or short passphrase is refused before the key loads', () => {
+  it('the reviewer\'s empty-passphrase PKCS#8 key: E_KEY on a blank line, the export removed', () => {
+    const emptyPem = String(realKey().export({ type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase: '' }));
+    expect(() => assertPassphraseRequired(emptyPem)).not.toThrow();
+    expect(PASSPHRASE_MIN_CHARS).toBe(8);
+    for (const typed of ['', '   ', 'seven77', ' seven77 ']) {
+      expect(thrown(() => loadPrivateKey(emptyPem, typed)).code).toBe('E_KEY');
+      expect(thrown(() => loadPrivateKey(pair.privateKey, typed)).code).toBe('E_KEY');
+    }
+    const folder = exportFolder(emptyPem);
+    const result = review(folder, stub(folder, []).env, [], '');
+    expect([result.status, String(result.stderr).split('\n')[0]]).toEqual([1, 'review stopped: E_KEY']);
+    expect(readdirSync(folder)).toEqual(['key.pem']);
+    expect(() => loadPrivateKey(pair.privateKey, PASSPHRASE)).not.toThrow();
+  });
+});
+
+describe('TERF 6: the reporting type and the proposed value, from the export', () => {
+  it('interested, not_interested and do_not_call give three distinguishable rows', () => {
+    const rows = (['interested', 'not_interested', 'do_not_call'] as const).map(outcome => {
+      const base = call('55555555-5555-4555-8555-555555555555', ['outcome']);
+      const proposals = [{ key: 'outcome', kind: 'outcome', mode: 'apply', reason: 'r', params: { outcome, evidence: [] } }];
+      const row = validateVerdicts({ verdicts: [entry('outcome')] }, { ...base, analysis: { ...base.analysis, proposals } } as ReviewCall).verdicts[0];
+      expect(row?.report_type).toBe(acceptanceTypeOf(proposals[0] as unknown as CallProposal));
+      return [row?.report_type, row?.proposed_value];
+    });
+    expect(rows).toEqual([
+      ['outcome:interested', 'interested'],
+      ['outcome:not_interested', 'not_interested'],
+      ['stop', 'do_not_call'],
+    ]);
+  });
+
+  it('the reporting type equals acceptanceTypeOf over every kind and outcome, and its list is exactly those values', () => {
+    const all = new Set<string>();
+    for (const kind of CALL_PROPOSAL_KINDS) {
+      for (const outcome of kind === 'outcome' ? CALL_OUTCOMES : [undefined]) {
+        const proposal = { key: kind, kind, mode: 'apply', reason: 'r', params: { outcome } };
+        const type = acceptanceTypeOf(proposal as unknown as CallProposal);
+        expect(reportTypeOf(proposal)).toBe(type);
+        all.add(type);
+      }
+    }
+    expect([...REPORT_TYPES].sort()).toEqual([...all].sort());
   });
 });
 
@@ -413,15 +552,16 @@ describe('the cost guard (still standing)', () => {
 });
 
 describe('cleanup.sh (a manual sweep)', () => {
-  it('removes exports and verdicts.json, keeps reasons-for-david.txt unless --all', () => {
+  it('removes exports, verdicts.json and older versions\' leftovers; it has no --all', () => {
     const folder = exportFolder();
     writeFileSync(join(folder, 'verdicts.json'), '{}');
     writeFileSync(join(folder, 'reasons-for-david.txt'), 'notes');
+    const all = spawnSync('bash', [tool('cleanup.sh'), folder, '--all'], { encoding: 'utf8' });
+    expect(all.status).toBe(2);
+    expect(readdirSync(folder).sort()).toEqual(['key.pem', 'reasons-for-david.txt', 'trial-export.jsonl', 'verdicts.json']);
     const first = spawnSync('bash', [tool('cleanup.sh'), folder], { encoding: 'utf8' });
     expect(first.status).toBe(0);
-    expect(readdirSync(folder).sort()).toEqual(['key.pem', 'reasons-for-david.txt']);
-    const all = spawnSync('bash', [tool('cleanup.sh'), folder, '--all'], { encoding: 'utf8' });
-    expect(all.status).toBe(0);
     expect(readdirSync(folder)).toEqual(['key.pem']);
+    expect(readFileSync(tool('cleanup.sh'), 'utf8')).not.toContain('--all');
   });
 });
