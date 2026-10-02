@@ -66,7 +66,7 @@ function operations(extra: NonNullable<AppServerOptions['operations']> = {}): No
   };
 }
 
-const review = (...items: object[]): { items: object[] } => JSON.parse(JSON.stringify(reviewAnswer(items))) as { items: object[] };
+const review = (...items: object[]): { items: object[]; failed: boolean } => ({ ...(JSON.parse(JSON.stringify(reviewAnswer(items))) as { items: object[] }), failed: false });
 const analysis = (proposals: Parameters<typeof analysisAnswer>[0] = {}) => ({ analysis: JSON.parse(JSON.stringify(analysisAnswer(proposals))) as object, reason: null });
 
 async function settled(page: Page): Promise<void> {
