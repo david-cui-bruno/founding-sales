@@ -30,9 +30,32 @@ function nextNumbers(): readonly [string, string] {
   counter += 1;
   const base = (counter * 2) % 100;
   const pad = (n: number): string => String(n).padStart(2, '0');
-  // 555-0100..555-0199, cycling through area codes so a long file never repeats a pair.
-  const area = 401 + Math.floor((counter * 2) / 100);
+  // 555-0100..555-0199, cycling through area codes from 212 so a long file never repeats a
+  // pair, and never meets the shared fixtures' 401 numbers (a handle stop is workspace-wide).
+  const area = 212 + Math.floor((counter * 2) / 100);
   return [`+1${String(area)}55501${pad(base)}`, `+1${String(area)}55501${pad(base + 1)}`];
+}
+
+/** Two numbers for a contact some other fixture created, both on the same contact. */
+export async function addPhones(
+  session: SessionQueryable,
+  workspaceId: string,
+  target: { readonly firmId: string; readonly contactId: string },
+): Promise<{ readonly phone: string; readonly otherPhone: string; readonly phoneRouteId: string; readonly otherPhoneRouteId: string }> {
+  const [phone, otherPhone] = nextNumbers();
+  const ids: string[] = [];
+  for (const e164 of [phone, otherPhone]) {
+    const route = await session.query<{ id: string }>(
+      `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at,
+                                 association_confidence, technical_validation, eligibility, eligibility_policy_version)
+       VALUES ($1, $2, $3, $4, 'research_provider', TIMESTAMPTZ '2026-09-01 12:00:00+00',
+               0.900, 'passed', 'usable', 'route-policy.1')
+       RETURNING id`,
+      [workspaceId, target.firmId, target.contactId, e164],
+    );
+    ids.push(route.rows[0]?.id ?? '');
+  }
+  return { phone, otherPhone, phoneRouteId: ids[0] ?? '', otherPhoneRouteId: ids[1] ?? '' };
 }
 
 export async function seedChannelFirm(session: SessionQueryable, workspace: SeededWorkspace): Promise<ChannelFirm> {
@@ -149,7 +172,7 @@ export function userContext(
  * The input `suppressionSource` reads: the firm, the contact and the step's channel. The
  * rest of a step's input is irrelevant to that source, which reads nothing else.
  */
-export function stepInput(firm: ChannelFirm, channel: 'email' | 'call_task'): StepEligibilityInput {
+export function stepInput(firm: Pick<ChannelFirm, 'firmId' | 'contactId'>, channel: 'email' | 'call_task'): StepEligibilityInput {
   return {
     firmId: firm.firmId,
     contactId: firm.contactId,

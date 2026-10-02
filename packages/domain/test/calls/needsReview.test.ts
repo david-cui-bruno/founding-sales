@@ -124,6 +124,31 @@ describe('B-13: Needs review', () => {
     expect(await kindsFor(call.sessionId)).not.toContain('stop_scope');
   });
 
+  it('stop_scope (migration 0037): a firm e-mail stop does not settle it; a firm calls stop does', async () => {
+    const call = await analysed(
+      lines(['Y', 'Hi, David from Callie.'], ['T', "Stop calling me. Don't contact anyone here again."]),
+      answer({ stop: { requested: true, scope: 'all_contact', quote: 'Stop calling me', line: 2 } }),
+    );
+    const firmStop = async (channel: 'email' | 'phone'): Promise<void> => {
+      const recorded = await withTransaction(world.session, async () =>
+        await recordSuppression(world.salesperson(), {
+          scope: 'firm',
+          firmId: call.firm.firmId,
+          source: 'prospect_do_not_call',
+          channel,
+          commandId: `review-stop-${channel}-${call.sessionId}`,
+          journal: recordingSuppressionJournal(),
+        }),
+      );
+      expect(recorded.ok).toBe(true);
+    };
+    // A stop about a call that leaves calls open is not the answer to "stop calling".
+    await firmStop('email');
+    expect(await kindsFor(call.sessionId)).toContain('stop_scope');
+    await firmStop('phone');
+    expect(await kindsFor(call.sessionId)).not.toContain('stop_scope');
+  });
+
   it('referral_contact: done when a contact with that name exists at the firm', async () => {
     const call = await analysed(
       lines(['Y', 'May I speak with Bob?'], ['T', 'Bob left. Talk to Sarah Kim.']),
