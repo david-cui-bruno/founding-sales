@@ -9,7 +9,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { openOpportunity, readOpenOpportunity, reopenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
 import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -1132,8 +1132,9 @@ async function recordAgreement(
  *
  * The answer is always a follow-up entry: `agreed_sequence_enrolled` naming the
  * enrollment, or `follow_up_not_enrolled` whose reason is `enrollContact`'s refusal code
- * (`enrollment_failed` for a throw). A firm with no open opportunity gets one first, at
- * stage New, in the same savepoint. Either way the permission granted before it stands.
+ * (`enrollment_failed` for a throw), or `no_open_opportunity` for a firm with no open
+ * opportunity (slice 3a: none is opened for it). Either way the permission granted before
+ * it stands.
  */
 async function enrolAgreedSequence(
   context: RepositoryContext,
@@ -1143,25 +1144,20 @@ async function enrolAgreedSequence(
     readonly firmId: string;
     readonly contactId: string;
     readonly permissionId: string;
-    /** The interested call that agreed to it, named on an opportunity opened for it. */
+    /** The call that agreed to it. */
     readonly callLogId: string;
   },
 ): Promise<CallFollowUp> {
   const refused: { reason: string } = { reason: 'enrollment_failed' };
   const enrolled = await withinSavepoint(context, async (): Promise<PolicyResult<string>> => {
-    // A firm with no open opportunity — one added through `/crm/firms/add` or an import,
-    // which open none — gets one here, at stage New, so starting what the person agreed
-    // to never needs a command of its own (the coordinator's decision, 30 September
-    // 2026). Inside this savepoint: a refused enrolment takes the new opportunity back
-    // with it, so a refusal leaves nothing behind but the permission.
-    let opportunityId = input.opportunityId;
+    // Slice 3a (DESIGN-S3A §2.6): permission is not qualification. A firm with no open
+    // opportunity is not given one here any more — a deal opens only on David's deliberate
+    // tick (the buying signal) or his own command — so the agreement stands, the
+    // permission stands, and nothing is enrolled: `no_open_opportunity`.
+    const opportunityId = input.opportunityId;
     if (opportunityId === null) {
-      const opened = await opportunityForAgreedSequence(context, input);
-      if (!opened.ok) {
-        refused.reason = opened.reason;
-        return refusePolicy('invalid_input');
-      }
-      opportunityId = opened.value;
+      refused.reason = 'no_open_opportunity';
+      return refusePolicy('invalid_input');
     }
     const outcome = await enrollContact(context, {
       originKind: 'follow_up',
@@ -1180,89 +1176,6 @@ async function enrolAgreedSequence(
   });
   if (enrolled.ok) return { kind: 'agreed_sequence_enrolled', reason: 'enrolled', enrollmentId: enrolled.value };
   return { kind: 'follow_up_not_enrolled', reason: refused.reason };
-}
-
-/**
- * The open opportunity an agreed sequence enrols against, for a firm that has none
- * (coordinator's decisions and the review of S3, 30 September 2026). Always stage New
- * (the first non-terminal stage), manual, origin `engaged_call` — exactly what the
- * engaged call would have made of an opportunity that was open — and audited with the
- * call named. Two ways, and never silently a third:
- *
- *   * **no history**: `openOpportunity` at stage New, then `setManualControlMode` with
- *     origin `engaged_call`, the path the call's own effects take;
- *   * **a closed history** (the last opportunity Won or Lost): the explicit reopen,
- *     `reopenOpportunity` — a new row linked by `reopened_from_opportunity_id`, in
- *     manual mode, with a reason naming the interested call — rather than an unlinked
- *     row that would hide the history (review P1-2). The reopen records no manual-mode
- *     origin (its NULL reads as a takeover, which would block the very follow-up this
- *     is for), so the origin is recorded here as the call's: `engaged_call`, only on
- *     the row just reopened and only while it is still unrecorded, and audited as
- *     `opportunity.manual` the way every origin change is.
- *
- * Runs inside the enrolment's savepoint: a refused enrolment takes the row back.
- */
-async function opportunityForAgreedSequence(
-  context: RepositoryContext,
-  input: { readonly firmId: string; readonly callLogId: string; readonly sequenceVersionId: string },
-): Promise<{ readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: string }> {
-  const { rows: closed } = await context.db.query(
-    `SELECT 1 FROM opportunities WHERE workspace_id = $1 AND firm_id = $2 AND status <> 'open' LIMIT 1`,
-    [context.scope.workspaceId, input.firmId],
-  );
-  let opportunityId: string;
-  let reopened = false;
-  if (closed.length > 0) {
-    const reopen = await reopenOpportunity(context, {
-      firmId: input.firmId,
-      reason: `interested call ${input.callLogId} agreed to a sequence`,
-    });
-    if (!reopen.ok) return { ok: false, reason: reopen.reason };
-    opportunityId = reopen.value.opportunityId;
-    reopened = true;
-    const { rows: recorded } = await context.db.query<{ id: string }>(
-      `UPDATE opportunities SET control_mode_origin = 'engaged_call', updated_at = now()
-        WHERE workspace_id = $1 AND id = $2 AND control_mode = 'manual' AND control_mode_origin IS NULL
-        RETURNING id`,
-      [context.scope.workspaceId, opportunityId],
-    );
-    if (recorded[0] === undefined) return { ok: false, reason: 'invalid_input' };
-    await recordCrmAuditEvent(context, {
-      action: 'opportunity.manual',
-      subjectKind: 'opportunity',
-      subjectId: opportunityId,
-      detail: { firmId: input.firmId, origin: 'engaged_call', callLogId: input.callLogId, reopened: true },
-    });
-  } else {
-    const opened = await openOpportunity(context, { firmId: input.firmId, stageKey: 'new' });
-    if (!opened.ok) return { ok: false, reason: opened.reason };
-    opportunityId = opened.value.id;
-    // Marked manual exactly as the engaged call marks an open opportunity: the same
-    // `setManualControlMode`, origin `engaged_call`. That origin is a prospect signal, so
-    // the agreed follow-up still runs under it (PR 332's rule, `controlModeSource`); its
-    // stop event owes nothing, because the call's own stop already ended every live
-    // enrollment at the firm and this one does not exist yet.
-    const manual = await setManualControlMode(context, {
-      opportunityId,
-      reason: manualReasonFor('interested'),
-      origin: 'engaged_call',
-    });
-    if (!manual.ok) return { ok: false, reason: manual.reason };
-  }
-  // `openOpportunity` / `reopenOpportunity` audit themselves; this names why.
-  await recordCrmAuditEvent(context, {
-    action: 'opportunity.opened_for_agreed_sequence',
-    subjectKind: 'opportunity',
-    subjectId: opportunityId,
-    detail: {
-      firmId: input.firmId,
-      callLogId: input.callLogId,
-      outcome: 'interested',
-      sequenceVersionId: input.sequenceVersionId,
-      reopened,
-    },
-  });
-  return { ok: true, value: opportunityId };
 }
 
 const EFFECTS_SAVEPOINT = 'call_outcome_effects';
