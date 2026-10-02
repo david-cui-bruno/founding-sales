@@ -26,6 +26,7 @@ import { lockCallAnalysis } from './analysis.ts';
 import { transcriptSha256 } from './analysisModel.ts';
 import { taskKey } from './analysisPolicy.ts';
 import { createCallTask } from './callTasks.ts';
+import { recordProposalDecisions } from './proposalMeasure.ts';
 import { CALL_CADENCE_PARKED_SOURCE } from './sessions.ts';
 
 /**
@@ -309,38 +310,21 @@ export async function applyCallProposals(
   await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
 
   // ---- 5. Measure, then Today -----------------------------------------------------------
-  for (const entry of applied.results) {
-    await recordCrmAuditEvent(context, {
-      action: 'call.proposal_decided',
-      subjectKind: 'call_analysis',
-      subjectId: analysis.id,
-      detail: {
-        analysisId: analysis.id,
-        callSessionId: sessionId,
-        version: analysis.version,
-        proposalHash: analysis.proposal_hash,
-        policyVersion: analysis.policy_version,
-        key: entry.key,
-        kind: entry.kind,
-        type: acceptanceTypeOf(byKey.get(entry.key)),
-        result: entry.edited ? 'edited' : 'unchanged',
-      },
-    });
-  }
+  await recordProposalDecisions(
+    context,
+    {
+      id: analysis.id,
+      callSessionId: sessionId,
+      version: analysis.version,
+      // Both checked non-null by the freshness step above.
+      proposalHash: analysis.proposal_hash ?? input.proposalHash,
+      policyVersion: analysis.policy_version,
+      proposals: analysis.proposals ?? [],
+    },
+    applied.results.map(entry => ({ key: entry.key, result: entry.edited ? 'edited' : 'unchanged' })),
+  );
   await refreshTodayForFirm(context, { firmId: where.firm_id });
   return { ok: true, value: { analysisId: analysis.id, callSessionId: sessionId, ...applied } };
-}
-
-/**
- * The measurement's action type for one proposal (DESIGN-S3A §2.9): `outcome:<value>` for an
- * outcome other than `do_not_call`, `stop` for `do_not_call` and `stop_scope`, otherwise the
- * kind. The proposal's own value, not the edited one: the measurement is of the suggestion.
- */
-export function acceptanceTypeOf(proposal: CallProposal | undefined): string {
-  if (proposal === undefined) return 'unknown';
-  if (proposal.kind === 'outcome') return proposal.params.outcome === 'do_not_call' ? 'stop' : `outcome:${proposal.params.outcome}`;
-  if (proposal.kind === 'stop_scope') return 'stop';
-  return proposal.kind;
 }
 
 interface MapInput {
@@ -398,6 +382,7 @@ async function mapKeys(
         : {}),
       commandId: input.commandId,
       journal: input.journal,
+      viaProposalApply: true,
     });
     if (!logged.ok) throw new Refused(logged.reason);
     callLogId = logged.value.callLogId;

@@ -36,6 +36,7 @@ import { callOutcomeEffects, manualReasonFor, REACHED_OUTCOMES } from './outcome
 export { REACHED_OUTCOMES };
 import { UNANSWERED_OUTCOMES, parkIfCadenceSpent } from '../calls/sessions.ts';
 import { releasePendingHold } from '../calls/pendingHold.ts';
+import { recordFormBypass } from '../calls/proposalMeasure.ts';
 import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep } from './stepEffects.ts';
 
 /**
@@ -142,6 +143,11 @@ export interface LogCallOutcomeInput {
   readonly commandId?: string | undefined;
   /** Required whenever the outcome may suppress. The journal write precedes the row. */
   readonly journal?: SuppressionJournal | undefined;
+  /**
+   * Slice 3a: set by the proposal Apply, which measures its own keys. Absent — the form —
+   * a call with an authoritative analysis records the suggestions it bypassed.
+   */
+  readonly viaProposalApply?: boolean | undefined;
 }
 
 export interface LoggedCall {
@@ -671,6 +677,17 @@ export async function logCallOutcome(
       kind: 'callback',
       dueAt: now,
       sourceKind: 'callback',
+    });
+  }
+
+  // Slice 3a's measurement (DESIGN-S3A §2.9): logged from the form while the call had an
+  // authoritative analysis, its outcome suggestion (and the callback and follow-up ones the
+  // form also made) were bypassed.
+  if (input.callSessionId !== undefined && input.viaProposalApply !== true) {
+    await recordFormBypass(context, {
+      sessionId: input.callSessionId,
+      callback: outcomes.callbackId !== null,
+      followUp: followUpPermissionId !== null,
     });
   }
 

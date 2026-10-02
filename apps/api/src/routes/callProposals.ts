@@ -1,6 +1,12 @@
-import { applyCallProposalsCommandSchema, dismissPendingCallCommandSchema } from '@fss/contracts';
+import {
+  applyCallProposalsCommandSchema,
+  declineCallProposalsCommandSchema,
+  dismissPendingCallCommandSchema,
+  proposalAcceptanceResponseSchema,
+} from '@fss/contracts';
 import { dismissPendingHold } from '@fss/domain/calls/pendingHold.ts';
 import { applyCallProposals } from '@fss/domain/calls/proposalApply.ts';
+import { declineCallProposals, readProposalAcceptance } from '@fss/domain/calls/proposalMeasure.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -17,23 +23,41 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     answered from it.
  *   * `POST /calls/pending/dismiss` — release a call's pending-review hold without logging
  *     it (`calls/pendingHold.ts`).
+ *   * `POST /calls/proposals/decline` — the measurement only: these suggestions were declined
+ *     (`calls/proposalMeasure.ts`). A declined proposal stays applicable.
+ *   * `GET /calls/proposals/acceptance` — the shadow measurement, per action type.
  *
  * Both are 404 unless the workspace's `calling_provider` is `twilio`, like the analysis
  * read beside them. Every refusal is a 409 carrying its code.
  */
 
-export const CALL_PROPOSAL_PATHS: readonly string[] = ['/calls/proposals/apply', '/calls/pending/dismiss'];
+export const CALL_PROPOSAL_PATHS: readonly string[] = [
+  '/calls/proposals/apply',
+  '/calls/proposals/decline',
+  '/calls/proposals/acceptance',
+  '/calls/pending/dismiss',
+];
 
 export async function routeCallProposals(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!CALL_PROPOSAL_PATHS.includes(request.path)) return null;
   const prepared = await policyRouteDeps(request, options);
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
-  if (request.method !== 'POST') return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+  const read = request.path === '/calls/proposals/acceptance';
+  if (request.method !== (read ? 'GET' : 'POST')) {
+    return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+  }
   const scoped = contextForPrincipal(deps.auth, deps.principal);
   if (!scoped.ok) return scoped.result;
   if ((await readCallingProvider(scoped.context)) !== 'twilio') {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+  }
+  if (read) return { status: 200, body: proposalAcceptanceResponseSchema.parse(await readProposalAcceptance(scoped.context)) };
+
+  if (request.path === '/calls/proposals/decline') {
+    return await runPolicyCommand(deps, declineCallProposalsCommandSchema, 'call_proposals_decline', async (context, body) =>
+      await declineCallProposals(context, { analysisId: body.analysisId, proposalHash: body.proposalHash, keys: body.keys }),
+    );
   }
 
   if (request.path === '/calls/pending/dismiss') {
