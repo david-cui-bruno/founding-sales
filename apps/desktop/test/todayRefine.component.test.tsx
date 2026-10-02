@@ -347,8 +347,8 @@ describe('quieter text (item 4)', () => {
       if (uses > 0) counts[name] = uses;
     }
     // The call timer and the Call button's number (CallPanel), the phone field
-    // (BasicsEditor) and the live-call strip's timer (TodayWorkspace). Nothing else.
-    expect(counts).toEqual({ 'BasicsEditor.tsx': 1, 'CallPanel.tsx': 2, 'TodayWorkspace.tsx': 1 });
+    // (BasicsEditor), the spoken number a review item shows beside Copy (ReviewItems) and the live-call strip's timer (TodayWorkspace). Nothing else.
+    expect(counts).toEqual({ 'BasicsEditor.tsx': 1, 'CallPanel.tsx': 2, 'ReviewItems.tsx': 1, 'TodayWorkspace.tsx': 1 });
   });
 });
 

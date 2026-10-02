@@ -166,6 +166,34 @@ export function TaskRow({
   const callLogId = entry.task.callLogId;
   const until = entry.task.snoozeUntil === null ? null : dueLabel(entry.task.snoozeUntil, state.businessTimeZone, state.snapshotDate);
 
+  // A promise made on a call (slice 3a): quiet, one line of its own words, and Complete.
+  const callTaskId = entry.task.callTaskId;
+  if (entry.task.kind === 'task' && typeof callTaskId === 'string') {
+    const busy = actions.busy(todayForm.callTask(callTaskId));
+    return (
+      <li data-testid="today-task" data-kind="task" className="group/task flex items-center gap-x-3 border-b border-border py-1.5 last:border-b-0">
+        <time data-testid="task-due" dateTime={entry.task.dueAt} className="w-24 shrink-0 text-xs tabular-nums text-muted-foreground">
+          {dueLabel(entry.task.dueAt, state.businessTimeZone, state.snapshotDate)}
+        </time>
+        <span data-testid="task-text" className="min-w-0 flex-1 truncate text-sm" title={entry.task.taskText ?? undefined}>
+          {entry.task.taskText ?? entry.label}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="task-complete"
+          className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/task:opacity-100"
+          disabled={!actionsEnabled || busy}
+          {...(busy ? { 'aria-busy': true } : {})}
+          onClick={() => {
+            actions.completeTask({ taskId: callTaskId });
+          }}
+        >
+          Complete
+        </Button>
+      </li>
+    );
+  }
   return (
     <li
       data-testid="today-task"

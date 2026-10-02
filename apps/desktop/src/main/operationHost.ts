@@ -81,6 +81,33 @@ const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
   mailbox: 'mailbox.state',
 });
 
+/**
+ * The per-key reasons of a refused Apply, when the refusal body names them. An Apply is atomic:
+ * one refused key refuses the batch and writes nothing, and each key that was refused says why.
+ * Read tolerantly (a list of `{ key, reason }` under `keys`, `results` or `refusals`, or a
+ * `{ key: reason }` map under `keyReasons`); anything else is no per-key detail.
+ */
+export function keyReasonsOf(refusal: unknown): Record<string, string> {
+  if (typeof refusal !== 'object' || refusal === null) return {};
+  const body = refusal as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  const map = body['keyReasons'];
+  if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
+    for (const [key, value] of Object.entries(map)) if (typeof value === 'string') out[key.slice(0, 80)] = value.slice(0, 80);
+  }
+  for (const name of ['keys', 'results', 'refusals']) {
+    const list = body[name];
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as Record<string, unknown>;
+      const code = record['reason'] ?? record['result'];
+      if (typeof record['key'] === 'string' && typeof code === 'string' && code !== 'applied') out[record['key'].slice(0, 80)] = code.slice(0, 80);
+    }
+  }
+  return out;
+}
+
 async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{ analysis: z.infer<typeof callAnalysisResponseSchema> | null; reason: string | null }> {
   const answer = await api.read(`/calls/analysis?callSessionId=${encodeURIComponent(callSessionId)}`, value =>
     callAnalysisResponseSchema.parse(value),
@@ -243,7 +270,9 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
         value => applyCallProposalsResultSchema.parse(value),
         commandId === undefined ? {} : { commandId },
       );
-      return answer.ok ? { applied: answer.value, reason: null } : { applied: null, reason: answer.reason.slice(0, 80) };
+      return answer.ok
+        ? { applied: answer.value, reason: null, keyReasons: {} }
+        : { applied: null, reason: answer.reason.slice(0, 80), keyReasons: answer.offline ? {} : keyReasonsOf(answer.refusal) };
     },
     'calling.proposalsDecline': async (input: OperationInput<'calling.proposalsDecline'>) => {
       const answer = await deps.api.command('/calls/proposals/decline', input, value => value);

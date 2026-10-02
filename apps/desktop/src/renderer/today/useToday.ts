@@ -47,6 +47,8 @@ export interface TodayActions {
   recordAgreedDates(input: OperationInput<'today.recordAgreedDates'>): void;
   scheduleCallback(input: OperationInput<'today.scheduleCallback'>): void;
   releasePause(input: OperationInput<'today.releasePause'>): void;
+  /** Slice 3a: a call task marked done; the card and the list are read again. */
+  completeTask(input: OperationInput<'today.completeTask'>): void;
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
   dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): void;
   /**
@@ -83,6 +85,7 @@ export const todayForm = {
   callback: (callLogId: string): string => `callback:${callLogId}`,
   research: (firmId: string): string => `research-run:${firmId}`,
   hold: (holdId: string): string => `hold:${holdId}`,
+  callTask: (taskId: string): string => `call-task:${taskId}`,
   dial: (routeId: string): string => `dial:${routeId}`,
 } as const;
 
@@ -213,6 +216,9 @@ export function useToday(identity: string | null, generation: number, guard: Gen
       },
       releasePause: input => {
         command(value.command('today.releasePause', input), todayForm.hold(input.holdId));
+      },
+      completeTask: input => {
+        command(value.command('today.completeTask', input), todayForm.callTask(input.taskId));
       },
       dial: input => {
         const bridge = dialBridge();

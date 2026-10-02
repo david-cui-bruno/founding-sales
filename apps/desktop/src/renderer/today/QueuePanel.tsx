@@ -35,6 +35,8 @@ export function QueuePanel({
   onScroll,
   onSelect,
   footer,
+  review,
+  marks = {},
 }: {
   readonly cards: readonly TodayCard[];
   readonly selected: string | null;
@@ -49,6 +51,10 @@ export function QueuePanel({
   onSelect(firmId: string): void;
   /** Below the list: what needs the person, and the numbers. */
   readonly footer?: ReactNode;
+  /** Needs review, drawn above the groups (slice 3a, C). Not part of the J/K walk. */
+  readonly review?: ReactNode;
+  /** Where a call's notes are, by firm: a quiet line under the firm's name. */
+  readonly marks?: Readonly<Record<string, string>>;
 }): JSX.Element {
   const groups = queueGroups(cards);
   const callable = cards.filter(card => groupOf(card) !== 'blocked').length;
@@ -77,6 +83,7 @@ export function QueuePanel({
         className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
         onScroll={event => onScroll(event.currentTarget.scrollTop)}
       >
+        {review}
         {groups.length === 0 ? (
           <EmptyState testId="queue-empty" icon={<CheckCircle2 />} title="Nothing to call right now">
             Firms you add appear here as soon as they are added; callbacks on the day they are due.
@@ -127,6 +134,11 @@ export function QueuePanel({
                           >
                             {card.firmName}
                           </span>
+                          {marks[card.firmId] === undefined ? null : (
+                            <span data-testid="queue-analysis" className="truncate text-xs text-muted-foreground">
+                              {marks[card.firmId]}
+                            </span>
+                          )}
                           {line === null ? null : (
                             <span
                               data-testid="queue-line"

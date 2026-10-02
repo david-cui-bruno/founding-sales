@@ -106,7 +106,7 @@ export function evidencePhrase(kind: string, occurredAt: string): string {
     case 'meeting.booked':
       return `booking on ${dayOf(occurredAt)} (Cal.com)`;
     case 'call.interested':
-      return `interested call on ${dayOf(occurredAt)}`;
+      return `buying signal on a call on ${dayOf(occurredAt)}`;
     case 'subscription.accepted':
       return `subscription accepted on ${dayOf(occurredAt)}`;
     case 'customer.live':

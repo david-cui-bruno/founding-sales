@@ -405,9 +405,18 @@ const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/u);
 const reasonCode = z.string().max(80).nullable();
 export const analysisViewSchema = z.strictObject({ analysis: callAnalysisResponseSchema.nullable(), reason: reasonCode });
 export type AnalysisView = z.infer<typeof analysisViewSchema>;
-export const proposalsApplyViewSchema = z.strictObject({ applied: applyCallProposalsResultSchema.nullable(), reason: reasonCode });
+export const proposalsApplyViewSchema = z.strictObject({
+  applied: applyCallProposalsResultSchema.nullable(),
+  /** The whole batch's refusal code. A refused Apply wrote nothing (it is atomic). */
+  reason: reasonCode,
+  /** Each refused key's own code, when the refusal named them; empty otherwise. */
+  keyReasons: z.record(z.string().max(80), z.string().max(80)),
+});
 export type ProposalsApplyView = z.infer<typeof proposalsApplyViewSchema>;
-const doneViewSchema = (name: string) => z.strictObject({ [name]: z.boolean(), reason: reasonCode });
+export const declinedViewSchema = z.strictObject({ declined: z.boolean(), reason: reasonCode });
+export const dismissedViewSchema = z.strictObject({ dismissed: z.boolean(), reason: reasonCode });
+export const resolvedViewSchema = z.strictObject({ resolved: z.boolean(), reason: reasonCode });
+export const stoppedViewSchema = z.strictObject({ stopped: z.boolean(), reason: reasonCode });
 export const reviewViewSchema = z.strictObject({ items: z.array(reviewItemSchema).nullable() });
 export type ReviewView = z.infer<typeof reviewViewSchema>;
 export const recapViewSchema = z.strictObject({ recap: callRecapResponseSchema.nullable() });
@@ -663,14 +672,14 @@ export const OPERATIONS = {
       proposalHash: sha256Hex,
       keys: z.array(callProposalKeySchema).min(1).max(40),
     }),
-    output: doneViewSchema('declined'),
+    output: declinedViewSchema,
     transform: 'records the decision only; a declined suggestion stays applicable',
   },
   'calling.pendingDismiss': {
     kind: 'command',
     calls: [{ method: 'POST', path: '/calls/pending/dismiss' }],
     input: z.strictObject({ callSessionId: uuid }),
-    output: doneViewSchema('dismissed'),
+    output: dismissedViewSchema,
     transform: 'releases the call’s pending-review hold without logging the call',
   },
   'calling.recap': {
@@ -698,14 +707,14 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [{ method: 'POST', path: '/review/stage/resolve' }],
     input: z.strictObject({ itemId: uuid }),
-    output: doneViewSchema('resolved'),
+    output: resolvedViewSchema,
     transform: 'resolves one stage review item by id',
   },
   'suppressions.firmStop': {
     kind: 'command',
     calls: [{ method: 'POST', path: '/suppressions/record' }],
     input: z.strictObject({ firmId: uuid }),
-    output: doneViewSchema('stopped'),
+    output: stoppedViewSchema,
     transform: 'sends scope firm, the firm and source prospect_do_not_call, and nothing else; the explicit confirm is the caller’s',
   },
   'calling.recording': {

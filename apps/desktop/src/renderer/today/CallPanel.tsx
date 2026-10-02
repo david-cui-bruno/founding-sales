@@ -1,5 +1,5 @@
 import { ArrowRight, Mic, MicOff, Phone, PhoneOff, RotateCw } from 'lucide-react';
-import type { JSX } from 'react';
+import type { JSX, ReactNode } from 'react';
 import { CALL_ANNOUNCEMENT } from '@fss/contracts';
 import type { TodayCardBlocker } from '@fss/contracts';
 import { useDraft } from '../app/drafts.tsx';
@@ -56,6 +56,11 @@ export interface CallPanelProps {
   onOutcome(): void;
   /** The last command's answer; the part about dialling is drawn here, above the Call button. */
   readonly feedback?: TodayScreenView['feedback'];
+  /**
+   * The firm's after-call block: its notes, the suggestions and Needs review (slice 3a, C).
+   * Above the call's own controls once a call has just ended, below them when idle.
+   */
+  readonly afterBlock?: ReactNode;
 }
 
 function PhaseChip({ call, firmId }: { readonly call: CallControl; readonly firmId: string | null }): JSX.Element {
@@ -353,7 +358,9 @@ export function CallPanel(props: CallPanelProps): JSX.Element {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {dialing}
+        {ended ? props.afterBlock : null}
         {body}
+        {ended || live || liveElsewhere !== null ? null : props.afterBlock}
       </div>
     </section>
   );
