@@ -1,5 +1,5 @@
 import {
-  type ApplyKeyReason,
+  type ApplyKeyReasons,
   type ApplyCallProposalsResult,
   type CallAnalysisResult,
   type CallFollowUp,
@@ -27,7 +27,7 @@ import { lockCallAnalysis } from './analysis.ts';
 import { transcriptSha256 } from './analysisModel.ts';
 import { taskKey } from './analysisPolicy.ts';
 import { createCallTask } from './callTasks.ts';
-import { recordProposalDecisions } from './proposalMeasure.ts';
+import { PROPOSAL_DECIDED_ACTION, recordProposalDecisions } from './proposalMeasure.ts';
 import { CALL_CADENCE_PARKED_SOURCE } from './sessions.ts';
 
 /**
@@ -80,11 +80,11 @@ export type ApplyRefusalCode = CallProposalRefusalCode | PolicyRefusalCode | 'no
 
 export type ApplyCallProposalsOutcome =
   | { readonly ok: true; readonly value: ApplyCallProposalsResult }
-  | { readonly ok: false; readonly reason: ApplyRefusalCode; readonly keyReasons?: readonly ApplyKeyReason[] };
+  | { readonly ok: false; readonly reason: ApplyRefusalCode; readonly keyReasons?: ApplyKeyReasons };
 
-/** A refusal of the whole Apply; with `key`, the key that refused it. */
-const refuse = (reason: ApplyRefusalCode, key?: string, detail?: string | null): ApplyCallProposalsOutcome =>
-  key === undefined ? { ok: false, reason } : { ok: false, reason, keyReasons: [{ key, reason, detail: detail ?? null }] };
+/** A refusal of the whole Apply; with `key`, the key that refused it (`keyReasons`). */
+const refuse = (reason: ApplyRefusalCode, key?: string): ApplyCallProposalsOutcome =>
+  key === undefined ? { ok: false, reason } : { ok: false, reason, keyReasons: { [key]: reason } };
 
 /** The outcomes whose effects touch the dialled route: retirement, or the number's suppression. */
 const ROUTE_OUTCOMES: ReadonlySet<CallOutcome> = new Set<CallOutcome>(['wrong_number', 'do_not_call']);
@@ -108,7 +108,6 @@ class Refused extends Error {
   constructor(
     readonly reason: ApplyRefusalCode,
     readonly key?: string,
-    readonly detail?: string | null,
   ) {
     super(reason);
   }
@@ -324,7 +323,7 @@ export async function applyCallProposals(
   } catch (error) {
     await context.db.query(`ROLLBACK TO SAVEPOINT ${SAVEPOINT}`);
     await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
-    if (error instanceof Refused) return refuse(error.reason, error.key, error.detail);
+    if (error instanceof Refused) return refuse(error.reason, error.key);
     throw error;
   }
   await context.db.query(`RELEASE SAVEPOINT ${SAVEPOINT}`);
@@ -411,7 +410,7 @@ async function mapKeys(
     if (!logged.ok) throw new Refused(logged.reason, 'outcome');
     // A selected follow-up whose permission was not granted is a refusal of the whole Apply,
     // never an `applied` key beside a warning (review S3B, finding 4).
-    if (selected.has('follow_up') && logged.value.followUpPermissionId === null) throw notGranted(logged.value.followUps);
+    if (selected.has('follow_up') && logged.value.followUpPermissionId === null) throw notGranted();
     callLogId = logged.value.callLogId;
     followUps.push(...logged.value.followUps);
     const outcomeEdited =
@@ -449,7 +448,7 @@ async function mapKeys(
         commandId: input.commandId,
       });
       if (!confirmed.ok) throw new Refused(confirmed.reason, 'follow_up');
-      if (confirmed.value.followUpPermissionId === null) throw notGranted(confirmed.value.followUps);
+      if (confirmed.value.followUpPermissionId === null) throw notGranted();
       followUps.push(...confirmed.value.followUps);
       push(proposalOf('follow_up'), 'applied', confirmed.value.followUpPermissionId, false);
     }
@@ -476,29 +475,50 @@ async function mapKeys(
   }
 
   // -- buying signal: the stage evidence, then manual mode ----------------------------------
+  // One per call: when this call's evidence is already on an opportunity, or already waits
+  // in a stage review item, the click is a no-op (`already_applied`), not a decision (review
+  // S3B, finding 8). Asked here rather than of `applyStageEvidence`'s answer, which reports
+  // `not_forward` before `already_applied` once the stage has moved, and writes no evidence
+  // at all when an opportunity was already open.
   if (selected.has('buying_signal')) {
-    const stage = await applyStageEvidence(context, {
-      firmId: m.firmId,
-      evidenceKind: 'call.interested',
-      evidenceId: buyingSignalEvidenceId(m.sessionId),
-      occurredAt: m.session.started.toISOString(),
-      detail: { callSessionId: m.sessionId, analysisId: input.analysisId },
-    });
-    const opportunityId = stage.kind === 'review' ? null : stage.opportunityId;
-    // This call's evidence is already on the opportunity (one per call): a no-op, not a
-    // decision (review S3B, finding 8).
-    const repeat = stage.kind === 'unchanged' && stage.reason === 'already_applied';
-    if (repeat) push(proposalOf('buying_signal'), 'already_applied', opportunityId, false);
-    else if (opportunityId !== null) {
-      const manual = await setManualControlMode(context, {
-        opportunityId,
-        reason: 'buying signal on a call',
-        origin: 'engaged_call',
-        commandId: `${input.commandId}:buying_signal`,
+    const evidenceId = buyingSignalEvidenceId(m.sessionId);
+    const { rows: before } = await context.db.query<{ opportunity_id: string | null }>(
+      `SELECT opportunity_id FROM opportunity_stage_evidence
+        WHERE workspace_id = $1 AND evidence_kind = 'call.interested' AND evidence_id = $2
+       UNION ALL
+       SELECT opportunity_id FROM stage_review_items
+        WHERE workspace_id = $1 AND evidence_kind = 'call.interested' AND evidence_id = $2
+       UNION ALL
+       -- An opportunity that was already open writes no evidence (open_if_none): an earlier
+       -- applied buying signal for this call is then the record.
+       SELECT NULL::uuid FROM audit_events
+        WHERE workspace_id = $1 AND action = $3 AND subject_kind = 'call_analysis'
+          AND detail->>'callSessionId' = $4 AND detail->>'key' = 'buying_signal'
+          AND detail->>'result' IN ('unchanged', 'edited')
+       LIMIT 1`,
+      [context.scope.workspaceId, evidenceId, PROPOSAL_DECIDED_ACTION, m.sessionId],
+    );
+    if (before.length > 0) push(proposalOf('buying_signal'), 'already_applied', before[0]?.opportunity_id ?? null, false);
+    else {
+      const stage = await applyStageEvidence(context, {
+        firmId: m.firmId,
+        evidenceKind: 'call.interested',
+        evidenceId,
+        occurredAt: m.session.started.toISOString(),
+        detail: { callSessionId: m.sessionId, analysisId: input.analysisId },
       });
-      if (!manual.ok) throw new Refused(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input', 'buying_signal');
+      const opportunityId = stage.kind === 'review' ? null : stage.opportunityId;
+      if (opportunityId !== null) {
+        const manual = await setManualControlMode(context, {
+          opportunityId,
+          reason: 'buying signal on a call',
+          origin: 'engaged_call',
+          commandId: `${input.commandId}:buying_signal`,
+        });
+        if (!manual.ok) throw new Refused(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input', 'buying_signal');
+      }
+      push(proposalOf('buying_signal'), 'applied', opportunityId, false);
     }
-    if (!repeat) push(proposalOf('buying_signal'), 'applied', opportunityId, false);
   }
 
   // -- park: a cadence park the analysis asked for, once ------------------------------------
@@ -556,11 +576,13 @@ async function mapKeys(
   return { callLogId, results, followUps };
 }
 
-/** A selected follow-up whose permission was not granted: the Apply's refusal, with why. */
-function notGranted(followUps: readonly CallFollowUp[]): Refused {
-  const entry = followUps.find(followUp => followUp.kind === 'follow_up_not_granted');
-  const reason = entry !== undefined && 'reason' in entry && typeof entry.reason === 'string' ? entry.reason : null;
-  return new Refused('follow_up_not_granted', 'follow_up', reason === null ? null : reason.slice(0, 64));
+/**
+ * A selected follow-up whose permission was not granted: the Apply's refusal. The command's
+ * own reason (the template retired, say) is in `followUps`, which the rollback discards with
+ * everything else; the wire carries the code only (`keyReasons` is key → code).
+ */
+function notGranted(): Refused {
+  return new Refused('follow_up_not_granted', 'follow_up');
 }
 
 function callbackEdited(proposal: CallProposal, edits: CallProposalEdits | undefined): boolean {

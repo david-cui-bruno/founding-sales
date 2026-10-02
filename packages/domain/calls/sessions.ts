@@ -576,6 +576,22 @@ export async function listFirmCallSessions(
 }
 
 /**
+ * Slice 3a (`GET /calls/history?include=outcome`): the outcome of each named call log, by
+ * id. The caller has already decided the firm readable and names only its calls' logs.
+ */
+export async function readCallLogOutcomes(
+  context: RepositoryContext,
+  callLogIds: readonly string[],
+): Promise<ReadonlyMap<string, CallOutcome>> {
+  if (callLogIds.length === 0) return new Map();
+  const { rows } = await context.db.query<{ id: string; outcome: CallOutcome }>(
+    'SELECT id, outcome FROM call_logs WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
+    [context.scope.workspaceId, [...callLogIds]],
+  );
+  return new Map(rows.map(row => [row.id, row.outcome]));
+}
+
+/**
  * The stored recording path of one session, for the playback proxy; null when the session
  * is unknown, not this workspace's, not a firm the caller may read, or has no recording.
  */

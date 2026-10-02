@@ -284,7 +284,7 @@ describe('B-9: apply-on-click, end to end', () => {
       status: 'refused',
       replayed: false,
       reason: 'call_already_logged',
-      keyReasons: [{ key: 'outcome', reason: 'call_already_logged', detail: null }],
+      keyReasons: { outcome: 'call_already_logged' },
     });
 
     expect(await count('SELECT count(*)::text AS n FROM call_logs WHERE firm_id = $1', [firmId])).toBe(1);
@@ -318,6 +318,18 @@ describe('B-9: apply-on-click, end to end', () => {
     expect(done.status, done.text).toBe(200);
     const after = todayFirmResponseSchema.parse((await post('/today/firm', salespersonToken, { firmId, cardVersion: 2, include: ['tasks'] })).body);
     expect(after.tasks.filter(task => task.kind === 'task').map(task => task.taskText)).toEqual([PROMISE]);
+
+    // Call history: the logged outcome only when asked for (`include=outcome`), so an
+    // installed Mac's parser never meets the key; with the summary too, either way of asking.
+    const plainHistory = await get(`/calls/history?firmId=${firmId}`, salespersonToken);
+    expect(plainHistory.status, plainHistory.text).toBe(200);
+    expect(plainHistory.body['calls']).toEqual([expect.not.objectContaining({ outcome: expect.anything() as unknown })]);
+    expect(JSON.stringify(plainHistory.body)).not.toContain('"outcome"');
+    for (const query of ['include=outcome', 'include=summary,outcome', 'include=summary&include=outcome']) {
+      const asked = await get(`/calls/history?firmId=${firmId}&${query}`, salespersonToken);
+      expect(asked.status, asked.text).toBe(200);
+      expect(asked.body['calls']).toEqual([expect.objectContaining({ sessionId, outcome: 'interested', callLogId: expect.any(String) as unknown })]);
+    }
 
     const review = await get('/review', salespersonToken);
     expect(review.status, review.text).toBe(200);

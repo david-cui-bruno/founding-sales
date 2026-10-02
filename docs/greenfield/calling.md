@@ -579,15 +579,15 @@ current transcript, else `stale_analysis`; the echoed hash is the stored one, el
 the session's start, never the log's time — is `follow_up_expired`), and maps each key to its
 command inside one savepoint. **The Apply is atomic**: any key refused, or a command that
 fails (a selected follow-up whose permission is not granted is `follow_up_not_granted`),
-rolls the whole batch back and the 409 names the key (`keyReasons`); nothing is applied or
-measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
+rolls the whole batch back and the 409 names the key (`keyReasons`, key → code); nothing is
+applied or measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
 none. `outcome` (with `callback`, `follow_up` and the "covers all contact"
 choice) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
 `createCallback`; `follow_up` on a logged call is `confirmCapturedFollowUp` (seven days, not
 `recordCallFollowUp`'s sixty minutes); `buying_signal` is `applyStageEvidence('call.interested')`
 then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` when
 this proposal's park was ever made — a Resume sticks — or any park hold, the automatic one
-included, is open); a task is a `call_tasks` row (`already_created` on a repeat). An overview
+included, is open); a buying signal already applied for the call is `already_applied`; a task is a `call_tasks` row (`already_created` on a repeat). An overview
 request's "Send overview" task is written once: by the task key with David's edits when he
 selected it, otherwise beside the follow-up as proposed. A second outcome for one session — from the form or an
 Apply — is `call_already_logged` in `logCallOutcome` itself.

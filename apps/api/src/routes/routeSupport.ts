@@ -42,8 +42,8 @@ export type CommandResult<T> =
       readonly ok: false;
       readonly reason: string;
       readonly liveEnrollments?: readonly unknown[];
-      /** Slice 3a: an atomic Apply's refusal names the key (or keys) that refused it. */
-      readonly keyReasons?: readonly unknown[];
+      /** Slice 3a: an atomic Apply's refusal names the key that refused it (key → code). */
+      readonly keyReasons?: Readonly<Record<string, string>>;
     };
 
 /** Authenticate, or the refusal to return. Reads and writes both need a principal. */

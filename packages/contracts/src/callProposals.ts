@@ -49,7 +49,7 @@ const keys = z
 /**
  * Why an Apply is refused. **An Apply is atomic**: if any selected key is refused, or its
  * command fails, the whole batch rolls back — nothing is applied, no task is written, nothing
- * is measured — and the 409 carries `keyReasons` (`applyKeyReasonSchema`) naming the key.
+ * is measured — and the 409 carries `keyReasons` (`applyKeyReasonsSchema`) naming the key.
  * David re-selects and clicks again. In the order they are checked:
  *
  *   * `stale_analysis` — the analysis is not the newest completed model analysis on the call's
@@ -63,7 +63,7 @@ const keys = z
  *   * `follow_up_expired` — `follow_up` selected more than 7 days after the call (the
  *     call's own time — the session's start — never when it was logged);
  *   * `follow_up_not_granted` — `follow_up` selected and its single-email permission could
- *     not be granted (the template retired, say); `detail` says why.
+ *     not be granted (the template retired, say).
  *
  * A command a key maps to may refuse with its own code (e.g. `not_assigned`); that key is
  * named the same way.
@@ -81,15 +81,12 @@ export const CALL_PROPOSAL_REFUSAL_CODES = [
 export type CallProposalRefusalCode = (typeof CALL_PROPOSAL_REFUSAL_CODES)[number];
 
 /**
- * One key's reason in a refused Apply's 409 body (`keyReasons`). Freshness refusals
- * (`stale_analysis`, `stale_proposal`) name no key.
+ * A refused Apply's per-key reasons, beside the overall `reason` in the 409 body:
+ * `keyReasons: { [proposalKey]: reasonCode }`. Freshness refusals (`stale_analysis`,
+ * `stale_proposal`) name no key and carry none.
  */
-export const applyKeyReasonSchema = z.object({
-  key: callProposalKeySchema,
-  reason: z.string().min(1).max(64),
-  detail: z.string().min(1).max(64).nullable(),
-});
-export type ApplyKeyReason = z.infer<typeof applyKeyReasonSchema>;
+export const applyKeyReasonsSchema = z.record(z.string().min(1).max(64), z.string().min(1).max(64));
+export type ApplyKeyReasons = z.infer<typeof applyKeyReasonsSchema>;
 
 /**
  * What one applied key became. `already_parked`: this proposal's park was already made
@@ -225,12 +222,16 @@ export const PENDING_HOLD_REVIEW_AFTER_HOURS = 3;
 export const REVIEW_PROPOSAL_KINDS = [...CALL_PROPOSAL_KINDS, 'follow_up_expired'] as const;
 export type ReviewProposalKind = (typeof REVIEW_PROPOSAL_KINDS)[number];
 
+/** The firm's name on a review item, so the list reads without a second request. */
+const reviewFirmName = z.string().min(1).max(300);
+
 export const reviewItemSchema = z.discriminatedUnion('source', [
   z.object({
     source: z.literal('pending_hold'),
     holdId: uuid,
     callSessionId: uuid,
     firmId: uuid,
+    firmName: reviewFirmName,
     openedAt: instant,
   }),
   z.object({
@@ -241,6 +242,7 @@ export const reviewItemSchema = z.discriminatedUnion('source', [
     proposalHash: sha256Hex,
     callSessionId: uuid,
     firmId: uuid,
+    firmName: reviewFirmName,
     proposal: callProposalSchema,
     completedAt: instant,
   }),
@@ -248,6 +250,8 @@ export const reviewItemSchema = z.discriminatedUnion('source', [
     source: z.literal('stage'),
     itemId: uuid,
     firmId: uuid.nullable(),
+    /** Null when the item names no firm. */
+    firmName: reviewFirmName.nullable(),
     opportunityId: uuid.nullable(),
     evidenceKind: z.string().min(1).max(64),
     reason: z.string().min(1).max(40),

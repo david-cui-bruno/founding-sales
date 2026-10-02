@@ -169,6 +169,17 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     ).toBe(1);
   });
 
+  it('B-1: a repeated buying signal at a firm whose opportunity was already open is already_applied, and measured once', async () => {
+    const call = await world.analyse(await world.placeCall(await world.newFirm({ opportunity: 'open' }), CALL), READING);
+    const first = await apply(world, call, ['buying_signal']);
+    expect(first.ok && first.value.results).toEqual([expect.objectContaining({ key: 'buying_signal', result: 'applied' })]);
+    const again = await apply(world, call, ['buying_signal'], { commandId: 'signal-again' });
+    expect(again.ok && again.value.results).toEqual([expect.objectContaining({ key: 'buying_signal', result: 'already_applied' })]);
+    expect(
+      await count("SELECT count(*)::text AS n FROM audit_events WHERE action = 'call.proposal_decided' AND subject_id = $1", [call.analysisId]),
+    ).toBe(1);
+  });
+
   it('B-1: a park is already_parked when the automatic cadence park is open on the firm', async () => {
     const soft = await analysedCall(SOFT_NO, SOFT_READING);
     await world.session.query(

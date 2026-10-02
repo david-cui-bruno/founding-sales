@@ -44,6 +44,7 @@ const LIMIT = 500;
 type SessionRow = {
   readonly session_id: string;
   readonly firm_id: string;
+  readonly firm_name: string;
   readonly call_log_id: string | null;
   readonly log_outcome: string | null;
   readonly route_id: string;
@@ -62,8 +63,8 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
   const items: ReviewItem[] = [];
 
   // ---- 1. Pending holds open three hours or more ------------------------------------
-  const { rows: holds } = await context.db.query<{ id: string; session_id: string; firm_id: string; started_at: Date }>(
-    `SELECT h.id, h.source_event_id AS session_id, f.id AS firm_id, h.started_at
+  const { rows: holds } = await context.db.query<{ id: string; session_id: string; firm_id: string; firm_name: string; started_at: Date }>(
+    `SELECT h.id, h.source_event_id AS session_id, f.id AS firm_id, f.name AS firm_name, h.started_at
        FROM active_holds h
        LEFT JOIN call_sessions s ON s.workspace_id = h.workspace_id AND s.id::text = h.source_event_id
        -- A hold whose session is gone is still listed, at the firm it blocks, so Dismiss can
@@ -76,12 +77,19 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
     [workspace, CALL_ANALYSIS_PENDING_SOURCE, PENDING_HOLD_REVIEW_AFTER_HOURS, ownerFilter],
   );
   for (const hold of holds) {
-    items.push({ source: 'pending_hold', holdId: hold.id, callSessionId: hold.session_id, firmId: hold.firm_id, openedAt: hold.started_at.toISOString() });
+    items.push({
+      source: 'pending_hold',
+      holdId: hold.id,
+      callSessionId: hold.session_id,
+      firmId: hold.firm_id,
+      firmName: hold.firm_name,
+      openedAt: hold.started_at.toISOString(),
+    });
   }
 
   // ---- 2. Review suggestions of the authoritative analyses --------------------------
   const { rows: sessions } = await context.db.query<SessionRow>(
-    `SELECT DISTINCT ON (s.id) s.id AS session_id, s.firm_id, s.call_log_id, l.outcome AS log_outcome,
+    `SELECT DISTINCT ON (s.id) s.id AS session_id, s.firm_id, f.name AS firm_name, s.call_log_id, l.outcome AS log_outcome,
             t.phone_route_id AS route_id, coalesce(s.answered_at, s.started_at, s.created_at) AS started
        FROM call_analyses a
        JOIN call_sessions s ON s.workspace_id = a.workspace_id AND s.id = a.call_session_id
@@ -121,6 +129,7 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
         proposalHash: analysis.proposalHash,
         callSessionId: session.session_id,
         firmId: session.firm_id,
+        firmName: session.firm_name,
         proposal,
         completedAt: facts.completed_at.toISOString(),
       });
@@ -131,12 +140,13 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
   const { rows: stages } = await context.db.query<{
     id: string;
     firm_id: string | null;
+    firm_name: string | null;
     opportunity_id: string | null;
     evidence_kind: string;
     reason: string;
     created_at: Date;
   }>(
-    `SELECT i.id, i.firm_id, i.opportunity_id, i.evidence_kind, i.reason, i.created_at
+    `SELECT i.id, i.firm_id, f.name AS firm_name, i.opportunity_id, i.evidence_kind, i.reason, i.created_at
        FROM stage_review_items i
        LEFT JOIN firms f ON f.workspace_id = i.workspace_id AND f.id = i.firm_id
       WHERE i.workspace_id = $1 AND i.resolved_at IS NULL
@@ -149,6 +159,7 @@ export async function readNeedsReview(context: RepositoryContext): Promise<Revie
       source: 'stage',
       itemId: stage.id,
       firmId: stage.firm_id,
+      firmName: stage.firm_name,
       opportunityId: stage.opportunity_id,
       evidenceKind: stage.evidence_kind,
       reason: stage.reason,

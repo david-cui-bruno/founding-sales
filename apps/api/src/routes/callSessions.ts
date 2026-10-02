@@ -1,4 +1,5 @@
 import {
+  CALL_HISTORY_INCLUDE_OUTCOME,
   CALL_HISTORY_INCLUDE_SUMMARY,
   callHistoryResponseSchema,
   callRecordingResponseSchema,
@@ -12,6 +13,7 @@ import {
 import {
   createCallSession,
   listFirmCallSessions,
+  readCallLogOutcomes,
   readCallingStatus,
   recordingPathOfSession,
   resumeCallCadence,
@@ -118,19 +120,35 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (firmId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const calls = await listFirmCallSessions(scoped.context, firmId);
     if (calls === null) return notFound;
-    if (!request.query.getAll('include').includes(CALL_HISTORY_INCLUDE_SUMMARY)) {
-      return { status: 200, body: callHistoryResponseSchema.parse({ calls }) };
-    }
+    // Each addition only when asked for (repeated or comma-separated), so an older Mac's
+    // parser never meets a key it does not know.
+    const includes = new Set(
+      request.query
+        .getAll('include')
+        .flatMap(value => value.split(','))
+        .map(value => value.trim()),
+    );
     // The firm was already decided readable by `listFirmCallSessions`; these are its calls.
     const sessionIds = calls.map(call => call.sessionId);
-    const analyses = await readAnalysisSummaries(scoped.context, sessionIds);
-    const summaries = await readCallSummaries(scoped.context, sessionIds);
+    const withSummary = includes.has(CALL_HISTORY_INCLUDE_SUMMARY);
+    const analyses = withSummary ? await readAnalysisSummaries(scoped.context, sessionIds) : null;
+    const summaries = withSummary ? await readCallSummaries(scoped.context, sessionIds) : null;
+    const outcomes = includes.has(CALL_HISTORY_INCLUDE_OUTCOME)
+      ? await readCallLogOutcomes(
+          scoped.context,
+          calls.flatMap(call => (call.callLogId === null ? [] : [call.callLogId])),
+        )
+      : null;
     return {
       status: 200,
       body: callHistoryResponseSchema.parse({
         calls: calls.map(call => {
-          const summary = analyses.get(call.sessionId) ?? summaries.get(call.sessionId);
-          return summary === undefined ? call : { ...call, summary };
+          const summary = analyses?.get(call.sessionId) ?? summaries?.get(call.sessionId);
+          return {
+            ...call,
+            ...(summary === undefined ? {} : { summary }),
+            ...(outcomes === null ? {} : { outcome: call.callLogId === null ? null : (outcomes.get(call.callLogId) ?? null) }),
+          };
         }),
       }),
     };

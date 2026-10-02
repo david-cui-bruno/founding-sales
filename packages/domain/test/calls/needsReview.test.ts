@@ -58,6 +58,12 @@ describe('B-13: Needs review', () => {
   it('outcome_unclear: done when the call has a log', async () => {
     const call = await analysed(lines(['Y', 'Hi, David from Callie.'], ['T', 'Hm, okay.']), answer({ summary: 'A short call.' }));
     expect(await kindsFor(call.sessionId)).toEqual(['outcome_unclear']);
+    // A proposal item names its firm.
+    const { rows: named } = await world.session.query<{ name: string }>('SELECT name FROM firms WHERE id = $1', [call.firm.firmId]);
+    expect((await review()).find(item => item.source === 'proposal' && item.callSessionId === call.sessionId)).toMatchObject({
+      firmId: call.firm.firmId,
+      firmName: named[0]?.name,
+    });
     expect((await log(call, 'interested')).ok).toBe(true);
     expect(await kindsFor(call.sessionId)).toEqual([]);
   });
@@ -186,7 +192,12 @@ describe('B-13: Needs review', () => {
       [world.seeded.alpha.workspaceId, firm.firmId, `test:${firm.firmId}`],
     );
     const itemId = rows[0]?.id ?? '';
-    expect((await review()).some(item => item.source === 'stage' && item.itemId === itemId)).toBe(true);
+    // Each item names its firm, so the list reads without a second request.
+    const { rows: named } = await world.session.query<{ name: string }>('SELECT name FROM firms WHERE id = $1', [firm.firmId]);
+    expect((await review()).find(item => item.source === 'stage' && item.itemId === itemId)).toMatchObject({
+      firmId: firm.firmId,
+      firmName: named[0]?.name,
+    });
     const resolved = await withTransaction(world.session, async () => await resolveStageReviewItem(world.salesperson(), { itemId }));
     expect(resolved).toMatchObject({ ok: true, value: { itemId } });
     expect((await review()).some(item => item.source === 'stage' && item.itemId === itemId)).toBe(false);
@@ -213,7 +224,8 @@ describe('B-13: Needs review', () => {
       "UPDATE active_holds SET started_at = now() - interval '3 hours 1 minute' WHERE source_event_kind = 'call_analysis_pending' AND source_event_id = $1",
       [placed.sessionId],
     );
-    expect(await listed()).toHaveLength(1);
+    const { rows: named } = await world.session.query<{ name: string }>('SELECT name FROM firms WHERE id = $1', [firm.firmId]);
+    expect(await listed()).toEqual([expect.objectContaining({ firmId: firm.firmId, firmName: named[0]?.name })]);
     expect(
       (
         await withTransaction(world.session, async () =>

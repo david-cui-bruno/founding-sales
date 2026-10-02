@@ -227,7 +227,7 @@ describe('B-14: the captured overview confirmation', () => {
     const overviewKey = taskKey('Could you send me an overview by email?');
     expect(fresh.keys).toEqual(expect.arrayContaining(['outcome', 'follow_up', overviewKey]));
     expect(await apply(world, fresh, ['outcome', 'follow_up', overviewKey], { edits: retired })).toEqual(
-      refusedAt('follow_up_not_granted', 'follow_up', 'template_retired'),
+      refusedAt('follow_up_not_granted', 'follow_up'),
     );
     const { rows: logs } = await world.session.query('SELECT 1 FROM call_sessions WHERE id = $1 AND call_log_id IS NOT NULL', [fresh.sessionId]);
     expect(logs).toHaveLength(0);
@@ -236,7 +236,7 @@ describe('B-14: the captured overview confirmation', () => {
 
     // On a logged call: `confirmCapturedFollowUp`'s path, the same refusal.
     const logged = await loggedCall(await world.newFirm(), '61 minutes');
-    expect(await apply(world, logged, ['follow_up'], { edits: retired })).toEqual(refusedAt('follow_up_not_granted', 'follow_up', 'template_retired'));
+    expect(await apply(world, logged, ['follow_up'], { edits: retired })).toEqual(refusedAt('follow_up_not_granted', 'follow_up'));
     expect(await effects(logged)).toEqual({ agreed: null, permissions: [], tasks: [] });
     expect(await decisions(logged.analysisId)).toBe(0);
   });

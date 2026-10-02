@@ -3,6 +3,7 @@ import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
 import { callSummaryDtoSchema } from './callSummaries.ts';
+import { CALL_OUTCOMES } from './dial.ts';
 
 /**
  * The call-session wire contract (call-to-booking slice W, migration 0028).
@@ -206,6 +207,12 @@ export const callSessionDtoSchema = z.object({
    * them (`include=summary`) and the call has one. An older Mac never asks.
    */
   summary: callSummaryDtoSchema.optional(),
+  /**
+   * Slice 3a: the outcome of the log `callLogId` names (null when the call has no log), only
+   * when the read asked for it (`include=outcome`). An installed Mac (1.0.27 and before)
+   * never asks, and its parser never meets the key.
+   */
+  outcome: z.enum(CALL_OUTCOMES).nullable().optional(),
 });
 export type CallSessionDto = z.infer<typeof callSessionDtoSchema>;
 
