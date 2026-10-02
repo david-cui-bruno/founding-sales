@@ -69,7 +69,7 @@ const TRIAL: CallTrialResponse = callTrialResponseSchema.parse({
 });
 
 const rowOf = (name: string) => {
-  const row = screen.getAllByTestId('trial-type').find(element => element.dataset.type === name);
+  const row = screen.getAllByTestId('trial-type').find(element => element.dataset['type'] === name);
   if (row === undefined) throw new Error(`no row ${name}`);
   return row;
 };
@@ -112,7 +112,7 @@ describe('the Trial section', () => {
   it('lists excluded calls by reason, each expandable to its calls, and the unanswered apart', () => {
     render(<TrialSection trial={TRIAL} />);
     const reasons = screen.getAllByTestId('trial-excluded-reason');
-    expect(reasons.map(element => element.dataset.reason)).toEqual(['answered_at_missing', 'too_short']);
+    expect(reasons.map(element => element.dataset['reason'])).toEqual(['answered_at_missing', 'too_short']);
     expect(reasons[1]?.querySelector('summary')?.textContent).toBe('Too short (recording under 20 s) · 1');
     expect(within(reasons[1] as HTMLElement).getByTestId('trial-excluded-session').textContent).toContain('Birch Test Partners · 2 Oct · call 19 s, recording 19 s');
     expect(within(reasons[0] as HTMLElement).getByTestId('trial-excluded-session').textContent).toContain('Elm Fork Test Rentals');

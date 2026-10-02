@@ -26,7 +26,7 @@ describe('the trial read', () => {
   let world: ApplyWorld;
   let since: string;
   let trial: CallTrialResponse;
-  const placed: Record<string, PlacedCall> = {};
+  const placed: Partial<Record<'before' | 'twenty' | 'nineteen' | 'noAnswer' | 'busy' | 'providerOnly' | 'off' | 'failed', PlacedCall>> = {};
   let applied: Analysed;
   let bypassed: Analysed;
 
