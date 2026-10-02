@@ -134,6 +134,11 @@ export const TODAY_CARD_VERSION = 2;
 export const todayFirmRequestSchema = z.strictObject({
   firmId: uuid,
   cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
+  /**
+   * Slice 3a: `['tasks']` adds the firm's open call tasks (kind `task`). Without it a task
+   * is in no card, count or expansion, so an installed desktop never meets the kind.
+   */
+  include: z.array(z.literal('tasks')).max(1).optional(),
 });
 
 /**

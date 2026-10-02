@@ -21,5 +21,6 @@ export * from './heldOutgoing.ts';
 export * from './callSessions.ts';
 export * from './callSummaries.ts';
 export * from './callAnalysis.ts';
+export * from './callProposals.ts';
 export * from './meetings.ts';
 export * from './reasonText.ts';
