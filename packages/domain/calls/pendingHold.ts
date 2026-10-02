@@ -8,6 +8,8 @@ import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact, sendGateLockName } from '../policy/sendGate.ts';
 import { readCallTranscription } from '../settings/integrations.ts';
 import { callAnalysisAdmission } from './analysisEligibility.ts';
+import { enqueueCallTranscription, transcriptionWorkerAvailable, type EnqueueTranscriptionOutcome } from './transcription.ts';
+import { repositoryContext, workspaceScope } from '../db/workspaceScope.ts';
 
 /**
  * The pending-review hold (slice 3a, DESIGN-S3A §2.5).
@@ -30,6 +32,8 @@ import { callAnalysisAdmission } from './analysisEligibility.ts';
  *     `TRANSCRIPTION_MINIMUM_SECONDS` by its own duration, and `call_transcription` on —
  *     the rule the transcription enqueue applies, so a call is held exactly when it is on
  *     its way to an analysis (slice S3T). In practice that is the recording delivery;
+ *   * its transcription is queued (a `call.transcribe` job exists): `admitToAnalysisPath`
+ *     enqueues it first, in the same delivery, so the two never part (review S3T, finding 2);
  *   * the call has no log;
  *   * no `call_analysis_pending` hold for this session has **ever** existed.
  *
@@ -93,6 +97,7 @@ type SessionFacts = {
   readonly recording_seconds: number | null;
   readonly call_log_id: string | null;
   readonly ever_held: boolean;
+  readonly transcribe_queued: boolean;
 };
 
 /**
@@ -106,13 +111,16 @@ export async function admitPendingHold(context: RepositoryContext, sessionId: st
             s.recording_path IS NOT NULL AS recording, s.recording_duration_seconds AS recording_seconds, s.call_log_id,
             EXISTS (SELECT 1 FROM active_holds h
                      WHERE h.workspace_id = s.workspace_id AND h.source_event_kind = $3
-                       AND h.source_event_id = s.id::text) AS ever_held
+                       AND h.source_event_id = s.id::text) AS ever_held,
+            EXISTS (SELECT 1 FROM jobs j WHERE j.workspace_id = s.workspace_id AND j.kind = 'call.transcribe'
+                     AND j.payload ->> 'callSessionId' = s.id::text) AS transcribe_queued
        FROM call_sessions s WHERE s.workspace_id = $1 AND s.id = $2`,
     [context.scope.workspaceId, sessionId, CALL_ANALYSIS_PENDING_SOURCE],
   );
   const facts = rows[0];
   if (facts === undefined) return null;
-  if (facts.call_log_id !== null || facts.ever_held) return null;
+  // No transcription queued, no analysis to come: nothing to wait for (review S3T, finding 2).
+  if (facts.call_log_id !== null || facts.ever_held || !facts.transcribe_queued) return null;
   const transcription = await readCallTranscription(context);
   const admitted = callAnalysisAdmission({
     status: facts.status,
@@ -141,6 +149,29 @@ export async function admitPendingHold(context: RepositoryContext, sessionId: st
     detail: { firmId: facts.firm_id, callSessionId: sessionId },
   });
   return holdId;
+}
+
+/**
+ * The analysis path's admission, for one delivery (review S3T, finding 2): first the idempotent
+ * transcription enqueue (`enqueueCallTranscription`, keyed by the session, so a repeated
+ * delivery queues nothing more), then the hold, which is admitted only once that job exists.
+ * Run by both callbacks on every final delivery, inside their transaction and after their
+ * gate → firm → session prefix, so whichever delivery completes the facts — the recording, or
+ * an answer that arrives after it — queues the transcription and holds the firm together:
+ * a call is never held without its transcription queued.
+ */
+export async function admitToAnalysisPath(
+  db: Queryable,
+  input: { readonly workspaceId: string; readonly sessionId: string },
+): Promise<{ readonly transcription: EnqueueTranscriptionOutcome; readonly holdId: string | null }> {
+  const transcription = await enqueueCallTranscription(db, {
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    // The key is the worker's alone; a live worker that can transcribe says so in its heartbeat.
+    keyConfigured: await transcriptionWorkerAvailable(db),
+  });
+  const context = repositoryContext(workspaceScope(input.workspaceId, { kind: 'system', component: 'worker' }), db);
+  return { transcription, holdId: await admitPendingHold(context, input.sessionId) };
 }
 
 /**

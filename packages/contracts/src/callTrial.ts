@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { CALL_ANALYSIS_FAILURE_REASONS, callProposalSchema } from './callAnalysis.ts';
+import { CALL_ANALYSIS_FAILURE_REASONS, CALL_PROPOSAL_KINDS, CALL_PROPOSAL_MODES } from './callAnalysis.ts';
+import { CALL_OUTCOMES } from './dial.ts';
 import { callProposalKeySchema } from './callProposals.ts';
 import { TRANSCRIPTION_MINIMUM_SECONDS } from './callSessions.ts';
 import { instant, uuid } from './foundationRows.ts';
@@ -83,6 +84,15 @@ const excludedSessionSchema = z.object({
   reason: z.enum(CALL_ANALYSIS_EXCLUSION_REASONS),
 });
 
+/** What `startsTicked` reads of a suggestion: nothing more. Strict, so nothing more can pass. */
+export const callTrialSampleSchema = z.strictObject({
+  kind: z.enum(CALL_PROPOSAL_KINDS),
+  mode: z.enum(CALL_PROPOSAL_MODES),
+  /** The proposed outcome, for an `outcome` suggestion; null for every other kind. */
+  outcome: z.enum(CALL_OUTCOMES).nullable(),
+});
+export type CallTrialSample = z.infer<typeof callTrialSampleSchema>;
+
 const trialTypeSchema = z.object({
   type: z.string().min(1).max(64),
   unchanged: count,
@@ -113,10 +123,12 @@ const trialTypeSchema = z.object({
   applyMode: count,
   reviewMode: count,
   /**
-   * One suggestion of this type offered to apply (the newest), or null when none was: the
-   * desktop asks its own `startsTicked` rule of it, so the rule lives in one place.
+   * The shape of one suggestion of this type offered to apply (the newest), or null when none
+   * was: the desktop asks its own `startsTicked` of it, so the rule lives in one place. Only
+   * what that rule reads — the kind, the mode and the outcome value — and never a quote, an
+   * evidence line or any other parameter (review S3T, finding 1: no transcript text here).
    */
-  applySample: callProposalSchema.nullable(),
+  applySample: callTrialSampleSchema.nullable(),
 });
 
 export const callTrialResponseSchema = z.object({

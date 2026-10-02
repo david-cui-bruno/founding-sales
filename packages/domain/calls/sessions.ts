@@ -26,7 +26,8 @@ import { currentCallingIdentityId } from '../dial/identities.ts';
 import { localDate, localParts } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { sendGateLockName } from '../policy/sendGate.ts';
-import { admitPendingHold, lockGateAndFirmForCallSid } from './pendingHold.ts';
+import { admitToAnalysisPath, lockGateAndFirmForCallSid } from './pendingHold.ts';
+import type { EnqueueTranscriptionOutcome } from './transcription.ts';
 
 /**
  * Call sessions: one Twilio call attempt, from authorization to its recording
@@ -985,8 +986,9 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
   }
 
   // Slice 3a: every delivery, duplicates included, may complete the facts the pending-review
-  // hold is admitted on (since S3T the analysis path's: an answer, then the recording).
-  await admitPendingHold(context, session.id);
+  // hold is admitted on (since S3T the analysis path's: an answer, then the recording). An
+  // answer that arrives after the recording queues its transcription here (review S3T, 2).
+  await admitToAnalysisPath(db, { workspaceId: session.workspace_id, sessionId: session.id });
 
   let settlement: 'settled' | 'estimated' | null = null;
   if (terminal) {
@@ -1039,8 +1041,23 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
  */
 export async function recordCallRecording(
   db: Queryable,
-  input: { readonly callSid: string; readonly recordingSid: string; readonly recordingUrl: string; readonly durationSeconds?: number | undefined },
-): Promise<{ readonly known: boolean; readonly recorded?: { readonly workspaceId: string; readonly sessionId: string } }> {
+  input: {
+    readonly callSid: string;
+    readonly recordingSid: string;
+    readonly recordingUrl: string;
+    readonly durationSeconds?: number | undefined;
+    /**
+     * Twilio's `RecordingStatus` was `completed` (or absent). A recording that is not final
+     * (`absent`, `failed`) has no audio: its path and duration are not stored, so nothing is
+     * transcribed or held on it, now or at a later status delivery (review S3T, finding 2).
+     */
+    readonly final?: boolean | undefined;
+  },
+): Promise<{
+  readonly known: boolean;
+  readonly recorded?: { readonly workspaceId: string; readonly sessionId: string };
+  readonly transcription?: EnqueueTranscriptionOutcome;
+}> {
   // Slice 3a: the status callback's prefix — the send gate, then the firm, before the
   // session row — because this delivery may admit the pending-review hold, which takes the
   // gate (DESIGN-S3A §2.5). It used to lock the session first.
@@ -1059,14 +1076,17 @@ export async function recordCallRecording(
     input.durationSeconds !== undefined && Number.isFinite(input.durationSeconds) && input.durationSeconds >= 0
       ? Math.trunc(input.durationSeconds)
       : null;
+  const final = input.final !== false;
   await db.query(
     `UPDATE call_sessions SET recording_sid = $3, recording_path = COALESCE($4, recording_path),
             recording_duration_seconds = COALESCE($5::integer, recording_duration_seconds), updated_at = now()
       WHERE workspace_id = $1 AND id = $2`,
-    [session.workspace_id, session.id, input.recordingSid, path, duration],
+    [session.workspace_id, session.id, input.recordingSid, final ? path : null, final ? duration : null],
   );
-  await admitPendingHold(systemContext(db, session.workspace_id), session.id);
-  return { known: true, recorded: { workspaceId: session.workspace_id, sessionId: session.id } };
+  if (!final) return { known: true };
+  // The transcription enqueue (slice C2), then the hold: one admission (review S3T, finding 2).
+  const admitted = await admitToAnalysisPath(db, { workspaceId: session.workspace_id, sessionId: session.id });
+  return { known: true, recorded: { workspaceId: session.workspace_id, sessionId: session.id }, transcription: admitted.transcription };
 }
 
 // ---------------------------------------------------------------------------

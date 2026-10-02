@@ -156,7 +156,7 @@ describe('the trial read', () => {
       correctedNewInformation: 0,
       applyMode: 2,
     });
-    expect(outcome?.applySample).toMatchObject({ kind: 'outcome', mode: 'apply' });
+    expect(outcome?.applySample).toEqual({ kind: 'outcome', mode: 'apply', outcome: 'interested' });
     const signal = trial.types.find(type => type.type === 'buying_signal');
     expect(signal).toMatchObject({ declined: 1, undecided: 1, unchanged: 0, insufficient: true, acceptedUnchangedShare: 0 });
     expect(trial.incorrect).toEqual([
@@ -195,6 +195,31 @@ describe('the trial read', () => {
       ['buying_signal', 'declined'],
       ['buying_signal', 'corrected'],
     ]);
+  });
+
+  it('review S3T finding 1: the response carries no transcript text — no quote, no evidence, at any depth', async () => {
+    // The analysed calls' suggestions do carry quotes: the read must not.
+    const stored = JSON.stringify((await world.session.query('SELECT proposals FROM call_analyses WHERE id = $1', [applied.analysisId])).rows);
+    expect(stored).toContain('Can you show us a demo?');
+    expect(stored).toContain('"evidence"');
+    const keys: string[] = [];
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(walk);
+      else if (value !== null && typeof value === 'object') {
+        for (const [key, inner] of Object.entries(value)) {
+          keys.push(key);
+          walk(inner);
+        }
+      }
+    };
+    // The domain answer itself, before any schema: what the route would hand the parser.
+    const raw = await readCallTrial(world.salesperson(), { since });
+    walk(raw);
+    expect(keys.filter(key => /quote|evidence|text|params|reason$/u.test(key) && key !== 'reason')).toEqual([]);
+    const wire = JSON.stringify(raw);
+    for (const spoken of ['Can you show us a demo', 'evaluating tools', 'Hi Dana', 'She asked for a demo']) expect(wire).not.toContain(spoken);
+    expect(raw.types.find(type => type.type === 'buying_signal')?.applySample).toEqual({ kind: 'buying_signal', mode: 'apply', outcome: null });
+    expect(raw.types.find(type => type.type === 'outcome:interested')?.applySample).toEqual({ kind: 'outcome', mode: 'apply', outcome: 'interested' });
   });
 
   it('the since filter: a call before it is not counted anywhere; an earlier since counts it', async () => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { callTrialResponseSchema, type CallTrialResponse } from '@fss/contracts';
+import { callTrialResponseSchema, type CallProposal, type CallTrialResponse, type CallTrialSample } from '@fss/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Trial, TrialSection } from '../src/renderer/today/Trial.tsx';
 import { PROPOSALS } from './support/analysisAnswers.ts';
@@ -23,6 +23,13 @@ const SESSION = '55555555-5555-4555-8555-555555555555';
 const OTHER = '66666666-6666-4666-8666-666666666666';
 const FIRM = '11111111-1111-4111-8111-111111111111';
 const ANALYSIS = '77777777-7777-4777-8777-777777777777';
+
+/** What the server sends of a suggestion (`sampleOf` in trialReport.ts): kind, mode, outcome. */
+const sample = (proposal: CallProposal): CallTrialSample => ({
+  kind: proposal.kind,
+  mode: proposal.mode,
+  outcome: proposal.kind === 'outcome' ? proposal.params.outcome : null,
+});
 
 const type = (patch: Partial<CallTrialResponse['types'][number]> & { type: string }): CallTrialResponse['types'][number] => ({
   unchanged: 0,
@@ -60,10 +67,10 @@ const TRIAL: CallTrialResponse = callTrialResponseSchema.parse({
   analysis: { completed: 6, failed: 1, failedByReason: [{ reason: 'refused', count: 1 }], pending: 0, held: 0 },
   heldButExcluded: 0,
   types: [
-    type({ type: 'buying_signal', declined: 1, undecided: 1, acceptedUnchangedShare: 0, applyMode: 2, applySample: PROPOSALS.buyingSignal }),
-    type({ type: 'outcome:interested', unchanged: 5, bypassed: 1, acceptedUnchangedShare: 5 / 6, insufficient: false, applyMode: 6, applySample: PROPOSALS.outcome }),
-    type({ type: 'stop', unchanged: 1, applyMode: 1, applySample: PROPOSALS.stopOutcome }),
-    type({ type: 'task', unchanged: 5, correctedOriginalError: 1, acceptedUnchangedShare: 0.8, insufficient: false, applyMode: 5, applySample: PROPOSALS.task }),
+    type({ type: 'buying_signal', declined: 1, undecided: 1, acceptedUnchangedShare: 0, applyMode: 2, applySample: sample(PROPOSALS.buyingSignal) }),
+    type({ type: 'outcome:interested', unchanged: 5, bypassed: 1, acceptedUnchangedShare: 5 / 6, insufficient: false, applyMode: 6, applySample: sample(PROPOSALS.outcome) }),
+    type({ type: 'stop', unchanged: 1, applyMode: 1, applySample: sample(PROPOSALS.stopOutcome) }),
+    type({ type: 'task', unchanged: 5, correctedOriginalError: 1, acceptedUnchangedShare: 0.8, insufficient: false, applyMode: 5, applySample: sample(PROPOSALS.task) }),
   ],
   incorrect: [{ analysisId: ANALYSIS, callSessionId: SESSION, key: 'buying_signal', type: 'buying_signal', result: 'declined', decidedAt: '2026-10-02T16:30:00.000Z' }],
 });

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { JSX } from 'react';
-import { CALL_TRIAL_UNCHANGED_BAR, type CallAnalysisExclusionReason, type CallTrialResponse } from '@fss/contracts';
+import { CALL_TRIAL_UNCHANGED_BAR, type CallAnalysisExclusionReason, type CallProposal, type CallTrialResponse, type CallTrialSample } from '@fss/contracts';
 import { Block, Chip, Label } from '../v2/parts.tsx';
 import { startsTicked } from './afterCallModel.ts';
 import { acceptanceWord } from './Recap.tsx';
@@ -42,9 +42,18 @@ export function shortDay(instant: string): string {
   return `${String(at.getDate())} ${new Intl.DateTimeFormat('en-US', { month: 'short' }).format(at)}`;
 }
 
-/** Whether a type's suggestions start ticked: asked of one apply-mode suggestion of it. */
+/**
+ * The sample as the suggestion `startsTicked` reads: its kind, its mode and (for an outcome)
+ * its value. The trial read carries nothing more (no quotes), and the rule reads nothing more;
+ * a change to `startsTicked` that reads another field must widen `callTrialSampleSchema`.
+ */
+export function sampleAsProposal(sample: CallTrialSample): CallProposal {
+  return { key: sample.kind, kind: sample.kind, mode: sample.mode, reason: '', params: sample.outcome === null ? {} : { outcome: sample.outcome } } as unknown as CallProposal;
+}
+
+/** Whether a type's suggestions start ticked: the desktop's own rule, asked of the sample. */
 export function typeStartsTicked(type: CallTrialResponse['types'][number]): boolean {
-  return type.applySample !== null && startsTicked(type.applySample);
+  return type.applySample !== null && startsTicked(sampleAsProposal(type.applySample));
 }
 
 export function exclusionWord(reason: CallAnalysisExclusionReason, minimumSeconds: number): string {

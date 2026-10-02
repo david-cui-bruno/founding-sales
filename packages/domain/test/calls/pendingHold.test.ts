@@ -102,6 +102,49 @@ describe('B-7 and B-12: the pending-review hold', () => {
     expect(await holdsOf(call.sessionId)).toHaveLength(1);
   });
 
+  const transcribeJobs = async (sessionId: string): Promise<number> =>
+    (await world.session.query("SELECT 1 FROM jobs WHERE kind = 'call.transcribe' AND payload ->> 'callSessionId' = $1", [sessionId])).rows.length;
+
+  it('review S3T finding 2: the recording before the answer — the answer queues the transcription and holds the firm; duplicates add nothing', async () => {
+    const call = await place(await world.newFirm(), [], null);
+    await recording(call, 25);
+    // No answer yet: neither queued nor held.
+    expect([await transcribeJobs(call.sessionId), await holdsOf(call.sessionId)]).toEqual([0, []]);
+    await status(call, 'in-progress');
+    expect(await transcribeJobs(call.sessionId)).toBe(1);
+    expect(await holdsOf(call.sessionId)).toHaveLength(1);
+    await status(call, 'completed', 25);
+    await recording(call, 25);
+    await status(call, 'completed', 25);
+    expect(await transcribeJobs(call.sessionId)).toBe(1);
+    expect(await holdsOf(call.sessionId)).toHaveLength(1);
+  });
+
+  it('a call is never held without its transcription queued: no transcription worker up, no job and no hold', async () => {
+    await world.session.query("UPDATE heartbeats SET detail = '{}'::jsonb WHERE component = 'worker'");
+    try {
+      const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
+      expect([await transcribeJobs(call.sessionId), await holdsOf(call.sessionId)]).toEqual([0, []]);
+    } finally {
+      await world.session.query(`UPDATE heartbeats SET detail = '{"call_transcribe": true}'::jsonb WHERE component = 'worker'`);
+    }
+  });
+
+  it('a recording that is not final (absent or failed) is neither transcribed nor held, now or at a later status', async () => {
+    const call = await place(await world.newFirm(), [{ status: 'in-progress' }], null);
+    await withTransaction(world.session, async () =>
+      await recordCallRecording(world.session, {
+        callSid: call.callSid,
+        recordingSid: `RE${'e'.repeat(32)}`,
+        recordingUrl: `https://api.twilio.com/2010-04-01/Accounts/AC${'a'.repeat(32)}/Recordings/RE${'e'.repeat(32)}`,
+        durationSeconds: 60,
+        final: false,
+      }),
+    );
+    await status(call, 'completed', 60);
+    expect([await transcribeJobs(call.sessionId), await holdsOf(call.sessionId)]).toEqual([0, []]);
+  });
+
   it('duplicate deliveries give one hold', async () => {
     const call = await place(await world.newFirm(), [{ status: 'in-progress' }, { status: 'completed', seconds: 125 }], 125);
     await status(call, 'completed', 125);

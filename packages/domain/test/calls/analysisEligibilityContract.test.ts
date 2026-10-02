@@ -1,22 +1,31 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { callAnalysisAdmission, callAnalysisEligibility, type CallAnalysisEligibility } from '../../calls/analysisEligibility.ts';
-import { listOwedAnalyses } from '../../calls/analysisPaid.ts';
-import { enqueueCallTranscription } from '../../calls/transcription.ts';
+import { listOwedAnalyses, postCallModelPath } from '../../calls/analysisPaid.ts';
+import { recordCallRecording, recordCallStatus } from '../../calls/sessions.ts';
+import { listHeldTranscriptions } from '../../calls/transcription.ts';
 import { withTransaction } from '../../db/queryable.ts';
+import { enqueueJob } from '../../jobs/jobStore.ts';
+import { jobIdempotencyKey } from '../../jobs/jobKinds.ts';
 import { lines } from './analysisFixtures.ts';
 import { createApplyWorld, type ApplyWorld, type PlacedCall } from './support/applyWorld.ts';
 
 /**
  * Slice S3T, the contract check: one eligibility rule, and the real gates agree with it.
  *
- * Each row places a call through the real callbacks (`recordCallStatus`, then
- * `recordCallRecording`), which run the real pending-hold admission on every delivery. Then
- * the real transcription enqueue (`enqueueCallTranscription`, with a transcription worker up)
- * is asked about the same session, and `callAnalysisAdmission` is asked about the facts the
- * row accumulated. On every row: held == transcribed == the classifier.
+ * Each row delivers a call through the real callbacks only (`recordCallStatus`,
+ * `recordCallRecording`), in the row's order. Those run the real admission on every delivery:
+ * the transcription enqueue, then the pending hold (`admitToAnalysisPath`). Then, on the facts
+ * the row accumulated:
  *
- * The five named rows are the ones the hold and the analysis path disagreed on before S3T
- * aligned the hold to the analysis path (the probe at c3f97aa7); with the old hold they fail.
+ *   * held — a `call_analysis_pending` hold exists;
+ *   * transcribed — a `call.transcribe` job exists (queued by the callbacks, nothing else);
+ *   * resumable — `listHeldTranscriptions`, after the row's job is finished and the switch is
+ *     written again, offers the call (its own SQL copy of the rule);
+ *   * classifier — `callAnalysisAdmission`.
+ *
+ * On every row the four agree. The five named disagreement rows are the ones the hold and the
+ * analysis path disagreed on before S3T (the probe at c3f97aa7); the recording-before-answer
+ * row is review S3T's finding 2.
  */
 
 const CALL = lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', 'Sure, go ahead.']);
@@ -25,6 +34,8 @@ type Row = {
   readonly name: string;
   readonly statuses: { status: string; seconds?: number }[];
   readonly recordingSeconds: number | null;
+  /** The recording is delivered before the statuses (default: after). */
+  readonly recordingFirst?: boolean;
   readonly transcription: boolean;
   readonly expected: CallAnalysisEligibility['kind'];
   readonly reason?: string;
@@ -78,6 +89,23 @@ const ROWS: Row[] = [
     transcription: true,
     expected: 'eligible',
   },
+  {
+    name: 'review S3T finding 2: the 25 s recording before the answer, then in-progress, then completed',
+    statuses: answeredThen(25),
+    recordingSeconds: 25,
+    recordingFirst: true,
+    transcription: true,
+    expected: 'eligible',
+  },
+  {
+    name: 'the 19 s recording before the answer',
+    statuses: answeredThen(19),
+    recordingSeconds: 19,
+    recordingFirst: true,
+    transcription: true,
+    expected: 'excluded',
+    reason: 'too_short',
+  },
 ];
 
 describe('S3T contract: the hold, the transcription enqueue and the eligibility rule agree', () => {
@@ -118,26 +146,71 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
     };
   };
 
+  const status = async (call: PlacedCall, providerStatus: string, seconds?: number) =>
+    await withTransaction(world.session, async () =>
+      await recordCallStatus(world.session, { callSid: call.callSid, providerStatus, ...(seconds === undefined ? {} : { durationSeconds: seconds }) }),
+    );
+  const recording = async (call: PlacedCall, seconds: number) =>
+    await withTransaction(world.session, async () =>
+      await recordCallRecording(world.session, {
+        callSid: call.callSid,
+        recordingSid: `RE${'d'.repeat(32)}`,
+        recordingUrl: `https://api.twilio.com/2010-04-01/Accounts/AC${'a'.repeat(32)}/Recordings/RE${'d'.repeat(32)}`,
+        durationSeconds: seconds,
+      }),
+    );
+  const transcribeJobs = async (sessionId: string): Promise<number> =>
+    (
+      await world.session.query("SELECT 1 FROM jobs WHERE kind = 'call.transcribe' AND payload ->> 'callSessionId' = $1", [sessionId])
+    ).rows.length;
+
+  /** Whether the resumption source would offer the call once its (real or stand-in) job has finished. */
+  const resumable = async (call: PlacedCall, transcription: boolean): Promise<boolean> => {
+    // A call the callbacks did not queue gets a stand-in job, so the source's own copy of the
+    // rule — not the absence of a job — is what decides.
+    await enqueueJob(world.session, {
+      workspaceId: world.seeded.alpha.workspaceId,
+      kind: 'call.transcribe',
+      idempotencyKey: jobIdempotencyKey.callTranscribe(call.sessionId),
+      payload: { callSessionId: call.sessionId },
+      maxAttempts: 3,
+    });
+    await world.session.query(
+      "UPDATE jobs SET state = 'done', completed_at = now() - interval '1 minute', updated_at = now() - interval '1 minute' WHERE kind = 'call.transcribe' AND payload ->> 'callSessionId' = $1",
+      [call.sessionId],
+    );
+    // The switch written again, after the job finished: what resumes held work.
+    await world.setTranscription(transcription);
+    return (await listHeldTranscriptions(world.session)).some(held => held.sessionId === call.sessionId);
+  };
+
   for (const row of ROWS) {
     it(row.name, async () => {
       await world.setTranscription(row.transcription);
-      const call = await world.placeCall(await world.newFirm(), CALL, { statuses: row.statuses, recordingSeconds: row.recordingSeconds, transcript: false });
-      const enqueue = await withTransaction(world.session, async () =>
-        await enqueueCallTranscription(world.session, { workspaceId: world.seeded.alpha.workspaceId, sessionId: call.sessionId, keyConfigured: true }),
-      );
+      const call = await world.placeCall(await world.newFirm(), CALL, { statuses: [], recordingSeconds: null, transcript: false });
+      if (row.recordingFirst === true && row.recordingSeconds !== null) await recording(call, row.recordingSeconds);
+      for (const delivery of row.statuses) await status(call, delivery.status, delivery.seconds);
+      if (row.recordingFirst !== true && row.recordingSeconds !== null) await recording(call, row.recordingSeconds);
+
       const verdict = callAnalysisAdmission(await factsOf(call, row.transcription));
-      const answers = { held: await held(call.sessionId), transcribed: enqueue.enqueued, classifier: verdict.kind === 'eligible' };
+      const answers = {
+        held: await held(call.sessionId),
+        transcribed: (await transcribeJobs(call.sessionId)) === 1,
+        classifier: verdict.kind === 'eligible',
+      };
       const want = row.expected === 'eligible';
       expect(answers).toEqual({ held: want, transcribed: want, classifier: want });
       if (verdict.kind === 'excluded') expect(verdict.reason).toBe(row.reason);
+      expect(await resumable(call, row.transcription)).toBe(want);
     });
   }
 
   it('after transcription, the analysis source offers exactly the calls the whole rule calls eligible', async () => {
     await world.setTranscription(true);
-    const cases: { readonly provider: string; readonly model: string; readonly labelled: boolean }[] = [
-      { provider: 'aws_transcribe', model: 'standard', labelled: true },
-      { provider: 'deepgram', model: 'nova-3', labelled: false },
+    const cases: { readonly provider: string; readonly model: string; readonly summary: boolean; readonly reason: string | null }[] = [
+      { provider: 'aws_transcribe', model: 'standard', summary: false, reason: null },
+      { provider: 'deepgram', model: 'nova-3', summary: false, reason: 'not_channel_labelled' },
+      { provider: 'aws_transcribe', model: 'standard', summary: true, reason: 'summary_path' },
     ];
     for (const transcript of cases) {
       const call = await world.placeCall(await world.newFirm(), CALL, { transcript: false });
@@ -146,16 +219,26 @@ describe('S3T contract: the hold, the transcription enqueue and the eligibility 
          VALUES ($1, $2, $3, $4, 'en-US', 125, $5::jsonb)`,
         [world.seeded.alpha.workspaceId, call.sessionId, transcript.provider, transcript.model, JSON.stringify(CALL)],
       );
+      if (transcript.summary) {
+        // An obligation started before 3a: a summarize job puts the call on the summary path.
+        await enqueueJob(world.session, {
+          workspaceId: world.seeded.alpha.workspaceId,
+          kind: 'call.summarize',
+          idempotencyKey: jobIdempotencyKey.callSummarize(call.sessionId),
+          payload: { callSessionId: call.sessionId },
+          maxAttempts: 3,
+        });
+      }
       const verdict = callAnalysisEligibility({
         ...(await factsOf(call, true)),
-        transcript: transcript.labelled ? 'channel_labelled' : 'not_channel_labelled',
-        transcribeQueued: false,
+        transcript: transcript.provider === 'deepgram' ? 'not_channel_labelled' : 'channel_labelled',
+        transcribeQueued: (await transcribeJobs(call.sessionId)) > 0,
         transcriptionFailed: false,
-        summaryPath: false,
+        summaryPath: (await postCallModelPath(world.session, world.seeded.alpha.workspaceId, call.sessionId)) === 'summary',
       });
       const offered = (await listOwedAnalyses(world.session, 500)).some(owed => owed.sessionId === call.sessionId);
-      expect({ offered, eligible: verdict.kind === 'eligible' }).toEqual({ offered: transcript.labelled, eligible: transcript.labelled });
-      if (verdict.kind === 'excluded') expect(verdict.reason).toBe('not_channel_labelled');
+      expect({ offered, eligible: verdict.kind === 'eligible' }).toEqual({ offered: transcript.reason === null, eligible: transcript.reason === null });
+      if (verdict.kind === 'excluded') expect(verdict.reason).toBe(transcript.reason);
     }
   });
 });

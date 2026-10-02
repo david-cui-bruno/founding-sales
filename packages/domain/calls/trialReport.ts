@@ -11,6 +11,7 @@ import {
   type CallAnalysisExclusionReason,
   type CallAnalysisFailureReason,
   type CallProposal,
+  type CallTrialSample,
   type CallProposalDecision,
   type CallTrialResponse,
 } from '@fss/contracts';
@@ -117,6 +118,14 @@ function factsOf(row: SessionRow, summaryPath: boolean): CallAnalysisFacts {
         (!row.transcribe_open && !row.transcription_open_reservation && Number(row.transcription_spent) >= TRANSCRIPTION_MAX_ATTEMPTS)),
     summaryPath,
   };
+}
+
+/**
+ * What the desktop's `startsTicked` reads of a suggestion, and nothing else: no quote, no
+ * evidence, no parameter but the outcome value (review S3T, finding 1).
+ */
+export function sampleOf(proposal: CallProposal): CallTrialSample {
+  return { kind: proposal.kind, mode: proposal.mode, outcome: proposal.kind === 'outcome' ? proposal.params.outcome : null };
 }
 
 const byReasonOrder = (reason: CallAnalysisExclusionReason): number => CALL_ANALYSIS_EXCLUSION_REASONS.indexOf(reason);
@@ -235,7 +244,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
   const outcome = { completed: 0, failed: 0, pending: 0, held: 0 };
   const failedByReason = new Map<CallAnalysisFailureReason, number>();
   const undecided = new Map<string, number>();
-  const modes = new Map<string, { apply: number; review: number; sample: CallProposal | null }>();
+  const modes = new Map<string, { apply: number; review: number; sample: CallTrialSample | null }>();
 
   for (const row of sessions) {
     const summaryPath = (await postCallModelPath(context.db, workspaceId, row.id)) === 'summary';
@@ -276,7 +285,7 @@ export async function readCallTrial(context: RepositoryContext, options: { reado
         if (proposal.mode === 'apply') {
           mode.apply += 1;
           // Sessions are newest first: the first apply-mode suggestion seen is the newest.
-          mode.sample ??= proposal;
+          mode.sample ??= sampleOf(proposal);
         } else {
           mode.review += 1;
         }
