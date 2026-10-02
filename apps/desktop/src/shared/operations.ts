@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import {
   CALL_OUTCOMES,
+  applyCallProposalsResultSchema,
+  callAnalysisNotesSchema,
+  callAnalysisResponseSchema,
+  callProposalEditsSchema,
+  callProposalKeySchema,
+  callRecapResponseSchema,
+  proposalAcceptanceResponseSchema,
+  reviewItemSchema,
   callCadenceSchema,
   callRecordingResponseSchema,
   callTranscriptResponseSchema,
@@ -388,6 +396,23 @@ const callCancelInput = z.strictObject({ requestId: uuid });
 /** The firm page's call history; null when it could not be read. */
 export const callHistoryViewSchema = z.strictObject({ calls: z.array(callSessionDtoSchema).nullable() });
 
+/**
+ * Slice 3a, lane C: the after-call analysis, applying it, Needs review and the recap. Every
+ * view is "the answer, or null/false with the server's code", never a thrown error, so a
+ * 404 from an API without the route is a hidden block and not an error page.
+ */
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/u);
+const reasonCode = z.string().max(80).nullable();
+export const analysisViewSchema = z.strictObject({ analysis: callAnalysisResponseSchema.nullable(), reason: reasonCode });
+export type AnalysisView = z.infer<typeof analysisViewSchema>;
+export const proposalsApplyViewSchema = z.strictObject({ applied: applyCallProposalsResultSchema.nullable(), reason: reasonCode });
+export type ProposalsApplyView = z.infer<typeof proposalsApplyViewSchema>;
+const doneViewSchema = (name: string) => z.strictObject({ [name]: z.boolean(), reason: reasonCode });
+export const reviewViewSchema = z.strictObject({ items: z.array(reviewItemSchema).nullable() });
+export type ReviewView = z.infer<typeof reviewViewSchema>;
+export const recapViewSchema = z.strictObject({ recap: callRecapResponseSchema.nullable() });
+export const acceptanceViewSchema = z.strictObject({ acceptance: proposalAcceptanceResponseSchema.nullable() });
+
 /** One recording's audio for the page to play; `reason` when it could not be read. */
 export const callRecordingViewSchema = z.strictObject({
   recording: callRecordingResponseSchema.nullable(),
@@ -531,6 +556,14 @@ export const OPERATIONS = {
     transform: 're-reads the list and the open card, keeping the command’s notice',
   },
 
+  'today.completeTask': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/today/tasks/complete' }],
+    input: z.strictObject({ taskId: uuid }),
+    output: todayStateSchema,
+    transform: 're-reads the list and the open card, keeping the command’s notice',
+  },
+
   // --- Calling from Callie (slice C1) -----------------------------------------
   'calling.status': {
     kind: 'read',
@@ -582,6 +615,98 @@ export const OPERATIONS = {
     input: z.strictObject({ firmId: uuid }),
     output: callHistoryViewSchema,
     transform: 'none: the firm’s placed calls, each with its summary when it has one, or null when the read did not answer',
+  },
+  'calling.analysis': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/analysis?callSessionId={uuid}' }],
+    input: z.strictObject({ callSessionId: uuid }),
+    output: analysisViewSchema,
+    transform: 'none: one call’s analysis, keyed by its session and never by the open view; null when it has none or the route is absent',
+  },
+  'calling.analysisRetry': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/calls/analysis/retry' },
+      { method: 'GET', path: '/calls/analysis?callSessionId={uuid}' },
+    ],
+    input: z.strictObject({ callSessionId: uuid, reason: z.enum(['retry', 'reanalysis']) }),
+    output: analysisViewSchema,
+    transform: 'asks for a new analysis of the call, then reads it back; the server’s refusal code is the reason',
+  },
+  'calling.analysisEdit': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/analysis/edit' }],
+    input: z.strictObject({ callSessionId: uuid, notes: callAnalysisNotesSchema }),
+    output: analysisViewSchema,
+    transform: 'David’s notes as a new version of the analysis; the answer is the analysis read',
+  },
+  'calling.proposalsApply': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/proposals/apply' }],
+    input: z.strictObject({
+      analysisId: uuid,
+      transcriptSha256: sha256Hex,
+      proposalHash: sha256Hex,
+      keys: z.array(callProposalKeySchema).min(1).max(40),
+      edits: callProposalEditsSchema.optional(),
+      /** The same id for the same click, so a retry is answered from its receipt. */
+      commandId: uuid.optional(),
+    }),
+    output: proposalsApplyViewSchema,
+    transform: 'the selected keys of one analysis in one request, with the three identifiers the server checks; a refusal’s code is the reason',
+  },
+  'calling.proposalsDecline': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/proposals/decline' }],
+    input: z.strictObject({
+      analysisId: uuid,
+      proposalHash: sha256Hex,
+      keys: z.array(callProposalKeySchema).min(1).max(40),
+    }),
+    output: doneViewSchema('declined'),
+    transform: 'records the decision only; a declined suggestion stays applicable',
+  },
+  'calling.pendingDismiss': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/calls/pending/dismiss' }],
+    input: z.strictObject({ callSessionId: uuid }),
+    output: doneViewSchema('dismissed'),
+    transform: 'releases the call’s pending-review hold without logging the call',
+  },
+  'calling.recap': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/recap' }],
+    input: nothing,
+    output: recapViewSchema,
+    transform: 'none: the day’s recap, or null when the read did not answer (the block is then hidden)',
+  },
+  'calling.acceptance': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/calls/proposals/acceptance' }],
+    input: nothing,
+    output: acceptanceViewSchema,
+    transform: 'none: the per-type acceptance counts, read-only; null when the read did not answer',
+  },
+  'review.list': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/review' }],
+    input: nothing,
+    output: reviewViewSchema,
+    transform: 'none: Needs review’s three sources as the server lists them; null when the read did not answer',
+  },
+  'review.stageResolve': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/review/stage/resolve' }],
+    input: z.strictObject({ itemId: uuid }),
+    output: doneViewSchema('resolved'),
+    transform: 'resolves one stage review item by id',
+  },
+  'suppressions.firmStop': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/suppressions/record' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: doneViewSchema('stopped'),
+    transform: 'sends scope firm, the firm and source prospect_do_not_call, and nothing else; the explicit confirm is the caller’s',
   },
   'calling.recording': {
     kind: 'read',

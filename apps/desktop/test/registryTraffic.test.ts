@@ -110,6 +110,15 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'replies.confirm': { messageId: FIXTURE_IDS.message, classification: 'human_reply', callback: null },
   'replies.resolve': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
   'replies.saveModel': { modelName: 'claude-haiku-4-5-20251001' },
+  'calling.analysis': { callSessionId: UUID },
+  'calling.analysisRetry': { callSessionId: UUID, reason: 'retry' },
+  'calling.analysisEdit': { callSessionId: UUID, notes: { summary: 'Ask for Glen.', facts: [] } },
+  'calling.proposalsApply': { analysisId: UUID, transcriptSha256: 'a'.repeat(64), proposalHash: 'b'.repeat(64), keys: ['outcome'] },
+  'calling.proposalsDecline': { analysisId: UUID, proposalHash: 'b'.repeat(64), keys: ['outcome'] },
+  'calling.pendingDismiss': { callSessionId: UUID },
+  'review.stageResolve': { itemId: UUID },
+  'suppressions.firmStop': { firmId: UUID },
+  'today.completeTask': { taskId: UUID },
   'research.open': { firmId: UUID },
   'research.run': { firmId: UUID },
   'research.addLink': { firmId: UUID, url: 'https://news.example.test/piece' },
@@ -250,6 +259,12 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     today: today as unknown as Host,
     // Slice C1: the calling operations are the Today bridge's dial path, under their own names.
     calling: {
+      ...Object.fromEntries(
+        ['analysis', 'analysisRetry', 'analysisEdit', 'proposalsApply', 'proposalsDecline', 'pendingDismiss', 'recap', 'acceptance'].map(method => [
+          method,
+          async (input: unknown) => await operationHandlers({ api } as unknown as OperationHostDeps)[`calling.${method}` as OperationName](input as never),
+        ]),
+      ),
       expand: async input => await today.expand(input as { firmId: string }),
       status: async input => await today.callingStatus(input as { firmId: string }),
       start: async input => await today.startCall(input as Parameters<typeof today.startCall>[0]),
@@ -278,7 +293,14 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     // Slice S2: answered by `operationHost.ts` against the client directly, like Meetings.
     ...(() => {
       const handlers = operationHandlers({ api } as unknown as OperationHostDeps);
+      const through = (names: readonly string[]): Host =>
+        Object.fromEntries(
+          names.map(name => [name.slice(name.indexOf('.') + 1), async (input: unknown) => await handlers[name as OperationName](input as never)]),
+        );
       return {
+        // Slice 3a, lane C: the after-call analysis and its siblings, straight through the client.
+        review: through(['review.list', 'review.stageResolve']),
+        suppressions: through(['suppressions.firmStop']),
         firms: { saveBasics: async (input: unknown) => await handlers['firms.saveBasics'](input as never) },
         calls: { logIncoming: async (input: unknown) => await handlers['calls.logIncoming'](input as never) },
       };

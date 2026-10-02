@@ -672,7 +672,7 @@ describe('the Today bridge', () => {
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.expand({ firmId: FIRM_ID });
-    expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2 });
+    expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2, include: ['tasks'] });
   });
 
   it('records the outcome against its task and the number the call used, on the server’s clock (C04, C15)', async () => {
@@ -941,6 +941,8 @@ describe('the Today bridge', () => {
       'today.recordAgreedDates',
       'today.scheduleCallback',
       'today.releasePause',
+      // Slice 3a, lane C: a call task marked done.
+      'today.completeTask',
     ]);
     expect(OPERATION_NAMES).not.toContain('today.dial');
     expect(DIAL_IPC_CHANNELS.call).toBe('callie:dial:call');

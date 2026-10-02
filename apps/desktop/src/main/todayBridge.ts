@@ -3,6 +3,7 @@ import {
   CALL_CADENCE,
   TODAY_CARD_VERSION,
   callHistoryResponseSchema,
+  completeCallTaskResultSchema,
   callRecordingResponseSchema,
   callTranscriptResponseSchema,
   callSessionCreatedSchema,
@@ -160,6 +161,7 @@ export interface TodayBridgeHost {
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
   scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
+  completeTask(input: { readonly taskId: string }): Promise<TodayState>;
   releasePause(input: ReleasePauseRequest): Promise<TodayState>;
 
   // ---- Calling from Callie (slice C1): the dial path when `calling_provider = twilio` ----
@@ -489,6 +491,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     const page = await deps.api.read('/today/firm', value => todayFirmResponseSchema.parse(value), {
       firmId,
       cardVersion: TODAY_CARD_VERSION,
+      // Slice 3a: the firm's open call tasks, as tasks of kind `task`.
+      include: ['tasks'],
     });
     if (stale(mine)) return;
     if (!page.ok) {
@@ -1063,6 +1067,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       );
       if (stale(mine)) return await answerFor(mine);
       note(answer, 'callback_scheduled');
+      await reloadAfterMutation({ refreshList: true }, mine);
+      return await answerFor(mine);
+    },
+
+    async completeTask(input) {
+      const mine = generation;
+      const answer = await deps.api.command('/today/tasks/complete', { taskId: input.taskId }, value => completeCallTaskResultSchema.parse(value));
+      if (stale(mine)) return await answerFor(mine);
+      note(answer, 'task_completed');
       await reloadAfterMutation({ refreshList: true }, mine);
       return await answerFor(mine);
     },

@@ -116,7 +116,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls']);
+    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual(['firms.saveBasics', 'calls.logIncoming']);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
@@ -129,6 +129,14 @@ describe('the operation registry', () => {
       'calling.setActive',
       'calling.resume',
       'calling.history',
+      'calling.analysis',
+      'calling.analysisRetry',
+      'calling.analysisEdit',
+      'calling.proposalsApply',
+      'calling.proposalsDecline',
+      'calling.pendingDismiss',
+      'calling.recap',
+      'calling.acceptance',
       'calling.recording',
       // Slice C2: the call's transcript, under its row on the firm page.
       'calling.transcript',
@@ -145,6 +153,7 @@ describe('the operation registry', () => {
       'today.recordAgreedDates',
       'today.scheduleCallback',
       'today.releasePause',
+      'today.completeTask',
     ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('replies.'))).toEqual([
       'replies.state',
