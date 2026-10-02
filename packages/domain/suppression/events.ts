@@ -495,16 +495,27 @@ export async function lockSuppressionHistory(context: RepositoryContext): Promis
   ]);
 }
 
+/** The prefix of a merge copy's id (RF, review RFV). No pre-repair id starts with it. */
+const MERGE_COPY_PREFIX = 'mergecopy:';
+/** The prefix of a merge copy written before RF's last repair: `merge:<event>`, any survivor. */
+const LEGACY_MERGE_COPY_PREFIX = 'merge:';
+
 /**
  * Carry a supersession onto every merge copy of the event it lifted (brief RF, review P2).
  *
- * A firm merge copies each source stop to the survivor as `mergeCopyId(event, survivor)`
- * (before RF's last repair, `merge:<event>`). A lift of the source's event after the merge is
- * a lift of the stop the survivor inherited, so each copy is lifted with it, as
- * `mergeCopyId(supersession, survivor)` — exactly the row the merge would have copied had the
- * lift come first (a pre-repair copy gets the pre-repair form, `merge:<supersession>`). Copies of copies follow. Each copied lift is a release, so
+ * A firm merge copies each source stop to the survivor as `mergeCopyId(event, survivor)`,
+ * `mergecopy:<event>@<survivor>`; before RF's last repair it wrote `merge:<event>`. A lift of
+ * the source's event after the merge is a lift of the stop the survivor inherited, so each
+ * copy is lifted with it, in the copy's own form: `mergeCopyId(supersession, survivor)` for a
+ * copy, `merge:<supersession>` for a pre-repair copy — exactly the row the merge would have
+ * copied had the lift come first. Copies of copies follow. Each copied lift is a release, so
  * its journal record is returned for the caller to append after the commit (RF reset, J2),
  * with the supersession's own.
+ *
+ * The two forms are told apart by prefix, and each is matched by equality only (review RFV):
+ * a pre-repair copy of `e` is exactly `merge:e`, a copy of `e` on the firm it sits on is
+ * exactly `mergecopy:e@<that firm's key>`. No id of one form starts with the other's prefix,
+ * so a copy of one lineage is never read as a child of another.
  */
 async function liftMergeCopies(
   context: RepositoryContext,
@@ -514,7 +525,8 @@ async function liftMergeCopies(
   const { rows } = await context.db.query<{ event_id: string; canonical_key: string }>(
     `SELECT copy.event_id, copy.canonical_key FROM suppression_events copy
       WHERE copy.workspace_id = $1 AND copy.scope = 'firm'
-        AND copy.event_id IN ('merge:' || $2, 'merge:' || $2 || ':' || copy.canonical_key)
+        AND (copy.event_id = '${LEGACY_MERGE_COPY_PREFIX}' || $2
+             OR copy.event_id = '${MERGE_COPY_PREFIX}' || $2 || '@' || copy.canonical_key)
         AND NOT EXISTS (
           SELECT 1 FROM suppression_events lift
            WHERE lift.workspace_id = copy.workspace_id AND lift.supersedes_event_id = copy.event_id
@@ -524,7 +536,9 @@ async function liftMergeCopies(
   const records: SuppressionJournalRecord[] = [];
   for (const copy of rows) {
     const copiedLift =
-      copy.event_id === `merge:${originalEventId}` ? `merge:${supersessionEventId}` : mergeCopyId(supersessionEventId, copy.canonical_key);
+      copy.event_id === `${LEGACY_MERGE_COPY_PREFIX}${originalEventId}`
+        ? `${LEGACY_MERGE_COPY_PREFIX}${supersessionEventId}`
+        : mergeCopyId(supersessionEventId, copy.canonical_key);
     const inserted = await context.db.query<EventDbRow>(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id,
@@ -545,15 +559,22 @@ async function liftMergeCopies(
 }
 
 /**
- * The id of a merge's copy of `eventId` on the survivor `survivorFirmId` (RF, review RFR).
+ * The id of a merge's copy of `eventId` on the survivor `survivorFirmId` (RF, reviews RFR, RFV).
  *
  * The survivor is part of it: a copy is a different stop on each firm it is copied to, and a
  * merge that rolled back after journalling its copy for one survivor must not own the id (and
  * so the conditional journal object) a later merge to another survivor needs. Deterministic,
- * so a retry of the same merge reaches the same id and the same object.
+ * so a retry of the same merge reaches the same id and the same object. Its prefix is not the
+ * pre-repair `merge:`, so no copy can share an id with a pre-repair copy or its descendants;
+ * the survivor is the firm key after the last `@` (a firm key is a UUID, with no `@`).
  */
 export function mergeCopyId(eventId: string, survivorFirmId: string): string {
-  return `merge:${eventId}:${survivorFirmId.toLowerCase()}`;
+  return `${MERGE_COPY_PREFIX}${eventId}@${survivorFirmId.toLowerCase()}`;
+}
+
+/** Whether an event id is a merge's copy, in either form (`mergecopy:` or pre-repair `merge:`). */
+export function isMergeCopyId(eventId: string): boolean {
+  return eventId.startsWith(MERGE_COPY_PREFIX) || eventId.startsWith(LEGACY_MERGE_COPY_PREFIX);
 }
 
 /** An event as the journal holds it. */

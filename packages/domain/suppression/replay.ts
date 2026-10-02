@@ -7,7 +7,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization, readFinalization } from './finalize.ts';
-import { lockSuppressionHistory, readSuppressionEvent, reviewHoldBlocks } from './events.ts';
+import { isMergeCopyId, lockSuppressionHistory, readSuppressionEvent, reviewHoldBlocks } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
@@ -158,8 +158,8 @@ export interface JournalReplayReport {
   readonly unverifiedLegacyReleases: readonly string[];
 }
 
-/** A merge's copy (`merge:<event>`), live a bare row: no claim, no hold, no finalizer. */
-const isMergeCopy = (record: SuppressionJournalRecord): boolean => record.eventId.startsWith('merge:');
+/** A merge's copy, in either form (`isMergeCopyId`), live a bare row: no claim, no hold, no finalizer. */
+const isMergeCopy = (record: SuppressionJournalRecord): boolean => isMergeCopyId(record.eventId);
 
 /** The sources that are terminal the instant they commit (10.2). Mirrors `events.ts`. */
 const TERMINAL_SOURCES: ReadonlySet<string> = new Set([

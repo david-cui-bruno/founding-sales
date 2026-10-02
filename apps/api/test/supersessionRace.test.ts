@@ -10,6 +10,7 @@ import { dispatch, type ApiRequest } from '../src/server.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { replaySuppressionJournal } from '@fss/domain/suppression/replay.ts';
+import { isMergeCopyId } from '@fss/domain/suppression/events.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedFirm } from './support/crmSeed.ts';
@@ -525,7 +526,7 @@ describe('RF reset J1: a merge that fails to commit leaves at most an extra stop
     expect(await onTarget()).toBe(0);
     // The journal already holds the copy, under the survivor's key: a restore replay adds a
     // stop the database does not have (an extra one), and never loses one it does.
-    const copy = appended.find(record => record.eventId === `merge:${stopId}:${targetFirmId}`);
+    const copy = appended.find(record => record.eventId === `mergecopy:${stopId}@${targetFirmId}`);
     expect(copy).toMatchObject({ scope: 'firm', canonicalKey: targetFirmId, supersedesEventId: null });
     const restore = repositoryContext(workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'migration' }), fixture.db);
     await withTransaction(fixture.db, async () => await replaySuppressionJournal(restore, { records: appended }));
@@ -551,10 +552,10 @@ describe('RF reset J1: a merge that fails to commit leaves at most an extra stop
     const merged = await post(fixture.db, journal, '/merges/firms', { sourceFirmId, targetFirmId });
     expect(merged.status, JSON.stringify(merged.body)).toBe(200);
     expect(((merged.body as Record<string, unknown>)['result'] as Record<string, unknown>)['journalAfterCommit']).toBeUndefined();
-    const copies = appended.filter(record => record.eventId.startsWith('merge:'));
+    const copies = appended.filter(record => isMergeCopyId(record.eventId));
     expect(copies.map(record => [record.eventId, record.committed ?? false])).toEqual([
-      [`merge:${stopId}:${targetFirmId}`, false],
-      [`merge:${liftId}:${targetFirmId}`, true],
+      [`mergecopy:${stopId}@${targetFirmId}`, false],
+      [`mergecopy:${liftId}@${targetFirmId}`, true],
     ]);
   });
 });

@@ -113,9 +113,9 @@ describe('an admin lift racing a firm merge', () => {
     // on either firm.
     const copyLift = await database.session.query<{ event_id: string }>(
       'SELECT event_id FROM suppression_events WHERE workspace_id = $1 AND supersedes_event_id = $2',
-      [seeded.alpha.workspaceId, `merge:${stopId}:${target.firmId}`],
+      [seeded.alpha.workspaceId, `mergecopy:${stopId}@${target.firmId}`],
     );
-    expect(copyLift.rows.map(row => row.event_id)).toEqual([`merge:${lifted.ok ? lifted.value.supersessionEventId : ''}:${target.firmId}`]);
+    expect(copyLift.rows.map(row => row.event_id)).toEqual([`mergecopy:${lifted.ok ? lifted.value.supersessionEventId : ''}@${target.firmId}`]);
     const effective = await database.session.query(
       `SELECT event_id FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = ANY($2::text[])`,
       [seeded.alpha.workspaceId, [source.firmId, target.firmId]],

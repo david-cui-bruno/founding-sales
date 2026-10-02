@@ -4,7 +4,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { mergeFirms } from '../../crm/merges.ts';
-import { mergeCopyId, recordAdminSupersession, recordSuppression } from '../../suppression/events.ts';
+import { isMergeCopyId, mergeCopyId, recordAdminSupersession, recordSuppression } from '../../suppression/events.ts';
 import {
   deterministicEventId,
   journalObjectBody,
@@ -341,9 +341,9 @@ describe('X7: a merge keeps a lifted stop lifted and an active stop active', () 
       `SELECT event_id, channel FROM effective_suppressions WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
       [seeded.alpha.workspaceId, target.firmId],
     );
-    expect(effective.rows).toEqual([{ event_id: `merge:${active}:${target.firmId}`, channel: 'email' }]);
-    expect(await supersessionsOf(`merge:${lifted}:${target.firmId}`)).toEqual([`merge:${lift.ok ? lift.value.supersessionEventId : ''}:${target.firmId}`]);
-    expect(await supersessionsOf(`merge:${active}:${target.firmId}`)).toEqual([]);
+    expect(effective.rows).toEqual([{ event_id: `mergecopy:${active}@${target.firmId}`, channel: 'email' }]);
+    expect(await supersessionsOf(`mergecopy:${lifted}@${target.firmId}`)).toEqual([`mergecopy:${lift.ok ? lift.value.supersessionEventId : ''}@${target.firmId}`]);
+    expect(await supersessionsOf(`mergecopy:${active}@${target.firmId}`)).toEqual([]);
   });
 });
 
@@ -558,15 +558,15 @@ describe('RF reset J1 and J2: a merge’s copies survive a restore', () => {
     const journal = recordingSuppressionJournal();
     const { target, stopId } = await stoppedPair(journal);
     // The copy was journalled before the merge committed, with the survivor's key.
-    expect(journal.appended.map(record => [record.eventId, record.canonicalKey])).toContainEqual([`merge:${stopId}:${target.firmId}`, target.firmId]);
-    await remove([`merge:${stopId}:${target.firmId}`]);
+    expect(journal.appended.map(record => [record.eventId, record.canonicalKey])).toContainEqual([`mergecopy:${stopId}@${target.firmId}`, target.firmId]);
+    await remove([`mergecopy:${stopId}@${target.firmId}`]);
     expect(await effectiveOn(target.firmId)).toEqual([]);
     await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
-    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}:${target.firmId}`]);
+    expect(await effectiveOn(target.firmId)).toEqual([`mergecopy:${stopId}@${target.firmId}`]);
     // Live, a copy is the row alone: no finalization claim.
     const claims = await database.session.query('SELECT 1 FROM suppression_finalizations WHERE workspace_id = $1 AND event_id = $2', [
       seeded.alpha.workspaceId,
-      `merge:${stopId}:${target.firmId}`,
+      `mergecopy:${stopId}@${target.firmId}`,
     ]);
     expect(claims.rows).toEqual([]);
   });
@@ -583,10 +583,10 @@ describe('RF reset J1 and J2: a merge’s copies survive a restore', () => {
     );
     if (!lifted.ok) throw new Error(lifted.reason);
     // The lift and its copy, journalled after the commit and marked, as the route does.
-    expect(lifted.value.journalRecords.map(record => record.supersedesEventId)).toEqual([stopId, `merge:${stopId}:${target.firmId}`]);
+    expect(lifted.value.journalRecords.map(record => record.supersedesEventId)).toEqual([stopId, `mergecopy:${stopId}@${target.firmId}`]);
     for (const record of lifted.value.journalRecords) await journal.append({ ...record, committed: true });
     await remove(lifted.value.journalRecords.map(record => record.eventId));
-    expect(await effectiveOn(target.firmId)).toEqual([`merge:${stopId}:${target.firmId}`]);
+    expect(await effectiveOn(target.firmId)).toEqual([`mergecopy:${stopId}@${target.firmId}`]);
     await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records: journal.appended }));
     expect(await effectiveOn(target.firmId)).toEqual([]);
     expect(await effectiveOn(source.firmId)).toEqual([]);
@@ -675,7 +675,7 @@ describe('review RFR: a merge copy is per survivor', () => {
     const c = await seedChannelFirm(database.session, seeded.alpha);
     await rolledBackMerge(journal, a.firmId, b.firmId);
     await merge(journal, a.firmId, c.firmId);
-    const copies = journal.appended.filter(record => record.eventId.startsWith('merge:'));
+    const copies = journal.appended.filter(record => isMergeCopyId(record.eventId));
     const forB = copies.find(record => record.canonicalKey === b.firmId)!;
     const forC = copies.find(record => record.canonicalKey === c.firmId)!;
     expect(forB.eventId).not.toBe(forC.eventId);
@@ -702,6 +702,133 @@ describe('review RFR: a merge copy is per survivor', () => {
       `SELECT event_id FROM suppression_events WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2`,
       [seeded.alpha.workspaceId, b.firmId],
     );
-    expect(rows.map(row => row.event_id)).toEqual([`merge:${stopId}:${b.firmId}`]);
+    expect(rows.map(row => row.event_id)).toEqual([`mergecopy:${stopId}@${b.firmId}`]);
+  });
+
+  describe('review RFV: the two copy forms never collide', () => {
+    /** A copy as a merge before RF's last repair journalled and wrote it: `merge:<event>`. */
+    const legacyCopy = (stop: SuppressionJournalRecord, firmId: string): SuppressionJournalRecord => ({
+      ...stop,
+      eventId: `merge:${stop.eventId}`,
+      canonicalKey: firmId,
+    });
+    const copyOf = (parent: SuppressionJournalRecord, firmId: string): SuppressionJournalRecord => ({
+      ...parent,
+      eventId: mergeCopyId(parent.eventId, firmId),
+      canonicalKey: firmId,
+    });
+    const replayed = async (records: readonly SuppressionJournalRecord[]) =>
+      await withTransaction(database.session, async () => await replaySuppressionJournal(restore(), { records }));
+    const lift = async (eventId: string): Promise<readonly SuppressionJournalRecord[]> => {
+      const lifted = await withTransaction(database.session, async () =>
+        await recordAdminSupersession(userContext(database.session, seeded.alpha, 'admin'), {
+          eventId,
+          reason: 'documented_reconsent',
+          commandId: randomUUID(),
+        }),
+      );
+      if (!lifted.ok) throw new Error(lifted.reason);
+      return lifted.value.journalRecords;
+    };
+    /** Every stop on the firm that nothing lifted (the view shows one per channel). */
+    const effectiveIds = async (firmId: string): Promise<readonly string[]> =>
+      (
+        await database.session.query<{ event_id: string }>(
+          `SELECT e.event_id FROM suppression_events e
+            WHERE e.workspace_id = $1 AND e.scope = 'firm' AND e.canonical_key = $2 AND e.supersedes_event_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM suppression_events s WHERE s.workspace_id = e.workspace_id AND s.supersedes_event_id = e.event_id)`,
+          [seeded.alpha.workspaceId, firmId],
+        )
+      ).rows
+        .map(row => row.event_id)
+        .sort();
+
+    it('the reviewer’s sequence: lifting a restored A→C copy leaves the legacy branch’s stop on D', async () => {
+      const journal = conditionalJournal();
+      const { firm: a, stopId } = await stoppedFirm(journal);
+      const [b, c, d] = [
+        await seedChannelFirm(database.session, seeded.alpha),
+        await seedChannelFirm(database.session, seeded.alpha),
+        await seedChannelFirm(database.session, seeded.alpha),
+      ];
+      // A pre-repair A→B failed and was replayed: A keeps its stop, B has the legacy copy.
+      await replayed([legacyCopy(journal.objects.get(stopId)!, b.firmId)]);
+      // A post-repair A→C journals C's copy and rolls back.
+      await rolledBackMerge(journal, a.firmId, c.firmId);
+      // B→C, then C→D: D inherits only the legacy branch.
+      await merge(journal, b.firmId, c.firmId);
+      await merge(journal, c.firmId, d.firmId);
+      const onC = mergeCopyId(`merge:${stopId}`, c.firmId);
+      const onD = mergeCopyId(onC, d.firmId);
+      expect(await effectiveIds(d.firmId)).toEqual([onD]);
+      // A restore replays the journal: C's A→C copy comes back.
+      await replayed([...journal.objects.values()]);
+      const restoredCopy = mergeCopyId(stopId, c.firmId);
+      expect(await effectiveIds(c.firmId)).toContain(restoredCopy);
+      // Lifting it lifts that branch alone.
+      const lifts = await lift(restoredCopy);
+      expect(lifts.map(record => record.supersedesEventId)).toEqual([restoredCopy]);
+      expect(await effectiveIds(d.firmId)).toEqual([onD]);
+      expect(await effectiveIds(c.firmId)).toEqual([onC]);
+    });
+
+    it('a new copy of a legacy copy is not a child of the new copy of the original: lifting the second leaves the first', async () => {
+      const journal = conditionalJournal();
+      const { stopId } = await stoppedFirm(journal);
+      const [b, c] = [await seedChannelFirm(database.session, seeded.alpha), await seedChannelFirm(database.session, seeded.alpha)];
+      const stop = journal.objects.get(stopId)!;
+      const onB = legacyCopy(stop, b.firmId);
+      // On C: B's legacy copy merged on (B→C), and the original copied directly (A→C).
+      const legacyBranch = copyOf(onB, c.firmId);
+      const direct = copyOf(stop, c.firmId);
+      await replayed([onB, legacyBranch, direct]);
+      expect(await effectiveIds(c.firmId)).toEqual([legacyBranch.eventId, direct.eventId].sort());
+      const lifts = await lift(direct.eventId);
+      expect(lifts.map(record => record.supersedesEventId)).toEqual([direct.eventId]);
+      expect(await effectiveIds(c.firmId)).toEqual([legacyBranch.eventId]);
+      expect(await effectiveIds(b.firmId)).toEqual([onB.eventId]);
+    });
+
+    it('lifting a legacy copy lifts its own copies in their own forms, never the original’s new copy; a restore replays them as copies', async () => {
+      const journal = conditionalJournal();
+      const { stopId } = await stoppedFirm(journal);
+      const [b, c, e] = [
+        await seedChannelFirm(database.session, seeded.alpha),
+        await seedChannelFirm(database.session, seeded.alpha),
+        await seedChannelFirm(database.session, seeded.alpha),
+      ];
+      const stop = journal.objects.get(stopId)!;
+      const onB = legacyCopy(stop, b.firmId);
+      // A pre-repair copy of B's copy (legacy form), a post-repair one (new form), and the
+      // original's own new copy on C.
+      const legacyChild = legacyCopy(onB, e.firmId);
+      const newChild = copyOf(onB, c.firmId);
+      const sibling = copyOf(stop, c.firmId);
+      // The forms are told apart by prefix (review RFV): a copy is never `merge:` anything.
+      expect([newChild.eventId, sibling.eventId]).toEqual([`mergecopy:merge:${stopId}@${c.firmId}`, `mergecopy:${stopId}@${c.firmId}`]);
+      await replayed([onB, legacyChild, newChild, sibling]);
+      const lifts = await lift(onB.eventId);
+      const liftId = lifts[0]!.eventId;
+      expect(lifts[0]!.supersedesEventId).toBe(onB.eventId);
+      expect(lifts.slice(1).map(record => [record.eventId, record.supersedesEventId]).sort()).toEqual(
+        [
+          [`merge:${liftId}`, legacyChild.eventId],
+          [`mergecopy:${liftId}@${c.firmId}`, newChild.eventId],
+        ].sort(),
+      );
+      expect(await effectiveIds(c.firmId)).toEqual([sibling.eventId]);
+      expect(await effectiveIds(e.firmId)).toEqual([]);
+      // A restore to before the lift: the marked releases replay; the copied lifts, in both
+      // forms, are bare rows (no release of their own), the lift itself is a release.
+      await database.session.query('DELETE FROM suppression_events WHERE workspace_id = $1 AND event_id = ANY($2::text[])', [
+        seeded.alpha.workspaceId,
+        lifts.map(record => record.eventId),
+      ]);
+      const report = await replayed(lifts.map(record => ({ ...record, committed: true as const })));
+      expect(report).toMatchObject({ inserted: 3, released: 1 });
+      expect(await effectiveIds(c.firmId)).toEqual([sibling.eventId]);
+      expect(await effectiveIds(b.firmId)).toEqual([]);
+      expect(await effectiveIds(e.firmId)).toEqual([]);
+    });
   });
 });
