@@ -264,12 +264,12 @@ describe('A-2: the safety nets added after the first live run (C2)', () => {
     const demo = [{ kind: 'demo_request' as const, quote: 'Could you show us a demo?', line: 2 }];
     expect(labels(answer({ interest: { level: 'curious', signals: demo } }), call)).toEqual(['outcome:interested', 'buying_signal']);
     expect(labels(answer({ interest: { level: 'neutral', signals: demo } }), call)).toEqual(['outcome_unclear']);
-    // A pricing question qualifies only under Q3's other reading, passed by the evaluation.
+    // Q3 (David, 2 Oct): a bare pricing question is never a buying signal, whatever the level.
     const price = lines(['Y', 'Hi.'], ['T', 'What does it cost?']);
-    const raw = answer({ interest: { level: 'curious', signals: [{ kind: 'pricing_question', quote: 'What does it cost?', line: 2 }] } });
-    expect(labels(raw, price)).toEqual(['outcome_unclear']);
-    const wide = proposeEffects(read(raw, price), CONTEXT, ['demo_request', 'evaluation', 'adoption_question', 'pricing_question']);
-    expect(effectLabels(wide.proposals)).toEqual(['outcome:interested', 'buying_signal']);
+    for (const level of ['buying_signal', 'curious'] as const) {
+      const raw = answer({ interest: { level, signals: [{ kind: 'pricing_question', quote: 'What does it cost?', line: 2 }] } });
+      expect(labels(raw, price)).toEqual(['outcome_unclear']);
+    }
   });
 
   it('a neutral call with an unanswered declining objection is a soft rejection; an answered one, or an unclear reading, is not', () => {

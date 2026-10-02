@@ -73,7 +73,7 @@
     {
       "id": "02-pricing-question",
       "n": 2,
-      "title": "What does it cost? (Q3: bare pricing question)",
+      "title": "What does it cost? (a bare pricing question; Q3 decided 2 Oct: not a buying signal)",
       "firmName": "Harbor Lane Property Management",
       "contactName": "Dana Whitfield",
       "callStartedAt": "2026-10-05T14:15:00Z",
@@ -125,29 +125,7 @@
       "expected_content": {
         "reached": "person"
       },
-      "awaiting": "Q3",
-      "q3_reading": "no",
-      "note": "Q3 open with David. Reading NO (recommended): a bare pricing question is not a buying signal. Not counted in the pass rule until Q3 is answered.",
-      "q3_yes": {
-        "qualifyingSignals": [
-          "demo_request",
-          "evaluation",
-          "adoption_question",
-          "pricing_question"
-        ],
-        "expected_effects": [
-          "outcome:interested",
-          "buying_signal"
-        ],
-        "forbidden_effects": [
-          "outcome:do_not_call",
-          "callback:*",
-          "park",
-          "follow_up",
-          "outcome:wrong_number",
-          "task:*"
-        ]
-      }
+      "note": "David, 2 Oct 2026 (Q3): a bare pricing question is not enough; buying interest requires evidence connected to their own evaluation of Callie. buying_signal is forbidden."
     },
     {
       "id": "03-evaluating-demo",

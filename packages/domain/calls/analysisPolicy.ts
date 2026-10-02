@@ -8,7 +8,6 @@ import {
   type CallAnalysisQuoteRef,
   type CallAnalysisObjectionCategory,
   type CallAnalysisResult,
-  type CallAnalysisSignalKind,
   type CallProposal,
   type CallProposalKind,
 } from '@fss/contracts';
@@ -265,8 +264,6 @@ function emailRequest(result: CallAnalysisResult): { readonly kind: 'overview_em
 export function proposeEffects(
   result: CallAnalysisResult,
   context: CallPolicyContext,
-  /** Production never passes it; the evaluation passes a wider set to measure Q3's other reading. */
-  qualifyingSignals?: readonly CallAnalysisSignalKind[],
 ): ProposalSet {
   const proposals: CallProposal[] = [];
   const outcome = (value: Extract<CallProposal, { kind: 'outcome' }>): void => {
@@ -380,7 +377,7 @@ export function proposeEffects(
     // (`buying_signal`, or `curious` with a demo request or the like; C2: the model's level and
     // its signals disagreed on a plain demo request). The reader has already turned an
     // unqualified `buying_signal` level into `unclear`.
-    const qualifying = new Set(qualifyingSignals ?? CALL_ANALYSIS_QUALIFYING_SIGNALS);
+    const qualifying = new Set(CALL_ANALYSIS_QUALIFYING_SIGNALS);
     const signals =
       result.interest.level === 'buying_signal' || result.interest.level === 'curious'
         ? result.interest.signals.filter(signal => qualifying.has(signal.kind))

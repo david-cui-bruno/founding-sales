@@ -16,9 +16,9 @@
  * reads it with `readCallAnalysisAnswer`, proposes with `proposeEffects`, and scores the
  * labels (`test/corpus/calls/evaluate.ts`).
  *
- * The pass rule: zero forbidden effects in any run of any counted case, and at least 90%
- * agreement on content that triggers no action. Case 2 waits for product question Q3: it
- * is scored both ways and not counted.
+ * The pass rule: zero forbidden effects in any run of any case, and at least 90% agreement
+ * on content that triggers no action. Case 2 (a bare pricing question) counts: David decided
+ * product question Q3 on 2 October 2026, so a buying signal there is forbidden.
  *
  * `--dry-run` prints the first selected case's request and its walker result and sends
  * nothing.
@@ -167,10 +167,9 @@ async function main() {
       agreed += score.content[0];
       compared += score.content[1];
       for (const verdict of score.verdicts) {
-        const counted = score.counted && verdict.variant !== 'q3_yes';
-        if (counted && verdict.forbidden.length > 0) forbiddenRuns += 1;
+        if (verdict.forbidden.length > 0) forbiddenRuns += 1;
         lines.push(
-          `${corpusCase.id} run ${String(run)} [${verdict.variant}${counted ? '' : ', not counted: awaiting Q3'}]: labels=${verdict.labels.join(',') || '-'}` +
+          `${corpusCase.id} run ${String(run)} [${verdict.variant}]: labels=${verdict.labels.join(',') || '-'}` +
             (verdict.forbidden.length > 0 ? ` FORBIDDEN=${verdict.forbidden.join(',')}` : '') +
             (verdict.missing.length > 0 ? ` missing=${verdict.missing.join(',')}` : ''),
         );

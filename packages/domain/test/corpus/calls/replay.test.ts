@@ -4,7 +4,7 @@ import { scoreAnswer, type CorpusCase } from './evaluate.ts';
 
 /**
  * Slice 3a, A-8: the recorded answers of the live evaluation (C2), replayed through today's
- * reader and policy. Nothing is sent. Every recorded run of every counted case must
+ * reader and policy. Nothing is sent. Every recorded run of every case (case 2 included, since Q3) must
  * propose no forbidden effect; a reader or policy change that would turn a recorded answer
  * into a forbidden effect fails here before it reaches a call.
  *
@@ -35,7 +35,7 @@ describe('A-8: the recorded corpus, replayed', () => {
     expect(recorded.length).toBeGreaterThanOrEqual(111);
   });
 
-  it('proposes no forbidden effect in any recorded run of any counted case, and reads every answer', () => {
+  it('proposes no forbidden effect in any recorded run of any case, and reads every answer', () => {
     const forbidden: string[] = [];
     const unreadable: string[] = [];
     let agreed = 0;
@@ -53,7 +53,6 @@ describe('A-8: the recorded corpus, replayed', () => {
       agreed += score.content[0];
       compared += score.content[1];
       for (const verdict of score.verdicts) {
-        if (!score.counted || verdict.variant === 'q3_yes') continue;
         if (verdict.forbidden.length > 0) forbidden.push(`${version}/${file} [${verdict.variant}]: ${verdict.forbidden.join(',')}`);
       }
     }

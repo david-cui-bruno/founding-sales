@@ -152,9 +152,6 @@ describe('A-1: reading an answer', () => {
     const read = readCallAnalysisAnswer(pricing, CALL);
     expect(read.ok && read.result.interest.level).toBe('unclear');
     expect(read.ok && read.result.dropped['buying_signal']).toBe(1);
-    // Q3's other reading, for the evaluation only.
-    const wide = readCallAnalysisAnswer(pricing, CALL, { qualifyingSignals: ['demo_request', 'evaluation', 'adoption_question', 'pricing_question'] });
-    expect(wide.ok && wide.result.interest.level).toBe('buying_signal');
     // A dropped qualifying signal does not keep the level either.
     const invented = readCallAnalysisAnswer(answer({ interest: { level: 'buying_signal', signals: [{ kind: 'demo_request', quote: 'show us a demo', line: 2 }] } }), CALL);
     expect(invented.ok && invented.result.interest.level).toBe('unclear');

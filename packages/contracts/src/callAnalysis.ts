@@ -49,9 +49,10 @@ export const CALL_ANALYSIS_SIGNAL_KINDS = [
 export type CallAnalysisSignalKind = (typeof CALL_ANALYSIS_SIGNAL_KINDS)[number];
 
 /**
- * The signal kinds that make a buying signal. A bare `pricing_question` is not one: product
- * question Q3 is open with David (recommendation: no, unless tied to the prospect's own
- * evaluation, which the model then reports as `evaluation`).
+ * The signal kinds that make a buying signal; frozen. A bare `pricing_question` is not one:
+ * David's decision on product question Q3 (2 October 2026), "a bare pricing question is not
+ * enough. Buying interest requires evidence connected to their own evaluation of Callie." A
+ * price asked as part of their own evaluation is reported as `evaluation`.
  */
 export const CALL_ANALYSIS_QUALIFYING_SIGNALS: readonly CallAnalysisSignalKind[] = Object.freeze([
   'demo_request',

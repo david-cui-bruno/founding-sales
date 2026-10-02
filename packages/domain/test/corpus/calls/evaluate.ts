@@ -1,4 +1,4 @@
-import type { CallAnalysisResult, CallProposal, CallTranscriptUtterance, CallAnalysisSignalKind } from '@fss/contracts';
+import type { CallAnalysisResult, CallProposal, CallTranscriptUtterance } from '@fss/contracts';
 import { readCallAnalysisAnswer } from '../../../calls/analysisModel.ts';
 import { proposeEffects, type CallPolicyContext } from '../../../calls/analysisPolicy.ts';
 
@@ -27,9 +27,7 @@ export interface CorpusCase extends CorpusExpectation {
   readonly hasOpenOpportunity: boolean;
   readonly utterances: readonly CallTranscriptUtterance[];
   readonly expected_content: Readonly<Record<string, unknown>>;
-  readonly awaiting?: string;
   readonly with_open_opportunity?: CorpusExpectation;
-  readonly q3_yes?: CorpusExpectation & { readonly qualifyingSignals: readonly CallAnalysisSignalKind[] };
 }
 
 /** The labels a proposal set shows. */
@@ -118,8 +116,6 @@ export interface CaseScore {
   readonly read: 'ok' | 'malformed' | 'schema_invalid';
   readonly verdicts: readonly RunVerdict[];
   readonly content: [number, number];
-  /** Whether this case counts toward the pass rule (case 2 waits for Q3). */
-  readonly counted: boolean;
 }
 
 function contextOf(corpusCase: CorpusCase, hasOpenOpportunity: boolean): CallPolicyContext {
@@ -133,31 +129,22 @@ function contextOf(corpusCase: CorpusCase, hasOpenOpportunity: boolean): CallPol
 
 /**
  * Score one raw answer for one case: the base expectation, the open-opportunity variant
- * (the same answer, the policy run again with an open opportunity), and for case 2 the Q3
- * "yes" reading (the same answer, read with pricing questions qualifying).
+ * (the same answer, the policy run again with an open opportunity).
  */
 export function scoreAnswer(corpusCase: CorpusCase, raw: string): CaseScore {
   const read = readCallAnalysisAnswer(raw, corpusCase.utterances);
-  if (!read.ok) return { caseId: corpusCase.id, read: read.failure, verdicts: [], content: [0, 0], counted: corpusCase.awaiting === undefined };
+  if (!read.ok) return { caseId: corpusCase.id, read: read.failure, verdicts: [], content: [0, 0] };
   const verdicts: RunVerdict[] = [];
   const base = proposeEffects(read.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity));
-  verdicts.push(judge(corpusCase.awaiting === 'Q3' ? 'q3_no' : 'base', effectLabels(base.proposals), corpusCase));
+  verdicts.push(judge('base', effectLabels(base.proposals), corpusCase));
   if (corpusCase.with_open_opportunity !== undefined) {
     const open = proposeEffects(read.result, contextOf(corpusCase, true));
     verdicts.push(judge('open_opportunity', effectLabels(open.proposals), corpusCase.with_open_opportunity));
-  }
-  if (corpusCase.q3_yes !== undefined) {
-    const wide = readCallAnalysisAnswer(raw, corpusCase.utterances, { qualifyingSignals: corpusCase.q3_yes.qualifyingSignals });
-    if (wide.ok) {
-      const yes = proposeEffects(wide.result, contextOf(corpusCase, corpusCase.hasOpenOpportunity), corpusCase.q3_yes.qualifyingSignals);
-      verdicts.push(judge('q3_yes', effectLabels(yes.proposals), corpusCase.q3_yes));
-    }
   }
   return {
     caseId: corpusCase.id,
     read: 'ok',
     verdicts,
     content: contentAgreement(read.result, corpusCase.expected_content),
-    counted: corpusCase.awaiting === undefined,
   };
 }

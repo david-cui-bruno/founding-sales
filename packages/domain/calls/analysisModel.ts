@@ -14,7 +14,6 @@ import {
   type CallAnalysisQuoteRef,
   type CallAnalysisResult,
   type CallAnalysisSide,
-  type CallAnalysisSignalKind,
   type CallTranscriptUtterance,
 } from '@fss/contracts';
 import { modelProviderKey, transportPrice, type ModelTransportKind } from '../classification/modelTransport.ts';
@@ -391,15 +390,6 @@ export type CallAnalysisRead =
   | { readonly ok: true; readonly result: CallAnalysisResult }
   | { readonly ok: false; readonly failure: 'malformed' | 'schema_invalid' };
 
-export interface CallAnalysisReadOptions {
-  /**
-   * The signal kinds that keep a `buying_signal` level. Production always uses
-   * `CALL_ANALYSIS_QUALIFYING_SIGNALS`; the evaluation passes a wider set only to measure
-   * the other reading of product question Q3 (case 2).
-   */
-  readonly qualifyingSignals?: readonly CallAnalysisSignalKind[];
-}
-
 /** A clause in which the speaker says they will do something: what makes a commitment a promise. */
 const PROMISE = /\b(?:i'll|i will|i shall|i'm going to|i am going to|i can|we'll|we will|we're going to|we are going to|we can|let me)\b/u;
 
@@ -488,7 +478,6 @@ function digitsOf(value: string): string {
 export function readCallAnalysisAnswer(
   raw: string,
   utterances: readonly CallTranscriptUtterance[],
-  options: CallAnalysisReadOptions = {},
 ): CallAnalysisRead {
   let parsed: unknown;
   try {
@@ -499,7 +488,7 @@ export function readCallAnalysisAnswer(
   const checked = callAnalysisAnswerSchema.safeParse(parsed);
   if (!checked.success) return { ok: false, failure: 'schema_invalid' };
   const answer = checked.data;
-  const qualifying = new Set(options.qualifyingSignals ?? CALL_ANALYSIS_QUALIFYING_SIGNALS);
+  const qualifying = new Set(CALL_ANALYSIS_QUALIFYING_SIGNALS);
 
   const dropped: Record<string, number> = {};
   const drop = (field: string): void => {
