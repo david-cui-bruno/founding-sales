@@ -12,7 +12,9 @@ import {
 } from '../../calls/analysisPolicy.ts';
 import {
   confirmBuyingSignal,
+  confirmCallbackOffer,
   confirmCallbackRequest,
+  confirmFollowUpOffer,
   confirmFollowUpRequest,
   confirmStop,
   hasMarkers,
@@ -715,6 +717,37 @@ describe('S3A1F: property — a confirmed line with any clause appended is revie
       expect(plainYes(reply), reply).toBe(true);
       for (const form of forms(reply)) expect(plainYes(form), form).toBe(false);
     }
+  });
+
+  it('a later Them line with a contrast or correction marker withdraws a follow-up or a callback, asked for or agreed to', () => {
+    const LATER = [
+      'Hmm, actually I will look at your website instead.',
+      'Actually, no.',
+      'Never mind.',
+      'Scratch that.',
+      'On second thought, let me check first.',
+      'Forget it.',
+      'But I will probably just look at the site.',
+      'Wait, let me ask my partner.',
+      'I mean, we will see.',
+      'Rather not, to be honest.',
+    ];
+    const offers = ['Can I send you a short overview by e-mail?', 'Could I send you the brochure?', 'Want me to send you some info?'];
+    const callbackOffers = ['Can I call you Tuesday at 2?', 'Could I call you back tomorrow?', "I'll call you back Friday."];
+    for (const offer of offers) {
+      expect(confirmFollowUpOffer(offer, 'Sure.', []).kind, offer).toBe('confirmed');
+      for (const later of LATER) expect(confirmFollowUpOffer(offer, 'Sure.', [later]).kind, `${offer} / ${later}`).toBe('unconfirmed');
+    }
+    for (const offer of callbackOffers) {
+      expect(confirmCallbackOffer(offer, 'Sure.', []).confirmed, offer).toBe(true);
+      for (const later of LATER) expect(confirmCallbackOffer(offer, 'Sure.', [later]).confirmed, `${offer} / ${later}`).toBe(false);
+    }
+    for (const line of FOLLOW_UPS) for (const later of LATER) expect(confirmFollowUpRequest(line, [later]).kind, `${line} / ${later}`).not.toBe('confirmed');
+    for (const line of CALLBACKS) for (const later of LATER) expect(confirmCallbackRequest(line, [later]).confirmed, `${line} / ${later}`).toBe(false);
+    // Through the reader: the coordinator's case.
+    const call = lines(['Y', 'Can I send you a short overview by e-mail?'], ['T', 'Sure.'], ['Y', 'Great.'], ['T', 'Hmm, actually I will look at your website instead.']);
+    const raw = answer({ follow_up_request: { kind: 'overview_email', quote: 'Can I send you a short overview by e-mail?', line: 1, agreed_line: 2 } });
+    expect(applies(raw, call)).toEqual([]);
   });
 
   it('through the reader and the policy, an appended clause leaves nothing to apply for the action', () => {

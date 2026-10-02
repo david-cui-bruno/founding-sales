@@ -191,8 +191,13 @@ export function plainYes(line: string): boolean {
   return yes > 0;
 }
 
+/**
+ * A later Them line that takes something back: a withdrawal, or any contrast or correction
+ * marker at all ("Hmm, actually I will look at your website instead"). Over-withdrawal only
+ * routes the reading to review.
+ */
 const WITHDRAWAL =
-  /\b(?:never mind|nevermind|forget (?:it|that|about it)|scratch that|on second thought|(?:don't|dont|do not) bother|no need|cancel (?:that|it)|changed my mind|(?:don't|dont|do not) (?:send|email|call)|actually (?:no|don't|dont))\b/u;
+  /\b(?:never mind|nevermind|forget (?:it|that|about it)|scratch that|on second thought|(?:don't|dont|do not) bother|no need|cancel (?:that|it)|changed my mind|(?:don't|dont|do not) (?:send|email|call)|actually|instead|but|however|though|rather|wait|i mean)\b/u;
 
 /** Whether any of these later lines takes something back. */
 export function withdrawn(laterLines: readonly string[]): boolean {
