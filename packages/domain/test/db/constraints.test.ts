@@ -21,6 +21,7 @@ import { CALL_TO_BOOKING_CONSTRAINT_CASES } from './support/callToBookingCases.t
 import { MEETING_BOOKING_UIDS_CONSTRAINT_CASES } from './support/meetingBookingUidsCases.ts';
 import { CALL_TRANSCRIPTS_CONSTRAINT_CASES } from './support/callTranscriptsCases.ts';
 import { CALL_SUMMARIES_CONSTRAINT_CASES } from './support/callSummariesCases.ts';
+import { CALL_ANALYSES_CONSTRAINT_CASES } from './support/callAnalysesCases.ts';
 import { TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES } from './support/transcriptionProviderJobsCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
@@ -1370,6 +1371,7 @@ const cases: readonly Case[] = [
   ...MEETING_BOOKING_UIDS_CONSTRAINT_CASES,
   ...CALL_TRANSCRIPTS_CONSTRAINT_CASES,
   ...CALL_SUMMARIES_CONSTRAINT_CASES,
+  ...CALL_ANALYSES_CONSTRAINT_CASES,
   ...TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES,
 ];
 

@@ -64,7 +64,6 @@ CREATE TABLE call_analyses (
   created_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz,
   CONSTRAINT call_analyses_pkey PRIMARY KEY (workspace_id, id),
-  CONSTRAINT call_analyses_id_unique UNIQUE (id),
   CONSTRAINT call_analyses_one_version UNIQUE (workspace_id, call_session_id, version),
   CONSTRAINT call_analyses_session_fkey FOREIGN KEY (workspace_id, call_session_id)
     REFERENCES call_sessions (workspace_id, id) ON DELETE CASCADE,
