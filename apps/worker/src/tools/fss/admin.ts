@@ -358,6 +358,10 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
   let foreign = 0;
   let finalized = 0;
   let windowsReopened = 0;
+  let released = 0;
+  // Brief RF: the journal objects a replay skipped, by id only (no key, no address).
+  const competingSupersessions: string[] = [];
+  const orphanSupersessions: string[] = [];
   for (const [workspaceId, forWorkspace] of byWorkspace) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
     const report = await withTransaction(invocation.session, async () =>
@@ -368,6 +372,9 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     foreign += report.foreign;
     finalized += report.finalized;
     windowsReopened += report.windowsReopened;
+    released += report.released;
+    competingSupersessions.push(...report.competingSupersessions);
+    orphanSupersessions.push(...report.orphanSupersessions);
   }
 
   return accept({
@@ -379,6 +386,9 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     foreign,
     finalized,
     windowsReopened,
+    released,
+    competingSupersessions,
+    orphanSupersessions,
     workspaces: byWorkspace.size,
   });
 }

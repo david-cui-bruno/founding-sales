@@ -42,9 +42,12 @@ happens to *enrollments*, not whether the handle is suppressed.
 
 ### 2. The journal is durable before the row is
 
-`journal.append` is awaited inside the command transaction and before the `INSERT`.
+`journal.append` is awaited inside the command transaction and before the commit: a stop's
+before its `INSERT`, a supersession's after its `INSERT` has won the one-supersession index
+(brief RF, R1). A lift in the journal that the database refused is the one object a replay
+must not apply, so only the winner of a race is journalled.
 See `docs/archive/decisions/g4-journal-port.md` for the two failure modes and why the
-surviving-journal one is the safe direction.
+surviving-journal one is the safe direction for a stop.
 
 **Both processes write it.** The API writes from its three suppression routes; the
 worker writes when mail sync imports a prospect opt-out, which is the commonest way a
@@ -151,15 +154,18 @@ terminal stops end exactly the enrollments whose e-mail steps eligibility refuse
 | Apply's outcome | `edits.outcome.doNotCall`, the same rule |
 | an e-mail opt-out (`mail/effects.ts`, a confirmed reply) | handle `email`; the firm (one candidate, or ticked) `email` |
 | a deletion tombstone | `all` |
-| a merge | the original's channel |
+| a merge | the original's channel, and its lift: a stop the source had lifted is copied with the lift linked to the copy, so it stays lifted on the target (brief RF, X7) |
 | a correction or an admin supersession | the original's channel; the trigger refuses another |
 | replay | the journalled channel, absent `all` |
+| the same command again, across the 0037 boundary | the earlier event, when its channel covers the one asked for (`all` covers all): an opt-out journalled before 0037 as `all` and reprocessed after a restore as `email` is that event, not a second one (brief RF, X6) |
 | `POST /suppressions/record` | `channel`, absent `all` (the installed desktop's "Stop all contact with this firm") |
 
 **The manual review hold follows the channel** (`reviewHoldBlocks`): `email` blocks
 `email_send` only (`enrollment_advance` is read by every sequence channel, so it cannot be
 part of an e-mail-only hold); `phone` blocks `call_task` and `dial_authorization`; `all`
-blocks all four. Replay opens the same set from the record's channel.
+blocks all four. Replay opens the same set from the record's channel, on the firm the live
+write named: a firm stop's own key, or the `firmId` a handle stop is journalled with since
+brief RF (X5). A handle stop journalled before RF names no firm and replays with no hold.
 
 **The journal** carries `channel` under the same schema, `fss.suppression.v1`: the field
 is additive, an older parser ignores it and replays the event as `all`, and this parser
@@ -192,7 +198,23 @@ There is no claim on the admin path. The ten-minute race belongs to the salesper
 window; an admin superseding an event the finalizer already finalized is not a race
 but a sequence — the terminal stops happened, and the supersession lifts the
 suppression from there on. Two admins racing produce one supersession, refused by
-migration 0001's partial unique index.
+migration 0001's partial unique index. The second waits on the first's index entry and,
+once the first commits, is refused `already_superseded` under a savepoint, so its command
+transaction is whole and its receipt is written; a supersession already committed is refused
+before anything is journalled. A correction takes its finalization claim under the same
+savepoint, so a correction that loses to an admin lift leaves no claim behind.
+
+**Replay** (`fss admin suppression-journal replay`, brief RF):
+
+- puts originals before what supersedes them, whatever order the bucket lists them in,
+  earliest first otherwise (R3);
+- keeps one supersession per event: the one the database already holds, else the earliest
+  by recorded time and then id; the others are reported as `competingSupersessions`, ids
+  only (R2), and a supersession whose original is in neither the database nor the records
+  read is reported as `orphanSupersessions` and skipped;
+- replays a supersession as a release: it opens no hold, is owed no finalizer, releases its
+  original's review hold, and a correction claims its original `corrected` as it did live
+  (R4).
 
 A supersession may not change the scope, the canonical key or (since 0037) the channel:
 a narrower or wider lift is a supersession followed by a new event. A CHECK cannot read

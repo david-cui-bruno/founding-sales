@@ -468,6 +468,10 @@ async function insertAlias(
  * suppression "global across the workspace", so it already covers the target. Each copy
  * keeps its original's channel (migration 0037): a firm that asked not to be called is,
  * after the merge, a firm that asked not to be called, not one that asked for silence.
+ * And each copy keeps its lift (brief RF, X7): a supersession on the source is copied
+ * pointing at the copy of the event it lifted, so a stop lifted on the source is lifted on
+ * the target, and an active one stays active. Until RF the lift was copied with no link,
+ * which the supersession CHECK refused, so a merge of a firm with a lifted stop failed.
  */
 async function preserveFirmSuppressions(
   context: RepositoryContext,
@@ -477,26 +481,44 @@ async function preserveFirmSuppressions(
 ): Promise<void> {
   // The target inherits a stop fact, so the insert takes the send gate.
   await lockSendGateForStopFact(context);
-  await context.db.query(
-    `INSERT INTO suppression_events
-       (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id, channel)
-     SELECT $1,
-            'merge:' || e.event_id,
-            'firm',
-            $3,
-            e.canonicalizer_version,
-            e.source,
-            e.actor_user_id,
-            $4,
-            e.channel
-       FROM suppression_events e
-      WHERE e.workspace_id = $1 AND e.scope = 'firm' AND e.canonical_key = $2
-        AND NOT EXISTS (
-          SELECT 1 FROM suppression_events existing
-           WHERE existing.workspace_id = $1 AND existing.event_id = 'merge:' || e.event_id
-        )`,
-    [context.scope.workspaceId, sourceFirmId, targetFirmId, commandId ?? null],
+  // Brief RF, X7: each copy carries its history. A stop the source had lifted is copied
+  // with the lift, linked to the copy, so it is lifted on the target too; a stop that was
+  // active stays active, because a lift is copied only onto the copy of the event it lifted.
+  // Originals before their supersessions, so the copy a supersession names exists first.
+  const { rows } = await context.db.query<{ event_id: string; supersedes_event_id: string | null }>(
+    `SELECT event_id, supersedes_event_id FROM suppression_events
+      WHERE workspace_id = $1 AND scope = 'firm' AND canonical_key = $2
+      ORDER BY recorded_at, event_id`,
+    [context.scope.workspaceId, sourceFirmId],
   );
+  const onSource = new Map(rows.map(row => [row.event_id, row.supersedes_event_id] as const));
+  const done = new Set<string>();
+  const copy = async (eventId: string): Promise<void> => {
+    if (done.has(eventId)) return;
+    done.add(eventId);
+    const supersedes = onSource.get(eventId) ?? null;
+    if (supersedes !== null) {
+      // A lift of an event that is not this firm's stop has nothing on the target to lift.
+      if (!onSource.has(supersedes)) return;
+      await copy(supersedes);
+    }
+    await context.db.query(
+      `INSERT INTO suppression_events
+         (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id, channel,
+          supersedes_event_id, supersession_reason)
+       SELECT $1, 'merge:' || e.event_id, 'firm', $3, e.canonicalizer_version, e.source, e.actor_user_id, $4, e.channel,
+              CASE WHEN e.supersedes_event_id IS NULL THEN NULL ELSE 'merge:' || e.supersedes_event_id END,
+              e.supersession_reason
+         FROM suppression_events e
+        WHERE e.workspace_id = $1 AND e.event_id = $2
+          AND NOT EXISTS (
+            SELECT 1 FROM suppression_events existing
+             WHERE existing.workspace_id = $1 AND existing.event_id = 'merge:' || e.event_id
+          )`,
+      [context.scope.workspaceId, eventId, targetFirmId, commandId ?? null],
+    );
+  };
+  for (const row of rows) await copy(row.event_id);
 }
 
 /** Fill the target's blanks from the source, then apply the person's resolutions. */

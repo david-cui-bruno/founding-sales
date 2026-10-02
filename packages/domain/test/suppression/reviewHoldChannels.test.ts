@@ -26,9 +26,9 @@ import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
  * Two shapes of manual stop open that hold:
  *
  *   * a handle stop with firm context, on a key that belongs to nobody at the firm, so the
- *     only thing that can refuse a dial or a step is the hold. Its replay opens no hold at
- *     all — the journal record carries no firm — which is how replay already behaved before
- *     0037 (`replay.ts`: only a firm-scope record reopens a hold), and is not changed here;
+ *     only thing that can refuse a dial or a step is the hold. Since brief RF (X5) its journal
+ *     record carries the firm and its replay reopens the same hold (`restorePath.test.ts`);
+ *     one journalled before RF carries none and replays with no hold;
  *   * a firm stop, whose replay reopens the hold: replayed from the journal record the
  *     original write appended, it opens exactly the same set.
  *
