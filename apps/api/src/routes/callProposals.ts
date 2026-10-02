@@ -3,10 +3,13 @@ import {
   declineCallProposalsCommandSchema,
   dismissPendingCallCommandSchema,
   proposalAcceptanceResponseSchema,
+  resolveStageReviewCommandSchema,
+  reviewListResponseSchema,
 } from '@fss/contracts';
 import { dismissPendingHold } from '@fss/domain/calls/pendingHold.ts';
 import { applyCallProposals } from '@fss/domain/calls/proposalApply.ts';
 import { declineCallProposals, readProposalAcceptance } from '@fss/domain/calls/proposalMeasure.ts';
+import { readNeedsReview, resolveStageReviewItem } from '@fss/domain/calls/needsReview.ts';
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -26,9 +29,13 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *   * `POST /calls/proposals/decline` — the measurement only: these suggestions were declined
  *     (`calls/proposalMeasure.ts`). A declined proposal stays applicable.
  *   * `GET /calls/proposals/acceptance` — the shadow measurement, per action type.
+ *   * `GET /review` — Needs review: pending holds open three hours, undecided review
+ *     suggestions, open stage review items (`calls/needsReview.ts`).
+ *   * `POST /review/stage/resolve` — a stage review item, resolved by id, audited.
  *
- * Both are 404 unless the workspace's `calling_provider` is `twilio`, like the analysis
- * read beside them. Every refusal is a 409 carrying its code.
+ * The `/calls/...` paths are 404 unless the workspace's `calling_provider` is `twilio`, like
+ * the analysis read beside them; Needs review is not, because stage items come from meetings
+ * too. Every refusal is a 409 carrying its code.
  */
 
 export const CALL_PROPOSAL_PATHS: readonly string[] = [
@@ -36,6 +43,8 @@ export const CALL_PROPOSAL_PATHS: readonly string[] = [
   '/calls/proposals/decline',
   '/calls/proposals/acceptance',
   '/calls/pending/dismiss',
+  '/review',
+  '/review/stage/resolve',
 ];
 
 export async function routeCallProposals(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
@@ -43,12 +52,18 @@ export async function routeCallProposals(request: ApiRequest, options: RoutingOp
   const prepared = await policyRouteDeps(request, options);
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
-  const read = request.path === '/calls/proposals/acceptance';
+  const read = request.path === '/calls/proposals/acceptance' || request.path === '/review';
   if (request.method !== (read ? 'GET' : 'POST')) {
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
   }
   const scoped = contextForPrincipal(deps.auth, deps.principal);
   if (!scoped.ok) return scoped.result;
+  if (request.path === '/review') return { status: 200, body: reviewListResponseSchema.parse(await readNeedsReview(scoped.context)) };
+  if (request.path === '/review/stage/resolve') {
+    return await runPolicyCommand(deps, resolveStageReviewCommandSchema, 'review_stage_resolve', async (context, body) =>
+      await resolveStageReviewItem(context, { itemId: body.itemId }),
+    );
+  }
   if ((await readCallingProvider(scoped.context)) !== 'twilio') {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }

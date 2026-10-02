@@ -149,6 +149,8 @@ describe('what the API mounts', () => {
       '/research/settings',
       '/retention/deletions/commit',
       '/retention/deletions/preview',
+      '/review',
+      '/review/stage/resolve',
       '/sequences',
       '/sequences/create',
       '/sequences/holidays',
