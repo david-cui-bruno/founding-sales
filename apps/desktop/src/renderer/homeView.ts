@@ -183,7 +183,19 @@ export interface LaneSection {
   readonly cards: readonly CardView[];
 }
 
+/**
+ * A state somebody should act on, drawn as one line in Today's header on every subtab and
+ * at every width (slice 3a, C0 review). Healthy states are not here: they are Settings ›
+ * Status's. `action` is null when there is nothing to press.
+ */
+export interface WarningRow {
+  readonly key: 'sending' | 'mailbox' | 'calling';
+  readonly text: string;
+  readonly action: NeedsAction | null;
+}
+
 export interface HomeView {
+  readonly warnings: readonly WarningRow[];
   /** "Thursday, 25 September", from the snapshot's date in the business zone. */
   readonly heading: string;
   /** "3 firms · 1 reply · 1 callback". Counts only; null when there is no list. */
@@ -715,7 +727,9 @@ export function figuresView(input: {
         // What is open at this moment, not something the window counted.
         period: PERIOD_NOW,
         unconfirmed: null,
-        link: dashboard.holds.open > 0 ? { name: 'settings', tab: 'dashboard' } : null,
+        // No link: nothing in the app lists the held firms or items themselves (Settings →
+        // Dashboard shows counts by reason only), so a link would open an aggregate.
+        link: null,
       },
       sent === null
         ? { key: 'emails', label: 'Emails sent', value: DASH, note: 'not in this build', period: since, ...plain }
@@ -744,6 +758,26 @@ function noticesOf(input: HomeInput, desktopBanners: readonly BannerView[]): rea
   });
 }
 
+function warningRows(input: HomeInput, needs: readonly NeedsRow[]): readonly WarningRow[] {
+  const rows: WarningRow[] = [];
+  if (input.hasOperations && input.admin?.settings?.effectiveSendingEnabled === false) {
+    rows.push({ key: 'sending', text: 'Sending is paused', action: null });
+  }
+  const mailbox = needs.find(need => need.key === 'connect_gmail');
+  if (mailbox !== undefined) {
+    rows.push({
+      key: 'mailbox',
+      text: input.mailbox?.status?.mailbox == null ? 'Mailbox is not connected' : 'Mailbox needs reconnecting',
+      action: mailbox.action,
+    });
+  }
+  const calling = needs.find(need => need.key === 'calling_number');
+  if (calling !== undefined) {
+    rows.push({ key: 'calling', text: 'No calling number, so Callie cannot place calls', action: calling.action });
+  }
+  return rows;
+}
+
 export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerView[]): HomeView {
   const snapshotDate = input.today?.snapshotDate ?? input.desktop.today?.snapshotDate ?? null;
   const zone = input.today?.businessTimeZone ?? input.desktop.today?.businessTimeZone ?? null;
@@ -770,6 +804,7 @@ export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerV
   const needs = needsRows(input);
 
   return {
+    warnings: warningRows(input, needs),
     heading: businessDateHeading(snapshotDate, zone),
     summary: today === null ? null : summaryLine(today.cards, sendingOff),
     notices: noticesOf({ ...input, todayView }, desktopBanners),

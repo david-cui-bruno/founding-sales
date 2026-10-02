@@ -222,6 +222,36 @@ function FirmHeader({
   );
 }
 
+/** What needs acting on, whichever subtab is open and however narrow the window is. */
+function Warnings({ warnings, onConnectMailbox }: { readonly warnings: HomeView['warnings']; onConnectMailbox(): void }): JSX.Element | null {
+  if (warnings.length === 0) return null;
+  return (
+    <ul data-testid="today-warnings" className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border bg-warn-soft/50 px-5 py-1.5">
+      {warnings.map(row => (
+        <li key={row.key} data-testid={`warning-${row.key}`} className="flex items-center gap-2 text-sm text-warn-ink">
+          <span>{row.text}</span>
+          {row.action === null ? null : row.action.kind === 'connect_mailbox' ? (
+            <Button variant="outline" className={cn(dense.sm, 'bg-background')} data-testid="warning-action" disabled={!row.action.enabled} onClick={onConnectMailbox}>
+              {row.action.label}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              className={cn(dense.sm, 'bg-background')}
+              data-testid="warning-action"
+              onClick={() => {
+                if (row.action?.kind === 'open') navigate(row.action.route);
+              }}
+            >
+              {row.action.label}
+            </Button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function TodayWorkspace({
   home,
   today,
@@ -491,6 +521,7 @@ export function TodayWorkspace({
   return (
     <div data-testid="home" data-region="today" aria-busy={today.pending > 0} className="callie-v2 flex h-screen min-w-0 flex-col">
       {header}
+      <Warnings warnings={home.warnings ?? []} onConnectMailbox={onConnectMailbox} />
       {notices.length === 0 ? null : (
         <div data-testid="banners" className="flex flex-col gap-1.5 border-b border-border px-5 py-2">
           {notices.map(notice => (

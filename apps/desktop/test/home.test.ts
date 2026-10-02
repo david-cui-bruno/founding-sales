@@ -545,6 +545,19 @@ describe('Needs you', () => {
   });
 });
 
+describe('the warnings line (C0 review, P1)', () => {
+  it('names only actionable states: sending off, a mailbox to reconnect, no calling number', () => {
+    const on = { effectiveSendingEnabled: true } as unknown as AdminState['settings'];
+    const healthy = buildHomeView(input({ mailbox: connected, admin: admin({ settings: on }) }), []);
+    expect(healthy.warnings).toEqual([]);
+    const sendingOff = buildHomeView(input({ admin: admin({ settings: { effectiveSendingEnabled: false } as unknown as AdminState['settings'] }) }), []);
+    expect(sendingOff.warnings).toEqual([{ key: 'sending', text: 'Sending is paused', action: null }]);
+    const broken = buildHomeView(input({ mailbox: notConnected, admin: admin({ settings: on, callingNumbers: [] }) }), []);
+    expect(broken.warnings.map(row => row.key)).toEqual(['mailbox', 'calling']);
+    expect(broken.warnings[0]?.action).toMatchObject({ kind: 'connect_mailbox' });
+  });
+});
+
 describe('the numbers row', () => {
   it('covers exactly seven days, and says so per cell rather than in the heading', () => {
     const window = figuresWindow(new Date('2026-09-25T12:00:00.000Z'));
@@ -569,7 +582,7 @@ describe('the numbers row', () => {
         { key: 'replies', label: 'Replies', value: '4', note: null, period: 'since 18 Sep', unconfirmed: 2, link: { name: 'replies' } },
         // 4 replies, 3 handled.
         { key: 'waiting', label: 'Replies waiting', value: '1', note: null, period: 'since 18 Sep', unconfirmed: null, link: { name: 'replies' } },
-        { key: 'holds', label: 'Holds open', value: '3', note: null, period: 'now', unconfirmed: null, link: { name: 'settings', tab: 'dashboard' } },
+        { key: 'holds', label: 'Holds open', value: '3', note: null, period: 'now', unconfirmed: null, link: null },
         { key: 'emails', label: 'Emails sent', value: '—', note: 'not in this build', period: 'since 18 Sep', unconfirmed: null, link: null },
       ],
       line: null,
@@ -597,8 +610,10 @@ describe('the numbers row', () => {
     ]);
     // Even the dashes name their period, so a figure never loses it when the read fails.
     expect(figures({ figures: read(null) }).cells.every(cell => cell.period !== '')).toBe(true);
-    // Replies and the replies still waiting lead to the Replies queue; holds to where they are listed.
-    expect(cells.filter(cell => cell.link !== null).map(cell => cell.key)).toEqual(['replies', 'waiting', 'holds']);
+    // Replies and the replies still waiting lead to the Replies queue.
+    expect(cells.filter(cell => cell.link !== null).map(cell => cell.key)).toEqual(['replies', 'waiting']);
+    // Holds open has no queue that lists the held work, so it is a count and not a link.
+    expect(cells.find(cell => cell.key === 'holds')?.link).toBeNull();
     // Nothing waiting is not a link to an empty queue.
     const none = figures({
       figures: read(dashboard({ replyHandling: { replies: 3, handled: 3, medianSecondsToHandle: null, slowestSecondsToHandle: null } })),

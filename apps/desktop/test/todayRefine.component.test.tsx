@@ -81,7 +81,10 @@ function stateOf(overrides: Partial<TodayState> = {}): TodayState {
   };
 }
 
+const warned = (warnings: HomeView['warnings']): HomeView => ({ ...home, warnings });
+
 const home = {
+  warnings: [],
   heading: 'Thursday, 1 October',
   summary: null,
   notices: [],
@@ -105,7 +108,7 @@ const idle: CallControl = {
 const actions = { busy: () => false, expand: vi.fn(), dial: vi.fn() } as unknown as TodayActions;
 
 /** The workspace as the shell mounts it: its memory and the draft store are above it. */
-function Shell({ memory, state, call = idle }: { readonly memory: TodayMemory; readonly state: TodayState; readonly call?: CallControl }): JSX.Element {
+function Shell({ memory, state, call = idle, view = home }: { readonly memory: TodayMemory; readonly state: TodayState; readonly call?: CallControl; readonly view?: HomeView }): JSX.Element {
   const today = {
     state,
     pending: 0,
@@ -118,7 +121,7 @@ function Shell({ memory, state, call = idle }: { readonly memory: TodayMemory; r
   } as unknown as Today;
   return (
     <TodayWorkspace
-      home={home}
+      home={view}
       today={today}
       todayView={buildTodayView(state)}
       call={call}
@@ -131,14 +134,14 @@ function Shell({ memory, state, call = idle }: { readonly memory: TodayMemory; r
 }
 
 /** Today, and a stand-in for "somewhere else" the test can switch to and back from. */
-function Window({ state = stateOf(), call }: { readonly state?: TodayState; readonly call?: CallControl }): JSX.Element {
+function Window({ state = stateOf(), call, view }: { readonly state?: TodayState; readonly call?: CallControl; readonly view?: HomeView }): JSX.Element {
   const memory = useTodayMemory();
   const [elsewhere, setElsewhere] = useState(false);
   return (
     <>
       <button type="button" data-testid="go-away" onClick={() => setElsewhere(true)} />
       <button type="button" data-testid="come-back" onClick={() => setElsewhere(false)} />
-      {elsewhere ? <p data-testid="elsewhere">Pipeline</p> : <Shell memory={memory} state={state} {...(call === undefined ? {} : { call })} />}
+      {elsewhere ? <p data-testid="elsewhere">Pipeline</p> : <Shell memory={memory} state={state} {...(call === undefined ? {} : { call })} {...(view === undefined ? {} : { view })} />}
     </>
   );
 }
@@ -346,5 +349,39 @@ describe('quieter text (item 4)', () => {
     // The call timer and the Call button's number (CallPanel), the phone field
     // (BasicsEditor) and the live-call strip's timer (TodayWorkspace). Nothing else.
     expect(counts).toEqual({ 'BasicsEditor.tsx': 1, 'CallPanel.tsx': 2, 'TodayWorkspace.tsx': 1 });
+  });
+});
+
+describe('actionable warnings stay on Today (C0 review, P1)', () => {
+  const warnings: HomeView['warnings'] = [
+    { key: 'sending', text: 'Sending is paused', action: null },
+    { key: 'mailbox', text: 'Mailbox needs reconnecting', action: { kind: 'connect_mailbox', label: 'Reconnect Gmail', enabled: true } },
+    { key: 'calling', text: 'No calling number, so Callie cannot place calls', action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' } },
+  ];
+
+  it('shows them on the Queue and on Overview, with no width class that could hide them at 1180', () => {
+    mount({ view: warned(warnings) });
+    for (const tab of ['today-tab-queue', 'today-tab-overview']) {
+      fireEvent.click(screen.getByTestId(tab));
+      const line = screen.getByTestId('today-warnings');
+      expect(within(line).getByTestId('warning-sending').textContent).toBe('Sending is paused');
+      expect(within(line).getByTestId('warning-mailbox').textContent).toContain('Mailbox needs reconnecting');
+      expect(within(line).getByTestId('warning-calling')).toBeTruthy();
+      // Tailwind breakpoints are the only way this could be hidden at 1180; there are none.
+      expect(line.outerHTML).not.toMatch(/hidden|min-\[|max-\[/u);
+    }
+    // Sending is paused says so plainly and offers nothing to press.
+    expect(within(screen.getByTestId('warning-sending')).queryByRole('button')).toBeNull();
+  });
+
+  it('keeps the mailbox’s own reconnect action', () => {
+    mount({ view: warned(warnings) });
+    fireEvent.click(screen.getByTestId('today-tab-overview'));
+    expect(within(screen.getByTestId('warning-mailbox')).getByTestId('warning-action').textContent).toBe('Reconnect Gmail');
+  });
+
+  it('draws nothing when everything is healthy', () => {
+    mount();
+    expect(screen.queryByTestId('today-warnings')).toBeNull();
   });
 });
