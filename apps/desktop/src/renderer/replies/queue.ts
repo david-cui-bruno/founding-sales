@@ -9,23 +9,25 @@ import type { ReplySummary } from '../replyContract.ts';
  * - **What is waiting.** A reply waits while nobody has answered it and the next step is a
  *   person's: answering it, or saying which conversation it belongs to. A delivery failure
  *   is not a reply to answer, and an answered one is done.
- * - **What is uncertain.** A waiting reply with no suggestion at all is counted apart, so
- *   "3 waiting" is never padded by messages Callie could not read. (The summary carries no
- *   class or confidence — those are on the open card — so "no suggestion" is the only
- *   uncertainty the queue can honestly name.)
+ * - **What is uncertain.** A waiting reply whose classification is `uncertain` is counted
+ *   apart, so "3 waiting" is never padded by messages the classifier could not tell. That is
+ *   the classifier's own class, which the summary now carries. The send path opens its
+ *   `uncertain_reply` hold for the classes `human` and `uncertain`
+ *   (`packages/domain/mail/effects.ts:220`), and `uncertain` is the one that means the
+ *   classifier could not tell. No threshold on confidence is applied anywhere.
  * - **The order.** Waiting first, newest first; then the rest, newest first. Stable, so
  *   messages at the same instant keep the server's order.
  */
 
-export type QueueFilter = 'all' | 'waiting' | 'unsure';
+export type QueueFilter = 'all' | 'waiting' | 'uncertain';
 
 export function isWaiting(card: ReplySummary): boolean {
   return card.confirmedDisposition === null && (card.nextAction === 'confirm_disposition' || card.nextAction === 'resolve_ambiguity');
 }
 
-/** Waiting, and Callie has no suggestion to start from. */
-export function isUnsure(card: ReplySummary): boolean {
-  return card.nextAction === 'confirm_disposition' && isWaiting(card) && card.proposedDisposition === null;
+/** Waiting, and the classifier's class for it is `uncertain`. */
+export function isUncertain(card: ReplySummary): boolean {
+  return isWaiting(card) && card.deterministicClass === 'uncertain';
 }
 
 export function orderQueue(cards: readonly ReplySummary[]): readonly ReplySummary[] {
@@ -45,20 +47,20 @@ export function orderQueue(cards: readonly ReplySummary[]): readonly ReplySummar
 export interface QueueCounts {
   /** Waiting, with a suggestion (or a conversation to choose): the count that is firm. */
   readonly waiting: number;
-  /** Waiting, with nothing suggested: shown apart. */
-  readonly unsure: number;
+  /** Waiting, classified `uncertain`: shown apart. */
+  readonly uncertain: number;
   readonly all: number;
 }
 
 export function countQueue(cards: readonly ReplySummary[]): QueueCounts {
-  const unsure = cards.filter(isUnsure).length;
-  return { waiting: cards.filter(isWaiting).length - unsure, unsure, all: cards.length };
+  const uncertain = cards.filter(isUncertain).length;
+  return { waiting: cards.filter(isWaiting).length - uncertain, uncertain, all: cards.length };
 }
 
 export function filterQueue(cards: readonly ReplySummary[], filter: QueueFilter): readonly ReplySummary[] {
   if (filter === 'all') return cards;
-  if (filter === 'unsure') return cards.filter(isUnsure);
-  return cards.filter(card => isWaiting(card) && !isUnsure(card));
+  if (filter === 'uncertain') return cards.filter(isUncertain);
+  return cards.filter(card => isWaiting(card) && !isUncertain(card));
 }
 
 /**
@@ -76,5 +78,5 @@ export function nextAfter(cards: readonly ReplySummary[], answeredId: string): s
 }
 
 export function queueFilterOf(text: string): QueueFilter {
-  return text === 'waiting' || text === 'unsure' ? text : 'all';
+  return text === 'waiting' || text === 'uncertain' ? text : 'all';
 }
