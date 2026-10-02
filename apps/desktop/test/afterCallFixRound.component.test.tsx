@@ -198,3 +198,144 @@ describe('finding 6: a late Apply never reopens the firm it came from', () => {
     expect(screen.getByTestId('firm-name').textContent).toBe(NAMES[B]);
   });
 });
+
+const OLD_SESSION = '99999999-9999-4999-8999-9999999999cc';
+
+/** Today shown or left, over a shell that keeps its memory and state, as the real shell does. */
+function Shell({ show, record, newerCall = false }: { readonly show: boolean; readonly record: (input: unknown) => void; readonly newerCall?: boolean }): JSX.Element {
+  const [state, setState] = useState<TodayState>(() => (newerCall ? { ...initial(), lastCall: { firmId: A, routeId: ROUTE_ID, contactId: null, e164: '+12145550142' } } : initial()));
+  const memory = useTodayMemory();
+  const actions = {
+    busy: () => false,
+    dial: vi.fn(),
+    recordOutcome: record,
+    expand: (firmId: string) => {
+      asked.push({ firmId, answer: () => setState(current => ({ ...current, expanded: expandedFor(firmId) })) });
+    },
+  } as unknown as TodayActions;
+  const today: Today = { state, pending: 0, commands: 0, refreshAnswered: true, now: Date.parse('2026-10-01T14:00:00.000Z'), refresh: vi.fn(), actions, autoRefresh: vi.fn() };
+  return show ? <TodayWorkspace home={home} today={today} todayView={buildTodayView(state)} call={ended} memory={memory} hasTodayBridge onRefresh={vi.fn()} onConnectMailbox={vi.fn()} /> : <span data-testid="elsewhere" />;
+}
+
+const mount = (element: (show: boolean) => JSX.Element) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const tree = (show: boolean): JSX.Element => (
+    <QueryClientProvider client={client}>
+      <DraftsProvider>{element(show)}</DraftsProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree(true));
+  return { client, show: (value: boolean) => view.rerender(tree(value)) };
+};
+
+describe('R1 (S3CF-1, S3CF-2): the log target is set by every opening', () => {
+  const holdAt = (callSessionId: string) => ({ source: 'pending_hold', holdId: '55555555-5555-4555-8555-5555555555ee', callSessionId, firmId: A, firmName: NAMES[A], openedAt: '2026-10-02T09:00:00.000Z' });
+  beforeEach(() => {
+    asked = [];
+    (globalThis as { callieApi?: unknown }).callieApi = {
+      read: vi.fn(async (operation: string) => {
+        if (operation === 'calling.analysis') return { analysis: null, reason: 'not_found' };
+        if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };
+        if (operation === 'review.list') return { items: [holdAt(OLD_SESSION)], failed: false };
+        return { calls: [] };
+      }),
+      command: vi.fn(async () => ({})),
+    };
+  });
+
+  it('opening Log, closing, then Set outcome records the current call: the request names no older session', async () => {
+    const recorded: { callSessionId?: string }[] = [];
+    mount(() => <Shell show record={input => recorded.push(input as { callSessionId?: string })} />);
+    const logButton = await screen.findByTestId('review-log');
+    fireEvent.click(logButton);
+    expect(screen.getByTestId('outcome-call').textContent).toContain('chose from Needs review');
+    fireEvent.click(screen.getByText('Close'));
+    expect(screen.queryByTestId('outcome-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('firm-outcome'));
+    expect(screen.getByTestId('outcome-call').textContent).not.toContain('chose from Needs review');
+    fireEvent.change(screen.getByTestId('outcome-select'), { target: { value: 'no_answer' } });
+    fireEvent.click(screen.getByTestId('outcome-submit'));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).not.toHaveProperty('callSessionId');
+  });
+
+  it('an older item’s Log sends its session and no route, and closes with the save', async () => {
+    const recorded: Record<string, unknown>[] = [];
+    // A newer call to another number at this firm is the last call.
+    mount(() => <Shell show newerCall record={input => recorded.push(input as Record<string, unknown>)} />);
+    fireEvent.click(await screen.findByTestId('review-log'));
+    expect(screen.getByTestId('outcome-call').textContent).not.toContain('2145550142');
+    fireEvent.change(screen.getByTestId('outcome-select'), { target: { value: 'no_answer' } });
+    fireEvent.click(screen.getByTestId('outcome-submit'));
+    expect(recorded[0]).toMatchObject({ callSessionId: OLD_SESSION, routeId: null, contactId: null });
+    expect(screen.queryByTestId('outcome-panel')).toBeNull();
+  });
+});
+
+describe('R2 (S3CF-4): a late Apply never navigates, even after Today was left and re-entered', () => {
+  it('delivering A’s answer with B open invalidates A’s caches and expands nothing', async () => {
+    asked = [];
+    let release: () => void = () => undefined;
+    const applied = { applied: { analysisId: '33333333-3333-4333-8333-3333333333cc', callSessionId: SESSION_ID, callLogId: null, results: [{ key: 'outcome', kind: 'outcome', result: 'applied', edited: false, id: null }], followUps: [] }, reason: null, keyReasons: {} };
+    (globalThis as { callieApi?: unknown }).callieApi = {
+      read: vi.fn(async (operation: string) => {
+        if (operation === 'calling.analysis') return { analysis: analysisAnswer({ proposals: [PROPOSALS.outcome] }), reason: null };
+        if (operation === 'review.list') return { items: [], failed: false };
+        if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };
+        return { calls: [] };
+      }),
+      command: vi.fn(async () => await new Promise(resolve => (release = () => resolve(applied)))),
+    };
+    const { client, show } = mount(visible => <Shell show={visible} record={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('apply')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('apply'));
+    show(false);
+    show(true);
+    fireEvent.click(await screen.findByText(NAMES[B]!, { selector: '[data-testid="queue-firm"]' }));
+    await act(async () => {
+      asked[asked.length - 1]!.answer();
+    });
+    expect(screen.getByTestId('firm-name').textContent).toBe(NAMES[B]);
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const mark = asked.length;
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    expect(asked.slice(mark).filter(entry => entry.firmId === A)).toEqual([]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['calling.history', A] });
+    expect(screen.getByTestId('firm-name').textContent).toBe(NAMES[B]);
+  });
+});
+
+describe('R4 (S3CF-5): the review list is kept by the shared cache', () => {
+  function Probe(): JSX.Element {
+    const review = useReview(true);
+    return (
+      <span data-testid="probe">
+        {review.items === null ? 'none' : String(review.items.length)}:{String(review.failed)}
+      </span>
+    );
+  }
+  it('keeps one item and the failure note across leaving and returning while reads still fail', async () => {
+    let next: unknown = JSON.parse(JSON.stringify(reviewAnswer([proposalItem(PROPOSALS.referral)])));
+    next = { items: (next as { items: unknown }).items, failed: false };
+    (globalThis as { callieApi?: unknown }).callieApi = { read: async () => await Promise.resolve(next) };
+    const { client, show } = mount(visible => (visible ? <Probe /> : <span />));
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('1:false'));
+    next = { items: null, failed: true };
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['review.list'] });
+    });
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('1:true'));
+    show(false);
+    show(true);
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('1:true'));
+    // A later good answer clears the note; a 404 hides the group.
+    next = { items: null, failed: false };
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['review.list'] });
+    });
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('none:false'));
+  });
+});

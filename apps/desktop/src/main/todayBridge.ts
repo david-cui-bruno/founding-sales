@@ -901,9 +901,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           };
         }
       }
+      // When the page names the call (a Needs review item's Log), nothing is borrowed from the
+      // last call: not its route and not its person. The server derives the route from that
+      // session's ticket, and a route from another call would be refused as a mismatch.
+      const named = input.callSessionId ?? null;
       // The last handed-off call belongs to this outcome when it was to this firm and,
       // if the window named a number, to that number (C16).
       const call =
+        named === null &&
         lastCall !== null &&
         lastCall.firmId === input.firmId &&
         (input.routeId === null || input.routeId === lastCall.routeId)
@@ -916,7 +921,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       // firms or numbers, exactly like the last call above.
       // When the page names the call (a Needs review item's Log), that session is sent as it
       // is and `lastSession` is never consulted: it may be another call, or none after a restart.
-      const named = input.callSessionId ?? null;
       const placed =
         named !== null
           ? null

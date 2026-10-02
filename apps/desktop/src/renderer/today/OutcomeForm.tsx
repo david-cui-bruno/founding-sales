@@ -47,13 +47,17 @@ import { todayForm, type TodayActions } from './useToday.ts';
  * that was this firm's; there is no ticket to name since 1.0.12, because `POST /calls/log`
  * never needed one.
  */
+export type LogTarget = { readonly kind: 'current' } | { readonly kind: 'session'; readonly callSessionId: string };
+const CURRENT: LogTarget = { kind: 'current' };
+
 export function OutcomeForm({
   state,
   view,
   enabled,
   actions,
   callSessionId = null,
-  forSession = null,
+  target = CURRENT,
+  onSubmitted,
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
@@ -66,11 +70,16 @@ export function OutcomeForm({
    */
   readonly callSessionId?: string | null;
   /**
-   * A call chosen by name — a Needs review item's Log. It is sent as the log's session as it
-   * is, and the main process never replaces it with "the last call placed".
+   * Which call this opening records, set by whoever opened the form. `current` is the call
+   * Callie just placed (the last call's number and person). `session` is a call named by its
+   * own session (a Needs review item's Log): its session is sent, and no route, person or task
+   * is borrowed from the last call; the server derives the route from the session's ticket.
    */
-  readonly forSession?: string | null;
+  readonly target?: LogTarget;
+  /** The form was submitted: the opener decides what that closes. */
+  onSubmitted?(): void;
 }): JSX.Element | null {
+  const named = target.kind === 'session';
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
   const prefix = `today:outcome:${firmId}:`;
@@ -98,9 +107,10 @@ export function OutcomeForm({
   // Who this call was with, and whether a follow-up may be offered at all. Computed
   // before the early return, because the preview below is asked for from an effect.
   const lastCallHere =
-    expanded !== null && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
-  const chosenItemId =
-    chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
+    !named && expanded !== null && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
+  // A named call borrows nothing: only a task David picked in this form names a person or an item.
+  const pickedTask = chosenTask !== '' && chosenTask !== 'none' ? chosenTask : '';
+  const chosenItemId = named ? pickedTask : chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
   const chosenTaskRow = view.tasks.find(entry => entry.callable && entry.task.itemId === chosenItemId)?.task ?? null;
   const calledContactId = lastCallHere?.contactId ?? chosenTaskRow?.contactId ?? null;
   const pick = {
@@ -148,11 +158,11 @@ export function OutcomeForm({
   };
 
   // The number the last Call button handed to the phone app, when it was this firm's.
-  const lastCall = state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
+  const lastCall = !named && state.lastCall != null && state.lastCall.firmId === expanded.firmId ? state.lastCall : null;
   const callable = view.tasks.filter(entry => entry.callable);
   // The view model's default is the task of the contact just called; a person may pick
   // another, and what they picked wins.
-  const itemId = chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
+  const itemId = chosenItemId;
   const stopper = outcomeProblem(draft);
   // This card's outcome form waits for its own command and for nothing else (P1-4).
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
@@ -172,7 +182,9 @@ export function OutcomeForm({
   const offersFollowUp = draft.outcome !== null && REACHED_OUTCOMES.includes(draft.outcome) && contactId !== null;
   // The last request for this pick came back and left nothing: a lost answer, not a refusal.
   const previewFailed = previewKey !== null && askedKey === previewKey && preview === null && !previewing;
-  const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
+  // A named call with an agreement picked and nobody to give it to: not dropped silently.
+  const needsWho = named && draft.outcome !== null && REACHED_OUTCOMES.includes(draft.outcome) && contactId === null && pick.choice !== 'none';
+  const followUpStopper = needsWho ? 'who' : offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
 
   // Review of S3, round 2 (P1-B): the call was recorded but its agreed dates had changed
   // after the preview, so nothing was granted. This call's agreement stays open here: the
@@ -264,7 +276,7 @@ export function OutcomeForm({
             contactId,
             routeId: lastCall?.routeId ?? null,
             itemId: itemId === '' ? null : itemId,
-            ...(forSession === null ? {} : { callSessionId: forSession }),
+            ...(target.kind === 'session' ? { callSessionId: target.callSessionId } : {}),
             outcome: built.command.outcome,
             note: built.command.note ?? '',
             callback:
@@ -282,10 +294,11 @@ export function OutcomeForm({
           followUpPermission: offersFollowUp && followUpStopper === null ? followUpPermissionOf(pick, preview) : null,
         });
         clear(prefix);
+        onSubmitted?.();
       }}
     >
       <p data-testid="outcome-call" className="text-xs text-muted-foreground">
-        {lastCall === null ? 'Not after a call from Callie: this records the call as history.' : `The call to ${lastCall.e164}.`}
+        {named ? 'This records the call you chose from Needs review.' : lastCall === null ? 'Not after a call from Callie: this records the call as history.' : `The call to ${lastCall.e164}.`}
       </p>
       {callSessionId === null ? null : (
         <p data-testid="outcome-call-session" data-session={callSessionId} className="text-xs text-muted-foreground">
@@ -501,6 +514,14 @@ export function OutcomeForm({
       <p data-testid="outcome-warning" className="text-xs text-[color-mix(in_oklch,var(--status-warn)_75%,black)] empty:hidden">
         {suppression === 'none' ? '' : SUPPRESSION_WARNINGS[suppression]}
       </p>
+      {needsWho ? (
+        <p data-testid="outcome-who" className="text-xs text-destructive">
+          Choose who agreed: pick their task above.{' '}
+          <button type="button" data-testid="outcome-who-none" className="underline underline-offset-2" onClick={() => setFollowUpKind('')}>
+            No follow-up
+          </button>
+        </p>
+      ) : null}
       <p data-testid="outcome-problem" className="text-xs text-destructive empty:hidden">
         {stopper === null || draft.outcome === null ? '' : OUTCOME_PROBLEM_SENTENCES[stopper]}
       </p>

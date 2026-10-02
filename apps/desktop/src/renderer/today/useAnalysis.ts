@@ -105,9 +105,11 @@ export function useAnalysis(callSessionId: string | null, endedAt: number): { vi
 }
 
 /**
- * Needs review, as the server lists it. Items are null when the API does not serve the list
- * at all (404: the group hides). Any other failed read keeps the **last known list** and says
- * so through `failed`, because the items on it are unresolved work.
+ * Needs review, as the server lists it. A read that did not answer (anything but a 404)
+ * **rejects**, so the shared query cache keeps the last successful list as `data` and exposes
+ * the error: the list survives a refresh that fails, and leaving Today and coming back, because
+ * the cache outlives the view. A 404 is an API that does not serve the list: a soft empty
+ * (`items: null`), and the group hides.
  */
 export function useReview(enabled: boolean): { items: ReviewView['items']; failed: boolean; reload(): void } {
   const client = useQueryClient();
@@ -115,7 +117,9 @@ export function useReview(enabled: boolean): { items: ReviewView['items']; faile
     queryKey: REVIEW_KEY,
     queryFn: async (): Promise<ReviewView> => {
       const bridge = api();
-      return bridge === undefined ? { items: null, failed: false } : await bridge.read('review.list', {});
+      const view: ReviewView = bridge === undefined ? { items: null, failed: false } : await bridge.read('review.list', {});
+      if (view.failed === true) throw new Error('review_read_failed');
+      return view;
     },
     enabled: enabled && api() !== undefined,
     staleTime: 0,
@@ -123,11 +127,6 @@ export function useReview(enabled: boolean): { items: ReviewView['items']; faile
     refetchOnWindowFocus: false,
     refetchInterval: 60_000,
   });
-  // The last list that did answer, kept while later reads fail.
-  const known = useRef<ReviewView['items']>(null);
-  const data = query.data;
-  if (data !== undefined && data.items != null) known.current = data.items;
-  else if (data !== undefined && data.failed !== true) known.current = null;
-  const failed = query.isError || data?.failed === true;
-  return { items: known.current, failed: failed && known.current !== null, reload: () => void client.invalidateQueries({ queryKey: REVIEW_KEY }) };
+  const items = query.data?.items ?? null;
+  return { items, failed: query.isError && items !== null, reload: () => void client.invalidateQueries({ queryKey: REVIEW_KEY }) };
 }
