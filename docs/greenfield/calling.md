@@ -462,9 +462,9 @@ time. A summary request in flight (`calling`) counts in transcription's "still f
 
 **Post-call analysis (slice 3a, migration 0035).** A channel-labelled transcript is read by a
 model once per **version** (`call_analyses`): one structured reading of the call
-(prompt `call_analysis.2`), checked against the transcript by
+(prompt `call_analysis.3`), checked against the transcript by
 `readCallAnalysisAnswer`, and stored with the proposal set the pure policy computes from it
-(`proposeEffects`, `call_policy.2`) and that set's hash. Nothing in an analysis acts: every
+(`proposeEffects`, `call_policy.3`) and that set's hash. Nothing in an analysis acts: every
 proposal is applied only by David's click, checked against one exact version and its stored
 hash. David's edited notes are a version of their own (origin `user`) and stay the current
 notes whatever model version completes later. Every writer of one call's analysis
