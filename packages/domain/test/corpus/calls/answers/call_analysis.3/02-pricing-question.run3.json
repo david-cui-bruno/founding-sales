@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 4001,
+    "cachedInputTokens": 0,
+    "outputTokens": 301
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management. After your brief introduction to Callie, Dana asked what it costs. You gave the pricing, and the call ended.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[{\"kind\":\"pricing_question\",\"quote\":\"What does it cost?\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana asked for pricing immediately after your introduction but did not express interest in learning more. After you provided the price, they thanked you and ended the call without requesting a follow-up, demo, or further information.\",\"lines\":[2,4,5]}, \"prompt_version\":\"call_analysis.3\"}"
+}

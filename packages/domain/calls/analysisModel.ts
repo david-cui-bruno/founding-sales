@@ -10,6 +10,7 @@ import {
   CALL_ANALYSIS_SIDES,
   CALL_ANALYSIS_SIGNAL_KINDS,
   CALL_ANALYSIS_STOP_SCOPES,
+  type CallAnalysisDayQualifier,
   type CallAnalysisLineRef,
   type CallAnalysisQuoteRef,
   type CallAnalysisResult,
@@ -396,6 +397,23 @@ const PROMISE = /\b(?:i'll|i will|i shall|i'm going to|i am going to|i can|we'll
 /** A request to be sent something names the sending. */
 const SEND = /\b(?:send|sending|e ?mail|mail|forward|shoot)\b/u;
 
+const WEEKDAY_NAMES: ReadonlySet<string> = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']);
+
+/**
+ * How a callback's weekday was qualified, read from the callback's own whole lines (the
+ * model may quote "Tuesday at 10" out of "next Tuesday at 10"; C2 final, case 10). "Next
+ * week" beside the weekday is `next_week`; any other "next" in those lines is `next`, the
+ * ambiguous reading, which wins; "this" or "coming" before it is `this`.
+ */
+function dayQualifierOf(day: string | null, lines: readonly string[]): CallAnalysisDayQualifier | null {
+  if (day === null || !WEEKDAY_NAMES.has(day)) return null;
+  const text = lines.map(line => fold(line)).join(' \u0000 ');
+  if (new RegExp(`\\bnext week(?: on)? ${day}\\b|\\b${day}(?: of)? next week\\b`, 'u').test(text)) return 'next_week';
+  if (/\bnext\b/u.test(text)) return 'next';
+  if (new RegExp(`\\b(?:this|this coming|coming) ${day}\\b`, 'u').test(text)) return 'this';
+  return null;
+}
+
 /** A plain yes at the start of Them's reply to an offer. */
 const AGREES = /^(?:yes|yeah|yep|sure|ok|okay|please|absolutely|definitely|of course|go ahead|sounds good|that works|that would be great|that'd be great|that'd help|please do)\b/u;
 
@@ -587,7 +605,12 @@ export function readCallAnalysisAnswer(
       (utterance, index) => index + 1 > after && sideOfSpeaker(utterance.speaker) === 'them' && RETRACTS.test(fold(utterance.text)),
     );
     if (!valid || ref === null || retracted) drop('follow_up_request');
-    else followUpRequest = { kind: requestKind, ref, agreed };
+    else {
+      // An e-mail that names an overview is an overview (C2 final: "send me an overview by
+      // e-mail" labelled other_email in 2 of 6 runs).
+      const kind = requestKind === 'other_email' && /\boverview\b/u.test(words) ? 'overview_email' : requestKind;
+      followUpRequest = { kind, ref, agreed };
+    }
   }
 
   let callback: CallAnalysisResult['callback'] = null;
@@ -613,11 +636,13 @@ export function readCallAnalysisAnswer(
         if (!found) drop(field);
         return found ? words : null;
       };
+      const day = answer.callback.day === 'none' ? null : answer.callback.day;
       callback = {
         exact: answer.callback.exact,
         phrase,
         agreed,
-        day: answer.callback.day === 'none' ? null : answer.callback.day,
+        day,
+        dayQualifier: dayQualifierOf(day, [utterances[phrase.line - 1]?.text ?? '', agreedText ?? '']),
         dateText: spoken(trimmed(answer.callback.date_text), 120, 'date_text'),
         time: spoken(trimmed(answer.callback.time), 60, 'time'),
       };

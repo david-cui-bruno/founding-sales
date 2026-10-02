@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3986,
+    "cachedInputTokens": 0,
+    "outputTokens": 291
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana Whitfield at Harbor Lane Property Management and introduced Callie. You offered to send an overview by email, but Dana was non-committal, saying maybe and that they would see.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana's response was hedging rather than agreement. When you offered to send an overview and Dana said 'Maybe, we'll see,' this does not constitute clear agreement to receive the email, so no follow-up request was recorded.\",\"lines\":[3,4]}, \"prompt_version\":\"call_analysis.3\"}"
+}

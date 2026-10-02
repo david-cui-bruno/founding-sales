@@ -163,8 +163,11 @@ export interface ResolvedCallback {
  *
  * It resolves only when both a day and a time were said in
  * the verified phrase or its agreed line (the reader keeps `dateText` and `time` only
- * then). The rules: a weekday is the next one strictly after the call's local date; "next
- * <weekday>" is ambiguous and never resolves; a correction ("no wait") uses what follows
+ * then). The rules: a bare weekday or "this <weekday>" is the next one strictly after the
+ * call's local date (said on Monday, "Tuesday" is tomorrow); "next <weekday>" is ambiguous
+ * and never resolves, wherever "next" was said in the callback's lines; "next week
+ * <weekday>" is that weekday in the Monday-to-Sunday week after the call's, and is not
+ * resolved when said on a Sunday; a correction ("no wait") uses what follows
  * the last one; a bare hour 1-6 is PM, 7-11 AM, 12 noon; the instant comes from
  * `callbackInstant`, and must be after the call.
  */
@@ -178,7 +181,10 @@ export function resolveSpokenCallback(
   if (callback.day === null || callback.dateText === null || callback.time === null) return null;
   if (zone === null || !isKnownTimeZone(zone)) return null;
   const dateWords = fold(callback.dateText);
-  if (/\bnext\b/u.test(dateWords)) return null;
+  // "Next Tuesday" is ambiguous (the coming one, or the one after?) wherever "next" was
+  // said — in the model's date words or anywhere in the callback's own lines.
+  if (callback.dayQualifier === 'next') return null;
+  if (/\bnext\b/u.test(dateWords) && callback.dayQualifier !== 'next_week') return null;
   // The day words must name the day the model chose.
   const dayWord = callback.day;
   if (!new RegExp(`\\b${dayWord.slice(0, 3)}`, 'u').test(dateWords)) return null;
@@ -200,8 +206,17 @@ export function resolveSpokenCallback(
   else if (dayWord === 'tomorrow') localDate = addDays(call.date, 1);
   else {
     const target = WEEKDAYS.indexOf(dayWord);
-    const ahead = ((target - call.weekday + 7) % 7) || 7;
-    localDate = addDays(call.date, ahead);
+    if (callback.dayQualifier === 'next_week') {
+      // The weekday in the Monday-to-Sunday week after the call's own. Said on a Sunday,
+      // "next week" may mean the week starting tomorrow: ambiguous, so not resolved.
+      if (call.weekday === 0) return null;
+      const toNextMonday = 8 - call.weekday;
+      localDate = addDays(call.date, toNextMonday + ((target + 6) % 7));
+    } else {
+      // A bare weekday or "this <weekday>": the next one strictly after the call's date.
+      const ahead = ((target - call.weekday + 7) % 7) || 7;
+      localDate = addDays(call.date, ahead);
+    }
   }
   const dueAt = callbackInstant(localDate, localTime, zone);
   if (dueAt === null || Date.parse(dueAt) <= Date.parse(context.callStartedAt)) return null;

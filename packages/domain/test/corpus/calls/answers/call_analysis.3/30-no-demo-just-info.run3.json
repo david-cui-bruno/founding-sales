@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3963,
+    "cachedInputTokens": 0,
+    "outputTokens": 271
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management. Dana declined a demo but asked you to send an overview by e-mail.\",\"facts\":[],\"interest\":{\"level\":\"neutral\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"other_email\",\"quote\":\"Just send me an overview by e-mail.\",\"line\":2,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana rejected the demo offer directly. You could have explored why they don't need a demo or what they currently use before agreeing to send materials, to better qualify the lead.\",\"lines\":[1,2]},\"prompt_version\":\"call_analysis.3\"}"
+}

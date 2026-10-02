@@ -293,3 +293,49 @@ describe('A-2: the safety nets added after the first live run (C2)', () => {
   });
 });
 
+describe('A-2: "next <weekday>" (C2 final, case 10)', () => {
+  // Monday 5 to Sunday 11 October 2026, 10:15 in New York.
+  const WEEK = ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'];
+  const resolve = (line: string, dateText: string, day: 'tuesday' | 'friday', date: string): string | null => {
+    const call = lines(['Y', 'Hi.'], ['T', line]);
+    const result = read(answer({ callback: { requested: true, exact: true, phrase: line.replace(/\.$/u, ''), line: 2, agreed_line: 0, day, date_text: dateText, time: '10' } }), call);
+    if (result.callback === null) return null;
+    const resolved = resolveSpokenCallback(result.callback, { callStartedAt: `${date}T14:15:00Z`, firmTimeZone: 'America/New_York' });
+    return resolved === null ? null : resolved.localDate;
+  };
+
+  it('never resolves "next Tuesday", said on any day of the week, even when the model quotes only "Tuesday"', () => {
+    for (const date of WEEK) {
+      expect(resolve('Call me next Tuesday at 10.', 'next Tuesday', 'tuesday', date), date).toBeNull();
+      expect(resolve('Call me next Tuesday at 10.', 'Tuesday', 'tuesday', date), date).toBeNull();
+      expect(resolve('Next Friday at 10 works.', 'Friday', 'friday', date), date).toBeNull();
+    }
+  });
+
+  it('resolves "next week Tuesday" to the Tuesday of the following Monday-to-Sunday week, and not when said on a Sunday', () => {
+    const expected = ['2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13', null];
+    WEEK.forEach((date, index) => {
+      expect(resolve('Call me next week Tuesday at 10.', 'Tuesday', 'tuesday', date), date).toBe(expected[index]);
+      expect(resolve('Call me Tuesday next week at 10.', 'Tuesday', 'tuesday', date), date).toBe(expected[index]);
+    });
+  });
+
+  it('a bare weekday, or "this <weekday>", is the next one strictly after the call: "Tuesday" said on Monday is tomorrow', () => {
+    const bare = ['2026-10-06', '2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13', '2026-10-13'];
+    WEEK.forEach((date, index) => {
+      expect(resolve('Call me Tuesday at 10.', 'Tuesday', 'tuesday', date), date).toBe(bare[index]);
+      expect(resolve('Call me this Tuesday at 10.', 'this Tuesday', 'tuesday', date), date).toBe(bare[index]);
+    });
+    // The plan's own example, "Call me Tuesday at 2" on a Monday, is checked above: 2026-10-06T14:00.
+  });
+
+  it('records the qualifier from the callback’s whole lines, so a quote that dropped "next" is still ambiguous', () => {
+    const call = lines(['Y', 'Hi.'], ['T', 'Call me next Tuesday at 10.']);
+    const result = read(answer({ callback: { requested: true, exact: true, phrase: 'Tuesday at 10', line: 2, agreed_line: 0, day: 'tuesday', date_text: 'Tuesday', time: '10' } }), call);
+    expect(result.callback?.dayQualifier).toBe('next');
+    expect(labels(answer({ callback: { requested: true, exact: true, phrase: 'Tuesday at 10', line: 2, agreed_line: 0, day: 'tuesday', date_text: 'Tuesday', time: '10' } }), call)).toEqual([
+      'outcome:callback_requested',
+    ]);
+  });
+});
+

@@ -21,7 +21,7 @@ import { CALL_SUMMARY_SIDES } from './callSummaries.ts';
  */
 
 /** Bumped whenever a byte of the policy table (`analysisPolicy.ts`) changes what it proposes. */
-export const CALL_POLICY_VERSION = 'call_policy.2';
+export const CALL_POLICY_VERSION = 'call_policy.3';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -99,6 +99,9 @@ export const CALL_ANALYSIS_DAYS = [
 ] as const;
 export type CallAnalysisDay = (typeof CALL_ANALYSIS_DAYS)[number];
 
+export const CALL_ANALYSIS_DAY_QUALIFIERS = ['next', 'next_week', 'this'] as const;
+export type CallAnalysisDayQualifier = (typeof CALL_ANALYSIS_DAY_QUALIFIERS)[number];
+
 export const CALL_ANALYSIS_SIDES = CALL_SUMMARY_SIDES;
 export type CallAnalysisSide = (typeof CALL_ANALYSIS_SIDES)[number];
 
@@ -158,6 +161,13 @@ export const callAnalysisResultSchema = z.strictObject({
       /** The Them line that agreed to a callback phrase David said; null when Them said it. */
       agreed: callAnalysisLineRefSchema.nullable(),
       day: z.enum(CALL_ANALYSIS_DAYS).nullable(),
+      /**
+       * How the weekday was qualified in the callback's own lines (the phrase's line and the
+       * agreeing line), found by the reader whatever the model quoted: `next` ("next
+       * Tuesday", or any "next" beside a weekday: ambiguous, never resolved), `next_week`
+       * ("next week Tuesday", "Tuesday next week"), `this` ("this Tuesday"), or null.
+       */
+      dayQualifier: z.enum(CALL_ANALYSIS_DAY_QUALIFIERS).nullable(),
       dateText: z.string().min(1).max(120).nullable(),
       time: z.string().min(1).max(60).nullable(),
     })

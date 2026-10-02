@@ -282,5 +282,13 @@ describe('A-1: reading an answer', () => {
     const read = readCallAnalysisAnswer(JSON.stringify(old), lines(['Y', 'Hi.'], ['T', 'Just send me an overview by e-mail.']));
     expect(read.ok && read.result.followUpRequest).toMatchObject({ kind: 'overview_email', agreed: null });
   });
+
+  it('reads an e-mail request that names an overview as an overview', () => {
+    const read = readCallAnalysisAnswer(
+      answer({ follow_up_request: { kind: 'other_email', quote: 'Just send me an overview by e-mail', line: 2 } }),
+      lines(['Y', 'Hi.'], ['T', 'Just send me an overview by e-mail.']),
+    );
+    expect(read.ok && read.result.followUpRequest?.kind).toBe('overview_email');
+  });
 });
 

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3975,
+    "cachedInputTokens": 0,
+    "outputTokens": 323
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. Dana mentioned they tried a similar maintenance coordination solution before but had issues with vendors not engaging properly. The call was cut short by technical difficulties.\",\"facts\":[{\"text\":\"tried something like this before\",\"line\":2}],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[{\"category\":\"has_solution\",\"quote\":\"We tried something like this before\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The conversation was cut short before you could address Dana's concern about vendor engagement with the previous solution. You may want to follow up to learn more about what went wrong and position Callie's approach differently.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.3\"}"
+}

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3958,
+    "cachedInputTokens": 0,
+    "outputTokens": 322
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management. Dana said they had to run because there was a tenant at the door, so the call ended quickly. You stated you would call back Tuesday at 2.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"I'll call you Tuesday at 2\",\"line\":1,\"agreed_line\":0,\"day\":\"tuesday\",\"date_text\":\"Tuesday\",\"time\":\"2\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"I'll call you Tuesday at 2\",\"line\":1,\"due_phrase\":\"Tuesday at 2\"}],\"coaching\":{\"observation\":\"You stated a callback time at the start of the call before establishing any interest or rapport. Dana was interrupted by a tenant and did not acknowledge or agree to the Tuesday at 2 callback.\",\"lines\":[1,2]}, \"prompt_version\":\"call_analysis.3\"}"
+}

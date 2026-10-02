@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3961,
+    "cachedInputTokens": 0,
+    "outputTokens": 265
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They said it was a bad time and asked you to call back Wednesday at 3. You confirmed the callback time.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":true,\"exact\":true,\"phrase\":\"Call me Wednesday at 3\",\"line\":2,\"agreed_line\":3,\"day\":\"wednesday\",\"date_text\":\"Wednesday\",\"time\":\"3\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"I'll call you then\",\"line\":3,\"due_phrase\":\"Wednesday at 3\"}],\"coaching\":{\"observation\":\"\",\"lines\":[]},\"prompt_version\":\"call_analysis.3\"}"
+}
