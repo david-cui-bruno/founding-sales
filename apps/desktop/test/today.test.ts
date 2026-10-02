@@ -826,7 +826,7 @@ describe('the Today bridge', () => {
     expect(calls.filter(call => call.path === '/dial/authorize')).toHaveLength(0);
     expect(calls.filter(call => call.path === '/dial/consume')).toHaveLength(0);
     // The window is told which number, never the URI.
-    expect(answer.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' });
+    expect(answer.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null });
     expect(JSON.stringify(answer)).not.toContain('tel:');
   });
 
@@ -870,7 +870,7 @@ describe('the Today bridge', () => {
     });
     await bridge.expand({ firmId: FIRM_ID });
     const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
-    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' });
+    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187', callSessionId: null });
 
     const answer = await bridge.recordOutcome({
       firmId: FIRM_ID,
