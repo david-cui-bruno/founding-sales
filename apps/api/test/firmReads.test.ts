@@ -245,4 +245,96 @@ describe('firm page tasks and timeline', () => {
     expect(all.filter(event => event.kind === 'stop_recorded')).toEqual([{ kind: 'stop_recorded', code: 'email', detail: 'firm' }].map(row => expect.objectContaining(row)));
     expect(JSON.stringify(all)).not.toContain(firmId.toLowerCase());
   });
+
+  it('pages MIXED kinds that share one instant, with inserts between the pages, without a skip or a repeat', async () => {
+    const workspace = fixture.alpha.workspaceId;
+    const user = fixture.alpha.salesperson.userId;
+    const mixed = await seedFirm(fixture, { name: 'Mixed Kinds Test Holdings', regionCode: 'TX', assignedUserId: user });
+    const SAME = '2026-08-15T09:30:00.250000Z';
+    const { rows: opp } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
+       VALUES ($1, $2, (SELECT id FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position LIMIT 1), now()) RETURNING id`,
+      [workspace, mixed],
+    );
+    const opportunityId = opp[0]?.id ?? '';
+    const stageSql = `(SELECT id FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position OFFSET 1 LIMIT 1)`;
+    // Every kind the timeline reads, 30 of each, ALL at the same microsecond.
+    await fixture.db.query(
+      `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+       SELECT $1, $2, 'no_answer', 'none', $4::timestamptz, $4::timestamptz, $3 FROM generate_series(1, 30)`,
+      [workspace, mixed, user, SAME],
+    );
+    await fixture.db.query(
+      `INSERT INTO opportunity_stage_events (workspace_id, opportunity_id, firm_id, to_stage_id, actor_kind, actor_user_id, occurred_at)
+       SELECT $1, $2, $3, ${stageSql}, 'user', $4, $5::timestamptz FROM generate_series(1, 30)`,
+      [workspace, opportunityId, mixed, user, SAME],
+    );
+    const { rows: box } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, provider_account_id, status)
+       VALUES ($1, $2, 'mixed@example.test', 'mixed-account', 'connected')
+       ON CONFLICT (workspace_id, owner_user_id) DO UPDATE SET status = 'connected' RETURNING id`,
+      [workspace, user],
+    );
+    for (const direction of ['incoming', 'outgoing'] as const) {
+      await fixture.db.query(
+        `WITH made AS (
+           INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction, internal_date, header_from, header_to, subject, matched)
+           SELECT $1, $2, $5 || g::text, $5 || g::text, $6, $4::timestamptz, 'x@example.test', ARRAY['y@example.test'], 'Mixed ' || g::text, true
+             FROM generate_series(1, 30) g RETURNING id)
+         INSERT INTO mail_message_matches (workspace_id, mail_message_id, firm_id, opportunity_id, match_rule, ambiguous)
+         SELECT $1, id, $3, $7, 'participant', false FROM made`,
+        [workspace, box[0]?.id ?? '', mixed, SAME, `mix-${direction}-`, direction, opportunityId],
+      );
+    }
+    const walk = async (insertAfterFirstPage?: () => Promise<void>): Promise<string[]> => {
+      const seen: string[] = [];
+      let before: string | undefined;
+      let pageNo = 0;
+      for (;;) {
+        const answer = await page(salesToken, { firmId: mixed, pageVersion: 2, include: ['timeline'], ...(before === undefined ? {} : { timelineBefore: before }) });
+        const result = firmTimelineSchema.parse(answer.body['timeline']);
+        seen.push(...result.events.map(event => event.key));
+        pageNo += 1;
+        if (pageNo === 1 && insertAfterFirstPage !== undefined) await insertAfterFirstPage();
+        if (result.nextBefore === null) break;
+        before = result.nextBefore;
+        expect(pageNo).toBeLessThan(10);
+      }
+      return seen;
+    };
+    const baseline = await walk();
+    expect(baseline).toHaveLength(120);
+    expect(new Set(baseline).size).toBe(120);
+    expect(new Set(baseline.map(key => key.split(':')[0]))).toEqual(new Set(['call', 'stage_change', 'email_sent', 'email_received']));
+    // Page boundaries fall inside a kind AND between kinds: 50 | 50 | 20.
+    // Now insert between the pages: a newer event, and rows at the same instant that sort
+    // BEFORE the cursor (already past: must not show up later) and AFTER it (must show once).
+    const walked = await walk(async () => {
+      await fixture.db.query(
+        `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+         VALUES ($1, $2, 'no_answer', 'none', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', $3)`,
+        [workspace, mixed, user],
+      );
+      // Same instant, kind sorting BEFORE the cursor (stage_change > email_sent): already past.
+      await fixture.db.query(
+        `INSERT INTO opportunity_stage_events (workspace_id, opportunity_id, firm_id, to_stage_id, actor_kind, actor_user_id, occurred_at)
+         VALUES ($1, $2, $3, ${stageSql}, 'user', $4, $5::timestamptz)`,
+        [workspace, opportunityId, mixed, user, SAME],
+      );
+      // Same instant, kind sorting AFTER the cursor (call < email_sent): still to come, once.
+      await fixture.db.query(
+        `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+         VALUES ($1, $2, 'no_answer', 'none', $4::timestamptz, $4::timestamptz, $3)`,
+        [workspace, mixed, user, SAME],
+      );
+    });
+    expect(new Set(walked).size).toBe(walked.length);
+    // Every original row exactly once.
+    for (const key of baseline) expect(walked.filter(entry => entry === key), key).toHaveLength(1);
+    // Nothing the walk had already passed shows up later (the newer call, the stage event at
+    // the same instant), and the one row that sorts after the cursor shows up exactly once.
+    const extras = walked.filter(key => !baseline.includes(key));
+    expect(extras).toHaveLength(1);
+    expect(extras[0]?.startsWith('call:')).toBe(true);
+  });
 });

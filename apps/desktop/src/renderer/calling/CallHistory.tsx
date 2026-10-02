@@ -404,7 +404,11 @@ export function CallHistory({
                 <span className="w-12" />
               )}
             </div>
-            {call.note == null ? null : <CallNote sessionId={call.sessionId} note={call.note} />}
+            {(() => {
+              // The history read's note, or the one `GET /calls` returned for the same log.
+              const note = call.note ?? (call.callLogId === null ? null : (logById.get(call.callLogId)?.note ?? null));
+              return note === null ? null : <CallNote sessionId={call.sessionId} note={note} />;
+            })()}
             {call.summary === undefined ? null : <CallSummaryBlock summary={call.summary} />}
             {call.hasTranscript === true && ports?.transcript !== undefined ? (
               <TranscriptDisclosure callSessionId={call.sessionId} read={ports.transcript} />
@@ -427,6 +431,7 @@ export function CallHistory({
               </span>
               <span className="w-12" />
             </div>
+            {log.note === null ? null : <CallNote sessionId={log.id} note={log.note} />}
           </li>
     );
   }

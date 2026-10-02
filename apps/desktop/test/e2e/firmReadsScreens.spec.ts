@@ -36,11 +36,12 @@ const at = (hours: number): string => new Date(Date.UTC(2026, 9, 2, 16, 0, 0) - 
 const events = (from: number, count: number, prefix: string): FirmTimelineEvent[] =>
   Array.from({ length: count }, (_, index) => {
     const n = from + index;
+    const cursor = (kind: string): string => `${at(n * 7).replace('Z', '000')}|${kind}|${prefix}${String(n)}`;
     const kinds: FirmTimelineEvent[] = [
-      { key: `${prefix}:call:${String(n)}`, at: at(n * 7), kind: 'call', code: 'interested', detail: null },
-      { key: `${prefix}:mail:${String(n)}`, at: at(n * 7), kind: 'email_received', code: null, detail: 'Re: after-hours coverage for 650 doors' },
-      { key: `${prefix}:stage:${String(n)}`, at: at(n * 7), kind: 'stage_change', code: 'contacting', detail: 'new' },
-      { key: `${prefix}:stop:${String(n)}`, at: at(n * 7), kind: 'stop_recorded', code: 'email', detail: 'firm' },
+      { key: `${prefix}:call:${String(n)}`, at: at(n * 7), kind: 'call', cursor: cursor('call'), code: 'interested', detail: null },
+      { key: `${prefix}:mail:${String(n)}`, at: at(n * 7), kind: 'email_received', cursor: cursor('email_received'), code: null, detail: 'Re: after-hours coverage for 650 doors' },
+      { key: `${prefix}:stage:${String(n)}`, at: at(n * 7), kind: 'stage_change', cursor: cursor('stage_change'), code: 'contacting', detail: 'new' },
+      { key: `${prefix}:stop:${String(n)}`, at: at(n * 7), kind: 'stop_recorded', cursor: cursor('stop_recorded'), code: 'email', detail: 'firm' },
     ];
     return kinds[n % 4] as FirmTimelineEvent;
   });

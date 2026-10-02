@@ -396,6 +396,12 @@ export const firmTimelineEventSchema = z.strictObject({
   kind: z.enum(FIRM_TIMELINE_KINDS),
   code: z.string().max(80).nullable(),
   detail: z.string().max(200).nullable(),
+  /**
+   * The cursor that asks for the page of events older than THIS one. The desktop takes it
+   * from the oldest row it is showing, so a refreshed first page merged with older pages it
+   * already holds can never leave a gap behind a stale page cursor.
+   */
+  cursor: z.string().max(120),
 });
 export const firmTimelineSchema = z.strictObject({
   events: z.array(firmTimelineEventSchema).max(50),

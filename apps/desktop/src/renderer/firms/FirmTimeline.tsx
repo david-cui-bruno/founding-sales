@@ -1,10 +1,10 @@
 import type { FirmTimeline as TimelineDto, FirmTimelineEvent } from '@fss/contracts';
-import { useReducer, useRef, useState, type JSX } from 'react';
+import { useEffect, useSyncExternalStore, type JSX } from 'react';
 import type { Generation } from '../app/generation.ts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { Button } from '../ui/button.tsx';
 import { Group } from '../v2/parts.tsx';
-import { currentCrmMemory } from './crmMemory.ts';
+import { crmVersion, currentCrmMemory, notifyCrm, subscribeCrm, type TimelineCache } from './crmMemory.ts';
 
 /**
  * The firm's activity, newest first (S4F): calls and their outcome, e-mails sent and
@@ -12,10 +12,16 @@ import { currentCrmMemory } from './crmMemory.ts';
  * kind and a line, with no message body, note or address (the API sends codes and a cut
  * subject, never more).
  *
- * The first page arrives with the firm; "Show more" asks for the next. Pages already loaded
- * are kept above the route and keyed by firm, so leaving and returning shows them again, a
- * page that arrives for a firm David has since left is cached under that firm, and an answer
- * that was in flight when the session ended is dropped (rules K1 and K7).
+ * The first page arrives with the firm; "Show more" asks for the next. Everything loaded is
+ * kept above the route, by firm, and drawn from there through a subscription, so:
+ *
+ *  * leaving and returning shows the pages again, and a refreshed first page is MERGED with
+ *    them by event (deduplicated, newest first) rather than replacing or displacing any;
+ *  * "Show more" asks for the page older than the OLDEST row on screen, never a cursor stored
+ *    with some earlier page, so a newer event arriving between visits cannot leave a gap;
+ *  * a page that lands while another instance is mounted (or none) is drawn by whichever is,
+ *    a page for a firm David has since left is cached under that firm, and an answer in
+ *    flight when the session ended is dropped (rules K1 and K7).
  */
 
 export interface TimelinePorts {
@@ -68,6 +74,25 @@ const whenOf = (instant: string): string => {
   return Number.isFinite(at.getTime()) ? WHEN.format(at) : instant;
 };
 
+/** Newest first, as the server orders: by the cursor's instant, then kind, then id. */
+function newestFirst(a: FirmTimelineEvent, b: FirmTimelineEvent): number {
+  const [aAt = '', aKind = '', ...aId] = a.cursor.split('|');
+  const [bAt = '', bKind = '', ...bId] = b.cursor.split('|');
+  if (aAt !== bAt) return aAt < bAt ? 1 : -1;
+  if (aKind !== bKind) return aKind < bKind ? 1 : -1;
+  const x = aId.join('|');
+  const y = bId.join('|');
+  return x === y ? 0 : x < y ? 1 : -1;
+}
+
+/** The first page and everything cached, merged: one row per event, newest first. */
+export function mergedRows(first: readonly FirmTimelineEvent[], cache: TimelineCache | undefined): FirmTimelineEvent[] {
+  const byKey = new Map<string, FirmTimelineEvent>();
+  // Fresh rows win over cached ones for the same event.
+  for (const event of [...(cache?.events ?? []), ...first]) byKey.set(event.key, event);
+  return [...byKey.values()].sort(newestFirst);
+}
+
 export function FirmTimeline({
   firmId,
   timeline,
@@ -82,43 +107,58 @@ export function FirmTimeline({
   readonly guard: Generation;
   stageName(key: string): string;
 }): JSX.Element {
-  const [, redraw] = useReducer((n: number) => n + 1, 0);
-  const [state, setState] = useState<'idle' | 'loading' | 'failed'>('idle');
-  const mounted = useRef(true);
-  mounted.current = true;
-  const memory = currentCrmMemory();
-  const extra = memory.timeline[firmId];
-  const seen = new Set<string>();
-  const events = [...timeline.events, ...(extra?.events ?? [])].filter(event => {
-    if (seen.has(event.key)) return false;
-    seen.add(event.key);
-    return true;
-  });
-  const cursor = extra === undefined ? timeline.nextBefore : extra.nextBefore;
+  // Drawn from the shared memory: any change to it, from any instance, redraws this one.
+  useSyncExternalStore(subscribeCrm, crmVersion);
+  const cache = currentCrmMemory().timeline[firmId];
+  const events = mergedRows(timeline.events, cache);
+  const oldest = events[events.length - 1];
+  // More exist unless the oldest page loaded ended the list, or the first page itself did and
+  // nothing older was ever loaded.
+  const more = cache?.exhausted === true ? false : cache?.loadedMore === true ? true : timeline.nextBefore !== null;
+  const status = cache?.status ?? 'idle';
 
-  const more = (): void => {
-    if (ports === null || cursor === null || state === 'loading') return;
-    // The answer is for THIS firm, this session and this memory: any of the three having
-    // moved on drops it (K1), and it is cached under its own firm, never the one on screen (K7).
+  // Every row ever shown is kept, so a refreshed first page that no longer reaches as far
+  // back as the last one cannot lose the rows it displaced.
+  useEffect(() => {
+    const memory = currentCrmMemory();
+    const held = memory.timeline[firmId] ?? { events: [], loadedMore: false, exhausted: false, status: 'idle' as const };
+    held.events = mergedRows(timeline.events, held);
+    memory.timeline[firmId] = held;
+  }, [firmId, timeline]);
+
+  const loadMore = (): void => {
+    if (ports === null || !more || oldest === undefined || status === 'loading') return;
+    // The answer is for THIS firm, this session and this memory: any of the three having moved
+    // on drops it (K1), and it is cached under its own firm, never the one on screen (K7).
     const started = guard.now();
     const owner = currentCrmMemory();
-    setState('loading');
-    void ports.more(firmId, cursor).then(
-      answer => {
-        if (!guard.fresh(started) || currentCrmMemory() !== owner) return;
-        if (answer.timeline === null) {
-          if (mounted.current) setState('failed');
-          return;
-        }
-        const have = owner.timeline[firmId]?.events ?? [];
-        owner.timeline[firmId] = { events: [...have, ...answer.timeline.events], nextBefore: answer.timeline.nextBefore };
-        if (mounted.current) {
-          setState('idle');
-          redraw();
-        }
-      },
+    const entry = owner.timeline[firmId] ?? { events: [], loadedMore: false, exhausted: false, status: 'idle' as const };
+    entry.status = 'loading';
+    owner.timeline[firmId] = entry;
+    notifyCrm();
+    const settle = (change: (cache: TimelineCache) => void): void => {
+      if (!guard.fresh(started) || currentCrmMemory() !== owner) return;
+      const held = owner.timeline[firmId];
+      if (held === undefined) return;
+      change(held);
+      notifyCrm();
+    };
+    void ports.more(firmId, oldest.cursor).then(
+      answer =>
+        settle(held => {
+          if (answer.timeline === null) {
+            held.status = 'failed';
+            return;
+          }
+          held.events = mergedRows(answer.timeline.events, held);
+          held.loadedMore = true;
+          held.exhausted = answer.timeline.nextBefore === null;
+          held.status = 'idle';
+        }),
       () => {
-        if (guard.fresh(started) && mounted.current) setState('failed');
+        settle(held => {
+          held.status = 'failed';
+        });
       },
     );
   };
@@ -151,14 +191,14 @@ export function FirmTimeline({
           ))}
         </ol>
       )}
-      {cursor === null && state !== 'failed' ? null : (
+      {!more && status !== 'failed' ? null : (
         <div className="mt-1 flex items-center gap-2">
-          {cursor === null ? null : (
-            <Button variant="quiet" size="sm" data-testid="timeline-more" className="-ml-2" disabled={state === 'loading'} onClick={more}>
-              {state === 'loading' ? 'Loading…' : 'Show more'}
+          {!more ? null : (
+            <Button variant="quiet" size="sm" data-testid="timeline-more" className="-ml-2" disabled={status === 'loading'} onClick={loadMore}>
+              {status === 'loading' ? 'Loading…' : 'Show more'}
             </Button>
           )}
-          {state === 'failed' ? (
+          {status === 'failed' ? (
             <span data-testid="timeline-problem" role="status" className="text-xs text-muted-foreground">
               Callie could not load more just now. Try again.
             </span>

@@ -145,6 +145,7 @@ export async function readFirmTimeline(context: RepositoryContext, firmId: strin
       kind: row.kind,
       code: row.code,
       detail: row.detail === '' ? null : row.detail,
+      cursor: encodeCursor({ at: row.at_text, kind: row.kind, id: row.id }),
     })),
     nextBefore: rows.length > TIMELINE_PAGE && last !== undefined ? encodeCursor({ at: last.at_text, kind: last.kind, id: last.id }) : null,
   };

@@ -28,7 +28,15 @@ import { assigneeFirmPage, crmState, FIRM_ID, OTHER_FIRM_ID, pipelineView } from
  */
 
 const at = (n: number): string => new Date(Date.UTC(2026, 9, 1, 12, 0, 0) - n * 3_600_000).toISOString();
-const event = (n: number, prefix = 'a') => ({ key: `${prefix}:${String(n)}`, at: at(n), kind: 'call' as const, code: 'interested', detail: null });
+const cursorOf = (instant: string, kind: string, id: string): string => `${instant.replace('Z', '000')}|${kind}|${id}`;
+const event = (n: number, prefix = 'a') => ({
+  key: `${prefix}:${String(n)}`,
+  at: at(n),
+  kind: 'call' as const,
+  code: 'interested',
+  detail: null,
+  cursor: cursorOf(at(n), 'call', `${prefix}:${String(n)}`),
+});
 const page = (from: number, count: number, next: string | null, prefix = 'a'): TimelineDto => ({
   events: Array.from({ length: count }, (_, index) => event(from + index, prefix)),
   nextBefore: next,
@@ -176,7 +184,7 @@ describe('J/K then Enter run no command (K4)', () => {
 
 describe('what each row says (codes in words, never a body or an address)', () => {
   const words = (event: Parameters<typeof timelineSummary>[0]): string => timelineSummary(event, key => key.replace('_', ' '));
-  const base = { key: 'k', at: at(0) };
+  const base = { key: 'k', at: at(0), cursor: cursorOf(at(0), 'call', 'k') };
   it('puts each kind in a line from its codes', () => {
     expect(words({ ...base, kind: 'call', code: 'interested', detail: null })).toBe('Conversation');
     expect(words({ ...base, kind: 'outcome_corrected', code: 'interested', detail: 'no_answer' })).toContain('to');
@@ -228,5 +236,118 @@ describe('a call note keeps its open state (remount)', () => {
   it('a short note has no toggle', () => {
     render(<CallNote sessionId="s3" note="Left a voicemail." />);
     expect(screen.queryByTestId('call-note-toggle')).toBeNull();
+  });
+});
+
+describe('a refreshed first page never hides a row (finding 1)', () => {
+  it('keeps all 61 rows reachable when a newer event arrives between visits', async () => {
+    const asked: string[] = [];
+    // Page 2 (events 50-59) is what "Show more" fetches from the cursor of the oldest row shown.
+    const p: TimelinePorts = {
+      more: async (_firm, before) => {
+        asked.push(before);
+        return await Promise.resolve({ timeline: page(50, 10, null) });
+      },
+    };
+    const first = page(0, 50, at(49));
+    const view = render(<Timeline firmId={FIRM_ID} first={first} timelinePorts={p} />);
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row')).toHaveLength(60);
+    });
+    view.unmount();
+    // A newer event appeared; the refreshed first page is its 50 newest, so event 49 fell off it.
+    const newer = { ...event(-1, 'a') };
+    const refreshed: TimelineDto = { events: [newer, ...first.events.slice(0, 49)], nextBefore: first.events[48]?.cursor ?? null };
+    render(<Timeline firmId={FIRM_ID} first={refreshed} timelinePorts={p} />);
+    const keys = screen.getAllByTestId('timeline-row').map(row => row.getAttribute('data-key'));
+    expect(keys).toHaveLength(61);
+    expect(new Set(keys).size).toBe(61);
+    expect(keys).toContain('a:49');
+    expect(keys[0]).toBe('a:-1');
+    expect(keys[keys.length - 1]).toBe('a:59');
+    expect(screen.queryByTestId('timeline-more')).toBeNull();
+  });
+
+  it('asks for the page older than the oldest row on screen, not a cursor stored with an old page', async () => {
+    const asked: string[] = [];
+    const p: TimelinePorts = {
+      more: async (_firm, before) => {
+        asked.push(before);
+        return await Promise.resolve({ timeline: page(50, 5, at(54)) });
+      },
+    };
+    const first = page(0, 50, at(49));
+    render(<Timeline firmId={FIRM_ID} first={first} timelinePorts={p} />);
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('timeline-row')).toHaveLength(55);
+    });
+    expect(asked[0]).toBe(first.events[49]?.cursor);
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    expect(asked[1]).toBe(event(54).cursor);
+  });
+});
+
+describe('a late page reaches the instance that is mounted when it lands (finding 2)', () => {
+  it('request more, switch firm, come back, resolve: the page is on screen', async () => {
+    let release: (value: { timeline: TimelineDto | null }) => void = () => undefined;
+    const slow = new Promise<{ timeline: TimelineDto | null }>(resolve => {
+      release = resolve;
+    });
+    const p = ports({ [FIRM_ID]: slow });
+    const a = render(<Timeline firmId={FIRM_ID} first={page(0, 50, at(49), 'a')} timelinePorts={p} />);
+    await userEvent.click(screen.getByTestId('timeline-more'));
+    a.unmount();
+    const b = render(<Timeline firmId={OTHER_FIRM_ID} first={page(0, 3, null, 'b')} timelinePorts={p} />);
+    b.unmount();
+    render(<Timeline firmId={FIRM_ID} first={page(0, 50, at(49), 'a')} timelinePorts={p} />);
+    // The request is still shown as under way on the new instance, and cannot be sent twice.
+    expect((screen.getByTestId('timeline-more') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      release({ timeline: page(50, 10, null, 'a') });
+      await slow;
+    });
+    expect(screen.getAllByTestId('timeline-row')).toHaveLength(60);
+    expect(screen.queryByTestId('timeline-more')).toBeNull();
+  });
+});
+
+describe('a note on a manual or inbound log is shown (finding 3)', () => {
+  it('draws the note of a log-only row with the same two-line clamp and disclosure', async () => {
+    const { CallHistory } = await import('../src/renderer/calling/CallHistory.tsx');
+    const logId = '99999999-9999-4999-8999-999999999999';
+    const NOTE = 'Inbound from Marcus about after-hours coverage. '.repeat(6);
+    render(
+      <CallHistory
+        firmId={FIRM_ID}
+        ports={{
+          history: async () => await Promise.resolve({ calls: [] }),
+          recording: async () => await Promise.resolve({ recording: null, reason: null }),
+          logs: async () =>
+            await Promise.resolve({
+              calls: [
+                {
+                  id: logId,
+                  firmId: FIRM_ID,
+                  contactId: null,
+                  outcome: 'interested',
+                  stepEffect: 'none',
+                  occurredAt: '2026-09-29T15:00:00.000Z',
+                  actorUserId: '22222222-2222-4222-8222-222222222222',
+                  note: NOTE,
+                  direction: 'inbound',
+                  durationSeconds: 95,
+                  callSessionId: null,
+                },
+              ],
+            }),
+        } as never}
+      />,
+    );
+    const row = await screen.findByTestId('call-history-log-row');
+    expect(within(row).getByTestId('call-note-text').className).toContain('line-clamp-2');
+    await userEvent.click(within(row).getByTestId('call-note-toggle'));
+    expect(within(row).getByTestId('call-note-text').className).not.toContain('line-clamp-2');
   });
 });
