@@ -23,7 +23,7 @@ import { orDash } from '../today/text.ts';
 import { Block, Chip, dense, EmptyState, Kbd, Label, Skeleton } from '../v2/parts.tsx';
 import { useShortcuts } from '../v2/shortcuts.ts';
 import { useKept } from './kept.ts';
-import { countQueue, filterQueue, isUnsure, isWaiting, orderQueue, queueFilterOf, type QueueFilter } from './queue.ts';
+import { countQueue, filterQueue, isUncertain, isWaiting, orderQueue, queueFilterOf, type QueueFilter } from './queue.ts';
 import type { Replies } from './useReplies.ts';
 
 /**
@@ -454,12 +454,12 @@ function formatReceived(instant: string): string {
 const FILTER_NAMES: Readonly<Record<QueueFilter, string>> = Object.freeze({
   all: 'in all',
   waiting: 'to answer',
-  unsure: 'with no suggestion',
+  uncertain: 'uncertain',
 });
 
 /**
  * The period and the counts, as controls (criterion 5). Every number says it is today's;
- * the uncertain count is apart from the firm one, "3 to answer (+1 with no suggestion)"; and
+ * the uncertain count is apart from the firm one, "3 to answer (+1 uncertain)"; and
  * each number opens the list it counts.
  */
 function Counts({
@@ -490,11 +490,11 @@ function Counts({
     <p data-testid="reply-counts" className="text-xs leading-5 text-muted-foreground">
       <span>Today:</span>{' '}
       {pill('waiting', counts.waiting, 'count-waiting')}
-      {counts.unsure === 0 ? null : (
+      {counts.uncertain === 0 ? null : (
         <span className="whitespace-nowrap">
           {' '}
           <span aria-hidden>(+</span>
-          {pill('unsure', counts.unsure, 'count-unsure')}
+          {pill('uncertain', counts.uncertain, 'count-uncertain')}
           <span aria-hidden>)</span>
         </span>
       )}{' '}
@@ -692,7 +692,7 @@ export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Ele
                   >
                     <span aria-hidden className="flex h-5 items-center">
                       {waiting ? (
-                        <span className={cn('size-1.5 rounded-full', isUnsure(summary) ? 'bg-faint' : 'bg-link')} />
+                        <span className={cn('size-1.5 rounded-full', isUncertain(summary) ? 'bg-faint' : 'bg-link')} />
                       ) : (
                         <span className="size-1.5 rounded-full border border-strong" />
                       )}

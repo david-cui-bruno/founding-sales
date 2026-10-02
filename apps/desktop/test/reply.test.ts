@@ -405,9 +405,12 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     expect(after.cards).toHaveLength(2);
     // Not "the body is empty": the shape has nowhere to put one.
     for (const summary of after.cards) {
+      // S4F-R: the classifier's class and confidence are two scalars of the card, not content.
       expect(Object.keys(summary).sort()).toEqual([
+        'confidence',
         'confirmedDisposition',
         'contactName',
+        'deterministicClass',
         'firmId',
         'firmName',
         'from',
