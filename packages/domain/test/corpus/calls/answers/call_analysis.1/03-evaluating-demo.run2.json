@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3635,
+    "cachedInputTokens": 0,
+    "outputTokens": 325
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They are currently evaluating tools and asked to see a demo of Callie, specifically how tenant requests convert to work orders for vendors. You acknowledged their interest and thanked them.\",\"facts\":[],\"interest\":{\"level\":\"buying_signal\",\"signals\":[{\"kind\":\"demo_request\",\"quote\":\"Can you show us a demo?\",\"line\":2},{\"kind\":\"evaluation\",\"quote\":\"We're evaluating a couple of tools right now.\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect showed strong buying signals early in the call by indicating they are actively evaluating tools and requesting a demo. You could have scheduled the demo during this call to capture their momentum while they expressed interest.\",\"lines\":[2]},\"prompt_version\":\"call_analysis.1\"}"
+}

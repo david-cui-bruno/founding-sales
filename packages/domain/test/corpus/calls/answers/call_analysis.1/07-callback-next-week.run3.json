@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3563,
+    "cachedInputTokens": 0,
+    "outputTokens": 278
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. They said now was a bad time and asked you to call back next week. You agreed.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[{\"category\":\"timing\",\"quote\":\"It is.\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"Try me next week sometime.\",\"line\":2,\"agreed_line\":3,\"day\":\"none\",\"date_text\":\"next week\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was cut short due to timing. Consider calling back on a specific day next week rather than leaving it open-ended.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.1\"}"
+}

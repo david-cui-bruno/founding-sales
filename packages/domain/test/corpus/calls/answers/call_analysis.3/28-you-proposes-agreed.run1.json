@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3953,
+    "cachedInputTokens": 0,
+    "outputTokens": 273
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana Whitfield at Harbor Lane Property Management. It sounded like a bad time, so you proposed calling back Tuesday at 2, and they agreed.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":true,\"exact\":true,\"phrase\":\"Tuesday at 2\",\"line\":1,\"agreed_line\":2,\"day\":\"tuesday\",\"date_text\":\"Tuesday\",\"time\":\"2\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"You established a callback time quickly after recognizing it was a bad moment. This sets up a second conversation to explore their needs.\",\"lines\":[1,2]}, \"prompt_version\":\"call_analysis.3\"}"
+}

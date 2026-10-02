@@ -58,6 +58,16 @@ export const POLICY_REFUSAL_CODES = [
   'call_too_old',
   /** Round 3, P1-F: only the person who made the call records what was agreed on it. */
   'not_call_actor',
+  /**
+   * Slice 3a (`confirmCapturedFollowUp`): an evidence-backed follow-up selected more than
+   * seven days after its call. The request stays in Needs review as manual work.
+   */
+  'follow_up_expired',
+  /**
+   * Slice 3a: the placed call already has its log (from the form or an analysis Apply).
+   * A second outcome for one session is refused; correcting one is slice 3b's.
+   */
+  'call_already_logged',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 

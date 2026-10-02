@@ -4,6 +4,7 @@ import { sweepCallSessionReservations, workspacesOwingCallSessionSweep } from '@
 import { sweepTranscriptionReservations, workspacesOwingTranscriptionSweep } from '@fss/domain/calls/transcription.ts';
 import { sweepClassificationReservations, workspacesOwingClassificationSweep } from '@fss/domain/classification/classify.ts';
 import { sweepCallSummaryReservations, workspacesOwingSummarySweep } from '@fss/domain/calls/summary.ts';
+import { sweepCallAnalysisReservations, workspacesOwingAnalysisSweep } from '@fss/domain/calls/analysisPaid.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey, quarterHourOf } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -33,7 +34,8 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * is gone, and is released (`reserved`) or estimated (`calling`) the same way. A workspace
  * owes a sweep when either predicate finds work. Slice P1 adds the reply classifier's
  * reservations the same way (`sweepClassificationReservations`, half an hour), and slice
- * C3b the after-call summaries' (`sweepCallSummaryReservations`, half an hour).
+ * C3b the after-call summaries' (`sweepCallSummaryReservations`, half an hour), and slice 3a
+ * the post-call analyses' (`sweepCallAnalysisReservations`, half an hour).
  *
  * There is no heartbeat: the job is one short transaction over at most a handful of
  * rows, well inside its sixty-second lease, and the job registry has no heartbeat
@@ -59,6 +61,7 @@ export function telephonySweepJobHandler(
       await sweepTranscriptionReservations(context);
       await sweepClassificationReservations(context);
       await sweepCallSummaryReservations(context);
+      await sweepCallAnalysisReservations(context);
     },
   };
 }
@@ -73,6 +76,7 @@ export function telephonySweepSource(): DueWorkSource {
           ...(await workspacesOwingTranscriptionSweep(session)),
           ...(await workspacesOwingClassificationSweep(session)),
           ...(await workspacesOwingSummarySweep(session)),
+          ...(await workspacesOwingAnalysisSweep(session)),
         ]),
       ];
       if (owing.length === 0) return [];

@@ -40,7 +40,9 @@ import { CALL_OUTCOMES, callbackInstant, type CallOutcome } from '@fss/contracts
  */
 
 export const OUTCOME_LABELS: Readonly<Record<CallOutcome, string>> = Object.freeze({
-  interested: 'Interested',
+  // Slice 3a: "Interested" claimed more than a conversation proved. Opening a deal is the
+  // buying-signal suggestion's own tick, not this outcome.
+  interested: 'Conversation',
   referral_or_wrong_person: 'Referral or wrong person',
   callback_requested: 'Callback requested',
   not_interested: 'Not interested',
@@ -51,6 +53,17 @@ export const OUTCOME_LABELS: Readonly<Record<CallOutcome, string>> = Object.free
   busy: 'Busy',
   policy_or_technical_failure: 'Could not place the call',
 });
+
+/**
+ * The outcomes of a call that reached a named person, the ones an e-mail follow-up may be
+ * agreed on (B2, migration 0036). Never `do_not_call`, never a voicemail or a miss.
+ */
+export const REACHED_OUTCOMES: readonly CallOutcome[] = Object.freeze([
+  'interested',
+  'callback_requested',
+  'referral_or_wrong_person',
+  'not_interested',
+]);
 
 /** The buttons, in the order the form shows them: the conversations first. */
 export const OUTCOME_ORDER: readonly CallOutcome[] = Object.freeze([...CALL_OUTCOMES]);

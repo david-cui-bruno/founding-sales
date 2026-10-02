@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3866,
+    "cachedInputTokens": 0,
+    "outputTokens": 295
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management to discuss Callie maintenance software. The call was difficult to hear due to background noise and crosstalk. Dana asked you to call back Thursday, though the exact time was unclear due to inaudibility.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"call me Thurs, Thursday maybe\",\"line\":2,\"agreed_line\":0,\"day\":\"thursday\",\"date_text\":\"Thursday\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call had significant audio issues with crosstalk and inaudible sections, making it difficult to understand Dana's full message. Consider calling back at the suggested Thursday time with a clearer line.\",\"lines\":[2,4]}, \"prompt_version\":\"call_analysis.2\"}"
+}

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 4001,
+    "cachedInputTokens": 0,
+    "outputTokens": 338
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management and asked to send an overview by e-mail. Dana initially agreed, but then said they're happy with their current solution and asked you not to send anything. You thanked them and ended the call.\",\"facts\":[{\"text\":\"About eighty doors managed\",\"line\":4}],\"interest\":{\"level\":\"not_interested\",\"signals\":[]},\"objections\":[{\"category\":\"has_solution\",\"quote\":\"we're happy with what we have\",\"line\":4,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana agreed to receive an overview but then immediately reversed course, citing satisfaction with their current solution. This suggests your opening question may have triggered them to reconsider or that they were not genuinely interested from the start.\",\"lines\":[2,4]},\"prompt_version\":\"call_analysis.3\"}"
+}

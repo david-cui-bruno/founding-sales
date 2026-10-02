@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3851,
+    "cachedInputTokens": 0,
+    "outputTokens": 302
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They are actively comparing three vendors and immediately asked for a trial, showing strong buying interest. They identified two users: Dana and their maintenance coordinator.\",\"facts\":[{\"text\":\"Me and our maintenance coordinator\",\"line\":4}],\"interest\":{\"level\":\"buying_signal\",\"signals\":[{\"kind\":\"demo_request\",\"quote\":\"Put us down for a trial.\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana expressed immediate buying signal by requesting a trial without objection, indicating they are actively in a vendor evaluation process. You quickly identified the two end users.\",\"lines\":[2,3,4]},\"prompt_version\":\"call_analysis.2\"}"
+}

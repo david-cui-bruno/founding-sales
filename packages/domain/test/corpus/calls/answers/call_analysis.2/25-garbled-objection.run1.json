@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3842,
+    "cachedInputTokens": 0,
+    "outputTokens": 311
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana Whitfield at Harbor Lane Property Management to discuss Callie. Dana mentioned they had tried a similar solution before but it did not work out because vendors were unresponsive. The call was interrupted by audio issues.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[{\"category\":\"has_solution\",\"quote\":\"We tried something like this before\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was interrupted by technical issues before you could respond to Dana's objection about their previous experience with a similar solution. Consider reconnecting to address what went wrong with their prior attempt and how Callie differs.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.2\"}"
+}

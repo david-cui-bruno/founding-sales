@@ -28,6 +28,7 @@ const LANE_OF_KIND: Readonly<Record<TodayItemKind, TodayLane>> = Object.freeze({
   reply: 'reply',
   callback: 'callback',
   email_due: 'due_work',
+  task: 'due_work',
   call_due: 'due_work',
   new_firm: 'new_firm',
 });

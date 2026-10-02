@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3563,
+    "cachedInputTokens": 0,
+    "outputTokens": 267
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They said now is a bad time and asked you to try next week. You acknowledged and ended the call.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"Try me next week sometime\",\"line\":2,\"agreed_line\":3,\"day\":\"none\",\"date_text\":\"next week\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was very brief. Dana declined to speak now but invited a callback next week. You could have asked for a more specific day and time to increase the chance of connection.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.1\"}"
+}

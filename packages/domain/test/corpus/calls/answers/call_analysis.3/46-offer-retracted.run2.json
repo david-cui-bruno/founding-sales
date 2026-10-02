@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 4001,
+    "cachedInputTokens": 0,
+    "outputTokens": 353
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management, which manages about eighty doors. You offered to send an overview by e-mail and Dana initially agreed, but then said they're happy with their current solution and asked you not to send anything.\",\"facts\":[{\"text\":\"About eighty doors managed\",\"line\":4}],\"interest\":{\"level\":\"not_interested\",\"signals\":[]},\"objections\":[{\"category\":\"has_solution\",\"quote\":\"we're happy with what we have\",\"line\":4,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"don't send anything\",\"line\":4},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"You asked for permission to send an overview before establishing any need or interest. When Dana said they were happy with their current solution, the conversation ended without exploring whether Callie could add value. Consider qualifying the prospect's pain points or dissatisfaction before offering to send materials.\",\"lines\":[1,4]},\"prompt_version\":\"call_analysis.3\"}"
+}

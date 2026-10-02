@@ -26,6 +26,7 @@ import { currentCallingIdentityId } from '../dial/identities.ts';
 import { localDate, localParts } from '../src/rules/localClock.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { sendGateLockName } from '../policy/sendGate.ts';
+import { admitPendingHold, lockGateAndFirmForCallSid } from './pendingHold.ts';
 
 /**
  * Call sessions: one Twilio call attempt, from authorization to its recording
@@ -575,6 +576,22 @@ export async function listFirmCallSessions(
 }
 
 /**
+ * Slice 3a (`GET /calls/history?include=outcome`): the outcome of each named call log, by
+ * id. The caller has already decided the firm readable and names only its calls' logs.
+ */
+export async function readCallLogOutcomes(
+  context: RepositoryContext,
+  callLogIds: readonly string[],
+): Promise<ReadonlyMap<string, CallOutcome>> {
+  if (callLogIds.length === 0) return new Map();
+  const { rows } = await context.db.query<{ id: string; outcome: CallOutcome }>(
+    'SELECT id, outcome FROM call_logs WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
+    [context.scope.workspaceId, [...callLogIds]],
+  );
+  return new Map(rows.map(row => [row.id, row.outcome]));
+}
+
+/**
  * The stored recording path of one session, for the playback proxy; null when the session
  * is unknown, not this workspace's, not a firm the caller may read, or has no recording.
  */
@@ -892,27 +909,22 @@ async function sessionBySid(db: Queryable, callSid: string): Promise<CallbackSes
  */
 export async function recordCallStatus(db: Queryable, input: CallStatusInput): Promise<CallStatusOutcome> {
   const status = sessionStatusOf(input.providerStatus);
-  // A final no-answer or busy may park the firm (`parkIfCadenceSpent`), which takes the
-  // send gate EXCLUSIVE. So such a callback takes the gate, then the firm, before the
-  // session row — the order consumption and Log outcome use — and never asks for the
-  // gate while holding the session (review of C1, fold 2, finding 1).
-  if (status !== null && UNANSWERED_PROVIDER_STATUSES.has(input.providerStatus)) {
-    const { rows: located } = await db.query<{ workspace_id: string; firm_id: string }>(
-      `SELECT workspace_id, firm_id FROM call_sessions WHERE twilio_call_sid = $1 OR dial_call_sid = $1
-        ORDER BY (twilio_call_sid = $1) DESC LIMIT 1`,
-      [input.callSid],
-    );
-    const at = located[0];
-    // Not found unlocked is not found (review of C1, fold 3): a session the locked read
-    // below could still find would then be held before the gate. The SID is set when the
-    // call is placed, so only a callback racing its own placement lands here, and it is
-    // answered as any unknown SID is.
-    if (at === undefined) return { known: false };
-    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sendGateLockName(at.workspace_id)]);
-    await db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2 FOR NO KEY UPDATE', [at.workspace_id, at.firm_id]);
-  }
+  if (status === null) return { known: false };
+  // Every status callback takes the send gate, then the firm, before the session row — the
+  // order consumption and Log outcome use — and never asks for the gate while holding the
+  // session. A final no-answer or busy may park the firm (`parkIfCadenceSpent`), and since
+  // slice 3a any terminal delivery may admit the pending-review hold (`admitPendingHold`);
+  // both take the gate EXCLUSIVE (review of C1, fold 2, finding 1; DESIGN-S3A §2.5). Taken
+  // for every status, not only the ones that write a hold: the facts a later delivery
+  // admits on are the ones an earlier one wrote, so the order is one order for all of them.
+  //
+  // Not found unlocked is not found (review of C1, fold 3): a session the locked read below
+  // could still find would then be held before the gate. The SID is set when the call is
+  // placed, so only a callback racing its own placement lands here, and it is answered as
+  // any unknown SID is.
+  if ((await lockGateAndFirmForCallSid(db, input.callSid)) === null) return { known: false };
   const session = await sessionBySid(db, input.callSid);
-  if (session === null || status === null) return { known: false };
+  if (session === null) return { known: false };
   const context = systemContext(db, session.workspace_id);
 
   const forward = STATUS_RANK[status] > STATUS_RANK[session.status];
@@ -972,6 +984,10 @@ export async function recordCallStatus(db: Queryable, input: CallStatusInput): P
     if (logged[0]?.call_log_id == null) await parkIfCadenceSpent(context, { firmId: session.firm_id, sessionId: session.id });
   }
 
+  // Slice 3a: every delivery, duplicates included, may complete the facts the pending-review
+  // hold is admitted on (a late duration, a terminal status before the answer).
+  await admitPendingHold(context, session.id);
+
   let settlement: 'settled' | 'estimated' | null = null;
   if (terminal) {
     // Every change to what the month has spent is serialised with the clearances that
@@ -1025,6 +1041,10 @@ export async function recordCallRecording(
   db: Queryable,
   input: { readonly callSid: string; readonly recordingSid: string; readonly recordingUrl: string; readonly durationSeconds?: number | undefined },
 ): Promise<{ readonly known: boolean; readonly recorded?: { readonly workspaceId: string; readonly sessionId: string } }> {
+  // Slice 3a: the status callback's prefix — the send gate, then the firm, before the
+  // session row — because this delivery may admit the pending-review hold, which takes the
+  // gate (DESIGN-S3A §2.5). It used to lock the session first.
+  if ((await lockGateAndFirmForCallSid(db, input.callSid)) === null) return { known: false };
   const session = await sessionBySid(db, input.callSid);
   if (session === null) return { known: false };
   if (!/^RE[0-9a-f]{32}$/u.test(input.recordingSid)) return { known: true };
@@ -1045,6 +1065,7 @@ export async function recordCallRecording(
       WHERE workspace_id = $1 AND id = $2`,
     [session.workspace_id, session.id, input.recordingSid, path, duration],
   );
+  await admitPendingHold(systemContext(db, session.workspace_id), session.id);
   return { known: true, recorded: { workspaceId: session.workspace_id, sessionId: session.id } };
 }
 

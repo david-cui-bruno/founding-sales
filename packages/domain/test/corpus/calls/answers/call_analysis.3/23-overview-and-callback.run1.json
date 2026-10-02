@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3954,
+    "cachedInputTokens": 0,
+    "outputTokens": 306
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana Whitfield at Harbor Lane Property Management. Dana asked you to send an overview and call back Thursday at 10, and you agreed.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"overview_email\",\"quote\":\"Send an overview\",\"line\":2,\"agreed_line\":3},\"callback\":{\"requested\":true,\"exact\":true,\"phrase\":\"call me Thursday at 10\",\"line\":2,\"agreed_line\":3,\"day\":\"thursday\",\"date_text\":\"Thursday\",\"time\":\"10\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"call me Thursday at 10\",\"line\":2,\"due_phrase\":\"Thursday at 10\"}],\"coaching\":{\"observation\":\"Dana moved quickly to a callback without discussing their situation, needs, or interest. Consider asking discovery questions before the callback to better understand their operation and tailor your overview.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.3\"}"
+}

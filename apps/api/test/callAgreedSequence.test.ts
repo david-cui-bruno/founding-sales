@@ -8,7 +8,7 @@ import {
   loggedCallResultSchema,
 } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { controlModeSource, followUpPermissionSource } from '@fss/domain/sequences/eligibility.ts';
+import { followUpPermissionSource } from '@fss/domain/sequences/eligibility.ts';
 import { listStepExecutions } from '@fss/domain/sequences/rows.ts';
 import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { placeEmailSend } from '@fss/domain/src/rules/sendingWindow.ts';
@@ -556,175 +556,62 @@ describe('an agreed sequence recorded on the call card', () => {
     expect(opportunity[0]?.control_mode).toBe('manual');
   });
 
-  it('opens the opportunity a firm added from the Mac never had, and enrols on it', async () => {
-    // `/crm/firms/add` opens no opportunity, and `enrollContact` needs one. The card must
-    // still start what the person agreed to without a command of its own (coordinator's
-    // decision, 30 September 2026): `logCallOutcome` opens it — stage New, audited with
-    // the call named — in the enrolment's savepoint, then enrols.
-    const sequenceVersionId = await publishedVersion(adminToken);
-    const added = await post(
-      '/crm/firms/add',
-      salespersonToken,
-      command({
-        firm: { name: 'Juniper Test Advisers', timeZone: 'America/New_York' },
-        contact: { fullName: 'Robin Example' },
-      }),
-    );
-    expect(added.status, JSON.stringify(added.body)).toBe(200);
-    const firmId = String(result(added)['firmId']);
-    const contactId = String(result(added)['contactId']);
-    expect(await rowsAt('opportunities', firmId)).toHaveLength(0);
-
-    const logged = await logInterested(
-      { firmId, contactId, opportunityId: null },
-      { scope: 'agreed_sequence', sequenceVersionId },
-    );
-    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
-    const answer = loggedCallResultSchema.parse(result(logged));
-    const enrolled = answer.followUps.find(entry => entry.kind === 'agreed_sequence_enrolled');
-    expect(answer.followUps.map(entry => entry.kind), JSON.stringify(answer.followUps)).toEqual(['agreed_sequence_enrolled']);
-
-    const opportunities = await rowsAt('opportunities', firmId);
-    expect(opportunities).toHaveLength(1);
-    expect(opportunities[0]?.['status']).toBe('open');
-    // Manual, from the engaged call, exactly as an existing opportunity would have been.
-    expect(opportunities[0]?.['control_mode']).toBe('manual');
-    expect(opportunities[0]?.['control_mode_origin']).toBe('engaged_call');
-    expect(answer.setManual).toBe(false);
-    const { rows: stage } = await fixture.db.query<{ key: string }>(
-      'SELECT key FROM pipeline_stages WHERE workspace_id = $1 AND id = $2',
-      [fixture.alpha.workspaceId, opportunities[0]?.['stage_id']],
-    );
-    expect(stage[0]?.key).toBe('new');
-    const [enrollment] = await rowsAt('sequence_enrollments', firmId);
-    expect(enrollment).toMatchObject({
-      id: enrolled?.enrollmentId,
-      opportunity_id: opportunities[0]?.['id'],
-      origin_kind: 'follow_up',
-      permission_id: answer.followUpPermissionId,
-      ended_at: null,
-    });
-
-    // Audited: the ordinary opening, the manual mode, and why — naming the interested call.
-    const [log] = await rowsAt('call_logs', firmId);
-    const { rows: audits } = await fixture.db.query<{ action: string; detail: Record<string, unknown> }>(
-      `SELECT action, detail FROM audit_events
-        WHERE workspace_id = $1 AND subject_kind = 'opportunity' AND subject_id = $2 ORDER BY occurred_at, action`,
-      [fixture.alpha.workspaceId, opportunities[0]?.['id']],
-    );
-    expect(audits.map(row => row.action).sort()).toEqual([
-      'opportunity.manual',
-      'opportunity.opened',
-      'opportunity.opened_for_agreed_sequence',
-    ]);
-    expect(audits.find(row => row.action === 'opportunity.opened_for_agreed_sequence')?.detail).toEqual({
-      firmId,
-      callLogId: log?.['id'],
-      outcome: 'interested',
-      sequenceVersionId,
-      reopened: false,
-    });
-
-    // The manual-mode event it wrote owes nothing — nothing was live at the firm — and the
-    // drain leaves the agreed sequence running with its first step still scheduled.
-    const { rows: events } = await fixture.db.query<{ owed_enrollment_ids: string[] | null }>(
-      `SELECT owed_enrollment_ids FROM crm_domain_events
-        WHERE workspace_id = $1 AND firm_id = $2 AND event_kind = 'opportunity.manual_mode'`,
-      [fixture.alpha.workspaceId, firmId],
-    );
-    expect(events.map(row => row.owed_enrollment_ids)).toEqual([[]]);
-    await consumeTerminalStops(workerContext());
-    const { rows: after } = await fixture.db.query<{ ended_at: Date | null }>(
-      'SELECT ended_at FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
-      [fixture.alpha.workspaceId, enrolled?.enrollmentId],
-    );
-    expect(after[0]?.ended_at).toBeNull();
-    const { rows: steps } = await fixture.db.query<{ ordinal: number; state: string }>(
-      'SELECT ordinal, state FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2 ORDER BY ordinal',
-      [fixture.alpha.workspaceId, enrolled?.enrollmentId],
-    );
-    expect(steps).toEqual([{ ordinal: 1, state: 'pending' }]);
-
-    // "Still runs": the eligibility rule for a follow-up on a manual opportunity. The
-    // control-mode source admits it because the origin is a prospect signal.
-    const context = repositoryContext(
-      workspaceScope(fixture.alpha.workspaceId, { kind: 'system', component: 'scheduler' }),
-      fixture.db,
-    );
-    const execution = (await listStepExecutions(context, { enrollmentId: enrolled?.enrollmentId ?? '' }))[0];
-    if (execution === undefined) throw new Error('no first step');
-    const verdict = await controlModeSource().evaluate(context, {
-      execution,
-      opportunityId: String(opportunities[0]?.['id']),
-      firmId,
-      contactId,
-      ownerUserId: fixture.alpha.salesperson.userId,
-      channel: 'email',
-      actionKind: 'email_send',
-      now: new Date().toISOString(),
-    });
-    expect(verdict).toEqual({ ok: true });
-  });
-
-  for (const closedAs of ['won', 'lost'] as const) {
-    it(`reopens a ${closedAs} history explicitly, linked and naming the call, rather than a silent new row`, async () => {
-      // Review of S3, P1-2: a firm whose last opportunity closed keeps that history. The
-      // opportunity the agreed sequence needs is the explicit reopen — linked by
-      // `reopened_from_opportunity_id`, its reason naming the interested call — at stage
-      // New, manual, origin `engaged_call`, so the follow-up still runs.
-      const sequenceVersionId = await publishedVersion(adminToken);
-      const at = await scene(`${closedAs === 'won' ? 'Oak' : 'Elm'} Test Advisers`);
-      const closed = await post(
-        '/opportunities/stage',
-        salespersonToken,
-        command({
-          opportunityId: at.opportunityId,
-          toStageKey: closedAs,
-          ...(closedAs === 'lost' ? { reason: 'not now' } : {}),
-        }),
-      );
-      expect(closed.status, JSON.stringify(closed.body)).toBe(200);
-
-      const logged = await logInterested(
-        { ...at, opportunityId: null },
-        { scope: 'agreed_sequence', sequenceVersionId },
-      );
-      expect(logged.status, JSON.stringify(logged.body)).toBe(200);
-      const answer = loggedCallResultSchema.parse(result(logged));
-      expect(answer.followUps.map(entry => entry.kind), JSON.stringify(answer.followUps)).toEqual([
-        'agreed_sequence_enrolled',
-      ]);
-      const enrollmentId = answer.followUps[0]?.enrollmentId;
-
-      const [log] = await rowsAt('call_logs', at.firmId);
-      const { rows: opportunities } = await fixture.db.query<Record<string, unknown>>(
-        `SELECT o.*, s.key AS stage_key FROM opportunities o
-           JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
-          WHERE o.workspace_id = $1 AND o.firm_id = $2 ORDER BY o.created_at`,
-        [fixture.alpha.workspaceId, at.firmId],
-      );
-      expect(opportunities.map(row => row['status'])).toEqual([closedAs, 'open']);
-      const reopened = opportunities[1];
-      expect(reopened).toMatchObject({
-        reopened_from_opportunity_id: at.opportunityId,
-        stage_key: 'new',
-        control_mode: 'manual',
-        control_mode_origin: 'engaged_call',
+  // B-6 (slice 3a, DESIGN-S3A §2.6): permission is not qualification. An agreed sequence at a
+  // firm with no open opportunity — none ever, or a closed history — opens nothing and
+  // reopens nothing: the agreement and the permission stand, and the answer says
+  // `follow_up_not_enrolled` / `no_open_opportunity`. A deal opens only on David's tick.
+  for (const history of ['none', 'won', 'lost'] as const) {
+    for (const path of ['POST /calls/log', 'POST /calls/follow-up'] as const) {
+      it(`B-6: an agreed sequence with ${history === 'none' ? 'no history' : `a ${history} history`}, through ${path}, enrols nothing and opens no deal`, async () => {
+        const sequenceVersionId = await publishedVersion(adminToken);
+        const at = await scene(`B6 ${history} ${path.slice(-3)} ${randomUUID().slice(0, 6)} Test Advisers`, { opportunity: history !== 'none' });
+        if (history !== 'none') {
+          const closed = await post(
+            '/opportunities/stage',
+            salespersonToken,
+            command({ opportunityId: at.opportunityId, toStageKey: history, ...(history === 'lost' ? { reason: 'not now' } : {}) }),
+          );
+          expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+        }
+        const before = (await rowsAt('opportunities', at.firmId)).length;
+        const agreement = { scope: 'agreed_sequence', sequenceVersionId };
+        let followUps: readonly { kind: string; reason: string }[];
+        let permissionId: string | null;
+        if (path === 'POST /calls/log') {
+          const logged = await logInterested({ ...at, opportunityId: null }, agreement);
+          expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+          const answer = loggedCallResultSchema.parse(result(logged));
+          followUps = answer.followUps;
+          permissionId = answer.followUpPermissionId;
+        } else {
+          const logged = await post('/calls/log', salespersonToken, command({ firmId: at.firmId, contactId: at.contactId, outcome: 'interested' }));
+          const callLogId = loggedCallResultSchema.parse(result(logged)).callLogId;
+          const recorded = await post(
+            '/calls/follow-up',
+            salespersonToken,
+            command({ callLogId, followUpPermission: { ...agreement, previewBasis: await previewBasisFor(at, sequenceVersionId) } }),
+          );
+          expect(recorded.status, JSON.stringify(recorded.body)).toBe(200);
+          const answer = callFollowUpResultSchema.parse(result(recorded));
+          followUps = answer.followUps;
+          permissionId = answer.followUpPermissionId;
+        }
+        expect(followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'no_open_opportunity' }]);
+        // The agreement and the permission stand; no enrollment, no new or reopened deal.
+        const [log] = await rowsAt('call_logs', at.firmId);
+        expect(log).toMatchObject({ agreed_follow_up: 'agreed_sequence', agreed_sequence_version_id: sequenceVersionId });
+        expect((await rowsAt('follow_up_permissions', at.firmId)).map(row => row['id'])).toEqual([permissionId]);
+        expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
+        const opportunities = await rowsAt('opportunities', at.firmId);
+        expect(opportunities).toHaveLength(before);
+        expect(opportunities.filter(row => row['status'] === 'open')).toHaveLength(0);
+        const { rows: audits } = await fixture.db.query(
+          "SELECT 1 FROM audit_events WHERE workspace_id = $1 AND action IN ('opportunity.opened_for_agreed_sequence', 'opportunity.reopened') AND detail->>'firmId' = $2",
+          [fixture.alpha.workspaceId, at.firmId],
+        );
+        expect(audits).toHaveLength(0);
       });
-      expect(String(reopened?.['control_mode_reason'])).toContain(String(log?.['id']));
-      const [enrollment] = (await rowsAt('sequence_enrollments', at.firmId)).filter(row => row['id'] === enrollmentId);
-      expect(enrollment).toMatchObject({ opportunity_id: reopened?.['id'], origin_kind: 'follow_up', ended_at: null });
-
-      const { rows: audits } = await fixture.db.query<{ action: string }>(
-        `SELECT action FROM audit_events WHERE workspace_id = $1 AND subject_kind = 'opportunity' AND subject_id = $2`,
-        [fixture.alpha.workspaceId, reopened?.['id']],
-      );
-      expect(audits.map(row => row.action).sort()).toEqual([
-        'opportunity.manual',
-        'opportunity.opened_for_agreed_sequence',
-        'opportunity.reopened',
-      ]);
-    });
+    }
   }
 
   describe('a single e-mail whose template no longer stands (review of S3, P1-4)', () => {
@@ -1178,12 +1065,12 @@ describe('an agreed sequence recorded on the call card', () => {
     }
   });
 
-  it('takes the opened opportunity back when the enrolment is then refused', async () => {
-    // The opportunity would open, the enrolment refuses the now-inactive person
-    // (`contact_unknown`), and the savepoint takes both back — only the call, its stop and
-    // the permission remain.
+  it('a refused enrolment leaves only the call, its stop and the permission', async () => {
+    // The enrolment refuses the now-inactive person (`contact_unknown`) in its own savepoint
+    // — only the call, its stop and the permission remain. (Before slice 3a this test also
+    // watched an opportunity opened for the sequence be taken back; none is opened now, B-6.)
     const sequenceVersionId = await publishedVersion(adminToken);
-    const at = await scene('Poplar Test Advisers', { opportunity: false });
+    const at = await scene('Poplar Test Advisers');
     const previewBasis = await previewBasisFor(at, sequenceVersionId);
     await fixture.db.query("UPDATE contacts SET status = 'inactive' WHERE workspace_id = $1 AND id = $2", [
       fixture.alpha.workspaceId,
@@ -1194,6 +1081,7 @@ describe('an agreed sequence recorded on the call card', () => {
     const answer = loggedCallResultSchema.parse(result(logged));
     expect(answer.followUps).toEqual([{ kind: 'follow_up_not_enrolled', reason: 'contact_unknown' }]);
     expect(answer.followUpPermissionId).not.toBeNull();
-    expect(await rowsAt('opportunities', at.firmId)).toHaveLength(0);
+    expect(await rowsAt('sequence_enrollments', at.firmId)).toHaveLength(0);
+    expect((await rowsAt('opportunities', at.firmId)).map(row => row['id'])).toEqual([at.opportunityId]);
   });
 });

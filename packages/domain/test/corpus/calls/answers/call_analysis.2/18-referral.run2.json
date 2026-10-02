@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3837,
+    "cachedInputTokens": 0,
+    "outputTokens": 246
+  },
+  "text": "{\"reached\":\"gatekeeper\",\"summary\":\"You called for Bob Tran, who left the firm a few months ago. The gatekeeper identified Sarah Kim as the person who now runs maintenance and should be contacted instead.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":true,\"name\":\"Sarah Kim\",\"role\":\"runs maintenance\",\"quote\":\"You'd want to talk to Sarah Kim, she runs maintenance now.\",\"line\":2},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"\",\"lines\":[]}, \"prompt_version\":\"call_analysis.2\"}"
+}

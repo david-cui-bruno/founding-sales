@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3813,
+    "cachedInputTokens": 0,
+    "outputTokens": 280
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management and asked if a demo would help. They said not now, and you ended the call.\",\"facts\":[],\"interest\":{\"level\":\"not_interested\",\"signals\":[]},\"objections\":[{\"category\":\"timing\",\"quote\":\"No, not now.\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call ended very quickly after a single objection. Consider asking a qualifying question or using a different opening to understand their situation before proposing a demo.\",\"lines\":[1,2,3]}, \"prompt_version\":\"call_analysis.2\"}"
+}

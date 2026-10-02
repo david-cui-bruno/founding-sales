@@ -460,6 +460,67 @@ fewer than two paid attempts is owed its remaining attempt by whichever job asks
 finding 5), and the lock, the open check and the one-open index keep that to one obligation at a
 time. A summary request in flight (`calling`) counts in transcription's "still finishing" line.
 
+**Post-call analysis (slice 3a, migration 0035).** A channel-labelled transcript is read by a
+model once per **version** (`call_analyses`): one structured reading of the call
+(prompt `call_analysis.3`), checked against the transcript by
+`readCallAnalysisAnswer`, and stored with the proposal set the pure policy computes from it
+(`proposeEffects`, `call_policy.5`) and that set's hash. **A whitelist:** a stop, a buying
+signal, an e-mail request, a callback and its agreement, an exact callback time and day, and a
+promised task are offered for applying only when the speaker's whole line is built entirely from
+a small set of complete, simple forms (`calls/analysisConfirm.ts`); anything else — a negation,
+a condition, a contrast, a correction, a withdrawal later in the call, an unknown phrasing — is a
+review item. Unknown is review; the confirmer never works out polarity or scope. Nothing in an analysis acts: every
+proposal is applied only by David's click, checked against one exact version and its stored
+hash. David's edited notes are a version of their own (origin `user`) and stay the current
+notes whatever model version completes later. Every writer of one call's analysis
+(`calls/analysis.ts`) takes the call's **firm row** (`FOR UPDATE`), then the advisory lock
+**`call_analysis:<session>`** (`lockCallAnalysis`, keyed `<workspace>:call_analysis:<session>`),
+then the session row (`FOR KEY SHARE`), then its own rows; an apply takes the same three in the
+same order after its own earlier locks (Today, the send gate, a touched route).
+
+**The analysis job (slice 3a, A2).** `call.analyze` (`calls/analysisPaid.ts`,
+`analysisHandler.ts`) is the summary's paid-call shape with an analysis **version** as the
+subject: `provider_reservations` subject `call_analysis`, keyed by the version's id, priced by
+model and tokens (`anthropic_call_analysis` is cash; `aws_bedrock.call_analysis` credits). Chunk 1
+takes the version (a pending one, or a new one), the switch, the caps — two paid attempts and six
+rows per version, three model versions per call (`CALL_ANALYSIS_MAX_MODEL_VERSIONS`), forty a day
+under `call_analysis_budget` — the month, and a reservation (one open per version,
+`provider_reservations_one_open_analysis`); chunk 2 the month and the switch's setting lock
+SHARED to the commit that marks `calling`; chunk 3 the request, then the settlement by id, then
+A1's `completeCallAnalysis` in the same transaction — there is no second completion path. An
+unreadable or ambiguous answer is retried once within the two. The switch is transcription's,
+`call_transcription`: off, a version is created and held (pending, nothing reserved). A held
+version resumes only on an **explicit** trigger, never by a periodic re-offer (review S3A2F): a
+settings write that turns `call_transcription` on, or that raises `monthly_cash_ceiling_cents`,
+is swept once (`call-analyze-sweep`, keyed by the write's own row), and the sweep queues every
+held version that has no open reservation and no live job, naming it in the payload; or David's
+Retry, keyed by its command and naming the held version. Chunk 1, under the analysis lock, does
+nothing for a named version that is no longer pending, so a sweep and a retry racing buy at
+most one reading. **A version held by the day's cap (forty) is not resumed the next day**: it
+stays pending, shown as held with Retry, and resumes on Retry (or on the next qualifying
+settings write). The model is the
+deployment's (`FSS_CALL_ANALYSIS_MODEL`, Haiku 4.5 unless set; not set in the infrastructure).
+David's `POST /calls/analysis/retry` (reason `retry` or `reanalysis`), under the call's analysis
+lock: a live `call.analyze` job is `analysis_in_flight`; a held version is queued again; a
+historical call, or one with a completed model reading of its current transcript, needs
+`reanalysis` (`reanalysis_required`) — and chunk 1 enforces that too; otherwise one job, keyed
+by the version and the command (`call-analyze:<session>:v<N>:c<command>`).
+David's notes count for none of this, nor for the path below (review S3A2).
+
+**The summary cutover.** `postCallModelPath(session)` is `analysis` for a call with a model
+analysis version; `summary` for one with any `call.summarize` job, `call_summary` reservation or summary;
+`analysis` otherwise. The summary handler refuses a call on the `analysis` path; the
+`call-summarize` source is **legacy only** — it re-owes a summary the switch held for a call that
+already has a `call.summarize` job (and no model analysis version), and never makes a first one. So
+every obligation started before the release finishes as a summary, every new call is analysed,
+and a historical call is analysed only by David's `reanalysis`. `GET /calls/history?include=summary`
+maps the current analysis (David's notes, else the latest completed model reading) to the
+summary's shape and falls back to the stored summary for a call with none. The deletion workflow
+takes each targeted session's `call_analysis:<session>` lock beside its summary lock, after the
+firm and before the sessions' own locks, finalises their open analysis attempts as the sweep
+does, and removes and counts their versions (`removes.call_analyses`); the telephony sweep
+finalises an analysis reservation half an hour on, skipping a call whose lock a live claim holds.
+
 **Provider errors in the logs (C3 review, finding 6).** A request the API refuses with a 4xx
 (not 408) is `provider_refused`: refused before generation, settled at 0, not retried; a 5xx,
 408 or dropped connection is `provider_error`, estimated and retried once. The classifier and the
@@ -472,9 +533,9 @@ firm and before the sessions' own locks.
 
 **One lock order, ledger rows included (fix round 2, finding 4).** Every path takes:
 
-routing → send gate → firm (and contact) → the subject's own lock (call summary, call session
-row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
-`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`) → the
+routing → send gate → firm (and contact) → the subject's own lock (call summary, call analysis
+`call_analysis:<session>`, call session row, transcription session, research run, reply) → its kind's budget lock (`telephony_budget`,
+`transcription_budget`, research `RSCH`, `classifier_budget`, `call_summary_budget`, `call_analysis_budget`) → the
 workspace monthly lock →
 rows: reservations, ledger, and the rows that reference a message (classifier attempts).
 
@@ -498,6 +559,78 @@ firm (Today's lock → route → firm, `retireRoute`'s own route → firm order)
 the build then wait for each other in one direction only;
 `packages/domain/test/today/promptFirm.test.ts` drives that interleaving, and without the
 early lock PostgreSQL picks a deadlock victim.
+
+**Applying a post-call analysis, and the pending-review hold (slice 3a, lane B, migration
+0036).** Every effect of an analysis happens only when David clicks, for the first time,
+through an existing command, for the analysis he saw (`POST /calls/proposals/apply`,
+`calls/proposalApply.ts`). One Apply carries any subset of the analysis's `apply` proposals
+(`outcome`, `callback`, `follow_up`, `buying_signal`, `park`, tasks); opening a deal is one
+of those ticks, with no dialog. Its transaction takes, in this order:
+
+Today's lock (shared) → send gate → the dialled route, whenever an **outcome** is applied
+(`FOR UPDATE` for `wrong_number` or `do_not_call`, `FOR KEY SHARE` otherwise — the call log's
+insert takes that lock through its foreign key) → firm → `call_analysis:<session>` → the
+session row
+
+then checks freshness under them (the analysis is the newest completed model analysis on the
+current transcript, else `stale_analysis`; the echoed hash is the stored one, else
+`stale_proposal`), then the first-time rules in order (`call_already_logged`,
+`outcome_required`, `callback_exists`; a `follow_up` more than seven days after the call —
+the session's start, never the log's time — is `follow_up_expired`), and maps each key to its
+command inside one savepoint. **The Apply is atomic**: any key refused, or a command that
+fails (a selected follow-up whose permission is not granted is `follow_up_not_granted`; a
+warning the outcome's command would keep as history on the form — `effects_not_applied`, a
+selected callback it did not create or whose fields do not name its `dueAt` — is refused,
+the callback's fields checked before anything is logged),
+rolls the whole batch back and the 409 names the key (`keyReasons`, key → code); nothing is
+applied or measured. Only `applied` keys write a `call.proposal_decided` row; the no-ops below write
+none. `outcome` (with `callback`, `follow_up` and the "covers all contact"
+choice) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
+`createCallback`; `follow_up` on a logged call is `confirmCapturedFollowUp` (seven days, not
+`recordCallFollowUp`'s sixty minutes); `buying_signal` is `applyStageEvidence('call.interested')`
+then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` when
+this proposal's park was ever made — a Resume sticks — or any park hold, the automatic one
+included, is open); a buying signal already applied for the call is `already_applied`; a task is a `call_tasks` row (`already_created` on a repeat). An overview
+request's "Send overview" task is written once: by the task key with David's edits when he
+selected it, otherwise beside the follow-up as proposed. A second outcome for one session — from the form or an
+Apply — is `call_already_logged` in `logCallOutcome` itself.
+
+An open call task is a Today item of kind `task` (due-work lane, key `call-task:<id>`,
+carried until done). The installed desktop's contract has no such kind, so it is negotiated:
+`GET /today?include=tasks` and `include: ['tasks']` on `POST /today/firm`. Without it a task
+is in no card, count or expansion — a card's lane and instant come from its other open items,
+and a firm with nothing else open has no card. `POST /today/tasks/complete {taskId}` marks
+one done (Today → firm, then the firm's card refreshed).
+
+`logCallOutcome` itself now takes the dialled route **before** the firm (gate → route →
+firm), the order `retireRoute` and `updateFirmBasics` keep — `FOR UPDATE` when it retires or
+suppresses the number, `FOR KEY SHARE` for every other outcome: taken after the firm (the
+route's row for a wrong number since S2, the call log's foreign-key lock for any outcome), a
+call logged while the same number was being replaced could deadlock with the basics edit.
+
+**The pending-review hold.** Both Twilio callbacks take the send gate, then the firm (`FOR NO
+KEY UPDATE`), before the session row — the status callback for **every** status now, not only
+no-answer and busy, and the recording callback, which used to lock the session first. On
+every delivery, duplicates included, `admitPendingHold` reads the session's accumulated facts
+and opens a firm-scoped `scoped_pause` (source `call_analysis_pending`, source id the session,
+recovery `review_call`, blocking `email_send`, `enrollment_advance` and `call_task`, never
+dialling) when the call is terminal, answered (`answered_at` or a provider status of
+`completed`), at least 20 seconds long, the transcription switch is on, it has no log, and the
+session never had one (`active_holds_one_pending_review`). It is released at the call's first
+log link, by `POST /calls/pending/dismiss`, or by the deletion that removes its session
+(`commitDeletion`, after the gate, the firm and the sessions' locks), and is never reopened.
+A firm merge carries every `call_tasks` row to the surviving firm, contactless ones included.
+
+**Cadence parking stays automatic.** It is the one automatic writer left (`parkIfCadenceSpent`,
+from the status callback and `logCallOutcome`); the "human click" rule covers analysis effects
+only.
+
+`packages/domain/test/calls/proposalApplyLocks.test.ts` (check C4) drives the Apply against
+the status callback, the recording callback, the morning build, `updateFirmBasics` replacing
+the dialled number, David's `logCallOutcome`, a reply opt-out and (in
+`proposalApply.test.ts`) `completeCallAnalysis`, in both orders and with the Apply stopped
+half-way; without the route pre-lock, the early Today lock, or either callback's gate prefix,
+its interleaving deadlocks.
 
 Every write to a `provider_ledger` row takes the monthly lock first (`lockMonthlySpend`,
 inside `recordProviderCall`, the settlement and the correction), so a transaction that holds

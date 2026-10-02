@@ -1,7 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { TodayCardBlocker } from '@fss/contracts';
-import type { FirmBasicsAnswer } from '../../shared/operations.ts';
+import type { AnalysisView, FirmBasicsAnswer } from '../../shared/operations.ts';
 import type { CallControl } from '../calling/useCall.ts';
 import { useCallingStatus } from '../calling/useCallingStatus.ts';
 import { UNAVAILABLE, type HomeView } from '../homeView.ts';
@@ -23,11 +24,15 @@ import { QueuePanel } from './QueuePanel.tsx';
 import { BLOCKER_FIXES, BLOCKER_SENTENCES, blockersOf, groupOf, nextToCall, stepFrom } from './queueView.ts';
 import { TaskRow } from './TaskRow.tsx';
 import { Feedback } from './Feedback.tsx';
+import { AfterCallAnalysis } from './AfterCallAnalysis.tsx';
 import { Overview } from './Overview.tsx';
+import { Recap } from './Recap.tsx';
+import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
+import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type Watch } from './useAnalysis.ts';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
 import { callTimer } from '../calling/callText.ts';
-import { useCallProgress } from './useCallProgress.ts';
+import { callHistoryKey, useCallProgress } from './useCallProgress.ts';
 import { todayForm, type Today } from './useToday.ts';
 
 /**
@@ -63,12 +68,22 @@ export interface TodayMemory {
    * the draft is on screen rather than behind a button.
    */
   readonly panels: { current: OpenPanels };
+  /**
+   * The call placed in this sitting for each firm, by session (slice 3a, C). The analysis of a
+   * call that ended while David moved on is watched through this, by session, so it is found
+   * when it completes and never depends on which firm is open.
+   */
+  readonly sessions: { current: Map<string, { readonly callSessionId: string; readonly endedAt: number }> };
+  /** An Apply's command id by call session: it outlives the panel so a lost answer is retried under it. */
+  readonly applyCommands: Map<string, { readonly signature: string; readonly id: string }>;
 }
 
 export interface OpenPanels {
   readonly firmId: string | null;
   readonly editing: BasicsField | null;
   readonly outcomeOpen: boolean;
+  /** The call the open outcome form records when it was chosen by name (a Needs review item's Log). */
+  readonly logSession?: string | null;
 }
 
 export function useTodayMemory(): TodayMemory {
@@ -76,10 +91,12 @@ export function useTodayMemory(): TodayMemory {
   const queueScroll = useRef(0);
   const firmScroll = useRef(new Map<string, number>());
   const panels = useRef<OpenPanels>({ firmId: null, editing: null, outcomeOpen: false });
+  const sessions = useRef(new Map<string, { readonly callSessionId: string; readonly endedAt: number }>());
+  const applyCommands = useRef(new Map<string, { readonly signature: string; readonly id: string }>());
   const markDone = useCallback((firmId: string): void => {
     setDone(current => (current.has(firmId) ? current : new Set([...current, firmId])));
   }, []);
-  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels }), [done, markDone]);
+  return useMemo(() => ({ done, markDone, queueScroll, firmScroll, panels, sessions, applyCommands: applyCommands.current }), [done, markDone]);
 }
 
 /** A call worth showing the steps of: placed in the last day. Older ones are history. */
@@ -100,6 +117,55 @@ function laneChip(card: TodayCard | undefined, blockers: readonly TodayCardBlock
   if (card === undefined) return <Chip tone="outline">Not on today’s list</Chip>;
   if (groupOf(card) === 'blocked' && blockers.length > 0) return <Chip tone="warn">Can’t call yet</Chip>;
   return null;
+}
+
+/**
+ * The latest call's steps. The notes chip reads the CURRENT analysis (the same state the
+ * after-call block shows), not the legacy summary chip: while the block says "Writing the
+ * notes…" this must not say "Summary done" or "in progress" from an older record.
+ */
+function LatestCall({
+  history,
+  view,
+  waiting,
+}: {
+  readonly history: ReturnType<typeof useCallProgress>;
+  readonly view: AnalysisView | undefined;
+  readonly waiting: boolean;
+}): JSX.Element | null {
+  const progress = history.progress;
+  const latest = history.latest;
+  if (progress === null || latest === null) return null;
+  const phase = view === undefined ? 'absent' : phaseOf(view, waiting);
+  const notes =
+    phase === 'pending' || phase === 'waiting'
+      ? { state: 'pending' as const, word: 'being written' }
+      : phase === 'completed'
+        ? { state: 'done' as const, word: 'ready' }
+        : phase === 'failed'
+          ? { state: 'failed' as const, word: 'could not be written' }
+          : { state: progress.analysis.state, word: progress.analysis.word };
+  const known = phase !== 'absent';
+  return (
+    <Block data-testid="latest-call" className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
+      <Label>Latest call</Label>
+      <div className="flex flex-wrap gap-1.5">
+        <StepChip label="Call" state={progress.call.state} word={progress.call.word} testId="latest-step-call" />
+        <StepChip label="Recording" state={progress.recording.state} word={progress.recording.word} testId="latest-step-recording" />
+        <StepChip label="Transcript" state={progress.transcription.state} word={progress.transcription.word} testId="latest-step-transcription" />
+        <StepChip label="Notes" state={notes.state} word={notes.word} testId="latest-step-analysis" />
+      </div>
+      {known ? null : latest.summary === undefined ? (
+        progress.sentence === null ? null : (
+          <p className="mt-2 text-sm text-muted-foreground">{progress.sentence}</p>
+        )
+      ) : (
+        <p data-testid="latest-call-summary" className="mt-2 text-base">
+          {latest.summary.summary}
+        </p>
+      )}
+    </Block>
+  );
 }
 
 function SearchDialog({
@@ -282,12 +348,35 @@ export function TodayWorkspace({
 
   const status = useCallingStatus(firmId);
   const history = useCallProgress(firmId);
+
+  // Slice 3a, lane C: each call's analysis is read by its own session (`useAnalysis.ts`), never by
+  // the open view. The open firm's panel reads its latest recent answered call; every call placed
+  // in this sitting is watched too, so notes that finish while David is on the next call are found
+  // and update only their own firm's mark and Needs review items.
+  const latest = history.latest;
+  const latestEnded = latest === null ? Number.NaN : Date.parse(latest.endedAt ?? latest.startedAt ?? '');
+  const panelSession: Watch | null =
+    firmId === null
+      ? null
+      : latest !== null && latest.answeredAt !== null && recentCall(latest)
+        ? { callSessionId: latest.sessionId, endedAt: Number.isFinite(latestEnded) ? latestEnded : Date.now() }
+        : (memory.sessions.current.get(firmId) ?? null);
+  const watched = new Map<string, Watch>();
+  for (const entry of memory.sessions.current.values()) watched.set(entry.callSessionId, entry);
+  if (panelSession !== null) watched.set(panelSession.callSessionId, panelSession);
+  const analyses = useAnalyses([...watched.values()]);
+  const queries = useQueryClient();
+  const queryReload = async (callSessionId: string): Promise<void> => {
+    await queries.invalidateQueries({ queryKey: analysisKey(callSessionId) });
+  };
   const [dialog, setDialog] = useState<'search' | 'help' | 'incoming' | null>(null);
+  const review = useReview(hasTodayBridge);
   // Today opens on the Queue every time it is mounted; Overview is a look away from it.
   const [subtab, setSubtab] = useState<'queue' | 'overview'>('queue');
   // The two forms come back open when the person does, with the text they left in them.
   const [editing, setEditing] = useState<BasicsField | null>(() => memory.panels.current.editing);
   const [outcomeOpen, setOutcomeOpen] = useState(() => memory.panels.current.outcomeOpen);
+  const [logSession, setLogSession] = useState<string | null>(() => memory.panels.current.logSession ?? null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [incomingNotice, setIncomingNotice] = useState<string | null>(null);
 
@@ -348,6 +437,7 @@ export function TodayWorkspace({
     if (!returning) {
       setEditing(null);
       setOutcomeOpen(false);
+      setLogSession(null);
     }
     if (region !== null) region.scrollTop = firmId === null ? 0 : (memory.firmScroll.current.get(firmId) ?? 0);
     if (call.state.phase === 'ended' || call.state.phase === 'refused') {
@@ -358,8 +448,8 @@ export function TodayWorkspace({
   // What is open, kept for the next visit. Not written while no firm is open, so a visit
   // that starts before the firm has been read does not forget the last one's forms.
   useEffect(() => {
-    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen };
-  }, [firmId, editing, outcomeOpen, memory]);
+    if (firmId !== null) memory.panels.current = { firmId, editing, outcomeOpen, logSession: outcomeOpen ? logSession : null };
+  }, [firmId, editing, outcomeOpen, logSession, memory]);
 
   // A call that ended: read the card and the cadence again, read the history now (and
   // while its steps are on their way), and tick the firm off for this sitting.
@@ -368,6 +458,7 @@ export function TodayWorkspace({
   useEffect(() => {
     if (endedSession === null || seen.current === endedSession || callFirm === null) return;
     seen.current = endedSession;
+    memory.sessions.current.set(callFirm, { callSessionId: endedSession, endedAt: Date.now() });
     memory.markDone(callFirm);
     actions?.expand(callFirm);
     status.reload();
@@ -432,6 +523,70 @@ export function TodayWorkspace({
   // No registry: say so where Today would be. No answer yet: the regions wait, empty.
   const unavailable = !hasTodayBridge || actions === null;
   const loading = state === null || todayView === null;
+
+  const loggedSessions = new Set((history.calls ?? []).filter(call => call.callLogId !== null).map(call => call.sessionId));
+  // `reload` is captured by a pending Apply, so a late answer for firm A can arrive while B is
+  // open. It always refreshes A's cached data; it re-opens a firm only when that firm is still
+  // the one on screen, so a background result never moves David off the firm he is working on.
+  const openFirm = useRef(firmId);
+  openFirm.current = firmId;
+  const reload = (): void => {
+    review.reload();
+    if (firmId !== null) void queries.invalidateQueries({ queryKey: callHistoryKey(firmId) });
+    if (firmId !== null && openFirm.current === firmId) actions?.expand(firmId);
+    today.refresh();
+  };
+  const marks: Record<string, string> = {};
+  for (const [entryFirm, entry] of memory.sessions.current) {
+    if (entryFirm === firmId) continue;
+    const phase = phaseOf(analyses.get(entry.callSessionId), Date.now() - entry.endedAt < WAITING_WINDOW_MS);
+    if (phase === 'pending' || phase === 'waiting') marks[entryFirm] = 'Writing the notes…';
+    else if (phase === 'completed') marks[entryFirm] = 'Notes ready';
+    else if (phase === 'failed') marks[entryFirm] = 'Notes could not be written';
+  }
+  const reviewItems = review.items ?? [];
+  const afterBlock =
+    firmId === null || expanded === null ? null : (
+      <div className="flex flex-col gap-4" data-testid="after-block">
+        {panelSession === null ? null : (
+          <AfterCallAnalysis
+            view={analyses.get(panelSession.callSessionId)}
+            sessionId={panelSession.callSessionId}
+            waiting={Date.now() - panelSession.endedAt < WAITING_WINDOW_MS}
+            logged={loggedSessions.has(panelSession.callSessionId)}
+            loggedOutcome={(history.calls ?? []).find(call => call.sessionId === panelSession.callSessionId)?.outcome ?? null}
+            templates={state?.followUpTemplates ?? []}
+            commands={memory.applyCommands}
+            onReload={() => {
+              void queryReload(panelSession.callSessionId);
+            }}
+            onChanged={reload}
+            onEnterManually={() => {
+              setLogSession(panelSession.callSessionId);
+              setOutcomeOpen(true);
+            }}
+          />
+        )}
+        <ReviewPanel
+          items={reviewItems}
+          firm={{
+            firmId,
+            values: { locality: basics?.locality ?? null, regionCode: basics?.regionCode ?? null, timeZone: basics?.timeZone ?? null },
+            phone: primaryRoute === null ? null : { routeId: primaryRoute.routeId, e164: primaryRoute.e164 },
+            enabled: todayView?.actionsEnabled ?? false,
+            loggedSessions,
+          }}
+          onChanged={() => {
+            reload();
+            if (panelSession !== null) void queryReload(panelSession.callSessionId);
+          }}
+          onLog={callSessionId => {
+            setLogSession(callSessionId);
+            setOutcomeOpen(true);
+          }}
+        />
+      </div>
+    );
 
   const header = (
     <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-5">
@@ -554,7 +709,7 @@ export function TodayWorkspace({
       ) : loading ? (
         <div data-testid="today" aria-busy={today.pending > 0} className="flex-1" />
       ) : subtab === 'overview' ? (
-        <Overview home={home} />
+        <Overview home={home} extras={<Recap />} />
       ) : (
         <div data-testid="today" aria-busy={today.pending > 0} className="relative flex min-h-0 flex-1">
           <div
@@ -576,6 +731,22 @@ export function TodayWorkspace({
               }}
               onSelect={select}
               footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} />}
+              marks={marks}
+              review={
+                review.items === null ? null : (
+                  <>
+                    <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
+                    {review.failed ? (
+                      <p data-testid="review-refresh-failed" role="status" className="mb-3 flex items-center gap-1 px-2 text-xs text-muted-foreground">
+                        Couldn’t refresh.
+                        <button type="button" data-testid="review-refresh-retry" className="underline underline-offset-2 hover:text-foreground" onClick={review.reload}>
+                          Retry
+                        </button>
+                      </p>
+                    ) : null}
+                  </>
+                )
+              }
             />
           </div>
 
@@ -668,6 +839,7 @@ export function TodayWorkspace({
                       enabled={todayView.actionsEnabled}
                       actions={actions}
                       callSessionId={call.state.phase === 'ended' && callFirm === expanded.firmId ? call.state.sessionId : null}
+                      forSession={logSession}
                     />
                   </Block>
                   </div>
@@ -686,24 +858,7 @@ export function TodayWorkspace({
                 )}
 
                 {history.progress !== null && history.latest !== null && recentCall(history.latest) ? (
-                  <Block data-testid="latest-call" className="mt-4 rounded-lg border border-border px-4 py-3 first:pt-3">
-                    <Label>Latest call</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      <StepChip label="Call" state={history.progress.call.state} word={history.progress.call.word} testId="latest-step-call" />
-                      <StepChip label="Recording" state={history.progress.recording.state} word={history.progress.recording.word} testId="latest-step-recording" />
-                      <StepChip label="Transcript" state={history.progress.transcription.state} word={history.progress.transcription.word} testId="latest-step-transcription" />
-                      <StepChip label="Summary" state={history.progress.analysis.state} word={history.progress.analysis.word} testId="latest-step-analysis" />
-                    </div>
-                    {history.latest.summary === undefined ? (
-                      history.progress.sentence === null ? null : (
-                        <p className="mt-2 text-sm text-muted-foreground">{history.progress.sentence}</p>
-                      )
-                    ) : (
-                      <p data-testid="latest-call-summary" className="mt-2 text-base">
-                        {history.latest.summary.summary}
-                      </p>
-                    )}
-                  </Block>
+                  <LatestCall history={history} view={analyses.get(history.latest.sessionId)} waiting={Date.now() - (Number.isFinite(latestEnded) ? latestEnded : Date.now()) < WAITING_WINDOW_MS} />
                 ) : null}
 
                 <div className="mt-6">
@@ -734,6 +889,7 @@ export function TodayWorkspace({
               onNext={goNext}
               onOutcome={() => setOutcomeOpen(true)}
               feedback={feedback}
+              afterBlock={afterBlock}
             />
           </div>
         </div>

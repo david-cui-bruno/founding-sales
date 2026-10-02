@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3568,
+    "cachedInputTokens": 0,
+    "outputTokens": 280
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They were busy and asked you to call back Tuesday afternoon. No information about their maintenance process or interest was gathered.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"Call me back Tuesday afternoon\",\"line\":2,\"agreed_line\":3,\"day\":\"tuesday\",\"date_text\":\"Tuesday\",\"time\":\"afternoon\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was very brief. You asked permission to discuss maintenance requests but Dana declined due to being busy. You acknowledged the callback request but did not attempt to establish interest or gather any qualifying information before agreeing to call back.\",\"lines\":[1,2,3]}, \"prompt_version\":\"call_analysis.1\"}"
+}

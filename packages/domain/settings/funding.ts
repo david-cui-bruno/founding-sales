@@ -24,6 +24,8 @@ export const PROVIDER_KIND_FUNDING: Readonly<Record<string, ProviderFunding>> = 
   anthropic_classifier: 'cash',
   // Slice C3b: after-call summaries, cash like every direct Anthropic API call.
   anthropic_call_summary: 'cash',
+  // Slice 3a: post-call analyses over the direct API, cash like the summary.
+  anthropic_call_analysis: 'cash',
   // Slice BR1: every Claude call made through Amazon Bedrock — `aws_bedrock.classifier`,
   // `aws_bedrock.call_summary`, `aws_bedrock.extraction` (`classification/modelTransport.ts`).
   // Cost Explorer shows AWS credits applied to Claude on Bedrock (1 Sep – 2 Oct 2026).

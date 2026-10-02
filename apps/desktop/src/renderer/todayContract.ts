@@ -271,6 +271,11 @@ export interface OutcomeRequest {
    * step or callback behind it; null records the call as history only.
    */
   readonly itemId: string | null;
+  /**
+   * The call this outcome is for, when the page names it (a Needs review item's Log). Sent
+   * as it is; when absent the main process may use the last call it placed to this firm.
+   */
+  readonly callSessionId?: string | null;
   readonly contactId: string | null;
   readonly routeId: string | null;
   readonly outcome: (typeof CALL_OUTCOMES)[number];

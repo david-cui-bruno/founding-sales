@@ -49,6 +49,7 @@ const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.freeze({
   email_due: 'Email due',
   call_due: 'Call due',
   new_firm: 'Not yet contacted',
+  task: 'Task',
 });
 
 /**

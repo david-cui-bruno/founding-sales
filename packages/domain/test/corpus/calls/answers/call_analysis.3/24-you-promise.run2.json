@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3984,
+    "cachedInputTokens": 0,
+    "outputTokens": 360
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They manage about 200 units and said their current portal is clunky. You offered to send pricing by Friday, and they agreed.\",\"facts\":[{\"text\":\"about two hundred doors\",\"line\":2},{\"text\":\"the portal we use is clunky\",\"line\":2}],\"interest\":{\"level\":\"neutral\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"other_email\",\"quote\":\"I'll send pricing by Friday\",\"line\":3,\"agreed_line\":4},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[{\"speaker\":\"you\",\"quote\":\"I'll send pricing by Friday\",\"line\":3,\"due_phrase\":\"by Friday\"}],\"coaching\":{\"observation\":\"Dana mentioned their current portal is clunky, which is a pain point, but did not express interest in evaluating Callie or asking how it would work for them. Before sending pricing, consider asking a discovery question to understand their specific needs or to gauge whether they would actually review a demo or trial.\",\"lines\":[2]},\"prompt_version\":\"call_analysis.3\"}"
+}

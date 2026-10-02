@@ -1,9 +1,10 @@
-import { CALL_OUTCOMES } from '@fss/contracts';
+import { CALL_OUTCOMES, type CallOutcome } from '@fss/contracts';
 import { useEffect, useState, type JSX } from 'react';
 import { useClearDrafts, useDraft } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
 import {
   OUTCOME_LABELS,
+  REACHED_OUTCOMES,
   OUTCOME_PROBLEM_SENTENCES,
   SUPPRESSION_WARNINGS,
   callbackNeedsTime,
@@ -52,6 +53,7 @@ export function OutcomeForm({
   enabled,
   actions,
   callSessionId = null,
+  forSession = null,
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
@@ -63,6 +65,11 @@ export function OutcomeForm({
    * filed with the recording.
    */
   readonly callSessionId?: string | null;
+  /**
+   * A call chosen by name — a Needs review item's Log. It is sent as the log's session as it
+   * is, and the main process never replaces it with "the last call placed".
+   */
+  readonly forSession?: string | null;
 }): JSX.Element | null {
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
@@ -102,7 +109,7 @@ export function OutcomeForm({
     sequenceVersionId: followUpSequence,
   };
   const wantsPreview =
-    expanded !== null && outcome === 'interested' && calledContactId !== null && pick.choice === 'agreed_sequence' &&
+    expanded !== null && REACHED_OUTCOMES.includes(outcome as CallOutcome) && calledContactId !== null && pick.choice === 'agreed_sequence' &&
     pick.sequenceVersionId !== '';
   const preview =
     expanded === null
@@ -162,7 +169,7 @@ export function OutcomeForm({
   const contactId = lastCall?.contactId ?? task?.contactId ?? null;
   // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
   // grants no e-mail permission, which is David's own distinction of 29 September 2026.
-  const offersFollowUp = draft.outcome === 'interested' && contactId !== null;
+  const offersFollowUp = draft.outcome !== null && REACHED_OUTCOMES.includes(draft.outcome) && contactId !== null;
   // The last request for this pick came back and left nothing: a lost answer, not a refusal.
   const previewFailed = previewKey !== null && askedKey === previewKey && preview === null && !previewing;
   const followUpStopper = offersFollowUp ? followUpProblem(pick, previewing ? null : preview, previewFailed) : null;
@@ -257,6 +264,7 @@ export function OutcomeForm({
             contactId,
             routeId: lastCall?.routeId ?? null,
             itemId: itemId === '' ? null : itemId,
+            ...(forSession === null ? {} : { callSessionId: forSession }),
             outcome: built.command.outcome,
             note: built.command.note ?? '',
             callback:

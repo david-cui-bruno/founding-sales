@@ -62,6 +62,10 @@ describe('job kind classes', () => {
       'call.transcribe',
       // Slice C3b: its summary, read with it.
       'call.summarize',
+      // Slice 3a: its analysis, which replaces the summary for a new call.
+      'call.analyze',
+      // And the sweep that resumes held analyses after a settings write.
+      'call.analyze_sweep',
     ]);
   });
 

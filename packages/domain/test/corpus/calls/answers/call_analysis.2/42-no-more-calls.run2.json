@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3817,
+    "cachedInputTokens": 0,
+    "outputTokens": 255
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"Dana Whitfield answered and immediately asked not to be called again, citing too many similar calls. You acknowledged the request.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":true,\"scope\":\"this_number\",\"quote\":\"No more calls, please.\",\"line\":2},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The prospect rejected the call immediately without hearing your pitch. Consider whether this number should be added to a do-not-call list to respect their request.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.2\"}"
+}

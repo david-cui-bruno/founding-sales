@@ -146,6 +146,12 @@ const HOLD_RECOVERY_ACTIONS = [
   'release_pause',
   'mark_delivered_or_skipped',
   'advance_generation',
+  /**
+   * Migration 0036, slice 3a: the pending-review hold an answered, transcribed call opens
+   * until David logs it or dismisses it (`calls/pendingHold.ts`). Its recovery is the call
+   * itself: log the outcome, or dismiss the hold.
+   */
+  'review_call',
 ] as const;
 export const holdRecoveryActionSchema = z.enum(HOLD_RECOVERY_ACTIONS);
 

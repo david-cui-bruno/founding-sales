@@ -22,7 +22,7 @@ export type TodayItemStatus = (typeof TODAY_ITEM_STATUSES)[number];
  * those lanes call has to name something the database will accept on the day they
  * arrive, not on the day they are wired in.
  */
-export const TODAY_SOURCE_KINDS = ['callback', 'firm', 'reply_message', 'step_execution'] as const;
+export const TODAY_SOURCE_KINDS = ['callback', 'firm', 'reply_message', 'step_execution', 'call_task'] as const;
 export type TodaySourceKind = (typeof TODAY_SOURCE_KINDS)[number];
 
 /**

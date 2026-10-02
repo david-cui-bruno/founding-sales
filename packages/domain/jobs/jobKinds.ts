@@ -38,6 +38,8 @@ export const JOB_KINDS = [
   'calcom.reconcile',
   'call.transcribe',
   'call.summarize',
+  'call.analyze',
+  'call.analyze_sweep',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -123,6 +125,14 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // DO NOTHING`, and every cent goes through a `provider_reservations` row per attempt,
   // closed once by a compare-and-set on its state (`calls/summary.ts`).
   'call.summarize': 'business_uniqueness',
+  // Slice 3a. One completion per analysis version (`completeCallAnalysis` writes only a
+  // pending row, under `call_analysis:<session>`), and every cent goes through a
+  // `provider_reservations` row per attempt, closed once by a compare-and-set on its state
+  // (`calls/analysisPaid.ts`).
+  'call.analyze': 'business_uniqueness',
+  // Slice 3a (S3A2F). One sweep per settings write, keyed by the write's row; it only enqueues
+  // `call.analyze` jobs, each keyed by its version and the write, and spends nothing itself.
+  'call.analyze_sweep': 'business_uniqueness',
 });
 
 /**
@@ -208,6 +218,20 @@ export const jobIdempotencyKey = Object.freeze({
   /** One summary of one transcribed call (slice C3b); `revision` re-owes a summary the switch held. */
   callSummarize: (callSessionId: string, revision = 0): string =>
     revision === 0 ? `call-summarize:${callSessionId}` : `call-summarize:${callSessionId}:r${String(revision)}`,
+  /** One analysis of one transcribed call (slice 3a); `revision` re-owes a version the switch held. */
+  callAnalyze: (callSessionId: string, revision = 0): string =>
+    revision === 0 ? `call-analyze:${callSessionId}` : `call-analyze:${callSessionId}:r${String(revision)}`,
+  /**
+   * David's retry or reanalysis of one call (slice 3a): keyed by the version it will work on
+   * and the command, unique and never reused (S3A2F).
+   */
+  callAnalyzeRequested: (callSessionId: string, version: number, commandId: string): string =>
+    `call-analyze:${callSessionId}:v${String(version)}:c${commandId}`,
+  /** One held version resumed by one settings write's sweep (slice 3a, S3A2F). */
+  callAnalyzeResume: (callSessionId: string, version: number, writeId: string): string =>
+    `call-analyze:${callSessionId}:v${String(version)}:w${writeId}`,
+  /** The sweep of one settings write that resumes held analyses: keyed by the write's own row. */
+  callAnalyzeSweep: (writeId: string): string => `call-analyze-sweep:${writeId}`,
 });
 
 /** The hour an instant falls in, as an ISO string: the Cal.com reconciliation's period. */
@@ -283,6 +307,10 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'call.transcribe': 'bulk',
   // Slice C3b: nor on its summary, which follows the transcript onto the firm page.
   'call.summarize': 'bulk',
+  // Slice 3a: the analysis is read later, after the call, like the summary it replaces.
+  'call.analyze': 'bulk',
+  // Slice 3a: the resume sweep after a settings write, as patient as the analyses it queues.
+  'call.analyze_sweep': 'bulk',
 });
 
 /** The lane a kind runs in, or `undefined` for a kind no table row classifies. */

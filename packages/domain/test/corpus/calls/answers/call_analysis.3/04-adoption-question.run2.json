@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 4016,
+    "cachedInputTokens": 0,
+    "outputTokens": 369
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management and explained Callie's maintenance coordination software. Dana asked how their technicians would receive work orders and whether it would replace their current portal. You explained the text-based system, and Dana responded positively, noting their techs dislike logging into the portal.\",\"facts\":[{\"text\":\"Our techs hate logging into the portal\",\"line\":4}],\"interest\":{\"level\":\"curious\",\"signals\":[{\"kind\":\"adoption_question\",\"quote\":\"How would our techs get work orders? Would it replace our portal?\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana showed genuine interest by asking practical questions about how the system would integrate with their workflow. Their comment about tech frustration with portal logins suggests you identified a real pain point. Consider probing deeper into their current process and the scope of their maintenance operations to move toward a demo or follow-up.\",\"lines\":[2,4]},\"prompt_version\":\"call_analysis.3\"}"
+}

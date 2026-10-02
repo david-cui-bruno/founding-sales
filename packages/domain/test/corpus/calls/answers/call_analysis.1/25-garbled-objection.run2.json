@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3585,
+    "cachedInputTokens": 0,
+    "outputTokens": 323
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They mentioned trying a similar maintenance coordination tool before, but the call cut out during their explanation of what went wrong with vendors. The call was brief and incomplete.\",\"facts\":[{\"text\":\"tried something like this before\",\"line\":2}],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[{\"category\":\"has_solution\",\"quote\":\"We tried something like this before\",\"line\":2,\"answered_line\":0}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The call was cut off mid-explanation when the prospect was describing a past experience with similar software. You acknowledged the audio issue but the transcript ends before you could clarify or re-engage Dana about their previous experience or current situation.\",\"lines\":[2,3]},\"prompt_version\":\"call_analysis.1\"}"
+}

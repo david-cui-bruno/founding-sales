@@ -238,6 +238,22 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'The summary, suggested next steps and quoted commitments of one transcribed call; removed with its call session, the firm or the person.',
   ),
 
+  // ------------------------------------------------ post-call analyses (0035, slice 3a)
+  // A model's reading of what the prospect said, with quotes of it, and David's edited
+  // notes: personal data, so it goes with the call it reads, exactly as the transcript does.
+  call_analyses: coverage(
+    ['deletion_removes'],
+    'Each version of one transcribed call\'s analysis (the reading, its quotes and proposals, or David\'s notes); removed with its call session, the firm or the person.',
+  ),
+
+  // ------------------------------------------------ call tasks (0036, slice 3a)
+  // A promise made on a call, its text often the quote itself: personal data, removed with
+  // the firm or the person (it outlives the call's session on purpose: it is David's work).
+  call_tasks: coverage(
+    ['deletion_removes'],
+    'A promise made on a call (its text and quote key), or the overview an agreement left to send; removed with the firm or the person.',
+  ),
+
   // ------------------------------------------------ transcription jobs (0032, slice C3a)
   // Ids, a provider job name and two object keys: what collecting a Transcribe job needs.
   // Kept past a deletion on purpose, so the workflow can still name the call's objects.

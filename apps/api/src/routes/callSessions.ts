@@ -1,4 +1,5 @@
 import {
+  CALL_HISTORY_INCLUDE_OUTCOME,
   CALL_HISTORY_INCLUDE_SUMMARY,
   callHistoryResponseSchema,
   callRecordingResponseSchema,
@@ -12,6 +13,7 @@ import {
 import {
   createCallSession,
   listFirmCallSessions,
+  readCallLogOutcomes,
   readCallingStatus,
   recordingPathOfSession,
   resumeCallCadence,
@@ -19,6 +21,7 @@ import {
 import { readCallingProvider } from '@fss/domain/settings/integrations.ts';
 import { readCallTranscript } from '@fss/domain/calls/transcription.ts';
 import { readCallSummaries } from '@fss/domain/calls/summary.ts';
+import { readAnalysisSummaries } from '@fss/domain/calls/analysisPaid.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';
@@ -47,7 +50,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *
  * Slice C3b: `GET /calls/history?firmId=&include=summary` adds each call's summary and
  * suggested next steps (`summary`, absent when the call has none). Opt-in, so a Mac built
- * before C3b, which never asks, gets the answer its strict parser expects.
+ * before C3b, which never asks, gets the answer its strict parser expects. Slice 3a: a call's
+ * current analysis (David's notes, else the latest completed model version) is mapped to the
+ * same shape and wins; a call with none falls back to its stored summary.
  *
  * Slice C2 adds one more read with the same switch:
  *
@@ -115,20 +120,35 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     if (firmId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const calls = await listFirmCallSessions(scoped.context, firmId);
     if (calls === null) return notFound;
-    if (!request.query.getAll('include').includes(CALL_HISTORY_INCLUDE_SUMMARY)) {
-      return { status: 200, body: callHistoryResponseSchema.parse({ calls }) };
-    }
-    // The firm was already decided readable by `listFirmCallSessions`; these are its calls.
-    const summaries = await readCallSummaries(
-      scoped.context,
-      calls.map(call => call.sessionId),
+    // Each addition only when asked for (repeated or comma-separated), so an older Mac's
+    // parser never meets a key it does not know.
+    const includes = new Set(
+      request.query
+        .getAll('include')
+        .flatMap(value => value.split(','))
+        .map(value => value.trim()),
     );
+    // The firm was already decided readable by `listFirmCallSessions`; these are its calls.
+    const sessionIds = calls.map(call => call.sessionId);
+    const withSummary = includes.has(CALL_HISTORY_INCLUDE_SUMMARY);
+    const analyses = withSummary ? await readAnalysisSummaries(scoped.context, sessionIds) : null;
+    const summaries = withSummary ? await readCallSummaries(scoped.context, sessionIds) : null;
+    const outcomes = includes.has(CALL_HISTORY_INCLUDE_OUTCOME)
+      ? await readCallLogOutcomes(
+          scoped.context,
+          calls.flatMap(call => (call.callLogId === null ? [] : [call.callLogId])),
+        )
+      : null;
     return {
       status: 200,
       body: callHistoryResponseSchema.parse({
         calls: calls.map(call => {
-          const summary = summaries.get(call.sessionId);
-          return summary === undefined ? call : { ...call, summary };
+          const summary = analyses?.get(call.sessionId) ?? summaries?.get(call.sessionId);
+          return {
+            ...call,
+            ...(summary === undefined ? {} : { summary }),
+            ...(outcomes === null ? {} : { outcome: call.callLogId === null ? null : (outcomes.get(call.callLogId) ?? null) }),
+          };
         }),
       }),
     };

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.1",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3570,
+    "cachedInputTokens": 0,
+    "outputTokens": 282
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management and mentioned Callie maintenance coordination software. Dana asked to be called back Tuesday but expressed uncertainty about availability that day. You agreed to try later in the week.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"Could you call Tuesday?\",\"line\":2,\"agreed_line\":0,\"day\":\"tuesday\",\"date_text\":\"Tuesday\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"this_number\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana expressed uncertainty about Tuesday availability ('Actually I'm not sure I'm in Tuesday'), which may indicate they were not strongly committed to that callback time. Consider confirming availability before calling back.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.1\"}"
+}

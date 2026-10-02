@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3868,
+    "cachedInputTokens": 0,
+    "outputTokens": 290
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management and briefly described Callie. Dana asked about pricing, you quoted $2 per door per month, and the call ended.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[{\"kind\":\"pricing_question\",\"quote\":\"What does it cost?\",\"line\":2}]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"Dana asked about pricing but gave no other signals of interest. After you provided the price, they ended the call with minimal engagement. Consider a follow-up with more value context or a specific pain point they might face.\",\"lines\":[2,4]},\"prompt_version\":\"call_analysis.2\"}"
+}

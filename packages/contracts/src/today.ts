@@ -26,7 +26,11 @@ import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRow
 export const TODAY_LANES = ['reply', 'callback', 'due_work', 'new_firm'] as const;
 export type TodayLane = (typeof TODAY_LANES)[number];
 
-export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'new_firm'] as const;
+/**
+ * `task` (slice 3a, migration 0036): an open call task — a promise made on a call. Only in a
+ * read that negotiated `include=tasks`; an installed desktop never meets the kind.
+ */
+export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'new_firm', 'task'] as const;
 export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 const firmName = z.string().min(1).max(300);
@@ -121,6 +125,13 @@ const todayTaskDtoSchema = z.object({
    * 1.0.11, whose schema does not name it.
    */
   heldDays: z.number().int().min(0).nullable().optional(),
+  /**
+   * Slice 3a, only in an expansion that negotiated `include=tasks` (an installed desktop
+   * parses the task strictly): the call task behind a `task` item, which
+   * `POST /today/tasks/complete` marks done, and its words. Null on every other kind.
+   */
+  callTaskId: uuid.nullable().optional(),
+  taskText: z.string().min(1).max(300).nullable().optional(),
 });
 export type TodayTaskDto = z.infer<typeof todayTaskDtoSchema>;
 
@@ -134,6 +145,11 @@ export const TODAY_CARD_VERSION = 2;
 export const todayFirmRequestSchema = z.strictObject({
   firmId: uuid,
   cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
+  /**
+   * Slice 3a: `['tasks']` adds the firm's open call tasks (kind `task`). Without it a task
+   * is in no card, count or expansion, so an installed desktop never meets the kind.
+   */
+  include: z.array(z.literal('tasks')).max(1).optional(),
 });
 
 /**

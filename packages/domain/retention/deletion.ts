@@ -5,6 +5,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { finaliseTranscriptionsOfSessions, lockSessionsForDeletion } from '../calls/transcription.ts';
 import { finaliseSummariesOfSessions, lockSummariesForDeletion } from '../calls/summary.ts';
+import { finaliseAnalysesOfSessions, lockAnalysesForDeletion } from '../calls/analysisPaid.ts';
 import { finaliseSubjectReservations, settleAttempt } from '../research/reservations.ts';
 import { lockMonthlySpend } from '../research/ledger.ts';
 import { lockRun } from '../research/runs.ts';
@@ -13,6 +14,7 @@ import { canonicalizeHandle } from '../src/rules/suppressionCanonicalization.ts'
 import { deletionTombstoneKeyOf } from '../meetings/attendee.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
+import { CALL_ANALYSIS_PENDING_SOURCE } from '@fss/contracts';
 import { accept, refuse, type RetentionResult } from './result.ts';
 
 /**
@@ -329,12 +331,28 @@ async function measure(
         WHERE t.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
       byContact,
     ),
+    // Slice 3a (0035): a call's analysis versions quote the prospect; counted in their own right.
+    call_analyses: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_analyses a
+         JOIN call_sessions s ON s.workspace_id = a.workspace_id AND s.id = a.call_session_id
+        WHERE a.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+      byContact,
+    ),
     // Slice C3b (0032): a call's summary quotes the prospect; counted in its own right too.
     call_summaries: await countOf(
       context,
       `SELECT count(*) AS count FROM call_summaries x
          JOIN call_sessions s ON s.workspace_id = x.workspace_id AND s.id = x.call_session_id
         WHERE x.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+      byContact,
+    ),
+    // Slice 3a (0036): a promise made on a call, quoting it; it outlives its session, so it
+    // is matched by its own firm and contact.
+    call_tasks: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_tasks
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
       byContact,
     ),
     meetings: await countOf(
@@ -682,6 +700,13 @@ export async function commitDeletion(
     context,
     targetedSessions.map(session => session.id),
   );
+  // Slice 3a: their analysis locks beside them, `call_analysis:<session>` in id order — after
+  // the firm and before the sessions' own locks and rows, the order every analysis writer
+  // takes them in (`lockCallAnalysisForSession`).
+  await lockAnalysesForDeletion(
+    context,
+    targetedSessions.map(session => session.id),
+  );
   await lockSessionsForDeletion(
     context,
     targetedSessions.map(session => session.id),
@@ -898,11 +923,44 @@ export async function commitDeletion(
         AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
     byContact,
   );
+  // Slice 3a: each session's open analysis attempts finalised as the sweep does it, under
+  // the analysis locks taken above and the monthly lock, then its versions removed (they
+  // would also go with the session, ON DELETE CASCADE; removed here so they are counted).
+  await finaliseAnalysesOfSessions(
+    context,
+    targetedSessions.map(session => session.id),
+    await databaseNow(context),
+  );
+  await remove(
+    'call_analyses',
+    `DELETE FROM call_analyses a USING call_sessions s
+      WHERE a.workspace_id = $1 AND s.workspace_id = a.workspace_id AND s.id = a.call_session_id
+        AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+    byContact,
+  );
   await remove(
     'call_transcripts',
     `DELETE FROM call_transcripts t USING call_sessions s
       WHERE t.workspace_id = $1 AND s.workspace_id = t.workspace_id AND s.id = t.call_session_id
         AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+    byContact,
+  );
+  // Slice 3a (0036): a pending-review hold names its session; the session going takes the
+  // hold's recovery (log it, or Dismiss) with it, so the hold is released here, in this
+  // transaction, after the gate, the firm and the sessions' locks above — never left
+  // blocking e-mail at a firm that survives (review S3B, finding 2). The hold row is kept:
+  // `active_holds` is retained, released or not.
+  const { rows: releasedPendingHolds } = await context.db.query<{ id: string }>(
+    `UPDATE active_holds SET released_at = now()
+      WHERE workspace_id = $1 AND source_event_kind = $2 AND released_at IS NULL
+        AND source_event_id = ANY($3::text[])
+      RETURNING id`,
+    [context.scope.workspaceId, CALL_ANALYSIS_PENDING_SOURCE, targetedSessions.map(session => session.id)],
+  );
+  // Before the sessions, whose deletion would only clear the task's link.
+  await remove(
+    'call_tasks',
+    `DELETE FROM call_tasks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
   await remove(
@@ -1117,7 +1175,15 @@ export async function commitDeletion(
     action: 'deletion.committed',
     subjectKind: row.target_kind,
     subjectId: scope.contactId ?? scope.firmId,
-    detail: { requestId: row.id, removed, redacted, stopped, tombstones: tombstoneEventIds.length },
+    detail: {
+      requestId: row.id,
+      removed,
+      redacted,
+      stopped,
+      tombstones: tombstoneEventIds.length,
+      // The pending-review holds released with their sessions (slice 3a): ids, not personal data.
+      releasedPendingHoldIds: releasedPendingHolds.map(hold => hold.id),
+    },
   });
 
   return accept({ requestId: row.id, removed, redacted, stopped, tombstoneEventIds });

@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.3",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3958,
+    "cachedInputTokens": 0,
+    "outputTokens": 282
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You reached Dana at Harbor Lane Property Management. They asked you to call back next week rather than this week, and you acknowledged the timing.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[{\"category\":\"timing\",\"quote\":\"just not this week\",\"line\":2,\"answered_line\":3}],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0,\"agreed_line\":0},\"callback\":{\"requested\":true,\"exact\":false,\"phrase\":\"Try me next week\",\"line\":2,\"agreed_line\":3,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"You opened by asking if you should stop calling, which may have prompted the timing objection. Consider leading with the value proposition instead.\",\"lines\":[1,2]}, \"prompt_version\":\"call_analysis.3\"}"
+}

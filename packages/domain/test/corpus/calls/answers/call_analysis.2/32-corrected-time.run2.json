@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3826,
+    "cachedInputTokens": 0,
+    "outputTokens": 240
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Dana at Harbor Lane Property Management. Dana asked you to call back Wednesday at 10 AM instead of Tuesday at 2 PM, and you confirmed.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":true,\"exact\":true,\"phrase\":\"Call me Tuesday at 2, no wait, Wednesday at 10.\",\"line\":2,\"agreed_line\":3,\"day\":\"wednesday\",\"date_text\":\"Wednesday\",\"time\":\"10\"},\"stop\":{\"requested\":false,\"scope\":\"unclear\",\"quote\":\"\",\"line\":0},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"\",\"lines\":[]},\"prompt_version\":\"call_analysis.2\"}"
+}

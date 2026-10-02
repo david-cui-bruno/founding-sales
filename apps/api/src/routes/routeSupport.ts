@@ -38,7 +38,13 @@ export interface RouteDeps {
  */
 export type CommandResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: string; readonly liveEnrollments?: readonly unknown[] };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly liveEnrollments?: readonly unknown[];
+      /** Slice 3a: an atomic Apply's refusal names the key that refused it (key → code). */
+      readonly keyReasons?: Readonly<Record<string, string>>;
+    };
 
 /** Authenticate, or the refusal to return. Reads and writes both need a principal. */
 export async function requirePrincipal(
@@ -96,6 +102,7 @@ export function commandReply(outcome: {
       reason: outcome.reason ?? 'refused',
       // `live_work_present` names the enrollments still live (R2); a replay answers the same.
       ...(outcome.details?.['liveEnrollments'] === undefined ? {} : { liveEnrollments: outcome.details['liveEnrollments'] }),
+      ...(outcome.details?.['keyReasons'] === undefined ? {} : { keyReasons: outcome.details['keyReasons'] }),
     },
   };
 }
@@ -121,9 +128,13 @@ export async function runRouteCommand<Schema extends z.ZodType<{ commandId: stri
   const outcome = await runCommand(deps.auth, deps.principal, { commandId, kind, payload, clientVersion }, async context => {
     const result = await work(context, body);
     if (result.ok) return { status: 'accepted', result: result.value ?? null };
-    return result.liveEnrollments === undefined
+    const details = {
+      ...(result.liveEnrollments === undefined ? {} : { liveEnrollments: result.liveEnrollments }),
+      ...(result.keyReasons === undefined ? {} : { keyReasons: result.keyReasons }),
+    };
+    return Object.keys(details).length === 0
       ? { status: 'refused', reason: result.reason }
-      : { status: 'refused', reason: result.reason, details: { liveEnrollments: result.liveEnrollments } };
+      : { status: 'refused', reason: result.reason, details };
   });
   return commandReply(outcome);
 }

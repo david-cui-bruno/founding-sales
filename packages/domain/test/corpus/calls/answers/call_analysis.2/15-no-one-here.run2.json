@@ -1,0 +1,13 @@
+{
+  "promptVersion": "call_analysis.2",
+  "model": "claude-haiku-4-5-20251001",
+  "transport": "bedrock",
+  "recordedAt": "2026-10-02",
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 3821,
+    "cachedInputTokens": 0,
+    "outputTokens": 273
+  },
+  "text": "{\"reached\":\"person\",\"summary\":\"You called Harbor Lane Property Management asking for the person who handles maintenance. Dana Whitfield answered and immediately asked not to be contacted, saying they don't want any calls of this kind.\",\"facts\":[],\"interest\":{\"level\":\"unclear\",\"signals\":[]},\"objections\":[],\"follow_up_request\":{\"kind\":\"none\",\"quote\":\"\",\"line\":0},\"callback\":{\"requested\":false,\"exact\":false,\"phrase\":\"\",\"line\":0,\"agreed_line\":0,\"day\":\"none\",\"date_text\":\"\",\"time\":\"\"},\"stop\":{\"requested\":true,\"scope\":\"all_contact\",\"quote\":\"Don't contact anyone here. We don't want any of this.\",\"line\":2},\"wrong_number\":{\"is_wrong\":false,\"quote\":\"\",\"line\":0,\"other_number_given\":\"\"},\"referral\":{\"given\":false,\"name\":\"\",\"role\":\"\",\"quote\":\"\",\"line\":0},\"voicemail_left\":false,\"commitments\":[],\"coaching\":{\"observation\":\"The contact requested not to be contacted and indicated no interest before you could present Callie. Honor this request and do not call back.\",\"lines\":[2]}, \"prompt_version\":\"call_analysis.2\"}"
+}

@@ -1,4 +1,10 @@
 import {
+  applyCallProposalsResultSchema,
+  applyKeyReasonsSchema,
+  callAnalysisResponseSchema,
+  callRecapResponseSchema,
+  proposalAcceptanceResponseSchema,
+  reviewListResponseSchema,
   firmBasicsRefusalSchema,
   firmBasicsResultSchema,
   firmMeetingsResponseSchema,
@@ -6,6 +12,7 @@ import {
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
 } from '@fss/contracts';
+import type { z } from 'zod';
 import {
   DIAL_IPC_CHANNELS,
   OPERATIONS,
@@ -74,6 +81,25 @@ const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
   settings: 'settings.state',
   mailbox: 'mailbox.state',
 });
+
+/**
+ * The per-key reasons of a refused Apply: the 409 body's `keyReasons`, `{ [proposalKey]: code }`
+ * (`applyKeyReasonsSchema`). An Apply is atomic: one refused key refuses the batch and writes
+ * nothing, and each key that was refused says why. A refusal that names no key (a freshness
+ * refusal) carries none, and anything that does not parse is no per-key detail.
+ */
+export function keyReasonsOf(refusal: unknown): Record<string, string> {
+  if (typeof refusal !== 'object' || refusal === null) return {};
+  const parsed = applyKeyReasonsSchema.safeParse((refusal as { keyReasons?: unknown }).keyReasons);
+  return parsed.success ? parsed.data : {};
+}
+
+async function readAnalysis(api: AuthedClient, callSessionId: string): Promise<{ analysis: z.infer<typeof callAnalysisResponseSchema> | null; reason: string | null }> {
+  const answer = await api.read(`/calls/analysis?callSessionId=${encodeURIComponent(callSessionId)}`, value =>
+    callAnalysisResponseSchema.parse(value),
+  );
+  return answer.ok ? { analysis: answer.value, reason: null } : { analysis: null, reason: answer.reason.slice(0, 80) };
+}
 
 export function operationHandlers(deps: OperationHostDeps): Readonly<Record<OperationName, Handler>> {
   const handlers = {
@@ -208,6 +234,70 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if (!answer.ok) throw new Error(answer.reason);
       return answer.value;
     },
+
+    // Slice 3a, lane C. Straight through the client, like Meetings: each answer is the value
+    // or null/false with the server's code, so a route an API does not serve is a hidden
+    // block and never an error page.
+    'calling.analysis': async (input: { readonly callSessionId: string }) => await readAnalysis(deps.api, input.callSessionId),
+    'calling.analysisRetry': async (input: OperationInput<'calling.analysisRetry'>) => {
+      const answer = await deps.api.command('/calls/analysis/retry', input, value => value);
+      if (!answer.ok) return { analysis: null, reason: answer.reason.slice(0, 80) };
+      return await readAnalysis(deps.api, input.callSessionId);
+    },
+    'calling.analysisEdit': async (input: OperationInput<'calling.analysisEdit'>) => {
+      const answer = await deps.api.command('/calls/analysis/edit', input, value => callAnalysisResponseSchema.parse(value));
+      return answer.ok ? { analysis: answer.value, reason: null } : { analysis: null, reason: answer.reason.slice(0, 80) };
+    },
+    'calling.proposalsApply': async (input: OperationInput<'calling.proposalsApply'>) => {
+      const { commandId, ...body } = input;
+      const answer = await deps.api.command(
+        '/calls/proposals/apply',
+        body,
+        value => applyCallProposalsResultSchema.parse(value),
+        commandId === undefined ? {} : { commandId },
+      );
+      return answer.ok
+        ? { applied: answer.value, reason: null, keyReasons: {} }
+        : { applied: null, reason: answer.reason.slice(0, 80), keyReasons: answer.offline ? {} : keyReasonsOf(answer.refusal) };
+    },
+    'calling.proposalsDecline': async (input: OperationInput<'calling.proposalsDecline'>) => {
+      const answer = await deps.api.command('/calls/proposals/decline', input, value => value);
+      return { declined: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
+    },
+    'calling.pendingDismiss': async (input: OperationInput<'calling.pendingDismiss'>) => {
+      const answer = await deps.api.command('/calls/pending/dismiss', input, value => value);
+      return { dismissed: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
+    },
+    'calling.recap': async () => {
+      const answer = await deps.api.read('/calls/recap', value => callRecapResponseSchema.parse(value));
+      return { recap: answer.ok ? answer.value : null };
+    },
+    'calling.acceptance': async () => {
+      const answer = await deps.api.read('/calls/proposals/acceptance', value => proposalAcceptanceResponseSchema.parse(value));
+      return { acceptance: answer.ok ? answer.value : null };
+    },
+    'review.list': async () => {
+      const answer = await deps.api.read('/review', value => reviewListResponseSchema.parse(value));
+      if (answer.ok) return { items: answer.value.items, failed: false };
+      // A 404 is an API that does not serve the list: the group hides. Anything else is a read
+      // that did not answer, and the page keeps what it last knew.
+      const notServed = !answer.offline && (answer.reason === 'not_found' || answer.reason === 'http_404');
+      return { items: null, failed: !notServed };
+    },
+    'review.stageResolve': async (input: OperationInput<'review.stageResolve'>) => {
+      const answer = await deps.api.command('/review/stage/resolve', input, value => value);
+      return { resolved: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
+    },
+    'suppressions.firmStop': async (input: OperationInput<'suppressions.firmStop'>) => {
+      // Scope firm, the firm, and the source David's own "do not call" carries. Nothing else.
+      const answer = await deps.api.command(
+        '/suppressions/record',
+        { scope: 'firm', firmId: input.firmId, source: 'prospect_do_not_call' },
+        value => value,
+      );
+      return { stopped: answer.ok, reason: answer.ok ? null : answer.reason.slice(0, 80) };
+    },
+    'today.completeTask': async (input: Parameters<TodayBridgeHost['completeTask']>[0]) => await deps.today.completeTask(input),
 
     // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
     'meetings.forFirm': async (input: { readonly firmId: string }) => {
