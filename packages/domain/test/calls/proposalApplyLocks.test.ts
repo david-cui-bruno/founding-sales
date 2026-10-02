@@ -230,4 +230,49 @@ describe('C4 (B-3): the apply against every competitor, in both orders and stopp
       if (answered.ok) expectCompetitor(competitor, answered.value, true);
     });
   }
+
+  // David's own wrong-number outcome against the same number being replaced on the firm's
+  // basics (found while building C4; pre-existing since S2, fixed in 3a): `logCallOutcome`
+  // now takes the route it retires before the firm, the order `updateFirmBasics` keeps.
+  describe("David's logCallOutcome(wrong_number) against updateFirmBasics replacing the dialled number", () => {
+    const logWrong = async (call: Analysed, db: SessionQueryable) =>
+      await logCallOutcome(world.salesperson(db), {
+        firmId: call.firm.firmId,
+        callSessionId: call.sessionId,
+        outcome: 'wrong_number',
+        commandId: `form-wrong-${call.sessionId}`,
+        journal: recordingSuppressionJournal(),
+      });
+
+    for (const first of ['logCallOutcome', 'updateFirmBasics'] as const) {
+      it(`${first} first: the other waits, and both finish`, async () => {
+        const { call } = await prepare('basics');
+        await a.query('BEGIN');
+        const held = first === 'logCallOutcome' ? await logWrong(call, a) : await work('basics', call, a);
+        expect(held).toMatchObject({ ok: true });
+        const second = settled(first === 'logCallOutcome' ? run('basics', call, b) : withTransaction(b, async () => await logWrong(call, b)));
+        expect(await waitsOn(world.session, await pidOf(a))).toBe(true);
+        await a.query('COMMIT');
+        const answered = await second;
+        expect(answered.ok, String(answered.ok ? '' : answered.error)).toBe(true);
+        if (answered.ok) expect(answered.value).toMatchObject({ ok: true });
+      });
+    }
+
+    it('logCallOutcome stopped after the firm (on the session row), the edit blocks on it, and both finish', async () => {
+      const { call } = await prepare('basics');
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT 1 FROM call_sessions WHERE id = $1 FOR UPDATE', [call.sessionId]);
+      const logging = settled(withTransaction(a, async () => await logWrong(call, a)));
+      expect(await waitsOn(world.session, await pidOf(blocker))).toBe(true);
+      const editing = settled(run('basics', call, b));
+      expect(await isBlocked(await pidOf(b))).toBe(true);
+      await blocker.query('COMMIT');
+      const [logged, edited] = await Promise.all([logging, editing]);
+      expect(logged.ok, String(logged.ok ? '' : logged.error)).toBe(true);
+      expect(edited.ok, String(edited.ok ? '' : edited.error)).toBe(true);
+      if (logged.ok) expect(logged.value).toMatchObject({ ok: true });
+      if (edited.ok) expect(edited.value).toMatchObject({ ok: true });
+    });
+  });
 });

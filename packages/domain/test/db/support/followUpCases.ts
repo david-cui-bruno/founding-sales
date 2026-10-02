@@ -441,10 +441,13 @@ export const FOLLOW_UP_CONSTRAINT_CASES: readonly Case[] = [
   },
   {
     constraint: 'call_logs_agreement_needs_interest',
-    // "Call me Tuesday" agreeing to an e-mail. David's own distinction, in the database.
+    // A voicemail agreeing to an e-mail: nobody was reached, so nobody agreed (0036, slice
+    // 3a, widened the CHECK under its own name: a reached, named person — interested,
+    // callback requested, referral, not interested — may agree; 0025 admitted only
+    // `interested`).
     run: async f =>
       await agreeingCall(f, {
-        outcome: 'callback_requested',
+        outcome: 'voicemail_left',
         agreed_follow_up: 'single_email',
         agreed_template_version_id: await seedTemplateVersion(f),
       }),

@@ -26,6 +26,8 @@ import { CALL_PATHS, routeCalls } from './calls.ts';
 import { CALL_SESSION_PATHS, routeCallSessions } from './callSessions.ts';
 // Slice 3a: a call's post-call analysis and David's notes.
 import { CALL_ANALYSIS_PATHS, routeCallAnalysis } from './callAnalysis.ts';
+// Slice 3a, lane B: applying an analysis, the pending hold, Needs review and call tasks.
+import { CALL_PROPOSAL_PATHS, routeCallProposals } from './callProposals.ts';
 import { CALCOM_PATHS, routeCalcom } from './calcom.ts';
 import { MEETING_PATHS, routeMeetings } from './meetings.ts';
 import { TWILIO_PATHS, routeTwilio } from './twilio.ts';
@@ -170,6 +172,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // until a workspace turns its switch on.
     moduleOf('call-sessions', { paths: CALL_SESSION_PATHS }, routeCallSessions, routing),
     moduleOf('call-analysis', { paths: CALL_ANALYSIS_PATHS }, routeCallAnalysis, routing),
+    moduleOf('call-proposals', { paths: CALL_PROPOSAL_PATHS }, routeCallProposals, routing),
     moduleOf('twilio', { paths: TWILIO_PATHS }, routeTwilio, routing),
     moduleOf('calcom', { paths: CALCOM_PATHS }, routeCalcom, routing),
     // Slice M1: the firm page's meetings, the bookings to match, and the match. Exact

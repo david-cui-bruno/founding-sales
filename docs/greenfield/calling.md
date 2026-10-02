@@ -560,6 +560,57 @@ the build then wait for each other in one direction only;
 `packages/domain/test/today/promptFirm.test.ts` drives that interleaving, and without the
 early lock PostgreSQL picks a deadlock victim.
 
+**Applying a post-call analysis, and the pending-review hold (slice 3a, lane B, migration
+0036).** Every effect of an analysis happens only when David clicks, for the first time,
+through an existing command, for the analysis he saw (`POST /calls/proposals/apply`,
+`calls/proposalApply.ts`). One Apply carries any subset of the analysis's `apply` proposals
+(`outcome`, `callback`, `follow_up`, `buying_signal`, `park`, tasks); opening a deal is one
+of those ticks, with no dialog. Its transaction takes, in this order:
+
+Today's lock (shared) → send gate → the dialled route, when a `wrong_number` or
+`do_not_call` **outcome** is applied → firm → `call_analysis:<session>` → the session row
+
+then checks freshness under them (the analysis is the newest completed model analysis on the
+current transcript, else `stale_analysis`; the echoed hash is the stored one, else
+`stale_proposal`), then the first-time rules in order (`call_already_logged`,
+`outcome_required`, `callback_exists`; a `follow_up` more than seven days after the call is
+`follow_up_expired`), and maps each key to its command inside one savepoint, so a refusal
+leaves nothing behind. `outcome` (with `callback`, `follow_up` and the "covers all contact"
+choice) is one `logCallOutcome`; `callback` on a logged call is `scheduleCallbackForCall` or
+`createCallback`; `follow_up` on a logged call is `confirmCapturedFollowUp` (seven days, not
+`recordCallFollowUp`'s sixty minutes); `buying_signal` is `applyStageEvidence('call.interested')`
+then `setManualControlMode(engaged_call)`; `park` is a cadence park (`already_parked` while any
+park hold, the automatic one included, is open); a task is a `call_tasks` row
+(`already_created` on a repeat). A second outcome for one session — from the form or an
+Apply — is `call_already_logged` in `logCallOutcome` itself.
+
+`logCallOutcome` itself now takes the route it retires or suppresses **before** the firm
+(gate → route → firm), the order `retireRoute` and `updateFirmBasics` keep: taken after the
+firm, as it was since S2, a wrong number logged while the same number was being replaced
+could deadlock with the basics edit.
+
+**The pending-review hold.** Both Twilio callbacks take the send gate, then the firm (`FOR NO
+KEY UPDATE`), before the session row — the status callback for **every** status now, not only
+no-answer and busy, and the recording callback, which used to lock the session first. On
+every delivery, duplicates included, `admitPendingHold` reads the session's accumulated facts
+and opens a firm-scoped `scoped_pause` (source `call_analysis_pending`, source id the session,
+recovery `review_call`, blocking `email_send`, `enrollment_advance` and `call_task`, never
+dialling) when the call is terminal, answered (`answered_at` or a provider status of
+`completed`), at least 20 seconds long, the transcription switch is on, it has no log, and the
+session never had one (`active_holds_one_pending_review`). It is released at the call's first
+log link, or by `POST /calls/pending/dismiss`, and is never reopened.
+
+**Cadence parking stays automatic.** It is the one automatic writer left (`parkIfCadenceSpent`,
+from the status callback and `logCallOutcome`); the "human click" rule covers analysis effects
+only.
+
+`packages/domain/test/calls/proposalApplyLocks.test.ts` (check C4) drives the Apply against
+the status callback, the recording callback, the morning build, `updateFirmBasics` replacing
+the dialled number, David's `logCallOutcome`, a reply opt-out and (in
+`proposalApply.test.ts`) `completeCallAnalysis`, in both orders and with the Apply stopped
+half-way; without the route pre-lock, the early Today lock, or either callback's gate prefix,
+its interleaving deadlocks.
+
 Every write to a `provider_ledger` row takes the monthly lock first (`lockMonthlySpend`,
 inside `recordProviderCall`, the settlement and the correction), so a transaction that holds
 a ledger row always holds the monthly lock and ledger rows cannot be part of a cycle; the

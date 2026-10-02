@@ -346,6 +346,14 @@ async function measure(
         WHERE x.workspace_id = $1 AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
       byContact,
     ),
+    // Slice 3a (0036): a promise made on a call, quoting it; it outlives its session, so it
+    // is matched by its own firm and contact.
+    call_tasks: await countOf(
+      context,
+      `SELECT count(*) AS count FROM call_tasks
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
     meetings: await countOf(
       context,
       `SELECT count(*) AS count FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,
@@ -934,6 +942,12 @@ export async function commitDeletion(
     `DELETE FROM call_transcripts t USING call_sessions s
       WHERE t.workspace_id = $1 AND s.workspace_id = t.workspace_id AND s.id = t.call_session_id
         AND s.firm_id = $3 AND ${contactPredicate('s.contact_id', '$2')}`,
+    byContact,
+  );
+  // Slice 3a (0036): before the sessions, whose deletion would only clear the task's link.
+  await remove(
+    'call_tasks',
+    `DELETE FROM call_tasks WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
   await remove(

@@ -310,4 +310,71 @@ describe('C3: first-time apply of the authoritative analysis', () => {
     expect(await apply(world, call, ['park'])).toEqual({ ok: false, reason: 'proposal_unknown' });
     expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
   });
+
+  it('a review-mode proposal is never applied: an unconfirmed buying signal is proposal_unknown, and nothing is written', async () => {
+    const vague = lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', 'Hm, that sounds pretty neat.']);
+    const call = await analysedCall(
+      vague,
+      answer({ interest: { level: 'buying_signal', signals: [{ kind: 'evaluation', quote: 'that sounds pretty neat', line: 2 }] } }),
+    );
+    const shown = (await world.read(call.sessionId)).authoritative?.proposals ?? [];
+    expect(shown.find(proposal => proposal.key === 'buying_signal')?.mode).toBe('review');
+    expect(await apply(world, call, ['buying_signal'])).toEqual({ ok: false, reason: 'proposal_unknown' });
+    expect(await effectsOf(call)).toEqual({ logs: 0, callbacks: 0, evidence: 0, tasks: 0 });
+  });
+
+  // ---------------------------------------------------------------------------- B-5
+
+  describe('B-5: the buying signal, in either click order, leaves the opportunity manual', () => {
+    const SIGNAL_CALL = lines(['Y', 'Hi Dana, this is David from Callie.'], ['T', "We're evaluating tools. Can you show us a demo?"]);
+    const SIGNAL = answer({
+      summary: 'You reached Dana. She asked for a demo.',
+      interest: { level: 'buying_signal', signals: [{ kind: 'demo_request', quote: 'Can you show us a demo?', line: 2 }] },
+    });
+    const opportunityOf = async (firmId: string) =>
+      (
+        await world.session.query<{ status: string; control_mode: string; control_mode_origin: string | null }>(
+          "SELECT status, control_mode, control_mode_origin FROM opportunities WHERE firm_id = $1 AND status = 'open'",
+          [firmId],
+        )
+      ).rows;
+
+    for (const order of [['outcome', 'buying_signal'], ['buying_signal', 'outcome'], ['outcome+buying_signal']] as const) {
+      it(`${order.join(' then ')}, at a firm with no opportunity`, async () => {
+        const firm = await world.newFirm();
+        const call = await world.analyse(await world.placeCall(firm, SIGNAL_CALL), SIGNAL);
+        expect([...call.keys].sort()).toEqual(['buying_signal', 'outcome']);
+        for (const step of order) {
+          const applied = await apply(world, call, step.split('+'));
+          expect(applied.ok, JSON.stringify(applied)).toBe(true);
+        }
+        expect(await opportunityOf(firm.firmId)).toEqual([{ status: 'open', control_mode: 'manual', control_mode_origin: 'engaged_call' }]);
+      });
+    }
+
+    it('an open automated opportunity becomes manual on the tick alone, and no second opportunity is opened', async () => {
+      const firm = await world.newFirm({ opportunity: 'open' });
+      const call = await world.analyse(await world.placeCall(firm, SIGNAL_CALL), SIGNAL);
+      expect((await apply(world, call, ['buying_signal'])).ok).toBe(true);
+      expect(await opportunityOf(firm.firmId)).toEqual([{ status: 'open', control_mode: 'manual', control_mode_origin: 'engaged_call' }]);
+    });
+
+    it('a firm whose history is closed gets a review item, never a reopened deal', async () => {
+      const firm = await world.newFirm({ opportunity: 'closed' });
+      const call = await world.analyse(await world.placeCall(firm, SIGNAL_CALL), SIGNAL);
+      const applied = await apply(world, call, ['buying_signal']);
+      expect(applied.ok && applied.value.results).toEqual([expect.objectContaining({ key: 'buying_signal', id: null })]);
+      expect(await opportunityOf(firm.firmId)).toEqual([]);
+      expect(
+        await count("SELECT count(*)::text AS n FROM stage_review_items WHERE firm_id = $1 AND reason = 'opportunity_closed'", [firm.firmId]),
+      ).toBe(1);
+    });
+
+    it('without the tick, no deal is opened: the outcome alone opens nothing', async () => {
+      const firm = await world.newFirm();
+      const call = await world.analyse(await world.placeCall(firm, SIGNAL_CALL), SIGNAL);
+      expect((await apply(world, call, ['outcome'])).ok).toBe(true);
+      expect(await opportunityOf(firm.firmId)).toEqual([]);
+    });
+  });
 });

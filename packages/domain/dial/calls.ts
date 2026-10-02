@@ -31,7 +31,7 @@ import type { SuppressionJournal } from '../suppression/journal.ts';
 import { businessDateOf, completeTodayItemsByKey, readTodayItem, upsertTodayItem } from '../today/snapshots.ts';
 import { callLogIdOfItemKey, callbackTimeNeededItemKey } from '../today/types.ts';
 import { completeCallback, createCallback, resolveConfirmedInstant } from './callbacks.ts';
-import { manualReasonFor } from './outcomes.ts';
+import { callOutcomeEffects, manualReasonFor } from './outcomes.ts';
 import { UNANSWERED_OUTCOMES, parkIfCadenceSpent } from '../calls/sessions.ts';
 import { releasePendingHold } from '../calls/pendingHold.ts';
 import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep } from './stepEffects.ts';
@@ -217,6 +217,17 @@ export async function logCallOutcome(
   // it here costs nothing: the same lock is taken a few statements later either way, and
   // a call that refuses releases it at the end of the caller's transaction.
   await lockSendGateForStopFact(context);
+  // Slice 3a (the one lock order, docs/greenfield/calling.md): an outcome that retires or
+  // suppresses the dialled number takes that route's row **before** the firm's, the order
+  // `retireRoute` and `updateFirmBasics` keep (route → firm). Taken after the firm, as it
+  // was, a wrong number logged while the same number was being replaced on the firm's
+  // basics could deadlock: this command held the firm and waited for the route, the edit
+  // held the route and waited for the firm. Located unlocked from what the request names;
+  // everything is checked again under the locks below, and a route that turns out not to be
+  // the call's is refused there.
+  if (callOutcomeEffects(input.outcome).retiresRoute || callOutcomeEffects(input.outcome).suppressesNumber) {
+    await lockDialledRoute(context, input);
+  }
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refusePolicy('firm_unknown');
   const permitted = decideFirmMutation(context, firm);
@@ -698,6 +709,34 @@ export async function logCallOutcome(
     followUpPermissionId,
     followUps,
   });
+}
+
+/**
+ * Lock, `FOR UPDATE`, the phone route a call outcome would retire or suppress: the one the
+ * request names, else its ticket's (directly, or through its call session). Only a route of
+ * the request's firm. Nothing is decided here; the caller checks every identity again under
+ * the firm's lock.
+ */
+async function lockDialledRoute(
+  context: RepositoryContext,
+  input: Pick<LogCallOutcomeInput, 'firmId' | 'routeId' | 'ticketId' | 'callSessionId'>,
+): Promise<void> {
+  let routeId = input.routeId;
+  if (routeId === undefined && (input.ticketId !== undefined || input.callSessionId !== undefined)) {
+    const { rows } = await context.db.query<{ phone_route_id: string }>(
+      `SELECT t.phone_route_id FROM dial_tickets t
+        WHERE t.workspace_id = $1
+          AND t.id = coalesce($2::uuid, (SELECT s.ticket_id FROM call_sessions s WHERE s.workspace_id = $1 AND s.id = $3::uuid))`,
+      [context.scope.workspaceId, input.ticketId ?? null, input.callSessionId ?? null],
+    );
+    routeId = rows[0]?.phone_route_id;
+  }
+  if (routeId === undefined || !/^[0-9a-f-]{36}$/iu.test(routeId)) return;
+  await context.db.query('SELECT 1 FROM phone_routes WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE', [
+    context.scope.workspaceId,
+    routeId,
+    input.firmId,
+  ]);
 }
 
 /** How long after a call its agreement may still be recorded by `recordCallFollowUp`. */
