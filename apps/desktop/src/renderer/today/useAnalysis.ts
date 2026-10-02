@@ -126,8 +126,8 @@ export function useReview(enabled: boolean): { items: ReviewView['items']; faile
   // The last list that did answer, kept while later reads fail.
   const known = useRef<ReviewView['items']>(null);
   const data = query.data;
-  if (data !== undefined && data.items !== null) known.current = data.items;
-  else if (data !== undefined && !data.failed) known.current = null;
+  if (data !== undefined && data.items != null) known.current = data.items;
+  else if (data !== undefined && data.failed !== true) known.current = null;
   const failed = query.isError || data?.failed === true;
   return { items: known.current, failed: failed && known.current !== null, reload: () => void client.invalidateQueries({ queryKey: REVIEW_KEY }) };
 }
