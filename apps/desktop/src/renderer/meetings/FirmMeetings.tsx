@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import type { FirmMeetingDto } from '@fss/contracts';
 import { shortDayTime } from '../dates.ts';
 import { Tag } from '../ui/layout.tsx';
-import { MEETING_STATE_WORDS } from './meetingText.ts';
+import { meetingStateWarns, meetingStateWord } from './meetingText.ts';
 
 /**
  * The firm page's Meetings rows (slice M1): each Cal.com booking with the firm, its state
@@ -73,8 +73,8 @@ export function FirmMeetings({
         {meetings.map(meeting => (
           <li key={meeting.meetingId} data-testid="firm-meeting-row" className="flex items-center gap-3 border-b border-border py-1.5 text-sm">
             <span className="flex-1 truncate">{shortDayTime(meeting.startsAt)}</span>
-            <Tag data-testid="firm-meeting-state" tone={meeting.state === 'cancelled' || meeting.state === 'no_show' ? 'warn' : 'none'}>
-              {MEETING_STATE_WORDS[meeting.state]}
+            <Tag data-testid="firm-meeting-state" tone={meetingStateWarns(meeting.state) ? 'warn' : 'none'}>
+              {meetingStateWord(meeting.state)}
             </Tag>
           </li>
         ))}

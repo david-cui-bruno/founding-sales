@@ -12,6 +12,25 @@ import { instant, uuid } from './foundationRows.ts';
 export const MEETING_STATES = ['booked', 'rescheduled', 'cancelled', 'held', 'no_show'] as const;
 export type MeetingState = (typeof MEETING_STATES)[number];
 
+/**
+ * A meeting state as a READER accepts it (lane M1, B0): one of `MEETING_STATES`, or a state
+ * a newer server added. Every answer the Mac parses carries the state through this rather
+ * than through `z.enum(MEETING_STATES)`, because a strict enum made one unknown state fail
+ * the whole board read: migration 0039 adds `ended`, and the desktop that is installed when
+ * the server first answers with it must still show the board and the firm's meetings. A
+ * state the reader does not know is shown neutrally ("Meeting"), never as its code.
+ *
+ * Bounded to the shape a state has (lower-case words joined by `_`), so the field cannot
+ * carry text. The server writes only `MEETING_STATES`; the database CHECK is the list.
+ */
+export const MEETING_STATE_WIRE_SHAPE = /^[a-z][a-z_]{0,31}$/u;
+export const meetingStateWireSchema = z.string().regex(MEETING_STATE_WIRE_SHAPE);
+
+/** Whether a state read off the wire is one this build knows. */
+export function isKnownMeetingState(state: string): state is MeetingState {
+  return (MEETING_STATES as readonly string[]).includes(state);
+}
+
 /** The Cal.com webhook triggers the CRM applies. Any other trigger is recorded `ignored`. */
 export const CALCOM_APPLIED_TRIGGERS = [
   'BOOKING_CREATED',
@@ -27,7 +46,7 @@ export const CALCOM_SIGNATURE_HEADER = 'x-cal-signature-256';
 
 export const meetingDtoSchema = z.object({
   meetingId: uuid,
-  state: z.enum(MEETING_STATES),
+  state: meetingStateWireSchema,
   startsAt: instant,
   endsAt: instant,
 });
@@ -40,14 +59,36 @@ export type MeetingDto = z.infer<typeof meetingDtoSchema>;
 /** A meeting as the firm page lists it: its state and its time. Strict: nothing else. */
 export const firmMeetingDtoSchema = z.strictObject({
   meetingId: uuid,
-  state: z.enum(MEETING_STATES),
+  state: meetingStateWireSchema,
   startsAt: instant,
   endsAt: instant,
+  /**
+   * How the meeting's attendance was confirmed, null while unconfirmed (lane M1, migration
+   * 0039: `manual`, `calcom_no_show`, later `recording`). Declared before the server sends it,
+   * optional and of the code shape, so the desktop released ahead of 0039 parses the answer
+   * the server sends after it.
+   */
+  attendanceSource: meetingStateWireSchema.nullable().optional(),
 });
 export type FirmMeetingDto = z.infer<typeof firmMeetingDtoSchema>;
 
+/**
+ * A stage move Callie suggests and a person makes with one click (lane M1: a booking no
+ * longer moves a deal by itself). `opportunityId` is the open deal to move, or null when the
+ * firm has none and the click opens one at the stage. Not strict: a later field is ignored.
+ */
+export const stageSuggestionSchema = z.object({
+  stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u),
+  opportunityId: uuid.nullable(),
+});
+export type StageSuggestion = z.infer<typeof stageSuggestionSchema>;
+
 /** `GET /meetings/firm?firmId=` — the firm's meetings, newest start first. */
-export const firmMeetingsResponseSchema = z.strictObject({ meetings: z.array(firmMeetingDtoSchema) });
+export const firmMeetingsResponseSchema = z.strictObject({
+  meetings: z.array(firmMeetingDtoSchema),
+  /** Lane M1: "Move to Demo booked" for a live booking, declared ahead of the server (above). */
+  stageSuggestion: stageSuggestionSchema.nullable().optional(),
+});
 
 /**
  * A booking Callie could not attach to a firm by itself (`firm_unmatched` /
@@ -55,7 +96,7 @@ export const firmMeetingsResponseSchema = z.strictObject({ meetings: z.array(fir
  */
 export const unmatchedMeetingDtoSchema = z.strictObject({
   meetingId: uuid,
-  state: z.enum(MEETING_STATES),
+  state: meetingStateWireSchema,
   startsAt: instant,
   endsAt: instant,
   attendeeEmail: z.string().max(320).nullable(),
@@ -89,7 +130,7 @@ export const meetingMatchedSchema = z.strictObject({
   meetingId: uuid,
   firmId: uuid,
   contactId: uuid.nullable(),
-  state: z.enum(MEETING_STATES),
+  state: meetingStateWireSchema,
   /** What the booked evidence did: `none` for a cancelled meeting, which owes nothing. */
   stage: z.enum(['moved', 'opened', 'unchanged', 'review', 'none']),
 });

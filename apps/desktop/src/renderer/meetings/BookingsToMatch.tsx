@@ -4,7 +4,7 @@ import { shortDayTime } from '../dates.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
-import { MEETING_STATE_WORDS } from './meetingText.ts';
+import { meetingStateWord } from './meetingText.ts';
 
 /**
  * "Bookings to match", on the Pipeline screen (slice M1): the Cal.com bookings Callie
@@ -71,7 +71,7 @@ function Booking({
         detail={
           <span className="flex flex-col gap-1">
             <span>
-              {MEETING_STATE_WORDS[meeting.state]}
+              {meetingStateWord(meeting.state)}
               {meeting.reason === 'firm_ambiguous' ? ' · more than one firm could be theirs' : ''}
             </span>
             {picked === null ? (
