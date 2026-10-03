@@ -36,16 +36,16 @@ function Item({ item, recordings, enabled }: { readonly item: RecordingItem; rea
   const detail = item.state === 'failed' ? reasonSentence(item.failure ?? 'upload_failed') : 'Which meeting was this?';
   return (
     <li data-testid="recording-to-sort" data-state={item.state} className="flex flex-col gap-1 border-b border-border py-1.5 last:border-b-0">
-      <span className="flex min-w-0 items-center gap-2">
-        <span className="flex min-w-0 flex-1 flex-col">
+      <span className="flex min-w-0 flex-col">
+        <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm">
             {recordingTitle(item.folderName)} · {shortDayTime(item.startedAt)}
           </span>
-          <span data-testid="recording-detail" className="truncate text-xs text-muted-foreground">
+          <span data-testid="recording-detail" className="text-xs text-muted-foreground">
             {detail}
           </span>
         </span>
-        <span className="flex shrink-0 items-center gap-0.5">
+        <span className="-ml-2 flex flex-wrap items-center gap-0.5">
           {item.state === 'needs_matching' && picking === undefined ? (
             <Button
               size="sm"

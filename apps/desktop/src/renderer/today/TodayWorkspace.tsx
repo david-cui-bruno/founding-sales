@@ -773,11 +773,10 @@ export function TodayWorkspace({
               footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} />}
               marks={marks}
               review={
-                review.items === null ? null : (
+                <>
+                {review.items === null ? null : (
                   <>
                     <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
-                    {/* Lane M4: a demo recording that needs a meeting chosen, or failed. Quiet otherwise. */}
-                    <RecordingsToSort />
                     {review.failed ? (
                       <p data-testid="review-refresh-failed" role="status" className="mb-3 flex items-center gap-1 px-2 text-xs text-muted-foreground">
                         Couldn’t refresh.
@@ -787,7 +786,10 @@ export function TodayWorkspace({
                       </p>
                     ) : null}
                   </>
-                )
+                )}
+                {/* Lane M4: a demo recording that needs a meeting chosen, or failed. Quiet otherwise. */}
+                <RecordingsToSort />
+                </>
               }
             />
           </div>
