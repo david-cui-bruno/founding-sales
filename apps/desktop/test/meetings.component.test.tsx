@@ -56,16 +56,54 @@ describe('the firm page s Meetings rows', () => {
     expect(screen.getAllByTestId('firm-meeting-row')[0]?.textContent).toContain('2026');
   });
 
-  it('renders nothing with no meetings, and a sentence when the read failed', async () => {
-    const { container } = render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async () => await Promise.resolve({ meetings: [] }) }} />);
-    await waitFor(() => {
-      expect(container.textContent).toBe('');
+  it('says "No meeting booked yet." once the read has answered and there is none', async () => {
+    render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async () => await Promise.resolve({ meetings: [] }) }} />);
+    expect((await screen.findByTestId('firm-meetings-empty')).textContent).toBe('No meeting booked yet.');
+    expect(screen.queryByTestId('firm-meetings-unavailable')).toBeNull();
+  });
+
+  it('says nothing while the read is under way', async () => {
+    let release: (value: { meetings: [] }) => void = () => undefined;
+    const slow = new Promise<{ meetings: [] }>(resolve => {
+      release = resolve;
     });
-    cleanup();
+    const { container } = render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async () => await slow }} />);
+    expect(container.textContent).toBe('');
+    expect(screen.queryByTestId('firm-meetings-empty')).toBeNull();
+    release({ meetings: [] });
+    expect(await screen.findByTestId('firm-meetings-empty')).toBeTruthy();
+  });
+
+  it('says the read failed, and never "no meeting", when it did not answer or rejected', async () => {
     render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async () => await Promise.resolve({ meetings: null }) }} />);
-    await waitFor(() => {
-      expect(screen.getByTestId('firm-meetings-unavailable').textContent).toContain('could not read');
+    expect((await screen.findByTestId('firm-meetings-unavailable')).textContent).toContain('could not read');
+    expect(screen.queryByTestId('firm-meetings-empty')).toBeNull();
+    cleanup();
+    render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async () => await Promise.reject(new Error('offline')) }} />);
+    expect(await screen.findByTestId('firm-meetings-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('firm-meetings-empty')).toBeNull();
+  });
+
+  it('says nothing when there is no way to read meetings at all (the read is absent)', () => {
+    const { container } = render(<FirmMeetings firmId={FIRM_ID} ports={null} />);
+    expect(container.textContent).toBe('');
+  });
+
+  it('does not show the empty message for the previous firm while the next one is read', async () => {
+    let release: (value: { meetings: [] }) => void = () => undefined;
+    const slow = new Promise<{ meetings: [] }>(resolve => {
+      release = resolve;
     });
+    const OTHER = '66666666-6666-4666-8666-666666666666';
+    const forFirm = (firmId: string) => (firmId === FIRM_ID ? Promise.resolve({ meetings: [] as [] }) : slow);
+    const { rerender } = render(<FirmMeetings firmId={FIRM_ID} ports={{ forFirm: async id => await forFirm(id) }} />);
+    await screen.findByTestId('firm-meetings-empty');
+    rerender(<FirmMeetings firmId={OTHER} ports={{ forFirm: async id => await forFirm(id) }} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId('firm-meetings-empty')).toBeNull();
+    });
+    release({ meetings: [] });
+    expect(await screen.findByTestId('firm-meetings-empty')).toBeTruthy();
   });
 });
 

@@ -56,7 +56,16 @@ export function FirmMeetings({
       </p>
     );
   }
-  if (meetings.length === 0) return null;
+  // Loaded, and there is none: said once, quietly. It is never shown while the read is under
+  // way (above: undefined) or when it failed (null), so a read that did not answer cannot read
+  // as "no meeting".
+  if (meetings.length === 0) {
+    return (
+      <p data-testid="firm-meetings-empty" className="text-xs text-muted-foreground">
+        No meeting booked yet.
+      </p>
+    );
+  }
   return (
     <section data-testid="firm-meetings" className="flex flex-col">
       <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">Meetings</h3>
