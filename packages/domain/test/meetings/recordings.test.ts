@@ -90,10 +90,19 @@ describe('meeting recordings in the domain', () => {
     const meetingId = await meeting(await firm());
     const answer = await withTransaction(database.session, async () =>
       await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c')] }, async key =>
-        await Promise.resolve(key.includes(sha('c')) ? 'recording_missing' : 'ok'),
+        await Promise.resolve(key.includes(sha('c')) ? 'recording_size_mismatch' : 'ok'),
       ),
     );
-    expect(answer).toEqual({ ok: false, reason: 'recording_missing' });
+    expect(answer).toEqual({ ok: false, reason: 'recording_size_mismatch' });
+    expect(await recordings(meetingId)).toEqual([]);
+    // A missing object is thrown with every missing digest, so the route keeps no receipt.
+    await expect(
+      withTransaction(database.session, async () =>
+        await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c'), file('d')] }, async key =>
+          await Promise.resolve(key.includes(sha('b')) ? 'ok' : 'recording_missing'),
+        ),
+      ),
+    ).rejects.toMatchObject({ name: 'RecordingObjectsMissingError', missing: [sha('c'), sha('d')] });
     expect(await recordings(meetingId)).toEqual([]);
   });
 

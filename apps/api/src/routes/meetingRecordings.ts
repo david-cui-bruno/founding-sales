@@ -13,8 +13,10 @@ import {
   meetingRecordingKey,
   recordedDigests,
   registerMeetingRecordings,
+  RecordingObjectsMissingError,
   type RecordingVerdict,
 } from '@fss/domain/meetings/recordings.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
 import {
   MEETING_AUDIO_TOTAL_TIMEOUT_MS,
   MeetingAudioUnavailableError,
@@ -41,8 +43,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     not already recorded is checked by HEAD (present, the size, the digest) before any row is
  *     written; one row per (meeting, sha256), so a duplicate or a restart records nothing twice.
  *     S3 not answering is a 503 `storage_unavailable` with no receipt (the transaction rolls
- *     back), so the same command id may be sent again; a definite answer (missing, wrong size,
- *     wrong digest) is a refusal the receipt keeps.
+ *     back), so the same command id may be sent again. An object that is not there (HEAD 404,
+ *     or 403: the role has no ListBucket) is 409 `object_missing` with the digests and no
+ *     receipt, so the Mac uploads those files again (review M4R, finding 9). A wrong size or
+ *     digest is a refusal the receipt keeps. A person who is not an administrator registers
+ *     only objects whose upload URL was issued to them (`recording_not_issued`).
+ *
+ * The candidates read answers only the meetings this person may attach a recording to, the
+ * attendee's address as its local part, and `truncated` (review M4R, findings 3 and 10). An
+ * upload URL is signed only after the person is authorized again, a replay included (finding 8).
  *
  * Without the bucket (`meetingAudio` absent) the two commands are 404, as an integration that
  * is not configured is; the candidates read needs no bucket.
@@ -83,24 +92,45 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
     }
     const scoped = contextForPrincipal(auth, authenticated.principal);
     if (!scoped.ok) return scoped.result;
-    const meetings = await listRecordingCandidates(scoped.context, { from: from.data, to: to.data });
-    return { status: 200, body: recordingCandidatesResponseSchema.parse({ meetings }) };
+    const listed = await listRecordingCandidates(scoped.context, { from: from.data, to: to.data });
+    return { status: 200, body: recordingCandidatesResponseSchema.parse({ meetings: listed.meetings, truncated: listed.truncated }) };
   }
 
   const audio = store as MeetingAudioStore;
   if (request.path === '/meetings/recordings/upload-url') {
-    type Kept = { readonly status: 'registered' } | { readonly status: 'upload'; readonly key: string; readonly sizeBytes: number; readonly sha256: string };
+    type Kept =
+      | { readonly status: 'registered' }
+      | { readonly status: 'upload'; readonly key: string; readonly sizeBytes: number; readonly sha256: string; readonly issuedTo: string };
     const answered = await runRouteCommand<typeof recordingUploadUrlCommandSchema, Kept>(deps, recordingUploadUrlCommandSchema, 'meeting_recording_upload_url', async (context, body) => {
       const authorized = await authorizeRecording(context, body.meetingId);
       if (!authorized.ok) return authorized;
       const recorded = await recordedDigests(context, body.meetingId, [body.fileSha256]);
       if (recorded.has(body.fileSha256)) return { ok: true, value: { status: 'registered' } };
-      // Kept on the receipt: the key, the size and the digest. Never the URL.
+      // Kept on the receipt: the key, the size, the digest and who it was issued to (the
+      // register's uploader binding). Never the URL.
       return {
         ok: true,
-        value: { status: 'upload', key: meetingRecordingKey(body.meetingId, body.fileSha256), sizeBytes: body.sizeBytes, sha256: body.fileSha256 },
+        value: {
+          status: 'upload',
+          key: meetingRecordingKey(body.meetingId, body.fileSha256),
+          sizeBytes: body.sizeBytes,
+          sha256: body.fileSha256,
+          issuedTo: authenticated.principal.userId,
+        },
       };
     });
+    if (answered.status !== 200) return answered;
+    // Review M4R, finding 8: a URL is a new bearer credential, so every one — a replay's too —
+    // is signed only after the person is authorized again, now: the firm still theirs (or an
+    // administrator), the meeting still there and not cancelled.
+    const meetingId = (request.body as { meetingId?: unknown }).meetingId;
+    const scoped = contextForPrincipal(auth, authenticated.principal);
+    if (!scoped.ok) return scoped.result;
+    const again = await withTransaction(auth.db, async () => await authorizeRecording(scoped.context, String(meetingId)));
+    if (!again.ok) {
+      const envelope = answered.body as { replayed?: unknown };
+      return { status: 409, body: { status: 'refused', replayed: envelope.replayed === true, reason: again.reason } };
+    }
     return await withFreshUrl(answered, audio);
   }
 
@@ -115,15 +145,31 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
     if (head.sha256Base64 !== sha256Base64(file.sha256)) return 'recording_checksum_mismatch';
     return 'ok';
   };
+  // Review M4R (uploader binding): a person who is not an administrator registers only the
+  // objects an upload URL was issued to them for (`issuedTo` on that command's receipt).
+  const issuedToActor = async (key: string): Promise<boolean> => {
+    const { rows } = await auth.db.query(
+      `SELECT 1 FROM command_receipts
+        WHERE workspace_id = $1 AND command_kind = 'meeting_recording_upload_url' AND result_status = 'accepted'
+          AND result ->> 'key' = $2 AND result ->> 'issuedTo' = $3
+        LIMIT 1`,
+      [authenticated.principal.workspaceId, key, authenticated.principal.userId],
+    );
+    return rows.length > 0;
+  };
   try {
     return await runRouteCommand(deps, recordingRegisterCommandSchema, 'meeting_recording_register', async (context, body) => {
-      const registered = await registerMeetingRecordings(context, { meetingId: body.meetingId, files: body.files }, verify);
+      const registered = await registerMeetingRecordings(context, { meetingId: body.meetingId, files: body.files }, verify, issuedToActor);
       return registered.ok ? { ok: true, value: recordingsRegisteredSchema.parse(registered.value) } : registered;
     });
   } catch (error) {
     if (error instanceof MeetingAudioUnavailableError) {
       options.log?.log('warn', 'meeting_recording_head_unavailable', {});
       return STORAGE_UNAVAILABLE;
+    }
+    if (error instanceof RecordingObjectsMissingError) {
+      // No receipt (the transaction rolled back): the Mac uploads these again, then registers.
+      return { status: 409, body: { status: 'refused', replayed: false, reason: 'object_missing', missing: [...error.missing] } };
     }
     throw error;
   }

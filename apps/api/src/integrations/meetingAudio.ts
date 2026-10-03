@@ -153,11 +153,17 @@ export async function loadMeetingAudioStore(options: {
   };
 }
 
-/** HEAD has no body, so S3's 404 arrives as `NotFound` (or a bare 404 status). */
+/**
+ * HEAD has no body, so S3's 404 arrives as `NotFound` (or a bare 404 status). Without
+ * `s3:ListBucket` — which the API role deliberately lacks — S3 answers a missing object with
+ * 403 instead (review M4R, finding 9; HeadObject's documented behaviour), so 403 is "not
+ * there" too: the Mac uploads it again, a bounded number of times.
+ */
 function isNotFound(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const record = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
-  return record.name === 'NotFound' || record.name === 'NoSuchKey' || record.$metadata?.httpStatusCode === 404;
+  const status = record.$metadata?.httpStatusCode;
+  return record.name === 'NotFound' || record.name === 'NoSuchKey' || record.name === 'Forbidden' || record.name === 'AccessDenied' || status === 404 || status === 403;
 }
 
 async function loadSdk(): Promise<MeetingAudioSdk> {

@@ -416,6 +416,8 @@ export const MEETING_RECORDING_REFUSAL_SENTENCES: Readonly<Record<MeetingRecordi
   recording_missing: 'The upload did not arrive. Retry sends the recording again.',
   recording_size_mismatch: 'The uploaded file was incomplete. Retry sends the recording again.',
   recording_checksum_mismatch: 'The uploaded file did not match the recording on this Mac. Retry sends it again.',
+  object_missing: 'The upload did not arrive. Retry sends the recording again.',
+  recording_not_issued: 'This recording was uploaded by somebody else. Retry sends it from this Mac.',
 });
 
 /** The importer's own failures on this Mac (`main/recordings`), as the Today item and the firm page say them. */
@@ -428,6 +430,7 @@ const RECORDING_IMPORT_SENTENCES: Readonly<Record<string, string>> = Object.free
   storage_unavailable: 'Callie’s server cannot take recordings just now. Retry in a few minutes.',
   recordings_unsupported: 'Callie’s server does not take recordings yet.',
   recording_choice_stale: 'That recording changed since this was shown. Look again and choose once more.',
+  not_audio: 'One of the files is not an audio recording (it has video, or is not an M4A file), so Callie does not send it.',
 });
 
 // ---------------------------------------------------------------------------

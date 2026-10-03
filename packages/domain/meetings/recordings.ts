@@ -12,8 +12,10 @@ import { loadFirmForUpdate } from '../crm/firms.ts';
  * The Mac decides which folder belongs to which meeting (it alone can see the folders); the
  * server answers three questions and records one fact:
  *
- *   * which meetings a folder could belong to (`listRecordingCandidates`) — any active member,
- *     as the firm page's meetings are; cancelled meetings are never candidates;
+ *   * which meetings a folder could belong to (`listRecordingCandidates`) — an administrator
+ *     sees the workspace's, anybody else only the meetings on firms assigned to them (review
+ *     M4R, finding 3); cancelled meetings are never candidates; the attendee's address is
+ *     answered as its local part only;
  *   * may this person attach a file to this meeting (`authorizeRecording`) — an administrator,
  *     or the assignee of the meeting's firm (`decideFirmMutation`); a meeting with no firm yet
  *     is an administrator's. Lock order, as every meeting writer keeps it: the firm row, then
@@ -41,34 +43,48 @@ interface CandidateRow extends QueryResultRowLike {
   readonly firm_id: string | null;
   readonly firm_name: string | null;
   readonly contact_name: string | null;
-  readonly attendee_email: string | null;
+  readonly attendee_local_part: string | null;
 }
 
-/** The non-cancelled meetings starting in [from, to], soonest first, at most `maxCandidates`. */
+/**
+ * The non-cancelled meetings starting in [from, to] that this person may attach a recording
+ * to, soonest first, at most `maxCandidates`; `truncated` when there were more (review M4R,
+ * finding 10). An administrator: every meeting of the workspace. Anybody else: only meetings
+ * on a firm assigned to them — an unmatched meeting is an administrator's (finding 3).
+ */
 export async function listRecordingCandidates(
   context: RepositoryContext,
   window: { readonly from: string; readonly to: string },
-): Promise<readonly RecordingCandidate[]> {
+): Promise<{ readonly meetings: readonly RecordingCandidate[]; readonly truncated: boolean }> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return { meetings: [], truncated: false };
+  const admin = actor.role === 'admin';
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name, m.attendee_email
+    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name,
+            NULLIF(split_part(m.attendee_email, '@', 1), '') AS attendee_local_part
        FROM meetings m
        LEFT JOIN firms f ON f.workspace_id = m.workspace_id AND f.id = m.firm_id
        LEFT JOIN contacts c ON c.workspace_id = m.workspace_id AND c.id = m.contact_id
       WHERE m.workspace_id = $1 AND m.state <> 'cancelled'
         AND m.starts_at >= $2::timestamptz AND m.starts_at <= $3::timestamptz
+        AND ($5::boolean OR (f.assigned_user_id = $6::uuid AND f.status <> 'merged'))
       ORDER BY m.starts_at, m.id
       LIMIT $4`,
-    [context.scope.workspaceId, window.from, window.to, MEETING_RECORDING_LIMITS.maxCandidates],
+    [context.scope.workspaceId, window.from, window.to, MEETING_RECORDING_LIMITS.maxCandidates + 1, admin, actor.userId],
   );
-  return rows.map(row => ({
-    meetingId: row.id,
-    startsAt: row.starts_at.toISOString(),
-    endsAt: row.ends_at.toISOString(),
-    firmId: row.firm_id,
-    firmName: row.firm_name,
-    attendeeName: row.contact_name,
-    attendeeEmail: row.attendee_email,
-  }));
+  const kept = rows.slice(0, MEETING_RECORDING_LIMITS.maxCandidates);
+  return {
+    truncated: rows.length > kept.length,
+    meetings: kept.map(row => ({
+      meetingId: row.id,
+      startsAt: row.starts_at.toISOString(),
+      endsAt: row.ends_at.toISOString(),
+      firmId: row.firm_id,
+      firmName: row.firm_name,
+      attendeeName: row.contact_name,
+      attendeeLocalPart: row.attendee_local_part,
+    })),
+  };
 }
 
 /** May this person attach recordings to this meeting? Takes the firm's and the meeting's locks. */
@@ -121,6 +137,18 @@ export function meetingRecordingKey(meetingId: string, sha256: string): string {
 
 export type RecordingVerdict = 'ok' | 'recording_missing' | 'recording_size_mismatch' | 'recording_checksum_mismatch';
 
+/**
+ * Some staged objects are not there (review M4R, finding 9): thrown, so the command's
+ * transaction rolls back and no receipt is kept; the route answers `object_missing` with the
+ * digests, and the Mac uploads those files again.
+ */
+export class RecordingObjectsMissingError extends Error {
+  constructor(readonly missing: readonly string[]) {
+    super('staged recording objects are missing');
+    this.name = 'RecordingObjectsMissingError';
+  }
+}
+
 interface RecordingRow extends QueryResultRowLike {
   readonly id: string;
   readonly sha256: string;
@@ -131,6 +159,11 @@ export async function registerMeetingRecordings(
   context: RepositoryContext,
   input: { readonly meetingId: string; readonly files: readonly RecordingFile[] },
   verify: (key: string, file: RecordingFile) => Promise<RecordingVerdict>,
+  /**
+   * Whether this person was issued an upload URL for the key (review M4R, uploader binding);
+   * absent: not checked (the domain's own tests). An administrator is never asked.
+   */
+  issuedToActor?: (key: string) => Promise<boolean>,
 ): Promise<{ readonly ok: true; readonly value: RecordingsRegistered } | Refusal> {
   const authorized = await authorizeRecording(context, input.meetingId);
   if (!authorized.ok) return authorized;
@@ -140,10 +173,17 @@ export async function registerMeetingRecordings(
   const files = [...new Map(input.files.map(file => [file.sha256, file] as const)).values()];
   const already = await recordedDigests(context, input.meetingId, files.map(file => file.sha256));
   const fresh = files.filter(file => !already.has(file.sha256));
-  for (const file of fresh) {
-    const verdict = await verify(meetingRecordingKey(input.meetingId, file.sha256), file);
-    if (verdict !== 'ok') return refuse(verdict);
+  const actor = context.scope.actor;
+  if (issuedToActor !== undefined && actor.kind === 'user' && actor.role !== 'admin') {
+    for (const file of fresh) {
+      if (!(await issuedToActor(meetingRecordingKey(input.meetingId, file.sha256)))) return refuse('recording_not_issued');
+    }
   }
+  const verdicts = new Map<string, RecordingVerdict>();
+  for (const file of fresh) verdicts.set(file.sha256, await verify(meetingRecordingKey(input.meetingId, file.sha256), file));
+  const missing = fresh.filter(file => verdicts.get(file.sha256) === 'recording_missing').map(file => file.sha256);
+  if (missing.length > 0) throw new RecordingObjectsMissingError(missing);
+  for (const verdict of verdicts.values()) if (verdict !== 'ok') return refuse(verdict);
 
   const answered: RecordingsRegistered['files'][number][] = [];
   for (const file of files) {

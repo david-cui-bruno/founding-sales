@@ -120,24 +120,36 @@ describe('meeting recordings over the wire (lane M4)', () => {
     await fixture.stop();
   });
 
-  it('candidates: the window’s non-cancelled meetings with the names the Mac corroborates by; a window over 35 days is refused', async () => {
-    const answer = await call(
-      salesToken,
-      'GET',
-      '/meetings/recordings/candidates',
-      undefined,
-      new URLSearchParams({ from: '2026-10-03T00:00:00Z', to: '2026-10-06T00:00:00Z' }),
-    );
+  it('candidates: a salesperson sees only meetings on firms assigned to them, an admin all; never a whole address; over 35 days is refused', async () => {
+    const window = new URLSearchParams({ from: '2026-10-03T00:00:00Z', to: '2026-10-07T00:00:00Z' });
+    const answer = await call(salesToken, 'GET', '/meetings/recordings/candidates', undefined, window);
     expect(answer.status).toBe(200);
     const parsed = recordingCandidatesResponseSchema.parse(answer.body);
-    expect(parsed.meetings.map(entry => entry.meetingId)).toEqual([ownMeeting, otherMeeting]);
-    expect(parsed.meetings[0]).toMatchObject({ firmName: 'Recording Own Rentals Test Co', attendeeName: 'Jordan Placeholder', attendeeEmail: 'jordan.placeholder@example.test' });
-    expect(parsed.meetings.some(entry => entry.meetingId === cancelledMeeting)).toBe(false);
+    // Review M4R, finding 3: not the other firm's meeting, not the unmatched one.
+    expect(parsed.meetings.map(entry => entry.meetingId)).toEqual([ownMeeting]);
+    expect(parsed.meetings[0]).toMatchObject({ firmName: 'Recording Own Rentals Test Co', attendeeName: 'Jordan Placeholder', attendeeLocalPart: 'jordan.placeholder' });
+    expect(parsed.truncated).toBe(false);
+    expect(JSON.stringify(answer.body)).not.toContain('@');
+    const asAdmin = recordingCandidatesResponseSchema.parse((await call(adminToken, 'GET', '/meetings/recordings/candidates', undefined, window)).body);
+    expect(asAdmin.meetings.map(entry => entry.meetingId)).toEqual([ownMeeting, otherMeeting, unmatchedMeeting]);
+    expect(asAdmin.meetings.some(entry => entry.meetingId === cancelledMeeting)).toBe(false);
 
     const wide = await call(salesToken, 'GET', '/meetings/recordings/candidates', undefined, new URLSearchParams({ from: '2026-08-01T00:00:00Z', to: '2026-10-06T00:00:00Z' }));
     expect(wide.status).toBe(400);
     const backwards = await call(salesToken, 'GET', '/meetings/recordings/candidates', undefined, new URLSearchParams({ from: '2026-10-06T00:00:00Z', to: '2026-10-05T00:00:00Z' }));
     expect(backwards.status).toBe(400);
+  });
+
+  it('candidates: more meetings than the limit answers the first hundred and truncated (review M4R, finding 10)', async () => {
+    const busy = await seedFirm(fixture, { name: 'Recording Busy Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.admin.userId });
+    for (let index = 0; index < 101; index += 1) await meeting(busy, null, new Date(Date.UTC(2026, 10, 2, 0, index)).toISOString());
+    const window = (to: string) => new URLSearchParams({ from: '2026-11-02T00:00:00Z', to });
+    const full = recordingCandidatesResponseSchema.parse((await call(adminToken, 'GET', '/meetings/recordings/candidates', undefined, window('2026-11-03T00:00:00Z'))).body);
+    expect(full.meetings).toHaveLength(100);
+    expect(full.truncated).toBe(true);
+    const narrow = recordingCandidatesResponseSchema.parse((await call(adminToken, 'GET', '/meetings/recordings/candidates', undefined, window('2026-11-02T00:30:00Z'))).body);
+    expect(narrow.meetings).toHaveLength(31);
+    expect(narrow.truncated).toBe(false);
   });
 
   it('upload-url: a fresh PUT for the assignee, never stored; refused to others, for a cancelled meeting, and 404 without the bucket', async () => {
@@ -174,15 +186,52 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect(noBucket.status).toBe(404);
   });
 
+  it('upload-url: a replay signs a new URL only for somebody still authorized, for a meeting still there (review M4R, finding 8)', async () => {
+    const firm = await seedFirm(fixture, { name: 'Recording Replay Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
+    const target = await meeting(firm, null, '2026-10-05T16:00:00Z');
+    const body = { ...envelope(), meetingId: target, fileSha256: sha('replay file'), sizeBytes: 100, participantLabel: 'audio1.m4a', segment: 1 };
+    expect((await call(salesToken, 'POST', '/meetings/recordings/upload-url', body)).status).toBe(200);
+    const signedBefore = bucket.signed();
+    // The firm is reassigned: the same command, replayed, is refused and signs nothing.
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [firm, fixture.alpha.admin.userId]);
+    expect(await call(salesToken, 'POST', '/meetings/recordings/upload-url', body)).toMatchObject({ status: 409, body: { reason: 'not_assigned', replayed: true } });
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [firm, fixture.alpha.salesperson.userId]);
+    // The meeting is cancelled: likewise.
+    await fixture.db.query("UPDATE meetings SET state = 'cancelled' WHERE id = $1", [target]);
+    expect(await call(salesToken, 'POST', '/meetings/recordings/upload-url', body)).toMatchObject({ status: 409, body: { reason: 'meeting_cancelled' } });
+    // Deleted: likewise.
+    await fixture.db.query('DELETE FROM meetings WHERE id = $1', [target]);
+    expect(await call(salesToken, 'POST', '/meetings/recordings/upload-url', body)).toMatchObject({ status: 409, body: { reason: 'meeting_unknown' } });
+    expect(bucket.signed()).toBe(signedBefore);
+  });
+
   it('register: several speakers and segments under one meeting, checked by HEAD, recorded once whatever repeats', async () => {
     const files = [
       { sha256: sha('david seg 1'), sizeBytes: 1000, participantLabel: 'audioDavidCui11234567890.m4a', segment: 1 },
       { sha256: sha('david seg 2'), sizeBytes: 1100, participantLabel: 'audioDavidCui11234567891.m4a', segment: 2 },
       { sha256: sha('jordan seg 1'), sizeBytes: 1200, participantLabel: 'audioJordanPlaceholder21234567890.m4a', segment: 1 },
     ];
-    // Nothing uploaded yet: a definite refusal, and no row.
-    const missing = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files });
-    expect(missing).toMatchObject({ status: 409, body: { reason: 'recording_missing' } });
+    // Without an upload URL issued to this person: refused (uploader binding).
+    expect(await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files })).toMatchObject({
+      status: 409,
+      body: { reason: 'recording_not_issued' },
+    });
+    for (const file of files) {
+      const issued = await call(salesToken, 'POST', '/meetings/recordings/upload-url', {
+        ...envelope(),
+        meetingId: ownMeeting,
+        fileSha256: file.sha256,
+        sizeBytes: file.sizeBytes,
+        participantLabel: file.participantLabel,
+        segment: file.segment,
+      });
+      expect(issued.status).toBe(200);
+    }
+    // Issued, but nothing uploaded yet: object_missing with every digest, no receipt, no row.
+    const missingId = randomUUID();
+    const missing = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(missingId), meetingId: ownMeeting, files });
+    expect(missing).toMatchObject({ status: 409, body: { reason: 'object_missing', missing: files.map(file => file.sha256) } });
+    expect((await fixture.db.query('SELECT 1 FROM command_receipts WHERE command_id = $1', [missingId])).rows).toEqual([]);
     expect(await rowsOf(ownMeeting)).toEqual([]);
 
     for (const file of files) bucket.put(`meetings/${ownMeeting}/${file.sha256}.m4a`, file.sizeBytes, file.sha256);
@@ -216,16 +265,16 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect(url.body['result']).toEqual({ status: 'registered' });
   });
 
-  it('register: a short or substituted object is refused, nothing is written; S3 not answering is a 503 with no receipt', async () => {
+  it('register: an administrator registers without an issued URL; a short or substituted object is refused; S3 not answering is a 503 with no receipt', async () => {
     const short = { sha256: sha('short file'), sizeBytes: 5000, participantLabel: 'audio1234567890.m4a', segment: 1 };
     bucket.put(`meetings/${ownMeeting}/${short.sha256}.m4a`, 4000, short.sha256);
-    expect(await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [short] })).toMatchObject({
+    expect(await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [short] })).toMatchObject({
       status: 409,
       body: { reason: 'recording_size_mismatch' },
     });
     const swapped = { sha256: sha('swapped file'), sizeBytes: 5000, participantLabel: 'audio1234567891.m4a', segment: 2 };
     bucket.put(`meetings/${ownMeeting}/${swapped.sha256}.m4a`, 5000, sha('something else'));
-    expect(await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [swapped] })).toMatchObject({
+    expect(await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [swapped] })).toMatchObject({
       status: 409,
       body: { reason: 'recording_checksum_mismatch' },
     });
@@ -234,11 +283,11 @@ describe('meeting recordings over the wire (lane M4)', () => {
     bucket.put(`meetings/${ownMeeting}/${fine.sha256}.m4a`, 900, fine.sha256);
     const commandId = randomUUID();
     bucket.setUnavailable(true);
-    const down = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files: [fine] });
+    const down = await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files: [fine] });
     expect(down).toMatchObject({ status: 503, body: { error: 'storage_unavailable' } });
     expect((await fixture.db.query('SELECT 1 FROM command_receipts WHERE command_id = $1', [commandId])).rows).toEqual([]);
     bucket.setUnavailable(false);
-    const retried = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files: [fine] });
+    const retried = await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files: [fine] });
     expect(retried.status).toBe(200);
     expect(retried.body['replayed']).toBe(false);
     expect((await rowsOf(ownMeeting)).map(row => row.sha256)).toContain(fine.sha256);

@@ -53,9 +53,11 @@ export const recordingSizeSchema = z.number().int().min(1).max(MEETING_RECORDING
 // ---------------------------------------------------------------------------
 
 /**
- * A meeting a recording could belong to: its time, and the names the Mac corroborates a
- * folder with (the firm, the attendee's name as the CRM holds it, the address they booked
- * with). Cancelled meetings are not candidates. Not strict: a later field is ignored.
+ * A meeting a recording could belong to (review M4R, finding 3: only what the matcher and the
+ * "Choose meeting" row need): its time, its firm, the linked contact's name, and the LOCAL PART
+ * of the address the attendee booked with — never the whole address. Cancelled meetings are not
+ * candidates. An administrator sees the workspace's meetings; anybody else only meetings on
+ * firms assigned to them. Not strict: a later field is ignored.
  */
 export const recordingCandidateSchema = z.object({
   meetingId: uuid,
@@ -65,11 +67,16 @@ export const recordingCandidateSchema = z.object({
   firmName: z.string().max(300).nullable(),
   /** The linked contact's name; Cal.com's own attendee name is not stored (0028). */
   attendeeName: z.string().max(300).nullable(),
-  attendeeEmail: z.string().max(320).nullable(),
+  /** `jordan.placeholder` of `jordan.placeholder@example.test`. */
+  attendeeLocalPart: z.string().max(320).nullable(),
 });
 export type RecordingCandidate = z.infer<typeof recordingCandidateSchema>;
 
-export const recordingCandidatesResponseSchema = z.strictObject({ meetings: z.array(recordingCandidateSchema) });
+/**
+ * `truncated`: the window held more meetings than `maxCandidates` (review M4R, finding 10). The
+ * Mac never decides a folder from a truncated answer: it narrows the window, or waits.
+ */
+export const recordingCandidatesResponseSchema = z.strictObject({ meetings: z.array(recordingCandidateSchema), truncated: z.boolean() });
 
 // ---------------------------------------------------------------------------
 // The upload URL
@@ -85,6 +92,11 @@ export const MEETING_RECORDING_REFUSAL_CODES = [
   'recording_missing',
   'recording_size_mismatch',
   'recording_checksum_mismatch',
+  // Review M4R, finding 9: the staged object is not there (expired, or never arrived). No
+  // receipt: the Mac uploads those files again and registers again.
+  'object_missing',
+  // Review M4R (uploader binding): no upload URL for this file was issued to this person.
+  'recording_not_issued',
 ] as const;
 export type MeetingRecordingRefusalCode = (typeof MEETING_RECORDING_REFUSAL_CODES)[number];
 
@@ -117,6 +129,9 @@ export const recordingUploadUrlSchema = z.discriminatedUnion('status', [
   }),
   z.strictObject({ status: z.literal('registered') }),
 ]);
+
+/** The body of an `object_missing` refusal: the digests whose objects are not there. */
+export const recordingObjectMissingSchema = z.object({ reason: z.literal('object_missing'), missing: z.array(sha256HexSchema) });
 export type RecordingUploadUrl = z.infer<typeof recordingUploadUrlSchema>;
 
 // ---------------------------------------------------------------------------
