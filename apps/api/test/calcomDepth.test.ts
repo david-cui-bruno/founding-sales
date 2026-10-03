@@ -7,6 +7,7 @@ import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
 import { startIntegrationServer, type IntegrationServer } from './support/integrationServer.ts';
 import { databaseUrlOf } from './support/poolFixture.ts';
+import { upcoming } from './support/upcoming.ts';
 import { CALENDAR_ROUTING_LOCK_NAME } from '@fss/domain/policy/calendarRouting.ts';
 
 /**
@@ -77,8 +78,8 @@ describe('Cal.com depth, over HTTP', () => {
     createdAt,
     payload: {
       uid: bookingUid,
-      startTime: '2026-10-14T15:00:00.000Z',
-      endTime: '2026-10-14T15:30:00.000Z',
+      startTime: upcoming(11, 15),
+      endTime: upcoming(11, 15, 30),
       organizer: { email: 'david@usecallie.example' },
       attendees: [{ email: attendee, name: 'A Partner' }],
       ...extra,
@@ -229,7 +230,7 @@ describe('Cal.com depth, over HTTP', () => {
     const offered = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
     expect(offered.body['stageSuggestion']).toEqual({ stageKey: 'demo_booked', opportunityId: world.opportunityId, fromStageKey: 'new' });
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: '2026-10-14T15:00:00.000Z' }]);
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: upcoming(11, 15) }]);
     const after = await get('/meetings/unmatched', salespersonToken);
     expect((after.body['meetings'] as { meetingId: string }[]).map(row => row.meetingId)).not.toContain(entry?.meetingId);
 
@@ -253,18 +254,18 @@ describe('Cal.com depth, over HTTP', () => {
     await calcom(
       booking('BOOKING_RESCHEDULED', '2026-09-30T17:20:00.000Z', c, world.attendee, {
         rescheduleUid: b,
-        startTime: '2026-10-16T18:00:00.000Z',
-        endTime: '2026-10-16T18:30:00.000Z',
+        startTime: upcoming(13, 18),
+        endTime: upcoming(13, 18, 30),
       }),
     );
     await calcom(
       booking('BOOKING_RESCHEDULED', '2026-09-30T17:10:00.000Z', b, world.attendee, {
         rescheduleUid: a,
-        startTime: '2026-10-15T18:00:00.000Z',
-        endTime: '2026-10-15T18:30:00.000Z',
+        startTime: upcoming(12, 18),
+        endTime: upcoming(12, 18, 30),
       }),
     );
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: '2026-10-16T18:00:00.000Z' }]);
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: upcoming(13, 18) }]);
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
   });
 
@@ -286,10 +287,10 @@ describe('Cal.com depth, over HTTP', () => {
     expect(Number(live[0]?.count)).toBe(0);
 
     // Booked again, as a new booking.
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:20:00.000Z', second, world.attendee, { startTime: '2026-10-21T15:00:00.000Z', endTime: '2026-10-21T15:30:00.000Z' }));
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:20:00.000Z', second, world.attendee, { startTime: upcoming(18, 15), endTime: upcoming(18, 15, 30) }));
     expect(await firmMeetings(world.firmId)).toEqual([
-      { state: 'booked', startsAt: '2026-10-21T15:00:00.000Z' },
-      { state: 'cancelled', startsAt: '2026-10-14T15:00:00.000Z' },
+      { state: 'booked', startsAt: upcoming(18, 15) },
+      { state: 'cancelled', startsAt: upcoming(11, 15) },
     ]);
     expect(await stageOf(world.opportunityId)).toBe('new');
   });
@@ -322,8 +323,8 @@ describe('Cal.com depth, over HTTP', () => {
     const since = clock[0]?.at ?? '';
     const [a, b] = [uid(), uid()];
     await calcom(booking('BOOKING_CREATED', '2026-09-30T20:00:00.000Z', a, world.attendee));
-    await calcom(booking('BOOKING_RESCHEDULED', '2026-09-30T20:10:00.000Z', b, world.attendee, { rescheduleUid: a, startTime: '2026-10-22T15:00:00.000Z', endTime: '2026-10-22T15:30:00.000Z' }));
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: '2026-10-22T15:00:00.000Z' }]);
+    await calcom(booking('BOOKING_RESCHEDULED', '2026-09-30T20:10:00.000Z', b, world.attendee, { rescheduleUid: a, startTime: upcoming(19, 15), endTime: upcoming(19, 15, 30) }));
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: upcoming(19, 15) }]);
 
     // By identity: nothing addressed to, about, or queued for the person who booked.
     const { rows: outbound } = await fixture.db.query<{ id: string }>(

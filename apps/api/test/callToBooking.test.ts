@@ -8,6 +8,7 @@ import { nextUnfinishedExecution, readEnrollment } from '@fss/domain/sequences/r
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
+import { upcoming } from './support/upcoming.ts';
 import {
   INSIDE_CALLING_WINDOW,
   PUBLIC_ORIGIN,
@@ -338,8 +339,9 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
       createdAt: '2026-09-30T16:00:00.000Z',
       payload: {
         uid: 'lenoxdemo1',
-        startTime: '2026-10-06T15:00:00.000Z',
-        endTime: '2026-10-06T15:30:00.000Z',
+        // Upcoming whenever the test runs: the Demo booked suggestion needs a live booking.
+        startTime: upcoming(3, 15),
+        endTime: upcoming(3, 15, 30),
         organizer: { email: 'david@usecallie.example' },
         attendees: [{ email: ATTENDEE, name: 'Dana Example' }],
       },
@@ -378,7 +380,7 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     const card = (board.body['cards'] as Record<string, Record<string, unknown>>)[firmId];
     expect(card).toMatchObject({
       value: { monthlyCents: 29_900, kind: 'estimated' },
-      meeting: { state: 'booked', startsAt: '2026-10-06T15:00:00.000Z' },
+      meeting: { state: 'booked', startsAt: upcoming(3, 15) },
       evidence: null,
       stageSuggestion: { stageKey: 'demo_booked', opportunityId, fromStageKey: 'new' },
     });
