@@ -674,7 +674,7 @@ describe('the Today bridge', () => {
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.callHistory({ firmId: FIRM_ID });
-    expect(seen).toEqual([`/calls/history?firmId=${FIRM_ID}&include=summary,outcome`]);
+    expect(seen).toEqual([`/calls/history?firmId=${FIRM_ID}&include=summary,outcome,notes`]);
   });
 
   it('never puts a token, a URI or a command id in the state it returns', async () => {
@@ -1169,7 +1169,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
     // The fifteenth is `crm.resolveOutgoing`, a held outgoing message's firm (S1 review P1-C).
     // The sixteenth is `crm.setValue`, a person's monthly value for an opportunity (Kanban, slice K).
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(16);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(17);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

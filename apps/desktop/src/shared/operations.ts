@@ -22,6 +22,7 @@ import {
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
   firmMeetingDtoSchema,
+  firmTimelineSchema,
   firmBasicsIssueSchema,
   TODAY_CARD_BLOCKERS,
   instant,
@@ -651,7 +652,7 @@ export const OPERATIONS = {
   },
   'calling.history': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}&include=summary,outcome' }],
+    calls: [{ method: 'GET', path: '/calls/history?firmId={uuid}&include=summary,outcome,notes' }],
     input: z.strictObject({ firmId: uuid }),
     output: callHistoryViewSchema,
     transform: 'none: the firm’s placed calls, each with its summary and logged outcome when it has them, or null when the read did not answer',
@@ -985,6 +986,15 @@ export const OPERATIONS = {
     input: firmId,
     output: crmStateSchema,
     transform: 'the firm page at its declared version, plus the sequences it could be enrolled in; a failed slice says so rather than reading as none',
+  },
+  // S4F: one older page of a firm's activity timeline. Not a screen: the answer is the page
+  // alone (or null when the read did not answer), and nothing the bridge holds changes.
+  'crm.firmTimeline': {
+    kind: 'read',
+    calls: [{ method: 'POST', path: '/crm/firm-page' }],
+    input: z.strictObject({ firmId: uuid, before: z.string().min(1).max(120) }),
+    output: z.strictObject({ timeline: firmTimelineSchema.nullable() }),
+    transform: 'the firm page read with only the timeline negotiated, and only its timeline kept; null when the caller is not the firm\'s assignee or an admin',
   },
   'crm.openPipeline': {
     kind: 'read',

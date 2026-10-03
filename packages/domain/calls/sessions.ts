@@ -607,6 +607,23 @@ export async function readCallLogOutcomes(
 }
 
 /**
+ * S4F (`GET /calls/history?include=notes`): the note typed when each named call log was
+ * written; absent for a log with none. The caller has already decided the firm readable (the
+ * assignee or an admin, Appendix F's note class) and names only its logs.
+ */
+export async function readCallLogNotes(
+  context: RepositoryContext,
+  callLogIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  if (callLogIds.length === 0) return new Map();
+  const { rows } = await context.db.query<{ id: string; note: string }>(
+    'SELECT id, note FROM call_logs WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND note IS NOT NULL',
+    [context.scope.workspaceId, [...callLogIds]],
+  );
+  return new Map(rows.map(row => [row.id, row.note]));
+}
+
+/**
  * S3X (`GET /calls?firmId=&include=corrections`): every correction of each named call log,
  * oldest first, from its `call.outcome_corrected` audit rows — the outcome it was changed
  * from and to, when, by whom, and the reason when one was required. The caller has already

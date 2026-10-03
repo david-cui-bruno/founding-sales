@@ -256,6 +256,7 @@ export function FirmsRoute({
       card={cardOf(firm.read.firm.id)}
       stageName={stageName}
       variant={variant}
+      guard={guard}
       research={
         <>
           {/* Lane PB: the prepared brief, negotiated on the firm page read

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useState } from 'react';
+import type { FirmTimelineEvent } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
 
 export interface BoardMemory {
@@ -59,6 +60,24 @@ export interface CrmMemory {
    * arrives, even after the view was left.
    */
   pending: Record<string, PendingCommand | undefined>;
+  /**
+   * The timeline rows already loaded, by firm (S4F): every row ever shown for it, the pages
+   * fetched with "Show more" included, whether the oldest page ended the list, and whether a
+   * request for more is under way. Keyed by the firm they belong to, so a page that arrives
+   * after David moved to another firm is cached under its own firm and never shown on this
+   * one (rule K7). Instances of the timeline read it through `subscribeCrm`, so whichever is
+   * mounted when a late page lands draws it.
+   */
+  timeline: Record<string, TimelineCache | undefined>;
+}
+
+export interface TimelineCache {
+  events: FirmTimelineEvent[];
+  /** An older page was asked for and landed, so the first page is no longer the whole story. */
+  loadedMore: boolean;
+  /** The oldest page loaded was the last one the server has. */
+  exhausted: boolean;
+  status: 'idle' | 'loading' | 'failed';
 }
 
 export interface PendingCommand {
@@ -82,6 +101,7 @@ const fresh = (): CrmMemory => ({
   pageEditors: {},
   drafts: {},
   pending: {},
+  timeline: {},
 });
 
 let current: { session: string; epoch: object | null; memory: CrmMemory } = { session: '', epoch: null, memory: fresh() };
@@ -99,6 +119,23 @@ export function crmMemoryFor(identity: string | null, generation = 0, epoch: obj
 
 let commandCounter = 0;
 export const nextCommandId = (): number => (commandCounter += 1);
+
+// A change of the kept state that a mounted view must draw, whichever instance of it asked
+// (a late answer lands in memory while the instance that asked is gone). `useSyncExternalStore`
+// reads the counter; `notifyCrm` moves it and tells every subscriber.
+const listeners = new Set<() => void>();
+let version = 0;
+export const subscribeCrm = (listener: () => void): (() => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+export const crmVersion = (): number => version;
+export function notifyCrm(): void {
+  version += 1;
+  for (const listener of [...listeners]) listener();
+}
 
 /** Tests: forget everything, as a sign-out does. */
 export function resetCrmMemory(): void {

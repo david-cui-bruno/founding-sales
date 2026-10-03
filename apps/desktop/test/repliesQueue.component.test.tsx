@@ -24,7 +24,7 @@ const THIRD_ID = '44444444-4444-4444-8444-444444444444';
 const column = { current: null };
 
 const waiting = (messageId: string, receivedAt: string, extra: Parameters<typeof replyCard>[0] = {}) =>
-  replyCard({ messageId, receivedAt, firmName: `Firm ${messageId.slice(0, 2)}`, ...extra });
+  replyCard({ messageId, receivedAt, firmName: `Firm ${messageId.slice(0, 2)}`, deterministicClass: 'human', ...extra });
 
 let lane: ReplyLane;
 let calls: { readonly method: string; readonly argument: unknown }[];
@@ -54,16 +54,16 @@ afterEach(() => {
 describe('the reply queue (pure)', () => {
   const a = replySummaryOf(waiting(MESSAGE_ID, '2026-09-21T09:00:00.000Z'));
   const b = replySummaryOf(waiting(OTHER_MESSAGE_ID, '2026-09-21T11:00:00.000Z'));
-  const c = replySummaryOf(waiting(THIRD_ID, '2026-09-21T10:00:00.000Z', { proposedDisposition: null, proposedBy: 'none', confidence: null }));
+  const c = replySummaryOf(waiting(THIRD_ID, '2026-09-21T10:00:00.000Z', { deterministicClass: 'uncertain', proposedDisposition: null, proposedBy: 'none', confidence: null }));
   const done = replySummaryOf(waiting('55555555-5555-4555-8555-555555555551', '2026-09-21T12:00:00.000Z', { nextAction: 'nothing_to_do' }));
 
   it('puts what is waiting first, newest first, and the rest after', () => {
     expect(orderQueue([a, done, b, c]).map(card => card.messageId)).toEqual([b.messageId, c.messageId, a.messageId, done.messageId]);
   });
 
-  it('counts a reply with no suggestion apart from the others', () => {
-    expect(countQueue([a, b, c, done])).toEqual({ waiting: 2, unsure: 1, all: 4 });
-    expect(filterQueue([a, b, c, done], 'unsure').map(card => card.messageId)).toEqual([c.messageId]);
+  it('counts an uncertain reply apart from the others', () => {
+    expect(countQueue([a, b, c, done])).toEqual({ waiting: 2, uncertain: 1, all: 4 });
+    expect(filterQueue([a, b, c, done], 'uncertain').map(card => card.messageId)).toEqual([c.messageId]);
     expect(filterQueue([a, b, c, done], 'waiting').map(card => card.messageId)).toEqual([a.messageId, b.messageId]);
   });
 
@@ -245,20 +245,20 @@ describe('context kept (criterion 7)', () => {
 });
 
 describe('the counts (criterion 5)', () => {
-  it('name their period, keep the unsure ones apart, and open the list they count', async () => {
+  it('name their period, keep the uncertain ones apart, and open the list they count', async () => {
     install(
       replyState({
         cards: [
           waiting(MESSAGE_ID, '2026-09-21T09:00:00.000Z'),
-          waiting(OTHER_MESSAGE_ID, '2026-09-21T11:00:00.000Z', { proposedDisposition: null, proposedBy: 'none', confidence: null }),
+          waiting(OTHER_MESSAGE_ID, '2026-09-21T11:00:00.000Z', { deterministicClass: 'uncertain', proposedDisposition: null, proposedBy: 'none', confidence: null }),
         ],
       }),
     );
     render(<RepliesRoute column={column} />);
     const counts = await screen.findByTestId('reply-counts');
-    expect(counts.textContent).toBe('Today: 1 to answer (+1 with no suggestion) · 2 in all');
+    expect(counts.textContent).toBe('Today: 1 to answer (+1 uncertain) · 2 in all');
     const user = userEvent.setup();
-    await user.click(screen.getByTestId('count-unsure'));
+    await user.click(screen.getByTestId('count-uncertain'));
     expect(screen.getAllByTestId('reply-summary')).toHaveLength(1);
     expect(screen.getByTestId('summary-line').textContent).toContain('Needs an answer');
     await user.click(screen.getByTestId('count-waiting'));
