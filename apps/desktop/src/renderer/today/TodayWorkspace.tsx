@@ -30,6 +30,7 @@ import { AfterCallAnalysis, type ApplyCommand } from './AfterCallAnalysis.tsx';
 import { Overview } from './Overview.tsx';
 import { Recap } from './Recap.tsx';
 import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
+import { RecordingsToSort } from '../recordings/RecordingsToSort.tsx';
 import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type Watch } from './useAnalysis.ts';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
@@ -772,7 +773,8 @@ export function TodayWorkspace({
               footer={<HomeExtras home={home} onConnectMailbox={onConnectMailbox} compact showFigures={false} />}
               marks={marks}
               review={
-                review.items === null ? null : (
+                <>
+                {review.items === null ? null : (
                   <>
                     <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
                     {review.failed ? (
@@ -784,7 +786,10 @@ export function TodayWorkspace({
                       </p>
                     ) : null}
                   </>
-                )
+                )}
+                {/* Lane M4: a demo recording that needs a meeting chosen, or failed. Quiet otherwise. */}
+                <RecordingsToSort />
+                </>
               }
             />
           </div>

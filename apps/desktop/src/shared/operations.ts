@@ -22,6 +22,7 @@ import {
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
   firmMeetingDtoSchema,
+  firmRecordingSchema,
   firmTimelineSchema,
   firmBasicsIssueSchema,
   TODAY_CARD_BLOCKERS,
@@ -35,6 +36,7 @@ import {
   uuid,
 } from '@fss/contracts';
 import { briefImportViewSchema } from './briefImport.ts';
+import { recordingItemIdSchema, recordingsViewSchema } from './recordings.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -1619,6 +1621,51 @@ export const OPERATIONS = {
     output: briefImportViewSchema,
     transform: 'lets the file and its preview go',
   },
+
+  // --- Lane M4: importing demo recordings ------------------------------------------------
+  // Held in the main process (`main/recordings/importer.ts`), which watches the folder and
+  // uploads on its own: its traffic (`GET /meetings/recordings/candidates`, `POST
+  // /meetings/recordings/upload-url`, `POST /meetings/recordings/register`) is that module's,
+  // as `POST /today` is the session manager's, and none of these four reaches the server
+  // itself. An item is named by its opaque id, never by a path. Choosing the folder and
+  // importing one by hand are channels (`IMPORT_IPC_CHANNELS`): macOS's panel.
+  'recordings.state': {
+    kind: 'read',
+    calls: [],
+    input: nothing,
+    output: recordingsViewSchema,
+    transform: 'the import the main process holds: the folder, and the folders that overlapped a Callie meeting, never any other',
+  },
+  'recordings.chooseMeeting': {
+    kind: 'command',
+    calls: [],
+    input: z.strictObject({ itemId: recordingItemIdSchema, meetingId: uuid }),
+    output: recordingsViewSchema,
+    transform: 'attaches a folder to one of the meetings it overlapped, and queues its upload; any other meeting is refused',
+  },
+  'recordings.ignore': {
+    kind: 'command',
+    calls: [],
+    input: z.strictObject({ itemId: recordingItemIdSchema }),
+    output: recordingsViewSchema,
+    transform: '“Not a Callie demo”: the folder is never uploaded or shown again',
+  },
+  'recordings.retry': {
+    kind: 'command',
+    calls: [],
+    input: z.strictObject({ itemId: recordingItemIdSchema }),
+    output: recordingsViewSchema,
+    transform: 'a failed folder is listed and evaluated afresh, and every file sent again under new commands',
+  },
+  // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
+  // fold, and show another Mac's uploads), straight through the authenticated client.
+  'recordings.forFirm': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/meetings/recordings?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: z.strictObject({ recordings: z.array(firmRecordingSchema).nullable(), truncated: z.boolean() }),
+    transform: 'none: the registered recordings of the firm’s meetings, or null when the read did not answer',
+  },
 } as const satisfies Readonly<Record<string, Operation>>;
 
 export type OperationName = keyof typeof OPERATIONS;
@@ -1648,7 +1695,13 @@ export const OPERATION_IPC_CHANNELS = {
 export const DIAL_IPC_CHANNELS = { call: 'callie:dial:call' } as const;
 
 /** Choosing a CSV to import: macOS's open dialog, which belongs to the main process. */
-export const IMPORT_IPC_CHANNELS = { choose: 'callie:import:choose', chooseBriefs: 'callie:import:choose-briefs' } as const;
+export const IMPORT_IPC_CHANNELS = {
+  choose: 'callie:import:choose',
+  chooseBriefs: 'callie:import:choose-briefs',
+  // Lane M4: the demo recordings folder to watch, and one folder imported by hand.
+  chooseRecordingsFolder: 'callie:import:choose-recordings-folder',
+  importRecordingFolder: 'callie:import:import-recording-folder',
+} as const;
 
 /**
  * What the renderer is given. Two functions and a closed vocabulary: a view that wants
@@ -1681,6 +1734,13 @@ export interface ImportBridge {
    * panel, reads and previews the file, and answers the preview, never the briefs.
    */
   chooseBriefs(): Promise<OperationOutput<'firms.briefImportState'>>;
+  /**
+   * Lane M4: choose the demo recordings folder this Mac watches, and import one recording
+   * folder by hand (the same pipeline, the same rule: a folder overlapping no Callie meeting
+   * is never read). The main process opens the panel; the window is given the import's view.
+   */
+  chooseRecordingsFolder(): Promise<OperationOutput<'recordings.state'>>;
+  importRecordingFolder(): Promise<OperationOutput<'recordings.state'>>;
 }
 
 declare global {

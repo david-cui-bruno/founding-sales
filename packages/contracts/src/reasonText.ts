@@ -4,6 +4,7 @@ import type { DialRefusalCode } from './dial.ts';
 import type { GrantRefusalCode } from './mail.ts';
 import type { HoldReasonCode } from './reasonCodes.ts';
 import type { MeetingAttendanceRefusalCode, MeetingMatchRefusalCode } from './meetings.ts';
+import type { MeetingRecordingRefusalCode } from './meetingRecordings.ts';
 import type { TranscriptionRefusalCode } from './callSessions.ts';
 import type { RESEARCH_REFUSAL_CODES } from './research.ts';
 
@@ -402,6 +403,38 @@ export const MEETING_ATTENDANCE_REFUSAL_SENTENCES: Readonly<Record<MeetingAttend
 });
 
 // ---------------------------------------------------------------------------
+// Lane M4: a demo recording's upload and register, and the Mac's own words for its import
+// ---------------------------------------------------------------------------
+
+export const MEETING_RECORDING_REFUSAL_SENTENCES: Readonly<Record<MeetingRecordingRefusalCode, string>> = Object.freeze({
+  meeting_unknown: 'Callie cannot find that meeting any more. Choose the meeting again.',
+  meeting_cancelled: 'That meeting was cancelled, so a recording cannot be attached to it. Choose another meeting.',
+  firm_unknown: FIRM_UNKNOWN,
+  firm_merged: FIRM_MERGED,
+  not_assigned: NOT_ASSIGNED,
+  invalid_input: INVALID_INPUT,
+  recording_missing: 'The upload did not arrive. Retry sends the recording again.',
+  recording_size_mismatch: 'The uploaded file was incomplete. Retry sends the recording again.',
+  recording_checksum_mismatch: 'The uploaded file did not match the recording on this Mac. Retry sends it again.',
+  object_missing: 'The upload did not arrive. Retry sends the recording again.',
+  recording_not_issued: 'This recording was uploaded by somebody else. Retry sends it from this Mac.',
+  not_your_upload: 'This recording was sent by somebody else, not through this Mac’s upload. Retry sends it from this Mac.',
+});
+
+/** The importer's own failures on this Mac (`main/recordings`), as the Today item and the firm page say them. */
+const RECORDING_IMPORT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  no_audio: 'Zoom saved no audio for this recording, only video. Callie never uploads video.',
+  file_changed: 'The recording changed on this Mac while it was being sent. Retry sends it again.',
+  file_unreadable: 'Callie could not read the recording on this Mac. Check the folder, then Retry.',
+  file_too_large: 'One of the audio files is larger than 300 MB, so Callie cannot send it.',
+  upload_failed: 'The upload did not finish. Retry sends the recording again.',
+  storage_unavailable: 'Callie’s server cannot take recordings just now. Retry in a few minutes.',
+  recordings_unsupported: 'Callie’s server does not take recordings yet.',
+  recording_choice_stale: 'That recording changed since this was shown. Look again and choose once more.',
+  not_audio: 'One of the files is not an audio recording (it has video, or is not an M4A file), so Callie does not send it.',
+});
+
+// ---------------------------------------------------------------------------
 // Slice C2: call transcription (the job's refusals and the transcript read)
 // ---------------------------------------------------------------------------
 
@@ -440,6 +473,9 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...CALL_START_REFUSAL_SENTENCES,
   ...STAGE_REVIEW_SENTENCES,
   ...MAILBOX_DETAIL_SENTENCES,
+  // Lane M4's first: the meetings' own families keep the flat sentence for their shared codes.
+  ...MEETING_RECORDING_REFUSAL_SENTENCES,
+  ...RECORDING_IMPORT_SENTENCES,
   ...MEETING_MATCH_REFUSAL_SENTENCES,
   ...MEETING_ATTENDANCE_REFUSAL_SENTENCES,
   ...TRANSCRIPTION_REFUSAL_SENTENCES,

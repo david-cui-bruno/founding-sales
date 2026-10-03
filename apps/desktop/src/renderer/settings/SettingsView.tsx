@@ -11,6 +11,7 @@ import { Administration } from './Administration.tsx';
 import { isAttributed, NoticeProvider } from './FormNotice.tsx';
 import { CallingCalendarSection } from './CallingCalendarSection.tsx';
 import { MailboxSection } from './MailboxSection.tsx';
+import { RecordingsFolderSection } from '../recordings/RecordingsFolderSection.tsx';
 import { ReplyModelSection } from './ReplyModelSection.tsx';
 import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
@@ -139,6 +140,8 @@ export function SettingsView({
                 available={hasMailboxBridge}
                 onSwitch={onSwitchMailbox}
               />
+              {/* Lane M4: the demo recordings folder, a setting of this Mac. */}
+              <RecordingsFolderSection />
               {state === null ? null : (
                 <CallingCalendarSection
                   state={state}

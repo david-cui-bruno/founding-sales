@@ -9,6 +9,7 @@ import type { AuthedClient } from '../src/main/authedClient.ts';
 import type { CrmBridgeHost } from '../src/main/crmBridge.ts';
 import type { MailboxBridgeHost } from '../src/main/mailboxBridge.ts';
 import type { BriefImportHost } from '../src/main/briefImport.ts';
+import type { RecordingImportHost } from '../src/main/recordings/importer.ts';
 import type { ReplyBridgeHost } from '../src/main/replyBridge.ts';
 import type { ResearchBridgeHost } from '../src/main/researchBridge.ts';
 import type { SequenceBridgeHost } from '../src/main/sequenceBridge.ts';
@@ -110,6 +111,7 @@ const hosts = () => {
     ),
     mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect', 'switch'], () => ({}) as never),
     briefImport: stub<BriefImportHost>(['state', 'choose', 'commit', 'reset', 'forget'], () => ({}) as never),
+    recordings: stub<RecordingImportHost>(['state', 'chooseMeeting', 'ignore', 'retry', 'forget'], () => ({}) as never),
     spies: { today, replies, api },
   };
 };
@@ -118,7 +120,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls']);
+    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
       'firms.saveBasics',
@@ -182,7 +184,13 @@ describe('the operation registry', () => {
     ]);
     expect(Object.values(OPERATION_IPC_CHANNELS)).toEqual(['callie:op:read', 'callie:op:command']);
     expect(Object.values(DIAL_IPC_CHANNELS)).toEqual(['callie:dial:call']);
-    expect(Object.values(IMPORT_IPC_CHANNELS)).toEqual(['callie:import:choose', 'callie:import:choose-briefs']);
+    expect(Object.values(IMPORT_IPC_CHANNELS)).toEqual([
+      'callie:import:choose',
+      'callie:import:choose-briefs',
+      // Lane M4: the recordings folder, and one recording folder by hand.
+      'callie:import:choose-recordings-folder',
+      'callie:import:import-recording-folder',
+    ]);
   });
 
   it('names no operation that dials, and every operation says what the main process does for it', () => {

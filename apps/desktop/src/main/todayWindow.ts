@@ -4,6 +4,9 @@ import { createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBr
 import { createBriefImport, type BriefImportHost } from './briefImport.ts';
 import { guardIdentity } from './identityReset.ts';
 import type { FileChoice } from './importHandoff.ts';
+import { nodeRecordingFs, httpsRecordingUploader, type RecordingFs, type RecordingUploader } from './recordings/files.ts';
+import { createRecordingImporter, type RecordingImportHost } from './recordings/importer.ts';
+import { memoryRecordingStore, type RecordingStore } from './recordings/store.ts';
 import { createImportHandoff, type ImportHandoff } from './importHandoff.ts';
 import { createMailboxBridge, type MailboxBridgeDeps, type MailboxBridgeHost } from './mailboxBridge.ts';
 import { registerOperations } from './operationHost.ts';
@@ -49,6 +52,17 @@ export interface WindowBridges {
   readonly settings: AdminBridgeHost;
   readonly mailbox: MailboxBridgeHost;
   readonly briefImport: BriefImportHost;
+  readonly recordings: RecordingImportHost;
+}
+
+/** Lane M4: what the recording import is built from. Absent in tests that never import one. */
+export interface RecordingImportWiring {
+  readonly store: RecordingStore;
+  identity(): Promise<{ readonly workspaceId: string; readonly userId: string; readonly role: 'admin' | 'member' } | null>;
+  readonly defaultFolder: string;
+  openFolderDialog(purpose: 'watch' | 'import'): Promise<FileChoice>;
+  readonly fs?: RecordingFs;
+  readonly uploader?: RecordingUploader;
 }
 
 export interface WindowBridgeDeps {
@@ -65,6 +79,8 @@ export interface WindowBridgeDeps {
   readonly openBriefDialog?: () => Promise<FileChoice>;
   /** Reading the chosen brief file; the default is `node:fs`. */
   readonly readBriefFile?: (path: string) => Promise<string>;
+  /** Lane M4: the demo recording import. Absent: an import that is never signed in. */
+  readonly recordings?: RecordingImportWiring;
   /**
    * The session's transition counter (1.0.13, P0-A).
    *
@@ -103,7 +119,19 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
       ...(deps.readBriefFile === undefined ? {} : { read: deps.readBriefFile }),
     }),
   );
-  registerOperations({ api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport }, handleOnce);
+  const wiring = deps.recordings;
+  const recordings = guard(
+    createRecordingImporter({
+      api: deps.today.api,
+      fs: wiring?.fs ?? nodeRecordingFs,
+      uploader: wiring?.uploader ?? httpsRecordingUploader,
+      store: wiring?.store ?? memoryRecordingStore(),
+      identity: wiring?.identity ?? (async () => await Promise.resolve(null)),
+      defaultFolder: wiring?.defaultFolder ?? '',
+      openFolderDialog: wiring?.openFolderDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
+    }),
+  );
+  registerOperations({ api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current
@@ -127,7 +155,11 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   // Lane PB: a prepared-brief file, chosen and previewed here; the window is given the preview.
   handleOnce(IMPORT_IPC_CHANNELS.chooseBriefs, async () => await briefImport.choose());
 
-  return { today, replies, research, crm, sequences, settings, mailbox, briefImport };
+  // Lane M4: the recordings folder, and one folder by hand; the window is given the import's view.
+  handleOnce(IMPORT_IPC_CHANNELS.chooseRecordingsFolder, async () => await recordings.chooseFolder());
+  handleOnce(IMPORT_IPC_CHANNELS.importRecordingFolder, async () => await recordings.importFolder());
+
+  return { today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings };
 }
 
 export { createImportHandoff };

@@ -243,7 +243,10 @@ locals {
   # Slice C3a: the call audio the worker hands Amazon Transcribe, under one prefix
   # (`callAudioObjectKey` in apps/worker/src/transcription/awsTranscribeClient.ts), and the
   # jobs it starts, named `<name_prefix>-<session>-a<attempt>` (`transcriptionJobName`).
-  call_audio_object_arn      = "${var.call_audio_bucket_arn}/calls/*"
+  call_audio_object_arn = "${var.call_audio_bucket_arn}/calls/*"
+  # Lane M4: a demo's per-participant audio, uploaded from the Mac through a presigned PUT
+  # the API signs (`meetingAudioKey` in apps/api/src/integrations/meetingAudio.ts).
+  meeting_audio_object_arn   = "${var.call_audio_bucket_arn}/meetings/*"
   call_audio_bucket_name     = trimprefix(var.call_audio_bucket_arn, "arn:aws:s3:::")
   transcription_job_arn_glob = "arn:aws:transcribe:${var.aws_region}:${var.aws_account_id}:transcription-job/${var.name_prefix}-*"
 
@@ -464,6 +467,15 @@ resource "aws_iam_role_policy" "api_task" {
         Resource = [local.call_audio_object_arn]
       },
       {
+        # Lane M4: the presigned PUT the Mac uploads a demo's audio file with is signed by
+        # this role, so the role needs the put; the register command's HEAD needs the get.
+        # Under meetings/ only, no delete, no list; the bucket's one-day expiry stays.
+        Sid      = "StageMeetingRecordings"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = [local.meeting_audio_object_arn]
+      },
+      {
         Sid      = "AppendSuppressionEvents"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
@@ -556,6 +568,13 @@ resource "aws_iam_role_policy" "worker_task" {
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
         Resource = [local.call_audio_object_arn]
+      },
+      {
+        # Lane M4: a demo's uploaded audio, read for its transcription (slice M5). Read only.
+        Sid      = "ReadMeetingRecordings"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = [local.meeting_audio_object_arn]
       },
       {
         # StartTranscriptionJob has no resource type in the service authorization

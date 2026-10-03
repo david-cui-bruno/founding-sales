@@ -381,6 +381,105 @@ then what `applyStageEvidence` locks. Every refusal reaches the window as its se
 (any active member: state and time are Appendix F's first row) is the firm page's
 **Meetings** rows. None of the three reaches Cal.com or depends on the switch.
 
+## Demo recordings (lane M4, migration 0041)
+
+Zoom records each Callie demo **locally**, with one audio file per participant, into the
+demo recordings folder (Settings › Demo recordings folder; default `~/Movies/Callie Demos`,
+a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/`):
+
+1. **Discovery.** `fs.watch` on the folder, a rescan every minute and a scan at start. Each
+   session folder's start time comes from its name (`YYYY-MM-DD HH.MM.SS <topic> <number>`)
+   or, failing that, the folder's own creation time. "Import a recording folder…" adds one
+   folder to the same pipeline, held in memory until it is found to overlap a meeting. The
+   folder rules are tables (`zoomFolder.ts`, assumptions A1–A6) until a real listing
+   confirms them.
+2. **Privacy.** `GET /meetings/recordings/candidates?from=&to=` answers the non-cancelled
+   meetings starting in the window that this person may attach a recording to (an
+   administrator: all; anybody else: meetings on firms assigned to them); at most 35 days and
+   100 meetings, and `truncated` when there were more. Every name it carries (the firm's, the
+   contact's, the attendee's address) goes through one minimiser: a value with an `@` is
+   answered as its local part, and the contract refuses an `@` in any of them. A truncated
+   answer decides nothing: each folder is read again on its own window, and one whose own
+   window is still truncated waits. A folder whose start falls in no meeting's
+   `[start − 30 min, end + 30 min]` is dropped from its name alone: never listed, hashed,
+   uploaded or shown, and only a salted digest of its path is kept (once no meeting can still
+   appear for it). No answer from the server decides nothing. Video is never read.
+3. **Matching.** Exactly one meeting within ±30 minutes of the start, corroborated by the
+   attendee's name (the linked contact's and the booking's `attendee_name`, else the words of
+   the address's local part) as whole words of the topic or of one participant's file name
+   (camel case, separators and digits split; "Ann Smith" is not in `audioJoannSmith1.m4a`),
+   or by the booking's `event_title` when it has at least two words and every one is a whole
+   word of the topic, is matched. The booking's name and title pass through the same
+   minimiser on the server. Anything else
+   that overlapped is **Needs matching**: Today's quiet Recordings group offers the
+   overlapping meetings, or "Not a Callie demo", which drops the folder for good.
+4. **One writer.** Every read-modify-write of the import — the store load (once per session),
+   a scan, a command, one upload step, a PUT's commit, the sign-out reset — is one turn of a
+   single queue, so nothing is ever derived from state another write has replaced. A PUT is
+   decided and leased in a turn, runs outside the queue (commands and scans go on), and its
+   result is committed only if the lease — its id and the entry's version — still holds. Entry versions come from
+   the person's persisted monotonic clock: a version is never reused, even by an entry
+   removed and recreated. A sign-out abandons the turn under way at its next await (an upload
+   in flight is dropped) and resets as the next turn.
+5. **No cached authority.** Immediately before each operation on a folder's files — listing,
+   stat, sniff, hash, upload URL, PUT, register — a complete candidates answer for that folder,
+   read in this session and fetched at most 60 seconds before that operation starts (stamped
+   when the read is issued, never re-stamped; an older one is read again first), under which
+   it still overlaps a meeting and its meeting still holds (David's choice still overlapping; an automatic match
+   still the matcher's answer). Without one nothing inside the folder is touched. A meeting
+   that is gone (folded, deleted, cancelled, moved, its firm given to someone else) — or
+   that the server refuses as such — puts the folder back to Needs matching; one that no
+   longer overlaps anything removes it.
+6. **Waiting.** A folder is ready when no `.zoom` or temporary file remains, its audio is
+   there (the per-participant files, or the mixed `audio*.m4a` when there are none) and the
+   listing is unchanged across two scans at least 20 seconds apart.
+7. **Upload**, one step per turn. Per file: its whole box tree is walked (`audioSniff.ts`:
+   every container at any depth, every `moov`; sizes, largesize and to-the-end boxes,
+   bounds-checked; `ftyp` first). It is audio only when at least one `stsd` exists, every
+   sample entry of every `stsd` is an allowlisted audio codec (`mp4a`, `alac`, `Opus`) and no
+   `hdlr` names pictures (`vide`, `pict`, `auxv`) — decided by codec, never by a track's
+   label — and no compressed movie header (`cmov`, `dcom`, `cmvd`) appears anywhere: players
+   inflate one and read the movie inside, so it is refused, never inflated. Anything else is `not_audio`, never hashed or sent; bytes in `free`, `skip` or
+   `mdat` are never read as boxes. Then `POST /meetings/recordings/upload-url {meetingId, fileSha256, sizeBytes,
+   participantLabel, segment}` answers `registered` (nothing to send) or a 15-minute
+   presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket that binds
+   `audio/mp4`, the size (≤ 300 MB) and the digest — S3 refuses any other body. The URL is
+   signed per answer, a replay's too, after the permission is checked again, and never
+   stored. Then `POST /meetings/recordings/register {meetingId, files}` under a command id
+   saved before it is sent, so a restart replays it; each new file is checked by HEAD
+   (present, size, digest) before any row is written. Each upload URL's signature covers an
+   `x-amz-meta-callie-upload` header carrying its receipt's random upload id, which S3 keeps
+   with the object and HEAD reads back: a person who is not an administrator registers only
+   an object written through a URL issued to them (`recording_not_issued` without any,
+   `not_your_upload` for somebody else's); an administrator, through any URL issued for that
+   key. No clock is compared. An object that is not there (expired, or never arrived) is
+   refused `object_missing` with its digests and no receipt: the Mac sends those files again.
+   Each file's PUTs and registers are counted in the store by the file's identity (its digest)
+   apart from the entries, across scans, restarts and an overlap lost and regained: a fourth
+   of either fails the folder with Retry, the only thing that resets them.
+   The S3 half of this is checked against real S3 in every rehearsal that deploys
+   (`rehearsal.sh meeting-audio`): a one-off API task, with the API task role and the run's
+   bucket, PUTs a synthetic object with exactly the signed headers, reads size, digest and
+   upload id back by HEAD, and requires the same URL without the upload-id header, and with
+   a body of another digest, to be refused. The object is left (the role cannot delete under
+   `meetings/`) to the teardown and the one-day expiry. Production never runs it.
+8. **States**, kept in `recordings.json` per person and role class (workspace, user, admin or
+   member: a downgraded person starts empty) and keyed by the folder path and the audio
+   files' identity (inode, size, mtime). This Mac shows only what is not registered yet:
+   Waiting for conversion, Uploading n/m, Needs matching, Failed (Retry / Not a Callie
+   demo). A command answers its own item at its version, and the window applies nothing
+   else from it. **Registered recordings are the server's:** the firm page reads
+   `GET /meetings/recordings?firmId=` (an administrator or the firm's assignee, as
+   `/meetings/brief`, because a participant label can carry a name; anybody else gets the
+   same 404 as an unknown firm) and shows each meeting's files and their state from the rows — which a
+   fold moves to the surviving meeting, and which another Mac's uploads add to.
+
+Who may upload: an administrator, or the assignee of the meeting's firm (an unmatched
+meeting is an administrator's). `meeting_recordings` holds one row per file, unique by
+(workspace, meeting, sha256), removed with its meeting and moved to the survivor by a
+Cal.com fold. The bucket's one-day expiry stays. Nothing is enqueued yet: slice M5 adds
+`meeting.transcribe` at the hook in `meetings/recordings.ts`.
+
 ## Reminders
 
 Callie sends no reminder of its own. Cal.com already sends the attendee the 24-hour

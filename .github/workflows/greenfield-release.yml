@@ -6,13 +6,14 @@ name: Greenfield release rehearsal
 # It creates a run-prefixed environment `fss-rh-<suffix>`, fills its secret entries,
 # migrates and deploys the two images by digest (migrate, then worker, then API),
 # bootstraps the workspace, checks the declared schema ranges against the deployed images
-# (Appendix G 22), runs the production smoke script against it, tears the run down, and
+# (Appendix G 22), checks the meeting-audio upload contract against real S3 (lane M4),
+# runs the production smoke script against it, tears the run down, and
 # asserts that the run's state is empty and its database gone (Appendix G 39). Every script
 # step is infra/scripts/rehearsal.sh, deploy.sh or stop.sh (P7, 27 September 2026).
 #
 # `stage` stops early or only cleans: `plan` plans and summarises and creates nothing;
-# `create` adds the apply; `deploy` adds the entries, the deploy, the bootstrap and the
-# smoke; `full` adds the schema ranges. `teardown` is not a rung on that ladder: it only
+# `create` adds the apply; `deploy` adds the entries, the deploy, the bootstrap, the
+# meeting-audio contract check and the smoke; `full` adds the schema ranges. `teardown` is not a rung on that ladder: it only
 # destroys the prefix named in `run_suffix` (required for it) and runs the guard, to
 # remove an orphan a failed teardown left.
 #
@@ -652,6 +653,17 @@ jobs:
           infra/scripts/rehearsal.sh ranges '${{ steps.prefix.outputs.prefix }}' \
             --api-digest '${{ inputs.api_image_digest }}' \
             --worker-digest '${{ inputs.worker_image_digest }}'
+
+      - name: The meeting-audio upload contract, against real S3
+        # Lane M4's early contract check: the presigned PUT, the HEAD read-back and both
+        # refusals, with the API task role and the run's own call-audio bucket. Nothing
+        # runs this against production.
+        if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          infra/scripts/rehearsal.sh meeting-audio '${{ steps.prefix.outputs.prefix }}' \
+            --api-digest '${{ inputs.api_image_digest }}'
 
       - name: Smoke the rehearsal environment with the production smoke script
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)

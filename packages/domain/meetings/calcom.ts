@@ -11,6 +11,7 @@ import { stopEnrollments } from '../sequences/enrollments.ts';
 import { attendeeAddressOf } from './attendee.ts';
 import { detailsEmpty, mergeBookingDetails, NO_BOOKING_DETAILS, parseWebhookBookingDetails, type BookingDetails } from './bookingDetails.ts';
 import { reconcileHeldFacts } from './heldFacts.ts';
+import { moveRecordingsToSurvivor } from './recordings.ts';
 import { manualModeEndReason } from '../sequences/terminalStops.ts';
 
 /**
@@ -727,6 +728,8 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
     replacement.id,
     survivor.id,
   ]);
+  // Lane M4: its uploaded recordings, likewise, before the row's cascade would take them (0041).
+  await moveRecordingsToSurvivor(context, replacement.id, survivor.id);
   // The person who booked stays on a row (review fold 3, finding 7): the caller has
   // refused a fold of two different attendees, so this only fills an empty one. The firm
   // association likewise (review M1F, finding 1): a survivor with no firm takes the
@@ -803,6 +806,8 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
       other.id,
       survivor.id,
     ]);
+    // Lane M4: its uploaded recordings go with the meeting they were of (0041).
+    await moveRecordingsToSurvivor(context, other.id, survivor.id);
     await context.db.query(
       `DELETE FROM stage_review_items
         WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,

@@ -136,6 +136,7 @@ function stubAws(directory: string, options: RunOptions): string {
   const lines = [
     '#!/usr/bin/env bash',
     'service=$1; operation=$2; shift 2',
+    'printf "%s\\n" "$service $operation $*" >> "${FSS_STUB_CALLS:-/dev/null}"',
     'target=""; tasks=""',
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
@@ -278,6 +279,82 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
     const run = runSchemaRanges({ staleExit: 1 });
     expect(run.code).not.toBe(0);
     expect(run.output).toContain('exited 1 and this step requires exit 12');
+  });
+});
+
+/**
+ * Lane M4, the coordinator's check B: `rehearsal.sh meeting-audio` launches the run's API task
+ * definition, at the release's digest, as one one-off task running `--meeting-audio-check`, and
+ * passes only on its exit 0. The real-S3 half is the task's own (apps/api's
+ * meetingAudioContract.test.ts drives its logic against a faithful fake of S3); this is the
+ * launch and the verdict.
+ */
+function runMeetingAudio(exit: number, args: readonly string[] = ['--api-digest', CHECK_API_DIGEST]) {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-meeting-audio-'));
+  const reports = mkdtempSync(join(tmpdir(), 'fss-meeting-audio-reports-'));
+  const calls = join(directory, 'calls.log');
+  const result = spawnSync(repositoryPath(SCHEMA_RANGES), ['meeting-audio', CHECK_PREFIX, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      FSS_STUB_CALLS: calls,
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_AWS_COMMAND: stubAws(directory, { staleExit: exit }),
+      AWS_REGION: 'us-east-1',
+      FSS_RELEASE_ACCOUNT: '111111111111',
+      FSS_RELEASE_CALLER_ACCOUNT: '111111111111',
+      FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
+      FSS_RELEASE_OUTPUT_CLUSTER_ARN: 'arn:aws:ecs:us-east-1:111111111111:cluster/fss-rh-check-cluster',
+      FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:111111111111:secret:fss-rh-check/app-runtime-database-bbbbbb',
+      FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+        subnet_ids: ['subnet-0a'],
+        security_group_id: 'sg-0a',
+        assign_public_ip: 'ENABLED',
+        database_port: 5432,
+        database_host: 'fss-rh-check-pg.example.com',
+        inbound_rule_count: 0,
+      }),
+      FSS_RELEASE_LOG_EVENTS: JSON.stringify({
+        events: [{ message: '{"level":"info","event":"api_meeting_audio_check","ok":true,"put":"pass status=200 code=none"}' }],
+      }),
+    },
+  });
+  const report = join(reports, 'meeting-audio.txt');
+  return {
+    code: result.status ?? 1,
+    output: `${result.stdout}${result.stderr}`,
+    report: existsSync(report) ? readFileSync(report, 'utf8').trim() : null,
+    calls: existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(line => line !== '') : [],
+  };
+}
+
+describe('lane M4 check B: rehearsal.sh meeting-audio launches the API task once and judges its exit', () => {
+  it('runs the API definition with --meeting-audio-check and passes on exit 0, with a report', () => {
+    const run = runMeetingAudio(0);
+    expect(run.code, run.output).toBe(0);
+    const launches = run.calls.filter(call => call.startsWith('ecs run-task'));
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toContain('task-definition/fss-rh-check-api:1');
+    expect(launches[0]).toContain('--meeting-audio-check');
+    expect(launches[0]).not.toContain('--selftest');
+    expect(run.output).toContain('api_meeting_audio_check');
+    expect(run.report).toContain('put_without_upload_id=refused');
+    expect(run.report).toContain('put_other_digest=refused');
+  });
+
+  it('fails, with no report, when the task exits 14 (S3 answered a step otherwise)', () => {
+    const run = runMeetingAudio(14);
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('FAIL: meeting-audio exited 14');
+    expect(run.output).toContain('did not hold against real S3');
+    expect(run.report).toBeNull();
+  });
+
+  it('refuses without the API digest, before any call', () => {
+    const run = runMeetingAudio(0, []);
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('--api-digest is required');
+    expect(run.calls).toEqual([]);
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import { reasonSentence, type FirmMeetingDto, type MeetingAttendanceChoice, type MeetingAttendanceSet, type StageSuggestion } from '@fss/contracts';
+import { reasonSentence, type FirmMeetingDto, type FirmRecording, type MeetingAttendanceChoice, type MeetingAttendanceSet, type StageSuggestion } from '@fss/contracts';
 import { shortDayTime } from '../dates.ts';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { Button } from '../ui/button.tsx';
@@ -8,6 +8,8 @@ import { useAttendanceMemory, type AttendanceCommand } from './attendanceMemory.
 import { useBriefMemory } from './briefMemory.ts';
 import { MeetingBrief, type BriefReader } from './MeetingBrief.tsx';
 import { meetingRowWord, meetingStateWarns } from './meetingText.ts';
+import { FirmRecordings, MeetingRecordingTag, meetingRecordingItem, meetingServerState } from '../recordings/FirmRecordings.tsx';
+import { registryRecordingPorts, useRecordings, type RecordingsPorts } from '../recordings/recordingsMemory.ts';
 
 /**
  * The firm page's Meetings rows (slice M1; attendance, lane M1): each Cal.com booking with the
@@ -80,6 +82,7 @@ export function FirmMeetings({
   refreshKey = '',
   onApplySuggestion,
   suggestionBusy = false,
+  recordingPorts = registryRecordingPorts(),
 }: {
   readonly firmId: string;
   readonly ports?: FirmMeetingsPorts | null;
@@ -93,6 +96,8 @@ export function FirmMeetings({
    */
   onApplySuggestion?(suggestion: StageSuggestion, firmId: string): void;
   readonly suggestionBusy?: boolean;
+  /** Lane M4: this Mac's demo recording import, for each meeting's recording state. */
+  readonly recordingPorts?: RecordingsPorts | null;
 }): JSX.Element | null {
   const [meetings, setMeetings] = useState<readonly FirmMeetingDto[] | null | undefined>(undefined);
   // The suggestion, with the firm and the `refreshKey` its read began under: offered only while
@@ -103,7 +108,29 @@ export function FirmMeetings({
   portsRef.current = ports;
   const { memory, touch } = useAttendanceMemory();
   const briefs = useBriefMemory();
+  const recordings = useRecordings(recordingPorts);
   const successes = memory.successes.get(firmId) ?? 0;
+  // R4: the firm's registered recordings, from the server, with the firm they were read for.
+  const [server, setServer] = useState<{ readonly firmId: string; readonly rows: readonly FirmRecording[] | null } | null>(null);
+  const recordingPortsRef = useRef(recordingPorts);
+  recordingPortsRef.current = recordingPorts;
+  // Read again whenever this Mac's import moves (an item registered leaves the local list).
+  const localKey = (recordings.view?.items ?? []).map(item => `${item.itemId}:${String(item.version)}`).join(',');
+  useEffect(() => {
+    let current = true;
+    const read = recordingPortsRef.current?.forFirm;
+    if (read === undefined) return undefined;
+    void read(firmId).then(
+      answer => {
+        if (current) setServer({ firmId, rows: answer.recordings });
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [firmId, refreshKey, localKey]);
+  const serverRows = server !== null && server.firmId === firmId ? server.rows : null;
 
   useEffect(() => {
     let current = true;
@@ -290,6 +317,7 @@ export function FirmMeetings({
                     Brief
                   </Button>
                 ) : null}
+                <MeetingRecordingTag item={meetingRecordingItem(recordings.view?.items ?? [], row.meetingId)} server={meetingServerState(serverRows, row.meetingId)} />
                 <Tag data-testid="firm-meeting-state" tone={meetingStateWarns(row.state) ? 'warn' : 'none'}>
                   {meetingRowWord(row.state)}
                 </Tag>
@@ -318,6 +346,7 @@ export function FirmMeetings({
           );
         })}
       </ul>
+      <FirmRecordings recordings={recordings} meetings={meetings} server={serverRows} actionsEnabled={actionsEnabled} />
     </section>
   );
 }

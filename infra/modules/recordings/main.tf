@@ -20,6 +20,10 @@
 # The grants are in `infra/modules/cluster`: the worker task role's put, get and delete on
 # `calls/*` (Transcribe writes the output with that put), its Start only with this bucket
 # as the output, and the API task role's delete on `calls/*` for the deletion workflow.
+#
+# Lane M4: a demo's per-participant audio arrives under `meetings/<meeting>/<sha256>.m4a`,
+# uploaded by the Mac through a PUT the API task role presigns (its put and get on
+# `meetings/*`); the worker may read it there (get on `meetings/*`). The same one-day expiry.
 
 locals {
   bucket_name = "${var.name_prefix}-call-audio-${var.aws_account_id}"

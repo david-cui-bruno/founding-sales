@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
@@ -17,6 +18,7 @@ import { loadWindowChoice, rememberWindowState } from './windowStateWiring.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
+import { createRecordingStore } from './recordings/store.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
 import type { NavigationTarget, SessionChange } from '../shared/contract.ts';
@@ -269,7 +271,23 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
         filters: [...BRIEF_FILE_FILTERS],
       }),
     sessionGeneration: () => manager.sessionGeneration(),
+    // Lane M4: the demo recordings folder this Mac watches (a device setting, in
+    // `recordings.json` beside `device.json`), and the import keyed by the signed-in person
+    // (workspace and user: review M4R, finding 7).
+    recordings: {
+      store: createRecordingStore({ directory: configuration.userDataDirectory }),
+      identity: async () => await manager.signedInIdentity(),
+      defaultFolder: join(app.getPath('home'), 'Movies', 'Callie Demos'),
+      openFolderDialog: async purpose =>
+        await dialog.showOpenDialog({
+          title: purpose === 'watch' ? 'Choose the demo recordings folder' : 'Choose a recording folder to import',
+          defaultPath: join(app.getPath('home'), 'Movies'),
+          properties: purpose === 'watch' ? ['openDirectory', 'createDirectory'] : ['openDirectory'],
+        }),
+    },
   });
+  // The watcher, the minute's rescan and a scan now; each scan does nothing until somebody is signed in.
+  void bridges.recordings.start();
 
   /*
    * A session transition empties this Mac (1.0.12; every bridge since 1.0.13's review).
@@ -287,7 +305,19 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
    * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
-    void resetBridges([bridges.today, bridges.replies, bridges.crm, bridges.sequences, bridges.settings, bridges.mailbox, bridges.briefImport]);
+    void resetBridges([
+      bridges.today,
+      bridges.replies,
+      bridges.crm,
+      bridges.sequences,
+      bridges.settings,
+      bridges.mailbox,
+      bridges.briefImport,
+      bridges.recordings,
+    ]).then(async () => {
+      // Lane M4: the next person's own import, if anybody is signed in now.
+      await bridges.recordings.scan();
+    });
     sendSessionChange(change);
   });
 

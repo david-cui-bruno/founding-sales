@@ -7,6 +7,7 @@
 #   rehearsal.sh identity [fss-rh-deploy]                   this session is an assumed-role session of the role
 #   rehearsal.sh run-task <fss-rh-run> <step> <migration|operations> -- <fss command word>...
 #   rehearsal.sh ranges   <fss-rh-run> [--api-digest D] [--worker-digest D]
+#   rehearsal.sh meeting-audio <fss-rh-run> [--api-digest D]   lane M4's upload contract, real S3
 #   rehearsal.sh teardown <fss-rh-run>                      everything the run made, the locked journal included
 #   rehearsal.sh guard    <fss-rh-run>                      after the teardown: nothing left, nothing production's
 #   rehearsal.sh leftovers <fss-rh-run>                     what still carries the run prefix, one line each
@@ -55,6 +56,7 @@ usage: rehearsal.sh prefix   <fss-rh-run>
        rehearsal.sh identity [fss-rh-deploy]
        rehearsal.sh run-task <fss-rh-run> <step> <migration|operations> -- <fss command word>...
        rehearsal.sh ranges   <fss-rh-run> [--api-digest D] [--worker-digest D]
+       rehearsal.sh meeting-audio <fss-rh-run> [--api-digest D]
        rehearsal.sh teardown <fss-rh-run>
        rehearsal.sh guard    <fss-rh-run>
        rehearsal.sh leftovers <fss-rh-run>
@@ -283,12 +285,7 @@ rehearsal_ranges() {
   RANGES_PREVIOUS="{$previous_min,$previous_max}"
   rehearsal_log "api {$api_min,$api_max} worker {$worker_min,$worker_max} previous {$previous_min,$previous_max} schema $current"
 
-  root="$(rehearsal_root)"
-  RANGES_CLUSTER="$(release_output "$root" cluster_arn)"
-  RANGES_NETWORK="$(release_output "$root" task_network_configuration json)"
-  RANGES_SECRET="$(release_output "$root" app_runtime_database_secret_arn)"
-  RANGES_HOST="$(release_json_path "${RANGES_NETWORK:-}" database_host)"
-  RANGES_ACCOUNT="${FSS_RELEASE_ACCOUNT:-$(release_caller_account)}"
+  ranges_environment
 
   local overlaps=0 verdicts='' service minimum digest previous_verdict
   for service in api worker; do
@@ -315,6 +312,18 @@ rehearsal_ranges() {
   rehearsal_log "Appendix G 22 complete: $overlaps overlapping pair(s), the rest asserted as refusals"
 }
 
+# The run's cluster, task network, runtime secret, database host and account, from the
+# rehearsal root's outputs: what every one-off launch below needs.
+ranges_environment() {
+  local root
+  root="$(rehearsal_root)"
+  RANGES_CLUSTER="$(release_output "$root" cluster_arn)"
+  RANGES_NETWORK="$(release_output "$root" task_network_configuration json)"
+  RANGES_SECRET="$(release_output "$root" app_runtime_database_secret_arn)"
+  RANGES_HOST="$(release_json_path "${RANGES_NETWORK:-}" database_host)"
+  RANGES_ACCOUNT="${FSS_RELEASE_ACCOUNT:-$(release_caller_account)}"
+}
+
 # The registered definition of a family as JSON, or nothing when nothing registers it.
 # ECS answers an unregistered family `(ClientException) … Unable to describe task
 # definition`; both halves are required, because ClientException alone is also what a
@@ -333,12 +342,21 @@ ranges_definition() {
   return 1
 }
 
-# One --selftest through release_run_task. The log group and stream prefix come from the
-# definition being launched, because they are a property of that definition.
+# One --selftest through release_run_task.
 #   ranges_selftest <step> <container> <definition json> <digest> <expected exit> [--env NAME=VALUE]...
 ranges_selftest() {
-  local step=$1 name=$2 definition=$3 digest=$4 expect=$5 container
+  local step=$1 name=$2 definition=$3 digest=$4 expect=$5
   shift 5
+  ranges_launch "$step" "$name" "$definition" "$digest" "$expect" --selftest "$@"
+}
+
+# One one-off task of a registered definition, running one entry-point flag, through
+# release_run_task. The log group and stream prefix come from the definition being
+# launched, because they are a property of that definition.
+#   ranges_launch <step> <container> <definition json> <digest> <expected exit> <flag> [--env NAME=VALUE]...
+ranges_launch() {
+  local step=$1 name=$2 definition=$3 digest=$4 expect=$5 flag=$6 container
+  shift 6
   container="$(FSS_JSON="$definition" FSS_NAME="$name" python3 -c '
 import json, os, sys
 for entry in json.loads(os.environ["FSS_JSON"] or "{}").get("containerDefinitions") or []:
@@ -352,7 +370,7 @@ for entry in json.loads(os.environ["FSS_JSON"] or "{}").get("containerDefinition
     --container "$name" --network-plan "$RANGES_NETWORK" --image-digest "$digest" --database-host "$RANGES_HOST" \
     --secret-arn "$RANGES_SECRET" --log-group "$(release_json_path "$container" logConfiguration.options.awslogs-group)" \
     --log-stream-prefix "$(release_json_path "$container" logConfiguration.options.awslogs-stream-prefix)" \
-    --expect-exit "$expect" "$@" -- --selftest
+    --expect-exit "$expect" "$@" -- "$flag"
 }
 
 ranges_overlap() {
@@ -400,6 +418,53 @@ ranges_stale() {
   fi
   rehearsal_log "$service: refused {$stale,$stale} at startup with exit $SCHEMA_REFUSAL_EXIT_CODE, which is this case's assertion"
   RANGES_VERDICT="refused_exit_$SCHEMA_REFUSAL_EXIT_CODE"
+}
+
+# ---------------------------------------------------------------------------
+# meeting-audio: lane M4's upload contract against real S3 (the coordinator's early contract
+# check B). The run's API task definition, at this release's digest, as a one-off task running
+# `--meeting-audio-check` (apps/api/src/integrations/meetingAudioContract.ts): the API task
+# role presigns with the API's own store, and from inside the run's network the task PUTs a
+# small synthetic object under meetings/<random uuid>/ with exactly the signed headers (must
+# be 200), HEADs it (size, S3's SHA-256 and the upload id must read back), PUTs the same URL
+# without x-amz-meta-callie-upload and then with a body of another digest (both must be
+# refused) and HEADs again. Exit 0 is all of it; exit 14 is a step S3 answered otherwise, and
+# the task's log line says which. The role cannot delete under meetings/, so the object is
+# left: the teardown's destroy of the destroyable bucket removes it, and the one-day expiry
+# would. A rehearsal subcommand only: nothing runs it against production.
+# ---------------------------------------------------------------------------
+MEETING_AUDIO_CHECK_FAILED_EXIT_CODE=14
+
+rehearsal_meeting_audio() {
+  local prefix=${1:-}
+  shift 1 2>/dev/null || true
+  RANGES_API_DIGEST=${FSS_RELEASE_API_DIGEST:-}
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --api-digest) RANGES_API_DIGEST=${2:-}; shift 2 ;;
+      *) rehearsal_fail "rehearsal.sh meeting-audio does not take '$1'" ;;
+    esac
+  done
+  rehearsal_require_prefix "$prefix" || exit 1
+  RANGES_PREFIX=$prefix
+  [ -n "$RANGES_API_DIGEST" ] \
+    || rehearsal_fail "--api-digest is required (or FSS_RELEASE_API_DIGEST): this step launches the API task definition, and the wrapper cannot compare a registered image against a digest it was not given"
+  ranges_environment
+
+  local family="${prefix}-api" definition
+  definition="$(ranges_definition "$family")" || exit 1
+  [ -n "$definition" ] \
+    || rehearsal_fail "nothing registers $family, so there is no API task role here to presign with. The apply registers it; a run that reached this step without one has not deployed what this step is about."
+  rehearsal_log "api: the meeting-audio upload contract against the run's call-audio bucket, as the API task role"
+  if ! ranges_launch meeting-audio api "$definition" "$RANGES_API_DIGEST" 0 --meeting-audio-check; then
+    echo "FAIL: the meeting-audio upload contract did not hold against real S3." >&2
+    echo "      The task's api_meeting_audio_check line above names the step: exit $MEETING_AUDIO_CHECK_FAILED_EXIT_CODE is S3" >&2
+    echo "      answering a step otherwise than the Mac's upload relies on; exit 12 is a task with no bucket." >&2
+    exit 1
+  fi
+  rehearsal_write_report "meeting-audio.txt" \
+    "prefix=$prefix api_digest=$RANGES_API_DIGEST put=accepted head=size_sha256_upload_id put_without_upload_id=refused put_other_digest=refused object=left_to_teardown_and_one_day_expiry"
+  rehearsal_log "pass: the presigned PUT, the HEAD read-back and both refusals held against real S3"
 }
 
 # ---------------------------------------------------------------------------
@@ -1242,6 +1307,7 @@ case "$REHEARSAL_SUBCOMMAND" in
   identity) rehearsal_identity "$@" ;;
   run-task) rehearsal_run_task "$@" ;;
   ranges) rehearsal_ranges "$@" ;;
+  meeting-audio) rehearsal_meeting_audio "$@" ;;
   teardown) rehearsal_teardown "$@" ;;
   leftovers) rehearsal_leftovers "$@" ;;
   guard) rehearsal_guard "$@" ;;

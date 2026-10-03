@@ -196,6 +196,8 @@ globalThis.callieDial = {
  */
 const IMPORT_API = `globalThis.callieImport = {
   async choose() { return await ask('crm.chooseImportFile', null); },
+  async chooseRecordingsFolder() { return await ask('recordings.chooseFolder', null); },
+  async importRecordingFolder() { return await ask('recordings.importFolder', null); },
 };`;
 
 function bridgeScript(installed: readonly string[]): string {

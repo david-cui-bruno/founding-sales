@@ -270,6 +270,14 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     ['operational'],
     'One Amazon Transcribe job per attempt and how far collecting it got; ids, a job name and object keys, no prospect identity; outlives a deleted session so its S3 objects can still be named and deleted.',
   ),
+
+  // ------------------------------------------------ demo recordings (0041, lane M4)
+  // A file name (which may carry a participant's display name) and a digest of their voice:
+  // it goes with the meeting, as the meeting's uids do. The object expires with the bucket.
+  meeting_recordings: coverage(
+    ['deletion_removes'],
+    'One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.',
+  ),
 });
 
 /** Tables the coverage registry deliberately does not classify. */
