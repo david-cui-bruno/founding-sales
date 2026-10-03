@@ -121,6 +121,8 @@ describe('what the API mounts', () => {
       '/meetings/match',
       '/meetings/recordings',
       '/meetings/recordings/candidates',
+      '/meetings/recordings/recovery-complete',
+      '/meetings/recordings/recovery-url',
       '/meetings/recordings/register',
       '/meetings/recordings/upload-url',
       '/meetings/transcript',

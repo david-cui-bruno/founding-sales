@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
+import { commandIdSchema } from './auth.ts';
+import { semanticVersionSchema } from './clientVersion.ts';
+import { recordingUploadUrlSchema, recordingSizeSchema, sha256HexSchema } from './meetingRecordings.ts';
 export const MEETING_TRANSCRIPTION_LIMITS = Object.freeze({
     maxDurationMs: 14400000, maxUtterances: 20000, maxTextBytes: 4 * 1024 * 1024,
     maxProviderBytes: 16 * 1024 * 1024, pageSize: 200, maxDailyCents: 500,
@@ -45,3 +48,11 @@ export const meetingTranscriptPageSchema = z.strictObject({
     nextCursor: z.string().max(500).nullable(), timing: z.literal('file_relative'),
 });
 export type MeetingTranscriptPage = z.infer<typeof meetingTranscriptPageSchema>;
+export const recordingRecoveryCommandSchema = z.strictObject({ commandId: commandIdSchema, clientVersion: semanticVersionSchema, recordingId: uuid });
+export const recordingRecoveryUrlSchema = z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('ready') }),
+    z.strictObject({ status: z.literal('upload'), recordingId: uuid, meetingId: uuid, sha256: sha256HexSchema,
+        sizeBytes: recordingSizeSchema, upload: recordingUploadUrlSchema }),
+]);
+export type RecordingRecoveryUrl = z.infer<typeof recordingRecoveryUrlSchema>;
+export const recordingRecoveryCompleteSchema = z.strictObject({ status: z.enum(['resumed', 'already_ready']) });

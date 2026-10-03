@@ -1,3 +1,4 @@
+import { uuid } from '@fss/contracts';
 import { ipcMain } from 'electron';
 import { DIAL_IPC_CHANNELS, IMPORT_IPC_CHANNELS } from '../shared/operations.ts';
 import { createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
@@ -61,6 +62,7 @@ export interface RecordingImportWiring {
   identity(): Promise<{ readonly workspaceId: string; readonly userId: string; readonly role: 'admin' | 'member' } | null>;
   readonly defaultFolder: string;
   openFolderDialog(purpose: 'watch' | 'import'): Promise<FileChoice>;
+  openRecoveryFileDialog?(): Promise<FileChoice>;
   readonly fs?: RecordingFs;
   readonly uploader?: RecordingUploader;
 }
@@ -128,6 +130,7 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
       store: wiring?.store ?? memoryRecordingStore(),
       identity: wiring?.identity ?? (async () => await Promise.resolve(null)),
       defaultFolder: wiring?.defaultFolder ?? '',
+      ...(wiring?.openRecoveryFileDialog === undefined ? {} : { openRecoveryFileDialog: wiring.openRecoveryFileDialog }),
       openFolderDialog: wiring?.openFolderDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
     }),
   );
@@ -159,6 +162,10 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   handleOnce(IMPORT_IPC_CHANNELS.chooseRecordingsFolder, async () => await recordings.chooseFolder());
   handleOnce(IMPORT_IPC_CHANNELS.importRecordingFolder, async () => await recordings.importFolder());
 
+  handleOnce(IMPORT_IPC_CHANNELS.chooseRecordingRecoveryFile, async id => {
+    const parsed = uuid.safeParse(id);
+    return parsed.success ? await recordings.reupload({ recordingId: parsed.data }, true) : { status: 'unavailable' };
+  });
   return { today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings };
 }
 

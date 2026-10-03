@@ -251,11 +251,11 @@ export async function registerMeetingRecordings(
   const answered: RecordingsRegistered['files'][number][] = [];
   for (const file of files) {
     const { rows: inserted } = await context.db.query<RecordingRow>(
-      `INSERT INTO meeting_recordings (workspace_id, meeting_id, segment, participant_label, sha256, size_bytes, s3_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO meeting_recordings (workspace_id, meeting_id, segment, participant_label, sha256, size_bytes, s3_key,source_kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7,$8)
        ON CONFLICT (workspace_id, meeting_id, sha256) DO NOTHING
        RETURNING id, sha256, state`,
-      [workspaceId, input.meetingId, file.segment, file.participantLabel, file.sha256, file.sizeBytes, meetingRecordingKey(input.meetingId, file.sha256)],
+      [workspaceId, input.meetingId, file.segment, file.participantLabel, file.sha256, file.sizeBytes, meetingRecordingKey(input.meetingId, file.sha256),file.sourceKind ?? 'unknown'],
     );
     const row = inserted[0];
     if (row !== undefined) {

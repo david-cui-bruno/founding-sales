@@ -111,7 +111,7 @@ const hosts = () => {
     ),
     mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect', 'switch'], () => ({}) as never),
     briefImport: stub<BriefImportHost>(['state', 'choose', 'commit', 'reset', 'forget'], () => ({}) as never),
-    recordings: stub<RecordingImportHost>(['state', 'chooseMeeting', 'ignore', 'retry', 'forget'], () => ({}) as never),
+    recordings: stub<RecordingImportHost>(['state', 'chooseMeeting', 'ignore', 'retry', 'reupload', 'forget'], () => ({}) as never),
     spies: { today, replies, api },
   };
 };
@@ -190,6 +190,7 @@ describe('the operation registry', () => {
       // Lane M4: the recordings folder, and one recording folder by hand.
       'callie:import:choose-recordings-folder',
       'callie:import:import-recording-folder',
+      'callie:import:choose-recording-recovery-file',
     ]);
   });
 

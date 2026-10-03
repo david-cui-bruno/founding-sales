@@ -36,7 +36,7 @@ import {
   uuid,
 } from '@fss/contracts';
 import { briefImportViewSchema } from './briefImport.ts';
-import { recordingItemIdSchema, recordingsViewSchema } from './recordings.ts';
+import { recordingItemIdSchema, recordingsViewSchema, recordingRecoveryViewSchema } from './recordings.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -1659,6 +1659,10 @@ export const OPERATIONS = {
   },
   // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
   // fold, and show another Mac's uploads), straight through the authenticated client.
+  'recordings.reupload': {
+    kind: 'command', calls: [], input: z.strictObject({ recordingId: uuid }), output: recordingRecoveryViewSchema,
+    transform: 'recover the same recording from its retained local source; never receives a path',
+  },
   'recordings.forFirm': {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/recordings?firmId={uuid}' }],
@@ -1701,6 +1705,7 @@ export const IMPORT_IPC_CHANNELS = {
   // Lane M4: the demo recordings folder to watch, and one folder imported by hand.
   chooseRecordingsFolder: 'callie:import:choose-recordings-folder',
   importRecordingFolder: 'callie:import:import-recording-folder',
+  chooseRecordingRecoveryFile: 'callie:import:choose-recording-recovery-file',
 } as const;
 
 /**
@@ -1741,6 +1746,7 @@ export interface ImportBridge {
    */
   chooseRecordingsFolder(): Promise<OperationOutput<'recordings.state'>>;
   importRecordingFolder(): Promise<OperationOutput<'recordings.state'>>;
+  chooseRecordingRecoveryFile(recordingId: string): Promise<OperationOutput<'recordings.reupload'>>;
 }
 
 declare global {

@@ -278,6 +278,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       store: createRecordingStore({ directory: configuration.userDataDirectory }),
       identity: async () => await manager.signedInIdentity(),
       defaultFolder: join(app.getPath('home'), 'Movies', 'Callie Demos'),
+      openRecoveryFileDialog: async () => await dialog.showOpenDialog({ title: 'Choose the original demo audio', properties: ['openFile'], filters: [{ name: 'Zoom audio', extensions: ['m4a'] }] }),
       openFolderDialog: async purpose =>
         await dialog.showOpenDialog({
           title: purpose === 'watch' ? 'Choose the demo recordings folder' : 'Choose a recording folder to import',

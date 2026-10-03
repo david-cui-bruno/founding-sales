@@ -397,6 +397,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
     'firms.briefImportReset': async () => await deps.briefImport.reset(),
     // Lane M4: answered from the import the main process holds.
+    'recordings.reupload': async (input: OperationInput<'recordings.reupload'>) => await deps.recordings.reupload(input),
     'recordings.state': async () => await deps.recordings.state(),
     'recordings.chooseMeeting': async (input: OperationInput<'recordings.chooseMeeting'>) => await deps.recordings.chooseMeeting(input),
     'recordings.ignore': async (input: OperationInput<'recordings.ignore'>) => await deps.recordings.ignore(input),
