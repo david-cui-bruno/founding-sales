@@ -18,6 +18,7 @@ import {
   clockKeyOf,
   emptyWorkspaceImport,
   personKeyOf,
+  type Attempts,
   type Entry,
   type PersonIdentity,
   type RecordingStore,
@@ -36,7 +37,11 @@ import { identityOf, parseFolderName, readinessOf, segmentsOf, signatureOf, type
  * ## R1: one writer
  *
  * Every read-modify-write of the import's state is one TURN of a single queue (`serial`): the
- * store load, a scan, a command, one step of the upload worker, the sign-out reset. Turns never
+ * store load, a scan, a command, one step of the upload worker, the commit of a PUT's result,
+ * the sign-out reset. The PUT itself is not a turn (M4RR finding 5): a turn decides it, counts
+ * it and claims a lease on it (the entry's version and a lease id), the transfer runs outside
+ * the queue while commands and scans go on, and a later turn commits its result only if the
+ * lease still holds — the same lease id, the entry at the same version — else drops it. Turns never
  * overlap, so no write is ever derived from state another write has since replaced. The store is
  * loaded once per session, as the session's first turn; a later load is a no-op. Entry versions
  * come from the person's persisted monotonic clock, so a version is never reused — not even by
@@ -49,13 +54,15 @@ import { identityOf, parseFolderName, readinessOf, segmentsOf, signatureOf, type
  *
  * ## R2: no cached authority to touch a file
  *
- * Hashing, sniffing, uploading or registering any file of a folder needs, in the same turn, a
- * candidates answer for that folder that is complete (not truncated), at most 60 seconds old and
- * read in this session, under which the folder still overlaps a meeting and its meeting still
- * holds (David's choice still overlapping; an automatic match still the matcher's answer).
- * Otherwise the turn reads the folder's own window again, and with no such answer nothing inside
- * the folder is touched. `validated` (the folders a scan in this session revalidated) is cleared
- * at the start of every scan and whenever a candidates read fails.
+ * Immediately before EACH operation on a folder's files — its listing, a stat, the sniff, the
+ * hash, the upload URL, the PUT, the register — a candidates answer for that folder must be
+ * complete (not truncated), read in this session, and FETCHED at most 60 seconds before that
+ * operation starts (an answer is stamped when its read is issued, and never re-stamped), and
+ * the folder must still overlap a meeting under it with its meeting still holding (David's
+ * choice still overlapping; an automatic match still the matcher's answer). An older answer
+ * is replaced by a read of the folder's own window first; with no such answer, the operation
+ * does not start. `validated` (the folders a scan in this session revalidated) is cleared at
+ * the start of every scan and whenever a candidates read fails.
  *
  * ## One scan (one turn)
  *
@@ -71,11 +78,12 @@ import { identityOf, parseFolderName, readinessOf, segmentsOf, signatureOf, type
  *
  * ## The upload (worker steps, each a turn)
  *
- * One step per turn, so a command waits at most one step: (a) one file's identity checked, its
- * box tree checked to be audio-only MP4 (R3), its SHA-256; (b) one file's `upload-url` and PUT;
- * (c) the `register`, under a command id saved before it is sent. Every step re-establishes R2
- * first. R7: each file's PUTs and the folder's registers are counted in the store, across scans
- * and restarts; a fourth of either fails the folder, with Retry, which resets the counts.
+ * One step per turn: (a) one file's identity checked, its codecs checked to be audio only
+ * (R3), its SHA-256; (b) one file's `upload-url`, then its PUT, leased and made outside the
+ * queue; (c) the `register`, under a command id saved before it is sent. R7: each FILE's PUTs
+ * and registers are counted in the store, keyed by the file's identity (its digest) and kept
+ * apart from the entries, so a folder that loses and regains its overlap does not start them
+ * again; a fourth of either fails the folder, with Retry — the only thing that resets them.
  *
  * ## R4: what is shown
  *
@@ -180,8 +188,15 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
   let personKey: string | null = null;
   /** Candidate meetings by id, from this session's reads: what "Choose meeting" offers. */
   let candidates = new Map<string, RecordingCandidate>();
-  /** Each folder's last complete candidates answer in this session, and when it was read (R2). */
-  let answers = new Map<string, { readonly atMs: number; readonly meetings: readonly RecordingCandidate[] }>();
+  /**
+   * Each folder's last complete candidates answer in this session, stamped with when its read
+   * was ISSUED (R2, after M4RR finding 2): never re-stamped, so its age is its real age.
+   */
+  let answers = new Map<string, { readonly fetchedAt: number; readonly meetings: readonly RecordingCandidate[] }>();
+  /** The PUT each folder's upload holds a lease for: claimed in a turn, run outside the queue (M4RR finding 5). */
+  let leases = new Map<string, string>();
+  /** The PUTs in flight, aborted by a sign-out. */
+  const inflight = new Set<AbortController>();
   /** The folders the last scan revalidated: the worker's to-do list, never its authority (R2). */
   let validated = new Set<string>();
   /** Folders chosen by hand and not yet past the overlap: memory only. */
@@ -357,9 +372,13 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
 
   // ---------------------------------------------------------------- the candidates
 
-  type Read = { readonly ok: true; readonly meetings: readonly RecordingCandidate[]; readonly truncated: boolean } | { readonly ok: false };
+  type Read =
+    | { readonly ok: true; readonly fetchedAt: number; readonly meetings: readonly RecordingCandidate[]; readonly truncated: boolean }
+    | { readonly ok: false };
 
   async function readWindow(turn: Turn, window: { readonly from: string; readonly to: string }): Promise<Read> {
+    // Stamped when it is issued: an answer is never younger than the question.
+    const fetchedAt = now();
     const answered = await turn.wait(
       deps.api.read(`/meetings/recordings/candidates?from=${encodeURIComponent(window.from)}&to=${encodeURIComponent(window.to)}`, body =>
         recordingCandidatesResponseSchema.parse(body),
@@ -372,48 +391,66 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       return { ok: false };
     }
     for (const meeting of answered.value.meetings) candidates.set(meeting.meetingId, meeting);
-    return { ok: true, meetings: answered.value.meetings, truncated: answered.value.truncated };
+    return { ok: true, fetchedAt, meetings: answered.value.meetings, truncated: answered.value.truncated };
   }
 
-  /** Each folder's complete candidates; a folder with none is absent. Null: no answer at all. */
-  async function candidatesFor(turn: Turn, open: readonly { readonly path: string; readonly startedAt: Date }[]): Promise<Map<string, readonly RecordingCandidate[]> | null> {
+  type Held = { readonly fetchedAt: number; readonly meetings: readonly RecordingCandidate[] };
+  const isFresh = (held: Held | undefined): held is Held => held !== undefined && now() >= held.fetchedAt && now() - held.fetchedAt <= AUTHORITY_MAX_AGE_MS;
+
+  /**
+   * R2, immediately before ONE file operation: this folder's complete answer, fetched at most
+   * 60 s before now — the one held, or one read now for the folder's own window. Null: none.
+   */
+  async function freshAnswer(turn: Turn, path: string, startedAt: Date): Promise<Held | null> {
+    const held = answers.get(path);
+    if (isFresh(held)) return held;
+    answers.delete(path);
+    const read = await readWindow(turn, ownWindow(startedAt));
+    if (!read.ok || read.truncated) {
+      validated.delete(path);
+      return null;
+    }
+    const answer = { fetchedAt: read.fetchedAt, meetings: read.meetings };
+    // A read slower than the limit is no authority either.
+    if (!isFresh(answer)) {
+      validated.delete(path);
+      return null;
+    }
+    answers.set(path, answer);
+    return answer;
+  }
+
+  /** Each folder's complete candidates, with their fetch time; a folder with none is absent. Null: no answer at all. */
+  async function candidatesFor(turn: Turn, open: readonly { readonly path: string; readonly startedAt: Date }[]): Promise<Map<string, Held> | null> {
     const times = open.map(entry => entry.startedAt.getTime());
     const combined = await readWindow(turn, {
       from: new Date(Math.min(...times) - CANDIDATE_LOOKBACK_MS).toISOString(),
       to: new Date(Math.max(...times) + CANDIDATE_LOOKAHEAD_MS).toISOString(),
     });
     if (!combined.ok) return null;
-    const found = new Map<string, readonly RecordingCandidate[]>();
+    const found = new Map<string, Held>();
     if (!combined.truncated) {
-      for (const entry of open) found.set(entry.path, combined.meetings);
+      for (const entry of open) found.set(entry.path, { fetchedAt: combined.fetchedAt, meetings: combined.meetings });
       return found;
     }
     // Truncated decides nothing: each folder's own window; one still truncated waits.
     for (const entry of open) {
       const own = await readWindow(turn, ownWindow(entry.startedAt));
       if (!own.ok) return null;
-      if (!own.truncated) found.set(entry.path, own.meetings);
+      if (!own.truncated) found.set(entry.path, { fetchedAt: own.fetchedAt, meetings: own.meetings });
     }
     return found;
   }
 
   /**
-   * R2, at every file access: a complete answer for this folder at most 60 s old (read again
-   * now otherwise), under which it overlaps a meeting and its meeting holds.
+   * R2, immediately before each file operation (stat, sniff, hash, upload URL, PUT, register):
+   * a complete answer for this folder fetched at most 60 s before, under which it overlaps a
+   * meeting and its meeting holds.
    */
   async function authority(turn: Turn, path: string, entry: Entry): Promise<'ok' | 'gone' | 'rematch' | 'unknown'> {
     const startedAt = new Date(entry.startedAt);
-    let held = answers.get(path);
-    if (held === undefined || now() - held.atMs > AUTHORITY_MAX_AGE_MS || now() < held.atMs) {
-      answers.delete(path);
-      const read = await readWindow(turn, ownWindow(startedAt));
-      if (!read.ok || read.truncated) {
-        validated.delete(path);
-        return 'unknown';
-      }
-      held = { atMs: now(), meetings: read.meetings };
-      answers.set(path, held);
-    }
+    const held = await freshAnswer(turn, path, startedAt);
+    if (held === null) return 'unknown';
     const overlapping = overlappingMeetings(startedAt, held.meetings);
     if (overlapping.length === 0) return 'gone';
     if (entry.meetingId === null || !overlapping.some(meeting => meeting.meetingId === entry.meetingId)) return 'rematch';
@@ -439,7 +476,6 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
     identity: null,
     files: [],
     registerCommandId: null,
-    registerAttempts: 0,
     failure: null,
   });
 
@@ -454,7 +490,6 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       mtimeMs: entry.mtimeMs,
       sha256: null,
       uploaded: false,
-      attempts: 0,
     }));
   }
 
@@ -478,7 +513,8 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
     const meetingChanged = next.meetingId !== base.meetingId;
     if (before !== undefined && !meetingChanged && (base.state === 'queued' || base.state === 'uploading' || base.state === 'failed')) return next;
     if (meetingChanged) {
-      // A different meeting (or none): nothing sent so far counts. The attempt counts stay (R7).
+      // A different meeting (or none): nothing sent so far counts. The attempt counts stay (R7):
+      // they are the files', kept apart from the entry.
       next.files = base.files.map(stored => ({ ...stored, uploaded: false }));
       next.registerCommandId = null;
     }
@@ -491,7 +527,6 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       next.identity = identity;
       next.files = filesOf(readiness.audio);
       next.registerCommandId = null;
-      next.registerAttempts = 0;
     }
     next.failure = null;
     next.state = next.meetingId === null ? 'needs_matching' : 'queued';
@@ -545,11 +580,12 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       const found = await candidatesFor(turn, open);
       // No answer, no decision: nothing is settled, listed, shown or uploaded on a guess.
       if (found !== null) {
+        // Each folder's answer keeps its own fetch time: a slow listing of one folder never
+        // makes the next folder's answer look younger than it is (M4RR finding 2).
+        for (const [path, held] of found) answers.set(path, held);
         for (const entry of open) {
-          const meetings = found.get(entry.path);
-          if (meetings === undefined) continue;
-          answers.set(entry.path, { atMs: now(), meetings });
-          await revalidate(turn, entry, meetings, at, settled);
+          if (!found.has(entry.path)) continue;
+          await revalidate(turn, entry, at, settled);
         }
       }
     }
@@ -560,10 +596,14 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
   async function revalidate(
     turn: Turn,
     entry: { readonly folder: RootFolder; readonly path: string; readonly startedAt: Date; readonly topic: string | null },
-    meetings: readonly RecordingCandidate[],
     at: number,
     settled: Set<string>,
   ): Promise<void> {
+    // R2: the answer the listing is decided on was fetched at most 60 s before the listing
+    // starts; an older one is read again for this folder's own window first.
+    const held = await freshAnswer(turn, entry.path, entry.startedAt);
+    if (held === null) return;
+    const meetings = held.meetings;
     const before = section()?.entries[entry.path];
     if (overlappingMeetings(entry.startedAt, meetings).length === 0) {
       // The privacy rule, from the start time alone: an entry it had goes; only a salted digest
@@ -594,8 +634,32 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
 
   type Step = 'progress' | 'skip' | 'stop' | 'idle';
 
+  /** A PUT decided and leased in a turn, made outside the queue (M4RR finding 5). */
+  interface PutPlan {
+    readonly leaseId: string;
+    readonly path: string;
+    /** The entry's version when the lease was claimed: the result commits only if it is unchanged. */
+    readonly version: number;
+    readonly index: number;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly filePath: string;
+  }
+  type Done = { readonly step: Step; readonly path: string | null; readonly put?: PutPlan };
+
+  /** A file's identity for its attempt counts (R7): its digest, else its path (salted), size and mtime. */
+  const fileKeyOf = (folderPath: string, stored: StoredFile): string =>
+    stored.sha256 ?? `p:${digestOf(join(folderPath, stored.relPath))}:${String(stored.sizeBytes)}:${String(Math.max(0, Math.trunc(stored.mtimeMs)))}`;
+  const attemptsOf = (key: string): Attempts => section()?.attempts[key] ?? { puts: 0, registers: 0 };
+  const countAttempt = (key: string, kind: keyof Attempts): void => {
+    const current = section();
+    if (current === null) throw new Abandoned();
+    const held = attemptsOf(key);
+    current.attempts[key] = { ...held, [kind]: held[kind] + 1 };
+  };
+
   /** One step of the next due folder's upload. */
-  async function workTurn(turn: Turn, skipped: ReadonlySet<string>): Promise<{ readonly step: Step; readonly path: string | null }> {
+  async function workTurn(turn: Turn, skipped: ReadonlySet<string>): Promise<Done> {
     if (!(await ensureSession(turn))) return { step: 'idle', path: null };
     const current = section();
     if (current === null) return { step: 'idle', path: null };
@@ -605,10 +669,10 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
     const next = due.find(([, entry]) => entry.state === 'uploading') ?? due[0];
     if (next === undefined) return { step: 'idle', path: null };
     const [path] = next;
-    return { step: await uploadStep(turn, path), path };
+    return { ...(await uploadStep(turn, path)), path };
   }
 
-  async function uploadStep(turn: Turn, path: string): Promise<Step> {
+  async function uploadStep(turn: Turn, path: string): Promise<{ readonly step: Step; readonly put?: PutPlan }> {
     const entryNow = (): Entry => {
       const found = section()?.entries[path];
       if (found === undefined) throw new Abandoned();
@@ -617,28 +681,40 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
     const update = (patch: Partial<Draft>): void => {
       commit(path, { ...entryNow(), ...patch });
     };
-    const fail = async (reason: string): Promise<Step> => {
+    const fail = async (reason: string): Promise<{ readonly step: Step }> => {
       update({ state: 'failed', failure: reason.slice(0, 80), registerCommandId: null });
       await persist(turn);
-      return 'skip';
+      return { step: 'skip' };
+    };
+    /**
+     * R2 immediately before each file operation: null to go on; otherwise the step ends, with
+     * the folder removed (overlaps nothing), back to Needs matching, or simply not touched.
+     */
+    const authorised = async (): Promise<{ readonly step: Step } | null> => {
+      const held = await authority(turn, path, entryNow());
+      if (held === 'ok') return null;
+      if (held === 'gone') commit(path, null);
+      if (held === 'rematch') {
+        update({ state: 'needs_matching', meetingId: null, matchedBy: null, registerCommandId: null, files: entryNow().files.map(stored => ({ ...stored, uploaded: false })) });
+      }
+      if (held !== 'unknown') await persist(turn);
+      return { step: 'skip' };
+    };
+    const unchanged = (seen: { readonly sizeBytes: number; readonly ino: number; readonly mtimeMs: number } | null, stored: StoredFile): boolean =>
+      seen !== null && seen.sizeBytes === stored.sizeBytes && seen.ino === stored.ino && Math.trunc(seen.mtimeMs) === Math.trunc(stored.mtimeMs);
+    const changedUnderneath = async (): Promise<{ readonly step: Step }> => {
+      // The folder changed under the upload: evaluated afresh at the next scan.
+      update({ state: 'waiting', identity: null, files: [], stable: null, registerCommandId: null });
+      validated.delete(path);
+      await persist(turn);
+      return { step: 'skip' };
     };
 
-    // R2 first: nothing inside the folder is touched without a fresh, complete, overlapping answer.
-    const held = await authority(turn, path, entryNow());
-    if (held === 'unknown') return 'skip';
-    if (held === 'gone') {
-      commit(path, null);
-      await persist(turn);
-      return 'skip';
-    }
-    if (held === 'rematch') {
-      update({ state: 'needs_matching', meetingId: null, matchedBy: null, registerCommandId: null, files: entryNow().files.map(stored => ({ ...stored, uploaded: false })) });
-      await persist(turn);
-      return 'skip';
-    }
+    const before = await authorised();
+    if (before !== null) return before;
     const entry = entryNow();
     const meetingId = entry.meetingId;
-    if (meetingId === null) return 'skip';
+    if (meetingId === null) return { step: 'skip' };
     if (entry.state !== 'uploading') update({ state: 'uploading' });
 
     const index = entry.files.findIndex(stored => !stored.uploaded);
@@ -648,20 +724,20 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       const withFile = (patch: Partial<StoredFile>): StoredFile[] =>
         entryNow().files.map((entryFile, position) => (position === index ? { ...entryFile, ...patch } : entryFile));
 
+      // Its identity (authorised just above).
+      const seen = await turn.wait(deps.fs.statFile(filePath));
+      if (seen === null) return await fail('file_unreadable');
+      if (!unchanged(seen, stored)) return await changedUnderneath();
+
       if (stored.sha256 === null) {
-        // (a) Identity, box tree, digest.
-        const seen = await turn.wait(deps.fs.statFile(filePath));
-        if (seen === null) return await fail('file_unreadable');
-        if (seen.sizeBytes !== stored.sizeBytes || seen.ino !== stored.ino || Math.trunc(seen.mtimeMs) !== Math.trunc(stored.mtimeMs)) {
-          // The folder changed under the upload: evaluated afresh at the next scan.
-          update({ state: 'waiting', identity: null, files: [], stable: null, registerCommandId: null });
-          validated.delete(path);
-          await persist(turn);
-          return 'skip';
-        }
+        // (a) The box tree, then the digest: each authorised immediately before it starts.
         if (stored.sizeBytes > MEETING_RECORDING_LIMITS.maxFileBytes || stored.sizeBytes === 0) return await fail('file_too_large');
+        const toSniff = await authorised();
+        if (toSniff !== null) return toSniff;
         const sniffed = await turn.wait(deps.fs.sniff(filePath));
         if (sniffed !== 'audio') return await fail(sniffed === 'unreadable' ? 'file_unreadable' : 'not_audio');
+        const toHash = await authorised();
+        if (toHash !== null) return toHash;
         let digest: string;
         try {
           digest = await turn.wait(deps.fs.sha256(filePath));
@@ -671,20 +747,14 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
         }
         update({ files: withFile({ sha256: digest }) });
         await persist(turn);
-        return 'progress';
+        return { step: 'progress' };
       }
 
-      // (b) One PUT, counted before it is made (R7).
-      const seen = await turn.wait(deps.fs.statFile(filePath));
-      if (seen === null || seen.sizeBytes !== stored.sizeBytes || seen.ino !== stored.ino || Math.trunc(seen.mtimeMs) !== Math.trunc(stored.mtimeMs)) {
-        update({ state: 'waiting', identity: null, files: [], stable: null, registerCommandId: null });
-        validated.delete(path);
-        await persist(turn);
-        return 'skip';
-      }
-      if (stored.attempts >= MAX_ATTEMPTS) return await fail('upload_failed');
-      update({ files: withFile({ attempts: stored.attempts + 1 }) });
-      await persist(turn);
+      // (b) The upload URL, then the PUT — counted (R7), leased, and made outside the queue.
+      const key = fileKeyOf(entry.folderPath, stored);
+      if (attemptsOf(key).puts >= MAX_ATTEMPTS) return await fail('upload_failed');
+      const toAsk = await authorised();
+      if (toAsk !== null) return toAsk;
       const answered = await turn.wait(
         deps.api.command(
           '/meetings/recordings/upload-url',
@@ -693,20 +763,33 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
         ),
       );
       if (!answered.ok) return await refused(turn, answered, path, fail);
-      if (answered.value.status === 'upload') {
-        const put = await turn.wait(deps.uploader.put(answered.value.url, answered.value.headers, filePath, turn.signal));
-        // Interrupted: sent again, whole, with a fresh URL at a later scan, while attempts remain.
-        if (!put.ok) return 'stop';
+      if (answered.value.status === 'registered') {
+        update({ files: withFile({ uploaded: true }) });
+        await persist(turn);
+        return { step: 'progress' };
       }
-      update({ files: withFile({ uploaded: true }) });
+      // The last check before the PUT starts: authority fetched within 60 s of now.
+      const toPut = await authorised();
+      if (toPut !== null) return toPut;
+      countAttempt(key, 'puts');
       await persist(turn);
-      return 'progress';
+      const leaseId = randomUUID();
+      leases.set(path, leaseId);
+      return {
+        step: 'progress',
+        put: { leaseId, path, version: entryNow().version, index, url: answered.value.url, headers: answered.value.headers, filePath },
+      };
     }
 
-    // (c) Every file is there: the register, counted (R7), its command id saved before it is sent.
-    if (entry.registerAttempts >= MAX_ATTEMPTS) return await fail('upload_failed');
+    // (c) Every file is there: the register, counted per file (R7), authorised, its command id
+    // saved before it is sent.
+    const keys = entry.files.map(stored => fileKeyOf(entry.folderPath, stored));
+    if (keys.some(key => attemptsOf(key).registers >= MAX_ATTEMPTS)) return await fail('upload_failed');
+    const toRegister = await authorised();
+    if (toRegister !== null) return toRegister;
     const commandId = entry.registerCommandId ?? randomUUID();
-    update({ registerCommandId: commandId, registerAttempts: entry.registerAttempts + 1 });
+    for (const key of keys) countAttempt(key, 'registers');
+    update({ registerCommandId: commandId });
     await persist(turn);
     const sent = entryNow();
     const registered = await turn.wait(
@@ -728,13 +811,49 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
         const missing = new Set(parsed.success ? parsed.data.missing : sent.files.map(stored => stored.sha256 ?? ''));
         update({ registerCommandId: null, files: sent.files.map(stored => (stored.sha256 !== null && missing.has(stored.sha256) ? { ...stored, uploaded: false } : stored)) });
         await persist(turn);
-        return 'stop';
+        return { step: 'stop' };
       }
       return await refused(turn, registered, path, fail);
     }
     update({ state: 'uploaded', registerCommandId: null, failure: null });
     await persist(turn);
-    return 'skip';
+    return { step: 'skip' };
+  }
+
+  /** A PUT's result, committed only while its lease holds: the entry unchanged since it was claimed. */
+  async function commitPut(turn: Turn, plan: PutPlan, ok: boolean): Promise<Step> {
+    if (leases.get(plan.path) !== plan.leaseId) return 'skip';
+    leases.delete(plan.path);
+    const entry = section()?.entries[plan.path];
+    if (entry === undefined || entry.version !== plan.version) return 'skip';
+    // Interrupted: sent again, whole, with a fresh URL at a later scan, while attempts remain.
+    if (!ok) return 'stop';
+    commit(plan.path, { ...entry, files: entry.files.map((stored, position) => (position === plan.index ? { ...stored, uploaded: true } : stored)) });
+    await persist(turn);
+    return 'progress';
+  }
+
+  /** The PUT, outside the queue: commands and scans go on meanwhile; a sign-out aborts it. */
+  async function runPut(plan: PutPlan): Promise<boolean> {
+    const controller = new AbortController();
+    inflight.add(controller);
+    try {
+      const aborted = new Promise<{ readonly ok: false }>(resolve => {
+        controller.signal.addEventListener(
+          'abort',
+          () => {
+            resolve({ ok: false });
+          },
+          { once: true },
+        );
+      });
+      const outcome = await Promise.race([deps.uploader.put(plan.url, plan.headers, plan.filePath, controller.signal), aborted]);
+      return outcome.ok;
+    } catch {
+      return false;
+    } finally {
+      inflight.delete(controller);
+    }
   }
 
   /** No definite answer: stop, a later scan resumes. The meeting gone: Needs matching. Else failed. */
@@ -742,16 +861,16 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
     turn: Turn,
     answered: { readonly reason: string; readonly offline: boolean },
     path: string,
-    fail: (reason: string) => Promise<Step>,
-  ): Promise<Step> {
-    if (answered.offline || TRANSIENT.has(answered.reason)) return 'stop';
+    fail: (reason: string) => Promise<{ readonly step: Step }>,
+  ): Promise<{ readonly step: Step }> {
+    if (answered.offline || TRANSIENT.has(answered.reason)) return { step: 'stop' };
     if (MEETING_GONE.has(answered.reason)) {
       const entry = section()?.entries[path];
-      if (entry === undefined) return 'skip';
+      if (entry === undefined) return { step: 'skip' };
       commit(path, { ...entry, state: 'needs_matching', meetingId: null, matchedBy: null, registerCommandId: null, files: entry.files.map(stored => ({ ...stored, uploaded: false })) });
       answers.delete(path);
       await persist(turn);
-      return 'skip';
+      return { step: 'skip' };
     }
     return await fail(answered.reason === 'not_found' ? 'recordings_unsupported' : answered.reason);
   }
@@ -771,9 +890,16 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
         const skipped = new Set<string>();
         for (;;) {
           if (mine !== generation) return;
-          const done = await serial(async turn => await workTurn(turn, skipped), { step: 'idle' as Step, path: null });
-          if (done.step === 'idle' || done.step === 'stop') break;
-          if (done.step === 'skip' && done.path !== null) skipped.add(done.path);
+          const done = await serial(async turn => await workTurn(turn, skipped), { step: 'idle' as Step, path: null } as Done);
+          let step = done.step;
+          const plan = done.put;
+          if (plan !== undefined) {
+            const ok = await runPut(plan);
+            if (mine !== generation) return;
+            step = await serial(async turn => (turn.mine === mine ? await commitPut(turn, plan, ok) : 'idle'), 'idle' as Step);
+          }
+          if (step === 'idle' || step === 'stop') break;
+          if (step === 'skip' && done.path !== null) skipped.add(done.path);
         }
       } while (workAgain);
     })()
@@ -829,6 +955,7 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
   const forget = async (): Promise<RecordingsView> => {
     generation += 1;
     running?.abort();
+    for (const controller of inflight) controller.abort();
     await serial(async () => {
       file = null;
       who = null;
@@ -836,6 +963,7 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       loadedFor = -1;
       candidates = new Map();
       answers = new Map();
+      leases = new Map();
       validated = new Set();
       pendingManual = new Set();
       notice = null;
@@ -970,22 +1098,28 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       return done.view;
     },
     async retry(input) {
-      const done = await onItem(input.itemId, entry =>
-        entry.state !== 'failed'
-          ? 'stale'
-          : {
-              // Evaluated afresh: listed again, every file sent again under new commands, and
-              // the attempt counts start again (R7).
-              ...entry,
-              state: 'waiting',
-              failure: null,
-              identity: null,
-              files: [],
-              stable: null,
-              registerCommandId: null,
-              registerAttempts: 0,
-            },
-      );
+      const done = await onItem(input.itemId, entry => {
+        if (entry.state !== 'failed') return 'stale';
+        // Retry is the one thing that resets its files' attempt counts (R7), whichever identity
+        // they are kept under.
+        const current = section();
+        if (current !== null) {
+          for (const stored of entry.files) {
+            delete current.attempts[fileKeyOf(entry.folderPath, stored)];
+            delete current.attempts[fileKeyOf(entry.folderPath, { ...stored, sha256: null })];
+          }
+        }
+        return {
+          // Evaluated afresh: listed again, every file sent again under new commands.
+          ...entry,
+          state: 'waiting',
+          failure: null,
+          identity: null,
+          files: [],
+          stable: null,
+          registerCommandId: null,
+        };
+      });
       if (!done.changed) return done.view;
       const mine = generation;
       await scan();

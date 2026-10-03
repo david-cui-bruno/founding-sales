@@ -411,15 +411,18 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
    that overlapped is **Needs matching**: Today's quiet Recordings group offers the
    overlapping meetings, or "Not a Callie demo", which drops the folder for good.
 4. **One writer.** Every read-modify-write of the import — the store load (once per session),
-   a scan, a command, one upload step, the sign-out reset — is one turn of a single queue, so
-   nothing is ever derived from state another write has replaced. Entry versions come from
+   a scan, a command, one upload step, a PUT's commit, the sign-out reset — is one turn of a
+   single queue, so nothing is ever derived from state another write has replaced. A PUT is
+   decided and leased in a turn, runs outside the queue (commands and scans go on), and its
+   result is committed only if the lease — its id and the entry's version — still holds. Entry versions come from
    the person's persisted monotonic clock: a version is never reused, even by an entry
    removed and recreated. A sign-out abandons the turn under way at its next await (an upload
    in flight is dropped) and resets as the next turn.
-5. **No cached authority.** Sniffing, hashing, uploading or registering any file of a folder
-   needs, in the same turn, a complete candidates answer for that folder read in this
-   session at most 60 seconds earlier (else read again then), under which it still overlaps a
-   meeting and its meeting still holds (David's choice still overlapping; an automatic match
+5. **No cached authority.** Immediately before each operation on a folder's files — listing,
+   stat, sniff, hash, upload URL, PUT, register — a complete candidates answer for that folder,
+   read in this session and fetched at most 60 seconds before that operation starts (stamped
+   when the read is issued, never re-stamped; an older one is read again first), under which
+   it still overlaps a meeting and its meeting still holds (David's choice still overlapping; an automatic match
    still the matcher's answer). Without one nothing inside the folder is touched. A meeting
    that is gone (folded, deleted, cancelled, moved, its firm given to someone else) — or
    that the server refuses as such — puts the folder back to Needs matching; one that no
@@ -427,26 +430,29 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
 6. **Waiting.** A folder is ready when no `.zoom` or temporary file remains, its audio is
    there (the per-participant files, or the mixed `audio*.m4a` when there are none) and the
    listing is unchanged across two scans at least 20 seconds apart.
-7. **Upload**, one step per turn. Per file: its box tree is walked (`audioSniff.ts`: sizes,
-   largesize and to-the-end boxes, bounds-checked; `ftyp` first; only `moov > trak > mdia >
-   hdlr` is descended, the handler read at its defined offset). It is audio only when a track
-   is `soun` and every other is `hint`, `meta` or `text` — `vide` or any unknown handler is
-   `not_audio`, never hashed or sent, and bytes in `free`, `skip` or `mdat` are never read as
-   a handler. Then `POST /meetings/recordings/upload-url {meetingId, fileSha256, sizeBytes,
+7. **Upload**, one step per turn. Per file: its whole box tree is walked (`audioSniff.ts`:
+   every container at any depth, every `moov`; sizes, largesize and to-the-end boxes,
+   bounds-checked; `ftyp` first). It is audio only when at least one `stsd` exists, every
+   sample entry of every `stsd` is an allowlisted audio codec (`mp4a`, `alac`, `Opus`) and no
+   `hdlr` names pictures (`vide`, `pict`, `auxv`) — decided by codec, never by a track's
+   label. Anything else is `not_audio`, never hashed or sent; bytes in `free`, `skip` or
+   `mdat` are never read as boxes. Then `POST /meetings/recordings/upload-url {meetingId, fileSha256, sizeBytes,
    participantLabel, segment}` answers `registered` (nothing to send) or a 15-minute
    presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket that binds
    `audio/mp4`, the size (≤ 300 MB) and the digest — S3 refuses any other body. The URL is
    signed per answer, a replay's too, after the permission is checked again, and never
    stored. Then `POST /meetings/recordings/register {meetingId, files}` under a command id
    saved before it is sent, so a restart replays it; each new file is checked by HEAD
-   (present, size, digest) before any row is written. A person who is not an administrator
-   registers only an object an upload URL was issued to them for (`recording_not_issued`),
-   no later than S3's `LastModified` for it, compared in whole seconds as S3 gives it
-   (`not_your_upload`): an object somebody else staged first is not theirs. An object that is
-   not there (expired, or never arrived) is refused `object_missing` with its digests and no
-   receipt: the Mac sends those files again. Each file's PUTs and each folder's registers are
-   counted in the store across scans and restarts: a fourth of either fails the folder with
-   Retry, which resets the counts.
+   (present, size, digest) before any row is written. Each upload URL's signature covers an
+   `x-amz-meta-callie-upload` header carrying its receipt's random upload id, which S3 keeps
+   with the object and HEAD reads back: a person who is not an administrator registers only
+   an object written through a URL issued to them (`recording_not_issued` without any,
+   `not_your_upload` for somebody else's); an administrator, through any URL issued for that
+   key. No clock is compared. An object that is not there (expired, or never arrived) is
+   refused `object_missing` with its digests and no receipt: the Mac sends those files again.
+   Each file's PUTs and registers are counted in the store by the file's identity (its digest)
+   apart from the entries, across scans, restarts and an overlap lost and regained: a fourth
+   of either fails the folder with Retry, the only thing that resets them.
 8. **States**, kept in `recordings.json` per person and role class (workspace, user, admin or
    member: a downgraded person starts empty) and keyed by the folder path and the audio
    files' identity (inode, size, mtime). This Mac shows only what is not registered yet:

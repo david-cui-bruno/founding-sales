@@ -19,10 +19,12 @@ import { instant, uuid } from '@fss/contracts';
  *     under another authority:
  *       - `entries`, keyed by folder path, for the folders that overlapped a Callie meeting —
  *         their state, the meeting, and each audio file's identity (inode, size, mtime), digest,
- *         whether it has been uploaded and how many times it was sent (R7). A folder whose
+ *         and whether it has been uploaded. A folder whose
  *         files' identity changes is evaluated again (the brief: keyed by the path plus the
  *         files' identity). Each entry carries a `version` taken from `clocks` (below), so a
  *         version is never reused, even by an entry removed and recreated (R1);
+ *       - `attempts` — each file's PUTs and registers, by the file's identity, kept when an entry
+ *         goes (R7);
  *       - `settled` — a SALTED digest (`salt`, random per person) of the path of each folder
  *         found to overlap no meeting, once no meeting can still appear for it. Never the path:
  *         the store holds no name of a folder it never looked into (finding 5). A folder chosen
@@ -47,8 +49,6 @@ export const storedFileSchema = z.strictObject({
   mtimeMs: z.number(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/u).nullable(),
   uploaded: z.boolean(),
-  /** PUTs started for this file, across scans and restarts; the fourth is a failure (R7). */
-  attempts: z.number().int().min(0),
 });
 export type StoredFile = z.infer<typeof storedFileSchema>;
 
@@ -71,16 +71,24 @@ export const entrySchema = z.strictObject({
   files: z.array(storedFileSchema).max(200),
   /** The register command's id, minted before it is sent, so a restart replays it. */
   registerCommandId: uuid.nullable(),
-  /** Registers sent, across scans and restarts; the fourth is a failure (R7). Retry resets. */
-  registerAttempts: z.number().int().min(0),
   failure: z.string().max(80).nullable(),
   updatedAt: instant,
 });
 export type Entry = z.infer<typeof entrySchema>;
 
+/**
+ * R7 (repaired after M4RR finding 4): each FILE's PUTs and registers, keyed by the file's
+ * identity — its SHA-256 when known, else a salted digest of its path with its size and mtime —
+ * and kept apart from the entries: an entry removed (its folder lost its overlap) and found
+ * again starts from the same counts. Only Retry resets them.
+ */
+export const attemptsSchema = z.strictObject({ puts: z.number().int().min(0), registers: z.number().int().min(0) });
+export type Attempts = z.infer<typeof attemptsSchema>;
+
 export const workspaceImportSchema = z.strictObject({
   salt: z.string().regex(/^[0-9a-f]{64}$/u),
   entries: z.record(z.string(), entrySchema),
+  attempts: z.record(z.string().regex(/^(?:[0-9a-f]{64}|p:[0-9a-f]{64}:[0-9]+:[0-9]+)$/u), attemptsSchema),
   settled: z.array(z.string().regex(/^[0-9a-f]{64}$/u)).max(10_000),
 });
 export type WorkspaceImport = z.infer<typeof workspaceImportSchema>;
@@ -104,7 +112,7 @@ export const recordingsFileSchema = z.strictObject({
 });
 export type RecordingsFile = z.infer<typeof recordingsFileSchema>;
 
-export const emptyWorkspaceImport = (): WorkspaceImport => ({ salt: randomBytes(32).toString('hex'), entries: {}, settled: [] });
+export const emptyWorkspaceImport = (): WorkspaceImport => ({ salt: randomBytes(32).toString('hex'), entries: {}, attempts: {}, settled: [] });
 const EMPTY: RecordingsFile = Object.freeze({ version: 3, folder: null, people: {}, clocks: {} }) as RecordingsFile;
 
 export interface RecordingStore {

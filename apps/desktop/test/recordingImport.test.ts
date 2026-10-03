@@ -823,3 +823,224 @@ describe('the M4 design reset (review M4F repros)', () => {
     expect(h.upload.puts).toHaveLength(2);
   });
 });
+
+describe('the M4RR repair (the reviewer’s probes)', () => {
+  const moved = (): RecordingCandidate => meeting('1', local(17, 0));
+  const demo = (h: ReturnType<typeof harness>) => h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+  const candidateReads = (h: ReturnType<typeof harness>): number => h.server.calls.filter(call => call.path.includes('candidates')).length;
+
+  it('finding 2: a sniff that takes 61 s while the meeting moves away — the hash is not started (slow sniff)', async () => {
+    const h = harness();
+    demo(h);
+    const sniff = h.files.fs.sniff;
+    h.files.fs.sniff = async path => {
+      const verdict = await sniff(path);
+      h.advance(61_000);
+      h.setMeetings([moved()]);
+      return verdict;
+    };
+    await settle(h);
+    expect(h.files.sniffed).toHaveLength(1);
+    expect(h.files.hashed).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+  });
+
+  it('finding 2: an upload URL that takes 61 s while the meeting moves away — the PUT is not started (delayed URL)', async () => {
+    const h = harness();
+    demo(h);
+    const command = h.server.api.command.bind(h.server.api);
+    h.server.api.command = async (path, payload, parse, options) => {
+      const answered = await command(path, payload, parse, options);
+      if (path === '/meetings/recordings/upload-url') {
+        h.advance(61_000);
+        h.setMeetings([moved()]);
+      }
+      return answered;
+    };
+    await settle(h);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(1);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
+  });
+
+  it('finding 2: a 61 s listing of one folder never lends the scan’s answer to the next folder (slow earlier listing)', async () => {
+    const h = harness();
+    const first = demo(h);
+    const later = h.files.add(folderName(local(14, 2), 'Callie demo between David Cui and Jordan Placeholder'), [
+      fakeFile('Audio Record/audioJordanPlaceholder21234567899.m4a', 'other jordan', 1),
+    ]);
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    const list = h.files.fs.listFolder;
+    h.files.fs.listFolder = async path => {
+      if (path === first.path) {
+        h.advance(61_000);
+        h.setMeetings([moved()]);
+      }
+      return await list(path);
+    };
+    const reads = candidateReads(h);
+    await h.importer.scan();
+    await h.importer.idle();
+    // The next folder's answer was read again before its listing, and it no longer overlaps.
+    expect(candidateReads(h)).toBeGreaterThan(reads + 1);
+    expect(h.files.listed.filter(path => path === later.path)).toHaveLength(1);
+    expect(h.upload.puts.filter(path => path.startsWith(later.path))).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
+    expect(h.store.saved().people[PERSON]!.entries[later.path]).toBeUndefined();
+  });
+
+  it('finding 4: a file failed after three PUTs stays failed when its folder loses and regains its overlap — no fourth PUT without Retry', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [fakeFile('Audio Record/audioJordanPlaceholder21234567890.m4a', 'jordan', 1)]);
+    h.upload.setBehaviour(() => 'fail');
+    await settle(h);
+    for (let round = 0; round < 3; round += 1) {
+      await h.importer.scan();
+      await h.importer.idle();
+    }
+    expect(stored(h)).toEqual(['failed']);
+    expect(h.upload.puts).toHaveLength(3);
+    for (let round = 0; round < 3; round += 1) {
+      h.setMeetings([]);
+      await h.importer.scan();
+      await h.importer.idle();
+      expect(stored(h)).toEqual([]);
+      h.setMeetings([meeting('1', local(14, 0))]);
+      await settle(h);
+    }
+    expect(h.upload.puts).toHaveLength(3);
+    expect(stored(h)).toEqual(['failed']);
+    // Retry, and only Retry, starts the count again.
+    h.upload.setBehaviour(() => 'ok');
+    await h.importer.retry({ itemId: (await h.importer.state()).items[0]!.itemId });
+    await settle(h);
+    expect(stored(h)).toEqual(['uploaded']);
+    expect(h.upload.puts).toHaveLength(4);
+  });
+
+  it('finding 4: the meeting-gone loop with the overlap lost and regained in between is still bounded at three PUTs', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [fakeFile('Audio Record/audioJordanPlaceholder21234567890.m4a', 'jordan', 1)]);
+    h.server.setIntercept(path => (path === '/meetings/recordings/register' ? { ok: false, reason: 'meeting_unknown', offline: false } : null));
+    await settle(h);
+    for (let round = 0; round < 5; round += 1) {
+      h.setMeetings([]);
+      await h.importer.scan();
+      await h.importer.idle();
+      h.setMeetings([meeting('1', local(14, 0))]);
+      await settle(h);
+    }
+    expect(h.upload.puts).toHaveLength(3);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(3);
+  });
+
+  it('finding 5: an ignore of an unrelated item answers while a PUT is held; the PUT then commits under its lease', async () => {
+    const h = harness({ meetings: [meeting('1', local(14, 0)), meeting('2', local(15, 10), 'Riley Example'), meeting('3', local(15, 20), 'Sam Example')] });
+    demo(h);
+    h.files.add(folderName(local(15, 15), 'Zoom Meeting'), [fakeFile('Audio Record/audioSomebody1.m4a', 'somebody', 1)]);
+    const gate = latch();
+    const put = h.upload.uploader.put.bind(h.upload.uploader);
+    let held = 0;
+    h.upload.uploader.put = async (url, headers, path, signal) => {
+      held += 1;
+      if (held === 1) {
+        gate.started();
+        await gate.released;
+      }
+      return await put(url, headers, path, signal);
+    };
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    const scanned = h.importer.scan();
+    await gate.began;
+    await scanned;
+    const other = (await h.importer.state()).items.find(item => item.state === 'needs_matching')!;
+    let answered = false;
+    const ignoring = h.importer.ignore({ itemId: other.itemId }).then(view => {
+      answered = true;
+      return view;
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(answered).toBe(true);
+    expect((await ignoring).answered).toMatchObject({ itemId: other.itemId, item: null });
+    // A scan runs during the transfer too.
+    await h.importer.scan();
+    gate.release();
+    await h.importer.idle();
+    expect(stored(h)).toEqual(['ignored', 'uploaded']);
+    expect(h.upload.puts).toHaveLength(2);
+  });
+
+  it('finding 5: a PUT whose lease was lost meanwhile (the folder no longer overlaps) commits nothing, and nothing is registered', async () => {
+    const h = harness();
+    demo(h);
+    const gate = latch();
+    const put = h.upload.uploader.put.bind(h.upload.uploader);
+    h.upload.uploader.put = async (url, headers, path, signal) => {
+      gate.started();
+      await gate.released;
+      return await put(url, headers, path, signal);
+    };
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    void h.importer.scan();
+    await gate.began;
+    h.setMeetings([moved()]);
+    await h.importer.scan();
+    expect(stored(h)).toEqual([]);
+    gate.release();
+    await h.importer.idle();
+    expect(stored(h)).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
+  });
+
+  it('finding 5: a PUT whose entry changed meanwhile (now ambiguous, Needs matching) is dropped — never marked sent under the new state', async () => {
+    const h = harness();
+    demo(h);
+    const gate = latch();
+    const put = h.upload.uploader.put.bind(h.upload.uploader);
+    h.upload.uploader.put = async (url, headers, path, signal) => {
+      gate.started();
+      await gate.released;
+      return await put(url, headers, path, signal);
+    };
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    void h.importer.scan();
+    await gate.began;
+    // A second meeting appears beside the first: the folder needs David now.
+    h.setMeetings([meeting('1', local(14, 0)), meeting('2', local(14, 10), 'Riley Example')]);
+    await h.importer.scan();
+    expect(stored(h)).toEqual(['needs_matching']);
+    gate.release();
+    await h.importer.idle();
+    const entry = Object.values(h.store.saved().people[PERSON]!.entries)[0]!;
+    expect(entry.state).toBe('needs_matching');
+    expect(entry.files.map(stored => stored.uploaded)).toEqual([false, false]);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
+  });
+
+  it('finding 5: a sign-out aborts the PUT in flight and the import drains', async () => {
+    const h = harness();
+    demo(h);
+    let aborted = false;
+    const began = latch();
+    h.upload.uploader.put = async (_url, _headers, _path, signal) => {
+      signal?.addEventListener('abort', () => {
+        aborted = true;
+      });
+      began.started();
+      return await new Promise(() => undefined);
+    };
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    void h.importer.scan();
+    await began.began;
+    h.signIn(null);
+    await h.importer.forget();
+    await h.importer.idle();
+    expect(aborted).toBe(true);
+    expect((await h.importer.state()).items).toEqual([]);
+  });
+});
