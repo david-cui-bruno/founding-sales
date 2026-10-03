@@ -167,6 +167,13 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
         rows = [];
         return view;
       }
+      // One answer per row asked, in order (lane PBM). A short or long answer says nothing
+      // about any row, so it is an error for the file — never every row "unmatched".
+      if (answer.value.rows.length !== valid.length) {
+        view = { ...EMPTY, previewId, fileName, reason: 'match_answer_mismatch' };
+        rows = [];
+        return view;
+      }
       matches = answer.value.rows;
     }
     const matchOf = new Map(valid.map(({ index }, position) => [index, matches[position]] as const));
@@ -182,6 +189,7 @@ export function createBriefImport(deps: BriefImportDeps): BriefImportHost {
         if (!entry.ok) {
           return { index, label: entry.label, status: 'invalid', issue: entry.issue, firmName: null, matchedOn: null, briefLength: 0, sourceCount: 0, result: null };
         }
+        // Present for every valid row: the answer had one row per row asked (checked above).
         const match = matchOf.get(index) ?? { status: 'unmatched' as const };
         return {
           index,

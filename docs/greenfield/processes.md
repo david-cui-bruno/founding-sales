@@ -313,6 +313,7 @@ fss admin schema-preflight 0020                    the one-off check before migr
 fss admin release-record put --json <file> | --json-base64 <value>
 fss admin release-record show --reference <releaseGateReference>
 fss admin trial export --public-key-pem-b64 <b64> --workspace-slug <slug> | --workspace-id <uuid> [--since <instant>] [--max-calls 12]
+fss admin import-match report --workspace-id <uuid> --external-id-prefix <prefix>
 ```
 
 Every command takes `--report <path>`, which writes the same JSON the command printed, except
@@ -324,6 +325,13 @@ under a random key wrapped with RSA-OAEP-SHA256, as numbered lines each under 15
 `{"exported": n}`. Transcripts, suggestions, evidence, decisions, corrections and the logged
 outcome only; no audio, number, address or name. One READ ONLY transaction. David reviews it on his
 Mac with `tools/trial-review/review.mjs`, which decrypts in memory (its README).
+
+**`fss admin import-match report`** (lane PBM) says whether a CSV import's firms are in a
+workspace, as one JSON line of five counts: `activeFirms`, `externalIdAliases` (firm
+`external_id` aliases starting with the prefix — where the CSV importer keeps a firm's
+external id), `aliasesOnActiveFirms`, `aliasesOnMergedFirms` and `firmsCreatedLast7Days`. No
+name, website, id or alias value, because the log is CloudWatch. The prefix is 4 to 64
+characters of `[a-z0-9-]`. One READ ONLY transaction, rolled back.
 
 **`fss verify`** is what a deployment runs between the migration and the first service:
 the applied version and whether each declared range accepts it, the configured-parts

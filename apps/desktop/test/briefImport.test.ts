@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { reasonSentence } from '@fss/contracts';
 import type { ApiOutcome } from '../src/main/apiClient.ts';
 import type { AuthedClient } from '../src/main/authedClient.ts';
 import { createBriefImport, parseBriefFile } from '../src/main/briefImport.ts';
@@ -39,7 +40,7 @@ interface Call {
 }
 
 /** The match answers every row matched to A then B; the import waits for the test when `hold` is set. */
-function fakeApi(options: { readonly hold?: boolean; readonly refuse?: string } = {}) {
+function fakeApi(options: { readonly hold?: boolean; readonly refuse?: string; readonly answerRows?: (asked: number) => number } = {}) {
   const calls: Call[] = [];
   const releases: (() => void)[] = [];
   const api = {
@@ -52,7 +53,8 @@ function fakeApi(options: { readonly hold?: boolean; readonly refuse?: string } 
         { status: 'unmatched' },
         { status: 'ambiguous', column: 'firm_name' },
       ];
-      return await Promise.resolve({ ok: true as const, value: parse({ rows: rows.map((_r, i) => answers[i] ?? { status: 'unmatched' }) }) });
+      const answered = Array.from({ length: options.answerRows?.(rows.length) ?? rows.length }, (_r, i) => answers[i] ?? { status: 'unmatched' });
+      return await Promise.resolve({ ok: true as const, value: parse({ rows: answered }) });
     },
     command: async <T>(path: string, body: Record<string, unknown>, parse: (value: unknown) => T, opts?: { commandId?: string }): Promise<ApiOutcome<T>> => {
       calls.push({ kind: 'command', path, body, commandId: opts?.commandId });
@@ -110,6 +112,22 @@ describe('the prepared-brief import', () => {
     expect(calls[0]?.path).toBe('/firms/brief/match');
     expect(JSON.stringify(calls[0]?.body)).not.toContain('call the office');
     expect(JSON.stringify(view)).not.toContain('call the office');
+  });
+
+  it('lane PBM: a match answer with a different number of rows is an error for the file, never every row unmatched', async () => {
+    for (const answerRows of [() => 0, (asked: number) => asked - 1, (asked: number) => asked + 1]) {
+      const { api, calls } = fakeApi({ answerRows });
+      const host = importer(api, () => JSON.stringify(FILE));
+      const view = await host.choose();
+      expect(briefImportViewSchema.parse(view)).toEqual(view);
+      expect(view.reason).toBe('match_answer_mismatch');
+      // The screen says it in words of its own, not the generic sentence that names the code.
+      expect(reasonSentence(view.reason ?? '')).not.toContain('(match_answer_mismatch)');
+      expect(view.rows).toEqual([]);
+      // Nothing to import from a preview that could not be matched.
+      await host.commit({ previewId: view.previewId });
+      expect(calls.filter(call => call.kind === 'command')).toEqual([]);
+    }
   });
 
   it('commits ONE import command with the valid rows of the preview on screen, and shows the server’s outcome per row', async () => {
