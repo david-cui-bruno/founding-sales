@@ -79,6 +79,20 @@ describe('the meeting answers accept a state this build does not know', () => {
     expect(meetingMatchedSchema.safeParse({ meetingId: MEETING, firmId: FIRM, contactId: null, state: 'ended', stage: 'none' }).success).toBe(true);
   });
 
+  it('parses the firm s meetings as the server answers after migration 0039, with attendance and a stage suggestion', () => {
+    const after = {
+      meetings: [
+        { meetingId: MEETING, state: 'held', startsAt: '2026-10-06T15:00:00.000Z', endsAt: '2026-10-06T15:30:00.000Z', attendanceSource: 'manual' },
+        { meetingId: OTHER_MEETING, state: 'ended', startsAt: '2026-10-01T15:00:00.000Z', endsAt: '2026-10-01T15:30:00.000Z', attendanceSource: null },
+      ],
+      stageSuggestion: { stageKey: 'demo_booked', opportunityId: null },
+    };
+    expect(firmMeetingsResponseSchema.safeParse(after).success).toBe(true);
+    expect(firmMeetingsResponseSchema.safeParse({ ...after, stageSuggestion: { stageKey: 'demo_booked', opportunityId: OPP } }).success).toBe(true);
+    // A board card with a suggestion parses too (the card is not strict).
+    expect(pipelineBoardResponseSchema.safeParse({ ...board(['booked', 'ended']), cards: { [FIRM]: { ...card('booked'), stageSuggestion: { stageKey: 'demo_booked', opportunityId: OPP } } } }).success).toBe(true);
+  });
+
   it('still refuses a state that is not a state s shape, so the field cannot carry text', () => {
     for (const state of ['', 'Held', 'held by a partner', 'no-show', 'ended!', 'x'.repeat(40), '_held']) {
       expect(firmMeetingsResponseSchema.safeParse(firmMeetings([state])).success, state).toBe(false);

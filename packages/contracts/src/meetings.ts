@@ -62,11 +62,33 @@ export const firmMeetingDtoSchema = z.strictObject({
   state: meetingStateWireSchema,
   startsAt: instant,
   endsAt: instant,
+  /**
+   * How the meeting's attendance was confirmed, null while unconfirmed (lane M1, migration
+   * 0039: `manual`, `calcom_no_show`, later `recording`). Declared before the server sends it,
+   * optional and of the code shape, so the desktop released ahead of 0039 parses the answer
+   * the server sends after it.
+   */
+  attendanceSource: meetingStateWireSchema.nullable().optional(),
 });
 export type FirmMeetingDto = z.infer<typeof firmMeetingDtoSchema>;
 
+/**
+ * A stage move Callie suggests and a person makes with one click (lane M1: a booking no
+ * longer moves a deal by itself). `opportunityId` is the open deal to move, or null when the
+ * firm has none and the click opens one at the stage. Not strict: a later field is ignored.
+ */
+export const stageSuggestionSchema = z.object({
+  stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u),
+  opportunityId: uuid.nullable(),
+});
+export type StageSuggestion = z.infer<typeof stageSuggestionSchema>;
+
 /** `GET /meetings/firm?firmId=` — the firm's meetings, newest start first. */
-export const firmMeetingsResponseSchema = z.strictObject({ meetings: z.array(firmMeetingDtoSchema) });
+export const firmMeetingsResponseSchema = z.strictObject({
+  meetings: z.array(firmMeetingDtoSchema),
+  /** Lane M1: "Move to Demo booked" for a live booking, declared ahead of the server (above). */
+  stageSuggestion: stageSuggestionSchema.nullable().optional(),
+});
 
 /**
  * A booking Callie could not attach to a firm by itself (`firm_unmatched` /
