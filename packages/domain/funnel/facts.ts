@@ -194,3 +194,58 @@ export async function recordFunnelFact(
   if (id === undefined) return { recorded: false, reason: 'duplicate' };
   return { recorded: true, id };
 }
+
+/** A withdrawal's reason: a lower-case code (`funnel_facts_withdrawn_reason_shape`, 0039). */
+export const FUNNEL_WITHDRAWN_REASON_SHAPE = /^[a-z][a-z0-9_]{0,63}$/u;
+
+/**
+ * Withdraw facts that turned out to be wrong (lane M1, migration 0039).
+ *
+ * `funnel_facts` is append-only — DELETE is revoked (0022) — so a fact is never removed: it
+ * is marked withdrawn, with a reason code, and every reader skips it (`funnel/read.ts`). The
+ * row keeps its dedupe key, so the same fact confirmed again later is the same row
+ * reinstated (`reinstateFunnelFact`), never a second one. Answers how many it withdrew; a
+ * fact already withdrawn is left with its first reason.
+ */
+export async function withdrawFunnelFacts(
+  context: RepositoryContext,
+  input: { readonly kind: string; readonly dedupeKeys: readonly string[]; readonly reason: string },
+): Promise<number> {
+  if (!FUNNEL_WITHDRAWN_REASON_SHAPE.test(input.reason)) throw new Error('a withdrawal reason is a lower-case code');
+  if (input.dedupeKeys.length === 0) return 0;
+  const { rowCount } = await context.db.query(
+    `UPDATE funnel_facts SET withdrawn_at = now(), withdrawn_reason = $4
+      WHERE workspace_id = $1 AND kind = $2 AND dedupe_key = ANY($3::text[]) AND withdrawn_at IS NULL`,
+    [context.scope.workspaceId, input.kind, [...input.dedupeKeys], input.reason],
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * Make one fact of `kind` under any of `dedupeKeys` count again, if one was withdrawn and
+ * none counts now. The one keyed by `preferredKey` first, else the earliest. Answers
+ * `live` when one already counted, `reinstated` when it brought one back, and `absent`
+ * when there is none to bring back (the caller records it with `recordFunnelFact`). A
+ * reinstated fact keeps the actor and instant it was first written with.
+ */
+export async function reinstateFunnelFact(
+  context: RepositoryContext,
+  input: { readonly kind: string; readonly dedupeKeys: readonly string[]; readonly preferredKey: string },
+): Promise<'live' | 'reinstated' | 'absent'> {
+  const keys = [...new Set([input.preferredKey, ...input.dedupeKeys])];
+  const { rows } = await context.db.query<{ id: string; withdrawn: boolean }>(
+    `SELECT id, withdrawn_at IS NOT NULL AS withdrawn FROM funnel_facts
+      WHERE workspace_id = $1 AND kind = $2 AND dedupe_key = ANY($3::text[])
+      ORDER BY (withdrawn_at IS NULL) DESC, (dedupe_key = $4) DESC, occurred_at, id
+      FOR UPDATE`,
+    [context.scope.workspaceId, input.kind, keys, input.preferredKey],
+  );
+  const first = rows[0];
+  if (first === undefined) return 'absent';
+  if (!first.withdrawn) return 'live';
+  await context.db.query('UPDATE funnel_facts SET withdrawn_at = NULL, withdrawn_reason = NULL WHERE workspace_id = $1 AND id = $2', [
+    context.scope.workspaceId,
+    first.id,
+  ]);
+  return 'reinstated';
+}

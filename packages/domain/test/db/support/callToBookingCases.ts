@@ -233,7 +233,7 @@ export async function callSession(f: Fixture, overrides: Row = {}): Promise<stri
 const consumed = (): Row => ({ consumed_at: new Date().toISOString(), twilio_call_sid: sid('CA') });
 
 // ----------------------------------------------------------------------------- meetings
-async function meeting(f: Fixture, overrides: Row = {}): Promise<string> {
+export async function meeting(f: Fixture, overrides: Row = {}): Promise<string> {
   const { firmId, contactId, opportunityId } = await firmWithOpportunity(f);
   const uid = `booking${String(next())}`;
   return await insert(f, 'meetings', {
@@ -564,7 +564,11 @@ export const CALL_TO_BOOKING_CONSTRAINT_CASES: readonly Case[] = [
   { constraint: 'meetings_opportunity_fkey', run: async f => await meeting(f, { opportunity_id: f.crm.alpha.opportunityId }) },
   { constraint: 'meetings_uid_shape', run: async f => await meeting(f, { booking_uid: 'has spaces', current_booking_uid: 'fine' }) },
   { constraint: 'meetings_state_known', run: async f => await meeting(f, { state: 'maybe' }) },
-  { constraint: 'meetings_no_show_remembers', run: async f => await meeting(f, { state: 'no_show' }) },
+  // A Cal.com no-show that forgot what it was before (lane M1, 0039: a no-show is confirmed).
+  {
+    constraint: 'meetings_no_show_remembers',
+    run: async f => await meeting(f, { state: 'no_show', attendance_source: 'calcom_no_show', attendance_confirmed_at: '2026-10-05T16:00:00Z' }),
+  },
   { constraint: 'meetings_ends_after_start', run: async f => await meeting(f, { ends_at: '2026-10-05T14:00:00Z' }) },
   { constraint: 'meetings_links_need_firm', run: async f => await meeting(f, { firm_id: null }) },
   { constraint: 'meetings_emails_shape', run: async f => await meeting(f, { attendee_email: 'Partner@Firm.Example' }) },

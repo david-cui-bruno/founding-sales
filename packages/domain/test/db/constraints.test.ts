@@ -25,6 +25,7 @@ import { CALL_ANALYSES_CONSTRAINT_CASES } from './support/callAnalysesCases.ts';
 import { CALL_PROPOSALS_CONSTRAINT_CASES } from './support/callProposalsCases.ts';
 import { TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES } from './support/transcriptionProviderJobsCases.ts';
 import { PREPARED_BRIEFS_CONSTRAINT_CASES } from './support/preparedBriefsCases.ts';
+import { MEETING_ATTENDANCE_CONSTRAINT_CASES } from './support/meetingAttendanceCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1395,6 +1396,7 @@ const cases: readonly Case[] = [
   ...CALL_PROPOSALS_CONSTRAINT_CASES,
   ...TRANSCRIPTION_PROVIDER_JOBS_CONSTRAINT_CASES,
   ...PREPARED_BRIEFS_CONSTRAINT_CASES,
+  ...MEETING_ATTENDANCE_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

@@ -1,11 +1,14 @@
 import {
   firmMeetingsResponseSchema,
   matchMeetingCommandSchema,
+  meetingAttendanceSetSchema,
   meetingMatchedSchema,
+  setMeetingAttendanceCommandSchema,
   unmatchedMeetingsResponseSchema,
   uuid,
 } from '@fss/contracts';
-import { listFirmMeetings, listUnmatchedMeetings, matchMeetingToFirm } from '@fss/domain/meetings/match.ts';
+import { setMeetingAttendance } from '@fss/domain/meetings/attendance.ts';
+import { listFirmMeetings, listUnmatchedMeetings, matchMeetingToFirm, readFirmStageSuggestion } from '@fss/domain/meetings/match.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -22,19 +25,28 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     an administrator, decided by the domain command under the firm's row lock
  *     (`meetings/match.ts`), which then applies the booking exactly as a matched webhook
  *     would.
+ *   * `POST /meetings/attendance { meetingId, attendance }` — lane M1: a person confirms who
+ *     came (`attended`, `no_show`) or undoes their own confirmation (`unconfirmed`). The
+ *     assignee or an administrator, decided by the domain command under the firm's row
+ *     lock (`meetings/attendance.ts`). Idempotent per command id, audited, sends nothing.
+ *
+ * `GET /meetings/firm` also carries `stageSuggestion`, the one-click "Move to Demo booked"
+ * for a live booking (lane M1: a booking no longer moves a deal by itself).
  *
  * None of the three reaches Cal.com, and none depends on the `calendar_integration`
  * switch: they read and resolve rows the webhook or the reconciliation already wrote,
  * and a meeting stays on the firm page after the switch is turned off.
  */
 
-export const MEETING_PATHS: readonly string[] = ['/meetings/firm', '/meetings/unmatched', '/meetings/match'];
+export const MEETING_PATHS: readonly string[] = ['/meetings/firm', '/meetings/unmatched', '/meetings/match', '/meetings/attendance'];
+
+const COMMAND_PATHS: readonly string[] = ['/meetings/match', '/meetings/attendance'];
 
 export async function routeMeetings(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!MEETING_PATHS.includes(request.path)) return null;
   const auth = options.auth;
   if (auth === undefined) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-  const expected = request.path === '/meetings/match' ? 'POST' : 'GET';
+  const expected = COMMAND_PATHS.includes(request.path) ? 'POST' : 'GET';
   if (request.method !== expected) {
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
   }
@@ -53,6 +65,18 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
     );
   }
 
+  if (request.path === '/meetings/attendance') {
+    return await runRouteCommand(
+      { auth, request, principal: authenticated.principal },
+      setMeetingAttendanceCommandSchema,
+      'set_meeting_attendance',
+      async (context, body) => {
+        const set = await setMeetingAttendance(context, { meetingId: body.meetingId, attendance: body.attendance });
+        return set.ok ? { ok: true, value: meetingAttendanceSetSchema.parse(set.value) } : set;
+      },
+    );
+  }
+
   const scoped = contextForPrincipal(auth, authenticated.principal);
   if (!scoped.ok) return scoped.result;
 
@@ -65,5 +89,6 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   if (!firmId.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
   const meetings = await listFirmMeetings(scoped.context, firmId.data);
   if (meetings === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-  return { status: 200, body: firmMeetingsResponseSchema.parse({ meetings }) };
+  const stageSuggestion = await readFirmStageSuggestion(scoped.context, firmId.data);
+  return { status: 200, body: firmMeetingsResponseSchema.parse({ meetings, stageSuggestion }) };
 }

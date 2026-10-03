@@ -82,10 +82,26 @@ describe('Cal.com deliveries', () => {
     expect(Number(rows[0]?.count)).toBe(1);
   });
 
-  it('matches the attendee by domain to the firm and moves its pipeline', async () => {
+  it('matches the attendee by domain to the firm and moves no deal (lane M1, CC3)', async () => {
     const id = uid();
+    const opportunities = async (): Promise<number> =>
+      Number((await database.session.query<{ n: string }>('SELECT count(*) AS n FROM opportunities WHERE workspace_id = $1 AND firm_id = $2', [workspaceId(), firmId])).rows[0]?.n);
+    const before = await opportunities();
     const receipt = await send(delivery('BOOKING_CREATED', '2026-09-30T12:05:00.000Z', booking(id)));
-    expect(receipt.stage === null ? null : receipt.stage.kind).not.toBeNull();
+    expect(receipt).toMatchObject({ outcome: 'applied', meetingState: 'booked' });
+    // No opportunity opened, no stage event, no evidence row: stage changes are a person's.
+    expect(await opportunities()).toBe(before);
+    const evidence = await database.session.query(
+      "SELECT 1 FROM opportunity_stage_evidence WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2",
+      [workspaceId(), receipt.meetingId],
+    );
+    expect(evidence.rows).toHaveLength(0);
+    // The funnel fact is still written.
+    const facts = await database.session.query(
+      "SELECT 1 FROM funnel_facts WHERE workspace_id = $1 AND kind = 'meeting.booked' AND dedupe_key = $2",
+      [workspaceId(), id],
+    );
+    expect(facts.rows).toHaveLength(1);
     const { rows } = await database.session.query<{ firm_id: string; attendee_email: string }>(
       'SELECT firm_id, attendee_email FROM meetings WHERE workspace_id = $1 AND booking_uid = $2',
       [workspaceId(), id],
@@ -181,7 +197,7 @@ describe('Cal.com deliveries', () => {
     expect(rows.map(row => ({ ...row, starts_at: row.starts_at.toISOString() }))).toEqual([
       { booking_uid: a, current_booking_uid: c, starts_at: '2026-10-12T18:00:00.000Z', state: 'rescheduled' },
     ]);
-    // C still resolves: its end marks the meeting held.
+    // C still resolves: its end marks the meeting ended (lane M1: never held).
     const ended = {
       triggerEvent: 'MEETING_ENDED',
       uid: c,
@@ -190,7 +206,7 @@ describe('Cal.com deliveries', () => {
       createdAt: '2026-09-30T17:20:00.000Z',
       attendees: [{ email: 'partner@northwind-law.example', noShow: false }],
     };
-    expect(await send({ raw: Buffer.from(JSON.stringify(ended)), body: ended })).toMatchObject({ outcome: 'applied', meetingState: 'held' });
+    expect(await send({ raw: Buffer.from(JSON.stringify(ended)), body: ended })).toMatchObject({ outcome: 'applied', meetingState: 'ended' });
   });
 
   it('adopts the replacement row when the original was never ingested (the partial half of finding 7, fold 2)', async () => {
@@ -234,7 +250,7 @@ describe('Cal.com deliveries', () => {
     expect(rows).toEqual([{ booking_uid: a, current_booking_uid: c, state: 'cancelled' }]);
   });
 
-  it('marks a meeting held from Cal.com s flat MEETING_ENDED body (review fold 1, finding 8)', async () => {
+  it('marks a meeting ended, not held, from Cal.com s flat MEETING_ENDED body, with no meeting.held fact (fold 1 finding 8; lane M1)', async () => {
     const id = uid();
     await send(delivery('BOOKING_CREATED', '2026-09-30T15:10:00.000Z', booking(id)));
     // The documented shape: booking fields at the top level, no `payload`, and
@@ -255,12 +271,12 @@ describe('Cal.com deliveries', () => {
       attendees: [{ id: 101, email: 'partner@northwind-law.example', name: 'A Partner', timeZone: 'UTC', noShow: false }],
     };
     const receipt = await send({ raw: Buffer.from(JSON.stringify(body)), body });
-    expect(receipt).toMatchObject({ outcome: 'applied', meetingState: 'held' });
+    expect(receipt).toMatchObject({ outcome: 'applied', meetingState: 'ended' });
     const facts = await database.session.query<{ kind: string }>(
       "SELECT kind FROM funnel_facts WHERE workspace_id = $1 AND dedupe_key = $2 AND kind = 'meeting.held'",
       [workspaceId(), id],
     );
-    expect(facts.rows).toHaveLength(1);
+    expect(facts.rows).toHaveLength(0);
   });
 
   it('applies a no-show mark and unmark in order, back to booked', async () => {

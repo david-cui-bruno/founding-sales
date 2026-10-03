@@ -17,8 +17,8 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  * writes nothing and decides nothing.
  */
 
-/** Every state migration 0028's `meetings_state_known` allows, so a zero is printed as a zero. */
-const MEETING_STATES = ['booked', 'rescheduled', 'cancelled', 'held', 'no_show'] as const;
+/** Every state `meetings_state_known` allows (0039 added `ended`), so a zero is printed as a zero. */
+const MEETING_STATES = ['booked', 'rescheduled', 'cancelled', 'ended', 'held', 'no_show'] as const;
 
 export async function meetingsAttendanceReportCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const workspaceId = invocation.options['--workspace-id'] ?? '';
@@ -43,8 +43,11 @@ export async function meetingsAttendanceReportCommand(invocation: AdminInvocatio
         WHERE workspace_id = $1::uuid`,
       [workspaceId],
     );
-    const facts = await session.query<{ held: string; booked: string }>(
-      `SELECT count(*) FILTER (WHERE kind = 'meeting.held')::text AS held,
+    // Since 0039 a wrong fact is withdrawn rather than removed: `meetingHeldFacts` counts the
+    // live ones, `meetingHeldFactsWithdrawn` the rest.
+    const facts = await session.query<{ held: string; held_withdrawn: string; booked: string }>(
+      `SELECT count(*) FILTER (WHERE kind = 'meeting.held' AND withdrawn_at IS NULL)::text AS held,
+              count(*) FILTER (WHERE kind = 'meeting.held' AND withdrawn_at IS NOT NULL)::text AS held_withdrawn,
               count(*) FILTER (WHERE kind = 'meeting.booked')::text AS booked
          FROM funnel_facts
         WHERE workspace_id = $1::uuid AND kind IN ('meeting.held', 'meeting.booked')`,
@@ -88,6 +91,7 @@ export async function meetingsAttendanceReportCommand(invocation: AdminInvocatio
         heldEndingInFuture: count(meetings.rows[0]?.held_future),
         noShowBeforeHeld: count(meetings.rows[0]?.no_show_after_held),
         meetingHeldFacts: count(facts.rows[0]?.held),
+        meetingHeldFactsWithdrawn: count(facts.rows[0]?.held_withdrawn),
         meetingBookedFacts: count(facts.rows[0]?.booked),
         calcomMeetingEndedApplied: count(ended.rows[0]?.count),
         meetingsWithBookedEvidence: count(evidence.rows[0]?.meetings),

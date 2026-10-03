@@ -248,6 +248,8 @@ export interface ReconcileCounts {
 export interface StoredMeeting {
   readonly id: string;
   readonly state: MeetingState;
+  /** Lane M1 (0039): how attendance was confirmed, null while unconfirmed. */
+  readonly attendance_source?: string | null;
   readonly current_booking_uid: string;
   readonly starts_at: Date;
   readonly ends_at: Date;
@@ -388,7 +390,7 @@ const plusOne = (instant: string): string => new Date(Date.parse(instant) + 1).t
  *     older than the meeting's last applied event, about the meeting's current booking
  *     (review fold 1, finding 2). An end is dated at the later of the booking's `end` and
  *     just after the meeting's last event, so a meeting whose no-show mark was reversed
- *     after its end still converges to held (finding 5).
+ *     after its end still converges to `ended` (finding 5; lane M1: an end is never `held`).
  */
 export function planChain(chain: BookingChain, meeting: StoredMeeting | null, now: string): readonly PlannedEvent[] {
   const tailUid = chain.uids[chain.uids.length - 1] ?? '';
@@ -447,6 +449,8 @@ export function planChain(chain: BookingChain, meeting: StoredMeeting | null, no
     }
     if (movedAway) return events;
     if (tail.status === 'cancelled') {
+      // A cancellation does not overwrite a confirmation (lane M1), so none is planned.
+      if (state === 'held' || state === 'no_show') return events;
       events.push({ trigger: 'BOOKING_CANCELLED', booking: tail, rescheduleUid: null, instant: instantOfBooking(tail), noShow: null });
       return events;
     }
@@ -462,9 +466,13 @@ export function planChain(chain: BookingChain, meeting: StoredMeeting | null, no
   }
 
   if (tail.status !== 'accepted' || !fresh) return events;
-  if (tail.anyAttendeeAbsent && state !== 'no_show') {
+  // Lane M1: the flag never replaces a confirmation, and its unmark undoes only Cal.com's
+  // own mark (`calcom.ts` refuses both too); planning them would only re-synthesize, every
+  // run, an event that changes nothing. A reconciled end is `ended`, never `held`.
+  const calcomNoShow = state === 'no_show' && (meeting === null || meeting.attendance_source === 'calcom_no_show');
+  if (tail.anyAttendeeAbsent && state !== 'no_show' && state !== 'held') {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: true });
-  } else if (!tail.anyAttendeeAbsent && state === 'no_show') {
+  } else if (!tail.anyAttendeeAbsent && calcomNoShow) {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: false });
   } else if (!tail.anyAttendeeAbsent && (state === 'booked' || state === 'rescheduled') && Date.parse(tail.end) <= Date.parse(now)) {
     events.push({ trigger: 'MEETING_ENDED', booking: tail, rescheduleUid: null, instant: later(tail.end, plusOne(lastEventAt)), noShow: null });

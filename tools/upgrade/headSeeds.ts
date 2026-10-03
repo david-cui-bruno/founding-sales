@@ -57,6 +57,67 @@ export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
       return null;
     },
   },
+  {
+    // Lane M1 (0039): production's held meetings all came from Cal.com's scheduled end, and
+    // the base's fixture writes no meeting at all. A held meeting with its meeting.held fact,
+    // and a no-show that remembers held, in schema 38's columns, so the run meets the rows the
+    // correction rewrites: held → ended, the remembered held → ended, the fact withdrawn.
+    name: 'held meetings and their meeting.held fact (0039 corrects them)',
+    fromVersions: [38],
+    seed: async session => {
+      const { rows } = await session.query<{ id: string }>(
+        `WITH firm AS (
+           SELECT workspace_id, id FROM firms WHERE status = 'active' ORDER BY created_at, id LIMIT 1
+         ), held AS (
+           INSERT INTO meetings (workspace_id, booking_uid, current_booking_uid, firm_id, state, starts_at, ends_at, last_event_at)
+           SELECT workspace_id, 'upgrade0039held', 'upgrade0039held', id, 'held',
+                  TIMESTAMPTZ '2026-09-29 15:00:00+00', TIMESTAMPTZ '2026-09-29 15:30:00+00', TIMESTAMPTZ '2026-09-29 15:30:00+00'
+             FROM firm
+           RETURNING workspace_id, id, firm_id
+         ), absent AS (
+           INSERT INTO meetings (workspace_id, booking_uid, current_booking_uid, firm_id, state, state_before_no_show, starts_at, ends_at, last_event_at)
+           SELECT workspace_id, 'upgrade0039absent', 'upgrade0039absent', id, 'no_show', 'held',
+                  TIMESTAMPTZ '2026-09-28 15:00:00+00', TIMESTAMPTZ '2026-09-28 15:30:00+00', TIMESTAMPTZ '2026-09-28 16:00:00+00'
+             FROM firm
+           RETURNING id
+         ), aliased AS (
+           INSERT INTO meeting_booking_uids (workspace_id, booking_uid, meeting_id)
+           SELECT workspace_id, 'upgrade0039held', id FROM held
+           RETURNING meeting_id
+         ), fact AS (
+           INSERT INTO funnel_facts (workspace_id, kind, firm_id, dedupe_key, source, actor_kind, occurred_at)
+           SELECT workspace_id, 'meeting.held', firm_id, 'upgrade0039held', 'calendar', 'system', TIMESTAMPTZ '2026-09-29 15:31:00+00'
+             FROM held
+           RETURNING id
+         )
+         SELECT held.id FROM held, absent, aliased, fact`,
+      );
+      const id = rows[0]?.id;
+      if (id === undefined) throw new Error('the fixture has no active firm to hang a held meeting on');
+      return id;
+    },
+    verify: async (session, seededId) => {
+      const { rows } = await session.query<{ booking_uid: string; state: string; state_before_no_show: string | null; attendance_source: string | null }>(
+        `SELECT booking_uid, state, state_before_no_show, attendance_source FROM meetings
+          WHERE booking_uid IN ('upgrade0039held', 'upgrade0039absent') ORDER BY booking_uid`,
+      );
+      const absent = rows.find(row => row.booking_uid === 'upgrade0039absent');
+      const held = rows.find(row => row.booking_uid === 'upgrade0039held');
+      if (held === undefined || absent === undefined) return 'a seeded meeting is gone';
+      if (held.state !== 'ended') return `the held meeting is ${held.state}, expected ended`;
+      if (absent.state !== 'no_show' || absent.state_before_no_show !== 'ended') return `the no-show is ${absent.state} remembering ${String(absent.state_before_no_show)}`;
+      if (absent.attendance_source !== 'calcom_no_show') return `the no-show's source is ${String(absent.attendance_source)}`;
+      const facts = await session.query<{ withdrawn_reason: string | null; occurred_at: Date }>(
+        "SELECT withdrawn_reason, occurred_at FROM funnel_facts WHERE kind = 'meeting.held' AND dedupe_key = 'upgrade0039held'",
+      );
+      const fact = facts.rows[0];
+      if (fact === undefined) return 'the meeting.held fact is gone';
+      if (fact.withdrawn_reason !== 'scheduled_end_not_attendance') return `the fact's withdrawal is ${String(fact.withdrawn_reason)}`;
+      if (fact.occurred_at.toISOString() !== '2026-09-29T15:00:00.000Z') return `the fact is dated ${fact.occurred_at.toISOString()}, not the meeting's start`;
+      const meeting = await session.query('SELECT 1 FROM meetings WHERE id = $1', [seededId]);
+      return meeting.rows.length === 1 ? null : 'the seeded meeting id no longer resolves';
+    },
+  },
 ]);
 
 export function seedsFor(fromVersion: number): readonly HeadSeed[] {

@@ -188,7 +188,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
       [seeded.alpha.workspaceId, legacy.completed, CALL_SUMMARY_PROMPT_VERSION],
     );
     const { applyMigrations } = await import('@fss/domain/db/migrationRunner.ts');
-    await applyMigrations(session, { throughVersion: 38 });
+    await applyMigrations(session, { throughVersion: 39 });
     // After the release David writes notes on one held legacy call (S3A2, P1): they never
     // move it off the summary path.
     const salesperson = repositoryContext(
@@ -206,7 +206,7 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
   });
 
   it('after the upgrade, every legacy call is on the summary path and owed no analysis', async () => {
-    expect(await readAppliedSchemaVersion(session)).toBe(38);
+    expect(await readAppliedSchemaVersion(session)).toBe(39);
     for (const id of all) expect(await postCallModelPath(session, seeded.alpha.workspaceId, id), id).toBe('summary');
     await transcriptionOn(true);
     const owed = await owedAnalyses();

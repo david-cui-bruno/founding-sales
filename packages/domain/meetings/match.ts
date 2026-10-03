@@ -1,4 +1,5 @@
 import type {
+  StageSuggestion,
   FirmMeetingDto,
   MeetingMatchRefusalCode,
   MeetingMatched,
@@ -11,8 +12,10 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { createContact } from '../crm/contacts.ts';
 import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
 import { addEmailRoute } from '../crm/routes.ts';
-import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { mayChangeStage } from '../crm/board.ts';
+import { recordHeldFact } from './attendance.ts';
+import { readDemoBookedSuggestions } from './stageSuggestion.ts';
 import { applyBooked, MEETING_COLUMNS, type MeetingRow } from './calcom.ts';
 
 /**
@@ -33,14 +36,15 @@ import { applyBooked, MEETING_COLUMNS, type MeetingRow } from './calcom.ts';
  *      booking named one;
  *   4. the meeting's `stage_review_items` row is resolved by this person;
  *   5. unless the meeting is cancelled, `applyBooked` — the same function the webhook
- *      runs for a matched booking: the move to Demo booked, manual control for the
- *      opportunity, the stop owed to the firm's live prospecting and cold_legacy
- *      enrollments (an agreed follow-up keeps running), the funnel fact; and
- *      `meeting.held` when the meeting was already held.
+ *      runs for a matched booking: manual control for the firm's open opportunity, the
+ *      stop owed to the firm's live prospecting and cold_legacy enrollments (an agreed
+ *      follow-up keeps running), the funnel fact. No stage moves (lane M1: stage changes
+ *      are manual; `stage` is always `none`). `meeting.held` only for a meeting whose
+ *      attendance is confirmed — never for one that has merely `ended`.
  *
  * **Lock order**, the one every stop-fact writer keeps: the send gate first (advisory,
- * exclusive), then the firm row, then the meeting row, then whatever `applyBooked`'s
- * `applyStageEvidence` locks. The gate is what serializes this with the webhook and the
+ * exclusive), then the firm row, then the meeting row, then the opportunity `applyBooked`
+ * sets manual. The gate is what serializes this with the webhook and the
  * reconciliation, which take it before the meeting row.
  */
 
@@ -117,18 +121,11 @@ export async function matchMeetingToFirm(
     [workspaceId, meeting.id, actor.userId, firm.id],
   );
 
-  let stage: MeetingMatched['stage'] = 'none';
+  // Lane M1: a match moves no stage. The answer keeps its field for the desktops that read it.
+  const stage: MeetingMatched['stage'] = 'none';
   if (updated.state !== 'cancelled') {
-    const outcome = await applyBooked(context, updated, updated.last_event_at.toISOString());
-    stage = outcome.kind;
-    if (updated.state === 'held') {
-      await recordFunnelFact(context, {
-        kind: 'meeting.held',
-        source: 'calendar',
-        dedupeKey: updated.booking_uid,
-        firmId: firm.id,
-      });
-    }
+    await applyBooked(context, updated);
+    if (updated.state === 'held') await recordHeldFact(context, updated);
   }
   await recordCrmAuditEvent(context, {
     action: 'meeting.matched_by_person',
@@ -182,8 +179,8 @@ export async function listUnmatchedMeetings(context: RepositoryContext): Promise
 export async function listFirmMeetings(context: RepositoryContext, firmId: string): Promise<readonly FirmMeetingDto[] | null> {
   const firm = await readFirm(context, firmId);
   if (firm === null) return null;
-  const { rows } = await context.db.query<{ id: string; state: MeetingState; starts_at: Date; ends_at: Date }>(
-    `SELECT id, state, starts_at, ends_at FROM meetings
+  const { rows } = await context.db.query<{ id: string; state: MeetingState; starts_at: Date; ends_at: Date; attendance_source: string | null }>(
+    `SELECT id, state, starts_at, ends_at, attendance_source FROM meetings
       WHERE workspace_id = $1 AND firm_id = $2
       ORDER BY starts_at DESC, id
       LIMIT 50`,
@@ -194,5 +191,18 @@ export async function listFirmMeetings(context: RepositoryContext, firmId: strin
     state: row.state,
     startsAt: row.starts_at.toISOString(),
     endsAt: row.ends_at.toISOString(),
+    // Lane M1: how attendance was confirmed, so the row offers Undo only for a person's own.
+    attendanceSource: row.attendance_source,
   }));
+}
+
+/**
+ * The firm page's "Move to Demo booked" (lane M1, `stageSuggestion.ts`): offered only to a
+ * person who could make the move — an administrator or the firm's assignee — as the board
+ * offers a stage control. Null for anybody else, and when nothing is to be suggested.
+ */
+export async function readFirmStageSuggestion(context: RepositoryContext, firmId: string): Promise<StageSuggestion | null> {
+  const firm = await readFirm(context, firmId);
+  if (firm === null || !mayChangeStage(context, firm.assigned_user_id)) return null;
+  return (await readDemoBookedSuggestions(context, [firmId])).get(firmId) ?? null;
 }

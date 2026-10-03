@@ -3,7 +3,8 @@ import { readNextActions, type NextAction } from './boardNextAction.ts';
 import { firmIdentityDtoOf, type FirmIdentityDto } from './dto.ts';
 import { listPipelineStages } from './pipeline.ts';
 import type { FirmRow, PipelineStageRow } from './types.ts';
-import type { MeetingState } from '@fss/contracts';
+import type { MeetingState, StageSuggestion } from '@fss/contracts';
+import { readDemoBookedSuggestions } from '../meetings/stageSuggestion.ts';
 
 /**
  * The pipeline board, as one read (specification 8.1, Appendix F, Appendix G 7).
@@ -62,6 +63,12 @@ export interface PipelineBoardCard {
   readonly nextAction: NextAction | null;
   /** Why the opportunity was lost, for a Lost card; null otherwise. */
   readonly closeReason: string | null;
+  /**
+   * Lane M1: "Move to Demo booked", for a firm with a live booking whose deal is earlier,
+   * offered only to a person who could make the move (`meetings/stageSuggestion.ts`). A
+   * booking no longer moves the deal by itself. Null when there is nothing to suggest.
+   */
+  readonly stageSuggestion: StageSuggestion | null;
 }
 
 export interface PipelineBoardDto {
@@ -125,7 +132,7 @@ type BoardRow = FirmRow & {
  * a snapshot. When they disagree — a reassignment between the board load and the
  * click — the mutation wins, and the person is told the firm is not theirs.
  */
-function mayChangeStage(context: RepositoryContext, assignedUserId: string | null): boolean {
+export function mayChangeStage(context: RepositoryContext, assignedUserId: string | null): boolean {
   const actor = context.scope.actor;
   if (actor.kind === 'system') return true;
   if (actor.role === 'admin') return true;
@@ -199,6 +206,10 @@ export async function readPipelineBoardForActor(
   );
 
   const nextActions = await readNextActions(context);
+  const suggestions = await readDemoBookedSuggestions(
+    context,
+    rows.filter(row => row.opportunity_status === 'open' && mayChangeStage(context, row.assigned_user_id)).map(row => row.id),
+  );
   const opportunityIdByFirmId: Record<string, string> = {};
   const cards: Record<string, PipelineBoardCard> = {};
   const placed: FirmIdentityDto[] = [];
@@ -239,6 +250,7 @@ export async function readPipelineBoardForActor(
       pinned: row.pinned,
       nextAction: nextActions[row.id] ?? null,
       closeReason: row.close_reason,
+      stageSuggestion: suggestions.get(row.id) ?? null,
     };
     if (row.opportunity_status === 'open' && row.opportunity_id !== null && mayChangeStage(context, row.assigned_user_id)) {
       opportunityIdByFirmId[row.id] = row.opportunity_id;

@@ -74,13 +74,13 @@ describe('matching an unmatched booking to a firm', () => {
     await database.drop();
   });
 
-  it('links the firm, creates the contact with the address, resolves the review item and books the demo', async () => {
+  it('links the firm, creates the contact with the address, resolves the review item, and moves no deal (lane M1)', async () => {
     const firmId = await firm('Lakeside Law', seeded.alpha.salesperson.userId);
     const meetingId = await unmatched('dana@lakeside.example');
     expect((await listUnmatchedMeetings(salesperson())).map(entry => entry.meetingId)).toContain(meetingId);
 
     const matched = await match(salesperson(), meetingId, firmId);
-    expect(matched).toMatchObject({ ok: true, value: { meetingId, firmId, state: 'booked', stage: 'opened' } });
+    expect(matched).toMatchObject({ ok: true, value: { meetingId, firmId, state: 'booked', stage: 'none' } });
     const contactId = matched.ok ? matched.value.contactId : null;
     expect(contactId).not.toBeNull();
 
@@ -90,14 +90,12 @@ describe('matching an unmatched booking to a firm', () => {
     );
     expect(address).toEqual([{ contact_id: contactId, source: 'salesperson' }]);
     expect(await review(meetingId)).toEqual({ reason: 'firm_unmatched', resolved: true, firm_id: firmId });
-    const { rows: stage } = await database.session.query<{ key: string }>(
-      `SELECT s.key FROM meetings m
-         JOIN opportunities o ON o.workspace_id = m.workspace_id AND o.id = m.opportunity_id
-         JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
-        WHERE m.workspace_id = $1 AND m.id = $2`,
-      [workspaceId(), meetingId],
+    // No opportunity opened at Demo booked: the board offers that move as one click instead.
+    const { rows: opened } = await database.session.query<{ count: string }>(
+      'SELECT count(*) AS count FROM opportunities WHERE workspace_id = $1 AND firm_id = $2',
+      [workspaceId(), firmId],
     );
-    expect(stage[0]?.key).toBe('demo_booked');
+    expect(Number(opened[0]?.count)).toBe(0);
     expect((await listUnmatchedMeetings(salesperson())).map(entry => entry.meetingId)).not.toContain(meetingId);
     expect((await listFirmMeetings(salesperson(), firmId))?.map(entry => entry.state)).toEqual(['booked']);
   });
@@ -136,7 +134,7 @@ describe('matching an unmatched booking to a firm', () => {
     expect(await match(admin(), meetingId, mine)).toEqual({ ok: false, reason: 'meeting_already_matched' });
   });
 
-  it('reopens the review item with the real reason when the booking still cannot apply (closed opportunity)', async () => {
+  it('opens no review item and no deal for a firm whose opportunity is closed: the stage is a person s (lane M1)', async () => {
     const firmId = await firm('Closed Law', seeded.alpha.salesperson.userId);
     await database.session.query(
       `INSERT INTO opportunities (workspace_id, firm_id, stage_id, status, closed_at, close_reason, control_mode_changed_at)
@@ -144,9 +142,32 @@ describe('matching an unmatched booking to a firm', () => {
       [workspaceId(), firmId],
     );
     const meetingId = await unmatched('lee@closed.example');
-    expect(await match(salesperson(), meetingId, firmId)).toMatchObject({ ok: true, value: { stage: 'review' } });
-    // Open again, saying why — not the resolved `firm_unmatched` item read back.
-    expect(await review(meetingId)).toEqual({ reason: 'opportunity_closed', resolved: false, firm_id: firmId });
+    expect(await match(salesperson(), meetingId, firmId)).toMatchObject({ ok: true, value: { stage: 'none' } });
+    // The matching item is resolved, and no new one is opened: there is no automatic move to review.
+    expect(await review(meetingId)).toEqual({ reason: 'firm_unmatched', resolved: true, firm_id: firmId });
+  });
+
+  it('writes no meeting.held for a booking that has only ended when it is matched (lane M1)', async () => {
+    const firmId = await firm('Ended Law', seeded.alpha.salesperson.userId);
+    const meetingId = await unmatched('casey@ended.example');
+    // Cal.com's scheduled end arrives before anybody matched the booking.
+    counter += 1;
+    const body = {
+      triggerEvent: 'MEETING_ENDED',
+      uid: `mt${String(counter - 1)}x`,
+      startTime: '2026-10-06T15:00:00.000Z',
+      endTime: '2026-10-06T15:30:00.000Z',
+      attendees: [{ email: 'casey@ended.example', noShow: false }],
+    };
+    await withTransaction(database.session, async () =>
+      await receiveCalcomEvent(database.session, { workspaceId: workspaceId(), rawBody: Buffer.from(JSON.stringify(body)), body }),
+    );
+    expect(await match(salesperson(), meetingId, firmId)).toMatchObject({ ok: true, value: { state: 'ended', stage: 'none' } });
+    const { rows } = await database.session.query(
+      "SELECT 1 FROM funnel_facts WHERE workspace_id = $1 AND kind = 'meeting.held' AND firm_id = $2",
+      [workspaceId(), firmId],
+    );
+    expect(rows).toEqual([]);
   });
 
   it('links a cancelled booking without applying anything', async () => {

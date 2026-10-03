@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { CALCOM_APPLIED_TRIGGERS, type CalcomAppliedTrigger, type MeetingState } from '@fss/contracts';
+import { CALCOM_APPLIED_TRIGGERS, type CalcomAppliedTrigger, type MeetingAttendanceSource, type MeetingState } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
-import { applyStageEvidence, openReviewItem, type StageEvidenceOutcome } from '../crm/stageEvidence.ts';
+import { openReviewItem } from '../crm/stageEvidence.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
@@ -25,15 +25,18 @@ import { manualModeEndReason } from '../sequences/terminalStops.ts';
  *     order, and unmark restores the state the meeting had before the mark.
  *   * **Matching.** The attendee's e-mail → a contact → its firm; failing that the
  *     attendee's domain → the one firm whose website has it; otherwise a review item.
- *   * **A booking** applies `meeting.booked` through `applyStageEvidence` (the pipeline
- *     move to Demo booked), stops conflicting prospecting at the firm through the
- *     existing stop writers — manual mode on the opportunity (`setManualControlMode`,
- *     origin `engaged_call`: a booked demo is a conversation) and `stopEnrollments` for
- *     every live **prospecting** enrollment there; an evidenced follow-up is compatible
- *     with a booking and keeps running — and records the funnel fact. The CRM sends no reminder: Cal.com owns those.
+ *   * **A booking** moves no deal (lane M1: stage changes are manual). It stops
+ *     conflicting prospecting at the firm through the existing stop writers — manual mode
+ *     on the open opportunity (`setManualControlMode`, origin `engaged_call`: a booked demo
+ *     is a conversation) and `stopEnrollments` for every live **prospecting** enrollment
+ *     there; an evidenced follow-up is compatible with a booking and keeps running — and
+ *     records the funnel fact. The CRM sends no reminder: Cal.com owns those.
+ *   * **Attendance** (lane M1, 0039). `MEETING_ENDED` is the scheduled end: `ended`, never
+ *     `held`. Cal.com's no-show flag confirms absence; nothing from Cal.com confirms
+ *     attendance, and no Cal.com time event overwrites a confirmation.
  *
  * Lock order: the send gate first, before any row, as every stop-fact writer takes it
- * (`policy/sendGate.ts`); then the meeting; then what `applyStageEvidence` locks.
+ * (`policy/sendGate.ts`); then the meeting; then the opportunity `applyBooked` sets manual.
  */
 
 export type CalcomEventOutcome = 'applied' | 'stale' | 'ignored' | 'unmatched' | 'malformed';
@@ -44,7 +47,6 @@ export interface CalcomReceipt {
   readonly outcome: CalcomEventOutcome | null;
   readonly meetingId: string | null;
   readonly meetingState: MeetingState | null;
-  readonly stage: StageEvidenceOutcome | null;
 }
 
 /** The dedupe key: sha256 of the exact bytes Cal.com signed. */
@@ -131,6 +133,10 @@ export interface MeetingRow {
   readonly opportunity_id: string | null;
   readonly state: MeetingState;
   readonly state_before_no_show: MeetingState | null;
+  /** Lane M1, 0039: how attendance was confirmed; null while unconfirmed. */
+  readonly attendance_source: MeetingAttendanceSource | null;
+  readonly attendance_confirmed_at: Date | null;
+  readonly attendance_confirmed_by: string | null;
   readonly booking_uid: string;
   readonly current_booking_uid: string;
   readonly starts_at: Date;
@@ -141,7 +147,58 @@ export interface MeetingRow {
 }
 
 export const MEETING_COLUMNS =
-  'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at, attendee_email';
+  'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, attendance_source, attendance_confirmed_at, attendance_confirmed_by, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at, attendee_email';
+
+/**
+ * A meeting's confirmation (lane M1, 0039): `held` (by a person or a recording) or
+ * `no_show` (by a person or Cal.com's flag). Cal.com's time events — the scheduled end, a
+ * reschedule, a cancellation — never overwrite one, and no fold of duplicate rows erases one.
+ */
+export function isConfirmed(row: Pick<MeetingRow, 'state'>): boolean {
+  return row.state === 'held' || row.state === 'no_show';
+}
+
+/** What a write leaves in the three attendance columns. All null: unconfirmed. */
+export interface Attendance {
+  readonly source: MeetingAttendanceSource | null;
+  readonly at: string | null;
+  readonly by: string | null;
+}
+
+export const UNCONFIRMED: Attendance = Object.freeze({ source: null, at: null, by: null });
+
+export function attendanceOf(row: Pick<MeetingRow, 'attendance_source' | 'attendance_confirmed_at' | 'attendance_confirmed_by'>): Attendance {
+  return {
+    source: row.attendance_source,
+    at: row.attendance_confirmed_at === null ? null : row.attendance_confirmed_at.toISOString(),
+    by: row.attendance_confirmed_by,
+  };
+}
+
+/** A state a write leaves, with what it remembers before a no-show and its attendance. */
+export interface MeetingStateWrite {
+  readonly state: MeetingState;
+  readonly before: MeetingState | null;
+  readonly attendance: Attendance;
+}
+
+/**
+ * The state rows that are one meeting end with (lane M1): the latest confirmation among
+ * them, when any is confirmed — newest-row-wins must not erase a confirmation — else
+ * `base`, which the caller took from the newest row or the event.
+ */
+export function keepConfirmation(base: MeetingStateWrite, rows: readonly MeetingRow[]): MeetingStateWrite {
+  const confirmed = rows
+    .filter(isConfirmed)
+    .sort((left, right) => (right.attendance_confirmed_at?.getTime() ?? 0) - (left.attendance_confirmed_at?.getTime() ?? 0))[0];
+  if (confirmed === undefined) return base;
+  return { state: confirmed.state, before: confirmed.state_before_no_show, attendance: attendanceOf(confirmed) };
+}
+
+/** A row's own state as a write, its attendance kept only when it is a confirmation. */
+function stateOf(row: MeetingRow): MeetingStateWrite {
+  return { state: row.state, before: row.state_before_no_show, attendance: isConfirmed(row) ? attendanceOf(row) : UNCONFIRMED };
+}
 
 /**
  * Whether rows that look like one meeting are booked by different people (slice M1,
@@ -333,7 +390,7 @@ async function recordAndApply(context: RepositoryContext, eventId: string, parse
   );
   const rowId = inserted.rows[0]?.id;
   if (rowId === undefined) {
-    return { duplicate: true, eventId, outcome: null, meetingId: null, meetingState: null, stage: null };
+    return { duplicate: true, eventId, outcome: null, meetingId: null, meetingState: null };
   }
 
   const applied = await applyEvent(context, trigger, parsed);
@@ -361,7 +418,6 @@ async function applyEvent(
     outcome,
     meetingId: meeting?.id ?? null,
     meetingState: meeting?.state ?? null,
-    stage: null,
   });
   if (!(CALCOM_APPLIED_TRIGGERS as readonly string[]).includes(trigger)) return none('ignored');
   const kind = trigger as CalcomAppliedTrigger;
@@ -449,32 +505,41 @@ async function applyEvent(
         match.kind === 'ambiguous' ? 'firm_ambiguous' : 'firm_unmatched',
         { firmId: null, opportunityId: null },
       );
-      return { outcome: 'unmatched', meetingId: meeting.id, meetingState: meeting.state, stage: null };
+      return { outcome: 'unmatched', meetingId: meeting.id, meetingState: meeting.state };
     }
-    const stage = state === 'cancelled' ? null : await applyBooked(context, meeting, event.createdAt);
-    return { outcome: 'applied', meetingId: meeting.id, meetingState: state, stage };
+    if (state !== 'cancelled') await applyBooked(context, meeting);
+    return { outcome: 'applied', meetingId: meeting.id, meetingState: state };
   }
 
   // ---- an existing meeting ------------------------------------------------
-  let next: { state: MeetingState; before: MeetingState | null } | null = null;
+  // Lane M1: the scheduled end is `ended`, never `held`; and no Cal.com time event — the
+  // end, a reschedule, a cancellation — overwrites a confirmation (`held`, `no_show`). A
+  // reschedule moves `booked`, `rescheduled` and `ended` to `rescheduled`, the reconciliation's
+  // rule too (`reconcile.ts`), and its times move either way.
+  const confirmed = isConfirmed(existing);
+  const kept: MeetingStateWrite = stateOf(existing);
+  let next: MeetingStateWrite | null = null;
   switch (kind) {
     case 'BOOKING_CREATED':
       // A create after the meeting exists (a redelivery with new bytes): times only.
-      next = { state: existing.state, before: existing.state_before_no_show };
+      next = kept;
       break;
     case 'BOOKING_RESCHEDULED':
-      next = { state: 'rescheduled', before: null };
+      next = confirmed ? kept : { state: 'rescheduled', before: null, attendance: UNCONFIRMED };
       break;
     case 'BOOKING_CANCELLED':
-      next = { state: 'cancelled', before: null };
+      next = confirmed ? null : { state: 'cancelled', before: null, attendance: UNCONFIRMED };
       break;
     case 'MEETING_ENDED':
-      next = existing.state === 'no_show' ? null : { state: 'held', before: null };
+      next = existing.state === 'booked' || existing.state === 'rescheduled' ? { state: 'ended', before: null, attendance: UNCONFIRMED } : null;
       break;
     case 'BOOKING_NO_SHOW_UPDATED':
-      if (event.noShow === true && existing.state !== 'no_show') next = { state: 'no_show', before: existing.state };
-      else if (event.noShow === false && existing.state === 'no_show') {
-        next = { state: existing.state_before_no_show ?? 'booked', before: null };
+      // Cal.com's flag is a confirmation of absence over an unconfirmed meeting; it never
+      // replaces a confirmation, and its unmark undoes only its own mark.
+      if (event.noShow === true && !confirmed) {
+        next = { state: 'no_show', before: existing.state, attendance: { source: 'calcom_no_show', at: event.createdAt, by: null } };
+      } else if (event.noShow === false && existing.state === 'no_show' && existing.attendance_source === 'calcom_no_show') {
+        next = { state: existing.state_before_no_show ?? 'booked', before: null, attendance: UNCONFIRMED };
       }
       break;
   }
@@ -505,12 +570,14 @@ async function applyEvent(
         // rescheduled on (B→C before the delayed A→B, review fold 2). Its state, its
         // current uid and its times are the meeting's now; this event only joins the
         // two rows.
-        next = { state: replacement.state, before: replacement.state_before_no_show };
+        next = stateOf(replacement);
         lastEventAt = replacement.last_event_at.toISOString();
         startsAt = replacement.starts_at.toISOString();
         endsAt = replacement.ends_at.toISOString();
         currentUid = replacement.current_booking_uid;
       }
+      // Whichever row was newer, a confirmation either row holds is the meeting's (lane M1).
+      next = keepConfirmation(next, [existing, replacement]);
     }
   }
   // An event about the meeting's current booking that carries that booking's times sets
@@ -523,6 +590,7 @@ async function applyEvent(
   const { rows } = await context.db.query<MeetingRow>(
     `UPDATE meetings
         SET state = $3, state_before_no_show = $4,
+            attendance_source = $10, attendance_confirmed_at = $11::timestamptz, attendance_confirmed_by = $12::uuid,
             starts_at = CASE WHEN $5::boolean AND $6::timestamptz IS NOT NULL THEN $6::timestamptz ELSE starts_at END,
             ends_at = CASE WHEN $5::boolean AND $7::timestamptz IS NOT NULL THEN GREATEST($7::timestamptz, COALESCE($6::timestamptz, starts_at)) ELSE ends_at END,
             current_booking_uid = CASE WHEN $5::boolean AND $8::text IS NOT NULL THEN $8::text ELSE current_booking_uid END,
@@ -539,19 +607,16 @@ async function applyEvent(
       endsAt,
       currentUid,
       lastEventAt,
+      next.attendance.source,
+      next.attendance.at,
+      next.attendance.by,
     ],
   );
   const updated = rows[0] ?? existing;
   await aliasMeeting(context, updated.id, [updated.booking_uid, updated.current_booking_uid, event.uid]);
-  if (next.state === 'held' && existing.state !== 'held' && updated.firm_id !== null) {
-    await recordFunnelFact(context, {
-      kind: 'meeting.held',
-      source: 'calendar',
-      dedupeKey: updated.booking_uid,
-      firmId: updated.firm_id,
-    });
-  }
-  return { outcome: 'applied', meetingId: updated.id, meetingState: updated.state, stage: null };
+  // No funnel fact here: `meeting.held` is written only when attendance is confirmed
+  // (`meetings/attendance.ts`), which no Cal.com event does (lane M1).
+  return { outcome: 'applied', meetingId: updated.id, meetingState: updated.state };
 }
 
 /**
@@ -619,6 +684,8 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
   const attendee = attendeeAfterFold(survivor, others);
   const newest = [...rows].sort((left, right) => right.last_event_at.getTime() - left.last_event_at.getTime())[0] ?? survivor;
   const linked = survivor.firm_id === null ? (others.find(row => row.firm_id !== null) ?? null) : null;
+  // The newest row's state, unless any row holds a confirmation (lane M1): that is kept.
+  const write = keepConfirmation(stateOf(newest), rows);
   for (const other of others) {
     await context.db.query('UPDATE calcom_events SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [workspaceId, other.id, survivor.id]);
     await context.db.query('UPDATE meeting_booking_uids SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [
@@ -635,7 +702,9 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
   }
   const { rows: folded } = await context.db.query<MeetingRow>(
     `UPDATE meetings
-        SET state = $3, state_before_no_show = $4, starts_at = $5::timestamptz, ends_at = $6::timestamptz,
+        SET state = $3, state_before_no_show = $4,
+            attendance_source = $13, attendance_confirmed_at = $14::timestamptz, attendance_confirmed_by = $15::uuid,
+            starts_at = $5::timestamptz, ends_at = $6::timestamptz,
             current_booking_uid = $7, last_event_at = GREATEST(last_event_at, $8::timestamptz),
             firm_id = COALESCE(firm_id, $9::uuid), contact_id = CASE WHEN firm_id IS NULL THEN $10::uuid ELSE contact_id END,
             opportunity_id = CASE WHEN firm_id IS NULL THEN $11::uuid ELSE opportunity_id END,
@@ -646,8 +715,8 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
     [
       workspaceId,
       survivor.id,
-      newest.state,
-      newest.state_before_no_show,
+      write.state,
+      write.before,
       newest.starts_at.toISOString(),
       newest.ends_at.toISOString(),
       newest.current_booking_uid,
@@ -656,6 +725,9 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
       linked?.contact_id ?? null,
       linked?.opportunity_id ?? null,
       attendee,
+      write.attendance.source,
+      write.attendance.at,
+      write.attendance.by,
     ],
   );
   const result = folded[0] ?? survivor;
@@ -692,20 +764,20 @@ export const BOOKING_STOPS_ORIGIN_KINDS: readonly string[] = Object.freeze(['pro
 export type BookedMeeting = Pick<MeetingRow, 'id' | 'firm_id' | 'booking_uid'>;
 
 /**
- * A booked meeting with a firm: the pipeline move, the stop, the funnel fact.
+ * A booked meeting with a firm: the link to its open deal, the stop, the funnel fact.
+ *
+ * **No stage changes here** (lane M1; David, 3 October 2026: deal-stage changes are
+ * manual). A booking used to move the firm's deal to Demo booked, or open one there, through
+ * `applyStageEvidence`; now the board and the firm page offer that move as one click
+ * (`meetings/stageSuggestion.ts`) and a person makes it through the ordinary stage command.
+ * The `meeting.booked` funnel fact is still written, and an unmatched booking still opens
+ * its review item (`applyEvent`).
  *
  * Exported for the person's match of an unmatched booking (`meetings/match.ts`, slice
  * M1), which owes exactly what a matched webhook does. The caller holds the send gate.
  */
-export async function applyBooked(context: RepositoryContext, meeting: BookedMeeting, occurredAt: string): Promise<StageEvidenceOutcome> {
+export async function applyBooked(context: RepositoryContext, meeting: BookedMeeting): Promise<void> {
   const firmId = meeting.firm_id ?? '';
-  const stage = await applyStageEvidence(context, {
-    firmId,
-    evidenceKind: 'meeting.booked',
-    evidenceId: meeting.id,
-    occurredAt,
-    detail: { bookingUid: meeting.booking_uid },
-  });
   const opportunity = await readOpenOpportunity(context, firmId);
   if (opportunity !== null) {
     await context.db.query('UPDATE meetings SET opportunity_id = $3, updated_at = now() WHERE workspace_id = $1 AND id = $2', [
@@ -724,8 +796,7 @@ export async function applyBooked(context: RepositoryContext, meeting: BookedMee
       owedOriginKinds: BOOKING_STOPS_ORIGIN_KINDS,
     });
   }
-  // Only prospecting stops, now, through the stop writer (the send gate is held since
-  // `applyStageEvidence`). An evidenced follow-up — the overview promised on the call —
+  // Only prospecting stops, now, through the stop writer (the caller holds the send gate). An evidenced follow-up — the overview promised on the call —
   // is compatible with a booked demo and keeps running within its permission.
   const { rows: prospecting } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments
@@ -753,5 +824,4 @@ export async function applyBooked(context: RepositoryContext, meeting: BookedMee
     firmId,
     ...(opportunity === null ? {} : { opportunityId: opportunity.id }),
   });
-  return stage;
 }

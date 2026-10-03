@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
-import { meetingStateWireSchema } from './meetings.ts';
+import { meetingStateWireSchema, stageSuggestionSchema } from './meetings.ts';
 
 /**
  * The wire contract of the CRM (specification 7.2, 7.3, 8.1, 9.1, 14.1, Appendix F).
@@ -331,6 +331,8 @@ export const boardCardSchema = z.object({
     .optional(),
   /** Why a Lost opportunity was lost (slice K). Optional so older answers parse. */
   closeReason: z.string().nullable().optional(),
+  /** Lane M1: "Move to Demo booked" for a live booking, one click. Optional so older answers parse. */
+  stageSuggestion: stageSuggestionSchema.nullable().optional(),
 });
 export type BoardCard = z.infer<typeof boardCardSchema>;
 

@@ -350,14 +350,10 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
       `SELECT s.key FROM opportunities o JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id WHERE o.id = $1`,
       [opportunityId],
     );
-    expect(stage[0]?.key).toBe('demo_booked');
-    const { rows: evidence } = await fixture.db.query<{ evidence_kind: string; reason: string }>(
-      `SELECT x.evidence_kind, e.reason FROM opportunity_stage_evidence x
-         JOIN opportunity_stage_events e ON e.workspace_id = x.workspace_id AND e.id = x.stage_event_id
-        WHERE x.opportunity_id = $1`,
-      [opportunityId],
-    );
-    expect(evidence).toEqual([{ evidence_kind: 'meeting.booked', reason: 'evidence:meeting.booked' }]);
+    // Lane M1: the booking moves no deal. The board offers the move; a person makes it below.
+    expect(stage[0]?.key).toBe('new');
+    const { rows: evidence } = await fixture.db.query('SELECT 1 FROM opportunity_stage_evidence WHERE opportunity_id = $1', [opportunityId]);
+    expect(evidence).toEqual([]);
     const { rows: states } = await fixture.db.query<{ id: string; state: string }>(
       'SELECT id, state FROM sequence_enrollments WHERE id = ANY($1::uuid[]) ORDER BY id',
       [[followUpEnrollmentId, prospectingId]],
@@ -378,13 +374,21 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     expect(board.status).toBe(200);
     const columns = board.body['columns'] as { stage: { key: string; displayName: string }; firms: { id: string }[] }[];
     expect(columns.map(column => column.stage.displayName)).toEqual(['Interested', 'Demo booked', 'Decision pending', 'Onboarding', 'Live']);
-    expect(columns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('demo_booked');
+    expect(columns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('new');
     const card = (board.body['cards'] as Record<string, Record<string, unknown>>)[firmId];
     expect(card).toMatchObject({
       value: { monthlyCents: 29_900, kind: 'estimated' },
       meeting: { state: 'booked', startsAt: '2026-10-06T15:00:00.000Z' },
-      evidence: { kind: 'meeting.booked' },
+      evidence: null,
+      stageSuggestion: { stageKey: 'demo_booked', opportunityId },
     });
+    // The one click: the ordinary stage command. Then the card is in Demo booked, with no suggestion.
+    const moved = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked' }));
+    expect(moved.status, moved.text).toBe(200);
+    const after = await api('/pipeline/board', salespersonToken, { includeLost: false });
+    const afterColumns = after.body['columns'] as { stage: { key: string }; firms: { id: string }[] }[];
+    expect(afterColumns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('demo_booked');
+    expect((after.body['cards'] as Record<string, Record<string, unknown>>)[firmId]).toMatchObject({ stageSuggestion: null });
 
     // ---- the funnel ---------------------------------------------------------------------
     const { rows: facts } = await fixture.db.query<{ kind: string }>(

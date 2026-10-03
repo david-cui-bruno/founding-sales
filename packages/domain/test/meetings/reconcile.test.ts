@@ -186,21 +186,22 @@ describe('Cal.com reconciliation', () => {
     expect(await eventCount()).toBe(before);
   });
 
-  it('records a booking whose webhook never came, and moves the pipeline as the webhook would', async () => {
+  it('records a booking whose webhook never came, and moves no deal, as the webhook does not (lane M1, CC3)', async () => {
     const id = uid();
+    const stageEvents = async (): Promise<number> =>
+      Number((await database.session.query<{ n: string }>('SELECT count(*) AS n FROM opportunity_stage_events WHERE workspace_id = $1', [workspaceId()])).rows[0]?.n);
+    const before = await stageEvents();
     expect(await reconcile([parsed(id)])).toMatchObject({ synthesized: 1, applied: 1 });
     expect((await meeting(id))?.state).toBe('booked');
-    const { rows } = await database.session.query<{ key: string }>(
-      `SELECT s.key FROM meetings m
-         JOIN opportunities o ON o.workspace_id = m.workspace_id AND o.id = m.opportunity_id
-         JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id
-        WHERE m.workspace_id = $1 AND m.booking_uid = $2`,
+    expect(await stageEvents()).toBe(before);
+    const { rows } = await database.session.query<{ opportunity_id: string | null }>(
+      'SELECT opportunity_id FROM meetings WHERE workspace_id = $1 AND booking_uid = $2',
       [workspaceId(), id],
     );
-    expect(rows[0]?.key).toBe('demo_booked');
+    expect(rows[0]?.opportunity_id).toBeNull();
   });
 
-  it('marks a past meeting held, and an absent attendee a no-show, then its reversal', async () => {
+  it('marks a past meeting ended (never held), and an absent attendee a no-show, then its reversal (lane M1)', async () => {
     const held = uid();
     const absent = uid();
     await webhook('BOOKING_CREATED', '2026-09-28T12:00:00.000Z', webhookBooking(held, { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' }));
@@ -210,16 +211,16 @@ describe('Cal.com reconciliation', () => {
       parsed(held, past),
       parsed(absent, { ...past, attendees: [{ email: ATTENDEE, absent: true }], updatedAt: '2026-09-29T16:00:00.000Z' }),
     ]);
-    expect((await meeting(held))?.state).toBe('held');
+    expect((await meeting(held))?.state).toBe('ended');
     expect((await meeting(absent))?.state).toBe('no_show');
     // The mark is taken back in Cal.com.
     const reversed = [parsed(absent, { ...past, updatedAt: '2026-09-29T17:00:00.000Z' })];
     await reconcile(reversed);
     expect((await meeting(absent))?.state).toBe('booked');
-    // The next run converges: the meeting is past its end, so it was held (fold 1,
+    // The next run converges: the meeting is past its end, so it ended (fold 1,
     // finding 5). Its end is dated just after the reversal, not behind it.
     expect(await reconcile(reversed)).toMatchObject({ synthesized: 1, applied: 1 });
-    expect((await meeting(absent))?.state).toBe('held');
+    expect((await meeting(absent))?.state).toBe('ended');
     expect(await reconcile(reversed)).toMatchObject({ synthesized: 0 });
   });
 
@@ -686,6 +687,9 @@ describe('Cal.com reconciliation', () => {
       opportunity_id: null,
       state: 'booked' as const,
       state_before_no_show: null,
+      attendance_source: null,
+      attendance_confirmed_at: null,
+      attendance_confirmed_by: null,
       booking_uid: `big${String(index)}`,
       current_booking_uid: `big${String(index)}`,
       starts_at: new Date(),

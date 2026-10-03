@@ -223,8 +223,11 @@ describe('Cal.com depth, over HTTP', () => {
 
     const matched = await api('/meetings/match', salespersonToken, command({ meetingId: entry?.meetingId, firmId: world.firmId }));
     expect(matched.status, matched.text).toBe(200);
-    expect(resultOf(matched)).toMatchObject({ firmId: world.firmId, state: 'booked', stage: 'moved' });
-    expect(await stageOf(world.opportunityId)).toBe('demo_booked');
+    // Lane M1: a match moves no deal; the firm's meetings offer the move instead.
+    expect(resultOf(matched)).toMatchObject({ firmId: world.firmId, state: 'booked', stage: 'none' });
+    expect(await stageOf(world.opportunityId)).toBe('new');
+    const offered = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect(offered.body['stageSuggestion']).toEqual({ stageKey: 'demo_booked', opportunityId: world.opportunityId });
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
     expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: '2026-10-14T15:00:00.000Z' }]);
     const after = await get('/meetings/unmatched', salespersonToken);
@@ -288,7 +291,7 @@ describe('Cal.com depth, over HTTP', () => {
       { state: 'booked', startsAt: '2026-10-21T15:00:00.000Z' },
       { state: 'cancelled', startsAt: '2026-10-14T15:00:00.000Z' },
     ]);
-    expect(await stageOf(world.opportunityId)).toBe('demo_booked');
+    expect(await stageOf(world.opportunityId)).toBe('new');
   });
 
   it('marks a no-show and takes it back', async () => {
@@ -347,6 +350,48 @@ describe('Cal.com depth, over HTTP', () => {
       [world.firmId, since],
     );
     expect(enrollments).toEqual([]);
+  });
+
+  // ---- lane M1: attendance, confirmed by a person -------------------------------------
+  it('confirms attendance over HTTP: ended by Cal.com, attended by the assignee, replayed by command id, undone, refused for a colleague', async () => {
+    const world = await firmWithWork();
+    const id = uid();
+    const past = { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' };
+    await calcom(booking('BOOKING_CREATED', '2026-09-28T12:00:00.000Z', id, world.attendee, past));
+    expect(await calcom(booking('MEETING_ENDED', '2026-09-29T15:30:00.000Z', id, world.attendee, past))).toMatchObject({ meetingState: 'ended' });
+    const listed = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    const meeting = (listed.body['meetings'] as { meetingId: string; state: string; attendanceSource: string | null }[]).find(row => row.state === 'ended');
+    expect(meeting).toMatchObject({ attendanceSource: null });
+    const meetingId = meeting?.meetingId;
+
+    const body = command({ meetingId, attendance: 'attended' });
+    const first = await api('/meetings/attendance', salespersonToken, body);
+    expect(first.status, first.text).toBe(200);
+    expect(resultOf(first)).toEqual({ meetingId, state: 'held', attendanceSource: 'manual' });
+    // The same command id answers what it answered, and writes nothing twice.
+    const replay = await api('/meetings/attendance', salespersonToken, body);
+    expect(replay.status).toBe(200);
+    expect(resultOf(replay)).toEqual(resultOf(first));
+    const { rows: facts } = await fixture.db.query("SELECT 1 FROM funnel_facts WHERE kind = 'meeting.held' AND dedupe_key = $1", [id]);
+    expect(facts).toHaveLength(1);
+    const read = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect((read.body['meetings'] as { meetingId: string; state: string; attendanceSource: string | null }[]).find(row => row.meetingId === meetingId)).toMatchObject({
+      state: 'held',
+      attendanceSource: 'manual',
+    });
+
+    const undone = await api('/meetings/attendance', salespersonToken, command({ meetingId, attendance: 'unconfirmed' }));
+    expect(resultOf(undone)).toEqual({ meetingId, state: 'ended', attendanceSource: null });
+
+    // A colleague's firm: refused with its reason, which has a sentence.
+    const other = await seedFirm(fixture, { name: 'Attendance Elsewhere Law', assignedUserId: fixture.alpha.admin.userId, website: 'https://www.attendance-elsewhere.example/' });
+    const theirs = uid();
+    await calcom(booking('BOOKING_CREATED', '2026-09-28T12:00:00.000Z', theirs, 'partner@attendance-elsewhere.example', past));
+    const { rows } = await fixture.db.query<{ id: string }>('SELECT id FROM meetings WHERE firm_id = $1', [other]);
+    const refused = await api('/meetings/attendance', salespersonToken, command({ meetingId: rows[0]?.id, attendance: 'attended' }));
+    expect(refused).toMatchObject({ status: 409, body: { reason: 'not_assigned' } });
+    // A malformed choice is refused before anything runs.
+    expect((await api('/meetings/attendance', salespersonToken, command({ meetingId, attendance: 'maybe' }))).status).toBe(400);
   });
 
   // ---- review fold 3: the routing lock, SHARED for deliveries ------------------------
