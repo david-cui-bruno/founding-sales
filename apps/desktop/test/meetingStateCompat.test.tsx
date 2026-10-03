@@ -152,7 +152,7 @@ describe('the words for a state', () => {
     // A key every object has is not a state either.
     expect(meetingStateWord('constructor')).toBe('Meeting');
     expect(meetingLabel({ meetingId: MEETING, state: FUTURE_STATE, startsAt: '2026-10-06T15:00:00.000Z' })).toMatch(/^Meeting · /u);
-    expect(meetingLabel({ meetingId: MEETING, state: 'ended', startsAt: '2026-10-06T15:00:00.000Z' })).toMatch(/^Ended · /u);
+    expect(meetingLabel({ meetingId: MEETING, state: 'ended', startsAt: '2026-10-06T15:00:00.000Z' })).toMatch(/^Ended, not confirmed · /u);
   });
 
   it('renders the firm page rows neutrally for an unknown state', async () => {
@@ -174,7 +174,7 @@ describe('the words for a state', () => {
       expect(screen.getAllByTestId('firm-meeting-row')).toHaveLength(2);
     });
     const tags = screen.getAllByTestId('firm-meeting-state');
-    expect(tags.map(node => node.textContent)).toEqual(['Ended', 'Meeting']);
+    expect(tags.map(node => node.textContent)).toEqual(['Ended · attendance not confirmed', 'Meeting']);
     for (const tag of tags) expect(tag.className).toContain('bg-muted');
   });
 });

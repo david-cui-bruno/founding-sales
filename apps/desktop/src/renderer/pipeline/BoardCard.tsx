@@ -222,6 +222,11 @@ export function BoardCard({
   const canAct = opportunityId !== undefined;
   const place = placeOf(firm);
   const overdue = card?.nextAction != null && Date.parse(card.nextAction.dueAt) < now.getTime();
+  const suggestion = card?.stageSuggestion ?? null;
+  const suggested =
+    suggestion !== null && !lost && opportunityId !== undefined && suggestion.opportunityId === opportunityId
+      ? { opportunityId, stageKey: suggestion.stageKey }
+      : null;
 
   return (
     <li
@@ -280,6 +285,24 @@ export function BoardCard({
           <span className="min-w-0 truncate">{meetingLabel(card.meeting)}</span>
         </p>
       )}
+      {/* Lane M1: a booking no longer moves the deal; the move is offered, one click, through
+          the ordinary stage command (and its per-card pending answer). Only for the deal this
+          person may move. */}
+      {suggested !== null ? (
+        <Button
+          size="sm"
+          variant="quiet"
+          data-testid="card-stage-suggestion"
+          className="-ml-2 h-6 justify-start text-xs text-muted-foreground hover:text-foreground"
+          disabled={!actionsEnabled || stageBusy}
+          {...(stageBusy ? { 'aria-busy': true } : {})}
+          onClick={() => {
+            onChangeStage({ opportunityId: suggested.opportunityId, toStageKey: suggested.stageKey, reason: null });
+          }}
+        >
+          Move to {nameOf(suggested.stageKey)}
+        </Button>
+      ) : null}
       <p data-testid="card-value" className="border-t border-border pt-1.5 text-xs tabular-nums">
         {card?.value == null ? <span className="text-faint">No value yet</span> : valueLabel(card.value)}
       </p>

@@ -250,6 +250,11 @@ export function FirmsRoute({
       onSaveContact={crm.actions.saveContact}
       onCheckRoute={crm.actions.checkRoute}
       onOpenOpportunity={crm.actions.openOpportunity}
+      onApplyStageSuggestion={suggestion => {
+        // Lane M1: the ordinary manual commands — a move of the open deal, or opening one at the stage.
+        if (suggestion.opportunityId !== null) changeStage({ opportunityId: suggestion.opportunityId, toStageKey: suggestion.stageKey, reason: null });
+        else crm.actions.openOpportunityAt(suggestion.stageKey);
+      }}
       onEnroll={crm.actions.enroll}
       onTakeOver={crm.actions.takeOver}
       heldOutgoing={state.heldOutgoing}

@@ -124,7 +124,8 @@ export interface CrmBridgeHost {
   openImport(): Promise<CrmState>;
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
-  openOpportunity(): Promise<CrmState>;
+  /** Lane M1: `stageKey` opens it at that stage (the "Move to Demo booked" suggestion). */
+  openOpportunity(input?: { readonly stageKey?: string | undefined }): Promise<CrmState>;
   takeOver(input: { readonly reason: string }): Promise<CrmState>;
   /** Name the firm of one held outgoing message on the open Firm page (S1 review P1-C). */
   resolveOutgoing(input: ResolveOutgoingRequest): Promise<CrmState>;
@@ -610,13 +611,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
      * "Add to pipeline" (lane g88): open the firm's opportunity at the first stage. An
      * enrolment serves an open opportunity (11.2), and a firm just added has none.
      */
-    async openOpportunity() {
+    async openOpportunity(input = {}) {
       if (firm === null) {
         notice = 'firm_unknown';
         return await snapshot();
       }
       const firmId = firm.read.firm.id;
-      const answer = await deps.api.command('/opportunities/open', { firmId }, () => null);
+      const answer = await deps.api.command(
+        '/opportunities/open',
+        { firmId, ...(input.stageKey === undefined ? {} : { stageKey: input.stageKey }) },
+        () => null,
+      );
       notice = answer.ok ? 'opportunity_opened' : answer.reason;
       await loadFirm(firmId);
       return await snapshot();
@@ -750,6 +755,10 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       );
       notice = answer.ok ? 'stage_changed' : answer.reason;
       if (answer.ok) await loadPipeline();
+      // Lane M1: the firm page's one-click move — the page open on that deal shows its new stage.
+      if (answer.ok && firm !== null && firm.visibility === 'assigned_or_admin' && firm.opportunity?.id === input.opportunityId) {
+        await loadFirm(firm.read.firm.id);
+      }
       return await snapshot();
     },
 

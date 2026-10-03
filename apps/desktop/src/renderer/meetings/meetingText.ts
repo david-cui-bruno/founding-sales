@@ -27,3 +27,16 @@ export function meetingStateWord(state: string): string {
 export function meetingStateWarns(state: string): boolean {
   return state === 'cancelled' || state === 'no_show';
 }
+
+/**
+ * The firm page's row word (lane M1): `ended` says what is missing — Cal.com's end is the
+ * scheduled end, and nobody has confirmed who came. Every other state is its plain word.
+ */
+export function meetingRowWord(state: string): string {
+  return state === 'ended' ? 'Ended · attendance not confirmed' : meetingStateWord(state);
+}
+
+/** The board card's shorter form of the same (lane M1). */
+export function meetingCardWord(state: string): string {
+  return state === 'ended' ? 'Ended, not confirmed' : meetingStateWord(state);
+}

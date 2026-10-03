@@ -26,7 +26,10 @@ import {
   firmBasicsIssueSchema,
   TODAY_CARD_BLOCKERS,
   instant,
+  meetingAttendanceSetSchema,
+  MEETING_ATTENDANCE_CHOICES,
   meetingMatchedSchema,
+  stageSuggestionSchema,
   unmatchedMeetingDtoSchema,
   uuid,
 } from '@fss/contracts';
@@ -1097,9 +1100,10 @@ export const OPERATIONS = {
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
     ],
-    input: nothing,
+    // Lane M1: `stageKey` opens it at "Demo booked" from the firm's one-click suggestion.
+    input: z.strictObject({ stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u).optional() }),
     output: crmStateSchema,
-    transform: 'the open firm page\u2019s own id, never the window\u2019s word for it',
+    transform: 'the open firm page\u2019s own id, never the window\u2019s word for it; the stage it opens at, when one is named',
   },
   'crm.takeOver': {
     kind: 'command',
@@ -1525,8 +1529,9 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],
     input: z.strictObject({ firmId: uuid }),
-    output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable() }),
-    transform: 'none: the firm’s meetings with their state and time, or null when the read did not answer',
+    output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable(), stageSuggestion: stageSuggestionSchema.nullable() }),
+    transform:
+      'none: the firm’s meetings with their state, time and how attendance was confirmed, and the one-click stage move a live booking suggests (lane M1); meetings null when the read did not answer',
   },
   'meetings.unmatched': {
     kind: 'read',
@@ -1541,6 +1546,14 @@ export const OPERATIONS = {
     input: z.strictObject({ meetingId: uuid, firmId: uuid }),
     output: z.strictObject({ matched: meetingMatchedSchema.nullable(), reason: z.string().max(80).nullable() }),
     transform: 'none: the match, or the refusal code the window turns into a sentence',
+  },
+  'meetings.setAttendance': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/meetings/attendance' }],
+    input: z.strictObject({ meetingId: uuid, attendance: z.enum(MEETING_ATTENDANCE_CHOICES), commandId: uuid }),
+    output: z.strictObject({ set: meetingAttendanceSetSchema.nullable(), reason: z.string().max(80).nullable() }),
+    transform:
+      'lane M1: Attended, No-show or Undo for one meeting under the renderer’s own command id, so a retry is answered from its receipt; a refusal’s code is the reason',
   },
 
   // --- Slice S2: the firm's calling basics, and an incoming call ----------------
