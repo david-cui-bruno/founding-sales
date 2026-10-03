@@ -51,7 +51,7 @@ The **desktop commit stamp** is the release commit. The release record names it,
 
 ## 3. The rehearsal
 
-Dispatch only, `mode: schema`, five stages (`plan`, `create`, `deploy`, `full`, `teardown`). It creates `fss-rh-<suffix>`, fills its own entries, migrates and deploys both digests, bootstraps a workspace, checks the declared ranges against the deployed images, smokes, tears down and guards. The dispatch is in [`runbooks/operate.md`](runbooks/operate.md); why it has this shape, what the stages cost, and the numbered list of what a `full` run does — items 1 to 15, of which **13 is the teardown and 14 the prefix guard** — are in [`docs/archive/release-history.md`](../archive/release-history.md).
+Dispatch only, `mode: schema`, five stages (`plan`, `create`, `deploy`, `full`, `teardown`). It creates `fss-rh-<suffix>`, fills its own entries, migrates and deploys both digests, bootstraps a workspace, checks the declared ranges against the deployed images, checks the meeting-audio upload contract against real S3 (`rehearsal.sh meeting-audio`, stages `deploy` and `full`), smokes, tears down and guards. The dispatch is in [`runbooks/operate.md`](runbooks/operate.md); why it has this shape, what the stages cost, and the numbered list of what a `full` run does — items 1 to 15, of which **13 is the teardown and 14 the prefix guard** — are in [`docs/archive/release-history.md`](../archive/release-history.md).
 
 Three things about it are invariants rather than procedure:
 

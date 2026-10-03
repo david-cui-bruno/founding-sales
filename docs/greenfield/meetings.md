@@ -438,7 +438,8 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
    bounds-checked; `ftyp` first). It is audio only when at least one `stsd` exists, every
    sample entry of every `stsd` is an allowlisted audio codec (`mp4a`, `alac`, `Opus`) and no
    `hdlr` names pictures (`vide`, `pict`, `auxv`) — decided by codec, never by a track's
-   label. Anything else is `not_audio`, never hashed or sent; bytes in `free`, `skip` or
+   label — and no compressed movie header (`cmov`, `dcom`, `cmvd`) appears anywhere: players
+   inflate one and read the movie inside, so it is refused, never inflated. Anything else is `not_audio`, never hashed or sent; bytes in `free`, `skip` or
    `mdat` are never read as boxes. Then `POST /meetings/recordings/upload-url {meetingId, fileSha256, sizeBytes,
    participantLabel, segment}` answers `registered` (nothing to send) or a 15-minute
    presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket that binds
@@ -456,6 +457,12 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
    Each file's PUTs and registers are counted in the store by the file's identity (its digest)
    apart from the entries, across scans, restarts and an overlap lost and regained: a fourth
    of either fails the folder with Retry, the only thing that resets them.
+   The S3 half of this is checked against real S3 in every rehearsal that deploys
+   (`rehearsal.sh meeting-audio`): a one-off API task, with the API task role and the run's
+   bucket, PUTs a synthetic object with exactly the signed headers, reads size, digest and
+   upload id back by HEAD, and requires the same URL without the upload-id header, and with
+   a body of another digest, to be refused. The object is left (the role cannot delete under
+   `meetings/`) to the teardown and the one-day expiry. Production never runs it.
 8. **States**, kept in `recordings.json` per person and role class (workspace, user, admin or
    member: a downgraded person starts empty) and keyed by the folder path and the audio
    files' identity (inode, size, mtime). This Mac shows only what is not registered yet:

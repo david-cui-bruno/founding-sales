@@ -1,5 +1,6 @@
 import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
 import { loadMeetingAudioStore } from '../integrations/meetingAudio.ts';
+import { checkMeetingAudioContract } from '../integrations/meetingAudioContract.ts';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
@@ -95,6 +96,8 @@ export const API_EXIT_CODES = Object.freeze({
   ok: 0,
   configurationInvalid: 12,
   listenFailed: 13,
+  /** `--meeting-audio-check`: real S3 did not answer the upload contract as it must. */
+  contractCheckFailed: 14,
 });
 
 function asSession(client: pg.Client): SessionQueryable {
@@ -159,6 +162,27 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   if (argv.includes('--selftest')) {
     log.log('info', 'api_selftest', { ...describeApiConfig(config), ...describeDeployment(deployment) });
     return API_EXIT_CODES.ok;
+  }
+  // Lane M4's contract check against the real bucket, with this task's role: run by
+  // `infra/scripts/rehearsal.sh meeting-audio` as a one-off task, never by production.
+  // No database, no socket.
+  if (argv.includes('--meeting-audio-check')) {
+    const bucket = environment[CALL_AUDIO_BUCKET_VARIABLE]?.trim() ?? '';
+    const region = environment['AWS_REGION']?.trim() ?? '';
+    if (bucket === '' || region === '') {
+      log.log('error', 'api_meeting_audio_check', { ok: false, reason: 'no_call_audio_bucket' });
+      return API_EXIT_CODES.configurationInvalid;
+    }
+    try {
+      const result = await checkMeetingAudioContract({ store: await loadMeetingAudioStore({ bucket, region }) });
+      // One field per step, `pass|fail <detail>`: log values are primitives.
+      const steps = Object.fromEntries(result.steps.map(step => [step.step, `${step.ok ? 'pass' : 'fail'} ${step.detail}`]));
+      log.log(result.ok ? 'info' : 'error', 'api_meeting_audio_check', { ok: result.ok, key: result.key, ...steps });
+      return result.ok ? API_EXIT_CODES.ok : API_EXIT_CODES.contractCheckFailed;
+    } catch (error) {
+      log.log('error', 'api_meeting_audio_check', { ok: false, ...errorFields(error) });
+      return API_EXIT_CODES.contractCheckFailed;
+    }
   }
   // Lane g71: which API image this is, from the ECS task metadata (or FSS_IMAGE_DIGEST
   // outside ECS), once, before anything can ask. An enable of production sending is
