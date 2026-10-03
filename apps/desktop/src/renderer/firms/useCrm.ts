@@ -24,7 +24,8 @@ import { routeShown, type Route } from '../routes.ts';
  * of it. So this hook is `useViewState` plus three things only this view needs.
  *
  * **The route follows the screen.** `firm/<id>` opens that firm; `pipeline` and `firms`
- * ask the bridge what it is holding, and never show a firm page under either name.
+ * ask the bridge what it is holding. An explicit navigation opens their list; a reload
+ * can restore the capture screen. Neither shows a firm page under the list's name.
  * Opening a firm from the board or from the list stays in this view and the route follows
  * through `routeShown`, so nothing is mounted again and the sidebar stays true.
  *
@@ -54,7 +55,7 @@ export interface CrmActions {
   openImport(): void;
   /** macOS's file panel, then the server's preview of whatever it answered. */
   chooseImportFile(): void;
-  addFirm(draft: AddFirmDraft): void;
+  addFirm(draft: AddFirmDraft, onAccepted?: () => void): void;
   commitImport(): void;
   saveContact(edit: ContactEdit): void;
   /** `onAnswer` hears THIS command's own answer, even when the view drops it for a newer one. */
@@ -102,6 +103,8 @@ export function useCrm(
   guard: Generation,
   /** The firm the Pipeline's panel is open on, read when the view is first drawn (S4). */
   panelFirm: () => string | null = () => null,
+  /** Sidebar/menu navigation asks for the list; reloading may restore a capture screen. */
+  enterAtRoot = false,
 ): Crm {
   const wanted = route.name === 'firm' ? route.firmId : null;
   const panelRef = useRef(panelFirm);
@@ -112,10 +115,13 @@ export function useCrm(
     () =>
       async (api: OperationApi): Promise<CrmState> => {
         if (wanted !== null) return await api.read('crm.openFirm', { firmId: wanted });
-        // Pipeline and Firms are the board read, or a capture screen the bridge is still
-        // holding; a firm page it last showed is not what either row means.
+        // The main process remembers capture screens too. Clicking Firms or Pipeline
+        // must leave those screens, rather than reopening Import forever. A reload can
+        // still restore a half-finished capture without silently discarding it.
         const held = await api.read('crm.state', {});
-        const board = held.screen === 'firm' ? await api.read('crm.openPipeline', {}) : held;
+        const board = enterAtRoot || held.screen === 'firm'
+          ? await api.read('crm.openPipeline', {})
+          : held;
         // A panel left open when the view was last left is read again, so it shows the
         // firm as it is now, beside the board (UI criterion 7).
         const panel = route.name === 'pipeline' ? panelRef.current() : null;
@@ -125,7 +131,7 @@ export function useCrm(
         return board;
       },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wanted],
+    [wanted, enterAtRoot],
   );
   const view = useViewState<CrmState>({ key: 'crm', identity, generation, guard, first });
 
@@ -156,8 +162,12 @@ export function useCrm(
         if (bridge === undefined) return;
         command('import', async () => await bridge.choose());
       },
-      addFirm: draft => {
-        command('add-firm', api => api.command('crm.addFirm', draft));
+      addFirm: (draft, onAccepted) => {
+        command('add-firm', async api => {
+          const answer = await api.command('crm.addFirm', draft);
+          if (answer.notice === 'firm_added') onAccepted?.();
+          return answer;
+        });
       },
       commitImport: () => {
         command('import', api => api.command('crm.commitImport', {}));

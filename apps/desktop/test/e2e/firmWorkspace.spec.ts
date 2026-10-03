@@ -65,7 +65,7 @@ test('the assignee sees routes with their eligibility, contacts, history and hol
   await expect(page.getByTestId('stage-event-move').nth(1)).toHaveText('new → contacting');
 
   await expect(page.getByTestId('firm-hold')).toHaveCount(1);
-  await expect(page.getByTestId('hold-reason')).toHaveText('reassignment');
+  await expect(page.getByTestId('hold-reason')).toHaveText('This firm is being reassigned. Wait for that to finish.');
   // The server's codes as words: an underscore on screen is a bug report a person
   // cannot file, and a sentence per code would be a second list to keep correct (D6).
   await expect(page.getByTestId('hold-blocks')).toHaveText('email send, call task');

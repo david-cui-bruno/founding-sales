@@ -306,7 +306,7 @@ export function crmAnswer(state: CrmState, method: string, argument: unknown, _c
   }
   if (method === 'addFirm') return { ...state, screen: 'firm', firm: assigneeFirmPage(), addFirm: null, notice: 'firm_added' };
   if (method === 'openImport') {
-    return { ...state, screen: 'import', notice: null, import: { fileName: null, preview: null, fileRefusal: null, results: null } };
+    return { ...state, screen: 'import', notice: null, import: state.import ?? { fileName: null, preview: null, fileRefusal: null, results: null } };
   }
   // 1.0.13: one press. The open panel, the read and the preview are the main process's,
   // so the page asks for a file and is answered with the preview of the one chosen.

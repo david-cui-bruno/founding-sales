@@ -209,6 +209,7 @@ function Column({
           <FirmsRoute
             key={key}
             route={route}
+            enterAtRoot={epoch > 0}
             identity={session.identity}
             generation={session.generation}
             guard={session.guard}

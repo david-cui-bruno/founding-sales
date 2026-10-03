@@ -4,11 +4,12 @@ import {
   FIRM_ID,
   crmState,
   importPreviewView,
+  mergeView,
   pipelineView,
   unplacedIdentity,
 } from './support/crmFixtures.ts';
 import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
-import type { CrmState } from '../../src/renderer/firmWorkspaceContract.ts';
+import type { AddFirmDraft, CrmState } from '../../src/renderer/firmWorkspaceContract.ts';
 
 /**
  * Add firm and Import in the Firms window, end to end against the one test harness
@@ -93,6 +94,9 @@ test('Add firm sends exactly what was typed, and lands on the new firm', async (
     contactEmail: 'kim@aspen.example.test',
     contactPhone: '401 555 0121',
   });
+  await page.getByTestId('nav-firms').click();
+  await page.getByTestId('open-add-firm').click();
+  await expect(page.getByTestId('add-firm-name')).toHaveValue('');
 });
 
 test('a form with no firm name is not sent, and says why', async ({ page }) => {
@@ -217,4 +221,158 @@ test('a file refused whole says which column, and the button is still there', as
   );
   await expect(page.getByTestId('import-file-refused')).toHaveText('The column “Notes” is not one Callie imports. Remove it or rename it.');
   await expect(page.getByTestId('import-choose')).toBeVisible();
+});
+
+test('Import has a way back before choosing or committing a file', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('import-choose')).toBeVisible();
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  expect(server.calls.filter(call => call.method === 'commitImport')).toHaveLength(0);
+});
+
+for (const capture of ['import', 'add_firm', 'merge'] as const) {
+  test(`the Firms sidebar exits ${capture} instead of reopening it`, async ({ page }) => {
+    await openCrm(page, crmState({
+      screen: capture,
+      role: 'admin',
+      firm: null,
+      import: importPreviewView(),
+      addFirm: { draft: EMPTY_DRAFT, issues: [], duplicateFirmId: null },
+      merge: mergeView(),
+    }));
+    await expect(page.getByTestId(capture === 'import' ? 'import-screen' : capture === 'merge' ? 'merge-panel' : 'add-firm-form')).toBeVisible();
+    await page.getByTestId('nav-firms').click();
+    await expect(page.getByTestId('firms-list')).toBeVisible();
+    await expect(page.getByTestId('heading')).toHaveText('Firms');
+    expect(server.calls.filter(call => ['commitImport', 'addFirm', 'resolveMerge'].includes(call.method))).toHaveLength(0);
+  });
+}
+
+test('Pipeline leaves Import and stays on the board', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'import', role: 'admin', firm: null, import: importPreviewView() }));
+  await expect(page.getByTestId('import-screen')).toBeVisible();
+  await page.getByTestId('nav-pipeline').click();
+  await expect(page.getByTestId('pipeline-board')).toBeVisible();
+  await expect(page.getByTestId('nav-pipeline')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'pipeline');
+});
+
+test('an unmatched prepared-brief preview can be left and reopened without losing it', async ({ page }) => {
+  app = await startAppServer({
+    crm: crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }),
+    operations: {
+      'firms.briefImportState': () => ({
+        previewId: 1, fileName: 'briefs.json', fileError: null, reason: null, committing: false, committed: false,
+        rows: [{ index: 1, label: 'Aspen Test Wealth', status: 'unmatched', issue: null, firmName: null, matchedOn: null, briefLength: 300, sourceCount: 1, result: null }],
+      }),
+    },
+  });
+  server = app.crm;
+  await page.goto(app.url('#firms'));
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('brief-import-commit')).toBeDisabled();
+  await expect(page.getByTestId('brief-import-summary')).toContainText('1 unmatched');
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('brief-import-summary')).toContainText('briefs.json · 1 unmatched');
+  await expect(page.getByTestId('brief-import-row')).toContainText('Aspen Test Wealth');
+  expect(app.called('firms.briefImportCommit')).toHaveLength(0);
+});
+
+test('a merge can be left without resolving it', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'merge', role: 'admin', firm: null, merge: mergeView() }));
+  await expect(page.getByTestId('merge-submit')).toBeDisabled();
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  expect(server.calls.filter(call => call.method === 'resolveMerge')).toHaveLength(0);
+});
+
+test('leaving Add firm through the sidebar preserves the unsent draft', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
+  await page.getByTestId('open-add-firm').click();
+  await page.getByTestId('add-firm-name').fill('Unsent Test Firm');
+  await page.getByTestId('nav-firms').click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await page.getByTestId('open-add-firm').click();
+  await expect(page.getByTestId('add-firm-name')).toHaveValue('Unsent Test Firm');
+  expect(server.calls.filter(call => call.method === 'addFirm')).toHaveLength(0);
+});
+
+test('returning to Import keeps the CSV preview and results; Done returns to Firms', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'import', role: 'admin', firm: null, import: importPreviewView() }));
+  await expect(page.getByTestId('import-row')).toHaveCount(4);
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('import-row')).toHaveCount(4);
+  await page.getByTestId('import-commit').click();
+  await expect(page.getByTestId('import-results-summary')).toContainText('1 imported');
+  await page.getByTestId('import-done').click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('import-results-summary')).toContainText('1 imported');
+  await expect(page.getByTestId('import-commit')).toHaveCount(0);
+  expect(server.calls.filter(call => call.method === 'commitImport')).toHaveLength(1);
+});
+
+test('a late import answer cannot pull the user back after leaving through Back', async ({ page }) => {
+  await openCrm(page, crmState({ screen: 'import', role: 'admin', firm: null, import: importPreviewView() }));
+  const release = app.hold('crm.commitImport');
+  await page.getByTestId('import-commit').click();
+  await expect(page.getByTestId('import-commit')).toBeDisabled();
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  release();
+  await expect.poll(() => server.state().import?.results?.counts.accepted).toBe(1);
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'firms');
+  await page.getByTestId('open-import').click();
+  await expect(page.getByTestId('import-results-summary')).toContainText('1 imported');
+});
+
+test('clicking Firms again retries a failed list refresh', async ({ page }) => {
+  app = await startAppServer({
+    crm: crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView(), notice: 'http_503' }),
+  });
+  server = app.crm;
+  await page.goto(app.url('#firms'));
+  await expect(page.getByTestId('banner-warning')).toBeVisible();
+  await page.getByTestId('nav-firms').click();
+  await expect(page.getByTestId('firms-list')).toBeVisible();
+  await expect(page.getByTestId('banner-warning')).toHaveCount(0);
+  expect(server.calls.filter(call => call.method === 'openPipeline')).toHaveLength(1);
+});
+
+test('Back preserves a refused Add firm draft, while Cancel deliberately discards it', async ({ page }) => {
+  app = await startAppServer({
+    crm: crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }),
+    operations: {
+      'crm.addFirm': argument => {
+        const refused = {
+          ...app.crm.state(), screen: 'add_firm' as const, notice: 'website_invalid',
+          addFirm: { draft: argument as AddFirmDraft, issues: [{ column: 'website' as const, code: 'website_invalid' as const }], duplicateFirmId: null },
+        };
+        app.crm.setState(refused);
+        return refused;
+      },
+    },
+  });
+  server = app.crm;
+  await page.goto(app.url('#firms'));
+  await page.getByTestId('open-add-firm').click();
+  await page.getByTestId('add-firm-name').fill('Unsent Test Firm');
+  await page.getByTestId('add-firm-website').fill('not a website');
+  await page.getByTestId('add-firm-submit').click();
+  await expect(page.getByTestId('issue-website')).toBeVisible();
+  await page.getByRole('button', { name: 'Back to Firms', exact: true }).click();
+  await page.getByTestId('open-add-firm').click();
+  await expect(page.getByTestId('add-firm-name')).toHaveValue('Unsent Test Firm');
+  await expect(page.getByTestId('add-firm-website')).toHaveValue('not a website');
+  await page.getByTestId('add-firm-cancel').click();
+  await page.getByTestId('open-add-firm').click();
+  await expect(page.getByTestId('add-firm-name')).toHaveValue('');
+  expect(server.calls.filter(call => call.method === 'addFirm')).toHaveLength(1);
 });
