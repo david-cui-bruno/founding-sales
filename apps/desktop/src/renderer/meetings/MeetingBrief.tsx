@@ -137,9 +137,15 @@ export function MeetingBrief({ meetingId, read }: { readonly meetingId: string; 
         // A newer read for this meeting began since: its answer is the one that counts (K7).
         if (memory.generation.get(meetingId) !== generation) return;
         if (answer.brief !== null && answer.brief.meetingId !== meetingId) return;
-        if (answer.brief === null) memory.unavailable.add(meetingId);
+        if (answer.brief === null && answer.reason === 'not_found') {
+          // A definite answer: deleted, or no longer this person's. Nothing kept is shown.
+          memory.briefs.delete(meetingId);
+          memory.unavailable.delete(meetingId);
+          memory.gone.add(meetingId);
+        } else if (answer.brief === null) memory.unavailable.add(meetingId);
         else {
           memory.unavailable.delete(meetingId);
+          memory.gone.delete(meetingId);
           memory.briefs.set(meetingId, answer.brief);
         }
         touch();
@@ -155,6 +161,13 @@ export function MeetingBrief({ meetingId, read }: { readonly meetingId: string; 
   }, [meetingId]);
 
   const brief = memory.briefs.get(meetingId);
+  if (memory.gone.has(meetingId)) {
+    return (
+      <p data-testid="meeting-brief-not-available" className="mt-1 text-xs text-muted-foreground">
+        Not available.
+      </p>
+    );
+  }
   if (brief === undefined) {
     return memory.unavailable.has(meetingId) ? (
       <p data-testid="meeting-brief-unavailable" className="mt-1 text-xs text-muted-foreground">

@@ -491,6 +491,7 @@ describe('meeting attendance', () => {
       location_type: null,
       video_call_url: null,
       zoom_meeting_id: null,
+      details_observed_at: null,
       ...over,
     });
 

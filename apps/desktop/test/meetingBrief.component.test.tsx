@@ -306,4 +306,48 @@ describe('the brief, shown', () => {
     });
     expect(within(await rowOf(MEETING)).getByTestId('meeting-brief-unavailable')).toBeTruthy();
   });
+
+  it('a definite not_found forgets the brief it showed and says Not available; a read that failed keeps it (review M2R, finding 5)', async () => {
+    const { ports, reads } = harness({ [FIRM_ID]: [row(MEETING, 'booked', inDays(2))], [OTHER_FIRM_ID]: [] });
+    const view = render(
+      <Session>
+        <FirmMeetings firmId={FIRM_ID} ports={ports} />
+      </Session>,
+    );
+    await userEvent.click(within(await rowOf(MEETING)).getByTestId('meeting-brief-toggle'));
+    await act(async () => {
+      reads[0]?.answer.resolve({ brief: brief(MEETING, ['Revoked content.']), reason: null });
+      await Promise.resolve();
+    });
+    expect(within(await rowOf(MEETING)).getByTestId('meeting-brief').textContent).toContain('Revoked content.');
+    const remount = async (): Promise<void> => {
+      view.rerender(<Session>{null}</Session>);
+      view.rerender(
+        <Session>
+          <FirmMeetings firmId={FIRM_ID} ports={ports} />
+        </Session>,
+      );
+      await rowOf(MEETING);
+    };
+    // Offline: the last brief stays.
+    await remount();
+    await act(async () => {
+      reads[1]?.answer.resolve({ brief: null, reason: 'offline' });
+      await Promise.resolve();
+    });
+    expect(within(await rowOf(MEETING)).getByTestId('meeting-brief').textContent).toContain('Revoked content.');
+    // Deleted, or no longer this person's: gone, now and after another remount.
+    await remount();
+    await act(async () => {
+      reads[2]?.answer.resolve({ brief: null, reason: 'not_found' });
+      await Promise.resolve();
+    });
+    const after = await rowOf(MEETING);
+    expect(within(after).queryByTestId('meeting-brief')).toBeNull();
+    expect(within(after).getByTestId('meeting-brief-not-available').textContent).toBe('Not available.');
+    expect(after.textContent).not.toContain('Revoked content.');
+    await remount();
+    expect((await rowOf(MEETING)).textContent).not.toContain('Revoked content.');
+  });
 });
+

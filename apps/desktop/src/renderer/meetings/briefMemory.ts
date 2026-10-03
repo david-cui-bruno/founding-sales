@@ -11,7 +11,9 @@ import { useSessionEpoch } from '../app/drafts.tsx';
  * By meeting id:
  *   * `open` — the meetings whose brief is open; leaving the firm and coming back keeps it (K3);
  *   * `briefs` — the last brief read for the meeting, shown while a newer read is under way;
- *   * `unavailable` — the meetings whose last read did not answer;
+ *   * `unavailable` — the meetings whose last read did not answer (the last brief stays shown);
+ *   * `gone` — the meetings the server says are not there for this person (`not_found`):
+ *     their brief is forgotten, never shown again from memory (review M2R, finding 5);
  *   * `generation` — the number of the meeting's newest read: an answer from an older read,
  *     or one naming another meeting, is dropped (K7).
  */
@@ -20,10 +22,11 @@ export interface BriefMemory {
   readonly open: Set<string>;
   readonly briefs: Map<string, MeetingBriefResponse>;
   readonly unavailable: Set<string>;
+  readonly gone: Set<string>;
   readonly generation: Map<string, number>;
 }
 
-const fresh = (): BriefMemory => ({ open: new Set(), briefs: new Map(), unavailable: new Set(), generation: new Map() });
+const fresh = (): BriefMemory => ({ open: new Set(), briefs: new Map(), unavailable: new Set(), gone: new Set(), generation: new Map() });
 
 let current: { epoch: object | null; memory: BriefMemory } = { epoch: null, memory: fresh() };
 const listeners = new Set<() => void>();

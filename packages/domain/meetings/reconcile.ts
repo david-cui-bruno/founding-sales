@@ -557,20 +557,21 @@ async function recordSuccessor(
 
 /**
  * The booking's details from this read (lane M2, 0040), for the meeting whose current
- * booking it is. A snapshot at least as new as the meeting's last event replaces them; an
- * older one only fills what is empty — so a meeting stored before 0040, or whose webhook was
- * lost, gets its details on the next run without an old read undoing a newer delivery.
+ * booking it is, at the snapshot's own time (`updatedAt`, else `createdAt`). The details
+ * keep their own freshness (review M2R, finding 1): a snapshot at least as new as what set
+ * them replaces them, an older one only fills what is empty — so a meeting stored before
+ * 0040, or whose webhook was lost, gets its details on the next run, and an older read never
+ * undoes a newer one.
  */
 async function refreshBookingDetails(context: RepositoryContext, meetingId: string, tail: CalcomBooking): Promise<void> {
   if (tail.details === undefined || tail.details === null) return;
-  const { rows } = await context.db.query<{ current_booking_uid: string; last_event_at: Date }>(
-    'SELECT current_booking_uid, last_event_at FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+  const { rows } = await context.db.query<{ current_booking_uid: string }>(
+    'SELECT current_booking_uid FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
     [context.scope.workspaceId, meetingId],
   );
   const meeting = rows[0];
   if (meeting === undefined || meeting.current_booking_uid !== tail.uid) return;
-  const fresh = Date.parse(instantOfBooking(tail)) >= meeting.last_event_at.getTime();
-  await writeBookingDetails(context, meetingId, tail.details, fresh ? 'replace' : 'fill');
+  await writeBookingDetails(context, meetingId, tail.details, instantOfBooking(tail));
 }
 
 /** The meeting's deferred absence, read fresh: an event or a link may have just changed it. */

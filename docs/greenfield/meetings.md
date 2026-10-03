@@ -154,8 +154,8 @@ Besides its times, a meeting keeps what its booking says (`meetings/bookingDetai
 | `event_title` (≤ 300) | `title` | `title` |
 | `attendee_name` (≤ 200) | `attendees[0].name` | `attendees[0].name` |
 | `booking_notes` (≤ 4,000) | `additionalNotes`, else `description`, else `responses.notes.value` | `bookingFieldsResponses.notes`, else `description` |
-| `booking_answers` (question → answer, text, ≤ 1,000 each, ≤ 8 KB) | `responses` by `label`, skipping hidden fields | `bookingFieldsResponses` by slug |
-| `location_type` (≤ 80) | `videoCallData.type`, else `integrations:…`, `link` or `other` | the same, `zoom_video` for a Zoom URL |
+| `booking_answers` (question → answer, text, ≤ 1,000 each, ≤ 8,192 bytes as PostgreSQL prints the jsonb; the writer keeps 8,000) | `responses` by `label`, skipping hidden fields | `bookingFieldsResponses` by slug |
+| `location_type` (≤ 80) | `videoCallData.type`, else `zoom_video` for `integrations:zoom` or a Zoom URL, else `integrations:…`, `link` or `other` | the same, `zoom_video` for a Zoom URL |
 | `video_call_url` (https, no query or fragment) | `videoCallData.url`, else `metadata.videoCallUrl`, else `location` | `location`, else `meetingUrl` |
 | `zoom_meeting_id` (digits) | `videoCallData.id` when `type` is `zoom_video`, else read from a Zoom join URL | read from the Zoom join URL |
 
@@ -164,12 +164,28 @@ its API v2 bookings list (https://cal.com/docs/api-reference/v2/bookings/get-all
 the Zoom app's adapter, which returns `{ type: 'zoom_video', id: String(zoom.id), password, url:
 join_url }` (https://github.com/calcom/cal.com/blob/main/packages/app-store/zoomvideo/lib/VideoApiAdapter.ts).
 
+| `details_observed_at` | the delivery's `createdAt` | the booking's `updatedAt`, else `createdAt` |
+
 **Never stored:** the call's passcode (`videoCallData.password`, and a join URL's `?pwd=`), and
 among the answers the booker's name, address, phone numbers, guests, location choice and
-reschedule reason. Events about the current booking replace the details (a null never clears
-one); a reschedule takes the new booking's; a fold takes the newest row's, the survivor's next;
-a reconciliation read replaces them when it is at least as new as the meeting's last event, and
-otherwise only fills empty fields. They go with the meeting on deletion.
+reschedule reason, and any custom question whose field or label asks for contact details
+(a word, or two adjacent words joined, beginning `phone`, `mobile`, `email`, `whatsapp`,
+`sms`, `address`, `street`, `zip`, `postal`, `firstname`, `lastname`, `fullname`,
+`surname`, …; or the whole question `name`). Nor a question named `__proto__`,
+`constructor` or `prototype`.
+
+**Freshness** (review M2R). The details carry their own time, `details_observed_at`: the
+source time of the delivery or the API read that last set them (0040's
+`meetings_details_observed`: set exactly when a detail is). A source at least as new replaces
+what it says (a null never clears a field); an older source — a late webhook, a delayed
+reschedule, an older reconciliation snapshot — only fills empty fields. A source that names a
+location describes all three conferencing fields together: when the kind of location changes
+(Zoom → Google Meet, a video call → a street address), the stored type, URL and Zoom id are all
+replaced, cleared where the source has none; when it names the same kind without the call's
+data (a `MEETING_ENDED` says `integrations:zoom` and carries no `videoCallData`), the URL and
+id are kept. A source silent on location keeps all three. A fold composes each field from the
+row observed most recently, the three conferencing fields as one. They go with the meeting on
+deletion.
 
 ## The meeting brief (lane M2)
 
@@ -179,7 +195,7 @@ can be trusted: `stated` (the booking form), `observed` (a verbatim quote, a log
 e-mail's subject), `inferred` (a model's summary or next step) or `unverified` (prepared
 research, not verified by Callie). Each section carries at most 12 items and counts the rest.
 
-* **Why this demo** — the booking's notes and answers; the `demo_request` quotes from the
+* **Why this demo** — the booking's notes and answers (dated by `details_observed_at`); the `demo_request` quotes from the
   firm's recent calls' analyses; those calls' stored summaries' next steps.
 * **Firm** — the prepared brief's first three lines (it is free text: its first lines are its
   headline), then the research quotes `software_evidence` and `maintenance_workflow`.
@@ -191,9 +207,11 @@ research, not verified by Callie). Each section carries at most 12 items and cou
 
 Readable by whoever may read the firm page in full (the assignee or an administrator, whose
 read of a colleague's firm is audited); anyone else, an unknown meeting and a meeting matched
-to no firm get the same `not_found`. The desktop opens it from the firm page's Meetings row
+to no firm get the same `not_found`. Calls are the firm's own: a call session of another firm
+linked to one of this firm's call logs is skipped, with its summaries. The desktop opens it from the firm page's Meetings row
 ("Brief") for a meeting starting within seven days or past and unconfirmed. Today shows no
-meetings, so it has no link there.
+meetings, so it has no link there. A `not_found` forgets any brief the desktop kept for the
+meeting and shows "Not available."; a read that failed otherwise keeps the last brief shown.
 
 ## Lock order: routing, then the send gate, then rows
 

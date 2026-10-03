@@ -35,9 +35,9 @@ describe('the meeting brief, read', () => {
   async function insertMeeting(firmId: string | null, uid: string): Promise<string> {
     const { rows } = await world.session.query<{ id: string }>(
       `INSERT INTO meetings (workspace_id, booking_uid, current_booking_uid, firm_id, state, starts_at, ends_at, last_event_at,
-                             attendee_email, event_title, attendee_name, booking_notes, booking_answers, location_type)
+                             attendee_email, event_title, attendee_name, booking_notes, booking_answers, location_type, details_observed_at)
        VALUES ($1, $2, $2, $3, 'booked', now() + interval '2 days', now() + interval '2 days 30 minutes', now(),
-               'dana@brief.example.test', 'Callie demo', 'Dana Example', 'Texts are a mess.', '{"How many doors?": "240"}'::jsonb, 'zoom_video')
+               'dana@brief.example.test', 'Callie demo', 'Dana Example', 'Texts are a mess.', '{"How many doors?": "240"}'::jsonb, 'zoom_video', now())
        RETURNING id`,
       [workspaceId(), uid, firmId],
     );
@@ -141,5 +141,35 @@ describe('the meeting brief, read', () => {
     expect(await readMeetingBrief(world.salesperson(), 'not-a-uuid')).toBeNull();
     const unmatched = await insertMeeting(null, 'briefm2c');
     expect(await readMeetingBrief(world.admin(), unmatched)).toBeNull();
+  });
+
+  it('skips a session of another firm linked to this firm s call log, and its summaries (review M2R, finding 6)', async () => {
+    const other = await world.newFirm({ opportunity: 'open' });
+    const foreign = await world.placeCall(other, UTTERANCES);
+    await world.analyse(
+      foreign,
+      answer({
+        summary: 'Foreign summary of another firm.',
+        interest: { level: 'buying_signal', signals: [{ kind: 'demo_request', quote: 'Can you show us a demo?', line: 2 }] },
+        objections: [],
+        commitments: [],
+      }),
+    );
+    await world.session.query(
+      `INSERT INTO call_summaries (workspace_id, call_session_id, model, prompt_version, summary, next_steps, commitments)
+       VALUES ($1, $2, 'claude-haiku-4-5-20251001', 'c3b.summary.1', 'Foreign stored summary.', $3::jsonb, '[]'::jsonb)`,
+      [workspaceId(), foreign.sessionId, JSON.stringify([{ action: 'Foreign next step', owner: 'you', due: 'today' }])],
+    );
+    // The foreign key permits it: the other firm's session now points at this firm's logged voicemail.
+    const linked = await world.session.query(
+      `UPDATE call_sessions SET call_log_id = (
+         SELECT id FROM call_logs WHERE workspace_id = $1 AND firm_id = $2 AND outcome = 'voicemail_left')
+        WHERE workspace_id = $1 AND id = $3`,
+      [workspaceId(), firm.firmId, foreign.sessionId],
+    );
+    expect(linked.rowCount).toBe(1);
+    const brief = await readMeetingBrief(world.salesperson(), meetingId);
+    expect(JSON.stringify(brief)).not.toContain('Foreign');
+    expect(brief?.sections.conversations.items.map(entry => [entry.label, entry.text])).toContainEqual(['voicemail_left', 'No summary']);
   });
 });

@@ -23,6 +23,7 @@ const meeting: MeetingBriefSources['meeting'] = {
   booking_notes: null,
   booking_answers: null,
   location_type: 'zoom_video',
+  details_observed_at: null,
   created_at: new Date('2026-10-01T12:00:00.000Z'),
 };
 
@@ -76,14 +77,20 @@ describe('the meeting brief, assembled', () => {
   it('why this demo: the booker s words, then the demo requests quoted from calls, then the summaries next steps', () => {
     const brief = assembleMeetingBrief({
       ...empty,
-      meeting: { ...meeting, booking_notes: 'Requests come in by text.', booking_answers: { 'How many doors?': '300' } },
+      // Answers changed by a later delivery: dated by it, not by the meeting's creation (M2R minor 8).
+      meeting: {
+        ...meeting,
+        booking_notes: 'Requests come in by text.',
+        booking_answers: { 'How many doors?': '300' },
+        details_observed_at: new Date('2026-10-02T09:00:00.000Z'),
+      },
       calls: [call(1, 'interested', '2026-09-30T15:00:00.000Z'), call(2, 'callback_requested', '2026-09-25T15:00:00.000Z')],
       analyses: new Map([[SESSION(1), analysis(SESSION(1), [{ kind: 'demo_request', quote: 'Can you show us a demo?' }, { kind: 'evaluation', quote: 'We are looking' }])]]),
       storedSummaries: new Map([[SESSION(2), summary('They asked for a call back.', { nextSteps: [{ action: 'Send the calendar link', owner: 'you', due: 'today' }] })]]),
     });
     expect(brief.sections.whyThisDemo.items.map(entry => [entry.source, entry.provenance, entry.label, entry.text, entry.at])).toEqual([
-      ['booking_notes', 'stated', 'Notes', 'Requests come in by text.', '2026-10-01T12:00:00.000Z'],
-      ['booking_answer', 'stated', 'How many doors?', '300', '2026-10-01T12:00:00.000Z'],
+      ['booking_notes', 'stated', 'Notes', 'Requests come in by text.', '2026-10-02T09:00:00.000Z'],
+      ['booking_answer', 'stated', 'How many doors?', '300', '2026-10-02T09:00:00.000Z'],
       ['call_signal', 'observed', 'Asked for a demo', 'Can you show us a demo?', '2026-09-30T15:00:00.000Z'],
       ['call_next_step', 'inferred', 'Next step · You', 'Send the calendar link (today)', '2026-09-25T15:00:00.000Z'],
     ]);

@@ -145,7 +145,7 @@ export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
     },
     verify: async (session, seededId) => {
       const { rows } = await session.query<Record<string, unknown>>(
-        `SELECT state, event_title, attendee_name, booking_notes, booking_answers, location_type, video_call_url, zoom_meeting_id
+        `SELECT state, event_title, attendee_name, booking_notes, booking_answers, location_type, video_call_url, zoom_meeting_id, details_observed_at
            FROM meetings WHERE id = $1`,
         [seededId],
       );

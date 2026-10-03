@@ -9,7 +9,7 @@ import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
 import { attendeeAddressOf } from './attendee.ts';
-import { NO_BOOKING_DETAILS, parseWebhookBookingDetails, type BookingDetails } from './bookingDetails.ts';
+import { detailsEmpty, mergeBookingDetails, NO_BOOKING_DETAILS, parseWebhookBookingDetails, type BookingDetails } from './bookingDetails.ts';
 import { reconcileHeldFacts } from './heldFacts.ts';
 import { manualModeEndReason } from '../sequences/terminalStops.ts';
 
@@ -161,12 +161,14 @@ export interface MeetingRow {
   readonly location_type: string | null;
   readonly video_call_url: string | null;
   readonly zoom_meeting_id: string | null;
+  /** Lane M2, review M2R: the source time of what set the details; null when there are none. */
+  readonly details_observed_at: Date | null;
   readonly [column: string]: unknown;
 }
 
 export const MEETING_COLUMNS =
   'id, firm_id, contact_id, opportunity_id, state, state_before_no_show, attendance_source, attendance_confirmed_at, attendance_confirmed_by, calcom_absent_pending, booking_uid, current_booking_uid, starts_at, ends_at, last_event_at, attendee_email, ' +
-  'event_title, attendee_name, booking_notes, booking_answers, location_type, video_call_url, zoom_meeting_id';
+  'event_title, attendee_name, booking_notes, booking_answers, location_type, video_call_url, zoom_meeting_id, details_observed_at';
 
 /**
  * A meeting's confirmation (lane M1, 0039): `held` (by a person or a recording) or
@@ -542,7 +544,7 @@ async function applyEvent(
     );
     const inserted = rows[0];
     if (inserted === undefined) throw new Error('the meeting insert returned no row');
-    const meeting = (await writeBookingDetails(context, inserted.id, event.details ?? null, 'replace')) ?? inserted;
+    const meeting = (await writeBookingDetails(context, inserted.id, event.details ?? null, event.createdAt)) ?? inserted;
     await aliasMeeting(context, meeting.id, [lookupUid, event.uid]);
     if (firmId === null) {
       await openReviewItem(
@@ -620,7 +622,7 @@ async function applyEvent(
   }
   if (next === null) {
     await touch(context, existing.id, event.createdAt);
-    if (aboutCurrent) await writeBookingDetails(context, existing.id, event.details ?? null, 'replace');
+    if (aboutCurrent) await writeBookingDetails(context, existing.id, event.details ?? null, event.createdAt);
     return none('applied', (await applyPendingAbsence(context, existing)) ?? existing);
   }
   // A reschedule whose replacement uid already has a row of its own: an event about the
@@ -691,7 +693,9 @@ async function applyEvent(
   );
   // The booking's details follow its current booking (lane M2): a reschedule's are the new
   // booking's, and any event about the current booking refreshes them.
-  const detailed = kind === 'BOOKING_RESCHEDULED' || aboutCurrent ? await writeBookingDetails(context, existing.id, event.details ?? null, 'replace') : null;
+  // By the event's own time (review M2R, finding 2): a delayed reschedule only fills what a
+  // newer delivery of the replacement left empty.
+  const detailed = kind === 'BOOKING_RESCHEDULED' || aboutCurrent ? await writeBookingDetails(context, existing.id, event.details ?? null, event.createdAt) : null;
   const written = detailed ?? rows[0] ?? existing;
   // Once the start has passed, a deferred absence is the meeting's state: an end becomes
   // `no_show` rather than `ended` (review M1F, finding 2).
@@ -737,8 +741,11 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
       WHERE workspace_id = $1 AND id = $2`,
     [workspaceId, survivor.id, replacement.attendee_email, replacement.firm_id, replacement.contact_id, replacement.opportunity_id],
   );
-  // The replacement is the meeting's booking from now on: its details win where it has them.
-  await writeBookingDetails(context, survivor.id, bookingDetailsOfRow(replacement), 'replace');
+  // The replacement is the meeting's booking from now on: its details, at the time they were
+  // observed, meet the survivor's by the same freshness rule as any source.
+  if (replacement.details_observed_at !== null) {
+    await writeBookingDetails(context, survivor.id, bookingDetailsOfRow(replacement), replacement.details_observed_at.toISOString());
+  }
   if (survivor.firm_id === null && replacement.firm_id !== null) {
     await context.db.query(
       `DELETE FROM stage_review_items
@@ -835,11 +842,13 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
       rows.some(row => row.calcom_absent_pending === true),
     ],
   );
-  // The details follow the newest row's booking, as its times and current uid do (lane M2):
-  // each from the newest row that has it, the survivor's next.
-  const byRecency = [newest, survivor, ...others.filter(row => row.id !== newest.id).sort((left, right) => right.last_event_at.getTime() - left.last_event_at.getTime())];
-  const composed = composeBookingDetails(byRecency.map(bookingDetailsOfRow));
-  const result = (await writeBookingDetails(context, survivor.id, composed, 'replace')) ?? folded[0] ?? survivor;
+  // The details: each from the row whose details were observed most recently, the next
+  // where it has none (lane M2, review M2R) — never from a row only because it is newer.
+  const observed = (row: MeetingRow): number => row.details_observed_at?.getTime() ?? -Infinity;
+  const byObservation = [...rows].sort((left, right) => observed(right) - observed(left));
+  const composed = composeBookingDetails(byObservation.map(bookingDetailsOfRow));
+  const newestObservation = byObservation[0]?.details_observed_at ?? null;
+  const result = (await storeBookingDetails(context, survivor.id, composed, newestObservation === null ? null : newestObservation.toISOString())) ?? folded[0] ?? survivor;
   if (linked !== null) {
     await context.db.query(
       `DELETE FROM stage_review_items
@@ -900,45 +909,72 @@ export function bookingDetailsOfRow(row: MeetingRow): BookingDetails {
     locationType: row.location_type ?? null,
     videoCallUrl: row.video_call_url ?? null,
     zoomMeetingId: row.zoom_meeting_id ?? null,
+    // A stored location was named by the source that set it: it travels as a whole.
+    locationNamed: (row.location_type ?? row.video_call_url ?? row.zoom_meeting_id ?? null) !== null,
   };
 }
 
-/** Each field from the first of `candidates` that has it. */
+/**
+ * Each field from the first of `candidates` that has it; the three conferencing fields
+ * together, from the first that has any (review M2R, finding 4: no Zoom id from one booking
+ * beside another booking's location).
+ */
 function composeBookingDetails(candidates: readonly BookingDetails[]): BookingDetails {
   const first = <K extends keyof BookingDetails>(key: K): BookingDetails[K] =>
     candidates.find(candidate => candidate[key] !== null)?.[key] ?? NO_BOOKING_DETAILS[key];
+  const located = candidates.find(candidate => candidate.locationType !== null || candidate.videoCallUrl !== null || candidate.zoomMeetingId !== null);
   return {
     title: first('title'),
     attendeeName: first('attendeeName'),
     notes: first('notes'),
     answers: first('answers'),
-    locationType: first('locationType'),
-    videoCallUrl: first('videoCallUrl'),
-    zoomMeetingId: first('zoomMeetingId'),
+    locationType: located?.locationType ?? null,
+    videoCallUrl: located?.videoCallUrl ?? null,
+    zoomMeetingId: located?.zoomMeetingId ?? null,
+    locationNamed: located !== undefined,
   };
 }
 
 /**
- * Store a booking's details on its meeting (lane M2, 0040). `replace`: each field the
- * details carry replaces the stored one (a later event about the current booking). `fill`:
- * only empty fields are filled (a reconciliation snapshot older than the meeting's last
- * event). A null never clears a stored field. Answers the written row, or null when there
- * was nothing to write.
+ * A source's booking details meet the meeting's (lane M2, 0040; review M2R): by
+ * `mergeBookingDetails`, against the stored details and the source time that set them —
+ * a source at least as new replaces, an older one only fills. `observedAt` is the source's
+ * own time: the delivery's, or the reconciliation read's. Answers the written row, or null
+ * when there was nothing to write.
  */
 export async function writeBookingDetails(
   context: RepositoryContext,
   meetingId: string,
   details: BookingDetails | null,
-  mode: 'replace' | 'fill',
+  observedAt: string | null,
 ): Promise<MeetingRow | null> {
-  if (details === null || Object.values(details).every(value => value === null)) return null;
-  const set = (column: string, index: number, cast = ''): string =>
-    mode === 'replace' ? `${column} = COALESCE($${String(index)}${cast}, ${column})` : `${column} = COALESCE(${column}, $${String(index)}${cast})`;
+  if (details === null || detailsEmpty(details) || observedAt === null) return null;
+  const { rows } = await context.db.query<MeetingRow>(`SELECT ${MEETING_COLUMNS} FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE`, [
+    context.scope.workspaceId,
+    meetingId,
+  ]);
+  const row = rows[0];
+  if (row === undefined) return null;
+  const merged = mergeBookingDetails(
+    { details: bookingDetailsOfRow(row), observedAt: row.details_observed_at === null ? null : row.details_observed_at.toISOString() },
+    details,
+    observedAt,
+  );
+  return await storeBookingDetails(context, meetingId, merged.details, merged.observedAt);
+}
+
+/** Write exactly these details and their source time. */
+async function storeBookingDetails(
+  context: RepositoryContext,
+  meetingId: string,
+  details: BookingDetails,
+  observedAt: string | null,
+): Promise<MeetingRow | null> {
+  const empty = detailsEmpty({ ...details, locationNamed: false });
   const { rows } = await context.db.query<MeetingRow>(
     `UPDATE meetings
-        SET ${set('event_title', 3)}, ${set('attendee_name', 4)}, ${set('booking_notes', 5)},
-            ${set('booking_answers', 6, '::jsonb')}, ${set('location_type', 7)}, ${set('video_call_url', 8)},
-            ${set('zoom_meeting_id', 9)}, updated_at = now()
+        SET event_title = $3, attendee_name = $4, booking_notes = $5, booking_answers = $6::jsonb, location_type = $7,
+            video_call_url = $8, zoom_meeting_id = $9, details_observed_at = $10::timestamptz, updated_at = now()
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${MEETING_COLUMNS}`,
     [
@@ -951,6 +987,7 @@ export async function writeBookingDetails(
       details.locationType,
       details.videoCallUrl,
       details.zoomMeetingId,
+      empty ? null : observedAt,
     ],
   );
   return rows[0] ?? null;

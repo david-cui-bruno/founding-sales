@@ -704,6 +704,7 @@ describe('Cal.com reconciliation', () => {
       location_type: null,
       video_call_url: null,
       zoom_meeting_id: null,
+      details_observed_at: null,
     }));
     const before = (await conflictItems()).length;
     const context = repositoryContext(workspaceScope(workspaceId(), { kind: 'system', component: 'worker' }), database.session);

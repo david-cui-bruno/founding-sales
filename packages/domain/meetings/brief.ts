@@ -88,7 +88,16 @@ function item(fields: Omit<MeetingBriefItem, 'label' | 'sourceUrl' | 'text'> & {
 export interface MeetingBriefSources {
   readonly meeting: Pick<
     MeetingRow,
-    'id' | 'state' | 'starts_at' | 'ends_at' | 'event_title' | 'attendee_name' | 'booking_notes' | 'booking_answers' | 'location_type'
+    | 'id'
+    | 'state'
+    | 'starts_at'
+    | 'ends_at'
+    | 'event_title'
+    | 'attendee_name'
+    | 'booking_notes'
+    | 'booking_answers'
+    | 'location_type'
+    | 'details_observed_at'
   > & { readonly firm_id: string; readonly created_at: Date };
   /** The firm's most recent calls, newest first. */
   readonly calls: readonly BriefCall[];
@@ -150,7 +159,9 @@ export async function readMeetingBrief(context: RepositoryContext, meetingId: st
 export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBriefResponse {
   const { meeting, calls, storedSummaries, analysedSummaries, analyses } = sources;
   const dated = (call: BriefCall): string => call.at.toISOString();
-  const bookedAt = meeting.created_at.toISOString();
+  // The booking's own words are dated by the source that last said them (review M2R, minor
+  // 8), the meeting's creation only when that is unknown.
+  const bookedAt = (meeting.details_observed_at ?? meeting.created_at).toISOString();
   const resultOf = (call: BriefCall) => (call.sessionId === null ? null : (analyses.get(call.sessionId)?.authoritative?.result ?? null));
   // The history read's choice: the current analysis's summary, else the stored one.
   const summaryOf = (call: BriefCall): CallSummaryDto | undefined =>
@@ -280,18 +291,20 @@ export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBrief
  * lists them (`calls/sessions.ts`).
  */
 async function recentCalls(context: RepositoryContext, firmId: string): Promise<readonly BriefCall[]> {
-  const { rows } = await context.db.query<{ outcome: string | null; at: Date; session_id: string | null }>(
-    `SELECT outcome, at, session_id FROM (
-       SELECT l.outcome, l.occurred_at AS at, s.id AS session_id, l.id AS tie
+  const { rows } = await context.db.query<{ outcome: string | null; at: Date; session_id: string | null; session_firm_id: string | null }>(
+    `SELECT outcome, at, session_id, session_firm_id FROM (
+       SELECT l.outcome, l.occurred_at AS at, s.id AS session_id, s.firm_id AS session_firm_id, l.id AS tie
          FROM call_logs l
          LEFT JOIN LATERAL (
-           SELECT cs.id FROM call_sessions cs
-            WHERE cs.workspace_id = l.workspace_id AND cs.call_log_id = l.id
+           SELECT cs.id, cs.firm_id FROM call_sessions cs
+            -- Only a session of this firm (review M2R, finding 6): a session of another firm
+            -- linked to this firm's log is skipped, and its summaries with it.
+            WHERE cs.workspace_id = l.workspace_id AND cs.call_log_id = l.id AND cs.firm_id = l.firm_id
             ORDER BY cs.consumed_at DESC NULLS LAST, cs.id LIMIT 1
          ) s ON true
         WHERE l.workspace_id = $1 AND l.firm_id = $2
        UNION ALL
-       SELECT NULL, COALESCE(cs.started_at, cs.consumed_at), cs.id, cs.id
+       SELECT NULL, COALESCE(cs.started_at, cs.consumed_at), cs.id, cs.firm_id, cs.id
          FROM call_sessions cs
         WHERE cs.workspace_id = $1 AND cs.firm_id = $2 AND cs.consumed_at IS NOT NULL AND cs.call_log_id IS NULL
      ) calls
@@ -299,7 +312,8 @@ async function recentCalls(context: RepositoryContext, firmId: string): Promise<
      LIMIT $3`,
     [context.scope.workspaceId, firmId, MEETING_BRIEF_RECENT_CALLS],
   );
-  return rows.map(row => ({ outcome: row.outcome, at: row.at, sessionId: row.session_id }));
+  // And again here, so the summary readers are only ever given this firm's sessions.
+  return rows.map(row => ({ outcome: row.outcome, at: row.at, sessionId: row.session_firm_id === firmId ? row.session_id : null }));
 }
 
 /**
