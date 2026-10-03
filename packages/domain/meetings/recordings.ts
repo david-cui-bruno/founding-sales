@@ -333,7 +333,9 @@ export async function listFirmRecordings(
   const firm = await readFirm(context, firmId);
   if (firm === null || decideFirmRead(context, firm) !== 'assigned_or_admin') return null;
   const { rows } = await context.db.query<FirmRecordingRow>(
-    `SELECT r.id, r.meeting_id, r.segment, r.participant_label, r.state, r.created_at
+    `SELECT r.id, r.meeting_id, r.segment, r.participant_label,
+       CASE WHEN r.processing_status='ready' THEN 'transcribed' WHEN r.processing_status='transcribing' THEN 'transcribing'
+            WHEN r.processing_status IN ('failed','needs_reupload') THEN 'failed' ELSE r.state END AS state, r.created_at
        FROM meeting_recordings r
        JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id
       WHERE r.workspace_id = $1 AND m.firm_id = $2

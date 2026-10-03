@@ -30,6 +30,7 @@ import { AfterCallAnalysis, type ApplyCommand } from './AfterCallAnalysis.tsx';
 import { Overview } from './Overview.tsx';
 import { Recap } from './Recap.tsx';
 import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
+import { MeetingRecoveryQueue } from '../recordings/MeetingRecoveryQueue.tsx';
 import { RecordingsToSort } from '../recordings/RecordingsToSort.tsx';
 import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type Watch } from './useAnalysis.ts';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
@@ -789,6 +790,7 @@ export function TodayWorkspace({
                 )}
                 {/* Lane M4: a demo recording that needs a meeting chosen, or failed. Quiet otherwise. */}
                 <RecordingsToSort />
+                <MeetingRecoveryQueue />
                 </>
               }
             />

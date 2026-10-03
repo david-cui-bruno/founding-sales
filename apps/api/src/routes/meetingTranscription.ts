@@ -1,19 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { authorizeRecordingRecovery, completeRecordingRecovery } from '@fss/domain/meetings/recordingRecovery.ts';
+import { authorizeRecordingRecovery, completeRecordingRecovery, listRecordingRecoveries } from '@fss/domain/meetings/recordingRecovery.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import { MeetingAudioUnavailableError, MEETING_AUDIO_TOTAL_TIMEOUT_MS, sha256Base64 } from '../integrations/meetingAudio.ts';
-import { recordingRecoveryCommandSchema, recordingRecoveryUrlSchema } from '@fss/contracts';
+import { recordingRecoveryCommandSchema, recordingRecoveryUrlSchema, recordingRecoveriesSchema } from '@fss/contracts';
 import { uuid } from '@fss/contracts';
 import { readMeetingTranscript, MeetingTranscriptChangedError, MeetingTranscriptCursorError } from '@fss/domain/meetings/transcripts.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
-export const MEETING_TRANSCRIPTION_PATHS: readonly string[] = ['/meetings/transcript', '/meetings/recordings/recovery-url', '/meetings/recordings/recovery-complete'];
+export const MEETING_TRANSCRIPTION_PATHS: readonly string[] = ['/meetings/recordings/recovery', '/meetings/transcript', '/meetings/recordings/recovery-url', '/meetings/recordings/recovery-complete'];
 export async function routeMeetingTranscription(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
     if (!MEETING_TRANSCRIPTION_PATHS.includes(request.path))
         return null;
     if (options.auth === undefined)
         return { status: 404, body: { error: 'not_found' } };
-    if (request.path !== '/meetings/transcript') return await routeRecovery(request, options);
+    if (request.path !== '/meetings/transcript' && request.path !== '/meetings/recordings/recovery') return await routeRecovery(request, options);
     if (request.method !== 'GET')
         return { status: 405, body: { error: 'method_not_allowed' } };
     const auth = await requirePrincipal(options.auth, request);
@@ -22,6 +22,7 @@ export async function routeMeetingTranscription(request: ApiRequest, options: Ro
     const scoped = contextForPrincipal(options.auth, auth.principal);
     if (!scoped.ok)
         return scoped.result;
+    if (request.path === '/meetings/recordings/recovery') return { status: 200, body: recordingRecoveriesSchema.parse(await listRecordingRecoveries(scoped.context)) };
     const meetingId = uuid.safeParse(request.query?.get('meetingId'));
     const cursor = request.query?.get('cursor') ?? undefined;
     if (!meetingId.success || (cursor?.length ?? 0) > 500)

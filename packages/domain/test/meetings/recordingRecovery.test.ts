@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
-import { authorizeRecordingRecovery, completeRecordingRecovery } from '../../meetings/recordingRecovery.ts';
-import { moveRecordingsToSurvivor } from '../../meetings/recordings.ts';
+import { authorizeRecordingRecovery, completeRecordingRecovery, listRecordingRecoveries } from '../../meetings/recordingRecovery.ts';
+import { moveRecordingsToSurvivor, listFirmRecordings } from '../../meetings/recordings.ts';
 import { beginMeetingTranscription, dispatchMeetingTranscription, completeMeetingTranscription } from '../../meetings/transcription.ts';
 import { accountId, at, jobPrefix, meetingProcessingFixture, prepared } from './support/meetingProcessingFixture.ts';
 describe('recording recovery', () => {
@@ -52,4 +52,17 @@ describe('recording recovery', () => {
     expect(await completeRecordingRecovery(f.context, { recordingId, commandId: randomUUID() }, async () => ({ verdict: 'recording_checksum_mismatch', uploadId: randomUUID() }), binding)).toBe('refused');
     expect((await f.db.session.query('SELECT processing_status FROM meeting_recordings WHERE id=$1', [recordingId])).rows[0]).toEqual({ processing_status: 'needs_reupload' });
   });
+  it('Today lists only actionable missing sources, once each, under current ownership', async () => {
+    const a = await missing(); await f.recording(await f.meeting(), 'b'.repeat(64));
+    expect((await listRecordingRecoveries(f.context)).items.map(row => row.recordingId)).toEqual([a.recordingId]);
+    await f.transcript(a.recordingId);
+    expect((await listRecordingRecoveries(f.context)).items).toEqual([]);
+  });
+
+  it('the older firm recording read reflects completed processing without changing shape', async () => {
+    const id = await f.recording(await f.meeting());
+    await f.db.session.query("UPDATE meeting_recordings SET processing_status='ready' WHERE id=$1", [id]);
+    expect((await listFirmRecordings(f.context, f.firmId))?.recordings[0]?.state).toBe('transcribed');
+  });
+
 });

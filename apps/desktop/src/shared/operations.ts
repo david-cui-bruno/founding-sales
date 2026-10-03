@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   CALL_OUTCOMES,
+  meetingTranscriptPageSchema,
+  recordingRecoveriesSchema,
   applyCallProposalsResultSchema,
   callLogRowSchema,
   correctCallOutcomeCommandSchema,
@@ -1659,6 +1661,17 @@ export const OPERATIONS = {
   },
   // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
   // fold, and show another Mac's uploads), straight through the authenticated client.
+  'meetings.transcript': {
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/transcript?meetingId={uuid}&cursor={string}' }],
+    input: z.strictObject({ meetingId: uuid, cursor: z.string().max(500).optional() }),
+    output: z.strictObject({ page: meetingTranscriptPageSchema.nullable(), reason: z.string().nullable() }),
+    transform: 'bounded source-grouped transcript page, or an explicit reason',
+  },
+  'recordings.recoveries': {
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/recordings/recovery' }], input: z.strictObject({}),
+    output: recordingRecoveriesSchema.extend({ items: recordingRecoveriesSchema.shape.items.nullable() }),
+    transform: 'only missing recordings that need a reupload, or null on a failed read',
+  },
   'recordings.reupload': {
     kind: 'command', calls: [], input: z.strictObject({ recordingId: uuid }), output: recordingRecoveryViewSchema,
     transform: 'recover the same recording from its retained local source; never receives a path',

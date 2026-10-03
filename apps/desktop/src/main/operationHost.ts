@@ -31,6 +31,7 @@ import {
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
 import type { BriefImportHost } from './briefImport.ts';
+import { meetingTranscriptPageSchema, recordingRecoveriesSchema } from '@fss/contracts';
 import type { RecordingImportHost } from './recordings/importer.ts';
 import type { CrmBridgeHost } from './crmBridge.ts';
 import type { MailboxBridgeHost } from './mailboxBridge.ts';
@@ -397,6 +398,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
     'firms.briefImportReset': async () => await deps.briefImport.reset(),
     // Lane M4: answered from the import the main process holds.
+    'meetings.transcript': async (input: OperationInput<'meetings.transcript'>) => {
+      const generation = deps.recordings.identity.current();
+      const query = new URLSearchParams({ meetingId: input.meetingId, ...(input.cursor === undefined ? {} : { cursor: input.cursor }) });
+      const answer = await deps.api.read(`/meetings/transcript?${query.toString()}`, value => meetingTranscriptPageSchema.parse(value));
+      if (generation !== deps.recordings.identity.current()) return { page: null, reason: 'not_found' };
+      return answer.ok ? { page: answer.value, reason: null } : { page: null, reason: answer.reason };
+    },
+    'recordings.recoveries': async () => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read('/meetings/recordings/recovery', value => recordingRecoveriesSchema.parse(value));
+      return generation === deps.recordings.identity.current() && answer.ok ? answer.value : { items: null, truncated: false };
+    },
     'recordings.reupload': async (input: OperationInput<'recordings.reupload'>) => await deps.recordings.reupload(input),
     'recordings.state': async () => await deps.recordings.state(),
     'recordings.chooseMeeting': async (input: OperationInput<'recordings.chooseMeeting'>) => await deps.recordings.chooseMeeting(input),

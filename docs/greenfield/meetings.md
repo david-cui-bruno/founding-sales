@@ -514,3 +514,64 @@ suggestion carries the stage it was read at (`fromStageKey`), and the move sends
 `expectedStageKey`: a deal moved elsewhere since is refused (`stage_changed_elsewhere`) and
 not moved. While the firm page's deal stage changes, the line is hidden until the read that
 change caused lands.
+
+## Meeting transcription (M5, migration 0042)
+
+M5 extends registered demo audio with a separate `meeting.transcribe` worker lane.
+It does not summarize meetings, confirm attendance, change deals or send mail.
+The default `meeting_transcription` setting is disabled, a zero daily allowance,
+and no recorded credit coverage. Existing calling and cash limits are unchanged.
+
+The worker downloads and checksum-verifies the original audio, decodes it with
+FFmpeg, measures decoded samples (including silence), and uploads a mono FLAC to
+`meetings-processing/<recordingId>/<uuid>.flac`. Input/prepared output are limited
+to 300 MiB; decoded duration to four hours; media subprocesses to two minutes.
+Temporary files are private and removed on completion or abort. The existing
+one-day S3 lifecycle applies to source, prepared input and provider output.
+
+Before each provider start, current ownership, meeting eligibility, the current
+setting, business-day allowance, and recorded AWS account/service coverage are
+checked again. The coverage evidence must be unrevoked and unexpired. This record
+is not a live account credit-balance guarantee. There is no automatic cash fallback.
+The allowance measures gross provider charges; each file/attempt rounds up to
+cents with Transcribe's minimum billable duration. A reservation and deterministic
+job name are committed before dispatch. The SDK makes one request attempt;
+ambiguous starts are collected under the same name, never blindly started again.
+At most two paid attempts and six reservations are permitted per recording,
+including its aliases. Terminal output failures do not automatically buy a replacement.
+Collection stops after 120 minutes, including when check-up jobs keep crashing.
+Already-started work may finish after the switch is disabled.
+
+The firm page offers **Transcript** beside each registered meeting's audio.
+It shows ready/total source coverage, groups speech by recording/segment and keeps
+timestamps file-relative. Participant filenames and provider speaker labels are
+provisional, not verified identities. It never invents alignment between tracks.
+Transcript and utterance IDs survive meeting folds; duplicate recordings keep
+both successful versions and select the earliest completed result for display.
+A changed source revision invalidates an old pagination cursor and refreshes the
+view. Transcript content is plain text and is removed with the meeting/firm;
+operational attempt accounting survives without speech or participant labels.
+
+**Missing audio:** Today lists only actionable missing sources. Reupload uses a
+retained local file inside the configured demo folder, or an explicit native file
+picker. Current server authority is checked before local access and again before
+upload/completion; bytes must match the original size and SHA-256. A signed nonce
+binds completion to the uploader. Recovery resumes the same recording ID and does
+not reset paid history. The renderer receives no arbitrary filesystem access.
+
+**New API surfaces:** `GET /meetings/transcript?meetingId=&cursor=`,
+`GET /meetings/recordings/recovery`, `POST /meetings/recordings/recovery-url`, and
+`POST /meetings/recordings/recovery-complete`. Mutations use the usual command IDs,
+client versions and audited receipts. The old strict M4 upload/register response
+shapes are preserved; new registrations may send optional `sourceKind`.
+`GET /settings/integrations?include=meeting_transcription` opts into the separate
+setting and gross spend read. Deploy the API supporting this field before the
+new desktop begins sending it; release this feature as one schema/worker/API unit.
+
+**Activation remains separate from implementation.** Verify applicable AWS credit
+coverage, record evidence/expiry for the workload account, agree the daily meeting
+allowance, and exercise one real Zoom recording end to end before enabling it.
+No paid AWS transcription or real-account Zoom recording has been exercised by
+this implementation's synthetic tests. Synthetic tests establish media bounds,
+replay/ambiguity behavior, holds, recovery and UI states; they cannot establish the
+user's Zoom folder layout or future credit applicability.

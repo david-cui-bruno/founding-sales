@@ -1,5 +1,5 @@
 -- 0042_meeting_transcription.sql — attributed demo transcripts and bounded processing.
--- changes: meetings, meeting_recordings
+-- changes: meetings, meeting_recordings, provider_reservations, workspace_settings
 -- Existing response shapes and recording states stay compatible. Settings default off.
 ALTER TABLE meetings ADD COLUMN transcript_source_revision integer NOT NULL DEFAULT 0 CHECK (transcript_source_revision >= 0);
 ALTER TABLE meeting_recordings

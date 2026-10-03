@@ -1,3 +1,4 @@
+import { MeetingTranscript } from '../meetings/MeetingTranscript.tsx';
 import { useRef, type JSX, type KeyboardEvent } from 'react';
 import { reasonSentence, type FirmRecording } from '@fss/contracts';
 import type { RecordingItem } from '../../shared/recordings.ts';
@@ -85,14 +86,14 @@ export function FirmRecordings({
       <ul className="flex flex-col border-t border-border">
         {registered.map(({ meeting, rows }) => {
           const state = meetingServerState(rows, meeting.meetingId) ?? 'uploaded';
-          const speakers = new Set(rows.map(row => row.participantLabel.replace(/\d+\.m4a$/iu, ''))).size;
+
           return (
-            <li key={`server-${meeting.meetingId}`} data-testid="firm-recording-registered" data-meeting-id={meeting.meetingId} data-state={state} className="flex items-center gap-3 border-b border-border py-1.5 text-sm">
+            <li key={`server-${meeting.meetingId}`} data-testid="firm-recording-registered" data-meeting-id={meeting.meetingId} data-state={state} className="flex min-w-0 flex-col gap-1 border-b border-border py-2 text-sm">
               <span className="flex-1 truncate">
                 Demo · {shortDayTime(meeting.startsAt)} · {rows.length === 1 ? '1 file' : `${String(rows.length)} files`}
-                {speakers > 1 ? ` · ${String(speakers)} speakers` : ''}
+
               </span>
-              <Tag tone={state === 'failed' ? 'warn' : 'none'}>{serverRecordingWords(state)}</Tag>
+              <MeetingTranscript meetingId={meeting.meetingId} actionsEnabled={actionsEnabled} />
             </li>
           );
         })}

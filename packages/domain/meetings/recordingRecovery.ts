@@ -33,3 +33,17 @@ export async function completeRecordingRecovery(context: RepositoryContext, inpu
   await recordCrmAuditEvent(context, { action: 'meeting.recording_recovered', subjectKind: 'meeting', subjectId: source.meetingId, detail: { commandId: input.commandId } });
   return 'resumed';
 }
+
+/** Today gets actionable missing sources only, never ordinary processing progress. */
+export async function listRecordingRecoveries(context: RepositoryContext) {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return { items: [], truncated: false };
+  const rows = (await context.db.query<{ id: string; meeting_id: string; firm_id: string; name: string; participant_label: string }>(`SELECT r.id,r.meeting_id,m.firm_id,f.name,r.participant_label
+    FROM meeting_recordings r JOIN meetings m ON m.workspace_id=r.workspace_id AND m.id=r.meeting_id
+    JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
+    WHERE r.workspace_id=$1 AND r.processing_status='needs_reupload' AND m.state<>'cancelled' AND f.status<>'merged'
+      AND ($2::boolean OR f.assigned_user_id=$3)
+      AND NOT EXISTS (SELECT 1 FROM meeting_transcripts t WHERE t.workspace_id=r.workspace_id AND t.recording_id=r.id)
+    ORDER BY r.created_at,r.id LIMIT 101`, [context.scope.workspaceId, actor.role === 'admin', actor.userId])).rows;
+  return { items: rows.slice(0,100).map(row => ({ recordingId: row.id, meetingId: row.meeting_id, firmId: row.firm_id, firmName: row.name, participantLabel: row.participant_label })), truncated: rows.length > 100 };
+}

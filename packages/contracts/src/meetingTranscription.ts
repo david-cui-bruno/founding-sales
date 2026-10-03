@@ -56,3 +56,8 @@ export const recordingRecoveryUrlSchema = z.discriminatedUnion('status', [
 ]);
 export type RecordingRecoveryUrl = z.infer<typeof recordingRecoveryUrlSchema>;
 export const recordingRecoveryCompleteSchema = z.strictObject({ status: z.enum(['resumed', 'already_ready']) });
+export const recordingRecoveriesSchema = z.strictObject({
+    items: z.array(z.strictObject({ recordingId: uuid, meetingId: uuid, firmId: uuid, firmName: z.string().max(300), participantLabel: z.string().max(200) })).max(100),
+    truncated: z.boolean(),
+});
+export type RecordingRecoveries = z.infer<typeof recordingRecoveriesSchema>;

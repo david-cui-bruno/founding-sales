@@ -27,6 +27,13 @@ describe('meeting transcript reads', () => {
       VALUES ($1,$2,'m5api','m5api',$3,'booked',now(),now()+interval '20 minutes',now())`, [fixture.alpha.workspaceId, meetingId, firmId]);
     });
     afterAll(async () => { await fixture.stop(); });
+    it('answers meeting settings only to clients asking for them, disabled by default', async () => {
+      const call = (include: string) => dispatch({ method: 'GET', path: '/settings/integrations', query: new URLSearchParams({ include }), headers: { authorization: `Bearer ${admin}` }, body: undefined }, {
+        session: fixture.db, auth: fixture.deps, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false, upgradeUrl: 'https://callie.example/download',
+      });
+      expect((await call('meeting_transcription')).body).toMatchObject({ meetingTranscription: { setting: { enabled: false, dailyCeilingCents: 0, creditCoverage: null }, spentTodayCents: 0 } });
+      expect((await call('transcription')).body).not.toHaveProperty('meetingTranscription');
+    });
     it('gives the assigned user an honest empty transcript without confirming attendance', async () => {
         const result = await read();
         expect(result.status).toBe(200);
