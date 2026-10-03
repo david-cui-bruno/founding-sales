@@ -1,6 +1,6 @@
 import { useState, type JSX } from 'react';
 import type { ImportColumn } from '@fss/contracts';
-import { useClearDrafts, useDrafts } from '../app/drafts.tsx';
+import { useClearDrafts, useClearUnchangedDrafts, useDrafts } from '../app/drafts.tsx';
 import { ADD_FIRM_FIELDS, TIME_ZONE_CHOICES, addFirmSubmittable, fieldIssues, issueSentence } from '../captureView.ts';
 import type { AddFirmDraft, AddFirmView } from '../firmWorkspaceContract.ts';
 import { Button } from '../ui/button.tsx';
@@ -41,11 +41,12 @@ export function AddFirmForm({
 }: {
   readonly view: AddFirmView;
   readonly actionsEnabled: boolean;
-  onSubmit(draft: AddFirmDraft): void;
+  onSubmit(draft: AddFirmDraft, onAccepted: () => void): void;
   onCancel(): void;
   onOpenFirm(firmId: string): void;
 }): JSX.Element {
   const clear = useClearDrafts();
+  const clearUnchanged = useClearUnchangedDrafts();
   const { values, set } = useDrafts();
   const [nameMissing, setNameMissing] = useState(false);
 
@@ -102,8 +103,11 @@ export function AddFirmForm({
           return;
         }
         setNameMissing(false);
-        clear(DRAFTS);
-        onSubmit(typed);
+        // A refusal (or a lost answer) is still an unsaved draft. Keep it across
+        // navigation, and only clear accepted values that have not since been edited.
+        const submitted = Object.fromEntries(Object.entries(typed).map(([key, value]) => [`${DRAFTS}${key}`, value]));
+        for (const [key, value] of Object.entries(submitted)) set(key, value);
+        onSubmit(typed, () => clearUnchanged(submitted));
       }}
     >
       <fieldset className="flex flex-col gap-3">

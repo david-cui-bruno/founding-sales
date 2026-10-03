@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import type { Generation } from '../app/generation.ts';
 import { inWords } from '../dates.ts';
-import type { Route } from '../routes.ts';
+import { navigate, type Route } from '../routes.ts';
 import { Button } from '../ui/button.tsx';
 import { Banners, Page, ViewHeader } from '../ui/layout.tsx';
 import { Skeleton } from '../v2/parts.tsx';
@@ -71,17 +71,20 @@ function useColumnScroll(key: string | null, ready: boolean, offsets: Record<str
 
 export function FirmsRoute({
   route,
+  enterAtRoot = false,
   identity,
   generation,
   guard,
 }: {
   readonly route: Route;
+  /** Explicit navigation opens the requested list, even if a capture screen was left open. */
+  readonly enterAtRoot?: boolean;
   readonly identity: string | null;
   readonly generation: number;
   readonly guard: Generation;
 }): JSX.Element {
   const { memory, touch } = useCrmMemory(identity, generation);
-  const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId);
+  const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId, enterAtRoot);
   const state = crm.state;
   // Which row asked for this view. The board answer is the same answer on both, so the
   // route says which reading of it to draw.
@@ -185,6 +188,9 @@ export function FirmsRoute({
   const view = buildFirmWorkspaceView(cardShowsNotice ? { ...state, notice: null } : state);
   // Add firm and Import put a firm on file, so they belong to Firms and not to the board.
   const onFirmsList = state.screen === 'pipeline' && !onPipelineRow;
+  const onCapture = state.screen === 'add_firm' || state.screen === 'import' || state.screen === 'merge';
+  // A fresh route also fences late command answers from the screen being left.
+  const backToFirms = (): void => navigate({ name: 'firms' });
   const cardOf = (id: string) => state.pipeline?.cards?.[id];
 
   /** David opened or closed this card's editor: a late answer must leave it alone. */
@@ -418,6 +424,11 @@ export function FirmsRoute({
               <ChevronLeft aria-hidden />
               {crm.origin === 'pipeline' ? PIPELINE_HEADING : FIRMS_HEADING}
             </Button>
+          ) : onCapture ? (
+            <Button variant="quiet" size="sm" className="-ml-2 self-start" onClick={backToFirms}>
+              <ChevronLeft aria-hidden />
+              Back to Firms
+            </Button>
           ) : undefined
         }
         actions={
@@ -452,7 +463,7 @@ export function FirmsRoute({
           view={state.addFirm}
           actionsEnabled={view.actionsEnabled && !crm.busy('add-firm')}
           onSubmit={crm.actions.addFirm}
-          onCancel={crm.actions.openPipeline}
+          onCancel={backToFirms}
           onOpenFirm={crm.actions.openFirm}
         />
       ) : state.screen === 'import' && state.import !== null ? (
@@ -462,7 +473,7 @@ export function FirmsRoute({
             actionsEnabled={view.actionsEnabled && state.role === 'admin' && !crm.busy('import')}
             onChooseFile={crm.actions.chooseImportFile}
             onCommit={crm.actions.commitImport}
-            onDone={crm.actions.openPipeline}
+            onDone={backToFirms}
           />
           {/* Lane PB: prepared briefs from a JSON file, an administrator's import too. */}
           {state.role === 'admin' ? <BriefImport enabled={view.actionsEnabled} /> : null}

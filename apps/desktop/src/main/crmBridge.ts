@@ -353,12 +353,9 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     };
   };
 
-  /** Leave Add firm and Import, and let the file's text go. */
+  /** Leave capture without discarding the import preview; forget() clears it at sign-out. */
   const leaveCapture = (): void => {
     addFirmView = null;
-    importView = null;
-    importCsv = null;
-    importCommandIds = new Map();
   };
 
   const loadFirm = async (firmId: string): Promise<void> => {
@@ -489,6 +486,9 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       if (input?.includeLost !== undefined) includeLost = input.includeLost;
       notice = null;
       leaveCapture();
+      // Navigation still works when the refresh fails: keep the cached list and
+      // show the refusal there, instead of trapping the person in a capture screen.
+      screen = 'pipeline';
       await loadPipeline();
       return await snapshot();
     },
@@ -525,7 +525,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     async openImport() {
       notice = null;
       leaveCapture();
-      importView = { fileName: null, preview: null, fileRefusal: null, results: null };
+      importView ??= { fileName: null, preview: null, fileRefusal: null, results: null };
       screen = 'import';
       return await snapshot();
     },
@@ -577,6 +577,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'import_nothing_to_commit';
         return await snapshot();
       }
+      const committingView = importView;
       // Not `command`: the envelope is one command id per row, which the server hashes
       // each row's receipt under, and a request-level id would be refused as malformed.
       const answer = await deps.api.read('/import/commit', value => importCommitResponseSchema.parse(value), {
@@ -584,6 +585,9 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         csv: importCsv,
         rows,
       });
+      // A file chosen after leaving/reopening Import owns its own preview. The old
+      // command may finish, but its results must not label the new file imported.
+      if (importView !== committingView) return await snapshot();
       if (!answer.ok) {
         const fileRefusal = answer.offline ? null : fileRefusalOf(answer.refusal);
         if (fileRefusal !== null) importView = { ...importView, fileRefusal };

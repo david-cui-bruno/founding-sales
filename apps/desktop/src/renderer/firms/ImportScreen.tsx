@@ -134,7 +134,7 @@ export function ImportScreen({
           ) : null}
           <div className="mt-4">
             <Button variant="outline" data-testid="import-done" onClick={onDone}>
-              Open the pipeline
+              Back to Firms
             </Button>
           </div>
         </Section>

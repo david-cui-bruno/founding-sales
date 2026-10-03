@@ -31,7 +31,7 @@ import { CHECK_FIELDS, buildFirmWorkspaceView, noticeText } from '../src/rendere
 
 const FIRM_ID = '11111111-1111-4111-8111-111111111111';
 
-function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>) {
+function scriptedApi(answers: Readonly<Record<string, HttpAnswer | (() => Promise<HttpAnswer>)>>) {
   const calls: { path: string; body: Record<string, unknown> | null }[] = [];
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
@@ -40,7 +40,8 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>) {
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : (JSON.parse(init.body) as Record<string, unknown>) });
-      return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+      const answer = answers[path];
+      return await Promise.resolve(typeof answer === 'function' ? answer() : answer ?? { status: 404, body: { error: 'not_found' } });
     },
   });
   return { api, calls };
@@ -189,6 +190,7 @@ describe('the CRM bridge: Import', () => {
 
   it('previews, then commits the new firms and added contacts under ids minted once, in the per-row envelope', async () => {
     const { api, calls } = scriptedApi({
+      '/pipeline/board': { status: 200, body: { columns: [], opportunityIdByFirmId: {}, unplacedFirms: [] } },
       '/import/preview': { status: 200, body: preview() },
       '/import/commit': {
         status: 200,
@@ -209,7 +211,14 @@ describe('the CRM bridge: Import', () => {
     expect(previewed.import?.fileName).toBe('prospects.csv');
     expect(calls[0]?.body).toEqual({ csv });
 
+    // Going back to Firms must not discard the file or mint new row receipts.
+    expect((await bridge.openPipeline()).screen).toBe('pipeline');
+    const resumed = await bridge.openImport();
+    expect(resumed.import).toEqual(previewed.import);
     const first = await bridge.commitImport();
+    await bridge.openPipeline();
+    const reopened = await bridge.openImport();
+    expect(reopened.import?.results?.counts).toEqual({ accepted: 1, refused: 1 });
     const second = await bridge.commitImport();
     const commits = calls.filter(call => call.path === '/import/commit');
     expect(commits).toHaveLength(2);
@@ -224,6 +233,12 @@ describe('the CRM bridge: Import', () => {
     expect(first.notice).toBe('imported_with_refusals');
     expect(second.import?.results?.counts).toEqual({ accepted: 1, refused: 1 });
     expect(commitLine(first.import?.results?.results[1] ?? ({} as never))).toBe('Row 3 · Email: Already here.');
+
+    // Retention is session-only: signing out still drops the prospect file and receipts.
+    await bridge.forget();
+    expect((await bridge.openImport()).import?.preview).toBeNull();
+    expect((await bridge.commitImport()).notice).toBe('import_nothing_to_commit');
+    expect(calls.filter(call => call.path === '/import/commit')).toHaveLength(2);
   });
 
   it('shows a whole file’s refusal where it is, and a role refusal as a notice', async () => {
@@ -267,6 +282,50 @@ describe('the CRM bridge: Import', () => {
     const bridge = createCrmBridge({ api, clientVersion: '1.0.5', session: session() });
     const state = await bridge.openPipeline();
     expect(state.pipeline?.unplacedFirms?.map(firm => firm.name)).toEqual(['Aspen Test Wealth']);
+  });
+
+  it('leaves Import for the cached firms even if refreshing the list fails', async () => {
+    const answers: Record<string, HttpAnswer> = {
+      '/pipeline/board': { status: 200, body: { columns: [], opportunityIdByFirmId: {}, unplacedFirms: [identity] } },
+    };
+    const { api } = scriptedApi(answers);
+    const bridge = createCrmBridge({ api, clientVersion: '1.0.5', session: session() });
+    await bridge.openPipeline();
+    await bridge.openImport();
+    answers['/pipeline/board'] = { status: 503, body: { error: 'unavailable' } };
+    answers['/pipeline/stages'] = { status: 503, body: { error: 'unavailable' } };
+    const returned = await bridge.openPipeline();
+    expect(returned.screen).toBe('pipeline');
+    expect(returned.pipeline?.unplacedFirms?.map(firm => firm.name)).toEqual(['Aspen Test Wealth']);
+    expect(returned.notice).not.toBeNull();
+  });
+
+  it('does not mark a new preview imported when the previous file finishes late', async () => {
+    let release!: (answer: HttpAnswer) => void;
+    const pending = new Promise<HttpAnswer>(resolve => { release = resolve; });
+    const { api } = scriptedApi({
+      '/pipeline/board': { status: 200, body: { columns: [], opportunityIdByFirmId: {}, unplacedFirms: [] } },
+      '/import/preview': { status: 200, body: preview() },
+      '/import/commit': () => pending,
+    });
+    const bridge = createCrmBridge({ api, clientVersion: '1.0.5', session: session() });
+    await bridge.previewImport({ csv, fileName: 'first.csv' });
+    const committing = bridge.commitImport();
+    await bridge.openPipeline();
+    await bridge.openImport();
+    const second = await bridge.previewImport({ csv: csv.replace('Aspen', 'Second'), fileName: 'second.csv' });
+    release({
+      status: 200,
+      body: {
+        results: [{ rowNumber: 2, status: 'accepted', replayed: false, reason: null, firmId: FIRM_ID, column: null, outcome: 'created' }],
+        counts: { accepted: 1, refused: 0 },
+      },
+    });
+    const after = await committing;
+    expect(after.import?.fileName).toBe('second.csv');
+    expect(after.import?.results).toBeNull();
+    expect(after.import).toEqual(second.import);
+    expect(after.notice).toBeNull();
   });
 });
 
