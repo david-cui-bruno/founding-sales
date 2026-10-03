@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -312,6 +313,46 @@ describe('Cal.com depth, over HTTP', () => {
       payload: { bookingUid: id, attendees: [{ email: world.attendee, noShow: false }] },
     });
     expect((await firmMeetings(world.firmId))[0]?.state).toBe('booked');
+  });
+
+  // ---- a running 1.0.35 session (lane M1, review M1F finding 4) ------------------------
+  it('answers a session opened by 1.0.35 in the shape it parses, and 1.0.36 in the new one', async () => {
+    const world = await firmWithWork();
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T21:00:00.000Z', uid(), world.attendee));
+    const past = uid();
+    const pastTimes = { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' };
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T21:01:00.000Z', past, world.attendee, pastTimes));
+    await calcom(booking('MEETING_ENDED', '2026-09-30T21:02:00.000Z', past, world.attendee, pastTimes));
+    // A session 1.0.35 opened before the minimum moved: the session row keeps its version.
+    const legacyToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
+    await fixture.db.query('UPDATE sessions SET client_version = $2 WHERE access_token_hash = $1', [
+      createHash('sha256').update(legacyToken).digest('hex'),
+      '1.0.35',
+    ]);
+    // What 1.0.35 parses (its contracts before lane M1): strict rows of five states.
+    const oldStates = z.enum(['booked', 'rescheduled', 'cancelled', 'held', 'no_show']);
+    const oldFirmMeetings = z.strictObject({
+      meetings: z.array(z.strictObject({ meetingId: z.string(), state: oldStates, startsAt: z.string(), endsAt: z.string() })),
+    });
+    const oldCard = z.object({ meeting: z.object({ meetingId: z.string(), state: oldStates, startsAt: z.string() }).nullable() });
+
+    const legacy = await get(`/meetings/firm?firmId=${world.firmId}`, legacyToken);
+    expect(legacy.status).toBe(200);
+    expect(oldFirmMeetings.safeParse(legacy.body).success, JSON.stringify(legacy.body)).toBe(true);
+    expect((legacy.body['meetings'] as { state: string }[]).map(row => row.state)).toEqual(['booked', 'booked']);
+    const current = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect((current.body['meetings'] as { state: string }[]).map(row => row.state)).toEqual(['booked', 'ended']);
+    expect(current.body['stageSuggestion']).toMatchObject({ stageKey: 'demo_booked', fromStageKey: 'new' });
+    expect((current.body['meetings'] as Record<string, unknown>[])[1]).toHaveProperty('attendanceSource', null);
+
+    const legacyBoard = await api('/pipeline/board', legacyToken, {});
+    const legacyCard = (legacyBoard.body['cards'] as Record<string, Record<string, unknown>>)[world.firmId];
+    expect(legacyCard).not.toHaveProperty('stageSuggestion');
+    expect(oldCard.safeParse(legacyCard).success, JSON.stringify(legacyCard)).toBe(true);
+    expect(legacyCard?.['meeting']).toMatchObject({ state: 'booked' });
+    const currentBoard = await api('/pipeline/board', salespersonToken, {});
+    const currentCard = (currentBoard.body['cards'] as Record<string, Record<string, unknown>>)[world.firmId];
+    expect(currentCard).toMatchObject({ meeting: { state: 'ended' }, stageSuggestion: { stageKey: 'demo_booked' } });
   });
 
   // ---- no reminder of Callie's own ------------------------------------------------------

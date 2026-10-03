@@ -1,3 +1,4 @@
+import { legacyBoard, readsLegacyMeetings } from './meetingCompat.ts';
 import {
   pipelineBoardRequestSchema,
   createPipelineStageCommandSchema,
@@ -93,10 +94,9 @@ export async function routePipeline(request: ApiRequest, options: RoutingOptions
     // default keeps Lost; the new desktop sends `false` to hide it.
     const filter = pipelineBoardRequestSchema.safeParse(request.body ?? {});
     if (!filter.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    return {
-      status: 200,
-      body: await readPipelineBoardForActor(scoped.context, { includeLost: filter.data.includeLost !== false }),
-    };
+    const board = await readPipelineBoardForActor(scoped.context, { includeLost: filter.data.includeLost !== false });
+    // A session opened by 1.0.35 reads the shape it parses (lane M1, review M1F finding 4).
+    return { status: 200, body: readsLegacyMeetings(deps.principal) ? legacyBoard(board) : board };
   }
 
   switch (request.path) {

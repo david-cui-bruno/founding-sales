@@ -72,9 +72,15 @@ for `manual` only) are set exactly while the state is `held` or `no_show`.
   of those events over a confirmation. Folding duplicate rows keeps a confirmation any of
   them holds, whichever row is newest: a person's beats Cal.com's whatever the timestamps,
   and between two of the same kind the newest wins.
-* **Cal.com's no-show applies only once the start has passed.** A flag on a meeting not yet
-  started records nothing (the delivery's outcome is `ignored`, and the row is not touched);
-  a later delivery, or the reconciliation once the start has passed, applies it.
+* **Cal.com's no-show applies only once the start has passed** — the start the same write
+  leaves, so a successor still holding its predecessor's times is judged by its own. A flag
+  before then is kept, not applied: `calcom_absent_pending` (the delivery's outcome is
+  `ignored`; the state and the event ordering do not move). Once the start has passed, the
+  next delivery of any kind or the next reconciliation run makes the meeting `no_show`
+  (source `calcom_no_show`) — an end becomes `no_show` rather than `ended` — whatever the
+  booking snapshot's freshness, unless a person confirmed it. Cal.com's unmark, a reschedule,
+  a cancellation and a person's confirmation clear it
+  (`meetings_absent_pending_unconfirmed`: only an unconfirmed, live meeting holds one).
 * **A person confirms** with `POST /meetings/attendance { meetingId, attendance }`:
   `attended` → `held`, `no_show` → `no_show` (remembering `ended`), `unconfirmed` → back to
   `ended`. The assignee or an administrator; a meeting matched to a firm
@@ -89,13 +95,20 @@ for `manual` only) are set exactly while the state is `held` or `no_show`.
   [funnel.md](funnel.md)); confirming again reinstates the same row. Nothing is written for
   `ended`. A fold of duplicate rows (the reconciliation's or a reschedule's) leaves exactly one
   counted `meeting.held` for a held survivor — its own uid's first, else the earliest — and none
-  for any other state, withdrawing the rest (`meeting_folded`) in the fold's transaction.
+  for any other state, withdrawing the rest (`meeting_folded`) in the fold's transaction. A
+  fold keeps the firm association (firm, contact, opportunity) of whichever row has one, before
+  the facts are reconciled; two rows matched to different firms are not folded, and a person
+  is asked as for two attendees (`meeting.fold_refused`, reason `firm_conflict`).
 * **The firm page** shows an ended meeting as "Ended · attendance not confirmed" with quiet
   Attended and No-show actions on hover; a person's own Held or No-show has a small Undo. The
   board card says "Ended, not confirmed".
 * **Desktop 1.0.36 is the minimum.** 1.0.35 reads a meeting past its end as `held` and has
   no way to confirm, so the API's client-version minimum is 1.0.36 from this release
-  (`CONTAINER_CLIENT_VERSIONS`): publish desktop 1.0.36 before the API is deployed.
+  (`CONTAINER_CLIENT_VERSIONS`): publish desktop 1.0.36 before the API is deployed. A session
+  opened by an older build keeps reading until it renews, so the meetings and board reads
+  answer it in the shape it parses (`routes/meetingCompat.ts`: no `attendanceSource` or
+  `stageSuggestion`, and `ended` reads `booked`), and its first command's 426 takes the running
+  desktop to "Update now".
 * **M7** (the follow-through engine) gates on confirmed attendance: its hook is where a
   meeting becomes `held` in `meetings/attendance.ts`. M1 schedules nothing.
 * **0039's correction.** Every `held` stored before it came from the scheduled end, so it

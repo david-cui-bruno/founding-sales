@@ -128,6 +128,12 @@ export interface AuthenticatedPrincipal {
   readonly deviceId: string;
   readonly deviceStatus: 'active' | 'revoked';
   readonly sessionId: string;
+  /**
+   * The version the session was opened with (lane M1, review M1F finding 4). Reads carry
+   * no version of their own, so a read answers an older build in the shape it parses.
+   * Absent for a principal not made from a session row.
+   */
+  readonly clientVersion?: string;
 }
 
 export type AuthenticateOutcome =
@@ -144,10 +150,11 @@ interface SessionRow extends QueryResultRowLike {
   readonly device_status: 'active' | 'revoked';
   readonly membership_status: 'active' | 'inactive';
   readonly role: 'admin' | 'salesperson';
+  readonly client_version: string;
 }
 
 const SESSION_WITH_PRINCIPAL = `
-  SELECT s.id, s.user_id, s.device_id, s.status, s.expires_at, s.reauthenticate_after,
+  SELECT s.id, s.user_id, s.device_id, s.status, s.expires_at, s.reauthenticate_after, s.client_version,
          d.status AS device_status,
          m.status AS membership_status,
          m.role
@@ -193,6 +200,7 @@ export async function authenticate(deps: AuthDeps, authorizationHeader: string |
       deviceId: session.device_id,
       deviceStatus: session.device_status,
       sessionId: session.id,
+      clientVersion: session.client_version,
     },
   };
 }

@@ -1,3 +1,4 @@
+import { legacyFirmMeetings, legacyMeeting, readsLegacyMeetings } from './meetingCompat.ts';
 import {
   firmMeetingsResponseSchema,
   matchMeetingCommandSchema,
@@ -80,9 +81,12 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   const scoped = contextForPrincipal(auth, authenticated.principal);
   if (!scoped.ok) return scoped.result;
 
+  // A session opened by 1.0.35 reads the shape it parses (review M1F, finding 4).
+  const legacy = readsLegacyMeetings(authenticated.principal);
   if (request.path === '/meetings/unmatched') {
     const meetings = await listUnmatchedMeetings(scoped.context);
-    return { status: 200, body: unmatchedMeetingsResponseSchema.parse({ meetings }) };
+    const body = unmatchedMeetingsResponseSchema.parse({ meetings });
+    return { status: 200, body: legacy ? { meetings: body.meetings.map(legacyMeeting) } : body };
   }
 
   const firmId = uuid.safeParse(request.query.get('firmId') ?? '');
@@ -90,5 +94,6 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   const meetings = await listFirmMeetings(scoped.context, firmId.data);
   if (meetings === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   const stageSuggestion = await readFirmStageSuggestion(scoped.context, firmId.data);
-  return { status: 200, body: firmMeetingsResponseSchema.parse({ meetings, stageSuggestion }) };
+  const body = firmMeetingsResponseSchema.parse({ meetings, stageSuggestion });
+  return { status: 200, body: legacy ? legacyFirmMeetings(body) : body };
 }
