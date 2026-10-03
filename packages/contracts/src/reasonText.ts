@@ -398,8 +398,17 @@ export const TRANSCRIPTION_REFUSAL_SENTENCES: Readonly<Record<TranscriptionRefus
 });
 
 /** Every map above, for the flat lookup. Shared spellings carry one sentence, so order is immaterial. */
+/**
+ * The prepared-brief import's own word (lane PBM): the server's match answer did not have one
+ * row per row asked, so no row's status can be trusted — never shown as every row unmatched.
+ */
+const PREPARED_BRIEF_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  match_answer_mismatch: 'Callie could not match this file: the server answered for a different number of rows than it was asked about. Choose the file again; if it keeps happening, tell support.',
+});
+
 const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...INTEGRATION_SETTINGS_SENTENCES,
+  ...PREPARED_BRIEF_SENTENCES,
   ...HOLD_REASON_SENTENCES,
   ...DIAL_REFUSAL_SENTENCES,
   ...DIAL_ADVICE_SENTENCES,

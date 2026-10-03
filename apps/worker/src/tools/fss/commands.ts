@@ -92,6 +92,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'release drain off': 'database',
   // Call-to-booking (slice W): the 0028 remap's before-and-after counts, READ ONLY.
   'pipeline stage-counts': 'database',
+  // Lane PBM: whether a CSV import's firms are in a workspace, five counts, READ ONLY.
+  'import-match report': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -339,6 +341,16 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     summary:
       'every workspace\'s stages with their open, won and lost opportunities, pins and 0028 remap moves, in one READ ONLY transaction',
+  },
+  {
+    // Lane PBM: a prepared-brief file previewed as every row unmatched in production, and
+    // production has no read-only SQL path. Counts only: the log is CloudWatch.
+    path: ['admin', 'import-match', 'report'],
+    valueFlags: ['--workspace-id', '--external-id-prefix', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--workspace-id', '--external-id-prefix'],
+    summary:
+      'whether a CSV import\'s firms are in the workspace: active firms, external-id aliases with the prefix (on active and on merged firms) and firms created in the last 7 days, as counts only, in one READ ONLY transaction',
   },
 ]);
 

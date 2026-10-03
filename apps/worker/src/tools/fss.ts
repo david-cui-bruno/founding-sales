@@ -23,6 +23,7 @@ import {
   type AdminOutcome,
   type LaunchIdentity,
 } from './fss/admin.ts';
+import { importMatchReportCommand } from './fss/importMatch.ts';
 import { trialExportCommand } from './fss/trialExport.ts';
 import {
   TOOL_ENVIRONMENT_VARIABLES,
@@ -188,6 +189,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'release drain off': releaseDrainOffCommand,
   // Call-to-booking (slice W): the 0028 remap report.
   'pipeline stage-counts': pipelineStageCountsCommand,
+  // Lane PBM: whether a CSV import's firms are in a workspace, as counts.
+  'import-match report': importMatchReportCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
