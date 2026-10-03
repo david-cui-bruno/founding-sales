@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { meetingBriefResponseSchema, SENDING_STOP_LINE } from '@fss/contracts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
@@ -353,6 +353,42 @@ describe('Cal.com depth, over HTTP', () => {
     const currentBoard = await api('/pipeline/board', salespersonToken, {});
     const currentCard = (currentBoard.body['cards'] as Record<string, Record<string, unknown>>)[world.firmId];
     expect(currentCard).toMatchObject({ meeting: { state: 'ended' }, stageSuggestion: { stageKey: 'demo_booked' } });
+  });
+
+  // ---- the meeting brief (lane M2) --------------------------------------------------------
+  it('stores the booking s details from the webhook and serves the brief to the firm s people only', async () => {
+    const world = await firmWithWork();
+    const id = uid();
+    await calcom(
+      booking('BOOKING_CREATED', '2026-09-30T22:00:00.000Z', id, world.attendee, {
+        title: 'Callie demo between David and Dana Example',
+        additionalNotes: 'Maintenance requests come in by text.',
+        responses: { software: { label: 'Which property management software do you use?', value: 'AppFolio', isHidden: false } },
+        location: 'integrations:zoom',
+        videoCallData: { type: 'zoom_video', id: '81234567890', password: ['Fake', 'Pass'].join(''), url: 'https://us06web.zoom.us/j/81234567890' },
+        attendees: [{ email: world.attendee, name: 'Dana Example' }],
+      }),
+    );
+    const listed = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    const meetingId = String((listed.body['meetings'] as { meetingId: string }[])[0]?.meetingId);
+    const { rows } = await fixture.db.query<{ zoom_meeting_id: string | null; booking_answers: unknown }>(
+      'SELECT zoom_meeting_id, booking_answers FROM meetings WHERE id = $1',
+      [meetingId],
+    );
+    expect(rows[0]).toEqual({ zoom_meeting_id: '81234567890', booking_answers: { 'Which property management software do you use?': 'AppFolio' } });
+
+    const brief = await get(`/meetings/brief?meetingId=${meetingId}`, salespersonToken);
+    expect(brief.status).toBe(200);
+    expect(meetingBriefResponseSchema.safeParse(brief.body).success).toBe(true);
+    expect(brief.body['meeting']).toMatchObject({ title: 'Callie demo between David and Dana Example', attendeeName: 'Dana Example', locationType: 'zoom_video' });
+    const why = (brief.body['sections'] as { whyThisDemo: { items: { text: string }[] } }).whyThisDemo.items.map(entry => entry.text);
+    expect(why).toEqual(['Maintenance requests come in by text.', 'AppFolio']);
+    expect((await get(`/meetings/brief?meetingId=${meetingId}`, adminToken)).status).toBe(200);
+    expect((await get('/meetings/brief?meetingId=nope', salespersonToken)).status).toBe(400);
+    expect((await get(`/meetings/brief?meetingId=${randomUUID()}`, salespersonToken)).status).toBe(404);
+    // A colleague's firm: the same 404.
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [world.firmId, fixture.alpha.admin.userId]);
+    expect((await get(`/meetings/brief?meetingId=${meetingId}`, salespersonToken)).status).toBe(404);
   });
 
   // ---- no reminder of Callie's own ------------------------------------------------------

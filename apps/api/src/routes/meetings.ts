@@ -3,12 +3,14 @@ import {
   firmMeetingsResponseSchema,
   matchMeetingCommandSchema,
   meetingAttendanceSetSchema,
+  meetingBriefResponseSchema,
   meetingMatchedSchema,
   setMeetingAttendanceCommandSchema,
   unmatchedMeetingsResponseSchema,
   uuid,
 } from '@fss/contracts';
 import { setMeetingAttendance } from '@fss/domain/meetings/attendance.ts';
+import { readMeetingBrief } from '@fss/domain/meetings/brief.ts';
 import { listFirmMeetings, listUnmatchedMeetings, matchMeetingToFirm, readFirmStageSuggestion } from '@fss/domain/meetings/match.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
@@ -39,7 +41,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * and a meeting stays on the firm page after the switch is turned off.
  */
 
-export const MEETING_PATHS: readonly string[] = ['/meetings/firm', '/meetings/unmatched', '/meetings/match', '/meetings/attendance'];
+export const MEETING_PATHS: readonly string[] = ['/meetings/firm', '/meetings/unmatched', '/meetings/match', '/meetings/attendance', '/meetings/brief'];
 
 const COMMAND_PATHS: readonly string[] = ['/meetings/match', '/meetings/attendance'];
 
@@ -83,6 +85,15 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
 
   // A session opened by 1.0.35 reads the shape it parses (review M1F, finding 4).
   const legacy = readsLegacyMeetings(authenticated.principal);
+  // Lane M2: the meeting brief, for whoever may read the firm page in full; anyone else, an
+  // unknown meeting and an unmatched one are the same `not_found`.
+  if (request.path === '/meetings/brief') {
+    const meetingId = uuid.safeParse(request.query.get('meetingId') ?? '');
+    if (!meetingId.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const brief = await readMeetingBrief(scoped.context, meetingId.data);
+    if (brief === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+    return { status: 200, body: meetingBriefResponseSchema.parse(brief) };
+  }
   if (request.path === '/meetings/unmatched') {
     const meetings = await listUnmatchedMeetings(scoped.context);
     const body = unmatchedMeetingsResponseSchema.parse({ meetings });
