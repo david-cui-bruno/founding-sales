@@ -1,6 +1,6 @@
 import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmDetailDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
 import { useEffect, useState, type JSX, type ReactNode } from 'react';
-import type { BoardCard } from '@fss/contracts';
+import type { BoardCard, StageSuggestion } from '@fss/contracts';
 import { inWords, shortDay, shortDayTime } from '../dates.ts';
 import type {
   CheckRouteRequest,
@@ -918,6 +918,7 @@ export function FirmPage({
   research = null,
   guard,
   timelinePorts,
+  onApplyStageSuggestion,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -948,6 +949,9 @@ export function FirmPage({
   /** The session's guard, so a timeline page read for a session that ended is dropped. */
   readonly guard?: Generation;
   readonly timelinePorts?: TimelinePorts | null;
+  /** Lane M1: "Move to Demo booked" from the Meetings rows, through the ordinary stage command. */
+  /** Lane M1: told the firm the suggestion was read for, which the command must use. */
+  onApplyStageSuggestion?(suggestion: StageSuggestion, firmId: string): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -980,7 +984,16 @@ export function FirmPage({
       {/* Slice C1: calls placed from Callie, with their recordings. Renders nothing until there is one. */}
       <CallHistory firmId={page.read.firm.id} timeZone={page.read.firm.timeZone} />
       {/* Slice M1: the firm's Cal.com meetings, their state and time. Renders nothing until there is one. */}
-      {variant === 'page' ? <FirmMeetings firmId={page.read.firm.id} /> : null}
+      {variant === 'page' ? (
+        <FirmMeetings
+          firmId={page.read.firm.id}
+          actionsEnabled={actionsEnabled}
+          // The deal's stage: a move made here or anywhere reads the suggestion again.
+          refreshKey={page.visibility === 'assigned_or_admin' ? `${page.opportunity?.id ?? 'none'}:${page.opportunity?.stageKey ?? ''}` : ''}
+          {...(onApplyStageSuggestion === undefined ? {} : { onApplySuggestion: onApplyStageSuggestion })}
+          suggestionBusy={busy('opportunity') || (page.visibility === 'assigned_or_admin' && page.opportunity !== null && busy(`stage:${page.opportunity.id}`))}
+        />
+      ) : null}
     </>
   );
   if (variant === 'panel') {

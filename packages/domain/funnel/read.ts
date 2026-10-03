@@ -71,13 +71,15 @@ export interface FunnelFacts {
 
 /**
  * Every fact the caller may see, in the window. One place the visibility rule is
- * written, as a nullable parameter rather than two query strings.
+ * written, as a nullable parameter rather than two query strings. A withdrawn fact
+ * (lane M1, 0039: `withdrawn_at` set) is never counted.
  */
 const VISIBLE_FACTS = `
   SELECT ff.kind, ff.firm_id
     FROM funnel_facts ff
     LEFT JOIN firms f ON f.workspace_id = ff.workspace_id AND f.id = ff.firm_id
    WHERE ff.workspace_id = $1
+     AND ff.withdrawn_at IS NULL
      AND ff.occurred_at >= $2::timestamptz AND ff.occurred_at < $3::timestamptz
      AND ($4::uuid IS NULL OR (ff.firm_id IS NOT NULL AND f.assigned_user_id = $4::uuid))
 `;

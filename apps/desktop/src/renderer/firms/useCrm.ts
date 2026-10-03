@@ -64,6 +64,11 @@ export interface CrmActions {
   setValue(change: ValueChange, onAnswer?: (notice: string | null) => void): void;
   resolveMerge(resolution: MergeResolution): void;
   openOpportunity(): void;
+  /**
+   * Lane M1: open a firm's deal at a named stage (the "Move to Demo booked" suggestion), for
+   * the firm the suggestion was drawn for (review M1R, finding 2).
+   */
+  openOpportunityAt(firmId: string, stageKey: string): void;
   /** The explicit takeover (P1-1): manual mode with the origin only a person writes. */
   takeOver(reason: string): void;
   /** Name the firm of one held outgoing message (send-path v2, S1 review P1-C). */
@@ -196,6 +201,9 @@ export function useCrm(
       },
       openOpportunity: () => {
         command('opportunity', api => api.command('crm.openOpportunity', {}));
+      },
+      openOpportunityAt: (firmId, stageKey) => {
+        command('opportunity', api => api.command('crm.openOpportunity', { firmId, stageKey }));
       },
       takeOver: reason => {
         command('take-over', api => api.command('crm.takeOver', { reason }));

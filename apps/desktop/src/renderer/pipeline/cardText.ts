@@ -1,5 +1,5 @@
 import type { BoardCard } from '@fss/contracts';
-import { meetingStateWord } from '../meetings/meetingText.ts';
+import { meetingCardWord } from '../meetings/meetingText.ts';
 
 /**
  * The words on a Kanban card (slice K). Pure, so the card's rules are tested without
@@ -84,9 +84,12 @@ export const VALUE_PROBLEMS: Readonly<Record<Extract<ValueParse, { ok: false }>[
   too_large: 'That is more than $1,000,000 a month.',
 };
 
-/** "Booked · Oct 3, 2:00 PM". A state this build does not know reads "Meeting · …" (lane M1, B0). */
+/**
+ * "Booked · Oct 3, 2:00 PM"; "Ended, not confirmed · …" when Cal.com's scheduled end passed and
+ * nobody confirmed who came (lane M1). A state this build does not know reads "Meeting · …".
+ */
 export function meetingLabel(meeting: NonNullable<BoardCard['meeting']>): string {
-  return `${meetingStateWord(meeting.state)} · ${dayTimeOf(meeting.startsAt)}`;
+  return `${meetingCardWord(meeting.state)} · ${dayTimeOf(meeting.startsAt)}`;
 }
 
 /**

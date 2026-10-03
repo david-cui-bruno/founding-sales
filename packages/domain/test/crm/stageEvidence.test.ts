@@ -222,6 +222,7 @@ describe('applyStageEvidence', () => {
       pinned: false,
       nextAction: null,
       closeReason: null,
+      stageSuggestion: null,
     });
   });
 });

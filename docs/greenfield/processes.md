@@ -336,9 +336,10 @@ characters of `[a-z0-9-]`. One READ ONLY transaction, rolled back.
 
 **`fss admin meetings attendance-report`** (lane M1) sizes the attendance correction before
 the release that makes it: Cal.com's `MEETING_ENDED` fires at the scheduled end, so every
-stored `held` came from the clock. One JSON line of counts: `meetingsByState` (all five
-states), `heldEndedInPast`, `heldEndingInFuture`, `noShowBeforeHeld` (`state_before_no_show =
-'held'`), `meetingHeldFacts`, `meetingBookedFacts`, `calcomMeetingEndedApplied` (webhook and
+stored `held` came from the clock. One JSON line of counts: `meetingsByState` (every
+state, `ended` included since 0039), `heldEndedInPast`, `heldEndingInFuture`, `noShowBeforeHeld`
+(`state_before_no_show = 'held'`, none after 0039), `meetingHeldFacts` (live) and
+`meetingHeldFactsWithdrawn`, `meetingBookedFacts` (live), `calcomMeetingEndedApplied` (webhook and
 reconciliation deliveries alike), `meetingsWithBookedEvidence`, and the opportunities that
 `meeting.booked` evidence opened (`opportunitiesOpenedByBookedEvidence`, and the same from the
 audit trail as `…Audited`) or moved (`opportunitiesMovedByBookedEvidence`). No name, e-mail,

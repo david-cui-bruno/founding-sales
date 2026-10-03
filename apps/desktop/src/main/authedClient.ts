@@ -104,7 +104,9 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       options.onConnection?.(true);
-      if (answer.status === 401 || answer.status === 403) {
+      // 426 too (lane M1, review M1F finding 4): a running session whose build the server
+      // no longer admits is refused on its first command, and that is when it learns it.
+      if (answer.status === 401 || answer.status === 403 || answer.status === 426) {
         options.onAuthRefusal?.(refusalOf(answer.body, answer.status), answer.status, startedUnder);
       }
       if (answer.status < 200 || answer.status >= 300) {

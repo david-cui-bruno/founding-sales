@@ -141,6 +141,13 @@ export interface ChangeStageInput {
   /** Required when the target stage is Lost (8.1). */
   readonly reason?: string | undefined;
   readonly commandId?: string | undefined;
+  /**
+   * The stage the person saw the deal at (lane M1, review M1R finding 6). When given and the
+   * deal has since moved elsewhere, the move is refused (`stage_changed_elsewhere`) rather
+   * than applied over a change the person never saw. A deal already at the target is
+   * accepted as it is.
+   */
+  readonly expectedStageKey?: string | undefined;
 }
 
 /**
@@ -170,6 +177,13 @@ export async function changeStage(
   if (stage === null) return refuse('stage_unknown');
   if (stage.retired) return refuse('stage_retired');
   if (stage.id === opportunity.stage_id) return accept(opportunity);
+  if (input.expectedStageKey !== undefined) {
+    const { rows: current } = await context.db.query<{ key: string }>(
+      'SELECT key FROM pipeline_stages WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, opportunity.stage_id],
+    );
+    if (current[0]?.key !== input.expectedStageKey) return refuse('stage_changed_elsewhere');
+  }
 
   const reason = input.reason?.trim();
   if (stage.terminal_kind === 'lost' && (reason === undefined || reason.length === 0)) {

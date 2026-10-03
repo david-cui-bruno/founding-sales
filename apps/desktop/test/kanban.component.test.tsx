@@ -275,6 +275,7 @@ describe('a card', () => {
   it('shows Pinned only for a pinned card, and no evidence line when the API sent none', () => {
     const { unmount } = renderCard({ card: card({ pinned: true }) });
     expect(screen.getByTestId('card-pinned').textContent).toBe('Pinned');
+    expect(screen.getByTestId('card-pinned').getAttribute('title')).toBe('A person placed this card here. Only a person moves it on.');
     expect(screen.queryByTestId('card-evidence')).toBeNull();
     unmount();
     renderCard({ card: card() });

@@ -236,6 +236,8 @@ export interface StageChange {
   readonly toStageKey: string;
   /** Section 8.1: a Lost change requires one. The server enforces it; this sends it. */
   readonly reason: string | null;
+  /** Lane M1: the stage the person saw the deal at; a deal moved since is refused. */
+  readonly expectedStageKey?: string;
 }
 
 export interface MergeResolution {

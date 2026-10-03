@@ -8,6 +8,7 @@ import { nextUnfinishedExecution, readEnrollment } from '@fss/domain/sequences/r
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';
+import { upcoming } from './support/upcoming.ts';
 import {
   INSIDE_CALLING_WINDOW,
   PUBLIC_ORIGIN,
@@ -338,8 +339,9 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
       createdAt: '2026-09-30T16:00:00.000Z',
       payload: {
         uid: 'lenoxdemo1',
-        startTime: '2026-10-06T15:00:00.000Z',
-        endTime: '2026-10-06T15:30:00.000Z',
+        // Upcoming whenever the test runs: the Demo booked suggestion needs a live booking.
+        startTime: upcoming(3, 15),
+        endTime: upcoming(3, 15, 30),
         organizer: { email: 'david@usecallie.example' },
         attendees: [{ email: ATTENDEE, name: 'Dana Example' }],
       },
@@ -350,14 +352,10 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
       `SELECT s.key FROM opportunities o JOIN pipeline_stages s ON s.workspace_id = o.workspace_id AND s.id = o.stage_id WHERE o.id = $1`,
       [opportunityId],
     );
-    expect(stage[0]?.key).toBe('demo_booked');
-    const { rows: evidence } = await fixture.db.query<{ evidence_kind: string; reason: string }>(
-      `SELECT x.evidence_kind, e.reason FROM opportunity_stage_evidence x
-         JOIN opportunity_stage_events e ON e.workspace_id = x.workspace_id AND e.id = x.stage_event_id
-        WHERE x.opportunity_id = $1`,
-      [opportunityId],
-    );
-    expect(evidence).toEqual([{ evidence_kind: 'meeting.booked', reason: 'evidence:meeting.booked' }]);
+    // Lane M1: the booking moves no deal. The board offers the move; a person makes it below.
+    expect(stage[0]?.key).toBe('new');
+    const { rows: evidence } = await fixture.db.query('SELECT 1 FROM opportunity_stage_evidence WHERE opportunity_id = $1', [opportunityId]);
+    expect(evidence).toEqual([]);
     const { rows: states } = await fixture.db.query<{ id: string; state: string }>(
       'SELECT id, state FROM sequence_enrollments WHERE id = ANY($1::uuid[]) ORDER BY id',
       [[followUpEnrollmentId, prospectingId]],
@@ -378,13 +376,26 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     expect(board.status).toBe(200);
     const columns = board.body['columns'] as { stage: { key: string; displayName: string }; firms: { id: string }[] }[];
     expect(columns.map(column => column.stage.displayName)).toEqual(['Interested', 'Demo booked', 'Decision pending', 'Onboarding', 'Live']);
-    expect(columns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('demo_booked');
+    expect(columns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('new');
     const card = (board.body['cards'] as Record<string, Record<string, unknown>>)[firmId];
     expect(card).toMatchObject({
       value: { monthlyCents: 29_900, kind: 'estimated' },
-      meeting: { state: 'booked', startsAt: '2026-10-06T15:00:00.000Z' },
-      evidence: { kind: 'meeting.booked' },
+      meeting: { state: 'booked', startsAt: upcoming(3, 15) },
+      evidence: null,
+      stageSuggestion: { stageKey: 'demo_booked', opportunityId, fromStageKey: 'new' },
     });
+    // The click names the stage it was read at (review M1R, finding 6): a deal that moved
+    // elsewhere since is refused, with its reason, and not moved.
+    const elsewhere = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked', expectedStageKey: 'qualified' }));
+    expect(elsewhere.status, elsewhere.text).toBe(409);
+    expect(elsewhere.body).toMatchObject({ status: 'refused', reason: 'stage_changed_elsewhere' });
+    // The one click: the ordinary stage command. Then the card is in Demo booked, with no suggestion.
+    const moved = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked', expectedStageKey: 'new' }));
+    expect(moved.status, moved.text).toBe(200);
+    const after = await api('/pipeline/board', salespersonToken, { includeLost: false });
+    const afterColumns = after.body['columns'] as { stage: { key: string }; firms: { id: string }[] }[];
+    expect(afterColumns.find(column => column.firms.some(entry => entry.id === firmId))?.stage.key).toBe('demo_booked');
+    expect((after.body['cards'] as Record<string, Record<string, unknown>>)[firmId]).toMatchObject({ stageSuggestion: null });
 
     // ---- the funnel ---------------------------------------------------------------------
     const { rows: facts } = await fixture.db.query<{ kind: string }>(
@@ -558,7 +569,8 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     const { rows } = await fixture.db.query<{ starts_at: Date }>("SELECT starts_at FROM meetings WHERE booking_uid = 'resched1'");
     expect(rows[0]?.starts_at.toISOString()).toBe('2026-10-09T13:00:00.000Z');
 
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:30:00.000Z', 'noshow1'));
+    // A meeting whose start has passed: a mark before the start records nothing (lane M1).
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:30:00.000Z', 'noshow1', { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' }));
     const mark = await calcom({
       triggerEvent: 'BOOKING_NO_SHOW_UPDATED',
       createdAt: '2026-10-07T16:00:00.000Z',

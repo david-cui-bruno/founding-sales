@@ -73,7 +73,7 @@ export function StageWhy({
       </p>
       {manual || card?.pinned === true ? (
         <p data-testid="stage-pinned-note" className="text-xs text-muted-foreground">
-          A person placed this firm here, so automatic moves only go forward from it.
+          A person placed this firm here. Only a person moves it on.
         </p>
       ) : null}
     </div>

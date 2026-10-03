@@ -725,6 +725,12 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     },
 
     async noteAuthRefusal(reason, sessionGeneration) {
+      // A command refused for this build's version (426, lane M1): the running session
+      // goes to "Update now", as an open refused for it would. Nothing is wiped.
+      if (reason === 'client_upgrade_required') {
+        if (sessionGeneration === generation) setRefusedForVersion(true);
+        return;
+      }
       // Only the refusals that mean the registration is over. Everything else a bridge
       // is refused with is the bridge's own notice to show, not a reason to wipe.
       if (!REVOCATIONS.has(reason)) return;

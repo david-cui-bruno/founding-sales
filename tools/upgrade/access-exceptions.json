@@ -22,5 +22,30 @@
       ]
     }
   },
-  "migrations": {}
+  "migrations": {
+    "0039": {
+      "existingTableDeltas": [
+        {
+          "table": "funnel_facts",
+          "role": "app_runtime",
+          "grant": [
+            "UPDATE(withdrawn_at)",
+            "UPDATE(withdrawn_reason)"
+          ],
+          "revoke": [],
+          "why": "Lane M1, the coordinator's decision of 3 October 2026 (option B): a wrong funnel fact is withdrawn rather than removed, so the application may set and clear withdrawn_at and withdrawn_reason and nothing else; DELETE and TRUNCATE stay revoked (0022)."
+        },
+        {
+          "table": "funnel_facts",
+          "role": "migration",
+          "grant": [
+            "UPDATE(withdrawn_at)",
+            "UPDATE(withdrawn_reason)"
+          ],
+          "revoke": [],
+          "why": "Lane M1, the coordinator's decision of 3 October 2026 (option B): a wrong funnel fact is withdrawn rather than removed, so the application may set and clear withdrawn_at and withdrawn_reason and nothing else; DELETE and TRUNCATE stay revoked (0022)."
+        }
+      ]
+    }
+  }
 }

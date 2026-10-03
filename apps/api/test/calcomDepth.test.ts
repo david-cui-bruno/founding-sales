@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -7,6 +8,7 @@ import { issueSessionFor } from './support/sessionFixture.ts';
 import { seedContact, seedFirm, seedFollowUpPermission } from './support/crmSeed.ts';
 import { startIntegrationServer, type IntegrationServer } from './support/integrationServer.ts';
 import { databaseUrlOf } from './support/poolFixture.ts';
+import { upcoming } from './support/upcoming.ts';
 import { CALENDAR_ROUTING_LOCK_NAME } from '@fss/domain/policy/calendarRouting.ts';
 
 /**
@@ -77,8 +79,8 @@ describe('Cal.com depth, over HTTP', () => {
     createdAt,
     payload: {
       uid: bookingUid,
-      startTime: '2026-10-14T15:00:00.000Z',
-      endTime: '2026-10-14T15:30:00.000Z',
+      startTime: upcoming(11, 15),
+      endTime: upcoming(11, 15, 30),
       organizer: { email: 'david@usecallie.example' },
       attendees: [{ email: attendee, name: 'A Partner' }],
       ...extra,
@@ -223,10 +225,13 @@ describe('Cal.com depth, over HTTP', () => {
 
     const matched = await api('/meetings/match', salespersonToken, command({ meetingId: entry?.meetingId, firmId: world.firmId }));
     expect(matched.status, matched.text).toBe(200);
-    expect(resultOf(matched)).toMatchObject({ firmId: world.firmId, state: 'booked', stage: 'moved' });
-    expect(await stageOf(world.opportunityId)).toBe('demo_booked');
+    // Lane M1: a match moves no deal; the firm's meetings offer the move instead.
+    expect(resultOf(matched)).toMatchObject({ firmId: world.firmId, state: 'booked', stage: 'none' });
+    expect(await stageOf(world.opportunityId)).toBe('new');
+    const offered = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect(offered.body['stageSuggestion']).toEqual({ stageKey: 'demo_booked', opportunityId: world.opportunityId, fromStageKey: 'new' });
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: '2026-10-14T15:00:00.000Z' }]);
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: upcoming(11, 15) }]);
     const after = await get('/meetings/unmatched', salespersonToken);
     expect((after.body['meetings'] as { meetingId: string }[]).map(row => row.meetingId)).not.toContain(entry?.meetingId);
 
@@ -250,18 +255,18 @@ describe('Cal.com depth, over HTTP', () => {
     await calcom(
       booking('BOOKING_RESCHEDULED', '2026-09-30T17:20:00.000Z', c, world.attendee, {
         rescheduleUid: b,
-        startTime: '2026-10-16T18:00:00.000Z',
-        endTime: '2026-10-16T18:30:00.000Z',
+        startTime: upcoming(13, 18),
+        endTime: upcoming(13, 18, 30),
       }),
     );
     await calcom(
       booking('BOOKING_RESCHEDULED', '2026-09-30T17:10:00.000Z', b, world.attendee, {
         rescheduleUid: a,
-        startTime: '2026-10-15T18:00:00.000Z',
-        endTime: '2026-10-15T18:30:00.000Z',
+        startTime: upcoming(12, 18),
+        endTime: upcoming(12, 18, 30),
       }),
     );
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: '2026-10-16T18:00:00.000Z' }]);
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: upcoming(13, 18) }]);
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
   });
 
@@ -283,18 +288,19 @@ describe('Cal.com depth, over HTTP', () => {
     expect(Number(live[0]?.count)).toBe(0);
 
     // Booked again, as a new booking.
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:20:00.000Z', second, world.attendee, { startTime: '2026-10-21T15:00:00.000Z', endTime: '2026-10-21T15:30:00.000Z' }));
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:20:00.000Z', second, world.attendee, { startTime: upcoming(18, 15), endTime: upcoming(18, 15, 30) }));
     expect(await firmMeetings(world.firmId)).toEqual([
-      { state: 'booked', startsAt: '2026-10-21T15:00:00.000Z' },
-      { state: 'cancelled', startsAt: '2026-10-14T15:00:00.000Z' },
+      { state: 'booked', startsAt: upcoming(18, 15) },
+      { state: 'cancelled', startsAt: upcoming(11, 15) },
     ]);
-    expect(await stageOf(world.opportunityId)).toBe('demo_booked');
+    expect(await stageOf(world.opportunityId)).toBe('new');
   });
 
   it('marks a no-show and takes it back', async () => {
     const world = await firmWithWork();
     const id = uid();
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T19:00:00.000Z', id, world.attendee));
+    // A meeting whose start has passed: a mark before the start records nothing (lane M1).
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T19:00:00.000Z', id, world.attendee, { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' }));
     await calcom({
       triggerEvent: 'BOOKING_NO_SHOW_UPDATED',
       createdAt: '2026-10-14T16:00:00.000Z',
@@ -309,6 +315,46 @@ describe('Cal.com depth, over HTTP', () => {
     expect((await firmMeetings(world.firmId))[0]?.state).toBe('booked');
   });
 
+  // ---- a running 1.0.35 session (lane M1, review M1F finding 4) ------------------------
+  it('answers a session opened by 1.0.35 in the shape it parses, and 1.0.36 in the new one', async () => {
+    const world = await firmWithWork();
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T21:00:00.000Z', uid(), world.attendee));
+    const past = uid();
+    const pastTimes = { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' };
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T21:01:00.000Z', past, world.attendee, pastTimes));
+    await calcom(booking('MEETING_ENDED', '2026-09-30T21:02:00.000Z', past, world.attendee, pastTimes));
+    // A session 1.0.35 opened before the minimum moved: the session row keeps its version.
+    const legacyToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
+    await fixture.db.query('UPDATE sessions SET client_version = $2 WHERE access_token_hash = $1', [
+      createHash('sha256').update(legacyToken).digest('hex'),
+      '1.0.35',
+    ]);
+    // What 1.0.35 parses (its contracts before lane M1): strict rows of five states.
+    const oldStates = z.enum(['booked', 'rescheduled', 'cancelled', 'held', 'no_show']);
+    const oldFirmMeetings = z.strictObject({
+      meetings: z.array(z.strictObject({ meetingId: z.string(), state: oldStates, startsAt: z.string(), endsAt: z.string() })),
+    });
+    const oldCard = z.object({ meeting: z.object({ meetingId: z.string(), state: oldStates, startsAt: z.string() }).nullable() });
+
+    const legacy = await get(`/meetings/firm?firmId=${world.firmId}`, legacyToken);
+    expect(legacy.status).toBe(200);
+    expect(oldFirmMeetings.safeParse(legacy.body).success, JSON.stringify(legacy.body)).toBe(true);
+    expect((legacy.body['meetings'] as { state: string }[]).map(row => row.state)).toEqual(['booked', 'booked']);
+    const current = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect((current.body['meetings'] as { state: string }[]).map(row => row.state)).toEqual(['booked', 'ended']);
+    expect(current.body['stageSuggestion']).toMatchObject({ stageKey: 'demo_booked', fromStageKey: 'new' });
+    expect((current.body['meetings'] as Record<string, unknown>[])[1]).toHaveProperty('attendanceSource', null);
+
+    const legacyBoard = await api('/pipeline/board', legacyToken, {});
+    const legacyCard = (legacyBoard.body['cards'] as Record<string, Record<string, unknown>>)[world.firmId];
+    expect(legacyCard).not.toHaveProperty('stageSuggestion');
+    expect(oldCard.safeParse(legacyCard).success, JSON.stringify(legacyCard)).toBe(true);
+    expect(legacyCard?.['meeting']).toMatchObject({ state: 'booked' });
+    const currentBoard = await api('/pipeline/board', salespersonToken, {});
+    const currentCard = (currentBoard.body['cards'] as Record<string, Record<string, unknown>>)[world.firmId];
+    expect(currentCard).toMatchObject({ meeting: { state: 'ended' }, stageSuggestion: { stageKey: 'demo_booked' } });
+  });
+
   // ---- no reminder of Callie's own ------------------------------------------------------
   it('enqueues no e-mail, no step and no job for the attendee on a booking or a reschedule', async () => {
     const world = await firmWithWork();
@@ -318,8 +364,8 @@ describe('Cal.com depth, over HTTP', () => {
     const since = clock[0]?.at ?? '';
     const [a, b] = [uid(), uid()];
     await calcom(booking('BOOKING_CREATED', '2026-09-30T20:00:00.000Z', a, world.attendee));
-    await calcom(booking('BOOKING_RESCHEDULED', '2026-09-30T20:10:00.000Z', b, world.attendee, { rescheduleUid: a, startTime: '2026-10-22T15:00:00.000Z', endTime: '2026-10-22T15:30:00.000Z' }));
-    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: '2026-10-22T15:00:00.000Z' }]);
+    await calcom(booking('BOOKING_RESCHEDULED', '2026-09-30T20:10:00.000Z', b, world.attendee, { rescheduleUid: a, startTime: upcoming(19, 15), endTime: upcoming(19, 15, 30) }));
+    expect(await firmMeetings(world.firmId)).toEqual([{ state: 'rescheduled', startsAt: upcoming(19, 15) }]);
 
     // By identity: nothing addressed to, about, or queued for the person who booked.
     const { rows: outbound } = await fixture.db.query<{ id: string }>(
@@ -347,6 +393,48 @@ describe('Cal.com depth, over HTTP', () => {
       [world.firmId, since],
     );
     expect(enrollments).toEqual([]);
+  });
+
+  // ---- lane M1: attendance, confirmed by a person -------------------------------------
+  it('confirms attendance over HTTP: ended by Cal.com, attended by the assignee, replayed by command id, undone, refused for a colleague', async () => {
+    const world = await firmWithWork();
+    const id = uid();
+    const past = { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' };
+    await calcom(booking('BOOKING_CREATED', '2026-09-28T12:00:00.000Z', id, world.attendee, past));
+    expect(await calcom(booking('MEETING_ENDED', '2026-09-29T15:30:00.000Z', id, world.attendee, past))).toMatchObject({ meetingState: 'ended' });
+    const listed = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    const meeting = (listed.body['meetings'] as { meetingId: string; state: string; attendanceSource: string | null }[]).find(row => row.state === 'ended');
+    expect(meeting).toMatchObject({ attendanceSource: null });
+    const meetingId = meeting?.meetingId;
+
+    const body = command({ meetingId, attendance: 'attended' });
+    const first = await api('/meetings/attendance', salespersonToken, body);
+    expect(first.status, first.text).toBe(200);
+    expect(resultOf(first)).toEqual({ meetingId, state: 'held', attendanceSource: 'manual' });
+    // The same command id answers what it answered, and writes nothing twice.
+    const replay = await api('/meetings/attendance', salespersonToken, body);
+    expect(replay.status).toBe(200);
+    expect(resultOf(replay)).toEqual(resultOf(first));
+    const { rows: facts } = await fixture.db.query("SELECT 1 FROM funnel_facts WHERE kind = 'meeting.held' AND dedupe_key = $1", [id]);
+    expect(facts).toHaveLength(1);
+    const read = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
+    expect((read.body['meetings'] as { meetingId: string; state: string; attendanceSource: string | null }[]).find(row => row.meetingId === meetingId)).toMatchObject({
+      state: 'held',
+      attendanceSource: 'manual',
+    });
+
+    const undone = await api('/meetings/attendance', salespersonToken, command({ meetingId, attendance: 'unconfirmed' }));
+    expect(resultOf(undone)).toEqual({ meetingId, state: 'ended', attendanceSource: null });
+
+    // A colleague's firm: refused with its reason, which has a sentence.
+    const other = await seedFirm(fixture, { name: 'Attendance Elsewhere Law', assignedUserId: fixture.alpha.admin.userId, website: 'https://www.attendance-elsewhere.example/' });
+    const theirs = uid();
+    await calcom(booking('BOOKING_CREATED', '2026-09-28T12:00:00.000Z', theirs, 'partner@attendance-elsewhere.example', past));
+    const { rows } = await fixture.db.query<{ id: string }>('SELECT id FROM meetings WHERE firm_id = $1', [other]);
+    const refused = await api('/meetings/attendance', salespersonToken, command({ meetingId: rows[0]?.id, attendance: 'attended' }));
+    expect(refused).toMatchObject({ status: 409, body: { reason: 'not_assigned' } });
+    // A malformed choice is refused before anything runs.
+    expect((await api('/meetings/attendance', salespersonToken, command({ meetingId, attendance: 'maybe' }))).status).toBe(400);
   });
 
   // ---- review fold 3: the routing lock, SHARED for deliveries ------------------------

@@ -3,7 +3,7 @@ import type { CrmRefusalCode } from './crm.ts';
 import type { DialRefusalCode } from './dial.ts';
 import type { GrantRefusalCode } from './mail.ts';
 import type { HoldReasonCode } from './reasonCodes.ts';
-import type { MeetingMatchRefusalCode } from './meetings.ts';
+import type { MeetingAttendanceRefusalCode, MeetingMatchRefusalCode } from './meetings.ts';
 import type { TranscriptionRefusalCode } from './callSessions.ts';
 import type { RESEARCH_REFUSAL_CODES } from './research.ts';
 
@@ -157,6 +157,7 @@ export const CRM_REFUSAL_SENTENCES: Readonly<Record<CrmRefusalCode, string>> = O
   assignee_unknown: 'Callie cannot find that person to assign the firm to. Choose someone else.',
   stage_unknown: 'That stage does not exist. Choose one from the list.',
   stage_retired: 'That stage was retired. Choose an active stage.',
+  stage_changed_elsewhere: 'This deal moved to another stage since the page was drawn. Nothing was changed.',
   stage_key_exists: 'A stage with that name already exists. Choose another name.',
   stage_terminal: 'Won and Lost are fixed stages and cannot be changed this way.',
   stage_last_active: 'This is the last active stage, and deals need somewhere to start. Add another stage first.',
@@ -384,6 +385,23 @@ export const MEETING_MATCH_REFUSAL_SENTENCES: Readonly<Record<MeetingMatchRefusa
 });
 
 // ---------------------------------------------------------------------------
+// Lane M1: confirming a meeting's attendance (`POST /meetings/attendance`)
+// ---------------------------------------------------------------------------
+
+export const MEETING_ATTENDANCE_REFUSAL_SENTENCES: Readonly<Record<MeetingAttendanceRefusalCode, string>> = Object.freeze({
+  meeting_unknown: 'Callie cannot find that meeting any more. Refresh the firm.',
+  meeting_unmatched: 'That booking is not attached to a firm yet. Match it first, then confirm who came.',
+  meeting_cancelled: 'That meeting was cancelled, so there is no attendance to confirm.',
+  meeting_not_started: 'That meeting has not started yet. Confirm who came once it has.',
+  attendance_from_calcom: 'Cal.com marked this a no-show. Change it in Cal.com, or choose Attended here.',
+  attendance_from_recording: 'The recording confirmed this attendance, so there is nothing of yours to undo.',
+  firm_unknown: FIRM_UNKNOWN,
+  firm_merged: FIRM_MERGED,
+  not_assigned: NOT_ASSIGNED,
+  invalid_input: INVALID_INPUT,
+});
+
+// ---------------------------------------------------------------------------
 // Slice C2: call transcription (the job's refusals and the transcript read)
 // ---------------------------------------------------------------------------
 
@@ -423,6 +441,7 @@ const ALL_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
   ...STAGE_REVIEW_SENTENCES,
   ...MAILBOX_DETAIL_SENTENCES,
   ...MEETING_MATCH_REFUSAL_SENTENCES,
+  ...MEETING_ATTENDANCE_REFUSAL_SENTENCES,
   ...TRANSCRIPTION_REFUSAL_SENTENCES,
 });
 

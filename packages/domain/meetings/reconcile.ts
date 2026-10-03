@@ -6,7 +6,8 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {
   aliasMeeting,
-  attendeesConflict,
+  applyPendingAbsence,
+  foldConflict,
   foldMeetings,
   MEETING_COLUMNS,
   openAttendeeConflict,
@@ -248,6 +249,8 @@ export interface ReconcileCounts {
 export interface StoredMeeting {
   readonly id: string;
   readonly state: MeetingState;
+  /** Lane M1 (0039): how attendance was confirmed, null while unconfirmed. */
+  readonly attendance_source?: string | null;
   readonly current_booking_uid: string;
   readonly starts_at: Date;
   readonly ends_at: Date;
@@ -286,8 +289,9 @@ async function unifyChain(context: RepositoryContext, uids: readonly string[]): 
   const survivorId = [...found].sort((left, right) => Number(left.position) - Number(right.position))[0]?.id;
   const survivor = rows.find(row => row.id === survivorId) ?? rows[0];
   if (survivor === undefined) return null;
-  if (rows.length > 1 && attendeesConflict(rows)) {
-    return (await openAttendeeConflict(context, rows)) ? 'conflict' : 'conflict_unrecorded';
+  const conflict = rows.length > 1 ? foldConflict(rows) : null;
+  if (conflict !== null) {
+    return (await openAttendeeConflict(context, rows, conflict)) ? 'conflict' : 'conflict_unrecorded';
   }
   const meeting = rows.length === 1 ? survivor : await foldMeetings(context, rows, survivor.id);
   await aliasMeeting(context, meeting.id, uids);
@@ -388,7 +392,7 @@ const plusOne = (instant: string): string => new Date(Date.parse(instant) + 1).t
  *     older than the meeting's last applied event, about the meeting's current booking
  *     (review fold 1, finding 2). An end is dated at the later of the booking's `end` and
  *     just after the meeting's last event, so a meeting whose no-show mark was reversed
- *     after its end still converges to held (finding 5).
+ *     after its end still converges to `ended` (finding 5; lane M1: an end is never `held`).
  */
 export function planChain(chain: BookingChain, meeting: StoredMeeting | null, now: string): readonly PlannedEvent[] {
   const tailUid = chain.uids[chain.uids.length - 1] ?? '';
@@ -447,6 +451,8 @@ export function planChain(chain: BookingChain, meeting: StoredMeeting | null, no
     }
     if (movedAway) return events;
     if (tail.status === 'cancelled') {
+      // A cancellation does not overwrite a confirmation (lane M1), so none is planned.
+      if (state === 'held' || state === 'no_show') return events;
       events.push({ trigger: 'BOOKING_CANCELLED', booking: tail, rescheduleUid: null, instant: instantOfBooking(tail), noShow: null });
       return events;
     }
@@ -462,9 +468,16 @@ export function planChain(chain: BookingChain, meeting: StoredMeeting | null, no
   }
 
   if (tail.status !== 'accepted' || !fresh) return events;
-  if (tail.anyAttendeeAbsent && state !== 'no_show') {
+  // Lane M1: the flag never replaces a confirmation, and its unmark undoes only Cal.com's
+  // own mark (`calcom.ts` refuses both too); planning them would only re-synthesize, every
+  // run, an event that changes nothing. A reconciled end is `ended`, never `held`. A flag on
+  // a booking whose start has not passed is not yet a fact (review M1R, finding 7): nothing
+  // is planned, and a later run plans it once the start has passed.
+  const calcomNoShow = state === 'no_show' && (meeting === null || meeting.attendance_source === 'calcom_no_show');
+  const started = Date.parse(tail.start) <= Date.parse(now);
+  if (tail.anyAttendeeAbsent && started && state !== 'no_show' && state !== 'held') {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: true });
-  } else if (!tail.anyAttendeeAbsent && state === 'no_show') {
+  } else if (!tail.anyAttendeeAbsent && calcomNoShow) {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: false });
   } else if (!tail.anyAttendeeAbsent && (state === 'booked' || state === 'rescheduled') && Date.parse(tail.end) <= Date.parse(now)) {
     events.push({ trigger: 'MEETING_ENDED', booking: tail, rescheduleUid: null, instant: later(tail.end, plusOne(lastEventAt)), noShow: null });
@@ -527,6 +540,7 @@ async function recordSuccessor(
     `UPDATE meetings
         SET current_booking_uid = $3,
             state = CASE WHEN state IN ('held', 'no_show') THEN state ELSE 'rescheduled' END,
+            calcom_absent_pending = false,
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND current_booking_uid = $4 AND state <> 'cancelled'`,
     [context.scope.workspaceId, meeting.id, chain.successor, tail.uid],
@@ -534,6 +548,15 @@ async function recordSuccessor(
   if (rowCount === null || rowCount === 0) return false;
   await aliasMeeting(context, meeting.id, [chain.successor]);
   return true;
+}
+
+/** The meeting's deferred absence, read fresh: an event or a link may have just changed it. */
+async function applyPendingAbsenceOf(context: RepositoryContext, meetingId: string): Promise<void> {
+  const { rows } = await context.db.query<{ calcom_absent_pending: boolean }>(
+    'SELECT calcom_absent_pending FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+    [context.scope.workspaceId, meetingId],
+  );
+  if (rows[0]?.calcom_absent_pending === true) await applyPendingAbsence(context, { id: meetingId, calcom_absent_pending: true });
 }
 
 /**
@@ -596,6 +619,9 @@ export async function reconcileCalcomBookings(
     if (planned.length === 0) {
       if (meeting !== null && chain.successor !== null && (await recordSuccessor(context, meeting, chain, tail))) counts.successors += 1;
       else counts.unchanged += 1;
+      // A deferred Cal.com absence whose start has passed, whatever this snapshot's
+      // freshness (review M1F, finding 2).
+      if (meeting !== null) await applyPendingAbsenceOf(context, meeting.id);
       continue;
     }
     for (const event of planned) {
@@ -627,7 +653,10 @@ export async function reconcileCalcomBookings(
     if (after === 'conflict' || after === 'conflict_unrecorded') {
       counts.conflicted += 1;
       if (after === 'conflict_unrecorded') counts.conflictsUnrecorded += 1;
-    } else if (after !== null && chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
+    } else if (after !== null) {
+      if (chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
+      await applyPendingAbsenceOf(context, after.id);
+    }
   }
   if (counts.synthesized > 0) {
     await recordCrmAuditEvent(context, {

@@ -141,6 +141,38 @@ describe('append-only privileges', () => {
     await expect(migration.query('TRUNCATE funnel_facts')).rejects.toMatchObject({ code: '42501' });
   });
 
+  /**
+   * Lane M1 (0039): a wrong fact is withdrawn, never removed. UPDATE is granted on exactly
+   * three columns — 0022's `detail`, and `withdrawn_at` and `withdrawn_reason` — to both roles,
+   * and DELETE stays revoked; the matrices above still hold for every other column.
+   */
+  it('grants UPDATE on funnel_facts for detail and the withdrawal marker only, to both roles', async () => {
+    const { rows } = await database.session.query<{ grantee: string; column_name: string }>(
+      `SELECT grantee, column_name FROM information_schema.column_privileges
+        WHERE table_name = 'funnel_facts' AND privilege_type = 'UPDATE' AND grantee IN ('app_runtime', 'migration')
+        ORDER BY grantee, column_name`,
+    );
+    expect(rows).toEqual([
+      { grantee: 'app_runtime', column_name: 'detail' },
+      { grantee: 'app_runtime', column_name: 'withdrawn_at' },
+      { grantee: 'app_runtime', column_name: 'withdrawn_reason' },
+      { grantee: 'migration', column_name: 'detail' },
+      { grantee: 'migration', column_name: 'withdrawn_at' },
+      { grantee: 'migration', column_name: 'withdrawn_reason' },
+    ]);
+
+    await database.session.query(
+      `INSERT INTO funnel_facts (workspace_id, kind, dedupe_key, source, actor_kind)
+       VALUES ($1, 'meeting.held', 'privilege-case-0039', 'calendar', 'system')`,
+      [seeded.alpha.workspaceId],
+    );
+    await runtime.query(
+      "UPDATE funnel_facts SET withdrawn_at = now(), withdrawn_reason = 'attendance_unconfirmed' WHERE dedupe_key = 'privilege-case-0039'",
+    );
+    await runtime.query("UPDATE funnel_facts SET withdrawn_at = NULL, withdrawn_reason = NULL WHERE dedupe_key = 'privilege-case-0039'");
+    await expect(runtime.query("DELETE FROM funnel_facts WHERE dedupe_key = 'privilege-case-0039'")).rejects.toMatchObject({ code: '42501' });
+  });
+
   it('refuses writes to the hold reason-code reference table as app_runtime', async () => {
     await expect(
       runtime.query("INSERT INTO hold_reason_codes (code, description, recoverable) VALUES ('invented', 'x', true)"),

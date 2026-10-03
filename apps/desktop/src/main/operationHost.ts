@@ -12,6 +12,7 @@ import {
   firmBasicsRefusalSchema,
   firmBasicsResultSchema,
   firmMeetingsResponseSchema,
+  meetingAttendanceSetSchema,
   loggedCallResultSchema,
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
@@ -169,7 +170,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'crm.changeStage': async (input: Parameters<CrmBridgeHost['changeStage']>[0]) => await deps.crm.changeStage(input),
     'crm.setValue': async (input: Parameters<CrmBridgeHost['setValue']>[0]) => await deps.crm.setValue(input),
     'crm.resolveMerge': async (input: Parameters<CrmBridgeHost['resolveMerge']>[0]) => await deps.crm.resolveMerge(input),
-    'crm.openOpportunity': async () => await deps.crm.openOpportunity(),
+    'crm.openOpportunity': async (input: OperationInput<'crm.openOpportunity'>) => await deps.crm.openOpportunity(input),
     'crm.takeOver': async input => await deps.crm.takeOver(input),
     'crm.resolveOutgoing': async (input: Parameters<CrmBridgeHost['resolveOutgoing']>[0]) =>
       await deps.crm.resolveOutgoing(input),
@@ -347,7 +348,15 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       const answer = await deps.api.read(`/meetings/firm?firmId=${encodeURIComponent(input.firmId)}`, value =>
         firmMeetingsResponseSchema.parse(value),
       );
-      return { meetings: answer.ok ? answer.value.meetings : null };
+      return answer.ok
+        ? { meetings: answer.value.meetings, stageSuggestion: answer.value.stageSuggestion ?? null }
+        : { meetings: null, stageSuggestion: null };
+    },
+    // Lane M1: attendance, under the renderer's command id (a retry is the same command).
+    'meetings.setAttendance': async (input: OperationInput<'meetings.setAttendance'>) => {
+      const { commandId, ...body } = input;
+      const answer = await deps.api.command('/meetings/attendance', body, value => meetingAttendanceSetSchema.parse(value), { commandId });
+      return answer.ok ? { set: answer.value, reason: null } : { set: null, reason: answer.reason.slice(0, 80) };
     },
     'meetings.unmatched': async () => {
       const answer = await deps.api.read('/meetings/unmatched', value => unmatchedMeetingsResponseSchema.parse(value));

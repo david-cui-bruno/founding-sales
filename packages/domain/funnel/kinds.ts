@@ -37,7 +37,7 @@ export const FUNNEL_FACT_KINDS = [
   'call.engaged',
   /** Call-to-booking (Cal.com). A meeting was booked. Key: the original booking uid. */
   'meeting.booked',
-  /** Call-to-booking (Cal.com). The meeting ended. Key: the original booking uid. */
+  /** Lane M1: attendance confirmed (never Cal.com's scheduled end). Key: the original booking uid; dated at the meeting's start. */
   'meeting.held',
   /** W (warm mail). A warm message was sent. Key: the outbound message id. */
   'mail.warm_sent',

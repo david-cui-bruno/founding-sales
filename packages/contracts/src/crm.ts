@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
-import { meetingStateWireSchema } from './meetings.ts';
+import { meetingStateWireSchema, stageSuggestionSchema } from './meetings.ts';
 
 /**
  * The wire contract of the CRM (specification 7.2, 7.3, 8.1, 9.1, 14.1, Appendix F).
@@ -45,6 +45,9 @@ export const CRM_REFUSAL_CODES = [
   'assignee_unknown',
   'stage_unknown',
   'stage_retired',
+  // A stage move that names the stage the person saw (`expectedStageKey`), when the deal
+  // has moved elsewhere since (lane M1): nothing is moved, and the page reads again.
+  'stage_changed_elsewhere',
   // Stage administration (8.1: "rename, reorder, add, or retire *nonterminal*
   // stages"). `stage_terminal` is the refusal all four verbs give for Won and Lost;
   // `stage_last_active` refuses retiring the only stage a reopen could start at.
@@ -255,6 +258,8 @@ export const changeStageCommandSchema = z.strictObject({
   toStageKey: z.string().max(40),
   /** Required when the target stage is Lost (8.1). */
   reason: reasonSchema.optional(),
+  /** The stage the deal was at when the person chose the move (lane M1); refused if it moved. */
+  expectedStageKey: z.string().max(40).optional(),
 });
 
 /**
@@ -331,6 +336,8 @@ export const boardCardSchema = z.object({
     .optional(),
   /** Why a Lost opportunity was lost (slice K). Optional so older answers parse. */
   closeReason: z.string().nullable().optional(),
+  /** Lane M1: "Move to Demo booked" for a live booking, one click. Optional so older answers parse. */
+  stageSuggestion: stageSuggestionSchema.nullable().optional(),
 });
 export type BoardCard = z.infer<typeof boardCardSchema>;
 

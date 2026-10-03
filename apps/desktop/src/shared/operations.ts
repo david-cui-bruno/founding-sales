@@ -26,7 +26,10 @@ import {
   firmBasicsIssueSchema,
   TODAY_CARD_BLOCKERS,
   instant,
+  meetingAttendanceSetSchema,
+  MEETING_ATTENDANCE_CHOICES,
   meetingMatchedSchema,
+  stageSuggestionSchema,
   unmatchedMeetingDtoSchema,
   uuid,
 } from '@fss/contracts';
@@ -318,6 +321,11 @@ const stageChangeInput = z.strictObject({
   toStageKey: z.string().min(1).max(80),
   /** Section 8.1: a Lost change requires one. The server enforces it; this sends it. */
   reason: z.string().max(500).nullable(),
+  /**
+   * Lane M1: the stage the person saw the deal at, sent by the one-click suggestion; a deal
+   * moved elsewhere since is refused (`stage_changed_elsewhere`) rather than moved.
+   */
+  expectedStageKey: z.string().min(1).max(40).optional(),
 });
 
 const mergeResolutionInput = z.strictObject({
@@ -1097,9 +1105,16 @@ export const OPERATIONS = {
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
     ],
-    input: nothing,
+    // Lane M1: `stageKey` opens it at "Demo booked" from the firm's one-click suggestion, for
+    // `firmId`, the firm whose suggestion was drawn (review M1R, finding 2): a stage always
+    // names its firm, so the open never lands on whichever page the bridge read last.
+    input: z
+      .strictObject({ firmId: uuid.optional(), stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u).optional() })
+      .refine(input => input.stageKey === undefined || input.firmId !== undefined, {
+        message: 'a stage names the firm it opens for',
+      }),
     output: crmStateSchema,
-    transform: 'the open firm page\u2019s own id, never the window\u2019s word for it',
+    transform: 'the open firm page\u2019s own id; with a stage, the firm the window drew the suggestion for (lane M1: the page the bridge read last may be another firm\u2019s, and the server decides who may open one); the stage it opens at, when one is named',
   },
   'crm.takeOver': {
     kind: 'command',
@@ -1525,8 +1540,9 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/firm?firmId={uuid}' }],
     input: z.strictObject({ firmId: uuid }),
-    output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable() }),
-    transform: 'none: the firm’s meetings with their state and time, or null when the read did not answer',
+    output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable(), stageSuggestion: stageSuggestionSchema.nullable() }),
+    transform:
+      'none: the firm’s meetings with their state, time and how attendance was confirmed, and the one-click stage move a live booking suggests (lane M1); meetings null when the read did not answer',
   },
   'meetings.unmatched': {
     kind: 'read',
@@ -1541,6 +1557,14 @@ export const OPERATIONS = {
     input: z.strictObject({ meetingId: uuid, firmId: uuid }),
     output: z.strictObject({ matched: meetingMatchedSchema.nullable(), reason: z.string().max(80).nullable() }),
     transform: 'none: the match, or the refusal code the window turns into a sentence',
+  },
+  'meetings.setAttendance': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/meetings/attendance' }],
+    input: z.strictObject({ meetingId: uuid, attendance: z.enum(MEETING_ATTENDANCE_CHOICES), commandId: uuid }),
+    output: z.strictObject({ set: meetingAttendanceSetSchema.nullable(), reason: z.string().max(80).nullable() }),
+    transform:
+      'lane M1: Attended, No-show or Undo for one meeting under the renderer’s own command id, so a retry is answered from its receipt; a refusal’s code is the reason',
   },
 
   // --- Slice S2: the firm's calling basics, and an incoming call ----------------

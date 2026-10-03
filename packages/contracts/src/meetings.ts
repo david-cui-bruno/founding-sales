@@ -9,8 +9,17 @@ import { instant, uuid } from './foundationRows.ts';
  * CRM records the booking's state and moves the pipeline on it.
  */
 
-export const MEETING_STATES = ['booked', 'rescheduled', 'cancelled', 'held', 'no_show'] as const;
+/**
+ * `ended` (lane M1, migration 0039): the scheduled end passed and nobody has confirmed who
+ * came — what Cal.com's `MEETING_ENDED` means. `held` is confirmed attendance only, and
+ * `no_show` confirmed absence (Cal.com's no-show flag, or a person).
+ */
+export const MEETING_STATES = ['booked', 'rescheduled', 'cancelled', 'ended', 'held', 'no_show'] as const;
 export type MeetingState = (typeof MEETING_STATES)[number];
+
+/** How attendance was confirmed (0039). Null on a meeting while it is unconfirmed. */
+export const MEETING_ATTENDANCE_SOURCES = ['manual', 'calcom_no_show', 'recording'] as const;
+export type MeetingAttendanceSource = (typeof MEETING_ATTENDANCE_SOURCES)[number];
 
 /**
  * A meeting state as a READER accepts it (lane M1, B0): one of `MEETING_STATES`, or a state
@@ -80,6 +89,12 @@ export type FirmMeetingDto = z.infer<typeof firmMeetingDtoSchema>;
 export const stageSuggestionSchema = z.object({
   stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u),
   opportunityId: uuid.nullable(),
+  /**
+   * The stage the deal was at when this was read, null with no deal (review M1R finding 6):
+   * the click sends it as `expectedStageKey`, so a deal moved since is refused, not moved.
+   * Optional: a server without it is answered by the move's own checks.
+   */
+  fromStageKey: z.string().max(40).nullable().optional(),
 });
 export type StageSuggestion = z.infer<typeof stageSuggestionSchema>;
 
@@ -135,3 +150,43 @@ export const meetingMatchedSchema = z.strictObject({
   stage: z.enum(['moved', 'opened', 'unchanged', 'review', 'none']),
 });
 export type MeetingMatched = z.infer<typeof meetingMatchedSchema>;
+
+// ---------------------------------------------------------------------------
+// Lane M1: a person confirms attendance (`POST /meetings/attendance`).
+// ---------------------------------------------------------------------------
+
+/**
+ * `attended` → `held`; `no_show` → `no_show`; `unconfirmed` undoes a person's confirmation,
+ * back to `ended`. Never a Cal.com no-show: that is refused with its own reason.
+ */
+export const MEETING_ATTENDANCE_CHOICES = ['attended', 'no_show', 'unconfirmed'] as const;
+export type MeetingAttendanceChoice = (typeof MEETING_ATTENDANCE_CHOICES)[number];
+
+export const setMeetingAttendanceCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  meetingId: uuid,
+  attendance: z.enum(MEETING_ATTENDANCE_CHOICES),
+});
+
+/** What `POST /meetings/attendance` may refuse with. Each has a sentence in `reasonText.ts`. */
+export const MEETING_ATTENDANCE_REFUSAL_CODES = [
+  'meeting_unknown',
+  'meeting_unmatched',
+  'meeting_cancelled',
+  'meeting_not_started',
+  'attendance_from_calcom',
+  'attendance_from_recording',
+  'firm_unknown',
+  'firm_merged',
+  'not_assigned',
+  'invalid_input',
+] as const;
+export type MeetingAttendanceRefusalCode = (typeof MEETING_ATTENDANCE_REFUSAL_CODES)[number];
+
+export const meetingAttendanceSetSchema = z.strictObject({
+  meetingId: uuid,
+  state: meetingStateWireSchema,
+  attendanceSource: meetingStateWireSchema.nullable(),
+});
+export type MeetingAttendanceSet = z.infer<typeof meetingAttendanceSetSchema>;

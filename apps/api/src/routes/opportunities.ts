@@ -64,6 +64,7 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
           toStageKey: body.toStageKey,
           reason: body.reason,
           commandId: body.commandId,
+          expectedStageKey: body.expectedStageKey,
         }),
       );
     case '/opportunities/value':

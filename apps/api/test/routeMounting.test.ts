@@ -115,6 +115,7 @@ describe('what the API mounts', () => {
       '/integrations/twilio/recording',
       '/integrations/twilio/status',
       '/integrations/twilio/voice',
+      '/meetings/attendance',
       '/meetings/firm',
       '/meetings/match',
       '/meetings/unmatched',

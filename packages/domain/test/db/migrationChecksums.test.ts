@@ -83,6 +83,7 @@ const APPLIED: readonly (readonly [number, string, string])[] = [
   [36, '0036_call_proposals.sql', 'bb88eff42a5de37087cc91f4b1b5f13e11c24d8e413316abd24f1965c6eff65a'],
   [37, '0037_suppression_channels.sql', '6f8ea19921d9c514a012e9ea3390c320565dc01ecd93c3b78c8ebf06bf193c5c'],
   [38, '0038_firm_prepared_briefs.sql', '9e53327e569f417a4746afaf0b6ce6f9aabed8bf98860120e7665d531cbae157'],
+  [39, '0039_meeting_attendance.sql', 'f2bf56430f3a5e6c947ac6b47edb524f86517ba13e8e4a6ce1331ce2f730990e'],
 ];
 
 const EDITED = (fileName: string): string =>

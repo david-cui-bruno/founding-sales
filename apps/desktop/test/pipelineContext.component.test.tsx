@@ -125,7 +125,7 @@ describe('stage evidence is explainable (acceptance 2)', () => {
   const page = assigneeFirmPage();
   if (page.visibility !== 'assigned_or_admin') throw new Error('fixture');
 
-  it('says a person placed the firm, with their reason, and that automatic moves only go forward from it', () => {
+  it('says a person placed the firm, with their reason, and that only a person moves it on (lane M1)', () => {
     render(
       <StageWhy
         history={[
@@ -138,7 +138,9 @@ describe('stage evidence is explainable (acceptance 2)', () => {
     expect(screen.getByTestId('stage-manual').textContent).toBe('Manual');
     expect(screen.getByTestId('stage-why-line').textContent).toContain('You moved it to contacting');
     expect(screen.getByTestId('stage-why-line').textContent).toContain('They asked for it');
-    expect(screen.getByTestId('stage-pinned-note')).toBeTruthy();
+    // Stages are manual since lane M1: nothing says automatic moves still happen.
+    expect(screen.getByTestId('stage-pinned-note').textContent).toContain('Only a person moves it on');
+    expect(screen.getByTestId('stage-pinned-note').textContent).not.toContain('automatic moves');
   });
 
   it('names the evidence of an automatic move and does not call it manual', () => {
