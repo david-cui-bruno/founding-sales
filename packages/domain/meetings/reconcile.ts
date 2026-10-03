@@ -468,9 +468,12 @@ export function planChain(chain: BookingChain, meeting: StoredMeeting | null, no
   if (tail.status !== 'accepted' || !fresh) return events;
   // Lane M1: the flag never replaces a confirmation, and its unmark undoes only Cal.com's
   // own mark (`calcom.ts` refuses both too); planning them would only re-synthesize, every
-  // run, an event that changes nothing. A reconciled end is `ended`, never `held`.
+  // run, an event that changes nothing. A reconciled end is `ended`, never `held`. A flag on
+  // a booking whose start has not passed is not yet a fact (review M1R, finding 7): nothing
+  // is planned, and a later run plans it once the start has passed.
   const calcomNoShow = state === 'no_show' && (meeting === null || meeting.attendance_source === 'calcom_no_show');
-  if (tail.anyAttendeeAbsent && state !== 'no_show' && state !== 'held') {
+  const started = Date.parse(tail.start) <= Date.parse(now);
+  if (tail.anyAttendeeAbsent && started && state !== 'no_show' && state !== 'held') {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: true });
   } else if (!tail.anyAttendeeAbsent && calcomNoShow) {
     events.push({ trigger: 'BOOKING_NO_SHOW_UPDATED', booking: tail, rescheduleUid: null, instant: later(instantOfBooking(tail), tail.end), noShow: false });

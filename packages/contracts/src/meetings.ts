@@ -89,6 +89,12 @@ export type FirmMeetingDto = z.infer<typeof firmMeetingDtoSchema>;
 export const stageSuggestionSchema = z.object({
   stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u),
   opportunityId: uuid.nullable(),
+  /**
+   * The stage the deal was at when this was read, null with no deal (review M1R finding 6):
+   * the click sends it as `expectedStageKey`, so a deal moved since is refused, not moved.
+   * Optional: a server without it is answered by the move's own checks.
+   */
+  fromStageKey: z.string().max(40).nullable().optional(),
 });
 export type StageSuggestion = z.infer<typeof stageSuggestionSchema>;
 

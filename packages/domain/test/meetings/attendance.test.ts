@@ -5,9 +5,10 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { readPipelineBoardForActor } from '../../crm/board.ts';
+import { changeStage } from '../../crm/pipeline.ts';
 import { funnelFacts } from '../../funnel/read.ts';
 import { setMeetingAttendance } from '../../meetings/attendance.ts';
-import { foldMeetings, MEETING_COLUMNS, receiveCalcomEvent, type MeetingRow } from '../../meetings/calcom.ts';
+import { foldMeetings, keepConfirmation, MEETING_COLUMNS, receiveCalcomEvent, UNCONFIRMED, type MeetingRow } from '../../meetings/calcom.ts';
 import { matchMeetingToFirm, readFirmStageSuggestion } from '../../meetings/match.ts';
 import { parseCalcomBooking, planChain, bookingChains, reconcileCalcomBookings, type CalcomBooking } from '../../meetings/reconcile.ts';
 import { readDemoBookedSuggestions } from '../../meetings/stageSuggestion.ts';
@@ -186,7 +187,7 @@ describe('meeting attendance', () => {
     });
 
     it('no_show over their own attended: no_show remembering ended, the fact withdrawn; undo back to ended', async () => {
-      const { uid: id, meeting } = await endedMeeting('Cedar');
+      const { uid: id, meeting } = await endedMeeting('Catalpa');
       await set(salesperson(), meeting.id, 'attended');
       expect(await set(salesperson(), meeting.id, 'no_show')).toMatchObject({ ok: true, value: { state: 'no_show', attendanceSource: 'manual' } });
       expect(await meetingOf(id)).toMatchObject({ state: 'no_show', state_before_no_show: 'ended', attendance_source: 'manual' });
@@ -402,7 +403,7 @@ describe('meeting attendance', () => {
       expect(await stageOf(opportunityId)).toBe('new');
       expect(await stageEvents(owner.id)).toBe(events);
 
-      const suggestion = { stageKey: 'demo_booked', opportunityId };
+      const suggestion = { stageKey: 'demo_booked', opportunityId, fromStageKey: 'new' };
       expect((await readDemoBookedSuggestions(salesperson(), [owner.id])).get(owner.id)).toEqual(suggestion);
       expect(await readFirmStageSuggestion(salesperson(), owner.id)).toEqual(suggestion);
       expect((await readPipelineBoardForActor(salesperson())).cards[owner.id]?.stageSuggestion).toEqual(suggestion);
@@ -421,7 +422,7 @@ describe('meeting attendance', () => {
     it('suggests opening at Demo booked for a firm with no deal, and nothing for a closed deal, a later stage, an ended meeting or a colleague', async () => {
       const none = await firm('Redwood');
       await deliver('BOOKING_CREATED', uid(), none.domain, FUTURE);
-      expect(await readFirmStageSuggestion(salesperson(), none.id)).toEqual({ stageKey: 'demo_booked', opportunityId: null });
+      expect(await readFirmStageSuggestion(salesperson(), none.id)).toEqual({ stageKey: 'demo_booked', opportunityId: null, fromStageKey: null });
 
       const lost = await firm('Rowan');
       await opportunityAt(lost.id, 'lost', 'lost');
@@ -441,7 +442,174 @@ describe('meeting attendance', () => {
       const colleague = await firm('Tamarack', seeded.alpha.admin.userId);
       await deliver('BOOKING_CREATED', uid(), colleague.domain, FUTURE);
       expect(await readFirmStageSuggestion(salesperson(), colleague.id)).toBeNull();
-      expect(await readFirmStageSuggestion(admin(), colleague.id)).toEqual({ stageKey: 'demo_booked', opportunityId: null });
+      expect(await readFirmStageSuggestion(admin(), colleague.id)).toEqual({ stageKey: 'demo_booked', opportunityId: null, fromStageKey: null });
+    });
+  });
+
+  // ------------------------------------------------------------- review M1R
+  describe('review M1R', () => {
+    const fold = async (uids: readonly string[], survivorUid: string): Promise<MeetingRow> =>
+      await withTransaction(database.session, async () => {
+        const ids = await Promise.all(uids.map(async id => (await meetingOf(id)).id));
+        const { rows: locked } = await database.session.query<MeetingRow>(
+          `SELECT ${MEETING_COLUMNS} FROM meetings WHERE workspace_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR UPDATE`,
+          [workspaceId(), ids],
+        );
+        return await foldMeetings(system(), locked, (await meetingOf(survivorUid)).id);
+      });
+    /** The `meeting.held` facts under any of `uids`, live ones first. */
+    const factsOf = async (uids: readonly string[]): Promise<{ dedupe_key: string; withdrawn_reason: string | null }[]> =>
+      (
+        await database.session.query<{ dedupe_key: string; withdrawn_reason: string | null }>(
+          `SELECT dedupe_key, withdrawn_reason FROM funnel_facts
+            WHERE workspace_id = $1 AND kind = 'meeting.held' AND dedupe_key = ANY($2::text[])
+            ORDER BY withdrawn_at NULLS FIRST, dedupe_key`,
+          [workspaceId(), uids],
+        )
+      ).rows;
+    const row = (over: Partial<MeetingRow>): MeetingRow => ({
+      id: '44444444-4444-4444-8444-444444444401',
+      firm_id: null,
+      contact_id: null,
+      opportunity_id: null,
+      state: 'held',
+      state_before_no_show: null,
+      attendance_source: 'manual',
+      attendance_confirmed_at: new Date('2026-10-01T12:00:00.000Z'),
+      attendance_confirmed_by: seeded.alpha.salesperson.userId,
+      booking_uid: 'reviewA',
+      current_booking_uid: 'reviewA',
+      starts_at: new Date(PAST.startTime),
+      ends_at: new Date(PAST.endTime),
+      last_event_at: new Date(PAST.endTime),
+      attendee_email: 'partner@review.example',
+      ...over,
+    });
+
+    it('finding 1: a person s confirmation beats Cal.com s, whatever the timestamps; within a kind the newest wins', () => {
+      const base = { state: 'ended' as const, before: null, attendance: UNCONFIRMED };
+      const manualHeld = row({});
+      const newerCalcom = row({
+        id: '44444444-4444-4444-8444-444444444402',
+        state: 'no_show',
+        state_before_no_show: 'ended',
+        attendance_source: 'calcom_no_show',
+        attendance_confirmed_by: null,
+        attendance_confirmed_at: new Date('2026-10-02T12:00:00.000Z'),
+      });
+      for (const rows of [[manualHeld, newerCalcom], [newerCalcom, manualHeld]]) {
+        expect(keepConfirmation(base, rows)).toMatchObject({ state: 'held', attendance: { source: 'manual' } });
+      }
+      const newerManualNoShow = row({ id: '44444444-4444-4444-8444-444444444403', state: 'no_show', state_before_no_show: 'ended', attendance_confirmed_at: new Date('2026-10-02T13:00:00.000Z') });
+      expect(keepConfirmation(base, [manualHeld, newerManualNoShow, newerCalcom])).toMatchObject({ state: 'no_show', attendance: { source: 'manual' } });
+      const olderCalcom = { ...newerCalcom, id: '44444444-4444-4444-8444-444444444404', state_before_no_show: 'booked' as const, attendance_confirmed_at: new Date('2026-09-30T12:00:00.000Z') };
+      expect(keepConfirmation(base, [olderCalcom, newerCalcom])).toMatchObject({ before: 'ended', attendance: { at: '2026-10-02T12:00:00.000Z' } });
+    });
+
+    it('finding 1: a fold keeps a person s held over a newer Cal.com no-show, with its one fact', async () => {
+      const { firm: owner, uid: held, meeting } = await endedMeeting('Ash');
+      await set(salesperson(), meeting.id, 'attended');
+      const flagged = uid();
+      await deliver('BOOKING_CREATED', flagged, owner.domain, PAST);
+      // Cal.com's flag, dated after the person's confirmation.
+      await deliver('BOOKING_NO_SHOW_UPDATED', flagged, owner.domain, PAST, { attendees: [{ email: `partner@${owner.domain}`, noShow: true }] }, '2030-01-01T00:00:00.000Z');
+      expect((await meetingOf(flagged)).attendance_confirmed_at?.getTime()).toBeGreaterThan((await meetingOf(held)).attendance_confirmed_at?.getTime() ?? Infinity);
+      const result = await fold([held, flagged], flagged);
+      expect(result).toMatchObject({ state: 'held', attendance_source: 'manual', attendance_confirmed_by: seeded.alpha.salesperson.userId });
+      expect(await factsOf([held, flagged])).toEqual([{ dedupe_key: held, withdrawn_reason: null }]);
+    });
+
+    it('finding 4: a fold of two held rows leaves one counted fact, the survivor s, the other withdrawn', async () => {
+      const { firm: owner, uid: first, meeting } = await endedMeeting('Beech');
+      await set(salesperson(), meeting.id, 'attended');
+      const second = uid();
+      await deliver('BOOKING_CREATED', second, owner.domain, PAST);
+      await deliver('MEETING_ENDED', second, owner.domain, PAST);
+      await set(salesperson(), (await meetingOf(second)).id, 'attended');
+      expect((await factsOf([first, second])).filter(fact => fact.withdrawn_reason === null)).toHaveLength(2);
+      await fold([first, second], first);
+      expect(await factsOf([first, second])).toEqual([
+        { dedupe_key: first, withdrawn_reason: null },
+        { dedupe_key: second, withdrawn_reason: 'meeting_folded' },
+      ]);
+    });
+
+    it('finding 4: a fold whose survivor is a no-show counts no held fact', async () => {
+      const { firm: owner, uid: first, meeting } = await endedMeeting('Chinquapin');
+      await set(salesperson(), meeting.id, 'attended');
+      const second = uid();
+      await deliver('BOOKING_CREATED', second, owner.domain, PAST);
+      await deliver('MEETING_ENDED', second, owner.domain, PAST);
+      // The person's later word: a no-show. The newest of two manual confirmations wins.
+      await set(salesperson(), (await meetingOf(second)).id, 'no_show');
+      const result = await fold([first, second], first);
+      expect(result).toMatchObject({ state: 'no_show', attendance_source: 'manual' });
+      expect(await factsOf([first, second])).toEqual([{ dedupe_key: first, withdrawn_reason: 'meeting_folded' }]);
+    });
+
+    it('finding 4: the webhook s replacement fold of two held rows leaves one counted fact', async () => {
+      const { firm: owner, uid: original, meeting } = await endedMeeting('Date');
+      await set(salesperson(), meeting.id, 'attended');
+      const replacement = uid();
+      await deliver('BOOKING_CREATED', replacement, owner.domain, PAST);
+      await deliver('MEETING_ENDED', replacement, owner.domain, PAST);
+      await set(salesperson(), (await meetingOf(replacement)).id, 'attended');
+      await deliver('BOOKING_RESCHEDULED', replacement, owner.domain, PAST, { rescheduleUid: original });
+      expect((await meetingOf(original)).id).toBe(meeting.id);
+      expect(await meetingOf(original)).toMatchObject({ state: 'held', current_booking_uid: replacement });
+      expect(await factsOf([original, replacement])).toEqual([
+        { dedupe_key: original, withdrawn_reason: null },
+        { dedupe_key: replacement, withdrawn_reason: 'meeting_folded' },
+      ]);
+    });
+
+    it('finding 7: Cal.com s no-show before the start records nothing; a later delivery after it applies', async () => {
+      const owner = await firm('Eucalyptus');
+      const id = uid();
+      await deliver('BOOKING_CREATED', id, owner.domain, FUTURE);
+      const before = await meetingOf(id);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, { attendees: [{ email: `partner@${owner.domain}`, noShow: true }] });
+      const early = await meetingOf(id);
+      expect(early).toMatchObject({ state: 'booked', attendance_source: null, attendance_confirmed_at: null });
+      expect(early.last_event_at.getTime()).toBe(before.last_event_at.getTime());
+      const { rows: outcomes } = await database.session.query<{ outcome: string }>(
+        "SELECT outcome FROM calcom_events WHERE workspace_id = $1 AND booking_uid = $2 AND trigger_event = 'BOOKING_NO_SHOW_UPDATED'",
+        [workspaceId(), id],
+      );
+      expect(outcomes).toEqual([{ outcome: 'ignored' }]);
+      // The start passes (the row's times moved back, as the clock would move forward).
+      await database.session.query('UPDATE meetings SET starts_at = $3, ends_at = $4 WHERE workspace_id = $1 AND id = $2', [workspaceId(), before.id, PAST.startTime, PAST.endTime]);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, PAST, { attendees: [{ email: `partner@${owner.domain}`, noShow: true }] });
+      expect(await meetingOf(id)).toMatchObject({ state: 'no_show', state_before_no_show: 'booked', attendance_source: 'calcom_no_show' });
+    });
+
+    it('finding 7: the reconciliation plans no no-show before the start, and plans it once the start has passed', () => {
+      const absent = booking('futureA', {
+        start: FUTURE.startTime,
+        end: FUTURE.endTime,
+        attendee: 'partner@later.example',
+        attendees: [{ name: 'A', email: 'partner@later.example', timeZone: 'UTC', absent: true }],
+      });
+      const chain = bookingChains([absent])[0];
+      if (chain === undefined) throw new Error('no chain');
+      expect(planChain(chain, null, NOW).map(event => event.trigger)).not.toContain('BOOKING_NO_SHOW_UPDATED');
+      expect(planChain(chain, null, '2099-06-02T15:00:00.000Z').map(event => event.trigger)).toContain('BOOKING_NO_SHOW_UPDATED');
+    });
+
+    it('finding 6: a move naming the stage the person saw is refused once the deal has moved elsewhere', async () => {
+      const owner = await firm('Filbert');
+      const opportunityId = await opportunityAt(owner.id, 'new');
+      const move = async (expectedStageKey: string) =>
+        await withTransaction(database.session, async () => await changeStage(salesperson(), { opportunityId, toStageKey: 'demo_booked', expectedStageKey }));
+      expect(await move('interested')).toEqual({ ok: false, reason: 'stage_changed_elsewhere' });
+      const { rows } = await database.session.query<{ key: string }>(
+        'SELECT s.key FROM opportunities o JOIN pipeline_stages s ON s.id = o.stage_id WHERE o.workspace_id = $1 AND o.id = $2',
+        [workspaceId(), opportunityId],
+      );
+      expect(rows[0]?.key).toBe('new');
+      expect(await move('new')).toMatchObject({ ok: true });
+      // Already there: accepted as it is, whatever was expected.
+      expect(await move('interested')).toMatchObject({ ok: true });
     });
   });
 });

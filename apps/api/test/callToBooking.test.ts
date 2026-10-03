@@ -380,10 +380,15 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
       value: { monthlyCents: 29_900, kind: 'estimated' },
       meeting: { state: 'booked', startsAt: '2026-10-06T15:00:00.000Z' },
       evidence: null,
-      stageSuggestion: { stageKey: 'demo_booked', opportunityId },
+      stageSuggestion: { stageKey: 'demo_booked', opportunityId, fromStageKey: 'new' },
     });
+    // The click names the stage it was read at (review M1R, finding 6): a deal that moved
+    // elsewhere since is refused, with its reason, and not moved.
+    const elsewhere = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked', expectedStageKey: 'qualified' }));
+    expect(elsewhere.status, elsewhere.text).toBe(409);
+    expect(elsewhere.body).toMatchObject({ status: 'refused', reason: 'stage_changed_elsewhere' });
     // The one click: the ordinary stage command. Then the card is in Demo booked, with no suggestion.
-    const moved = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked' }));
+    const moved = await api('/opportunities/stage', salespersonToken, command({ opportunityId, toStageKey: 'demo_booked', expectedStageKey: 'new' }));
     expect(moved.status, moved.text).toBe(200);
     const after = await api('/pipeline/board', salespersonToken, { includeLost: false });
     const afterColumns = after.body['columns'] as { stage: { key: string }; firms: { id: string }[] }[];
@@ -562,7 +567,8 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     const { rows } = await fixture.db.query<{ starts_at: Date }>("SELECT starts_at FROM meetings WHERE booking_uid = 'resched1'");
     expect(rows[0]?.starts_at.toISOString()).toBe('2026-10-09T13:00:00.000Z');
 
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:30:00.000Z', 'noshow1'));
+    // A meeting whose start has passed: a mark before the start records nothing (lane M1).
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T18:30:00.000Z', 'noshow1', { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' }));
     const mark = await calcom({
       triggerEvent: 'BOOKING_NO_SHOW_UPDATED',
       createdAt: '2026-10-07T16:00:00.000Z',

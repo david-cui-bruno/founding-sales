@@ -24,7 +24,8 @@ import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands
  *     moved Birch's opportunity.
  *   * C (Alder): ended early by Cal.com and confirmed held while its end is still ahead.
  *   * D (an unmatched domain): booked, then cancelled.
- *   * E (Cedar): booked; its old evidence opened Cedar's opportunity.
+ *   * E (Cedar): booked; its old evidence opened Cedar's opportunity; its meeting.booked fact
+ *     is withdrawn.
  * Beta: one ended meeting confirmed and then unconfirmed (its fact withdrawn), and old evidence
  * that opened beta's opportunity.
  */
@@ -154,6 +155,14 @@ beforeAll(async () => {
   await evidence(alpha, a['synB'], birchOpportunity);
   await evidence(alpha, a['synE']);
   await evidence(beta, b['synZ']);
+  // A withdrawn `meeting.booked` fact is not counted (review M1R minor): E's, withdrawn here
+  // directly, as a correction would.
+  const withdrawn = await database.session.query(
+    `UPDATE funnel_facts SET withdrawn_at = now(), withdrawn_reason = 'review_fixture'
+      WHERE workspace_id = $1 AND kind = 'meeting.booked' AND dedupe_key = 'synE'`,
+    [alpha],
+  );
+  if (withdrawn.rowCount !== 1) throw new Error('the fixture found no meeting.booked fact for E');
 });
 
 afterAll(async () => {
@@ -200,8 +209,8 @@ describe('fss admin meetings attendance-report', () => {
       // Only A's confirmation went through the command; C's was written directly.
       meetingHeldFacts: 1,
       meetingHeldFactsWithdrawn: 0,
-      // A, B, C and E were matched bookings; D never matched a firm.
-      meetingBookedFacts: 4,
+      // A, B, C and E were matched bookings; D never matched a firm; E's fact is withdrawn.
+      meetingBookedFacts: 3,
       calcomMeetingEndedApplied: 3,
       // A opened Alder's, B moved Birch's, E opened Cedar's; C found Alder already there.
       meetingsWithBookedEvidence: 3,

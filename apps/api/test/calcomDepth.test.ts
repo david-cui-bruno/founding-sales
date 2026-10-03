@@ -227,7 +227,7 @@ describe('Cal.com depth, over HTTP', () => {
     expect(resultOf(matched)).toMatchObject({ firmId: world.firmId, state: 'booked', stage: 'none' });
     expect(await stageOf(world.opportunityId)).toBe('new');
     const offered = await get(`/meetings/firm?firmId=${world.firmId}`, salespersonToken);
-    expect(offered.body['stageSuggestion']).toEqual({ stageKey: 'demo_booked', opportunityId: world.opportunityId });
+    expect(offered.body['stageSuggestion']).toEqual({ stageKey: 'demo_booked', opportunityId: world.opportunityId, fromStageKey: 'new' });
     expect(await enrollmentStates(world)).toEqual({ followUp: 'active', prospecting: 'stopped' });
     expect(await firmMeetings(world.firmId)).toEqual([{ state: 'booked', startsAt: '2026-10-14T15:00:00.000Z' }]);
     const after = await get('/meetings/unmatched', salespersonToken);
@@ -297,7 +297,8 @@ describe('Cal.com depth, over HTTP', () => {
   it('marks a no-show and takes it back', async () => {
     const world = await firmWithWork();
     const id = uid();
-    await calcom(booking('BOOKING_CREATED', '2026-09-30T19:00:00.000Z', id, world.attendee));
+    // A meeting whose start has passed: a mark before the start records nothing (lane M1).
+    await calcom(booking('BOOKING_CREATED', '2026-09-30T19:00:00.000Z', id, world.attendee, { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' }));
     await calcom({
       triggerEvent: 'BOOKING_NO_SHOW_UPDATED',
       createdAt: '2026-10-14T16:00:00.000Z',

@@ -157,6 +157,7 @@ export const CRM_REFUSAL_SENTENCES: Readonly<Record<CrmRefusalCode, string>> = O
   assignee_unknown: 'Callie cannot find that person to assign the firm to. Choose someone else.',
   stage_unknown: 'That stage does not exist. Choose one from the list.',
   stage_retired: 'That stage was retired. Choose an active stage.',
+  stage_changed_elsewhere: 'This deal moved to another stage since the page was drawn. Nothing was changed.',
   stage_key_exists: 'A stage with that name already exists. Choose another name.',
   stage_terminal: 'Won and Lost are fixed stages and cannot be changed this way.',
   stage_last_active: 'This is the last active stage, and deals need somewhere to start. Add another stage first.',

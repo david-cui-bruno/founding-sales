@@ -19,6 +19,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  *     or closed. A firm with only a closed (Lost or Live) deal is offered nothing: reopening
  *     one is a person's deliberate act, not a booking's suggestion.
  *
+ * Each carries the stage the deal was at (`fromStageKey`), which the click sends back as the
+ * move's `expectedStageKey`: a deal moved since is refused, never moved over (review M1R).
+ *
  * The caller decides who sees it: only a person who could make the move (an administrator
  * or the firm's assignee), as the board decides who gets an opportunity id.
  */
@@ -30,12 +33,12 @@ export async function readDemoBookedSuggestions(
   firmIds: readonly string[],
 ): Promise<ReadonlyMap<string, StageSuggestion>> {
   if (firmIds.length === 0) return new Map();
-  const { rows } = await context.db.query<{ firm_id: string; opportunity_id: string | null }>(
+  const { rows } = await context.db.query<{ firm_id: string; opportunity_id: string | null; from_stage_key: string | null }>(
     `WITH target AS (
        SELECT position FROM pipeline_stages
         WHERE workspace_id = $1 AND key = $3 AND NOT retired AND terminal_kind IS NULL
      )
-     SELECT f.id AS firm_id, o.id AS opportunity_id
+     SELECT f.id AS firm_id, o.id AS opportunity_id, s.key AS from_stage_key
        FROM firms f
       CROSS JOIN target t
        LEFT JOIN opportunities o ON o.workspace_id = f.workspace_id AND o.firm_id = f.id AND o.status = 'open'
@@ -50,5 +53,5 @@ export async function readDemoBookedSuggestions(
                    SELECT 1 FROM opportunities x WHERE x.workspace_id = f.workspace_id AND x.firm_id = f.id)))`,
     [context.scope.workspaceId, [...firmIds], DEMO_BOOKED_STAGE_KEY],
   );
-  return new Map(rows.map(row => [row.firm_id, { stageKey: DEMO_BOOKED_STAGE_KEY, opportunityId: row.opportunity_id }]));
+  return new Map(rows.map(row => [row.firm_id, { stageKey: DEMO_BOOKED_STAGE_KEY, opportunityId: row.opportunity_id, fromStageKey: row.from_stage_key }]));
 }

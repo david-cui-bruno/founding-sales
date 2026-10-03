@@ -62,6 +62,7 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   lost_reason_required: 'A lost opportunity needs a reason.',
   stage_unknown: 'That stage is not part of this pipeline.',
   stage_retired: 'That stage has been retired and cannot be moved into.',
+  stage_changed_elsewhere: 'This deal moved to another stage since the page was drawn. Nothing was changed.',
   opportunity_closed: 'This opportunity is closed. Reopen it before changing its stage.',
   merge_conflicts: 'These two records disagree. Choose which value to keep for each.',
   merge_cross_firm: 'Those two people are at different firms. Merge the firms first.',

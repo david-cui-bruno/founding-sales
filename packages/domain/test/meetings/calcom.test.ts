@@ -281,7 +281,8 @@ describe('Cal.com deliveries', () => {
 
   it('applies a no-show mark and unmark in order, back to booked', async () => {
     const id = uid();
-    await send(delivery('BOOKING_CREATED', '2026-09-30T15:00:00.000Z', booking(id)));
+    // A meeting whose start has passed: a mark before the start records nothing (lane M1).
+    await send(delivery('BOOKING_CREATED', '2026-09-30T15:00:00.000Z', booking(id, { startTime: '2026-09-29T15:00:00.000Z', endTime: '2026-09-29T15:30:00.000Z' })));
     const marked = await send(
       delivery('BOOKING_NO_SHOW_UPDATED', '2026-10-06T16:00:00.000Z', { bookingUid: id, attendees: [{ email: 'partner@northwind-law.example', noShow: true }] }),
     );

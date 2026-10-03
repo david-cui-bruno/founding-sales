@@ -9,6 +9,7 @@ import { recordFunnelFact } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
 import { attendeeAddressOf } from './attendee.ts';
+import { reconcileHeldFacts } from './heldFacts.ts';
 import { manualModeEndReason } from '../sequences/terminalStops.ts';
 
 /**
@@ -183,14 +184,21 @@ export interface MeetingStateWrite {
 }
 
 /**
- * The state rows that are one meeting end with (lane M1): the latest confirmation among
- * them, when any is confirmed — newest-row-wins must not erase a confirmation — else
- * `base`, which the caller took from the newest row or the event.
+ * The state rows that are one meeting end with (lane M1): a confirmation among them, when
+ * any is confirmed — newest-row-wins must not erase a confirmation — else `base`, which the
+ * caller took from the newest row or the event. A person's confirmation beats any other,
+ * whatever the timestamps (review M1R, finding 1): Cal.com's flag never overrides what a
+ * person said. Between two of the same kind, the newest wins.
  */
 export function keepConfirmation(base: MeetingStateWrite, rows: readonly MeetingRow[]): MeetingStateWrite {
+  const byPerson = (row: MeetingRow): number => (row.attendance_source === 'manual' ? 1 : 0);
   const confirmed = rows
     .filter(isConfirmed)
-    .sort((left, right) => (right.attendance_confirmed_at?.getTime() ?? 0) - (left.attendance_confirmed_at?.getTime() ?? 0))[0];
+    .sort(
+      (left, right) =>
+        byPerson(right) - byPerson(left) ||
+        (right.attendance_confirmed_at?.getTime() ?? 0) - (left.attendance_confirmed_at?.getTime() ?? 0),
+    )[0];
   if (confirmed === undefined) return base;
   return { state: confirmed.state, before: confirmed.state_before_no_show, attendance: attendanceOf(confirmed) };
 }
@@ -536,6 +544,10 @@ async function applyEvent(
     case 'BOOKING_NO_SHOW_UPDATED':
       // Cal.com's flag is a confirmation of absence over an unconfirmed meeting; it never
       // replaces a confirmation, and its unmark undoes only its own mark.
+      // A mark before the meeting's start records nothing (review M1R, finding 7): absence is
+      // not yet a fact. The row is not even touched, so a later delivery, or the
+      // reconciliation once the start has passed, still applies it.
+      if (event.noShow === true && !confirmed && !(await hasStarted(context, existing))) return none('ignored', existing);
       if (event.noShow === true && !confirmed) {
         next = { state: 'no_show', before: existing.state, attendance: { source: 'calcom_no_show', at: event.createdAt, by: null } };
       } else if (event.noShow === false && existing.state === 'no_show' && existing.attendance_source === 'calcom_no_show') {
@@ -555,6 +567,7 @@ async function applyEvent(
   let startsAt = event.startsAt;
   let endsAt = event.endsAt;
   let currentUid = kind === 'BOOKING_RESCHEDULED' ? event.uid : null;
+  let folded = false;
   if (kind === 'BOOKING_RESCHEDULED' && event.uid !== null && event.uid !== lookupUid) {
     const replacement = await meetingByUid(context, event.uid);
     if (replacement !== null && replacement.id !== existing.id) {
@@ -565,6 +578,7 @@ async function applyEvent(
         return none('unmatched', existing);
       }
       await foldReplacement(context, existing, replacement);
+      folded = true;
       if (replacement.last_event_at.getTime() > Date.parse(event.createdAt)) {
         // The replacement's row is newer than this reschedule: it may itself have been
         // rescheduled on (B→C before the delayed A→B, review fold 2). Its state, its
@@ -614,8 +628,10 @@ async function applyEvent(
   );
   const updated = rows[0] ?? existing;
   await aliasMeeting(context, updated.id, [updated.booking_uid, updated.current_booking_uid, event.uid]);
-  // No funnel fact here: `meeting.held` is written only when attendance is confirmed
-  // (`meetings/attendance.ts`), which no Cal.com event does (lane M1).
+  // No new funnel fact from the event itself: `meeting.held` is written only when attendance
+  // is confirmed (`meetings/attendance.ts`), which no Cal.com event does (lane M1). A fold
+  // leaves exactly the facts the survivor's state owes (review M1R, finding 4).
+  if (folded) await reconcileHeldFacts(context, updated);
   return { outcome: 'applied', meetingId: updated.id, meetingState: updated.state };
 }
 
@@ -740,6 +756,9 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
     );
   }
   await aliasMeeting(context, survivor.id, others.flatMap(other => [other.booking_uid, other.current_booking_uid]));
+  // Every row's facts are the survivor's now: one `meeting.held` when it is held, none
+  // otherwise, the extras withdrawn here (review M1R, finding 4).
+  await reconcileHeldFacts(context, result);
   await recordCrmAuditEvent(context, {
     action: 'meeting.folded',
     subjectKind: 'meeting',
@@ -747,6 +766,12 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
     detail: { folded: others.length, state: result.state },
   });
   return result;
+}
+
+/** Whether a meeting's scheduled start has passed, by the database's clock (as `attendance.ts`). */
+async function hasStarted(context: RepositoryContext, meeting: Pick<MeetingRow, 'starts_at'>): Promise<boolean> {
+  const { rows } = await context.db.query<{ started: boolean }>('SELECT $1::timestamptz <= now() AS started', [meeting.starts_at.toISOString()]);
+  return rows[0]?.started === true;
 }
 
 async function touch(context: RepositoryContext, meetingId: string, at: string): Promise<void> {

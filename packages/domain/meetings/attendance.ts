@@ -3,9 +3,11 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
-import { recordFunnelFact, reinstateFunnelFact, withdrawFunnelFacts } from '../funnel/facts.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { MEETING_COLUMNS, type MeetingRow } from './calcom.ts';
+import { recordHeldFact, withdrawHeldFact } from './heldFacts.ts';
+
+export { recordHeldFact, withdrawHeldFact } from './heldFacts.ts';
 
 /**
  * Attendance, confirmed by a person (lane M1, migration 0039).
@@ -46,48 +48,6 @@ const refuse = (reason: MeetingAttendanceRefusalCode): AttendanceResult => ({ ok
 
 /** Why `unconfirmed` withdrew a fact, and why a person's no-show replaced an attendance. */
 export const ATTENDANCE_UNCONFIRMED_REASON = 'attendance_unconfirmed';
-
-/** Every booking uid a meeting has had: its `meeting.held` fact is keyed by one of them. */
-async function bookingUidsOf(context: RepositoryContext, meeting: Pick<MeetingRow, 'id' | 'booking_uid' | 'current_booking_uid'>): Promise<string[]> {
-  const { rows } = await context.db.query<{ booking_uid: string }>(
-    'SELECT booking_uid FROM meeting_booking_uids WHERE workspace_id = $1 AND meeting_id = $2',
-    [context.scope.workspaceId, meeting.id],
-  );
-  return [...new Set([meeting.booking_uid, meeting.current_booking_uid, ...rows.map(row => row.booking_uid)])];
-}
-
-/**
- * The `meeting.held` fact for a meeting that is now confirmed held: the one it had, brought
- * back if it was withdrawn, or a new one dated at the meeting's start. Exported for the
- * person's match of an unmatched booking (`meetings/match.ts`), which owes it for a meeting
- * already confirmed.
- */
-export async function recordHeldFact(
-  context: RepositoryContext,
-  meeting: Pick<MeetingRow, 'id' | 'booking_uid' | 'current_booking_uid' | 'firm_id' | 'starts_at' | 'attendance_source'>,
-): Promise<void> {
-  if (meeting.firm_id === null) return;
-  const keys = await bookingUidsOf(context, meeting);
-  const existing = await reinstateFunnelFact(context, { kind: 'meeting.held', dedupeKeys: keys, preferredKey: meeting.booking_uid });
-  if (existing !== 'absent') return;
-  await recordFunnelFact(context, {
-    kind: 'meeting.held',
-    source: 'calendar',
-    dedupeKey: meeting.booking_uid,
-    firmId: meeting.firm_id,
-    occurredAt: meeting.starts_at.toISOString(),
-    detail: { attendanceSource: meeting.attendance_source ?? 'manual' },
-  });
-}
-
-/** Withdraw a meeting's `meeting.held` fact, under whichever of its uids it was keyed. */
-export async function withdrawHeldFact(
-  context: RepositoryContext,
-  meeting: Pick<MeetingRow, 'id' | 'booking_uid' | 'current_booking_uid'>,
-  reason: string,
-): Promise<number> {
-  return await withdrawFunnelFacts(context, { kind: 'meeting.held', dedupeKeys: await bookingUidsOf(context, meeting), reason });
-}
 
 export async function setMeetingAttendance(
   context: RepositoryContext,

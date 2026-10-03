@@ -44,11 +44,11 @@ export async function meetingsAttendanceReportCommand(invocation: AdminInvocatio
       [workspaceId],
     );
     // Since 0039 a wrong fact is withdrawn rather than removed: `meetingHeldFacts` counts the
-    // live ones, `meetingHeldFactsWithdrawn` the rest.
+    // live ones, `meetingHeldFactsWithdrawn` the rest; `meetingBookedFacts` counts the live ones too.
     const facts = await session.query<{ held: string; held_withdrawn: string; booked: string }>(
       `SELECT count(*) FILTER (WHERE kind = 'meeting.held' AND withdrawn_at IS NULL)::text AS held,
               count(*) FILTER (WHERE kind = 'meeting.held' AND withdrawn_at IS NOT NULL)::text AS held_withdrawn,
-              count(*) FILTER (WHERE kind = 'meeting.booked')::text AS booked
+              count(*) FILTER (WHERE kind = 'meeting.booked' AND withdrawn_at IS NULL)::text AS booked
          FROM funnel_facts
         WHERE workspace_id = $1::uuid AND kind IN ('meeting.held', 'meeting.booked')`,
       [workspaceId],
