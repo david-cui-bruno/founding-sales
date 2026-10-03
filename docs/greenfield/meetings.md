@@ -381,6 +381,49 @@ then what `applyStageEvidence` locks. Every refusal reaches the window as its se
 (any active member: state and time are Appendix F's first row) is the firm page's
 **Meetings** rows. None of the three reaches Cal.com or depends on the switch.
 
+## Demo recordings (lane M4, migration 0040)
+
+Zoom records each Callie demo **locally**, with one audio file per participant, into the
+demo recordings folder (Settings › Demo recordings folder; default `~/Movies/Callie Demos`,
+a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/`):
+
+1. **Discovery.** `fs.watch` on the folder, a rescan every minute and a scan at start. Each
+   session folder's start time comes from its name (`YYYY-MM-DD HH.MM.SS <topic> <number>`)
+   or, failing that, the folder's own creation time. "Import a recording folder…" adds one
+   folder to the same pipeline. The folder rules are tables (`zoomFolder.ts`, assumptions
+   A1–A6) until a real listing confirms them.
+2. **Privacy.** One read, `GET /meetings/recordings/candidates?from=&to=` (the non-cancelled
+   meetings starting in the window; at most 35 days, 100 meetings), and a folder whose start
+   falls in no meeting's `[start − 30 min, end + 30 min]` is dropped from its name alone:
+   never listed, hashed, uploaded, stored or shown. No answer from the server decides
+   nothing. Video is never read.
+3. **Matching.** Exactly one meeting within ±30 minutes of the start, corroborated by the
+   attendee's name (the linked contact's, else the words of the address they booked with)
+   in the topic or a participant's file name, is matched. Anything else that overlapped is
+   **Needs matching**: Today's quiet Recordings group offers the overlapping meetings, or
+   "Not a Callie demo", which drops the folder for good.
+4. **Waiting.** A folder is ready when no `.zoom` or temporary file remains, its audio is
+   there (the per-participant files, or the mixed `audio*.m4a` when there are none) and the
+   listing is unchanged across two scans at least 20 seconds apart.
+5. **Upload.** Per file: `POST /meetings/recordings/upload-url {meetingId, fileSha256,
+   sizeBytes, participantLabel, segment}` answers `registered` (nothing to send) or a
+   15-minute presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket
+   that binds `audio/mp4`, the size (≤ 300 MB) and the digest — S3 refuses any other body.
+   The URL is signed per answer and never stored. Then `POST /meetings/recordings/register
+   {meetingId, files}` under a command id saved before it is sent, so a restart replays it;
+   each new file is checked by HEAD (present, size, digest) before any row is written. The
+   participant label is the file's name, kept as Zoom wrote it.
+6. **States**, kept in `recordings.json` per workspace and keyed by the folder path and the
+   audio files' identity (inode, size, mtime): Waiting for conversion, Uploading n/m,
+   Uploaded — waiting for transcription, Needs matching, Failed (Retry / Not a Callie demo).
+   The firm page tags each meeting with its recording state and lists its recordings.
+
+Who may upload: an administrator, or the assignee of the meeting's firm (an unmatched
+meeting is an administrator's). `meeting_recordings` holds one row per file, unique by
+(workspace, meeting, sha256), removed with its meeting and moved to the survivor by a
+Cal.com fold. The bucket's one-day expiry stays. Nothing is enqueued yet: slice M5 adds
+`meeting.transcribe` at the hook in `meetings/recordings.ts`.
+
 ## Reminders
 
 Callie sends no reminder of its own. Cal.com already sends the attendee the 24-hour
