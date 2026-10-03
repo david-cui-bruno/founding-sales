@@ -281,11 +281,25 @@ describe('session transitions the window is told about (1.0.12)', () => {
 
     const wiping = mac.manager.noteAuthRefusal('device_revoked', madeUnder);
     // The wipe is waiting on the cache. Somebody signs out and in again behind it.
-    // The sign-out wipes too, so the held one is let go first: what this drives is the
-    // *refusal's* wipe finishing after a sign-in, not a queue of wipes.
+    // The sign-out wipes too, so the held one is let go: what this drives is the
+    // *refusal's* wipe finishing after a sign-out has begun and before the sign-in
+    // has, not a queue of wipes.
+    //
+    // The ordering is pinned, not left to the scheduler. The release waits for the
+    // sign-out's own identity transition (observable as the generation moving past the
+    // refusal's), so the refusal resumes with a newer session already begun and must
+    // drop. Releasing at once raced the sign-out's first file writes: the refusal's real
+    // wipe could finish, pass its check and be inside `store.forget()` while the sign-in
+    // wrote the new registration, which is a different ordering from the one meant here.
     await eventually(() => mac.wipeHeld(), 'the cache wipe to begin');
+    const refusalsGeneration = mac.manager.sessionGeneration();
+    const signingOut = mac.manager.signOut();
+    await eventually(
+      () => mac.manager.sessionGeneration() > refusalsGeneration,
+      'the sign-out to begin its own transition',
+    );
     mac.releaseCacheWipe();
-    await mac.manager.signOut();
+    await signingOut;
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     await wiping;
 
