@@ -339,7 +339,7 @@ the release that makes it: Cal.com's `MEETING_ENDED` fires at the scheduled end,
 stored `held` came from the clock. One JSON line of counts: `meetingsByState` (every
 state, `ended` included since 0039), `heldEndedInPast`, `heldEndingInFuture`, `noShowBeforeHeld`
 (`state_before_no_show = 'held'`, none after 0039), `meetingHeldFacts` (live) and
-`meetingHeldFactsWithdrawn`, `meetingBookedFacts`, `calcomMeetingEndedApplied` (webhook and
+`meetingHeldFactsWithdrawn`, `meetingBookedFacts` (live), `calcomMeetingEndedApplied` (webhook and
 reconciliation deliveries alike), `meetingsWithBookedEvidence`, and the opportunities that
 `meeting.booked` evidence opened (`opportunitiesOpenedByBookedEvidence`, and the same from the
 audit trail as `…Audited`) or moved (`opportunitiesMovedByBookedEvidence`). No name, e-mail,

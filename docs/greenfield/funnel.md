@@ -188,7 +188,9 @@ a meeting confirmed by one person, undone, and confirmed by another still names 
 (accepted by the coordinator, 3 October 2026).
 
 Reasons so far: `scheduled_end_not_attendance` (0039: every `meeting.held` written from
-Cal.com's scheduled end) and `attendance_unconfirmed` (a person undid their confirmation).
+Cal.com's scheduled end), `attendance_unconfirmed` (a person undid their confirmation) and
+`meeting_folded` (rows that were one meeting were folded: a held survivor keeps one counted
+fact, any other survivor none).
 
 Nothing sweeps the table. It is business history under 10.3's first row, which
 `RETENTION_TARGETS` states as the `business_records` target's `retained` no-op, and

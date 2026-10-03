@@ -69,8 +69,12 @@ for `manual` only) are set exactly while the state is `held` or `no_show`.
 * **A confirmation is never overwritten by Cal.com.** An end, a reschedule, a cancellation
   or Cal.com's no-show flag leaves `held` and `no_show` as they are (a reschedule still moves
   the times); Cal.com's unmark undoes only Cal.com's own mark. The reconciliation plans none
-  of those events over a confirmation. Folding duplicate rows keeps the latest confirmation
-  any of them holds, whichever row is newest.
+  of those events over a confirmation. Folding duplicate rows keeps a confirmation any of
+  them holds, whichever row is newest: a person's beats Cal.com's whatever the timestamps,
+  and between two of the same kind the newest wins.
+* **Cal.com's no-show applies only once the start has passed.** A flag on a meeting not yet
+  started records nothing (the delivery's outcome is `ignored`, and the row is not touched);
+  a later delivery, or the reconciliation once the start has passed, applies it.
 * **A person confirms** with `POST /meetings/attendance { meetingId, attendance }`:
   `attended` → `held`, `no_show` → `no_show` (remembering `ended`), `unconfirmed` → back to
   `ended`. The assignee or an administrator; a meeting matched to a firm
@@ -83,10 +87,15 @@ for `manual` only) are set exactly while the state is `held` or `no_show`.
   meeting's start, keyed by its original booking uid. Undoing it, or replacing it with a
   person's no-show, **withdraws** the fact (`withdrawn_reason attendance_unconfirmed`, see
   [funnel.md](funnel.md)); confirming again reinstates the same row. Nothing is written for
-  `ended`.
+  `ended`. A fold of duplicate rows (the reconciliation's or a reschedule's) leaves exactly one
+  counted `meeting.held` for a held survivor — its own uid's first, else the earliest — and none
+  for any other state, withdrawing the rest (`meeting_folded`) in the fold's transaction.
 * **The firm page** shows an ended meeting as "Ended · attendance not confirmed" with quiet
   Attended and No-show actions on hover; a person's own Held or No-show has a small Undo. The
   board card says "Ended, not confirmed".
+* **Desktop 1.0.36 is the minimum.** 1.0.35 reads a meeting past its end as `held` and has
+  no way to confirm, so the API's client-version minimum is 1.0.36 from this release
+  (`CONTAINER_CLIENT_VERSIONS`): publish desktop 1.0.36 before the API is deployed.
 * **M7** (the follow-through engine) gates on confirmed attendance: its hook is where a
   meeting becomes `held` in `meetings/attendance.ts`. M1 schedules nothing.
 * **0039's correction.** Every `held` stored before it came from the scheduled end, so it
@@ -319,4 +328,9 @@ in the firm page's Meetings when the firm has a booked or rescheduled meeting th
 ended, the workspace's Demo booked stage is live, and the firm's open deal is in an earlier
 stage — or it has no deal at all (a closed one alone gets nothing). Only to a person who could
 make the move. The click is the ordinary command: `POST /opportunities/stage`, or
-`POST /opportunities/open` at Demo booked for a firm with no deal.
+`POST /opportunities/open` at Demo booked for a firm with no deal — for the firm whose
+suggestion was drawn, which the window names, never the page the bridge read last. The
+suggestion carries the stage it was read at (`fromStageKey`), and the move sends it back as
+`expectedStageKey`: a deal moved elsewhere since is refused (`stage_changed_elsewhere`) and
+not moved. While the firm page's deal stage changes, the line is hidden until the read that
+change caused lands.
