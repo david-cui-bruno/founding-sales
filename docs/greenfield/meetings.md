@@ -1,8 +1,10 @@
-# Meetings: Cal.com bookings move the pipeline
+# Meetings: Cal.com bookings, attendance, and the pipeline
 
 Call-to-booking slice W (migration 0028). A demo booked through Cal.com becomes a
-`meetings` row, moves the firm's opportunity to **Demo booked**, and stops cold
-outreach to the firm. Off by default: with `calendar_integration` off the webhook
+`meetings` row and stops cold outreach to the firm. Since lane M1 (migration 0039) it
+**moves no deal**: deal-stage changes are manual (David, 3 October 2026), and the board and
+the firm page offer "Move to Demo booked" as one click instead (below). Attendance is
+confirmed by a person, never assumed from Cal.com's end (below). Off by default: with `calendar_integration` off the webhook
 answers 404 and nothing reads the Cal.com secret.
 
 ## The switch
@@ -36,19 +38,62 @@ answers 503 rather than guess.
    the e-mail domain against a firm's website domain. No match, or more than one, opens
    a stage review item (`firm_unmatched` / `firm_ambiguous`) and the meeting stays
    unlinked; nothing else happens.
-2. **Stage evidence** `meeting.booked` through `applyStageEvidence`: the open
-   opportunity moves forward to Demo booked (never backward, never over a person's pin
-   to a later stage, never reopening a closed one, which opens a review item instead).
-   A firm with no opportunity at all gets one opened at Demo booked.
-3. **Manual control** for the firm (origin `engaged_call`, reason "meeting booked").
+2. **No stage change.** Until lane M1 the booking applied stage evidence `meeting.booked`
+   (`applyStageEvidence`), which moved the open opportunity to Demo booked or opened one
+   there. It does not any more, from the webhook, the reconciliation or a person's match;
+   no evidence row is written either (an evidence row belongs to a stage event).
+3. **Manual control** for the firm's open opportunity, if it has one (origin
+   `engaged_call`, reason "meeting booked").
 4. **Stop prospecting**: live `prospecting` and `cold_legacy` enrolments at the firm
    stop, with an audit row. A `follow_up` enrolment the prospect agreed to on the call
    is left running.
-5. Funnel fact `meeting.booked` (keyed by the booking uid); `MEETING_ENDED` records
-   `meeting.held`.
+5. Funnel fact `meeting.booked` (keyed by the booking uid).
 
-A reschedule updates the times and the current booking uid; a no-show mark remembers
-the state it replaced so an unmark restores it.
+A reschedule updates the times and the current booking uid, and moves `booked`,
+`rescheduled` and `ended` to `rescheduled`; it never changes `held` or `no_show`. A no-show
+mark remembers the state it replaced so an unmark restores it.
+
+## Attendance (lane M1, migration 0039)
+
+Cal.com's `MEETING_ENDED` fires at the booking's **scheduled** end, so it is not attendance.
+
+| State | Means | Set by |
+|---|---|---|
+| `ended` | the scheduled end passed; attendance not confirmed | `MEETING_ENDED` (webhook or the reconciliation's end) |
+| `held` | confirmed attendance | a person (`manual`); later a recording (`recording`) |
+| `no_show` | confirmed absence | Cal.com's no-show flag (`calcom_no_show`) or a person (`manual`) |
+
+`attendance_source`, `attendance_confirmed_at` and `attendance_confirmed_by` (the member,
+for `manual` only) are set exactly while the state is `held` or `no_show`.
+
+* **A confirmation is never overwritten by Cal.com.** An end, a reschedule, a cancellation
+  or Cal.com's no-show flag leaves `held` and `no_show` as they are (a reschedule still moves
+  the times); Cal.com's unmark undoes only Cal.com's own mark. The reconciliation plans none
+  of those events over a confirmation. Folding duplicate rows keeps the latest confirmation
+  any of them holds, whichever row is newest.
+* **A person confirms** with `POST /meetings/attendance { meetingId, attendance }`:
+  `attended` → `held`, `no_show` → `no_show` (remembering `ended`), `unconfirmed` → back to
+  `ended`. The assignee or an administrator; a meeting matched to a firm
+  (`meeting_unmatched`), not cancelled (`meeting_cancelled`), whose start has passed
+  (`meeting_not_started`). `unconfirmed` never undoes Cal.com's no-show
+  (`attendance_from_calcom`) or a recording's confirmation (`attendance_from_recording`); a
+  person may still choose Attended or No-show over Cal.com's flag. Idempotent per command id,
+  audited (`meeting.attendance_set`: ids and codes only). It sends nothing.
+* **The funnel.** `meeting.held` is written only on confirmed attendance, dated at the
+  meeting's start, keyed by its original booking uid. Undoing it, or replacing it with a
+  person's no-show, **withdraws** the fact (`withdrawn_reason attendance_unconfirmed`, see
+  [funnel.md](funnel.md)); confirming again reinstates the same row. Nothing is written for
+  `ended`.
+* **The firm page** shows an ended meeting as "Ended · attendance not confirmed" with quiet
+  Attended and No-show actions on hover; a person's own Held or No-show has a small Undo. The
+  board card says "Ended, not confirmed".
+* **M7** (the follow-through engine) gates on confirmed attendance: its hook is where a
+  meeting becomes `held` in `meetings/attendance.ts`. M1 schedules nothing.
+* **0039's correction.** Every `held` stored before it came from the scheduled end, so it
+  became `ended` (and a no-show remembering `held` remembers `ended`); every stored no-show is
+  Cal.com's; every `meeting.held` fact was withdrawn (`scheduled_end_not_attendance`) and
+  re-dated to its meeting's start; one `meeting.attendance_corrected` audit row per workspace
+  holds the counts. `fss admin meetings attendance-report` counts all of it read-only.
 
 **Every uid a meeting has been** is kept in `meeting_booking_uids` (migration 0029:
 workspace, uid, meeting; unique per workspace; removed with the meeting). A delivery
@@ -190,7 +235,7 @@ bookings and repairs the difference.
     its reversal — come only from a snapshot whose `updatedAt` is no older than the
     meeting's last applied event, and only about the meeting's current booking. An end
     is dated at the later of the booking's `end` and just after the meeting's last event,
-    so a meeting whose no-show mark was taken back after its end still becomes held on
+    so a meeting whose no-show mark was taken back after its end still becomes ended on
     the next run.
   * `pending`, `rejected` and `awaiting_host` are skipped, as the webhook ignores
     `BOOKING_REQUESTED` and `BOOKING_REJECTED`. A cancelled meeting is terminal.
@@ -234,10 +279,9 @@ Match sends `POST /meetings/match { meetingId, firmId }`:
   types a name) when nobody there has it;
 * the meeting's review item is resolved by that person;
 * unless the meeting is cancelled, the booking is then applied **exactly as a matched
-  webhook applies it** (`applyBooked`): the move to Demo booked, manual control, the
-  stop owed to prospecting and cold_legacy enrollments (an agreed follow-up keeps
-  running), the funnel fact. If it still cannot apply — the firm's opportunity is
-  closed, say — the review item is reopened with that reason.
+  webhook applies it** (`applyBooked`): manual control, the stop owed to prospecting and
+  cold_legacy enrollments (an agreed follow-up keeps running), the funnel fact. It moves
+  no deal (lane M1); the answer's `stage` is always `none`.
 
 Lock order, as every stop-fact writer: the send gate, then the firm, then the meeting,
 then what `applyStageEvidence` locks. Every refusal reaches the window as its sentence
@@ -263,7 +307,16 @@ event (reason `stage_remap_20260930`). `fss admin pipeline stage-counts` prints 
 workspace's stages with their counts, pins and remap moves, read only, for the before
 and after of the release.
 
-Automatic moves follow `stage_rules` (evidence kind to stage): `meeting.booked` →
-Demo booked, `call.interested` → open at Interested if none, `subscription.accepted` →
-Onboarding, `customer.live` → Live. A person's move pins the opportunity at that stage;
-evidence for a later stage clears the pin.
+Stage changes are manual (lane M1). What is left of `stage_rules`: `call.interested`
+opens an opportunity at Interested only on a person's accept of the after-call suggestion
+(`calls/proposalApply.ts`); `subscription.accepted` → Onboarding and `customer.live` → Live
+have no emitter. The `meeting.booked` rule stays only because past evidence rows name it;
+nothing applies it. A firm merge closes the merged firm's opportunity as Lost, inside a
+person's merge. A person's move pins the opportunity at that stage.
+
+**"Move to Demo booked"** (`meetings/stageSuggestion.ts`) is offered on the board card and
+in the firm page's Meetings when the firm has a booked or rescheduled meeting that has not
+ended, the workspace's Demo booked stage is live, and the firm's open deal is in an earlier
+stage — or it has no deal at all (a closed one alone gets nothing). Only to a person who could
+make the move. The click is the ordinary command: `POST /opportunities/stage`, or
+`POST /opportunities/open` at Demo booked for a firm with no deal.

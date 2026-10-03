@@ -175,6 +175,21 @@ application rewrite a fact's kind, its ids, its key and the instant it happened 
 which is the whole of the row; the column grant is what makes "append-only but for
 the redaction" a privilege rather than a promise. The recorder never updates at all.
 
+## Withdrawn facts (lane M1, migration 0039)
+
+A fact that turns out to be wrong is **withdrawn**, never removed: `withdrawn_at` and
+`withdrawn_reason` (a code) are set, and UPDATE is granted on those two columns as well as
+`detail`, to both roles, and on nothing else. Every reader skips a withdrawn fact
+(`funnel/read.ts`'s `VISIBLE_FACTS`, which the dashboard reads); the deletion workflow still
+counts and redacts it, because it still carries ids. A withdrawn fact keeps its dedupe key,
+so the same fact confirmed again is the same row reinstated (`reinstateFunnelFact`), never a
+second one. **A reinstated fact keeps the actor and the instant it was first written with**:
+a meeting confirmed by one person, undone, and confirmed by another still names the first
+(accepted by the coordinator, 3 October 2026).
+
+Reasons so far: `scheduled_end_not_attendance` (0039: every `meeting.held` written from
+Cal.com's scheduled end) and `attendance_unconfirmed` (a person undid their confirmation).
+
 Nothing sweeps the table. It is business history under 10.3's first row, which
 `RETENTION_TARGETS` states as the `business_records` target's `retained` no-op, and
 `TABLE_RETENTION_COVERAGE` records as `['retained', 'deletion_redacts']`.
