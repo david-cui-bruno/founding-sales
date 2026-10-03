@@ -126,6 +126,36 @@ export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
       return meeting.rows.length === 1 ? null : 'the seeded meeting id no longer resolves';
     },
   },
+  {
+    // Lane M2 (0040): a meeting stored at 39 has no booking details; the migration adds the
+    // columns empty and rewrites nothing.
+    name: 'a meeting at 39 gains empty booking details (0040)',
+    fromVersions: [39],
+    seed: async session => {
+      const { rows } = await session.query<{ id: string }>(
+        `INSERT INTO meetings (workspace_id, booking_uid, current_booking_uid, firm_id, state, starts_at, ends_at, last_event_at)
+         SELECT workspace_id, 'upgrade0040booked', 'upgrade0040booked', id, 'booked',
+                TIMESTAMPTZ '2026-10-08 15:00:00+00', TIMESTAMPTZ '2026-10-08 15:30:00+00', TIMESTAMPTZ '2026-10-01 12:00:00+00'
+           FROM firms WHERE status = 'active' ORDER BY created_at, id LIMIT 1
+         RETURNING id`,
+      );
+      const id = rows[0]?.id;
+      if (id === undefined) throw new Error('the fixture has no active firm to hang a meeting on');
+      return id;
+    },
+    verify: async (session, seededId) => {
+      const { rows } = await session.query<Record<string, unknown>>(
+        `SELECT state, event_title, attendee_name, booking_notes, booking_answers, location_type, video_call_url, zoom_meeting_id
+           FROM meetings WHERE id = $1`,
+        [seededId],
+      );
+      const row = rows[0];
+      if (row === undefined) return 'the seeded meeting is gone';
+      if (row['state'] !== 'booked') return `the meeting is ${String(row['state'])}, expected booked`;
+      const filled = Object.entries(row).filter(([column, value]) => column !== 'state' && value !== null);
+      return filled.length === 0 ? null : `0040 filled ${filled.map(([column]) => column).join(', ')}`;
+    },
+  },
 ]);
 
 export function seedsFor(fromVersion: number): readonly HeadSeed[] {

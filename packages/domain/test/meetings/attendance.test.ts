@@ -484,6 +484,13 @@ describe('meeting attendance', () => {
       ends_at: new Date(PAST.endTime),
       last_event_at: new Date(PAST.endTime),
       attendee_email: 'partner@review.example',
+      event_title: null,
+      attendee_name: null,
+      booking_notes: null,
+      booking_answers: null,
+      location_type: null,
+      video_call_url: null,
+      zoom_meeting_id: null,
       ...over,
     });
 
