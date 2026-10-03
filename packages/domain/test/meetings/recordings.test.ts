@@ -130,6 +130,11 @@ describe('meeting recordings in the domain', () => {
     expect(listed?.recordings.map(entry => entry.meetingId)).toEqual([survivor, survivor]);
     expect(listed?.recordings.every(entry => entry.state === 'uploaded')).toBe(true);
     expect(await withTransaction(database.session, async () => await listFirmRecordings(salesperson(database.session), '99999999-9999-4999-8999-999999999999'))).toBeNull();
+    // Admin-or-assignee: the same firm given to somebody else is not this salesperson's to read.
+    await database.session.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [firmId, seeded.alpha.admin.userId]);
+    expect(await withTransaction(database.session, async () => await listFirmRecordings(salesperson(database.session), firmId))).toBeNull();
+    const admin = repositoryContext(workspaceScope(workspaceId(), { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }), database.session);
+    expect((await withTransaction(database.session, async () => await listFirmRecordings(admin, firmId)))?.recordings).toHaveLength(2);
   });
 
   it('R5: every candidate name goes through one minimiser — a contact named by its address answers only the local part', async () => {

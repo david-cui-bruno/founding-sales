@@ -327,7 +327,7 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect(await rowsOf(target)).toHaveLength(1);
   });
 
-  it('R4: the firm’s registered recordings, from the rows, for any member of the workspace; 404 for another firm, 400 for no id', async () => {
+  it('R4: the firm’s registered recordings, from the rows, for an administrator or the assignee only; 404 for anybody else and an unknown firm, 400 for no id', async () => {
     const firm = await seedFirm(fixture, { name: 'Recording Listed Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
     const target = await meeting(firm, null, '2026-10-05T18:00:00Z');
     const file = { sha256: sha('listed file'), sizeBytes: 100, participantLabel: 'audioListed1.m4a', segment: 1 };
@@ -339,6 +339,17 @@ describe('meeting recordings over the wire (lane M4)', () => {
       const parsed = firmRecordingsResponseSchema.parse(answer.body);
       expect(parsed).toMatchObject({ truncated: false, recordings: [{ meetingId: target, segment: 1, participantLabel: 'audioListed1.m4a', state: 'uploaded' }] });
     }
+    // Admin-or-assignee, as /meetings/brief: participant labels can carry names. Another
+    // member's firm is the same 404 as an unknown one; its administrator reads it.
+    const elsewhere = await seedFirm(fixture, { name: 'Recording Elsewhere Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.admin.userId });
+    const theirs = await meeting(elsewhere, null, '2026-10-05T18:30:00Z');
+    const their = { sha256: sha('elsewhere file'), sizeBytes: 100, participantLabel: 'audioSomeoneNamed1.m4a', segment: 1 };
+    bucket.put(`meetings/${theirs}/${their.sha256}.m4a`, their.sizeBytes, their.sha256);
+    expect((await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: theirs, files: [their] })).status).toBe(200);
+    const refused = await call(salesToken, 'GET', '/meetings/recordings', undefined, new URLSearchParams({ firmId: elsewhere }));
+    expect(refused.status).toBe(404);
+    expect(JSON.stringify(refused.body)).not.toContain('SomeoneNamed');
+    expect(firmRecordingsResponseSchema.parse((await call(adminToken, 'GET', '/meetings/recordings', undefined, new URLSearchParams({ firmId: elsewhere }))).body).recordings).toHaveLength(1);
     expect((await call(salesToken, 'GET', '/meetings/recordings', undefined, new URLSearchParams({ firmId: randomUUID() }))).status).toBe(404);
     expect((await call(salesToken, 'GET', '/meetings/recordings', undefined, new URLSearchParams())).status).toBe(400);
     expect((await call(salesToken, 'POST', '/meetings/recordings', {}, new URLSearchParams({ firmId: firm }))).status).toBe(405);

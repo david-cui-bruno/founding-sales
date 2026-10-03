@@ -3,8 +3,8 @@ import { MEETING_RECORDING_LIMITS } from '@fss/contracts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
-import { decideFirmMutation } from '../crm/authorization.ts';
-import { loadFirmForUpdate } from '../crm/firms.ts';
+import { decideFirmMutation, decideFirmRead } from '../crm/authorization.ts';
+import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
 
 /**
  * A demo's recorded audio, as the server holds it (lane M4, migration 0041).
@@ -292,16 +292,18 @@ interface FirmRecordingRow extends QueryResultRowLike {
  * The firm page's recordings (M4 reset, R4): the rows registered for the firm's meetings,
  * newest meeting first, at most `maxFirmRecordings`; `truncated` when there were more. Read
  * from the server's rows, so a fold (which moves the rows to the survivor) and another Mac's
- * upload both show. The same authorisation as the firm page's meetings: any member, a firm of
- * this workspace (null otherwise, which the route answers 404).
+ * upload both show. A participant label is a file name, which can carry a person's name, so
+ * this is the firm page read in full — an administrator or the firm's assignee
+ * (`decideFirmRead`), the rule `/meetings/brief` keeps. Anybody else, and a firm of another
+ * workspace or none, is null: the route answers the same 404 for both.
  */
 export async function listFirmRecordings(
   context: RepositoryContext,
   firmId: string,
 ): Promise<{ readonly recordings: readonly FirmRecording[]; readonly truncated: boolean } | null> {
   const workspaceId = context.scope.workspaceId;
-  const { rows: firm } = await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2', [workspaceId, firmId]);
-  if (firm.length === 0) return null;
+  const firm = await readFirm(context, firmId);
+  if (firm === null || decideFirmRead(context, firm) !== 'assigned_or_admin') return null;
   const { rows } = await context.db.query<FirmRecordingRow>(
     `SELECT r.id, r.meeting_id, r.segment, r.participant_label, r.state, r.created_at
        FROM meeting_recordings r

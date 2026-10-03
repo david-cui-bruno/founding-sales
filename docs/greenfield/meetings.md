@@ -453,8 +453,9 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
    Waiting for conversion, Uploading n/m, Needs matching, Failed (Retry / Not a Callie
    demo). A command answers its own item at its version, and the window applies nothing
    else from it. **Registered recordings are the server's:** the firm page reads
-   `GET /meetings/recordings?firmId=` (the firm page's authorisation: any member, a firm of
-   this workspace) and shows each meeting's files and their state from the rows — which a
+   `GET /meetings/recordings?firmId=` (an administrator or the firm's assignee, as
+   `/meetings/brief`, because a participant label can carry a name; anybody else gets the
+   same 404 as an unknown firm) and shows each meeting's files and their state from the rows — which a
    fold moves to the surviving meeting, and which another Mac's uploads add to.
 
 Who may upload: an administrator, or the assignee of the meeting's firm (an unmatched

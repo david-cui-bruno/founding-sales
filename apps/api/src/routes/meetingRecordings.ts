@@ -55,8 +55,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     S3 says the object was written (`not_your_upload`; M4 reset, R6): an object somebody
  *     else staged before this person asked for a URL is not theirs to claim.
  *   * `GET /meetings/recordings?firmId=` — the registered recordings of the firm's meetings,
- *     from the rows (M4 reset, R4): a fold moves them, so they follow it. The firm page's
- *     authorisation: any active member, a firm of this workspace (404 otherwise).
+ *     from the rows (M4 reset, R4): a fold moves them, so they follow it. An administrator or
+ *     the firm's assignee, as `/meetings/brief` (participant labels can carry names); anybody
+ *     else, and an unknown firm, the same 404.
  *
  * The candidates read answers only the meetings this person may attach a recording to, the
  * attendee's address as its local part, and `truncated` (review M4R, findings 3 and 10). An
