@@ -1,6 +1,6 @@
-# Meeting transcription (M5): design for review
+# Meeting transcription (M5): approved design
 
-Status: design prepared; no product code, migration, deployed setting or paid transcription has changed.
+Status: David approved this design on 3 Oct after its plain-language explanation. Implementation plan: ../plans/2026-10-03-meeting-transcription.md. No product code, migration, deployed setting or paid transcription has changed.
 
 Baseline: main 48559f4236c5deef1f80af6b8b4a852c6df9cdc1, schema 41, desktop 1.0.39. Working branch: codex/meeting-transcription, in the reused crm-navigation worktree. This spec follows David's approved roadmap and the decision record at /Users/davidcui824/conductor/scratch/callie-shared/DECISIONS.md.
 
