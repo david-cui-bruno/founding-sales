@@ -106,7 +106,7 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
 
   it('HEAD: a found object with its checksum, NotFound and 403 as absent, anything else as no answer', async () => {
     const answers: unknown[] = [
-      { ContentLength: SIZE, ChecksumSHA256: sha256Base64(SHA) },
+      { ContentLength: SIZE, ChecksumSHA256: sha256Base64(SHA), LastModified: new Date('2026-10-05T19:30:00Z') },
       Object.assign(new Error('nf'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }),
       Object.assign(new Error('slow'), { name: 'InternalError', $metadata: { httpStatusCode: 500 } }),
       Object.assign(new Error('denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } }),
@@ -129,7 +129,7 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
     };
     const store = await loadMeetingAudioStore({ bucket: BUCKET, region: REGION, sdk, credentials });
     const key = meetingAudioKey(MEETING, SHA);
-    await expect(store.head(key)).resolves.toEqual({ found: true, sizeBytes: SIZE, sha256Base64: sha256Base64(SHA) });
+    await expect(store.head(key)).resolves.toEqual({ found: true, sizeBytes: SIZE, sha256Base64: sha256Base64(SHA), lastModified: '2026-10-05T19:30:00.000Z' });
     await expect(store.head(key)).resolves.toEqual({ found: false });
     await expect(store.head(key)).rejects.toBeInstanceOf(MeetingAudioUnavailableError);
     // Review M4R, finding 9: without ListBucket a missing object is 403, which is "not there".

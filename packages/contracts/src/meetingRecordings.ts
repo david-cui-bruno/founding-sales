@@ -30,6 +30,8 @@ export const MEETING_RECORDING_LIMITS = Object.freeze({
   /** The widest candidates read, in days, and the most meetings it answers. */
   maxCandidateSpanDays: 35,
   maxCandidates: 100,
+  /** The most registered recordings the firm page's read answers (R4). */
+  maxFirmRecordings: 200,
 });
 
 export const MEETING_RECORDING_STATES = ['uploaded', 'transcribing', 'transcribed', 'failed'] as const;
@@ -57,18 +59,20 @@ export const recordingSizeSchema = z.number().int().min(1).max(MEETING_RECORDING
  * "Choose meeting" row need): its time, its firm, the linked contact's name, and the LOCAL PART
  * of the address the attendee booked with — never the whole address. Cancelled meetings are not
  * candidates. An administrator sees the workspace's meetings; anybody else only meetings on
- * firms assigned to them. Not strict: a later field is ignored.
+ * firms assigned to them. Not strict: a later field is ignored. Every name has been through the
+ * server's one minimiser (M4 reset, R5), and the contract refuses an `@` in any of them.
  */
+const minimisedName = (max: number) => z.string().max(max).regex(/^[^@]*$/u).nullable();
 export const recordingCandidateSchema = z.object({
   meetingId: uuid,
   startsAt: instant,
   endsAt: instant,
   firmId: uuid.nullable(),
-  firmName: z.string().max(300).nullable(),
-  /** The linked contact's name; Cal.com's own attendee name is not stored (0028). */
-  attendeeName: z.string().max(300).nullable(),
+  firmName: minimisedName(300),
+  /** The linked contact's name (its local part, when the contact is named by an address). */
+  attendeeName: minimisedName(300),
   /** `jordan.placeholder` of `jordan.placeholder@example.test`. */
-  attendeeLocalPart: z.string().max(320).nullable(),
+  attendeeLocalPart: minimisedName(320),
 });
 export type RecordingCandidate = z.infer<typeof recordingCandidateSchema>;
 
@@ -97,6 +101,9 @@ export const MEETING_RECORDING_REFUSAL_CODES = [
   'object_missing',
   // Review M4R (uploader binding): no upload URL for this file was issued to this person.
   'recording_not_issued',
+  // M4 reset, R6: the object was there before this person's upload URL was issued, so it is
+  // somebody else's upload.
+  'not_your_upload',
 ] as const;
 export type MeetingRecordingRefusalCode = (typeof MEETING_RECORDING_REFUSAL_CODES)[number];
 
@@ -166,3 +173,28 @@ export const recordingsRegisteredSchema = z.strictObject({
   files: z.array(registeredRecordingSchema),
 });
 export type RecordingsRegistered = z.infer<typeof recordingsRegisteredSchema>;
+
+// ---------------------------------------------------------------------------
+// The firm's registered recordings (M4 reset, R4)
+// ---------------------------------------------------------------------------
+
+/**
+ * A recording the server holds, as the firm page shows it: the server's rows, never this Mac's
+ * folders, so a fold (which moves the rows to the surviving meeting) and another Mac's upload
+ * both show. The participant label is the file's name as Zoom wrote it.
+ */
+export const firmRecordingSchema = z.strictObject({
+  recordingId: uuid,
+  meetingId: uuid,
+  segment: recordingSegmentSchema,
+  participantLabel: participantLabelSchema,
+  state: z.enum(['uploaded', 'transcribing', 'transcribed', 'failed']),
+  createdAt: instant,
+});
+export type FirmRecording = z.infer<typeof firmRecordingSchema>;
+
+export const firmRecordingsResponseSchema = z.strictObject({
+  recordings: z.array(firmRecordingSchema).max(MEETING_RECORDING_LIMITS.maxFirmRecordings),
+  truncated: z.boolean(),
+});
+export type FirmRecordingsResponse = z.infer<typeof firmRecordingsResponseSchema>;

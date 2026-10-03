@@ -60,7 +60,13 @@ export interface PresignedPut {
 
 export type HeadAnswer =
   | { readonly found: false }
-  | { readonly found: true; readonly sizeBytes: number; readonly sha256Base64: string | null };
+  | {
+      readonly found: true;
+      readonly sizeBytes: number;
+      readonly sha256Base64: string | null;
+      /** S3's `LastModified`, ISO, whole seconds: the uploader binding orders it after the URL (R6). */
+      readonly lastModified: string | null;
+    };
 
 /** S3 did not answer definitely (a timeout, a 5xx, a refusal): nothing is decided from it. */
 export class MeetingAudioUnavailableError extends Error {
@@ -140,10 +146,11 @@ export async function loadMeetingAudioStore(options: {
       try {
         const answer = (await client.send(new sdk.HeadObjectCommand({ Bucket: options.bucket, Key: key, ChecksumMode: 'ENABLED' }), {
           abortSignal,
-        })) as { ContentLength?: unknown; ChecksumSHA256?: unknown };
+        })) as { ContentLength?: unknown; ChecksumSHA256?: unknown; LastModified?: unknown };
         const size = typeof answer.ContentLength === 'number' ? answer.ContentLength : Number.NaN;
         if (!Number.isSafeInteger(size)) throw new MeetingAudioUnavailableError('head answered no length');
-        return { found: true, sizeBytes: size, sha256Base64: typeof answer.ChecksumSHA256 === 'string' ? answer.ChecksumSHA256 : null };
+        const written = answer.LastModified instanceof Date && !Number.isNaN(answer.LastModified.getTime()) ? answer.LastModified.toISOString() : null;
+        return { found: true, sizeBytes: size, sha256Base64: typeof answer.ChecksumSHA256 === 'string' ? answer.ChecksumSHA256 : null, lastModified: written };
       } catch (error) {
         if (error instanceof MeetingAudioUnavailableError) throw error;
         if (isNotFound(error)) return { found: false };

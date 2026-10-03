@@ -1,4 +1,4 @@
-import type { MeetingRecordingRefusalCode, RecordingCandidate, RecordingFile, RecordingsRegistered } from '@fss/contracts';
+import type { FirmRecording, MeetingRecordingRefusalCode, RecordingCandidate, RecordingFile, RecordingsRegistered } from '@fss/contracts';
 import { MEETING_RECORDING_LIMITS } from '@fss/contracts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -14,8 +14,8 @@ import { loadFirmForUpdate } from '../crm/firms.ts';
  *
  *   * which meetings a folder could belong to (`listRecordingCandidates`) — an administrator
  *     sees the workspace's, anybody else only the meetings on firms assigned to them (review
- *     M4R, finding 3); cancelled meetings are never candidates; the attendee's address is
- *     answered as its local part only;
+ *     M4R, finding 3); cancelled meetings are never candidates; every name goes through
+ *     `minimiseName`, so an address is only ever answered as its local part;
  *   * may this person attach a file to this meeting (`authorizeRecording`) — an administrator,
  *     or the assignee of the meeting's firm (`decideFirmMutation`); a meeting with no firm yet
  *     is an administrator's. Lock order, as every meeting writer keeps it: the firm row, then
@@ -43,7 +43,21 @@ interface CandidateRow extends QueryResultRowLike {
   readonly firm_id: string | null;
   readonly firm_name: string | null;
   readonly contact_name: string | null;
-  readonly attendee_local_part: string | null;
+  readonly attendee_email: string | null;
+}
+
+/**
+ * The one minimiser every name a candidate carries goes through (M4 reset, R5): a value with
+ * an `@` is an address — a contact the match created is named by its address until somebody
+ * types a name — and is answered as its local part only; anything else is the name, trimmed.
+ * Blank is null.
+ */
+export function minimiseName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? '';
+  if (trimmed === '') return null;
+  if (!trimmed.includes('@')) return trimmed;
+  const local = trimmed.slice(0, trimmed.indexOf('@')).trim();
+  return local === '' ? null : local;
 }
 
 /**
@@ -60,8 +74,7 @@ export async function listRecordingCandidates(
   if (actor.kind !== 'user') return { meetings: [], truncated: false };
   const admin = actor.role === 'admin';
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name,
-            NULLIF(split_part(m.attendee_email, '@', 1), '') AS attendee_local_part
+    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name, m.attendee_email
        FROM meetings m
        LEFT JOIN firms f ON f.workspace_id = m.workspace_id AND f.id = m.firm_id
        LEFT JOIN contacts c ON c.workspace_id = m.workspace_id AND c.id = m.contact_id
@@ -80,9 +93,10 @@ export async function listRecordingCandidates(
       startsAt: row.starts_at.toISOString(),
       endsAt: row.ends_at.toISOString(),
       firmId: row.firm_id,
-      firmName: row.firm_name,
-      attendeeName: row.contact_name,
-      attendeeLocalPart: row.attendee_local_part,
+      // Every name through the one minimiser: never a whole address (R5; M4F finding 5).
+      firmName: minimiseName(row.firm_name),
+      attendeeName: minimiseName(row.contact_name),
+      attendeeLocalPart: minimiseName(row.attendee_email),
     })),
   };
 }
@@ -137,6 +151,23 @@ export function meetingRecordingKey(meetingId: string, sha256: string): string {
 
 export type RecordingVerdict = 'ok' | 'recording_missing' | 'recording_size_mismatch' | 'recording_checksum_mismatch';
 
+/** What the HEAD said of one staged object: the verdict, and when S3 says it was written. */
+export interface RecordingCheck {
+  readonly verdict: RecordingVerdict;
+  /** S3's `LastModified` (whole seconds), or null when it did not say. */
+  readonly lastModified: string | null;
+}
+
+/**
+ * The uploader binding (review M4R; M4 reset, R6), asked only for a person who is not an
+ * administrator: `issued` — was an upload URL for this key ever issued to them; `before` — was
+ * one issued no later than the object was written. Absent: not checked (the domain's own tests).
+ */
+export interface UploaderBinding {
+  issued(key: string): Promise<boolean>;
+  issuedBefore(key: string, lastModified: string): Promise<boolean>;
+}
+
 /**
  * Some staged objects are not there (review M4R, finding 9): thrown, so the command's
  * transaction rolls back and no receipt is kept; the route answers `object_missing` with the
@@ -158,12 +189,8 @@ interface RecordingRow extends QueryResultRowLike {
 export async function registerMeetingRecordings(
   context: RepositoryContext,
   input: { readonly meetingId: string; readonly files: readonly RecordingFile[] },
-  verify: (key: string, file: RecordingFile) => Promise<RecordingVerdict>,
-  /**
-   * Whether this person was issued an upload URL for the key (review M4R, uploader binding);
-   * absent: not checked (the domain's own tests). An administrator is never asked.
-   */
-  issuedToActor?: (key: string) => Promise<boolean>,
+  verify: (key: string, file: RecordingFile) => Promise<RecordingCheck>,
+  binding?: UploaderBinding,
 ): Promise<{ readonly ok: true; readonly value: RecordingsRegistered } | Refusal> {
   const authorized = await authorizeRecording(context, input.meetingId);
   if (!authorized.ok) return authorized;
@@ -174,16 +201,26 @@ export async function registerMeetingRecordings(
   const already = await recordedDigests(context, input.meetingId, files.map(file => file.sha256));
   const fresh = files.filter(file => !already.has(file.sha256));
   const actor = context.scope.actor;
-  if (issuedToActor !== undefined && actor.kind === 'user' && actor.role !== 'admin') {
+  const bound = binding !== undefined && actor.kind === 'user' && actor.role !== 'admin' ? binding : null;
+  // Before any HEAD: a person never issued a URL for the key learns nothing about the object.
+  if (bound !== null) {
     for (const file of fresh) {
-      if (!(await issuedToActor(meetingRecordingKey(input.meetingId, file.sha256)))) return refuse('recording_not_issued');
+      if (!(await bound.issued(meetingRecordingKey(input.meetingId, file.sha256)))) return refuse('recording_not_issued');
     }
   }
-  const verdicts = new Map<string, RecordingVerdict>();
-  for (const file of fresh) verdicts.set(file.sha256, await verify(meetingRecordingKey(input.meetingId, file.sha256), file));
-  const missing = fresh.filter(file => verdicts.get(file.sha256) === 'recording_missing').map(file => file.sha256);
+  const checks = new Map<string, RecordingCheck>();
+  for (const file of fresh) checks.set(file.sha256, await verify(meetingRecordingKey(input.meetingId, file.sha256), file));
+  const missing = fresh.filter(file => checks.get(file.sha256)?.verdict === 'recording_missing').map(file => file.sha256);
   if (missing.length > 0) throw new RecordingObjectsMissingError(missing);
-  for (const verdict of verdicts.values()) if (verdict !== 'ok') return refuse(verdict);
+  for (const check of checks.values()) if (check.verdict !== 'ok') return refuse(check.verdict);
+  // R6: the object was written after a URL was issued to this person — the order proves the
+  // upload was theirs. An object somebody else staged before their URL is not theirs to claim.
+  if (bound !== null) {
+    for (const file of fresh) {
+      const written = checks.get(file.sha256)?.lastModified ?? null;
+      if (written === null || !(await bound.issuedBefore(meetingRecordingKey(input.meetingId, file.sha256), written))) return refuse('not_your_upload');
+    }
+  }
 
   const answered: RecordingsRegistered['files'][number][] = [];
   for (const file of files) {
@@ -240,4 +277,50 @@ export async function moveRecordingsToSurvivor(context: RepositoryContext, fromM
     `UPDATE meeting_recordings SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2`,
     [workspaceId, fromMeetingId, toMeetingId],
   );
+}
+
+interface FirmRecordingRow extends QueryResultRowLike {
+  readonly id: string;
+  readonly meeting_id: string;
+  readonly segment: number;
+  readonly participant_label: string;
+  readonly state: FirmRecording['state'];
+  readonly created_at: Date;
+}
+
+/**
+ * The firm page's recordings (M4 reset, R4): the rows registered for the firm's meetings,
+ * newest meeting first, at most `maxFirmRecordings`; `truncated` when there were more. Read
+ * from the server's rows, so a fold (which moves the rows to the survivor) and another Mac's
+ * upload both show. The same authorisation as the firm page's meetings: any member, a firm of
+ * this workspace (null otherwise, which the route answers 404).
+ */
+export async function listFirmRecordings(
+  context: RepositoryContext,
+  firmId: string,
+): Promise<{ readonly recordings: readonly FirmRecording[]; readonly truncated: boolean } | null> {
+  const workspaceId = context.scope.workspaceId;
+  const { rows: firm } = await context.db.query('SELECT 1 FROM firms WHERE workspace_id = $1 AND id = $2', [workspaceId, firmId]);
+  if (firm.length === 0) return null;
+  const { rows } = await context.db.query<FirmRecordingRow>(
+    `SELECT r.id, r.meeting_id, r.segment, r.participant_label, r.state, r.created_at
+       FROM meeting_recordings r
+       JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id
+      WHERE r.workspace_id = $1 AND m.firm_id = $2
+      ORDER BY m.starts_at DESC, r.meeting_id, r.participant_label, r.segment, r.id
+      LIMIT $3`,
+    [workspaceId, firmId, MEETING_RECORDING_LIMITS.maxFirmRecordings + 1],
+  );
+  const kept = rows.slice(0, MEETING_RECORDING_LIMITS.maxFirmRecordings);
+  return {
+    truncated: rows.length > kept.length,
+    recordings: kept.map(row => ({
+      recordingId: row.id,
+      meetingId: row.meeting_id,
+      segment: row.segment,
+      participantLabel: row.participant_label,
+      state: row.state,
+      createdAt: row.created_at.toISOString(),
+    })),
+  };
 }

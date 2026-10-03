@@ -4,7 +4,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { foldMeetings, MEETING_COLUMNS, receiveCalcomEvent, type MeetingRow } from '../../meetings/calcom.ts';
-import { registerMeetingRecordings, type RecordingVerdict } from '../../meetings/recordings.ts';
+import { listFirmRecordings, listRecordingCandidates, minimiseName, registerMeetingRecordings, type RecordingCheck, type UploaderBinding } from '../../meetings/recordings.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
@@ -19,7 +19,7 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
  * Invented names only.
  */
 
-const verifyOk = async (): Promise<RecordingVerdict> => await Promise.resolve('ok');
+const verifyOk = async (): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', lastModified: '2026-10-05T19:30:00.000Z' });
 const sha = (letter: string): string => letter.repeat(64);
 const file = (letter: string, segment = 1) => ({ sha256: sha(letter), sizeBytes: 100, participantLabel: `audioSpeaker${letter}1.m4a`, segment });
 
@@ -90,7 +90,7 @@ describe('meeting recordings in the domain', () => {
     const meetingId = await meeting(await firm());
     const answer = await withTransaction(database.session, async () =>
       await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c')] }, async key =>
-        await Promise.resolve(key.includes(sha('c')) ? 'recording_size_mismatch' : 'ok'),
+        await Promise.resolve({ verdict: key.includes(sha('c')) ? ('recording_size_mismatch' as const) : ('ok' as const), lastModified: null }),
       ),
     );
     expect(answer).toEqual({ ok: false, reason: 'recording_size_mismatch' });
@@ -99,7 +99,7 @@ describe('meeting recordings in the domain', () => {
     await expect(
       withTransaction(database.session, async () =>
         await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c'), file('d')] }, async key =>
-          await Promise.resolve(key.includes(sha('b')) ? 'ok' : 'recording_missing'),
+          await Promise.resolve({ verdict: key.includes(sha('b')) ? ('ok' as const) : ('recording_missing' as const), lastModified: null }),
         ),
       ),
     ).rejects.toMatchObject({ name: 'RecordingObjectsMissingError', missing: [sha('c'), sha('d')] });
@@ -124,6 +124,53 @@ describe('meeting recordings in the domain', () => {
       { sha256: sha('e'), s3_key: `meetings/${folded}/${sha('e')}.m4a` },
     ]);
     expect(await recordings(folded)).toEqual([]);
+    // R4: the firm page's read follows the fold: both files, under the survivor, from the rows.
+    const listed = await withTransaction(database.session, async () => await listFirmRecordings(salesperson(database.session), firmId));
+    expect(listed?.truncated).toBe(false);
+    expect(listed?.recordings.map(entry => entry.meetingId)).toEqual([survivor, survivor]);
+    expect(listed?.recordings.every(entry => entry.state === 'uploaded')).toBe(true);
+    expect(await withTransaction(database.session, async () => await listFirmRecordings(salesperson(database.session), '99999999-9999-4999-8999-999999999999'))).toBeNull();
+  });
+
+  it('R5: every candidate name goes through one minimiser — a contact named by its address answers only the local part', async () => {
+    expect(minimiseName('jordan@private.example')).toBe('jordan');
+    expect(minimiseName('  Jordan Placeholder ')).toBe('Jordan Placeholder');
+    expect(minimiseName('@private.example')).toBeNull();
+    expect(minimiseName('')).toBeNull();
+    expect(minimiseName(null)).toBeNull();
+    const firmId = await firm();
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, 'jordan@private.example') RETURNING id`,
+      [workspaceId(), firmId],
+    );
+    const meetingId = await meeting(firmId);
+    await database.session.query("UPDATE meetings SET contact_id = $2, attendee_email = 'jordan.p@private.example' WHERE id = $1", [meetingId, rows[0]?.id]);
+    const listed = await withTransaction(database.session, async () =>
+      await listRecordingCandidates(salesperson(database.session), { from: '2026-10-05T00:00:00Z', to: '2026-10-06T00:00:00Z' }),
+    );
+    const mine = listed.meetings.find(entry => entry.meetingId === meetingId);
+    expect(mine).toMatchObject({ attendeeName: 'jordan', attendeeLocalPart: 'jordan.p' });
+    expect(JSON.stringify(listed)).not.toContain('@');
+  });
+
+  it('R6: a person who is not an administrator registers an object only if a URL was issued to them before it was written', async () => {
+    const meetingId = await meeting(await firm());
+    const written = '2026-10-05T19:30:00.000Z';
+    const at = async (lastModified: string): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', lastModified });
+    const binding = (issued: boolean, before: boolean): UploaderBinding => ({
+      issued: async () => await Promise.resolve(issued),
+      issuedBefore: async () => await Promise.resolve(before),
+    });
+    const register = async (b: UploaderBinding, verify = async () => await at(written)) =>
+      await withTransaction(database.session, async () => await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('7')] }, verify, b));
+    expect(await register(binding(false, false))).toEqual({ ok: false, reason: 'recording_not_issued' });
+    // A URL was issued, but only after somebody else's object was written: not theirs.
+    expect(await register(binding(true, false))).toEqual({ ok: false, reason: 'not_your_upload' });
+    // S3 did not say when it was written: not proven, refused.
+    expect(await register(binding(true, true), async () => await Promise.resolve({ verdict: 'ok', lastModified: null }))).toEqual({ ok: false, reason: 'not_your_upload' });
+    expect(await recordings(meetingId)).toEqual([]);
+    expect((await register(binding(true, true))).ok).toBe(true);
+    expect(await recordings(meetingId)).toHaveLength(1);
   });
 
   it('a replacement booking folded in by a late reschedule brings its recordings to the surviving meeting', async () => {

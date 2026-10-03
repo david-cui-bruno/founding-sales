@@ -1,6 +1,8 @@
 import {
   MEETING_RECORDING_LIMITS,
+  firmRecordingsResponseSchema,
   instant,
+  uuid,
   recordingCandidatesResponseSchema,
   recordingRegisterCommandSchema,
   recordingUploadUrlCommandSchema,
@@ -9,12 +11,14 @@ import {
 } from '@fss/contracts';
 import {
   authorizeRecording,
+  listFirmRecordings,
   listRecordingCandidates,
   meetingRecordingKey,
   recordedDigests,
   registerMeetingRecordings,
   RecordingObjectsMissingError,
-  type RecordingVerdict,
+  type RecordingCheck,
+  type UploaderBinding,
 } from '@fss/domain/meetings/recordings.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import {
@@ -47,7 +51,12 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     or 403: the role has no ListBucket) is 409 `object_missing` with the digests and no
  *     receipt, so the Mac uploads those files again (review M4R, finding 9). A wrong size or
  *     digest is a refusal the receipt keeps. A person who is not an administrator registers
- *     only objects whose upload URL was issued to them (`recording_not_issued`).
+ *     only objects whose upload URL was issued to them (`recording_not_issued`) no later than
+ *     S3 says the object was written (`not_your_upload`; M4 reset, R6): an object somebody
+ *     else staged before this person asked for a URL is not theirs to claim.
+ *   * `GET /meetings/recordings?firmId=` — the registered recordings of the firm's meetings,
+ *     from the rows (M4 reset, R4): a fold moves them, so they follow it. The firm page's
+ *     authorisation: any active member, a firm of this workspace (404 otherwise).
  *
  * The candidates read answers only the meetings this person may attach a recording to, the
  * attendee's address as its local part, and `truncated` (review M4R, findings 3 and 10). An
@@ -58,6 +67,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 
 export const MEETING_RECORDING_PATHS: readonly string[] = [
+  '/meetings/recordings',
   '/meetings/recordings/candidates',
   '/meetings/recordings/upload-url',
   '/meetings/recordings/register',
@@ -74,13 +84,24 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
   if (!MEETING_RECORDING_PATHS.includes(request.path)) return null;
   const auth = options.auth;
   if (auth === undefined) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-  const expected = request.path === '/meetings/recordings/candidates' ? 'GET' : 'POST';
+  const reads = request.path === '/meetings/recordings/candidates' || request.path === '/meetings/recordings';
+  const expected = reads ? 'GET' : 'POST';
   if (request.method !== expected) return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
   const store = options.meetingAudio;
   if (expected === 'POST' && store === undefined) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   const authenticated = await requirePrincipal(auth, request);
   if (!authenticated.ok) return authenticated.result;
   const deps = { auth, request, principal: authenticated.principal };
+
+  if (request.path === '/meetings/recordings') {
+    const firmId = uuid.safeParse(request.query.get('firmId') ?? '');
+    if (!firmId.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const scoped = contextForPrincipal(auth, authenticated.principal);
+    if (!scoped.ok) return scoped.result;
+    const listed = await withTransaction(auth.db, async () => await listFirmRecordings(scoped.context, firmId.data));
+    if (listed === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+    return { status: 200, body: firmRecordingsResponseSchema.parse(listed) };
+  }
 
   if (request.path === '/meetings/recordings/candidates') {
     const from = instant.safeParse(request.query.get('from') ?? '');
@@ -136,30 +157,40 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
 
   // register
   const verifyWithin = AbortSignal.timeout(MEETING_AUDIO_TOTAL_TIMEOUT_MS);
-  const verify = async (key: string, file: { readonly sizeBytes: number; readonly sha256: string }): Promise<RecordingVerdict> => {
+  const verify = async (key: string, file: { readonly sizeBytes: number; readonly sha256: string }): Promise<RecordingCheck> => {
     const head = await audio.head(key, verifyWithin);
-    if (!head.found) return 'recording_missing';
-    if (head.sizeBytes !== file.sizeBytes) return 'recording_size_mismatch';
+    if (!head.found) return { verdict: 'recording_missing', lastModified: null };
+    if (head.sizeBytes !== file.sizeBytes) return { verdict: 'recording_size_mismatch', lastModified: head.lastModified };
     // The PUT binds the digest, so S3 verified the bytes; an object without a stored checksum
     // could only come from somewhere other than our URL, and is refused.
-    if (head.sha256Base64 !== sha256Base64(file.sha256)) return 'recording_checksum_mismatch';
-    return 'ok';
+    if (head.sha256Base64 !== sha256Base64(file.sha256)) return { verdict: 'recording_checksum_mismatch', lastModified: head.lastModified };
+    return { verdict: 'ok', lastModified: head.lastModified };
   };
-  // Review M4R (uploader binding): a person who is not an administrator registers only the
-  // objects an upload URL was issued to them for (`issuedTo` on that command's receipt).
-  const issuedToActor = async (key: string): Promise<boolean> => {
-    const { rows } = await auth.db.query(
-      `SELECT 1 FROM command_receipts
+  // The uploader binding (review M4R; M4 reset, R6), for a person who is not an administrator:
+  // an upload-url receipt for this key issued to them (`issuedTo`), and one issued no later
+  // than S3 wrote the object. S3's LastModified is whole seconds, so the receipt's time is
+  // compared at the same precision: a URL issued in the same second as the write counts.
+  const receiptsFor = `FROM command_receipts
         WHERE workspace_id = $1 AND command_kind = 'meeting_recording_upload_url' AND result_status = 'accepted'
-          AND result ->> 'key' = $2 AND result ->> 'issuedTo' = $3
-        LIMIT 1`,
-      [authenticated.principal.workspaceId, key, authenticated.principal.userId],
-    );
-    return rows.length > 0;
+          AND result ->> 'key' = $2 AND result ->> 'issuedTo' = $3`;
+  const binding: UploaderBinding = {
+    issued: async key => {
+      const { rows } = await auth.db.query(`SELECT 1 ${receiptsFor} LIMIT 1`, [authenticated.principal.workspaceId, key, authenticated.principal.userId]);
+      return rows.length > 0;
+    },
+    issuedBefore: async (key, lastModified) => {
+      const { rows } = await auth.db.query(`SELECT 1 ${receiptsFor} AND date_trunc('second', created_at) <= $4::timestamptz LIMIT 1`, [
+        authenticated.principal.workspaceId,
+        key,
+        authenticated.principal.userId,
+        lastModified,
+      ]);
+      return rows.length > 0;
+    },
   };
   try {
     return await runRouteCommand(deps, recordingRegisterCommandSchema, 'meeting_recording_register', async (context, body) => {
-      const registered = await registerMeetingRecordings(context, { meetingId: body.meetingId, files: body.files }, verify, issuedToActor);
+      const registered = await registerMeetingRecordings(context, { meetingId: body.meetingId, files: body.files }, verify, binding);
       return registered.ok ? { ok: true, value: recordingsRegisteredSchema.parse(registered.value) } : registered;
     });
   } catch (error) {
