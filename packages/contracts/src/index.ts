@@ -27,5 +27,6 @@ export * from './callTrial.ts';
 export * from './callRecap.ts';
 export * from './meetings.ts';
 export * from './meetingBrief.ts';
+export * from './meetingRecordings.ts';
 export * from './reasonText.ts';
 export * from './preparedBriefs.ts';
