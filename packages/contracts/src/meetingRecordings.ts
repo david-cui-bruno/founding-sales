@@ -73,6 +73,14 @@ export const recordingCandidateSchema = z.object({
   attendeeName: minimisedName(300),
   /** `jordan.placeholder` of `jordan.placeholder@example.test`. */
   attendeeLocalPart: minimisedName(320),
+  /**
+   * Lane M2's booking details (0040), for the matcher's corroboration: the attendee's name as
+   * they gave it to Cal.com, and the booking's title — which Cal.com also gives the Zoom meeting,
+   * so the folder's topic. Each through the same minimiser (the title word by word). Absent
+   * from an API before M4: null.
+   */
+  bookingAttendeeName: minimisedName(200).default(null),
+  eventTitle: minimisedName(300).default(null),
 });
 export type RecordingCandidate = z.infer<typeof recordingCandidateSchema>;
 

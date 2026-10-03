@@ -44,6 +44,8 @@ interface CandidateRow extends QueryResultRowLike {
   readonly firm_name: string | null;
   readonly contact_name: string | null;
   readonly attendee_email: string | null;
+  readonly attendee_name: string | null;
+  readonly event_title: string | null;
 }
 
 /**
@@ -61,6 +63,18 @@ export function minimiseName(value: string | null | undefined): string | null {
 }
 
 /**
+ * A text that may carry addresses among its words (a booking's title, "Demo with
+ * jordan@example.test"): every word through `minimiseName`, so an address is its local part.
+ */
+export function minimiseText(value: string | null | undefined): string | null {
+  const words = (value ?? '')
+    .split(/\s+/u)
+    .map(word => minimiseName(word))
+    .filter((word): word is string => word !== null);
+  return words.length === 0 ? null : words.join(' ');
+}
+
+/**
  * The non-cancelled meetings starting in [from, to] that this person may attach a recording
  * to, soonest first, at most `maxCandidates`; `truncated` when there were more (review M4R,
  * finding 10). An administrator: every meeting of the workspace. Anybody else: only meetings
@@ -74,7 +88,8 @@ export async function listRecordingCandidates(
   if (actor.kind !== 'user') return { meetings: [], truncated: false };
   const admin = actor.role === 'admin';
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name, m.attendee_email
+    `SELECT m.id, m.starts_at, m.ends_at, m.firm_id, f.name AS firm_name, c.full_name AS contact_name, m.attendee_email,
+            m.attendee_name, m.event_title
        FROM meetings m
        LEFT JOIN firms f ON f.workspace_id = m.workspace_id AND f.id = m.firm_id
        LEFT JOIN contacts c ON c.workspace_id = m.workspace_id AND c.id = m.contact_id
@@ -97,6 +112,9 @@ export async function listRecordingCandidates(
       firmName: minimiseName(row.firm_name),
       attendeeName: minimiseName(row.contact_name),
       attendeeLocalPart: minimiseName(row.attendee_email),
+      // Lane M2's booking details, for corroboration: the same minimiser.
+      bookingAttendeeName: minimiseName(row.attendee_name),
+      eventTitle: minimiseText(row.event_title),
     })),
   };
 }

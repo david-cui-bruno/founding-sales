@@ -39,6 +39,8 @@ function meeting(id: string, start: Date, attendeeName: string | null = 'Jordan 
     firmName: 'Example Rentals',
     attendeeName,
     attendeeLocalPart: 'jordan.placeholder',
+    bookingAttendeeName: null,
+    eventTitle: null,
   };
 }
 

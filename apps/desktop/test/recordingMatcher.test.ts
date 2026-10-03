@@ -30,6 +30,8 @@ function meeting(id: string, starts: Date, overrides: Partial<RecordingCandidate
     firmName: 'Example Rentals',
     attendeeName: 'Jordan Placeholder',
     attendeeLocalPart: 'jordan.placeholder',
+    bookingAttendeeName: null,
+    eventTitle: null,
     ...overrides,
   };
 }
@@ -121,6 +123,32 @@ describe('CC2: matching a folder to a Callie meeting', () => {
     // Camel case, separators and digits split the same way on both sides.
     expect(wordsOf('audioJordanPlaceholder21234567890')).toEqual(['audio', 'jordan', 'placeholder']);
     expect(wordsOf('jordan_placeholder-2')).toEqual(['jordan', 'placeholder']);
+  });
+});
+
+describe('lane M2 wired in: the booking’s title and the name the attendee gave Cal.com corroborate, whole tokens only', () => {
+  it('the name the attendee gave Cal.com corroborates beside the contact’s', () => {
+    const booked = meeting('1', DEMO, { attendeeName: null, attendeeLocalPart: 'jp', bookingAttendeeName: 'Jordan Placeholder' });
+    expect(decideMatch({ startedAt: DEMO, topic: 'Zoom Meeting', participantLabels: ['audioJordanPlaceholder21234567890.m4a'] }, [booked])).toMatchObject({
+      kind: 'matched',
+      by: 'participant',
+    });
+    // Either name will do; the address's local part only when neither is known.
+    const both = meeting('1', DEMO, { attendeeName: 'Jordan Placeholder', bookingAttendeeName: 'Riley Example' });
+    expect(corroboration(both, { topic: 'Riley Example', participantLabels: [] })).toBe('topic');
+    expect(corroboration(meeting('1', DEMO, { attendeeName: null, bookingAttendeeName: 'Riley Example', attendeeLocalPart: 'sales' }), { topic: 'Sales call', participantLabels: [] })).toBeNull();
+    expect(corroboration(meeting('1', DEMO, { attendeeName: null, bookingAttendeeName: null, attendeeLocalPart: 'sales' }), { topic: 'Sales call', participantLabels: [] })).toBe('topic');
+    // Whole tokens: Ann Smith is not in Joann Smith, whichever field carries it.
+    expect(corroboration(meeting('1', DEMO, { attendeeName: null, bookingAttendeeName: 'Ann Smith' }), { topic: 'Chemistry', participantLabels: ['audioJoannSmith1.m4a'] })).toBeNull();
+  });
+
+  it('the booking’s title, the Zoom meeting’s topic, corroborates when every one of its words (two at least) is in the folder’s topic', () => {
+    const titled = meeting('1', DEMO, { attendeeName: 'Somebody Else', attendeeLocalPart: null, eventTitle: 'Callie demo between David Cui and Jordan' });
+    expect(decideMatch({ startedAt: DEMO, topic: 'Callie demo between David Cui and Jordan', participantLabels: [] }, [titled])).toMatchObject({ kind: 'matched', by: 'title' });
+    // A word missing, a one-word title, a substring: no.
+    expect(corroboration(titled, { topic: 'Callie demo between David Cui', participantLabels: [] })).toBeNull();
+    expect(corroboration(meeting('1', DEMO, { attendeeName: null, attendeeLocalPart: null, eventTitle: 'Demo' }), { topic: 'Demo', participantLabels: [] })).toBeNull();
+    expect(corroboration(meeting('1', DEMO, { attendeeName: null, attendeeLocalPart: null, eventTitle: 'Ann Review' }), { topic: 'Joann Reviews', participantLabels: [] })).toBeNull();
   });
 });
 

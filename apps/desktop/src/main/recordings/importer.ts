@@ -335,7 +335,7 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
             startsAt: meeting.startsAt,
             firmId: meeting.firmId,
             firmName: meeting.firmName,
-            attendee: (meeting.attendeeName ?? meeting.attendeeLocalPart)?.slice(0, 320) ?? null,
+            attendee: (meeting.attendeeName ?? meeting.bookingAttendeeName ?? meeting.attendeeLocalPart)?.slice(0, 320) ?? null,
           },
         ];
       }),

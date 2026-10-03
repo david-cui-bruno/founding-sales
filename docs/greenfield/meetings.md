@@ -381,7 +381,7 @@ then what `applyStageEvidence` locks. Every refusal reaches the window as its se
 (any active member: state and time are Appendix F's first row) is the firm page's
 **Meetings** rows. None of the three reaches Cal.com or depends on the switch.
 
-## Demo recordings (lane M4, migration 0040)
+## Demo recordings (lane M4, migration 0041)
 
 Zoom records each Callie demo **locally**, with one audio file per participant, into the
 demo recordings folder (Settings › Demo recordings folder; default `~/Movies/Callie Demos`,
@@ -405,9 +405,12 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
    uploaded or shown, and only a salted digest of its path is kept (once no meeting can still
    appear for it). No answer from the server decides nothing. Video is never read.
 3. **Matching.** Exactly one meeting within ±30 minutes of the start, corroborated by the
-   attendee's name (the linked contact's, else the words of the address's local part) as
-   whole words of the topic or of one participant's file name (camel case, separators and
-   digits split; "Ann Smith" is not in `audioJoannSmith1.m4a`), is matched. Anything else
+   attendee's name (the linked contact's and the booking's `attendee_name`, else the words of
+   the address's local part) as whole words of the topic or of one participant's file name
+   (camel case, separators and digits split; "Ann Smith" is not in `audioJoannSmith1.m4a`),
+   or by the booking's `event_title` when it has at least two words and every one is a whole
+   word of the topic, is matched. The booking's name and title pass through the same
+   minimiser on the server. Anything else
    that overlapped is **Needs matching**: Today's quiet Recordings group offers the
    overlapping meetings, or "Not a Callie demo", which drops the folder for good.
 4. **One writer.** Every read-modify-write of the import — the store load (once per session),

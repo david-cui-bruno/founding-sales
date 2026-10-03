@@ -10,7 +10,7 @@ import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * Lane M4 over the wire: the candidates read, the upload URL and the register command
- * (migration 0040), against a fake bucket that answers HEAD from what the test "uploaded".
+ * (migration 0041), against a fake bucket that answers HEAD from what the test "uploaded".
  * Every firm, person and file name is invented.
  */
 
@@ -154,7 +154,13 @@ describe('meeting recordings over the wire (lane M4)', () => {
     const parsed = recordingCandidatesResponseSchema.parse(answer.body);
     // Review M4R, finding 3: not the other firm's meeting, not the unmatched one.
     expect(parsed.meetings.map(entry => entry.meetingId)).toEqual([ownMeeting]);
-    expect(parsed.meetings[0]).toMatchObject({ firmName: 'Recording Own Rentals Test Co', attendeeName: 'Jordan Placeholder', attendeeLocalPart: 'jordan.placeholder' });
+    expect(parsed.meetings[0]).toMatchObject({
+      firmName: 'Recording Own Rentals Test Co',
+      attendeeName: 'Jordan Placeholder',
+      attendeeLocalPart: 'jordan.placeholder',
+      bookingAttendeeName: null,
+      eventTitle: null,
+    });
     expect(parsed.truncated).toBe(false);
     expect(JSON.stringify(answer.body)).not.toContain('@');
     const asAdmin = recordingCandidatesResponseSchema.parse((await call(adminToken, 'GET', '/meetings/recordings/candidates', undefined, window)).body);

@@ -68,6 +68,8 @@ export function labelWords(label: string): readonly string[] {
   return wordsOf(label.replace(/\.[A-Za-z0-9]{1,5}$/u, ''));
 }
 
+type NameFields = Pick<RecordingCandidate, 'attendeeName' | 'attendeeLocalPart'> & Partial<Pick<RecordingCandidate, 'bookingAttendeeName' | 'eventTitle'>>;
+
 /** The attendee's name as tokens: the contact's name, else the address's local part. */
 export function attendeeWords(meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeLocalPart'>): readonly string[] {
   const name = meeting.attendeeName?.trim() ?? '';
@@ -77,28 +79,48 @@ export function attendeeWords(meeting: Pick<RecordingCandidate, 'attendeeName' |
   return wordsOf(local);
 }
 
-export type Corroboration = 'topic' | 'participant' | null;
+/**
+ * Every name the meeting knows its attendee by, as tokens (lane M2 wired in): the contact's
+ * name and the name they gave Cal.com; the address's local part only when neither is known.
+ */
+export function attendeeNames(meeting: NameFields): readonly (readonly string[])[] {
+  const names = [attendeeWords({ attendeeName: meeting.attendeeName, attendeeLocalPart: null }), wordsOf(meeting.bookingAttendeeName ?? '')].filter(
+    words => words.length > 0,
+  );
+  if (names.length > 0) return names;
+  const local = wordsOf(meeting.attendeeLocalPart ?? '');
+  return local.length > 0 ? [local] : [];
+}
+
+/** The fewest words a booking title must have to corroborate on its own: "Demo" is not enough. */
+export const MIN_TITLE_WORDS = 2;
+
+export type Corroboration = 'topic' | 'participant' | 'title' | null;
 
 /**
- * Whether the folder says who the meeting was with: every token of the attendee's name is a
- * whole token of the topic, or of one participant file's name (`audioJohnSmith11234567890.m4a`
- * is `audio john smith`). Never a substring: `audioJoannSmith1.m4a` does not carry "Ann Smith".
+ * Whether the folder says which meeting it was, by whole tokens only (camel case, separators
+ * and digits split; never a substring — `audioJoannSmith1.m4a` does not carry "Ann Smith"):
+ *
+ *   * `topic` — every token of one of the attendee's names (the contact's, or the name they
+ *     gave Cal.com) is a token of the folder's topic;
+ *   * `participant` — or of one participant file's name (`audioJohnSmith11234567890.m4a` is
+ *     `audio john smith`);
+ *   * `title` — every token of the booking's title (Cal.com names the Zoom meeting after it,
+ *     and Zoom names the folder after the meeting), at least two of them, is a token of the
+ *     topic.
+ *
+ * Every name and the title arrive through the server's one minimiser.
  */
-export function corroboration(
-  meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeLocalPart'>,
-  folder: { readonly topic: string | null; readonly participantLabels: readonly string[] },
-): Corroboration {
-  // TODO(M2): once the server stores the booking's Cal.com title and the attendee's own name
-  // (slice M2), the candidates read answers them and they corroborate here as well: the
-  // title's words in the topic, and Cal.com's attendee name beside the contact's.
-  const name = attendeeWords(meeting);
-  if (name.length === 0) return null;
+export function corroboration(meeting: NameFields, folder: { readonly topic: string | null; readonly participantLabels: readonly string[] }): Corroboration {
   const topic = new Set(wordsOf(folder.topic ?? ''));
-  if (name.every(word => topic.has(word))) return 'topic';
+  const names = attendeeNames(meeting);
+  if (names.some(name => name.every(word => topic.has(word)))) return 'topic';
   for (const label of folder.participantLabels) {
     const tokens = new Set(labelWords(label));
-    if (name.every(word => tokens.has(word))) return 'participant';
+    if (names.some(name => name.every(word => tokens.has(word)))) return 'participant';
   }
+  const title = wordsOf(meeting.eventTitle ?? '');
+  if (title.length >= MIN_TITLE_WORDS && title.every(word => topic.has(word))) return 'title';
   return null;
 }
 

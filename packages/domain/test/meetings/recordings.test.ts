@@ -4,7 +4,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { foldMeetings, MEETING_COLUMNS, receiveCalcomEvent, type MeetingRow } from '../../meetings/calcom.ts';
-import { listFirmRecordings, listRecordingCandidates, minimiseName, registerMeetingRecordings, type RecordingCheck, type UploaderBinding } from '../../meetings/recordings.ts';
+import { listFirmRecordings, listRecordingCandidates, minimiseName, minimiseText, registerMeetingRecordings, type RecordingCheck, type UploaderBinding } from '../../meetings/recordings.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
@@ -149,12 +149,20 @@ describe('meeting recordings in the domain', () => {
       [workspaceId(), firmId],
     );
     const meetingId = await meeting(firmId);
-    await database.session.query("UPDATE meetings SET contact_id = $2, attendee_email = 'jordan.p@private.example' WHERE id = $1", [meetingId, rows[0]?.id]);
+    // Lane M2's booking details carry names and addresses too: the same minimiser.
+    await database.session.query(
+      `UPDATE meetings SET contact_id = $2, attendee_email = 'jordan.p@private.example', attendee_name = 'jp@private.example',
+              event_title = 'Callie demo with jordan@private.example', details_observed_at = now()
+        WHERE id = $1`,
+      [meetingId, rows[0]?.id],
+    );
     const listed = await withTransaction(database.session, async () =>
       await listRecordingCandidates(salesperson(database.session), { from: '2026-10-05T00:00:00Z', to: '2026-10-06T00:00:00Z' }),
     );
     const mine = listed.meetings.find(entry => entry.meetingId === meetingId);
-    expect(mine).toMatchObject({ attendeeName: 'jordan', attendeeLocalPart: 'jordan.p' });
+    expect(mine).toMatchObject({ attendeeName: 'jordan', attendeeLocalPart: 'jordan.p', bookingAttendeeName: 'jp', eventTitle: 'Callie demo with jordan' });
+    expect(minimiseText(' Demo  with a@b.example and  Sam ')).toBe('Demo with a and Sam');
+    expect(minimiseText('@only.example')).toBeNull();
     expect(JSON.stringify(listed)).not.toContain('@');
   });
 
