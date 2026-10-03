@@ -427,6 +427,7 @@ const RECORDING_IMPORT_SENTENCES: Readonly<Record<string, string>> = Object.free
   upload_failed: 'The upload did not finish. Retry sends the recording again.',
   storage_unavailable: 'Callie’s server cannot take recordings just now. Retry in a few minutes.',
   recordings_unsupported: 'Callie’s server does not take recordings yet.',
+  recording_choice_stale: 'That recording changed since this was shown. Look again and choose once more.',
 });
 
 // ---------------------------------------------------------------------------
