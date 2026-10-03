@@ -37,7 +37,11 @@ export async function meetingSource(context: RepositoryContext, recordingId: str
   if (!lock) return before;
   await context.db.query('SELECT id FROM meetings WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [context.scope.workspaceId, before.meeting_id]);
   const current = (await context.db.query<MeetingSource>(`${sql} FOR UPDATE OF r`, [context.scope.workspaceId, before.id])).rows[0];
-  return current !== undefined && current.meeting_id === before.meeting_id && current.firm_id === before.firm_id ? current : null;
+  if (current !== undefined && current.meeting_id === before.meeting_id && current.firm_id === before.firm_id) return current;
+  // A fold is not deletion. Roll back before settling or following a second firm's
+  // locks out of order; the next committed job attempt resolves the surviving source.
+  if (await resolveMeetingRecording(context, recordingId) !== null) throw new Error('meeting_recording_changed');
+  return null;
 }
 export async function holdMeetingSource(context: RepositoryContext, recordingId: string, reason: string, at: string, version: number): Promise<void> {
   const state: MeetingProcessingStatus = reason === 'source_missing' ? 'needs_reupload' : reason === 'daily_limit' ? 'budget_held'
@@ -97,6 +101,18 @@ async function dispatchGate(context: RepositoryContext, attempt: MeetingAttempt,
   let reason = source === null || source.firm_id === null || source.meeting_state === 'cancelled' ? 'not_eligible' : funding.reason;
   const day = await meetingBudgetDay(context, input.at);
   const reservation = (await context.db.query<{ business_date: string }>('SELECT business_date::text FROM provider_reservations WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, attempt.reservation_id])).rows[0];
+  if (reason === null && source !== null) {
+    if ((await context.db.query('SELECT id FROM meeting_transcripts WHERE workspace_id=$1 AND recording_id=$2 LIMIT 1', [context.scope.workspaceId, source.id])).rows.length > 0) reason = 'already_ready';
+    else {
+      const identity = await resolveMeetingRecording(context, source.id);
+      const paid = (await context.db.query<{ n: string }>(`SELECT count(*)::text AS n FROM provider_reservations
+        WHERE workspace_id=$1 AND subject_kind='meeting_transcription' AND subject_id=ANY($2::uuid[])
+          AND id<>$3 AND state NOT IN ('released','reserved')`, [context.scope.workspaceId, [source.id, ...identity?.aliasIds ?? []], attempt.reservation_id])).rows[0]!;
+      // Exclude this claim's own committed paid marker, but include every other
+      // possibly-paid alias. A fold never replenishes the lifetime allowance.
+      if (Number(paid.n) >= 2) reason = 'attempt_limit';
+    }
+  }
   if (reason === null && reservation?.business_date !== day.date) reason = 'budget_expired';
   if (reason === null && await meetingSpent(context, day.date) > funding.setting.dailyCeilingCents) reason = 'daily_limit';
   if (reason !== null && source !== null) await holdMeetingSource(context, source.id, reason, input.at, funding.version);

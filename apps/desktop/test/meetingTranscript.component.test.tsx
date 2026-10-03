@@ -5,6 +5,8 @@ import { DEFAULT_MEETING_TRANSCRIPTION, type MeetingTranscriptPage } from '@fss/
 import { MeetingTranscript, type TranscriptPorts } from '../src/renderer/meetings/MeetingTranscript.tsx';
 import { MeetingTranscriptionSection } from '../src/renderer/settings/MeetingTranscriptionSection.tsx';
 import { MeetingRecoveryQueue } from '../src/renderer/recordings/MeetingRecoveryQueue.tsx';
+import { useRoute } from '../src/renderer/app/useRoute.ts';
+import { setNavigator } from '../src/renderer/routes.ts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { transcriptPage, MID, RID } from './support/meetingTranscriptFixture.ts';
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -49,6 +51,23 @@ describe('meeting transcript', () => {
     const button = await screen.findByRole('button', { name: 'Reupload audio' }); fireEvent.click(button); fireEvent.click(button);
     expect(p.reupload).toHaveBeenCalledTimes(1); await act(async () => { finish(); });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reupload audio' })).toBeNull());
+  });
+  it('the recovery firm link opens the actual firm route', async () => {
+    const previous = globalThis.callie, hash = location.hash;
+    globalThis.callie = { onNavigate: () => undefined } as unknown as NonNullable<typeof globalThis.callie>;
+    history.replaceState(null, '', '#today');
+    const read = async () => ({ items: [{ recordingId: RID(1), meetingId: MID, firmId: RID(9), firmName: 'Example Rentals', participantLabel: 'audio.m4a' }], truncated: false });
+    function Harness() {
+      const { route } = useRoute();
+      return route.name === 'firm' ? <div data-testid="opened-firm">{route.firmId}</div> : <MeetingRecoveryQueue read={read} ports={portsFor()} />;
+    }
+    try {
+      render(<Harness />);
+      fireEvent.click(await screen.findByRole('link', { name: 'Example Rentals' }));
+      expect(await screen.findByTestId('opened-firm')).toHaveProperty('textContent', RID(9));
+    } finally {
+      cleanup(); globalThis.callie = previous; setNavigator(() => undefined, () => undefined); history.replaceState(null, '', hash || '#today');
+    }
   });
   it('an older Today read cannot restore an item after successful recovery', async () => {
     const items = [{ recordingId: RID(1), meetingId: MID, firmId: RID(9), firmName: 'Example Rentals', participantLabel: 'audio.m4a' }];
