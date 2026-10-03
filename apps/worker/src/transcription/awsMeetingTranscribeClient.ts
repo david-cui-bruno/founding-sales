@@ -60,15 +60,15 @@ export function awsMeetingTranscription(options: AwsTranscribeOptions): MeetingT
   const loaded = (async () => {
     const sdk = options.sdk ?? await loadAwsTranscribeSdk();
     const config = { ...options.clientConfiguration, region: options.region, maxAttempts: 1 };
-    return { sdk, s3: new sdk.S3Client(config), transcribe: new sdk.TranscribeClient(config) };
+    return { sdk, s3: new sdk.S3Client(config), transcribeClient: new sdk.TranscribeClient(config) };
   })();
   const validName = (name: string) => name.startsWith(`${options.jobPrefix}-`) && /^[A-Za-z0-9_-]{1,200}$/u.test(name);
   return {
     async start(input) {
       if (!validName(input.jobName) || !meetingInputKey.test(input.inputKey) || input.outputKey !== input.inputKey.replace(/\.flac$/u, '.json')) return 'refused';
-      const { sdk, transcribe } = await loaded;
+      const { sdk, transcribeClient } = await loaded;
       try {
-        await transcribe.send(new sdk.StartTranscriptionJobCommand({
+        await transcribeClient.send(new sdk.StartTranscriptionJobCommand({
           TranscriptionJobName: input.jobName, LanguageCode: 'en-US', MediaFormat: 'flac',
           Media: { MediaFileUri: `s3://${options.bucket}/${input.inputKey}` },
           OutputBucketName: options.bucket, OutputKey: input.outputKey,
@@ -83,10 +83,10 @@ export function awsMeetingTranscription(options: AwsTranscribeOptions): MeetingT
     },
     async collect(input) {
       if (!validName(input.jobName) || !meetingOutputKey.test(input.outputKey)) return { kind: 'failed', code: 'invalid_job_identity' };
-      const { sdk, transcribe, s3 } = await loaded;
+      const { sdk, transcribeClient, s3 } = await loaded;
       let status: unknown;
       try {
-        const answer = await transcribe.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: input.jobName }), { abortSignal: AbortSignal.timeout(AWS_REQUEST_TIMEOUT_MS) });
+        const answer = await transcribeClient.send(new sdk.GetTranscriptionJobCommand({ TranscriptionJobName: input.jobName }), { abortSignal: AbortSignal.timeout(AWS_REQUEST_TIMEOUT_MS) });
         status = record(record(answer)?.['TranscriptionJob'])?.['TranscriptionJobStatus'];
       } catch { return { kind: 'pending' }; }
       if (status === 'FAILED') return { kind: 'failed', code: 'provider_failed' };
