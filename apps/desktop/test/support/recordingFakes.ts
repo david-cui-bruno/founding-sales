@@ -41,6 +41,7 @@ export function fakeFs(root: string) {
   const listed: string[] = [];
   const hashed: string[] = [];
   const statted: string[] = [];
+  const sniffed: string[] = [];
   let rootMissing = false;
   const fileAt = (path: string): FakeFile | undefined => {
     for (const folder of folders.values()) {
@@ -89,6 +90,12 @@ export function fakeFs(root: string) {
       if (entry === undefined) throw new Error('ENOENT');
       return await Promise.resolve(sha(entry.content));
     },
+    // A synthetic file whose content begins `video:` is a container with a video track.
+    sniff: async path => {
+      sniffed.push(path);
+      const entry = fileAt(path);
+      return await Promise.resolve(entry === undefined ? 'unreadable' : entry.content.startsWith('video:') ? 'not_audio' : 'audio');
+    },
     watch: () => null,
   };
   return {
@@ -96,12 +103,16 @@ export function fakeFs(root: string) {
     listed,
     hashed,
     statted,
+    sniffed,
+    /** Every path this fake was asked about inside a folder (listed, statted, sniffed, hashed). */
+    touched: (): string[] => [...listed, ...statted, ...sniffed, ...hashed],
     add(name: string, files: FakeFile[], birthtimeMs = 1, parent = root): FakeFolder {
       const folder = { name, path: `${parent}/${name}`, birthtimeMs, files };
       folders.set(folder.path, folder);
       return folder;
     },
     contentOf: (path: string): string | undefined => fileAt(path)?.content,
+    remove: (path: string) => folders.delete(path),
     setRootMissing: (value: boolean) => {
       rootMissing = value;
     },
@@ -120,6 +131,8 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
   const receipts = new Map<string, Receipt>();
   const calls: { path: string; body?: Readonly<Record<string, unknown>>; commandId?: string }[] = [];
   let offlineReads = 0;
+  /** The server's candidate limit (100 in the API); more in the window answers `truncated`. */
+  let maxCandidates = 100;
   /** Called for each command before it is answered: return an outcome to answer instead. */
   let intercept: ((path: string, commandId: string) => ApiOutcome<unknown> | 'lose_answer' | 'hang' | null) | null = null;
 
@@ -143,9 +156,12 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
       };
     }
     const files = body['files'] as { sha256: string; sizeBytes: number; participantLabel: string; segment: number }[];
+    // Review M4R, finding 9: an object that is not there is `object_missing`, with no receipt.
+    const missing = files.filter(file => !recorded.has(file.sha256) && !objects.has(`meetings/${meetingId}/${file.sha256}.m4a`)).map(file => file.sha256);
+    if (missing.length > 0) return { ok: false, reason: 'object_missing', offline: false, refusal: { status: 'refused', replayed: false, reason: 'object_missing', missing } };
     for (const file of files) {
       if (recorded.has(file.sha256)) continue;
-      if (objects.get(`meetings/${meetingId}/${file.sha256}.m4a`) !== file.sizeBytes) return { ok: false, reason: 'recording_missing', offline: false };
+      if (objects.get(`meetings/${meetingId}/${file.sha256}.m4a`) !== file.sizeBytes) return { ok: false, reason: 'recording_size_mismatch', offline: false };
     }
     const answered = files.map(file => {
       const outcome = recorded.has(file.sha256) ? 'existing' : 'new';
@@ -163,12 +179,22 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
         offlineReads -= 1;
         return await Promise.resolve({ ok: false, reason: 'offline', offline: true });
       }
-      return await Promise.resolve({ ok: true, value: parse({ meetings: meetings() }) });
+      const query = new URL(path, 'https://api.test').searchParams;
+      const from = Date.parse(query.get('from') ?? '');
+      const to = Date.parse(query.get('to') ?? '');
+      const inWindow = meetings()
+        .filter(meeting => Date.parse(meeting.startsAt) >= from && Date.parse(meeting.startsAt) <= to)
+        .sort((left, right) => left.startsAt.localeCompare(right.startsAt));
+      return await Promise.resolve({ ok: true, value: parse({ meetings: inWindow.slice(0, maxCandidates), truncated: inWindow.length > maxCandidates }) });
     },
     async command<T>(path: string, payload: Readonly<Record<string, unknown>>, parse: (value: unknown) => T, options?: { readonly commandId?: string }): Promise<ApiOutcome<T>> {
       const commandId = options?.commandId ?? `auto-${String(calls.length)}`;
       calls.push({ path, body: payload, commandId });
       const kept = receipts.get(commandId);
+      // Review M4R, finding 8: a replayed upload URL is authorised again before it is signed.
+      if (kept !== undefined && path === '/meetings/recordings/upload-url' && !meetings().some(meeting => meeting.meetingId === String(payload['meetingId']))) {
+        return await Promise.resolve({ ok: false, reason: 'meeting_unknown', offline: false });
+      }
       if (kept !== undefined) {
         const replay = kept.answer;
         return await Promise.resolve(replay.ok ? { ok: true, value: parse(replay.value) } : replay);
@@ -176,7 +202,7 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
       const intercepted = intercept?.(path, commandId) ?? null;
       if (intercepted !== null && intercepted !== 'lose_answer' && intercepted !== 'hang') return await Promise.resolve(intercepted as ApiOutcome<T>);
       const answer = answerOf(path, payload);
-      receipts.set(commandId, { kind: path, answer });
+      if (answer.ok || answer.reason !== 'object_missing') receipts.set(commandId, { kind: path, answer });
       if (intercepted === 'lose_answer') return await Promise.resolve({ ok: false, reason: 'offline', offline: true });
       // The app quit while the request was on the wire: the server recorded it, no answer ever comes.
       if (intercepted === 'hang') return await new Promise<ApiOutcome<T>>(() => undefined);
@@ -189,6 +215,13 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
     calls,
     rows,
     putObject: (key: string, size: number) => objects.set(key, size),
+    /** The bucket's lifecycle: every staged object expires. */
+    expireObjects: () => {
+      objects.clear();
+    },
+    setMaxCandidates: (value: number) => {
+      maxCandidates = value;
+    },
     commandsTo: (path: string) => calls.filter(call => call.path === path),
     setOfflineReads: (count: number) => {
       offlineReads = count;

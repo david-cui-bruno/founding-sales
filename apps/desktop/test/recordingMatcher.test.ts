@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecordingCandidate } from '@fss/contracts';
-import { attendeeWords, corroboration, decideMatch, overlappingMeetings } from '../src/main/recordings/matcher.ts';
+import { attendeeWords, corroboration, decideMatch, overlappingMeetings, wordsOf } from '../src/main/recordings/matcher.ts';
 import {
   STABLE_AFTER_MS,
   audioFilesOf,
@@ -29,7 +29,7 @@ function meeting(id: string, starts: Date, overrides: Partial<RecordingCandidate
     firmId: '11111111-1111-4111-8111-111111111111',
     firmName: 'Example Rentals',
     attendeeName: 'Jordan Placeholder',
-    attendeeEmail: 'jordan.placeholder@example.test',
+    attendeeLocalPart: 'jordan.placeholder',
     ...overrides,
   };
 }
@@ -62,7 +62,7 @@ describe('CC2: matching a folder to a Callie meeting', () => {
   });
 
   it('two candidates near the start: needs matching, both offered, even when one is corroborated', () => {
-    const other = meeting('2', local(2026, 10, 5, 14, 20), { attendeeName: 'Riley Example', attendeeEmail: 'riley@example.test' });
+    const other = meeting('2', local(2026, 10, 5, 14, 20), { attendeeName: 'Riley Example', attendeeLocalPart: 'riley' });
     const decision = decideMatch(
       { startedAt: local(2026, 10, 5, 14, 5), topic: 'Callie demo between David Cui and Jordan Placeholder', participantLabels: [] },
       [meeting('1', DEMO), other],
@@ -98,13 +98,29 @@ describe('CC2: matching a folder to a Callie meeting', () => {
     expect(overlappingMeetings(local(2026, 10, 5, 14, 51), one)).toHaveLength(0);
   });
 
-  it('the attendee’s name: the contact’s, else the address’s words; a partial name does not corroborate', () => {
-    expect(attendeeWords({ attendeeName: 'Jördan  Placeholder', attendeeEmail: null })).toEqual(['jordan', 'placeholder']);
-    expect(attendeeWords({ attendeeName: 'jordan.placeholder@example.test', attendeeEmail: null })).toEqual(['jordan', 'placeholder']);
-    expect(attendeeWords({ attendeeName: null, attendeeEmail: 'riley_example@example.test' })).toEqual(['riley', 'example']);
-    expect(attendeeWords({ attendeeName: null, attendeeEmail: null })).toEqual([]);
-    expect(corroboration({ attendeeName: 'Jordan Placeholder', attendeeEmail: null }, { topic: 'Meeting with Jordan', participantLabels: [] })).toBeNull();
-    expect(corroboration({ attendeeName: null, attendeeEmail: null }, { topic: 'anything', participantLabels: ['audioX1.m4a'] })).toBeNull();
+  it('the attendee’s name: the contact’s, else the address’s local part; a partial name does not corroborate', () => {
+    expect(attendeeWords({ attendeeName: 'Jördan  Placeholder', attendeeLocalPart: null })).toEqual(['jordan', 'placeholder']);
+    expect(attendeeWords({ attendeeName: 'jordan.placeholder@example.test', attendeeLocalPart: null })).toEqual(['jordan', 'placeholder']);
+    expect(attendeeWords({ attendeeName: null, attendeeLocalPart: 'riley_example2' })).toEqual(['riley', 'example']);
+    expect(attendeeWords({ attendeeName: null, attendeeLocalPart: null })).toEqual([]);
+    expect(corroboration({ attendeeName: 'Jordan Placeholder', attendeeLocalPart: null }, { topic: 'Meeting with Jordan', participantLabels: [] })).toBeNull();
+    expect(corroboration({ attendeeName: null, attendeeLocalPart: null }, { topic: 'anything', participantLabels: ['audioX1.m4a'] })).toBeNull();
+  });
+
+  it('review M4R finding 4: whole tokens only — Ann Smith is not corroborated by Joann Smith (needs matching)', () => {
+    const ann = meeting('1', DEMO, { attendeeName: 'Ann Smith', attendeeLocalPart: null });
+    // The reviewer's repro: an unrelated topic and a participant whose name contains the attendee's.
+    expect(decideMatch({ startedAt: DEMO, topic: 'Chemistry class', participantLabels: ['audioJoannSmith123.m4a'] }, [ann])).toMatchObject({
+      kind: 'needs_matching',
+      why: 'not_corroborated',
+    });
+    expect(corroboration(ann, { topic: 'Joann Smith demo', participantLabels: [] })).toBeNull();
+    expect(corroboration(ann, { topic: 'Smithann', participantLabels: ['audioSmithAnn1.m4a'] })).toBe('participant');
+    expect(corroboration(ann, { topic: 'Demo with Ann Smith', participantLabels: [] })).toBe('topic');
+    expect(corroboration(ann, { topic: null, participantLabels: ['audioAnnSmith21234567890.m4a'] })).toBe('participant');
+    // Camel case, separators and digits split the same way on both sides.
+    expect(wordsOf('audioJordanPlaceholder21234567890')).toEqual(['audio', 'jordan', 'placeholder']);
+    expect(wordsOf('jordan_placeholder-2')).toEqual(['jordan', 'placeholder']);
   });
 });
 

@@ -272,13 +272,11 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       }),
     sessionGeneration: () => manager.sessionGeneration(),
     // Lane M4: the demo recordings folder this Mac watches (a device setting, in
-    // `recordings.json` beside `device.json`), and the import keyed by the signed-in workspace.
+    // `recordings.json` beside `device.json`), and the import keyed by the signed-in person
+    // (workspace and user: review M4R, finding 7).
     recordings: {
       store: createRecordingStore({ directory: configuration.userDataDirectory }),
-      identity: async () => {
-        const state = await manager.state();
-        return state.device !== null && state.mayMutate && state.screen === 'today' ? { workspaceId: state.device.workspaceId } : null;
-      },
+      identity: async () => await manager.signedInIdentity(),
       defaultFolder: join(app.getPath('home'), 'Movies', 'Callie Demos'),
       openFolderDialog: async purpose =>
         await dialog.showOpenDialog({

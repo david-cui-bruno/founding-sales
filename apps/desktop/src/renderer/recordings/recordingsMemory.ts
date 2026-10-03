@@ -18,9 +18,28 @@ import { useSessionEpoch } from '../app/drafts.tsx';
  *     earned, shown beside that item and no other.
  *
  * A picker closes only on a success answer (K5, K6); a refusal keeps it open with its reason.
- * A late answer updates the view and its own item's note, and never reopens a picker David
- * closed (K3).
+ * A command's answer changes its OWN item only, and only when that item has not moved past
+ * the answer's version (review M4R, finding 12): a late answer about B never puts back an A
+ * that a newer answer removed. It never reopens a picker David closed (K3).
  */
+
+/** Keys that move between rows: never left on a command button, so the Enter after them presses nothing (K4). */
+export const RECORDING_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['j', 'k', 'ArrowDown', 'ArrowUp']);
+
+/**
+ * The view with one command's answer applied to its own item (finding 12): replaced (or
+ * removed, when the answer says it left) only if the view still shows it at the answer's
+ * version or older. An item the view no longer shows is not brought back.
+ */
+export function applyAnswered(view: RecordingsView | null, answer: RecordingsView): RecordingsView | null {
+  const answered = answer.answered;
+  if (view === null || answered === undefined) return view;
+  const shown = view.items.find(item => item.itemId === answered.itemId);
+  if (shown === undefined || shown.version > answered.version) return view;
+  const next = answered.item;
+  const items = next === null ? view.items.filter(item => item.itemId !== answered.itemId) : view.items.map(item => (item.itemId === answered.itemId ? next : item));
+  return { ...view, items };
+}
 
 export type RecordingCommand = 'choose' | 'ignore' | 'retry';
 
@@ -176,7 +195,7 @@ export function useRecordings(ports: RecordingsPorts | null): Recordings {
           return;
         }
         kept.answers += 1;
-        kept.view = answer;
+        kept.view = applyAnswered(kept.view, answer);
         if (answer.notice !== null) {
           // K5: a refusal keeps the picker open, with its reason, on this item only.
           kept.notes.set(itemId, reasonSentence(answer.notice));

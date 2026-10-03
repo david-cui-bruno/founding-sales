@@ -27,6 +27,8 @@ export const recordingItemIdSchema = z.string().regex(/^[0-9a-f]{32}$/u);
 
 export const recordingItemSchema = z.strictObject({
   itemId: recordingItemIdSchema,
+  /** The entry's version: an answer older than what the window shows is not drawn (K7). */
+  version: z.number().int().min(1),
   /** The folder's name as Zoom wrote it: the date, the time and the topic. */
   folderName: z.string().max(300),
   startedAt: instant,
@@ -52,5 +54,13 @@ export const recordingsViewSchema = z.strictObject({
   items: z.array(recordingItemSchema).max(200),
   /** A command's refusal code (`recording_choice_stale`, say), or null. */
   notice: z.string().max(80).nullable(),
+  /**
+   * A command's answer about its own item (review M4R, finding 12): the item as it is now, or
+   * null when it left the view (ignored), at its entry's version. The window applies this and
+   * nothing else from a command's answer. Absent on a read.
+   */
+  answered: z
+    .strictObject({ itemId: recordingItemIdSchema, version: z.number().int().min(0), item: recordingItemSchema.nullable() })
+    .optional(),
 });
 export type RecordingsView = z.infer<typeof recordingsViewSchema>;

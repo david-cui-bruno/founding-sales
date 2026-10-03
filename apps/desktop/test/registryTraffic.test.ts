@@ -353,10 +353,10 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     recordings: (() => {
       const importer = createRecordingImporter({
         api,
-        fs: { listRoot: async () => await Promise.resolve([]), statFolder: async () => await Promise.resolve(null), listFolder: async () => await Promise.resolve([]), statFile: async () => await Promise.resolve(null), sha256: async () => await Promise.resolve(''), watch: () => null },
+        fs: { listRoot: async () => await Promise.resolve([]), statFolder: async () => await Promise.resolve(null), listFolder: async () => await Promise.resolve([]), statFile: async () => await Promise.resolve(null), sniff: async () => await Promise.resolve('unreadable' as const), sha256: async () => await Promise.resolve(''), watch: () => null },
         uploader: { put: async () => await Promise.resolve({ ok: true as const }) },
         store: memoryRecordingStore(),
-        identity: async () => await Promise.resolve({ workspaceId: UUID }),
+        identity: async () => await Promise.resolve({ workspaceId: UUID, userId: UUID }),
         defaultFolder: '/tmp/Callie Demos',
         openFolderDialog: async () => await Promise.resolve({ canceled: true, filePaths: [] }),
       });

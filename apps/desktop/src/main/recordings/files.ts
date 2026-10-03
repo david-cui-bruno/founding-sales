@@ -3,6 +3,8 @@ import { createReadStream, watch as watchPath, type FSWatcher } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { request } from 'node:https';
 import { join } from 'node:path';
+import { open } from 'node:fs/promises';
+import { sniffAudio, type SniffVerdict } from './audioSniff.ts';
 import { PARTICIPANT_FOLDER_NAMES, roleOf, type FolderFile } from './zoomFolder.ts';
 
 /**
@@ -28,6 +30,8 @@ export interface RecordingFs {
   listFolder(path: string): Promise<readonly FolderFile[]>;
   /** One audio file's identity now, to check it did not change since it was listed. */
   statFile(path: string): Promise<{ readonly sizeBytes: number; readonly ino: number; readonly mtimeMs: number } | null>;
+  /** Whether the file is an audio-only MP4/M4A, from its box headers (`audioSniff.ts`). */
+  sniff(path: string): Promise<SniffVerdict>;
   /** The SHA-256 of one audio file, streamed. */
   sha256(path: string): Promise<string>;
   /** Watch the root (recursively, on macOS); `onChange` is debounced by the caller. */
@@ -101,6 +105,26 @@ export const nodeRecordingFs: RecordingFs = {
       return { sizeBytes: info.size, ino: info.ino, mtimeMs: info.mtimeMs };
     } catch {
       return null;
+    }
+  },
+  async sniff(path) {
+    let handle: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      handle = await open(path, 'r');
+      const opened = handle;
+      const { size } = await opened.stat();
+      return await sniffAudio({
+        size,
+        read: async (offset, length) => {
+          const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - offset)));
+          const { bytesRead } = await opened.read(buffer, 0, buffer.length, offset);
+          return buffer.subarray(0, bytesRead);
+        },
+      });
+    } catch {
+      return 'unreadable';
+    } finally {
+      await handle?.close().catch(() => undefined);
     }
   },
   async sha256(path) {

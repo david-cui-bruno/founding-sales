@@ -18,9 +18,14 @@ import type { RecordingCandidate } from '@fss/contracts';
  *    choices. Never a guess: no corroboration is no match, and two near meetings are two.
  *
  * The attendee's name is the CRM contact linked to the meeting; failing that, the words of the
- * address they booked with (`john.smith@` → john, smith). Cal.com's event title and attendee
- * name are not stored by the server (migration 0028 keeps no payload), so the topic is checked
- * against the attendee only.
+ * local part of the address they booked with (`john.smith` → john, smith; the server never
+ * sends the whole address). Cal.com's event title and attendee name are not stored by the
+ * server (migration 0028 keeps no payload), so the topic is checked against the attendee only.
+ *
+ * **Whole tokens only** (review M4R, finding 4). Every text is cut into tokens the same way —
+ * camel case split, digits dropped, accents folded, separators split — and a name corroborates
+ * only when EVERY one of its tokens is a whole token of the topic, or of one participant file's
+ * name. `audioJoannSmith123.m4a` is `audio joann smith`, so "Ann Smith" is not in it.
  */
 
 export const OVERLAP_MARGIN_MS = 30 * 60 * 1000;
@@ -42,35 +47,45 @@ export function overlappingMeetings(startedAt: Date, meetings: readonly Recordin
   });
 }
 
-/** Lower-case words of at least two letters or digits, accents folded. */
+/**
+ * Lower-case letter tokens of at least two letters: accents folded, camel case split
+ * (`JordanPlaceholder`, `DavidCUI`), digits dropped, anything else a separator.
+ */
 export function wordsOf(text: string): readonly string[] {
   return text
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/gu, '')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .replace(/([a-z])([A-Z])/gu, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, '$1 $2')
+    .replace(/[0-9]+/gu, ' ')
     .toLowerCase()
-    .split(/[^a-z0-9]+/u)
+    .split(/[^a-z]+/u)
     .filter(word => word.length >= 2);
 }
 
-/** The attendee's name as words: the contact's name, else the address's local part. */
-export function attendeeWords(meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeEmail'>): readonly string[] {
+/** A participant file's name as tokens, without its extension (the digits go in `wordsOf`). */
+export function labelWords(label: string): readonly string[] {
+  return wordsOf(label.replace(/\.[A-Za-z0-9]{1,5}$/u, ''));
+}
+
+/** The attendee's name as tokens: the contact's name, else the address's local part. */
+export function attendeeWords(meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeLocalPart'>): readonly string[] {
   const name = meeting.attendeeName?.trim() ?? '';
   // A contact the match created is named by its address until somebody types a name.
   if (name !== '' && !name.includes('@')) return wordsOf(name);
-  const address = (name.includes('@') ? name : (meeting.attendeeEmail ?? '')).trim();
-  const local = address.split('@')[0] ?? '';
+  const local = name.includes('@') ? (name.split('@')[0] ?? '') : (meeting.attendeeLocalPart ?? '');
   return wordsOf(local);
 }
 
 export type Corroboration = 'topic' | 'participant' | null;
 
 /**
- * Whether the folder says who the meeting was with: every word of the attendee's name in the
- * topic, or the name's letters run together inside a participant file's name
- * (`audioJohnSmith11234567890.m4a` carries `johnsmith`).
+ * Whether the folder says who the meeting was with: every token of the attendee's name is a
+ * whole token of the topic, or of one participant file's name (`audioJohnSmith11234567890.m4a`
+ * is `audio john smith`). Never a substring: `audioJoannSmith1.m4a` does not carry "Ann Smith".
  */
 export function corroboration(
-  meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeEmail'>,
+  meeting: Pick<RecordingCandidate, 'attendeeName' | 'attendeeLocalPart'>,
   folder: { readonly topic: string | null; readonly participantLabels: readonly string[] },
 ): Corroboration {
   // TODO(M2): once the server stores the booking's Cal.com title and the attendee's own name
@@ -80,10 +95,9 @@ export function corroboration(
   if (name.length === 0) return null;
   const topic = new Set(wordsOf(folder.topic ?? ''));
   if (name.every(word => topic.has(word))) return 'topic';
-  const joined = name.join('');
   for (const label of folder.participantLabels) {
-    const letters = label.normalize('NFKD').replace(/[̀-ͯ]/gu, '').toLowerCase().replace(/[^a-z0-9]+/gu, '');
-    if (letters.includes(joined)) return 'participant';
+    const tokens = new Set(labelWords(label));
+    if (name.every(word => tokens.has(word))) return 'participant';
   }
   return null;
 }

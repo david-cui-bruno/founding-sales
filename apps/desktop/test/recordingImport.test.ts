@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { RecordingCandidate } from '@fss/contracts';
+import { guardIdentity } from '../src/main/identityReset.ts';
 import { createRecordingImporter, itemIdOf, type RecordingImportHost } from '../src/main/recordings/importer.ts';
 import { STABLE_AFTER_MS } from '../src/main/recordings/zoomFolder.ts';
-import { memoryRecordingStore, type RecordingStore } from '../src/main/recordings/store.ts';
+import { memoryRecordingStore, type RecordingStore, type RecordingsFile } from '../src/main/recordings/store.ts';
 import { fakeFile, fakeFs, fakeServer, fakeUploader, sha } from './support/recordingFakes.ts';
 
 /**
@@ -15,6 +16,8 @@ import { fakeFile, fakeFs, fakeServer, fakeUploader, sha } from './support/recor
 
 const ROOT = '/Users/test/Movies/Callie Demos';
 const WORKSPACE = '22222222-2222-4222-8222-222222222222';
+const USER = '55555555-5555-4555-8555-555555555555';
+const PERSON = `${WORKSPACE}:${USER}`;
 const T0 = new Date(2026, 9, 5, 14, 40, 0).getTime();
 
 const local = (hour: number, minute: number): Date => new Date(2026, 9, 5, hour, minute, 0);
@@ -31,27 +34,28 @@ function meeting(id: string, start: Date, attendeeName: string | null = 'Jordan 
     firmId: '11111111-1111-4111-8111-111111111111',
     firmName: 'Example Rentals',
     attendeeName,
-    attendeeEmail: 'jordan.placeholder@example.test',
+    attendeeLocalPart: 'jordan.placeholder',
   };
 }
 
-function harness(options: { meetings?: RecordingCandidate[]; store?: RecordingStore & { saved(): unknown } } = {}) {
+function harness(options: { meetings?: RecordingCandidate[]; store?: RecordingStore & { saved(): RecordingsFile } } = {}) {
   let clock = T0;
   let meetings = options.meetings ?? [meeting('1', local(14, 0))];
   const files = fakeFs(ROOT);
   const server = fakeServer(() => meetings);
   const upload = fakeUploader(server, files);
   const store = options.store ?? memoryRecordingStore();
-  let signedIn: string | null = WORKSPACE;
+  let chosen: string | null = null;
+  let signedIn: { workspaceId: string; userId: string } | null = { workspaceId: WORKSPACE, userId: USER };
   const build = (s: RecordingStore = store): RecordingImportHost =>
     createRecordingImporter({
       api: server.api,
       fs: files.fs,
       uploader: upload.uploader,
       store: s,
-      identity: async () => await Promise.resolve(signedIn === null ? null : { workspaceId: signedIn }),
+      identity: async () => await Promise.resolve(signedIn),
       defaultFolder: ROOT,
-      openFolderDialog: async () => await Promise.resolve({ canceled: true, filePaths: [] }),
+      openFolderDialog: async () => await Promise.resolve(chosen === null ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: [chosen] }),
       now: () => clock,
     });
   return {
@@ -67,8 +71,11 @@ function harness(options: { meetings?: RecordingCandidate[]; store?: RecordingSt
     setMeetings: (next: RecordingCandidate[]) => {
       meetings = next;
     },
-    signIn: (workspace: string | null) => {
-      signedIn = workspace;
+    signIn: (who: { workspaceId: string; userId: string } | null) => {
+      signedIn = who;
+    },
+    choose: (path: string | null) => {
+      chosen = path;
     },
   };
 }
@@ -98,8 +105,7 @@ describe('CC3: a restart in the middle of an upload resumes exactly once', () =>
     h.advance(STABLE_AFTER_MS + 1000);
     void h.importer.scan();
     await new Promise(resolve => setTimeout(resolve, 20));
-    const saved = h.store.saved() as { workspaces: Record<string, { entries: Record<string, { state: string; files: { uploaded: boolean }[] }> }> };
-    const entry = saved.workspaces[WORKSPACE]!.entries[folder.path]!;
+    const entry = h.store.saved().people[PERSON]!.entries[folder.path]!;
     expect(entry.state).toBe('uploading');
     expect(entry.files.map(file => file.uploaded)).toEqual([true, false]);
     expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
@@ -150,7 +156,7 @@ describe('the demo recording import (acceptance)', () => {
     await settle(h);
     const view = await h.importer.state();
     expect(view.items).toEqual([
-      expect.objectContaining({ itemId: itemIdOf(WORKSPACE, folder.path), state: 'uploaded', meetingId: meeting('1', local(14, 0)).meetingId, uploaded: 2, total: 2 }),
+      expect.objectContaining({ itemId: itemIdOf(PERSON, folder.path), state: 'uploaded', meetingId: meeting('1', local(14, 0)).meetingId, uploaded: 2, total: 2 }),
     ]);
     expect(h.upload.puts.map(path => path.slice(folder.path.length + 1))).toEqual([
       'Audio Record/audioDavidCui11234567890.m4a',
@@ -243,7 +249,7 @@ describe('the demo recording import (acceptance)', () => {
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)).toBeUndefined();
 
     // A meeting it did not overlap is refused, and nothing moves.
-    const second = (await h.importer.state()).items.find(item => item.itemId === itemIdOf(WORKSPACE, other.path))!;
+    const second = (await h.importer.state()).items.find(item => item.itemId === itemIdOf(PERSON, other.path))!;
     expect((await h.importer.chooseMeeting({ itemId: second.itemId, meetingId: '00000000-0000-4000-8000-000000000777' })).notice).toBe('recording_choice_stale');
     await h.importer.ignore({ itemId: second.itemId });
     await settle(h);
@@ -317,10 +323,302 @@ describe('the demo recording import (acceptance)', () => {
     await settle(h);
     expect((await h.importer.state()).items).toHaveLength(1);
     await h.importer.forget();
-    h.signIn('33333333-3333-4333-8333-333333333333');
+    h.signIn({ workspaceId: '33333333-3333-4333-8333-333333333333', userId: USER });
     h.setMeetings([]);
     expect((await h.importer.state()).items).toEqual([]);
     await settle(h);
     expect((await h.importer.state()).items).toEqual([]);
+  });
+});
+
+/** A port call held until released: the reviewer's way of landing a command inside a scan. */
+function latch() {
+  let started!: () => void;
+  let release!: () => void;
+  const began = new Promise<void>(resolve => {
+    started = resolve;
+  });
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return { began, released, started: () => started(), release: () => release() };
+}
+
+/** Interrupt every upload-url (offline): the folder is left `uploading`, its digests saved, nothing sent. */
+async function interruptedUpload(h: ReturnType<typeof harness>): Promise<void> {
+  h.server.setIntercept(path => (path === '/meetings/recordings/upload-url' ? { ok: false, reason: 'offline', offline: true } : null));
+  await settle(h);
+  h.server.setIntercept(null);
+  expect(Object.values(h.store.saved().people[PERSON]!.entries).map(entry => entry.state)).toEqual(['uploading']);
+}
+
+describe('review M4R: the importer', () => {
+  it('finding 1: “Not a Callie demo” during a scan stays final — the scan does not overwrite it, and nothing is sent', async () => {
+    const two = [meeting('1', local(14, 0)), meeting('2', local(14, 15), 'Riley Example')];
+    const h = harness({ meetings: two });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    expect(item.state).toBe('needs_matching');
+    // Now the matcher would place it (one meeting left) — but David says it is not a demo while the scan lists the folder.
+    h.setMeetings([two[0]!]);
+    const list = h.files.fs.listFolder;
+    const gate = latch();
+    h.files.fs.listFolder = async path => {
+      gate.started();
+      await gate.released;
+      return await list(path);
+    };
+    const pending = h.importer.scan();
+    await gate.began;
+    const ignored = await h.importer.ignore({ itemId: item.itemId });
+    expect(ignored.answered).toEqual({ itemId: item.itemId, version: item.version + 1, item: null });
+    gate.release();
+    await pending;
+    await h.importer.idle();
+    h.files.fs.listFolder = list;
+    await settle(h);
+    expect((await h.importer.state()).items).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.store.saved().people[PERSON]!.entries[Object.keys(h.store.saved().people[PERSON]!.entries)[0]!]?.state).toBe('ignored');
+  });
+
+  it('finding 1: a choice made during a scan is kept; the scan’s older derivation is dropped', async () => {
+    const two = [meeting('1', local(14, 0)), meeting('2', local(14, 15), 'Riley Example')];
+    const h = harness({ meetings: two });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    const list = h.files.fs.listFolder;
+    const gate = latch();
+    h.files.fs.listFolder = async path => {
+      gate.started();
+      await gate.released;
+      return await list(path);
+    };
+    const pending = h.importer.scan();
+    await gate.began;
+    h.files.fs.listFolder = list;
+    const chose = h.importer.chooseMeeting({ itemId: item.itemId, meetingId: two[1]!.meetingId });
+    gate.release();
+    await Promise.all([pending, chose]);
+    await h.importer.idle();
+    expect(h.server.rows.get(two[1]!.meetingId)?.size).toBe(2);
+    expect(h.server.rows.get(two[0]!.meetingId)).toBeUndefined();
+  });
+
+  it('finding 2: after a restart, a folder whose meeting moved out of its window is revalidated first — no stat, hash or PUT, and it is gone', async () => {
+    const h = harness();
+    const folder = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await interruptedUpload(h);
+    const reads = h.server.calls.filter(call => call.path.includes('candidates')).length;
+    // Rescheduled three hours later.
+    h.setMeetings([meeting('1', local(17, 0))]);
+    const touchedBefore = h.files.touched().length;
+    const restarted = h.build();
+    await restarted.scan();
+    await restarted.idle();
+    expect(h.server.calls.filter(call => call.path.includes('candidates')).length).toBeGreaterThan(reads);
+    expect(h.files.touched().slice(touchedBefore).filter(path => path.startsWith(folder.path))).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+    expect((await restarted.state()).items).toEqual([]);
+    expect(h.store.saved().people[PERSON]!.entries).toEqual({});
+  });
+
+  it('finding 2: after a restart with no candidates answer, nothing of the folder is touched and nothing is sent', async () => {
+    const h = harness();
+    const folder = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await interruptedUpload(h);
+    const touchedBefore = h.files.touched().length;
+    h.server.setOfflineReads(10);
+    const restarted = h.build();
+    await settle(h, restarted);
+    expect(h.files.touched().slice(touchedBefore).filter(path => path.startsWith(folder.path))).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+    // Only the interrupted attempt before the restart; none after it.
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(1);
+    // Answered again: revalidated, then resumed.
+    h.server.setOfflineReads(0);
+    await settle(h, restarted);
+    expect((await restarted.state()).items[0]?.state).toBe('uploaded');
+  });
+
+  it('findings 2 and 11: a meeting David chose that was folded into another is not kept — needs matching, the survivor offered, nothing sent to the old id', async () => {
+    const two = [meeting('1', local(14, 0)), meeting('2', local(14, 15), 'Riley Example')];
+    const h = harness({ meetings: two });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    h.server.setIntercept(path => (path === '/meetings/recordings/upload-url' ? { ok: false, reason: 'offline', offline: true } : null));
+    await h.importer.chooseMeeting({ itemId: item.itemId, meetingId: two[0]!.meetingId });
+    await h.importer.idle();
+    h.server.setIntercept(null);
+    // Meeting 1 folded into meeting 2 (the survivor), and the app restarted.
+    h.setMeetings([two[1]!]);
+    const restarted = h.build();
+    await restarted.scan();
+    await restarted.idle();
+    const after = (await restarted.state()).items;
+    expect(after).toEqual([expect.objectContaining({ state: 'needs_matching', meetingId: null })]);
+    expect(after[0]?.choices.map(choice => choice.meetingId)).toEqual([two[1]!.meetingId]);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url').filter(call => call.body?.['meetingId'] === two[0]!.meetingId)).toHaveLength(1);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(1);
+  });
+
+  it('finding 11: an upload refused meeting_unknown (deleted between the read and the command) goes back to Needs matching, not failed', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    h.server.setIntercept(path => (path === '/meetings/recordings/upload-url' ? { ok: false, reason: 'meeting_unknown', offline: false } : null));
+    await settle(h);
+    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'needs_matching', meetingId: null, failure: null })]);
+    expect(h.upload.puts).toEqual([]);
+  });
+
+  it('finding 5: a folder imported by hand that overlaps no meeting is never stored — not its path, not its name', async () => {
+    const h = harness();
+    const chemistry = h.files.add('2026-10-05 19.00.00 Chemistry class', [fakeFile('Audio Record/audioProfessorExample1.m4a', 'lecture')], 1, '/Users/test/Elsewhere');
+    h.choose(chemistry.path);
+    await h.importer.importFolder();
+    await h.importer.idle();
+    expect((await h.importer.state()).items).toEqual([]);
+    expect(h.files.touched().filter(path => path.startsWith(chemistry.path))).toEqual([]);
+    const saved = JSON.stringify(h.store.saved());
+    expect(saved).not.toContain('Chemistry');
+    expect(saved).not.toContain('Elsewhere');
+  });
+
+  it('finding 5: a folder imported by hand that overlaps a meeting is kept and uploaded', async () => {
+    const h = harness();
+    const demo = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles(), 1, '/Users/test/Elsewhere');
+    h.choose(demo.path);
+    await h.importer.importFolder();
+    h.advance(STABLE_AFTER_MS + 1000);
+    await h.importer.scan();
+    await h.importer.idle();
+    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+  });
+
+  it('finding 6: a sign-out while state() loads the store drops the late answer; the next read shows nothing', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const gate = latch();
+    const slow: RecordingStore = {
+      load: async () => {
+        gate.started();
+        await gate.released;
+        return await h.store.load();
+      },
+      save: async value => {
+        await h.store.save(value);
+      },
+    };
+    const raw = h.build(slow);
+    let epoch = 0;
+    const guarded = guardIdentity(raw, () => epoch);
+    const pending = guarded.state();
+    await gate.began;
+    epoch += 1;
+    h.signIn(null);
+    await raw.forget();
+    gate.release();
+    expect((await pending).items).toEqual([]);
+    expect((await guarded.state()).items).toEqual([]);
+    expect((await raw.state()).items).toEqual([]);
+  });
+
+  it('finding 7: another person in the same workspace sees none of the first one’s folders; the first sees theirs again', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    await h.importer.forget();
+    h.signIn({ workspaceId: WORKSPACE, userId: '66666666-6666-4666-8666-666666666666' });
+    h.setMeetings([]);
+    const other = h.build();
+    expect((await other.state()).items).toEqual([]);
+    await settle(h, other);
+    expect((await other.state()).items).toEqual([]);
+    await other.forget();
+    h.signIn({ workspaceId: WORKSPACE, userId: USER });
+    expect((await other.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+  });
+
+  it('finding 9: a staged object that expired before the register is sent again, and registered', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    h.server.setIntercept(path => (path === '/meetings/recordings/register' ? { ok: false, reason: 'offline', offline: true } : null));
+    await settle(h);
+    expect(h.upload.puts).toHaveLength(2);
+    h.server.setIntercept(null);
+    h.server.expireObjects();
+    const restarted = h.build();
+    for (let round = 0; round < 3; round += 1) await settle(h, restarted);
+    expect((await restarted.state()).items[0]?.state).toBe('uploaded');
+    expect(h.upload.puts).toHaveLength(4);
+    expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
+  });
+
+  it('finding 9: objects that never stay fail the folder after three registers, with Retry', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    h.server.setIntercept(path => {
+      if (path === '/meetings/recordings/register') h.server.expireObjects();
+      return null;
+    });
+    for (let round = 0; round < 5; round += 1) await settle(h);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(3);
+    expect(h.upload.puts).toHaveLength(6);
+    const failed = (await h.importer.state()).items[0]!;
+    expect(failed).toMatchObject({ state: 'failed', failure: 'upload_failed' });
+    h.server.setIntercept(null);
+    await h.importer.retry({ itemId: failed.itemId });
+    await settle(h);
+    expect((await h.importer.state()).items[0]?.state).toBe('uploaded');
+  });
+
+  it('finding 10: a truncated answer decides nothing — each folder is read on its own window, and one still truncated waits', async () => {
+    const h = harness({ meetings: [meeting('1', local(14, 0)), meeting('2', new Date(2026, 9, 1, 10, 0)), meeting('3', new Date(2026, 9, 1, 10, 20))] });
+    h.server.setMaxCandidates(1);
+    const demo = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    // Four days earlier, beside two meetings: its own window holds two, more than the limit.
+    const crowded = h.files.add(folderName(new Date(2026, 9, 1, 10, 5), 'Callie demo with Jordan Placeholder'), demoFiles());
+    await settle(h);
+    expect(h.files.listed).toContain(demo.path);
+    expect(h.files.listed).not.toContain(crowded.path);
+    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+    // Nothing was settled for the crowded folder: once the answer is complete, it is decided.
+    h.server.setMaxCandidates(100);
+    await settle(h);
+    expect(h.files.listed).toContain(crowded.path);
+    expect((await h.importer.state()).items.map(item => item.state)).toEqual(['uploaded', 'needs_matching']);
+  });
+
+  it('a file named .m4a that is not audio-only MP4 fails as not_audio: never hashed, never sent', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [
+      fakeFile('Audio Record/audioDavidCui11234567890.m4a', 'video: a renamed screen recording', 1),
+    ]);
+    await settle(h);
+    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'failed', failure: 'not_audio' })]);
+    expect(h.files.hashed).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(0);
+  });
+
+  it('finding 12: a command answers its own item with that item’s version', async () => {
+    const two = [meeting('1', local(14, 0)), meeting('2', local(14, 15), 'Riley Example')];
+    const h = harness({ meetings: two });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    h.server.setIntercept(path => (path === '/meetings/recordings/upload-url' ? { ok: false, reason: 'offline', offline: true } : null));
+    const chose = await h.importer.chooseMeeting({ itemId: item.itemId, meetingId: two[0]!.meetingId });
+    expect(chose.answered?.itemId).toBe(item.itemId);
+    expect(chose.answered?.version).toBeGreaterThan(item.version);
+    expect(chose.answered?.item).toMatchObject({ itemId: item.itemId, meetingId: two[0]!.meetingId });
+    const stale = await h.importer.retry({ itemId: item.itemId });
+    expect(stale.notice).toBe('recording_choice_stale');
+    expect(stale.answered?.itemId).toBe(item.itemId);
   });
 });

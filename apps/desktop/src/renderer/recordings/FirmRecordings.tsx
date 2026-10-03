@@ -1,10 +1,10 @@
-import type { JSX } from 'react';
+import { useRef, type JSX, type KeyboardEvent } from 'react';
 import { reasonSentence } from '@fss/contracts';
 import type { RecordingItem } from '../../shared/recordings.ts';
 import { shortDayTime } from '../dates.ts';
 import { Button } from '../ui/button.tsx';
 import { Tag } from '../ui/layout.tsx';
-import { recordingStateWords, recordingTitle, type Recordings } from './recordingsMemory.ts';
+import { RECORDING_NAVIGATION_KEYS, recordingStateWords, recordingTitle, type Recordings } from './recordingsMemory.ts';
 
 /**
  * The firm page's recording states (lane M4): a small tag on each meeting row with that
@@ -12,7 +12,8 @@ import { recordingStateWords, recordingTitle, type Recordings } from './recordin
  * imported for one of them — Waiting for conversion, Uploading n/m, Uploaded — waiting for
  * transcription, Failed (with Retry / Not a Callie demo). Drawn from this Mac's import
  * (`recordingsMemory.ts`); a folder that needs matching is Today's, since it names no meeting
- * yet.
+ * yet. J/K never leave focus on Retry or Not a Callie demo (K4, review M4R finding 13): the
+ * list takes focus back on its own heading, so the Enter that follows presses nothing.
  */
 
 /** The state a meeting row shows: the least finished of its folders, or none. */
@@ -40,11 +41,20 @@ export function FirmRecordings({
   readonly meetingIds: readonly string[];
   readonly actionsEnabled?: boolean;
 }): JSX.Element | null {
+  const heading = useRef<HTMLHeadingElement>(null);
   const items = (recordings.view?.items ?? []).filter(entry => entry.meetingId !== null && meetingIds.includes(entry.meetingId));
   if (items.length === 0) return null;
+  // K4: a navigation key on one of these buttons moves focus to the heading first; the page's
+  // own shortcut still runs.
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (!RECORDING_NAVIGATION_KEYS.has(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target instanceof HTMLButtonElement) heading.current?.focus();
+  };
   return (
-    <section data-testid="firm-recordings" className="mt-2 flex flex-col">
-      <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">Recordings</h3>
+    <section data-testid="firm-recordings" className="mt-2 flex flex-col" onKeyDown={onKeyDown}>
+      <h3 ref={heading} tabIndex={-1} className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase outline-none">
+        Recordings
+      </h3>
       <ul className="flex flex-col border-t border-border">
         {items.map(entry => {
           const busy = recordings.memory.pending.has(entry.itemId);

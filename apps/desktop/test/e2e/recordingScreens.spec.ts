@@ -36,6 +36,7 @@ async function shoot(page: Page, name: string): Promise<void> {
 const M = (n: number): string => `44444444-4444-4444-8444-44444444440${String(n)}`;
 const item = (n: number, overrides: Partial<RecordingItem>): RecordingItem => ({
   itemId: String(n).repeat(32).slice(0, 32),
+  version: 1,
   folderName: '2026-10-01 10.01.12 Callie demo between David Cui and Jordan Placeholder 81234567890',
   startedAt: '2026-10-01T15:01:12.000Z',
   state: 'uploaded',

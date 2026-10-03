@@ -9,7 +9,7 @@ import { resetAttendanceMemory } from '../src/renderer/meetings/attendanceMemory
 import { FirmMeetings, type FirmMeetingsPorts } from '../src/renderer/meetings/FirmMeetings.tsx';
 import { RecordingsToSort } from '../src/renderer/recordings/RecordingsToSort.tsx';
 import { RecordingsFolderSection } from '../src/renderer/recordings/RecordingsFolderSection.tsx';
-import { resetRecordingsMemory, type RecordingsPorts } from '../src/renderer/recordings/recordingsMemory.ts';
+import { applyAnswered, resetRecordingsMemory, type RecordingsPorts } from '../src/renderer/recordings/recordingsMemory.ts';
 import type { RecordingItem, RecordingsView } from '../src/shared/recordings.ts';
 import { useShortcuts } from '../src/renderer/v2/shortcuts.ts';
 
@@ -35,6 +35,7 @@ const MEETING_TWO = '00000000-0000-4000-8000-000000000002';
 
 const item = (overrides: Partial<RecordingItem> = {}): RecordingItem => ({
   itemId: ITEM,
+  version: 1,
   folderName: '2026-10-05 14.05.00 Callie demo between David Cui and Jordan Placeholder 81234567890',
   startedAt: '2026-10-05T18:05:00.000Z',
   state: 'needs_matching',
@@ -53,6 +54,12 @@ const viewOf = (items: RecordingItem[], notice: string | null = null): Recording
   folder: { path: '/Users/test/Movies/Callie Demos', isDefault: true, available: true },
   items,
   notice,
+});
+
+/** A command's answer: the whole view, and its own item at its version (review M4R, finding 12). */
+const answerOf = (items: RecordingItem[], own: { itemId: string; version: number; item: RecordingItem | null }, notice: string | null = null): RecordingsView => ({
+  ...viewOf(items, notice),
+  answered: own,
 });
 
 interface Deferred<T> {
@@ -185,7 +192,9 @@ describe('K3: a command and its answer belong to their item', () => {
     expect(within(again[1]!).queryByTestId('recording-picker')).toBeNull();
 
     await act(async () => {
-      h.answers[0]!.resolve(viewOf([item(), item({ itemId: OTHER_ITEM, folderName: '2026-10-05 14.20.00 Zoom Meeting' })], 'recording_choice_stale'));
+      h.answers[0]!.resolve(
+        answerOf([item(), item({ itemId: OTHER_ITEM, folderName: '2026-10-05 14.20.00 Zoom Meeting' })], { itemId: ITEM, version: 1, item: item() }, 'recording_choice_stale'),
+      );
       await Promise.resolve();
     });
     const after = await screen.findAllByTestId('recording-to-sort');
@@ -206,7 +215,7 @@ describe('K3: a command and its answer belong to their item', () => {
     await userEvent.click(screen.getByTestId('recording-cancel'));
     expect(screen.queryByTestId('recording-picker')).toBeNull();
     await act(async () => {
-      h.answers[0]!.resolve(viewOf([item()], 'recording_choice_stale'));
+      h.answers[0]!.resolve(answerOf([item()], { itemId: ITEM, version: 1, item: item() }, 'recording_choice_stale'));
       await Promise.resolve();
     });
     expect(screen.queryByTestId('recording-picker')).toBeNull();
@@ -246,6 +255,89 @@ describe('K4: navigation keys never run a recording command', () => {
   });
 });
 
+describe('K4 on the firm page (review M4R, finding 13)', () => {
+  it('J then Enter while the firm page’s Retry had focus sends nothing (the reviewer’s repro)', async () => {
+    const meetings: FirmMeetingDto[] = [
+      { meetingId: MEETING_ONE, state: 'ended', startsAt: '2026-10-05T18:00:00.000Z', endsAt: '2026-10-05T18:20:00.000Z', attendanceSource: null },
+    ];
+    const meetingPorts: FirmMeetingsPorts = { forFirm: async () => await Promise.resolve({ meetings }) };
+    const h = harness(viewOf([item({ state: 'failed', failure: 'upload_failed', meetingId: MEETING_ONE })]));
+    let moved = 0;
+    render(
+      <Session>
+        <WithShortcuts
+          onNext={() => {
+            moved += 1;
+          }}
+        >
+          <FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={meetingPorts} recordingPorts={h.ports} />
+        </WithShortcuts>
+      </Session>,
+    );
+    for (const testId of ['firm-recording-retry', 'firm-recording-ignore']) {
+      const button = await screen.findByTestId(testId);
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      await userEvent.keyboard('j');
+      expect(document.activeElement?.tagName).not.toBe('BUTTON');
+      await userEvent.keyboard('{Enter}');
+      await userEvent.keyboard('k{Enter}');
+    }
+    expect(moved).toBeGreaterThan(0);
+    expect(h.sent).toEqual([]);
+  });
+});
+
+describe('finding 12: a command’s answer changes its own item only, and never an older version over a newer one', () => {
+  it('a late answer for B does not bring back A, which a newer answer removed (the reviewer’s repro)', async () => {
+    const failedA = item({ state: 'failed', failure: 'upload_failed' });
+    const failedB = item({ itemId: OTHER_ITEM, state: 'failed', failure: 'upload_failed', folderName: '2026-10-05 14.20.00 Zoom Meeting' });
+    const h = harness(viewOf([failedA, failedB]));
+    render(
+      <Session>
+        <RecordingsToSort ports={h.ports} />
+      </Session>,
+    );
+    const rows = await screen.findAllByTestId('recording-to-sort');
+    fireEvent.click(within(rows[1]!).getByTestId('recording-ignore'));
+    fireEvent.click(within(rows[0]!).getByTestId('recording-ignore'));
+    expect(h.sent.map(entry => entry.input)).toEqual([{ itemId: OTHER_ITEM }, { itemId: ITEM }]);
+    // A's answer first: A gone, B still there as far as A's command knew.
+    await act(async () => {
+      h.answers[1]!.resolve(answerOf([failedB], { itemId: ITEM, version: 2, item: null }));
+      await Promise.resolve();
+    });
+    expect(screen.getAllByTestId('recording-to-sort').map(row => row.getAttribute('data-state'))).toEqual(['failed']);
+    // B's answer, taken before A was ignored: its whole view still has A. Only B changes.
+    await act(async () => {
+      h.answers[0]!.resolve(answerOf([failedA], { itemId: OTHER_ITEM, version: 2, item: null }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('recording-to-sort')).toBeNull();
+  });
+
+  it('an answer older than the item the window shows is not drawn', async () => {
+    const h = harness(viewOf([item({ state: 'failed', failure: 'upload_failed' })]));
+    render(
+      <Session>
+        <RecordingsToSort ports={h.ports} />
+      </Session>,
+    );
+    fireEvent.click(await screen.findByTestId('recording-retry'));
+    await act(async () => {
+      h.answers[0]!.resolve(answerOf([], { itemId: ITEM, version: 2, item: item({ version: 2, state: 'failed', failure: 'file_unreadable' }) }));
+      await Promise.resolve();
+    });
+    // Newer than the window's version 1: applied.
+    expect(screen.getByTestId('recording-detail').textContent).toMatch(/read/u);
+    // Older than what the window shows (a newer read drew version 3), or about an item it no
+    // longer shows: nothing changes.
+    const shown = viewOf([item({ version: 3, state: 'needs_matching' })]);
+    expect(applyAnswered(shown, answerOf([], { itemId: ITEM, version: 2, item: null }))).toBe(shown);
+    expect(applyAnswered(shown, answerOf([], { itemId: OTHER_ITEM, version: 9, item: item({ itemId: OTHER_ITEM }) }))).toBe(shown);
+  });
+});
+
 describe('K5 and K6: only a success answer closes the picker and clears the command', () => {
   it('a refusal keeps the picker and the pick with the reason; success removes the item', async () => {
     const h = harness(viewOf([item()]));
@@ -258,7 +350,7 @@ describe('K5 and K6: only a success answer closes the picker and clears the comm
     await userEvent.click(screen.getAllByTestId('recording-choice')[0]!);
     await userEvent.click(screen.getByTestId('recording-attach'));
     await act(async () => {
-      h.answers[0]!.resolve(viewOf([item()], 'recording_choice_stale'));
+      h.answers[0]!.resolve(answerOf([item()], { itemId: ITEM, version: 1, item: item() }, 'recording_choice_stale'));
       await Promise.resolve();
     });
     expect(screen.getByTestId('recording-picker')).toBeTruthy();
@@ -269,7 +361,8 @@ describe('K5 and K6: only a success answer closes the picker and clears the comm
 
     await userEvent.click(screen.getByTestId('recording-attach'));
     await act(async () => {
-      h.answers[1]!.resolve(viewOf([item({ state: 'uploading', meetingId: MEETING_ONE })]));
+      const uploading = item({ version: 2, state: 'uploading', meetingId: MEETING_ONE });
+      h.answers[1]!.resolve(answerOf([uploading], { itemId: ITEM, version: 2, item: uploading }));
       await Promise.resolve();
     });
     expect(screen.queryByTestId('recording-to-sort')).toBeNull();
@@ -305,7 +398,8 @@ describe('K7: a stale read never replaces a newer answer', () => {
     );
     fireEvent.click(screen.getByTestId('recording-retry'));
     await act(async () => {
-      h.answers[0]!.resolve(viewOf([item({ state: 'waiting' })]));
+      const waiting = item({ version: 2, state: 'waiting' });
+      h.answers[0]!.resolve(answerOf([waiting], { itemId: ITEM, version: 2, item: waiting }));
       await Promise.resolve();
     });
     expect(screen.queryByTestId('recording-to-sort')).toBeNull();

@@ -127,6 +127,12 @@ export interface SessionManager {
   sessionGeneration(): number;
   /** Told on every transition: sign-out, another workspace, a changed role, a wipe. */
   onSessionChange(listener: (change: SessionChange) => void): void;
+  /**
+   * Lane M4: who is signed in and may act now — the workspace and the user, for keying this
+   * person's own durable state (the recording import) — or null. Main process only: it never
+   * crosses the bridge.
+   */
+  signedInIdentity(): Promise<{ readonly workspaceId: string; readonly userId: string } | null>;
 }
 
 /** The name a Mac signs in under when nobody has named it. */
@@ -767,6 +773,14 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     },
 
     sessionGeneration: () => generation,
+
+    async signedInIdentity() {
+      await ensureLoaded();
+      const shown = snapshot();
+      const held = device;
+      if (held === null || !shown.mayMutate || shown.screen !== 'today' || shown.device?.workspaceId !== held.workspaceId) return null;
+      return { workspaceId: held.workspaceId, userId: held.userId };
+    },
 
     onSessionChange(listener) {
       listeners.push(listener);

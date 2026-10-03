@@ -1081,6 +1081,19 @@ describe('opening a session with the device secret (wave 3b, S7)', () => {
  * The other order leaves a device the workspace still counts as active and nothing on
  * this Mac able to revoke it.
  */
+describe('the identity the recording import keys its state by (lane M4, review M4R finding 7)', () => {
+  it('is the workspace and the user while signed in and able to act, and null before and after', async () => {
+    const mac = await started();
+    expect(await mac.manager.signedInIdentity()).toBeNull();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const who = await mac.manager.signedInIdentity();
+    expect(who?.workspaceId).toBe(mac.workspaceId);
+    expect(who?.userId).toMatch(/^[0-9a-f-]{36}$/u);
+    await mac.manager.signOut();
+    expect(await mac.manager.signedInIdentity()).toBeNull();
+  });
+});
+
 describe('signing out (wave 3b, A2)', () => {
   it('tells the server, then forgets, when it can reach it', async () => {
     const mac = await started();

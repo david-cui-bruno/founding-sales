@@ -112,7 +112,7 @@ export function audioFilesOf(files: readonly FolderFile[]): readonly FolderFile[
 export function participantKeyOf(file: Pick<FolderFile, 'name' | 'role'>): string {
   if (file.role === 'mixed_audio') return 'mixed';
   const stem = file.name.replace(/\.m4a$/iu, '').replace(/^audio/iu, '').replace(/\d+$/u, '');
-  const letters = stem.normalize('NFKD').replace(/[̀-ͯ]/gu, '').toLowerCase().replace(/[^a-z0-9]+/gu, '');
+  const letters = stem.normalize('NFKD').replace(/[\u0300-\u036f]/gu, '').toLowerCase().replace(/[^a-z0-9]+/gu, '');
   return letters === '' ? file.name.toLowerCase() : letters;
 }
 

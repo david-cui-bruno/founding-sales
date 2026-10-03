@@ -3,7 +3,7 @@ import { reasonSentence } from '@fss/contracts';
 import type { RecordingItem } from '../../shared/recordings.ts';
 import { shortDayTime } from '../dates.ts';
 import { Button } from '../ui/button.tsx';
-import { recordingTitle, registryRecordingPorts, useRecordings, type Recordings, type RecordingsPorts } from './recordingsMemory.ts';
+import { RECORDING_NAVIGATION_KEYS, recordingTitle, registryRecordingPorts, useRecordings, type Recordings, type RecordingsPorts } from './recordingsMemory.ts';
 
 /**
  * Today's quiet item for demo recordings (lane M4): only the folders that need David — a
@@ -17,8 +17,6 @@ import { recordingTitle, registryRecordingPorts, useRecordings, type Recordings,
  * Kept state is `recordingsMemory.ts`'s (K1–K7). J/K never leave focus on one of these buttons
  * (K4): the group takes focus back on its own heading.
  */
-
-const NAVIGATION_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp']);
 
 function choiceLabel(choice: RecordingItem['choices'][number]): string {
   return [shortDayTime(choice.startsAt), choice.firmName, choice.attendee].filter((part): part is string => part !== null && part !== '').join(' · ');
@@ -151,7 +149,7 @@ export function RecordingsToSort({
   // K4: a navigation key pressed on one of these buttons moves focus to the heading first,
   // so the Enter that follows presses nothing. The page's own shortcut still runs.
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    if (!NAVIGATION_KEYS.has(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!RECORDING_NAVIGATION_KEYS.has(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.target instanceof HTMLButtonElement) heading.current?.focus();
   };
 
