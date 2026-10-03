@@ -1,6 +1,6 @@
 # Meeting Transcription Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Native execution in the current chat is recommended; execution-method confirmation is pending.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Native execution in the current chat is approved, with one independent whole-branch review at the end.
 
 **Goal:** Turn imported Callie demo audio into readable, attributed meeting transcripts, with bounded spending and recoverable failures.
 

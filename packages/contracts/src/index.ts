@@ -30,3 +30,5 @@ export * from './meetingBrief.ts';
 export * from './meetingRecordings.ts';
 export * from './reasonText.ts';
 export * from './preparedBriefs.ts';
+
+export * from './meetingTranscription.ts';
