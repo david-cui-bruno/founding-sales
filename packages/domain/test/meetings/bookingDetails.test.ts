@@ -139,7 +139,6 @@ describe('booking details: parsing', () => {
       end: '2026-09-29T15:30:00Z',
       duration: 30,
       location: ZOOM_JOIN,
-      meetingUrl: ZOOM_JOIN,
       createdAt: '2026-09-20T10:00:00Z',
       updatedAt: '2026-09-20T10:00:00Z',
       metadata: {},
@@ -221,9 +220,15 @@ describe('booking details: stored on the meeting', () => {
       zoom_meeting_id: ZOOM_ID,
     });
     expect(created.booking_answers).toMatchObject({ 'How many doors?': '300' });
-    // A cancellation that carries only the uid and the times clears nothing.
-    await deliver('BOOKING_CANCELLED', { uid: 'm2d', startTime: '2026-09-29T15:00:00Z', endTime: '2026-09-29T15:30:00Z' });
-    expect(await meetingOf('m2d')).toMatchObject({ state: 'cancelled', event_title: created.event_title, zoom_meeting_id: ZOOM_ID });
+    // A cancellation that says only where the meeting was clears nothing it does not say.
+    await deliver('BOOKING_CANCELLED', { uid: 'm2d', startTime: '2026-09-29T15:00:00Z', endTime: '2026-09-29T15:30:00Z', location: 'integrations:zoom' });
+    expect(await meetingOf('m2d')).toMatchObject({
+      state: 'cancelled',
+      event_title: created.event_title,
+      attendee_name: 'Dana Example',
+      booking_notes: created.booking_notes,
+      zoom_meeting_id: ZOOM_ID,
+    });
     const { rows } = await database.session.query<{ text: string }>('SELECT row_to_json(m)::text AS text FROM meetings m WHERE id = $1', [created.id]);
     expect(rows[0]?.text).not.toContain(PASSCODE);
   });
