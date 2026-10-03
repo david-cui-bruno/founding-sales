@@ -690,6 +690,7 @@ describe('Cal.com reconciliation', () => {
       attendance_source: null,
       attendance_confirmed_at: null,
       attendance_confirmed_by: null,
+      calcom_absent_pending: false,
       booking_uid: `big${String(index)}`,
       current_booking_uid: `big${String(index)}`,
       starts_at: new Date(),

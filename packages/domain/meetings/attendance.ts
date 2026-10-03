@@ -116,6 +116,8 @@ export async function setMeetingAttendance(
             attendance_source = CASE WHEN $5::boolean THEN 'manual' END,
             attendance_confirmed_at = CASE WHEN $5::boolean THEN now() END,
             attendance_confirmed_by = CASE WHEN $5::boolean THEN $6::uuid END,
+            -- A person's word ends any deferred Cal.com absence (review M1F, finding 2).
+            calcom_absent_pending = false,
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${MEETING_COLUMNS}`,

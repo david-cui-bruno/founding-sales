@@ -6,7 +6,8 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {
   aliasMeeting,
-  attendeesConflict,
+  applyPendingAbsence,
+  foldConflict,
   foldMeetings,
   MEETING_COLUMNS,
   openAttendeeConflict,
@@ -288,8 +289,9 @@ async function unifyChain(context: RepositoryContext, uids: readonly string[]): 
   const survivorId = [...found].sort((left, right) => Number(left.position) - Number(right.position))[0]?.id;
   const survivor = rows.find(row => row.id === survivorId) ?? rows[0];
   if (survivor === undefined) return null;
-  if (rows.length > 1 && attendeesConflict(rows)) {
-    return (await openAttendeeConflict(context, rows)) ? 'conflict' : 'conflict_unrecorded';
+  const conflict = rows.length > 1 ? foldConflict(rows) : null;
+  if (conflict !== null) {
+    return (await openAttendeeConflict(context, rows, conflict)) ? 'conflict' : 'conflict_unrecorded';
   }
   const meeting = rows.length === 1 ? survivor : await foldMeetings(context, rows, survivor.id);
   await aliasMeeting(context, meeting.id, uids);
@@ -538,6 +540,7 @@ async function recordSuccessor(
     `UPDATE meetings
         SET current_booking_uid = $3,
             state = CASE WHEN state IN ('held', 'no_show') THEN state ELSE 'rescheduled' END,
+            calcom_absent_pending = false,
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND current_booking_uid = $4 AND state <> 'cancelled'`,
     [context.scope.workspaceId, meeting.id, chain.successor, tail.uid],
@@ -545,6 +548,15 @@ async function recordSuccessor(
   if (rowCount === null || rowCount === 0) return false;
   await aliasMeeting(context, meeting.id, [chain.successor]);
   return true;
+}
+
+/** The meeting's deferred absence, read fresh: an event or a link may have just changed it. */
+async function applyPendingAbsenceOf(context: RepositoryContext, meetingId: string): Promise<void> {
+  const { rows } = await context.db.query<{ calcom_absent_pending: boolean }>(
+    'SELECT calcom_absent_pending FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+    [context.scope.workspaceId, meetingId],
+  );
+  if (rows[0]?.calcom_absent_pending === true) await applyPendingAbsence(context, { id: meetingId, calcom_absent_pending: true });
 }
 
 /**
@@ -607,6 +619,9 @@ export async function reconcileCalcomBookings(
     if (planned.length === 0) {
       if (meeting !== null && chain.successor !== null && (await recordSuccessor(context, meeting, chain, tail))) counts.successors += 1;
       else counts.unchanged += 1;
+      // A deferred Cal.com absence whose start has passed, whatever this snapshot's
+      // freshness (review M1F, finding 2).
+      if (meeting !== null) await applyPendingAbsenceOf(context, meeting.id);
       continue;
     }
     for (const event of planned) {
@@ -638,7 +653,10 @@ export async function reconcileCalcomBookings(
     if (after === 'conflict' || after === 'conflict_unrecorded') {
       counts.conflicted += 1;
       if (after === 'conflict_unrecorded') counts.conflictsUnrecorded += 1;
-    } else if (after !== null && chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
+    } else if (after !== null) {
+      if (chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
+      await applyPendingAbsenceOf(context, after.id);
+    }
   }
   if (counts.synthesized > 0) {
     await recordCrmAuditEvent(context, {

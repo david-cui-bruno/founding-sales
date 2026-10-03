@@ -477,6 +477,7 @@ describe('meeting attendance', () => {
       attendance_source: 'manual',
       attendance_confirmed_at: new Date('2026-10-01T12:00:00.000Z'),
       attendance_confirmed_by: seeded.alpha.salesperson.userId,
+      calcom_absent_pending: false,
       booking_uid: 'reviewA',
       current_booking_uid: 'reviewA',
       starts_at: new Date(PAST.startTime),
@@ -610,6 +611,127 @@ describe('meeting attendance', () => {
       expect(await move('new')).toMatchObject({ ok: true });
       // Already there: accepted as it is, whatever was expected.
       expect(await move('interested')).toMatchObject({ ok: true });
+    });
+  });
+
+  // ----------------------------------------------------------- review M1F
+  describe('review M1F', () => {
+    const match = async (id: string, firmId: string) =>
+      await withTransaction(database.session, async () => await matchMeetingToFirm(salesperson(), { meetingId: (await meetingOf(id)).id, firmId }));
+    const liveFacts = async (uids: readonly string[]): Promise<{ dedupe_key: string; firm_id: string | null }[]> =>
+      (
+        await database.session.query<{ dedupe_key: string; firm_id: string | null }>(
+          `SELECT dedupe_key, firm_id FROM funnel_facts
+            WHERE workspace_id = $1 AND kind = 'meeting.held' AND dedupe_key = ANY($2::text[]) AND withdrawn_at IS NULL`,
+          [workspaceId(), uids],
+        )
+      ).rows;
+    /** Time passes: the meeting's start and end move into the past. */
+    const startPasses = async (id: string): Promise<void> => {
+      await database.session.query('UPDATE meetings SET starts_at = $3, ends_at = $4 WHERE workspace_id = $1 AND id = $2', [
+        workspaceId(),
+        (await meetingOf(id)).id,
+        PAST.startTime,
+        PAST.endTime,
+      ]);
+    };
+    const flag = (domain: string, noShow: boolean) => ({ attendees: [{ email: `partner@${domain}`, noShow }] });
+
+    it('finding 1: a delayed fold of an unmatched original with a matched, held replacement keeps the firm and its one fact', async () => {
+      const owner = await firm('Hornbeam');
+      const stranger = 'hornbeam-personal.example';
+      const [original, replacement] = [uid(), uid()];
+      await deliver('BOOKING_CREATED', original, stranger, PAST, {}, '2026-09-21T00:00:00.000Z');
+      await deliver('BOOKING_CREATED', replacement, stranger, PAST, {}, '2026-09-21T02:00:00.000Z');
+      await deliver('MEETING_ENDED', replacement, stranger, PAST, {}, '2026-09-21T03:00:00.000Z');
+      expect((await meetingOf(original)).firm_id).toBeNull();
+      expect(await match(replacement, owner.id)).toMatchObject({ ok: true });
+      expect(await set(salesperson(), (await meetingOf(replacement)).id, 'attended')).toMatchObject({ ok: true });
+      // The A→B reschedule, delivered late: dated before B's own events.
+      await deliver('BOOKING_RESCHEDULED', replacement, stranger, PAST, { rescheduleUid: original }, '2026-09-21T01:00:00.000Z');
+      const folded = await meetingOf(original);
+      expect(folded).toMatchObject({ state: 'held', firm_id: owner.id, current_booking_uid: replacement });
+      expect(await liveFacts([original, replacement])).toEqual([{ dedupe_key: replacement, firm_id: owner.id }]);
+    });
+
+    it('finding 1: rows matched to two different firms are not folded; a person is asked', async () => {
+      const [first, second] = [await firm('Ironwood'), await firm('Jacaranda')];
+      const stranger = 'ironwood-personal.example';
+      const [original, replacement] = [uid(), uid()];
+      await deliver('BOOKING_CREATED', original, stranger, PAST);
+      await deliver('BOOKING_CREATED', replacement, stranger, PAST);
+      await match(original, first.id);
+      await match(replacement, second.id);
+      await deliver('BOOKING_RESCHEDULED', replacement, stranger, PAST, { rescheduleUid: original });
+      expect((await meetingOf(original)).id).not.toBe((await meetingOf(replacement)).id);
+      expect((await meetingOf(original)).firm_id).toBe(first.id);
+      const { rows } = await database.session.query<{ reason: string }>(
+        "SELECT detail->>'reason' AS reason FROM audit_events WHERE workspace_id = $1 AND action = 'meeting.fold_refused' ORDER BY occurred_at DESC LIMIT 1",
+        [workspaceId()],
+      );
+      expect(rows[0]?.reason).toBe('firm_conflict');
+    });
+
+    it('finding 2: an early Cal.com no-show is kept, and the end after the start makes the meeting a no-show', async () => {
+      const owner = await firm('Juniperus');
+      const id = uid();
+      await deliver('BOOKING_CREATED', id, owner.domain, FUTURE);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, true));
+      expect(await meetingOf(id)).toMatchObject({ state: 'booked', attendance_source: null, calcom_absent_pending: true });
+      await startPasses(id);
+      await deliver('MEETING_ENDED', id, owner.domain, PAST);
+      expect(await meetingOf(id)).toMatchObject({
+        state: 'no_show',
+        state_before_no_show: 'ended',
+        attendance_source: 'calcom_no_show',
+        calcom_absent_pending: false,
+      });
+    });
+
+    it('finding 2: a reconciliation run applies it whatever the booking snapshot s freshness', async () => {
+      const owner = await firm('Kapok');
+      const id = uid();
+      await deliver('BOOKING_CREATED', id, owner.domain, FUTURE);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, true));
+      await startPasses(id);
+      // A snapshot older than the meeting's last event: the planner plans nothing for it.
+      await reconcile([booking(id, { attendee: `partner@${owner.domain}`, updatedAt: '2026-09-01T00:00:00.000Z' })]);
+      expect(await meetingOf(id)).toMatchObject({ state: 'no_show', attendance_source: 'calcom_no_show', calcom_absent_pending: false });
+    });
+
+    it('finding 2: Cal.com s unmark before the start clears it, and the end is ended', async () => {
+      const owner = await firm('Laburnum');
+      const id = uid();
+      await deliver('BOOKING_CREATED', id, owner.domain, FUTURE);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, true));
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, false));
+      expect(await meetingOf(id)).toMatchObject({ state: 'booked', calcom_absent_pending: false });
+      await startPasses(id);
+      await deliver('MEETING_ENDED', id, owner.domain, PAST);
+      expect(await meetingOf(id)).toMatchObject({ state: 'ended', attendance_source: null, calcom_absent_pending: false });
+    });
+
+    it('finding 2: a person s confirmation ends it', async () => {
+      const owner = await firm('Mahogany');
+      const id = uid();
+      await deliver('BOOKING_CREATED', id, owner.domain, FUTURE);
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, true));
+      await startPasses(id);
+      await set(salesperson(), (await meetingOf(id)).id, 'attended');
+      await deliver('MEETING_ENDED', id, owner.domain, PAST);
+      expect(await meetingOf(id)).toMatchObject({ state: 'held', attendance_source: 'manual', calcom_absent_pending: false });
+    });
+
+    it('finding 3: a no-show is judged by the start the same write installs, not stale stored times', async () => {
+      const owner = await firm('Nutmeg');
+      const id = uid();
+      // Stored times in the past (a successor that kept its predecessor's times) …
+      await deliver('BOOKING_CREATED', id, owner.domain, PAST);
+      // … and its first no-show delivery carries its real, future start.
+      await deliver('BOOKING_NO_SHOW_UPDATED', id, owner.domain, FUTURE, flag(owner.domain, true));
+      const after = await meetingOf(id);
+      expect(after.starts_at.toISOString()).toBe(FUTURE.startTime);
+      expect(after).toMatchObject({ state: 'booked', attendance_source: null, calcom_absent_pending: true });
     });
   });
 });

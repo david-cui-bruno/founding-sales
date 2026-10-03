@@ -40,6 +40,8 @@ export const MEETING_ATTENDANCE_CONSTRAINT_CASES: readonly Case[] = [
     run: async f =>
       await meeting(f, { state: 'held', attendance_source: 'manual', attendance_confirmed_at: CONFIRMED_AT, attendance_confirmed_by: ABSENT }),
   },
+  // A deferred Cal.com absence on a cancelled meeting: only an unconfirmed, live one waits.
+  { constraint: 'meetings_absent_pending_unconfirmed', run: async f => await meeting(f, { state: 'cancelled', calcom_absent_pending: true }) },
   // Withdrawn, with no reason.
   { constraint: 'funnel_facts_withdrawal_consistent', run: async f => await fact(f, CONFIRMED_AT, null) },
   // A reason that is a sentence rather than a code.

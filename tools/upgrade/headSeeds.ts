@@ -97,8 +97,14 @@ export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
       return id;
     },
     verify: async (session, seededId) => {
-      const { rows } = await session.query<{ booking_uid: string; state: string; state_before_no_show: string | null; attendance_source: string | null }>(
-        `SELECT booking_uid, state, state_before_no_show, attendance_source FROM meetings
+      const { rows } = await session.query<{
+        booking_uid: string;
+        state: string;
+        state_before_no_show: string | null;
+        attendance_source: string | null;
+        calcom_absent_pending: boolean;
+      }>(
+        `SELECT booking_uid, state, state_before_no_show, attendance_source, calcom_absent_pending FROM meetings
           WHERE booking_uid IN ('upgrade0039held', 'upgrade0039absent') ORDER BY booking_uid`,
       );
       const absent = rows.find(row => row.booking_uid === 'upgrade0039absent');
@@ -107,6 +113,8 @@ export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
       if (held.state !== 'ended') return `the held meeting is ${held.state}, expected ended`;
       if (absent.state !== 'no_show' || absent.state_before_no_show !== 'ended') return `the no-show is ${absent.state} remembering ${String(absent.state_before_no_show)}`;
       if (absent.attendance_source !== 'calcom_no_show') return `the no-show's source is ${String(absent.attendance_source)}`;
+      // 0039's new column: no stored meeting has a deferred Cal.com absence.
+      if (held.calcom_absent_pending || absent.calcom_absent_pending) return 'a migrated meeting holds a deferred Cal.com absence';
       const facts = await session.query<{ withdrawn_reason: string | null; occurred_at: Date }>(
         "SELECT withdrawn_reason, occurred_at FROM funnel_facts WHERE kind = 'meeting.held' AND dedupe_key = 'upgrade0039held'",
       );

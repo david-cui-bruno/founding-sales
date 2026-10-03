@@ -25,6 +25,11 @@
 --     `calcom_no_show` (a missing recording is not a no-show).
 --   * `attendance_confirmed_at` — when it was confirmed; set exactly when the source is.
 --   * `attendance_confirmed_by` — the member who confirmed it; set exactly for `manual`.
+--   * `calcom_absent_pending` — Cal.com flagged the attendee absent before the meeting's
+--     start, which is not yet a fact. It is kept, not applied: once the start has passed,
+--     the next delivery or reconciliation run makes the meeting `no_show` (source
+--     `calcom_no_show`) unless a person has confirmed it. Cal.com's unmark, a reschedule, a
+--     cancellation and any confirmation clear it. Only an unconfirmed meeting holds one.
 --
 -- ## Withdrawn funnel facts
 --
@@ -64,7 +69,8 @@ ALTER TABLE meetings
   DROP CONSTRAINT meetings_no_show_remembers,
   ADD COLUMN attendance_source text,
   ADD COLUMN attendance_confirmed_at timestamptz,
-  ADD COLUMN attendance_confirmed_by uuid;
+  ADD COLUMN attendance_confirmed_by uuid,
+  ADD COLUMN calcom_absent_pending boolean NOT NULL DEFAULT false;
 
 -- ---- (b) funnel_facts: the withdrawal marker -----------------------------------------
 ALTER TABLE funnel_facts
@@ -134,7 +140,10 @@ ALTER TABLE meetings
   ADD CONSTRAINT meetings_attendance_confirmer
     CHECK ((attendance_source IS NOT DISTINCT FROM 'manual') = (attendance_confirmed_by IS NOT NULL)),
   ADD CONSTRAINT meetings_attendance_confirmer_fkey FOREIGN KEY (workspace_id, attendance_confirmed_by)
-    REFERENCES workspace_memberships (workspace_id, user_id);
+    REFERENCES workspace_memberships (workspace_id, user_id),
+  -- A deferred Cal.com absence waits only on an unconfirmed, live meeting.
+  ADD CONSTRAINT meetings_absent_pending_unconfirmed
+    CHECK (NOT calcom_absent_pending OR state IN ('booked', 'rescheduled', 'ended'));
 
 -- ---- (e) privileges ---------------------------------------------------------------------
 -- The withdrawal is the second column-level UPDATE on funnel_facts, beside 0022's
