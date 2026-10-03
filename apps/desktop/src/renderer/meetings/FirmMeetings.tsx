@@ -5,6 +5,8 @@ import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { Button } from '../ui/button.tsx';
 import { Tag } from '../ui/layout.tsx';
 import { useAttendanceMemory, type AttendanceCommand } from './attendanceMemory.ts';
+import { useBriefMemory } from './briefMemory.ts';
+import { MeetingBrief, type BriefReader } from './MeetingBrief.tsx';
 import { meetingRowWord, meetingStateWarns } from './meetingText.ts';
 
 /**
@@ -35,6 +37,8 @@ export interface FirmMeetingsPorts {
     readonly attendance: MeetingAttendanceChoice;
     readonly commandId: string;
   }): Promise<{ readonly set: MeetingAttendanceSet | null; readonly reason: string | null }>;
+  /** Lane M2: the meeting brief (`meetings.brief`); absent, no row offers one. */
+  brief?: BriefReader;
 }
 
 export function registryMeetingPorts(): FirmMeetingsPorts | null {
@@ -43,10 +47,24 @@ export function registryMeetingPorts(): FirmMeetingsPorts | null {
   return {
     forFirm: async firmId => await api.read('meetings.forFirm', { firmId }),
     setAttendance: async input => await api.command('meetings.setAttendance', input),
+    brief: async meetingId => await api.read('meetings.brief', { meetingId }),
   };
 }
 
 const LOST_ANSWER = 'The answer was lost. Retry sends the same request again.';
+
+/** A brief is offered for the week ahead (lane M2). */
+const BRIEF_HORIZON_MS = 7 * 86_400_000;
+
+/**
+ * Whether a row offers its brief: a meeting whose start is within seven days, or one in the
+ * past that nobody has confirmed. Not a cancelled one, and not a confirmed one.
+ */
+export function briefOffered(row: { readonly state: string; readonly startsAt: string }, now: number = Date.now()): boolean {
+  if (row.state === 'cancelled' || row.state === 'held' || row.state === 'no_show') return false;
+  const start = Date.parse(row.startsAt);
+  return Number.isFinite(start) && start <= now + BRIEF_HORIZON_MS;
+}
 
 interface Shown {
   readonly meetingId: string;
@@ -84,6 +102,7 @@ export function FirmMeetings({
   const portsRef = useRef(ports);
   portsRef.current = ports;
   const { memory, touch } = useAttendanceMemory();
+  const briefs = useBriefMemory();
   const successes = memory.successes.get(firmId) ?? 0;
 
   useEffect(() => {
@@ -256,10 +275,28 @@ export function FirmMeetings({
                     {(row.state === 'held' || row.state === 'no_show') && manual ? action('unconfirmed', 'Undo', 'attendance-undo') : null}
                   </span>
                 ) : null}
+                {ports.brief !== undefined && briefOffered(row) ? (
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    data-testid="meeting-brief-toggle"
+                    aria-expanded={briefs.memory.open.has(row.meetingId)}
+                    onClick={() => {
+                      if (briefs.memory.open.has(row.meetingId)) briefs.memory.open.delete(row.meetingId);
+                      else briefs.memory.open.add(row.meetingId);
+                      briefs.touch();
+                    }}
+                  >
+                    Brief
+                  </Button>
+                ) : null}
                 <Tag data-testid="firm-meeting-state" tone={meetingStateWarns(row.state) ? 'warn' : 'none'}>
                   {meetingRowWord(row.state)}
                 </Tag>
               </div>
+              {ports.brief !== undefined && briefOffered(row) && briefs.memory.open.has(row.meetingId) ? (
+                <MeetingBrief meetingId={row.meetingId} read={ports.brief} />
+              ) : null}
               {note === undefined ? null : (
                 <p data-testid="attendance-note" role={note.alert ? 'alert' : 'status'} className="mt-0.5 flex items-center gap-2 text-xs text-destructive">
                   <span>{note.text}</span>

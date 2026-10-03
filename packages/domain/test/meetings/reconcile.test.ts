@@ -697,6 +697,14 @@ describe('Cal.com reconciliation', () => {
       ends_at: new Date(),
       last_event_at: new Date(),
       attendee_email: `p${String(index)}@big.example`,
+      event_title: null,
+      attendee_name: null,
+      booking_notes: null,
+      booking_answers: null,
+      location_type: null,
+      video_call_url: null,
+      zoom_meeting_id: null,
+      details_observed_at: null,
     }));
     const before = (await conflictItems()).length;
     const context = repositoryContext(workspaceScope(workspaceId(), { kind: 'system', component: 'worker' }), database.session);

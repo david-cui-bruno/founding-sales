@@ -7,6 +7,7 @@ import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import {
   aliasMeeting,
   applyPendingAbsence,
+  writeBookingDetails,
   foldConflict,
   foldMeetings,
   MEETING_COLUMNS,
@@ -16,6 +17,7 @@ import {
   type ParsedEvent,
 } from './calcom.ts';
 import { attendeeAddressOf, deletionTombstoneKeyOf } from './attendee.ts';
+import { parseApiBookingDetails, type BookingDetails } from './bookingDetails.ts';
 
 /**
  * Cal.com reconciliation (slice M1): the bookings Cal.com's API reports, compared with
@@ -111,6 +113,8 @@ export interface CalcomBooking {
   readonly hostEmail: string | null;
   readonly attendeeEmail: string | null;
   readonly anyAttendeeAbsent: boolean;
+  /** Lane M2 (0040): the booking's title, attendee name, notes, answers and location. */
+  readonly details?: BookingDetails | null;
 }
 
 const UID = /^[A-Za-z0-9_-]{1,128}$/u;
@@ -150,6 +154,7 @@ export function parseCalcomBooking(value: unknown): CalcomBooking | null {
     hostEmail: emailOf(hosts[0]?.['email']),
     attendeeEmail: emailOf(attendees[0]?.['email']),
     anyAttendeeAbsent: attendees.some(attendee => attendee['absent'] === true),
+    details: parseApiBookingDetails(row),
   };
 }
 
@@ -550,6 +555,25 @@ async function recordSuccessor(
   return true;
 }
 
+/**
+ * The booking's details from this read (lane M2, 0040), for the meeting whose current
+ * booking it is, at the snapshot's own time (`updatedAt`, else `createdAt`). The details
+ * keep their own freshness (review M2R, finding 1): a snapshot at least as new as what set
+ * them replaces them, an older one only fills what is empty — so a meeting stored before
+ * 0040, or whose webhook was lost, gets its details on the next run, and an older read never
+ * undoes a newer one.
+ */
+async function refreshBookingDetails(context: RepositoryContext, meetingId: string, tail: CalcomBooking): Promise<void> {
+  if (tail.details === undefined || tail.details === null) return;
+  const { rows } = await context.db.query<{ current_booking_uid: string }>(
+    'SELECT current_booking_uid FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+    [context.scope.workspaceId, meetingId],
+  );
+  const meeting = rows[0];
+  if (meeting === undefined || meeting.current_booking_uid !== tail.uid) return;
+  await writeBookingDetails(context, meetingId, tail.details, instantOfBooking(tail));
+}
+
 /** The meeting's deferred absence, read fresh: an event or a link may have just changed it. */
 async function applyPendingAbsenceOf(context: RepositoryContext, meetingId: string): Promise<void> {
   const { rows } = await context.db.query<{ calcom_absent_pending: boolean }>(
@@ -622,6 +646,7 @@ export async function reconcileCalcomBookings(
       // A deferred Cal.com absence whose start has passed, whatever this snapshot's
       // freshness (review M1F, finding 2).
       if (meeting !== null) await applyPendingAbsenceOf(context, meeting.id);
+      if (meeting !== null) await refreshBookingDetails(context, meeting.id, tail);
       continue;
     }
     for (const event of planned) {
@@ -636,6 +661,7 @@ export async function reconcileCalcomBookings(
         organizerEmail: event.booking.hostEmail,
         attendeeEmail: event.booking.attendeeEmail,
         noShow: event.noShow,
+        details: event.booking.details ?? null,
       };
       const receipt = await receiveSynthesizedCalcomEvent(db, {
         workspaceId: input.workspaceId,
@@ -656,6 +682,7 @@ export async function reconcileCalcomBookings(
     } else if (after !== null) {
       if (chain.successor !== null && (await recordSuccessor(context, after, chain, tail))) counts.successors += 1;
       await applyPendingAbsenceOf(context, after.id);
+      await refreshBookingDetails(context, after.id, tail);
     }
   }
   if (counts.synthesized > 0) {
