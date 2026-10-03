@@ -123,7 +123,9 @@ beforeEach(() => {
   asked = [];
   globalThis.callieApi = {
     read: vi.fn(async (operation: string) =>
-      operation === 'calling.status'
+      operation === 'recordings.recoveries'
+        ? { items: [], truncated: false }
+        : operation === 'calling.status'
         ? { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } }
         : { calls: [] },
     ),
