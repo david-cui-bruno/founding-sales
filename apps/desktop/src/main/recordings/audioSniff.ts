@@ -15,7 +15,12 @@
  *   * EVERY sample entry of EVERY `stsd` anywhere is an audio codec on the allowlist
  *     (`mp4a`, Zoom's; `alac`; `Opus`) — any other type, `avc1`, `hvc1`, `mp4v`, an
  *     encrypted `enca`, anything unknown, is rejected; and
- *   * no `hdlr` anywhere names a picture handler (`vide`, `pict`, `auxv`).
+ *   * no `hdlr` anywhere names a picture handler (`vide`, `pict`, `auxv`); and
+ *   * no compressed movie header is anywhere (M4 verification, finding A): a `cmov`, `dcom` or
+ *     `cmvd` box at the top level, at any depth of the walk, or with a plausible box header
+ *     anywhere in the bytes of a container read (inside a sample entry, `ilst`, `wave`…).
+ *     Players inflate `cmov` and read the movie inside it, which can carry video; it is never
+ *     inflated here, only refused.
  *
  * A track's handler label no longer makes anything acceptable: a video track labelled `text`,
  * `hint` or `meta` still describes its samples as video, and that is what is read. Bytes in
@@ -37,6 +42,8 @@ const PICTURE_HANDLERS: ReadonlySet<string> = new Set(['vide', 'pict', 'auxv']);
 /** Boxes whose payload is a sequence of boxes. `meta` is handled on its own (FullBox or not). */
 const CONTAINERS: ReadonlySet<string> = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts', 'dinf', 'udta', 'mvex', 'moof', 'traf', 'mfra', 'tref', 'sinf', 'schi']);
 const TOP_LEVEL_READ = new Set([...CONTAINERS, 'meta']);
+/** A compressed movie header and its parts: refused wherever they appear, never inflated. */
+export const COMPRESSED_MOVIE: ReadonlySet<string> = new Set(['cmov', 'dcom', 'cmvd']);
 
 const MAX_TOP_LEVEL_BOXES = 4096;
 const MAX_BOXES = 100_000;
@@ -134,12 +141,28 @@ function metaChildren(payload: Buffer): { readonly body: Buffer; readonly boxes:
   throw new Malformed();
 }
 
+/**
+ * Any 4-byte `cmov`/`dcom`/`cmvd` in `bytes` preceded by a size a box could have (0, 1, or 8 up
+ * to the bytes that remain): such bytes are refused even where the walk does not descend.
+ */
+function holdsCompressedMovie(bytes: Buffer): boolean {
+  for (const type of COMPRESSED_MOVIE) {
+    const needle = Buffer.from(type, 'latin1');
+    for (let at = bytes.indexOf(needle, 4); at !== -1; at = bytes.indexOf(needle, at + 1)) {
+      const size = bytes.readUInt32BE(at - 4);
+      if (size === 0 || size === 1 || (size >= 8 && size <= bytes.length - (at - 4))) return true;
+    }
+  }
+  return false;
+}
+
 /** Every box inside a container's payload, at any depth. */
 function walk(body: Buffer, boxes: readonly BoxHeader[], found: Found, depth: number): void {
   if (depth > MAX_DEPTH) throw new Malformed();
   for (const box of boxes) {
     found.boxes += 1;
     if (found.boxes > MAX_BOXES) throw new Malformed();
+    if (COMPRESSED_MOVIE.has(box.type)) throw new Malformed();
     const payload = payloadOf(body, box);
     if (box.type === 'stsd') readSampleDescription(payload, found);
     else if (box.type === 'hdlr') readHandler(payload, found);
@@ -160,6 +183,7 @@ export function verdictOf(found: Pick<Found, 'descriptions' | 'codecs' | 'handle
 /** The codecs and handlers of a box tree already in memory (tests, and the walk's core). */
 export function describe(bytes: Buffer): Found {
   const found: Found = { descriptions: 0, codecs: new Set(), handlers: new Set(), boxes: 0 };
+  if (holdsCompressedMovie(bytes)) throw new Malformed();
   walk(bytes, childrenOf(bytes), found, 0);
   return found;
 }
@@ -173,12 +197,14 @@ export async function sniffAudio(source: ByteSource): Promise<SniffVerdict> {
       if (index >= MAX_TOP_LEVEL_BOXES) return 'not_audio';
       const header = headerAt(await source.read(offset, 32), offset, source.size);
       if (index === 0 && header.type !== 'ftyp') return 'not_audio';
+      if (COMPRESSED_MOVIE.has(header.type)) return 'not_audio';
       if (TOP_LEVEL_READ.has(header.type)) {
         // The box, header included, so the walk sees it as the box it is.
         held += header.size;
         if (held > MAX_CONTAINER_BYTES) return 'not_audio';
         const bytes = await source.read(offset, header.size);
         if (bytes.length !== header.size) return 'unreadable';
+        if (holdsCompressedMovie(bytes)) return 'not_audio';
         walk(bytes, [{ ...header, start: 0 }], found, 0);
       }
       offset += header.size;

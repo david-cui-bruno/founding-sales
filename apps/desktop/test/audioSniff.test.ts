@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { describe as describeBoxes, sniffAudio } from '../src/main/recordings/audioSniff.ts';
 import { nodeRecordingFs } from '../src/main/recordings/files.ts';
+import { cmovPlusAudio, compressedVideoMovie, m4a, mp4Box, mp4Track, mvhd as plainMvhd, sampleEntry } from './support/cmovFixture.ts';
 
 /**
  * M4 reset R3, repaired after M4RR finding 1: the audio check decides by CODEC. The whole box
@@ -119,6 +120,33 @@ describe('R3 by codec: the reviewer’s fixtures and their kin are rejected (M4R
   });
 });
 
+describe('M4 verification finding A: a compressed movie header is refused wherever it is, never inflated', () => {
+  const soundTrack = (): Buffer => mp4Track('soun', sampleEntry('mp4a'));
+  const part = (type: 'dcom' | 'cmvd'): Buffer => mp4Box(type, Buffer.from('zlib', 'latin1'));
+
+  it('the reviewer’s shape: moov{ mvhd, cmov{ dcom zlib, cmvd(zlib(moov with avc1)) }, a visible mp4a trak }', async () => {
+    expect(await sniff(cmovPlusAudio())).toBe('not_audio');
+    // The same file without the cmov is plain audio: the cmov alone decides.
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), soundTrack())))).toBe('audio');
+  });
+
+  it('at the top level, inside udta or meta, as a lone dcom or cmvd, or nested where the walk does not descend', async () => {
+    expect(await sniff(m4a(compressedVideoMovie(), mp4Box('moov', plainMvhd(), soundTrack())))).toBe('not_audio');
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), soundTrack(), mp4Box('udta', compressedVideoMovie()))))).toBe('not_audio');
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), soundTrack(), mp4Box('meta', Buffer.alloc(4), compressedVideoMovie()))))).toBe('not_audio');
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), part('dcom'), soundTrack())))).toBe('not_audio');
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), part('cmvd'), soundTrack())))).toBe('not_audio');
+    // Inside the mp4a sample entry and inside an ilst: boxes the walk does not open.
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), mp4Track('soun', sampleEntry('mp4a', compressedVideoMovie())))))).toBe('not_audio');
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), soundTrack(), mp4Box('udta', mp4Box('ilst', compressedVideoMovie())))))).toBe('not_audio');
+  });
+
+  it('the word alone, where no box could start, is not a box: a title that says cmov is still audio', async () => {
+    const title = mp4Box('udta', mp4Box('\u00a9nam', Buffer.from('\xff\xff\xff\xffcmov and dcom', 'latin1')));
+    expect(await sniff(m4a(mp4Box('moov', plainMvhd(), soundTrack(), title)))).toBe('audio');
+  });
+});
+
 describe('the node port', () => {
   it('reads a real file’s boxes; a read that fails is unreadable', async () => {
     expect(await sniffAudio({ size: 100, read: async () => await Promise.reject(new Error('EIO')) })).toBe('unreadable');
@@ -131,6 +159,9 @@ describe('the node port', () => {
       expect(await nodeRecordingFs.sniff(audio)).toBe('audio');
       expect(await nodeRecordingFs.sniff(video)).toBe('not_audio');
       expect(await nodeRecordingFs.sniff(join(directory, 'absent.m4a'))).toBe('unreadable');
+      const compressed = join(directory, 'audioCompressedMovie1.m4a');
+      await writeFile(compressed, cmovPlusAudio());
+      expect(await nodeRecordingFs.sniff(compressed)).toBe('not_audio');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

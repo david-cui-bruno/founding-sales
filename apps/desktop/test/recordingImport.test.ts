@@ -5,6 +5,8 @@ import { applyAnswered } from '../src/renderer/recordings/recordingsMemory.ts';
 import { createRecordingImporter, itemIdOf, type RecordingImportHost } from '../src/main/recordings/importer.ts';
 import { STABLE_AFTER_MS } from '../src/main/recordings/zoomFolder.ts';
 import { memoryRecordingStore, type RecordingStore, type RecordingsFile } from '../src/main/recordings/store.ts';
+import { sniffAudio } from '../src/main/recordings/audioSniff.ts';
+import { cmovPlusAudio } from './support/cmovFixture.ts';
 import { fakeFile, fakeFs, fakeServer, fakeUploader, sha } from './support/recordingFakes.ts';
 
 /**
@@ -629,6 +631,25 @@ describe('review M4R: the importer', () => {
     expect(h.files.hashed).toEqual([]);
     expect(h.upload.puts).toEqual([]);
     expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(0);
+  });
+
+  it('M4 verification finding A: a file with a compressed movie header, judged by the real audio check, is not_audio and nothing is committed', async () => {
+    const h = harness();
+    const bytes = cmovPlusAudio();
+    h.files.fs.sniff = async path => {
+      h.files.sniffed.push(path);
+      return await sniffAudio({ size: bytes.length, read: async (offset, length) => await Promise.resolve(bytes.subarray(offset, offset + length)) });
+    };
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [
+      fakeFile('Audio Record/audioJordanPlaceholder21234567890.m4a', 'stands for the compressed-movie bytes above', 1),
+    ]);
+    await settle(h);
+    expect(h.files.sniffed).toHaveLength(1);
+    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'failed', failure: 'not_audio' })]);
+    expect(h.files.hashed).toEqual([]);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(0);
+    expect(h.server.commandsTo('/meetings/recordings')).toHaveLength(0);
   });
 
   it('finding 12: a command answers its own item with that item’s version', async () => {
