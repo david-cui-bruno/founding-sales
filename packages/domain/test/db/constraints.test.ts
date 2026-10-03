@@ -1,3 +1,4 @@
+import { MEETING_TRANSCRIPTION_CONSTRAINT_CASES } from './support/meetingTranscriptionCases.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
@@ -1401,6 +1402,7 @@ const cases: readonly Case[] = [
   ...MEETING_ATTENDANCE_CONSTRAINT_CASES,
   ...MEETING_BOOKING_DETAILS_CONSTRAINT_CASES,
   ...MEETING_RECORDINGS_CONSTRAINT_CASES,
+  ...MEETING_TRANSCRIPTION_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

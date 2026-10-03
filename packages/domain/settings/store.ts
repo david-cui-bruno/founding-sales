@@ -4,7 +4,6 @@ import {
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
   SETTING_KEYS,
   STORED_SETTING_VALUE_SCHEMAS,
-  type ActiveSettingKey,
   type SendingEnabledSetting,
   type StoredSettingKey,
 } from '@fss/contracts';
@@ -72,7 +71,7 @@ export function settingLockName(workspaceId: string, settingKey: StoredSettingKe
  * once — so a caller that needs the guarantee opens its transaction first. The claim
  * does (`recheckAndClaim`).
  */
-export async function lockSettingForRead(context: RepositoryContext, settingKey: ActiveSettingKey): Promise<void> {
+export async function lockSettingForRead(context: RepositoryContext, settingKey: StoredSettingKey): Promise<void> {
   await context.db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [
     settingLockName(context.scope.workspaceId, settingKey),
   ]);

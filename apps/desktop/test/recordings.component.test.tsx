@@ -478,7 +478,7 @@ describe('the states where David sees them', () => {
     });
     expect(screen.getAllByTestId('firm-recording').map(node => node.getAttribute('data-state'))).toEqual(['uploading']);
     expect(screen.getAllByTestId('firm-recording-registered').map(node => node.getAttribute('data-meeting-id'))).toEqual([MEETING_TWO]);
-    expect(screen.getByTestId('firm-recording-registered').textContent).toMatch(/2 files · 2 speakers/u);
+    expect(screen.getByTestId('firm-recording-registered').textContent).toMatch(/2 files/u);
     expect(asked[0]).toBe('11111111-1111-4111-8111-111111111111');
   });
 

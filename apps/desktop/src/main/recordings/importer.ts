@@ -8,7 +8,8 @@ import {
   recordingsRegisteredSchema,
   type RecordingCandidate,
 } from '@fss/contracts';
-import type { RecordingItem, RecordingsView } from '../../shared/recordings.ts';
+import { recoverMeetingRecording } from './recovery.ts';
+import type { RecordingRecoveryView, RecordingItem, RecordingsView } from '../../shared/recordings.ts';
 import type { AuthedClient } from '../authedClient.ts';
 import type { BridgeIdentity } from '../identityReset.ts';
 import type { FileChoice } from '../importHandoff.ts';
@@ -111,6 +112,7 @@ export interface RecordingImportDeps {
   identity(): Promise<RecordingIdentity | null>;
   readonly defaultFolder: string;
   openFolderDialog(purpose: 'watch' | 'import'): Promise<FileChoice>;
+  openRecoveryFileDialog?(): Promise<FileChoice>;
   readonly now?: () => number;
   readonly timers?: {
     setInterval(callback: () => void, ms: number): unknown;
@@ -132,6 +134,7 @@ export interface RecordingImportHost {
   chooseMeeting(input: { readonly itemId: string; readonly meetingId: string }): Promise<RecordingsView>;
   ignore(input: { readonly itemId: string }): Promise<RecordingsView>;
   retry(input: { readonly itemId: string }): Promise<RecordingsView>;
+  reupload(input: { readonly recordingId: string }, chooseFile?: boolean): Promise<RecordingRecoveryView>;
   forget(): Promise<RecordingsView>;
   readonly identity: BridgeIdentity;
   /** Tests: wait for the scan and the upload worker to go idle. */
@@ -490,6 +493,7 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       mtimeMs: entry.mtimeMs,
       sha256: null,
       uploaded: false,
+      sourceKind: entry.role === 'participant_audio' ? 'participant' : entry.role === 'mixed_audio' ? 'mixed' : 'unknown',
     }));
   }
 
@@ -797,7 +801,7 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
         '/meetings/recordings/register',
         {
           meetingId,
-          files: sent.files.map(stored => ({ sha256: stored.sha256, sizeBytes: stored.sizeBytes, participantLabel: stored.participantLabel, segment: stored.segment })),
+          files: sent.files.map(stored => ({ sha256: stored.sha256, sizeBytes: stored.sizeBytes, participantLabel: stored.participantLabel, segment: stored.segment, sourceKind: stored.sourceKind ?? 'unknown' })),
         },
         body => recordingsRegisteredSchema.parse(body),
         { commandId },
@@ -815,7 +819,10 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       }
       return await refused(turn, registered, path, fail);
     }
-    update({ state: 'uploaded', registerCommandId: null, failure: null });
+    update({ state: 'uploaded', registerCommandId: null, failure: null, files: sent.files.map(stored => {
+      const registeredFile = registered.value.files.find(row => row.sha256 === stored.sha256);
+      return registeredFile === undefined ? stored : { ...stored, recordingId: registeredFile.recordingId };
+    }) });
     await persist(turn);
     return { step: 'skip' };
   }
@@ -996,7 +1003,25 @@ export function createRecordingImporter(deps: RecordingImportDeps): RecordingImp
       { view: empty(), path: null, changed: false },
     );
 
+  const recovering = new Set<string>();
+  async function reupload(input: { readonly recordingId: string }, chooseFile = false): Promise<RecordingRecoveryView> {
+    const captured = await serial(async turn => {
+      if (!await ensureSession(turn) || personKey === null) return null;
+      return { generation, personKey, root: rootOf(file), sources: Object.values(section()?.entries ?? {}).flatMap(entry => entry.files.map(stored => ({ path: join(entry.folderPath, stored.relPath), sha256: stored.sha256 }))) };
+    }, null);
+    if (captured === null || captured.generation !== generation || recovering.has(input.recordingId)) return { status: 'unavailable' };
+    const controller = new AbortController(); inflight.add(controller); recovering.add(input.recordingId);
+    try {
+      return await recoverMeetingRecording({ api: deps.api, fs: deps.fs, uploader: deps.uploader, recordingId: input.recordingId,
+        expectedIdentity: captured.personKey, identity: async () => { const current = await deps.identity(); return current === null || captured.generation !== generation ? null : personKeyOf(current); },
+        signal: controller.signal, root: captured.root, sources: captured.sources,
+        ...(chooseFile ? { chooseFile: async () => { const selected = await deps.openRecoveryFileDialog?.(); return selected?.canceled === false ? selected.filePaths[0] ?? null : null; } } : {}),
+      });
+    } finally { inflight.delete(controller); recovering.delete(input.recordingId); }
+  }
+
   return {
+    reupload,
     identity: {
       current: () => generation,
       async forgetIfCurrent(since: number) {

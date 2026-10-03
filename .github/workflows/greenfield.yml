@@ -56,6 +56,11 @@ jobs:
             -c 'ALTER SYSTEM SET synchronous_commit = off' \
             -c 'ALTER SYSTEM SET full_page_writes = off' \
             -c 'SELECT pg_reload_conf()'
+      - name: Meeting media test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version
       - name: Greenfield gate
         run: npm run gate:greenfield
 

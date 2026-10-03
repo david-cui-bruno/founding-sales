@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_MEETING_TRANSCRIPTION, meetingTranscriptionSettingSchema } from './meetingTranscription.ts';
 import { commandIdSchema } from './auth.ts';
 import { clientVersionRangeSchema, semanticVersionSchema } from './clientVersion.ts';
 import { instant, uuid } from './foundationRows.ts';
@@ -200,6 +201,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'voicemail_script',
   'call_transcription',
   'monthly_cash_ceiling_cents',
+  'meeting_transcription',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -265,6 +267,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   voicemail_script: voicemailScriptSettingSchema,
   call_transcription: callTranscriptionSettingSchema,
   monthly_cash_ceiling_cents: monthlyCashCeilingSettingSchema,
+  meeting_transcription: meetingTranscriptionSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -274,6 +277,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   voicemail_script: { template: DEFAULT_VOICEMAIL_TEMPLATE },
   call_transcription: { enabled: false, dailyCeilingCents: 0, unitPriceMicros: DEFAULT_TRANSCRIPTION_UNIT_PRICE_MICROS },
   monthly_cash_ceiling_cents: { cents: DEFAULT_MONTHLY_CASH_CEILING_CENTS },
+  meeting_transcription: DEFAULT_MEETING_TRANSCRIPTION,
 });
 
 /** The schema and default for any stored key. */
@@ -293,6 +297,7 @@ export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, un
  */
 const integrationConfigured = z.strictObject({ ok: z.boolean(), missing: z.array(z.string().max(64)).max(16) });
 export const integrationsSettingsResponseSchema = z.strictObject({
+  meetingTranscription: z.strictObject({ setting: meetingTranscriptionSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   callingProvider: z.enum(['tel', 'twilio']),
   telephonyBudget: telephonyBudgetSettingSchema,
   calendarIntegration: z.enum(['off', 'calcom']),

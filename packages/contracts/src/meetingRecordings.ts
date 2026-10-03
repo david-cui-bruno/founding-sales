@@ -161,6 +161,7 @@ export const recordingFileSchema = z.strictObject({
   sizeBytes: recordingSizeSchema,
   participantLabel: participantLabelSchema,
   segment: recordingSegmentSchema,
+  sourceKind: z.enum(['participant', 'mixed', 'unknown']).optional(),
 });
 export type RecordingFile = z.infer<typeof recordingFileSchema>;
 

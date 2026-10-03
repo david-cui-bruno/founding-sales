@@ -161,6 +161,7 @@ describe('finding 6: a late Apply never reopens the firm it came from', () => {
     };
     (globalThis as { callieApi?: unknown }).callieApi = {
       read: vi.fn(async (operation: string) => {
+      if (operation === 'recordings.recoveries') return { items: [], truncated: false };
         if (operation === 'calling.analysis') return { analysis: analysisAnswer({ proposals: [PROPOSALS.outcome] }), reason: null };
         if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };
         if (operation === 'review.list') return { items: [], failed: false };
@@ -234,6 +235,7 @@ describe('R1 (S3CF-1, S3CF-2): the log target is set by every opening', () => {
     asked = [];
     (globalThis as { callieApi?: unknown }).callieApi = {
       read: vi.fn(async (operation: string) => {
+      if (operation === 'recordings.recoveries') return { items: [], truncated: false };
         if (operation === 'calling.analysis') return { analysis: null, reason: 'not_found' };
         if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };
         if (operation === 'review.list') return { items: [holdAt(OLD_SESSION)], failed: false };
@@ -290,6 +292,7 @@ describe('R2 (S3CF-4): a late Apply never navigates, even after Today was left a
     const applied = { applied: { analysisId: '33333333-3333-4333-8333-3333333333cc', callSessionId: SESSION_ID, callLogId: null, results: [{ key: 'outcome', kind: 'outcome', result: 'applied', edited: false, id: null }], followUps: [] }, reason: null, keyReasons: {} };
     (globalThis as { callieApi?: unknown }).callieApi = {
       read: vi.fn(async (operation: string) => {
+      if (operation === 'recordings.recoveries') return { items: [], truncated: false };
         if (operation === 'calling.analysis') return { analysis: analysisAnswer({ proposals: [PROPOSALS.outcome] }), reason: null };
         if (operation === 'review.list') return { items: [], failed: false };
         if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };

@@ -4,6 +4,8 @@ import {
   settingHistoryRequestSchema,
   updateSettingCommandSchema,
 } from '@fss/contracts';
+import { readMeetingTranscription } from '@fss/domain/meetings/transcriptionSettings.ts';
+import { meetingBudgetDay, meetingSpent } from '@fss/domain/meetings/transcriptionBudget.ts';
 import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
 import { SETTINGS_ELSEWHERE } from '@fss/domain/settings/elsewhere.ts';
 import {
@@ -132,6 +134,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     return {
       status: 200,
       body: integrationsSettingsResponseSchema.parse({
+        ...(request.query.getAll('include').includes('meeting_transcription') ? { meetingTranscription: { setting: await readMeetingTranscription(scoped.context), spentTodayCents: await meetingSpent(scoped.context, (await meetingBudgetDay(scoped.context, new Date().toISOString())).date) } } : {}),
         callingProvider: await readCallingProvider(scoped.context),
         telephonyBudget: await readTelephonyBudget(scoped.context),
         calendarIntegration: await readCalendarIntegration(scoped.context),

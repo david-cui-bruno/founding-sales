@@ -41,6 +41,13 @@ RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
 # ---------------------------------------------------------------------------
 FROM --platform=linux/arm64 ${NODE_IMAGE} AS runtime
 
+# M5: distribution media decoders, with their versions in the build evidence.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && ffmpeg -version \
+ && ffprobe -version \
+ && rm -rf /var/lib/apt/lists/*
+
 ARG GIT_REVISION=unknown
 LABEL org.opencontainers.image.title="fss-worker" \
       org.opencontainers.image.description="Founding Sales System worker: scheduler, job runner, metrics" \

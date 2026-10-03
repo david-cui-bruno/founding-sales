@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   CALL_OUTCOMES,
+  meetingTranscriptPageSchema,
+  recordingRecoveriesSchema,
   applyCallProposalsResultSchema,
   callLogRowSchema,
   correctCallOutcomeCommandSchema,
@@ -36,7 +38,7 @@ import {
   uuid,
 } from '@fss/contracts';
 import { briefImportViewSchema } from './briefImport.ts';
-import { recordingItemIdSchema, recordingsViewSchema } from './recordings.ts';
+import { recordingItemIdSchema, recordingsViewSchema, recordingRecoveryViewSchema } from './recordings.ts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyModelStateSchema, replyStateSchema, REPLY_DISPOSITIONS, REPLY_MODELS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -1278,7 +1280,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: nothing,
     output: adminStateSchema,
@@ -1296,7 +1298,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: z.strictObject({ screen: z.enum(SETTINGS_TAB_SCREENS) }),
     output: adminStateSchema,
@@ -1313,7 +1315,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: saveSettingInputSchema,
     output: adminStateSchema,
@@ -1323,7 +1325,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/settings/update' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: saveIntegrationInputSchema,
     output: adminStateSchema,
@@ -1370,7 +1372,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: z.strictObject({ stageKey: z.string().min(1).max(80) }),
     output: adminStateSchema,
@@ -1433,7 +1435,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
     ],
     input: recordHolidayCalendarInputSchema,
     output: adminStateSchema,
@@ -1659,6 +1661,21 @@ export const OPERATIONS = {
   },
   // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
   // fold, and show another Mac's uploads), straight through the authenticated client.
+  'meetings.transcript': {
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/transcript?meetingId={uuid}' }, { method: 'GET', path: '/meetings/transcript?meetingId={uuid}&cursor={string}' }],
+    input: z.strictObject({ meetingId: uuid, cursor: z.string().max(500).optional() }),
+    output: z.strictObject({ page: meetingTranscriptPageSchema.nullable(), reason: z.string().nullable() }),
+    transform: 'bounded source-grouped transcript page, or an explicit reason',
+  },
+  'recordings.recoveries': {
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/recordings/recovery' }], input: z.strictObject({}),
+    output: recordingRecoveriesSchema.extend({ items: recordingRecoveriesSchema.shape.items.nullable() }),
+    transform: 'only missing recordings that need a reupload, or null on a failed read',
+  },
+  'recordings.reupload': {
+    kind: 'command', calls: [{ method: 'POST', path: '/meetings/recordings/recovery-url' }, { method: 'POST', path: '/meetings/recordings/recovery-complete' }], input: z.strictObject({ recordingId: uuid }), output: recordingRecoveryViewSchema,
+    transform: 'recover the same recording from its retained local source; never receives a path',
+  },
   'recordings.forFirm': {
     kind: 'read',
     calls: [{ method: 'GET', path: '/meetings/recordings?firmId={uuid}' }],
@@ -1701,6 +1718,7 @@ export const IMPORT_IPC_CHANNELS = {
   // Lane M4: the demo recordings folder to watch, and one folder imported by hand.
   chooseRecordingsFolder: 'callie:import:choose-recordings-folder',
   importRecordingFolder: 'callie:import:import-recording-folder',
+  chooseRecordingRecoveryFile: 'callie:import:choose-recording-recovery-file',
 } as const;
 
 /**
@@ -1741,6 +1759,7 @@ export interface ImportBridge {
    */
   chooseRecordingsFolder(): Promise<OperationOutput<'recordings.state'>>;
   importRecordingFolder(): Promise<OperationOutput<'recordings.state'>>;
+  chooseRecordingRecoveryFile(recordingId: string): Promise<OperationOutput<'recordings.reupload'>>;
 }
 
 declare global {

@@ -49,6 +49,8 @@ export const storedFileSchema = z.strictObject({
   mtimeMs: z.number(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/u).nullable(),
   uploaded: z.boolean(),
+  recordingId: uuid.optional(),
+  sourceKind: z.enum(['participant', 'mixed', 'unknown']).optional(),
 });
 export type StoredFile = z.infer<typeof storedFileSchema>;
 

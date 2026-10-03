@@ -274,6 +274,9 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // ------------------------------------------------ demo recordings (0041, lane M4)
   // A file name (which may carry a participant's display name) and a digest of their voice:
   // it goes with the meeting, as the meeting's uids do. The object expires with the bucket.
+  meeting_recording_aliases: coverage(['deletion_removes'], 'Folded recording identities, removed with the surviving recording.'),
+  meeting_transcripts: coverage(['deletion_removes'], 'Demo speech and attribution, removed with the recording and meeting.'),
+  meeting_transcription_attempts: coverage(['operational'], 'Provider job IDs, object keys and reservations, without speech; retains accounting after subject deletion.'),
   meeting_recordings: coverage(
     ['deletion_removes'],
     'One uploaded audio file of a demo: its Zoom file name, size, digest and object key; removed with the meeting (ON DELETE CASCADE); the object expires a day after upload.',

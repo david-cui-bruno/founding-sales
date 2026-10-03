@@ -146,6 +146,7 @@ const record = (outcome: string): void => {
 beforeEach(() => {
   (globalThis as { callieApi?: unknown }).callieApi = {
     read: vi.fn(async (operation: string) => {
+      if (operation === 'recordings.recoveries') return { items: [], truncated: false };
       if (operation === 'calling.status') return { provider: 'twilio', cadence: { unansweredAttempts: 0, nextAttempt: 1, limit: 4, parked: false, refusal: null } };
       if (operation === 'review.list') return { items: [], failed: false };
       if (operation === 'calling.analysis') return { analysis: null, reason: 'not_found' };

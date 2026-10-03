@@ -61,6 +61,7 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
         if contains(statement.Action, "s3:PutObject") && !contains([
           ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"],
           ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings/*"],
+          ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings-processing/*"],
         ], statement.Resource)
       ] == [["arn:aws:s3:::fss-test-suppression-journal-123456789012/*"]]
     ])
@@ -77,7 +78,10 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
         ]
         # The one delete either role holds is the worker's, on slice C3a's call audio
         # (asserted to be exactly that below), never on the journal.
-        if statement.Resource != ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+        if !contains([
+          ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"],
+          ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings-processing/*"],
+        ], statement.Resource)
       ]
     ]))
     error_message = "Neither task role may delete from the journal or weaken an object lock."
@@ -121,8 +125,13 @@ run "the_worker_alone_may_stage_call_audio_and_run_this_stacks_transcription_job
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings/*"]
+        }, {
+        Sid      = "StageMeetingTranscription"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings-processing/*"]
     }]
-    error_message = "The worker may put, get and delete call audio under calls/, read meeting audio under meetings/ (lane M4), and do nothing else in that bucket."
+    error_message = "The worker can stage calls/ and meetings-processing/, and only read source meetings/ objects."
   }
 
   assert {
@@ -136,7 +145,7 @@ run "the_worker_alone_may_stage_call_audio_and_run_this_stacks_transcription_job
         if contains(statement.Action, "transcribe:StartTranscriptionJob")
         ] == [{
           StringEquals = { "transcribe:OutputBucketName" = "fss-test-call-audio-123456789012" }
-          StringLike   = { "transcribe:OutputKey" = "calls/*" }
+          StringLike   = { "transcribe:OutputKey" = ["calls/*", "meetings-processing/*"] }
       }]
       && !strcontains(aws_iam_role_policy.worker_task.policy, "transcribe:DeleteTranscriptionJob")
     )

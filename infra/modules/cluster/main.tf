@@ -75,9 +75,10 @@ locals {
   })
 
   worker_environment = merge(local.common_environment, var.worker_environment, {
-    FSS_ROLE       = "worker"
-    FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
-    FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
+    FSS_AWS_ACCOUNT_ID = var.aws_account_id
+    FSS_ROLE           = "worker"
+    FSS_SCHEMA_MIN     = tostring(var.worker_schema_range.min)
+    FSS_SCHEMA_MAX     = tostring(var.worker_schema_range.max)
     },
     # Slice BR1: `readModelTransport` in packages/domain/classification/modelTransport.ts.
     # Absent unless Bedrock is chosen, so the worker keeps its old default.
@@ -246,9 +247,10 @@ locals {
   call_audio_object_arn = "${var.call_audio_bucket_arn}/calls/*"
   # Lane M4: a demo's per-participant audio, uploaded from the Mac through a presigned PUT
   # the API signs (`meetingAudioKey` in apps/api/src/integrations/meetingAudio.ts).
-  meeting_audio_object_arn   = "${var.call_audio_bucket_arn}/meetings/*"
-  call_audio_bucket_name     = trimprefix(var.call_audio_bucket_arn, "arn:aws:s3:::")
-  transcription_job_arn_glob = "arn:aws:transcribe:${var.aws_region}:${var.aws_account_id}:transcription-job/${var.name_prefix}-*"
+  meeting_processing_object_arn = "${var.call_audio_bucket_arn}/meetings-processing/*"
+  meeting_audio_object_arn      = "${var.call_audio_bucket_arn}/meetings/*"
+  call_audio_bucket_name        = trimprefix(var.call_audio_bucket_arn, "arn:aws:s3:::")
+  transcription_job_arn_glob    = "arn:aws:transcribe:${var.aws_region}:${var.aws_account_id}:transcription-job/${var.name_prefix}-*"
 
   ecs_assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -577,9 +579,17 @@ resource "aws_iam_role_policy" "worker_task" {
         Resource = [local.meeting_audio_object_arn]
       },
       {
+        # M5: prepared meeting FLAC and provider output. No source overwrites or bucket listing.
+        Sid      = "StageMeetingTranscription"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = [local.meeting_processing_object_arn]
+      },
+      {
         # StartTranscriptionJob has no resource type in the service authorization
         # reference (it is authorized against "*"). Its output condition keys narrow it
-        # instead: a job may only write its transcript to this bucket, under calls/, where
+        # instead: a job may only write its transcript to this bucket, under calls/ or
+        # meetings-processing/, where
         # the one-day lifecycle expires it with its input — no transcript is left in
         # service-managed storage (review C3-F). Transcribe writes that output with this
         # role's permissions: the s3:PutObject on calls/* above.
@@ -589,7 +599,7 @@ resource "aws_iam_role_policy" "worker_task" {
         Resource = ["*"]
         Condition = {
           StringEquals = { "transcribe:OutputBucketName" = local.call_audio_bucket_name }
-          StringLike   = { "transcribe:OutputKey" = "calls/*" }
+          StringLike   = { "transcribe:OutputKey" = ["calls/*", "meetings-processing/*"] }
         }
       },
       {

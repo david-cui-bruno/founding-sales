@@ -69,3 +69,5 @@ export const recordingsViewSchema = z.strictObject({
     .optional(),
 });
 export type RecordingsView = z.infer<typeof recordingsViewSchema>;
+export const recordingRecoveryViewSchema = z.strictObject({ status: z.enum(['resumed', 'already_ready', 'choose_file', 'wrong_file', 'unavailable', 'upload_failed', 'cancelled']) });
+export type RecordingRecoveryView = z.infer<typeof recordingRecoveryViewSchema>;

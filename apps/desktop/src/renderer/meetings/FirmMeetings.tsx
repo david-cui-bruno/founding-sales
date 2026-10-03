@@ -286,8 +286,8 @@ export function FirmMeetings({
               data-meeting-id={row.meetingId}
               className="group flex flex-col border-b border-border py-1.5 text-sm"
             >
-              <div className="flex items-center gap-3">
-                <span className="flex-1 truncate">{shortDayTime(row.startsAt)}</span>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="min-w-36 flex-1">{shortDayTime(row.startsAt)}</span>
                 {canCommand ? (
                   <span
                     data-testid="attendance-actions"

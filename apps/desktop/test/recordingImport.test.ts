@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { recoverMeetingRecording } from '../src/main/recordings/recovery.ts';
+import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { RecordingCandidate } from '@fss/contracts';
 import { guardIdentity } from '../src/main/identityReset.ts';
 import { applyAnswered } from '../src/renderer/recordings/recordingsMemory.ts';
@@ -182,10 +184,11 @@ describe('the demo recording import (acceptance)', () => {
     ]);
     expect(h.files.hashed.some(path => path.endsWith('.mp4'))).toBe(false);
     expect(h.files.hashed.some(path => path.endsWith('audio1234567890.m4a'))).toBe(false);
+    expect(h.store.saved().people[PERSON]!.entries[folder.path]!.files.every(file => file.recordingId !== undefined)).toBe(true);
     const register = h.server.commandsTo('/meetings/recordings/register')[0]?.body;
     expect(register?.['files']).toEqual([
-      { sha256: sha('david segment one'), sizeBytes: 17, participantLabel: 'audioDavidCui11234567890.m4a', segment: 1 },
-      { sha256: sha('jordan segment one'), sizeBytes: 18, participantLabel: 'audioJordanPlaceholder21234567890.m4a', segment: 1 },
+      { sha256: sha('david segment one'), sizeBytes: 17, participantLabel: 'audioDavidCui11234567890.m4a', segment: 1, sourceKind: 'participant' },
+      { sha256: sha('jordan segment one'), sizeBytes: 18, participantLabel: 'audioJordanPlaceholder21234567890.m4a', segment: 1, sourceKind: 'participant' },
     ]);
   });
 
@@ -1065,5 +1068,47 @@ describe('the M4RR repair (the reviewer’s probes)', () => {
     await h.importer.idle();
     expect(aborted).toBe(true);
     expect((await h.importer.state()).items).toEqual([]);
+  });
+});
+
+describe('meeting source recovery', () => {
+  function recoveryHarness() {
+    let permitted = true, ready = false, identity: string | null = PERSON;
+    const recordingId = '11111111-1111-4111-8111-111111111111';
+    const file = `${ROOT}/demo/audio.m4a`;
+    const fs = { realPath: vi.fn(async (p: string) => p), statFile: vi.fn(async () => ({ sizeBytes: 100, ino: 1, mtimeMs: 1 })), sniff: vi.fn(async () => 'audio' as const), sha256: vi.fn(async () => sha('same bytes')) };
+    const uploader = { put: vi.fn(async () => ({ ok: true as const })) };
+    const api = createAuthedClient({ baseUrl: 'https://api.example.test', clientVersion: '1.0.39', accessToken: async () => identity === null ? null : { token: 'fixture', generation: 0 }, send: async url => {
+      if (!permitted) return { status: 409, body: { reason: 'recording_recovery_unavailable' } };
+      const result = url.endsWith('recovery-complete') ? { status: 'resumed' } : ready ? { status: 'ready' } : { status: 'upload', recordingId, meetingId: WORKSPACE, sizeBytes: 100, sha256: sha('same bytes'), upload: { status: 'upload', key: `meetings/${WORKSPACE}/${sha('same bytes')}.m4a`, url: 'https://audio.example.test/put', expiresAt: new Date(Date.now()+900000).toISOString(), headers: { 'content-type': 'audio/mp4', 'content-length': '100', 'x-amz-checksum-sha256': 'a'.repeat(43)+'=', 'x-amz-meta-callie-upload': USER } } };
+      return { status: 200, body: { status: 'accepted', replayed: false, result } };
+    } });
+    const controller = new AbortController();
+    const run = (chooseFile?: () => Promise<string | null>) => recoverMeetingRecording({ api, fs, uploader, recordingId, identity: async () => identity, expectedIdentity: PERSON, signal: controller.signal, root: ROOT, sources: [{ path: file, sha256: sha('same bytes') }], ...(chooseFile === undefined ? {} : { chooseFile }) });
+    return { fs, uploader, run, controller, revoke: () => { permitted = false; }, ready: () => { ready = true; }, logout: () => { identity = null; controller.abort(); } };
+  }
+  it('wrong_file_does_not_upload', async () => {
+    const h = recoveryHarness(); h.fs.sha256.mockResolvedValue(sha('different bytes'));
+    expect(await h.run()).toEqual({ status: 'wrong_file' }); expect(h.uploader.put).not.toHaveBeenCalled();
+  });
+  it('revoked_authority_precedes_local_read', async () => {
+    const h = recoveryHarness(); h.revoke(); expect(await h.run()).toEqual({ status: 'unavailable' });
+    expect(h.fs.statFile).not.toHaveBeenCalled(); expect(h.fs.sha256).not.toHaveBeenCalled();
+  });
+  it('registered_success_does_not_reupload', async () => {
+    const h = recoveryHarness(); h.ready(); expect(await h.run()).toEqual({ status: 'already_ready' }); expect(h.fs.statFile).not.toHaveBeenCalled();
+  });
+  it('reauthorizes after hashing, so reassignment cannot start the PUT', async () => {
+    const h = recoveryHarness(); h.fs.sha256.mockImplementation(async () => { h.revoke(); return sha('same bytes'); });
+    expect(await h.run()).toEqual({ status: 'unavailable' }); expect(h.uploader.put).not.toHaveBeenCalled();
+  });
+  it('requires a picker for a path resolving outside the demo folder', async () => {
+    const h = recoveryHarness(); h.fs.realPath.mockImplementation(async p => p.endsWith('.m4a') ? '/outside/audio.m4a' : p);
+    expect(await h.run()).toEqual({ status: 'choose_file' }); expect(h.fs.sha256).not.toHaveBeenCalled();
+    expect(await h.run(async () => '/chosen/audio.m4a')).toEqual({ status: 'resumed' }); expect(h.uploader.put).toHaveBeenCalledTimes(1);
+  });
+  it('logout during local work does not upload or complete', async () => {
+    const h = recoveryHarness(); h.fs.sha256.mockImplementation(async () => { h.logout(); return sha('same bytes'); });
+    expect(await h.run()).toEqual({ status: 'unavailable' }); expect(h.uploader.put).not.toHaveBeenCalled();
   });
 });

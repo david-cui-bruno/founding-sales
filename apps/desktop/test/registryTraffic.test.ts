@@ -94,6 +94,8 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'meetings.transcript': { meetingId: UUID },
+  'recordings.reupload': { recordingId: UUID },
   'today.expand': { firmId: UUID },
   'today.snooze': { itemId: UUID, reason: 'later', returnAt: '2026-09-28T09:00' },
   'today.recordOutcome': { itemId: UUID, outcome: 'no_answer', note: '', callback: null },
@@ -299,9 +301,10 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     // Slice M1: answered by `operationHost.ts` against the client directly, like
     // Diagnostics — but walked here, so its declared paths are the ones it asks.
     meetings: (() => {
-      const handlers = operationHandlers({ api } as unknown as OperationHostDeps);
+      const handlers = operationHandlers({ api, recordings: { identity: { current: () => 0 } } } as unknown as OperationHostDeps);
       return {
         forFirm: async input => await handlers['meetings.forFirm'](input as never),
+        transcript: async input => await handlers['meetings.transcript'](input as never),
         unmatched: async () => await handlers['meetings.unmatched'](undefined as never),
         match: async input => await handlers['meetings.match'](input as never),
         setAttendance: async input => await handlers['meetings.setAttendance'](input as never),
@@ -363,8 +366,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         openFolderDialog: async () => await Promise.resolve({ canceled: true, filePaths: [] }),
       });
       // M4 reset, R4: the firm's registered recordings, read through the client directly.
-      const handlers = operationHandlers({ api } as unknown as OperationHostDeps);
-      return { ...(importer as unknown as Host), forFirm: async (input: unknown) => await handlers['recordings.forFirm'](input as never) } as unknown as Host;
+      const handlers = operationHandlers({ api, recordings: importer } as unknown as OperationHostDeps);
+      return { ...(importer as unknown as Host), recoveries: async () => await handlers['recordings.recoveries']({} as never), forFirm: async (input: unknown) => await handlers['recordings.forFirm'](input as never) } as unknown as Host;
     })(),
     mailbox: createMailboxBridge({
       api,

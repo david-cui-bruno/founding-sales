@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, watch as watchPath, type FSWatcher } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, stat, realpath } from 'node:fs/promises';
 import { request } from 'node:https';
 import { join } from 'node:path';
 import { open } from 'node:fs/promises';
@@ -22,6 +22,8 @@ export interface RootFolder {
 }
 
 export interface RecordingFs {
+  /** Canonical containment for retained-source recovery; absent adapters require the picker. */
+  realPath?(path: string): Promise<string | null>;
   /** The session folders directly under the root: names and their own stat, nothing inside. */
   listRoot(root: string): Promise<readonly RootFolder[]>;
   /** One folder's own stat (a manually chosen one), or null when it is not a folder. */
@@ -50,6 +52,7 @@ export interface RecordingUploader {
 export const PUT_TIMEOUT_MS = 15 * 60 * 1000;
 
 export const nodeRecordingFs: RecordingFs = {
+  async realPath(path) { try { return await realpath(path); } catch { return null; } },
   async listRoot(root) {
     const entries = await readdir(root, { withFileTypes: true });
     const folders: RootFolder[] = [];

@@ -1,3 +1,6 @@
+import { enqueueJob } from '../jobs/jobStore.ts';
+import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
+import { mergeRecordingIdentity } from './recordingIdentity.ts';
 import type { FirmRecording, MeetingRecordingRefusalCode, RecordingCandidate, RecordingFile, RecordingsRegistered } from '@fss/contracts';
 import { MEETING_RECORDING_LIMITS } from '@fss/contracts';
 import type { QueryResultRowLike } from '../db/queryable.ts';
@@ -29,8 +32,8 @@ import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
  *     `existing` and not checked again. Idempotent by (meeting, sha256): a duplicate discovery
  *     or a restart records nothing twice, whatever the command id.
  *
- * Nothing is enqueued. **M5's hook** is marked below: the `meeting.transcribe` job is
- * enqueued for each `new` row, in this same transaction.
+ * M5 enqueues a `meeting.transcribe` job for each new row in this same transaction.
+ * The worker rechecks configuration and eligibility before preparing or buying work.
  */
 
 type Refusal = { readonly ok: false; readonly reason: MeetingRecordingRefusalCode };
@@ -142,7 +145,7 @@ export async function authorizeRecording(
     if (!decision.permitted) return refuse(decision.reason === 'firm_merged' ? 'firm_merged' : decision.reason === 'not_assigned' ? 'not_assigned' : 'firm_unknown');
   }
   const { rows: locked } = await context.db.query<{ firm_id: string | null; state: string }>(
-    'SELECT firm_id, state FROM meetings WHERE workspace_id = $1 AND id = $2 FOR SHARE',
+    'SELECT firm_id, state FROM meetings WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
     [workspaceId, meetingId],
   );
   const meeting = locked[0];
@@ -248,15 +251,16 @@ export async function registerMeetingRecordings(
   const answered: RecordingsRegistered['files'][number][] = [];
   for (const file of files) {
     const { rows: inserted } = await context.db.query<RecordingRow>(
-      `INSERT INTO meeting_recordings (workspace_id, meeting_id, segment, participant_label, sha256, size_bytes, s3_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO meeting_recordings (workspace_id, meeting_id, segment, participant_label, sha256, size_bytes, s3_key,source_kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7,$8)
        ON CONFLICT (workspace_id, meeting_id, sha256) DO NOTHING
        RETURNING id, sha256, state`,
-      [workspaceId, input.meetingId, file.segment, file.participantLabel, file.sha256, file.sizeBytes, meetingRecordingKey(input.meetingId, file.sha256)],
+      [workspaceId, input.meetingId, file.segment, file.participantLabel, file.sha256, file.sizeBytes, meetingRecordingKey(input.meetingId, file.sha256),file.sourceKind ?? 'unknown'],
     );
     const row = inserted[0];
     if (row !== undefined) {
-      // M5's hook: enqueue `meeting.transcribe` for this new row here, in this transaction.
+      await enqueueJob(context.db, { workspaceId, kind: 'meeting.transcribe',
+        idempotencyKey: jobIdempotencyKey.meetingTranscribe(row.id, 0), payload: { recordingId: row.id }, maxAttempts: 3 });
       answered.push({ recordingId: row.id, sha256: row.sha256, state: row.state, outcome: 'new' });
       continue;
     }
@@ -271,6 +275,7 @@ export async function registerMeetingRecordings(
 
   const added = answered.filter(file => file.outcome === 'new').length;
   if (added > 0) {
+    await context.db.query('UPDATE meetings SET transcript_source_revision=transcript_source_revision+1 WHERE workspace_id=$1 AND id=$2', [workspaceId,input.meetingId]);
     // Counts only: a file name may carry a participant's name, and the audit is not where it belongs.
     await recordCrmAuditEvent(context, {
       action: 'meeting.recordings_registered',
@@ -289,12 +294,12 @@ export async function registerMeetingRecordings(
  */
 export async function moveRecordingsToSurvivor(context: RepositoryContext, fromMeetingId: string, toMeetingId: string): Promise<void> {
   const workspaceId = context.scope.workspaceId;
-  await context.db.query(
-    `DELETE FROM meeting_recordings r
-      WHERE r.workspace_id = $1 AND r.meeting_id = $2
-        AND EXISTS (SELECT 1 FROM meeting_recordings s WHERE s.workspace_id = $1 AND s.meeting_id = $3 AND s.sha256 = r.sha256)`,
-    [workspaceId, fromMeetingId, toMeetingId],
-  );
+  const duplicates = (await context.db.query<{from_id:string;to_id:string}>(
+    `SELECT r.id AS from_id,s.id AS to_id FROM meeting_recordings r JOIN meeting_recordings s
+      ON s.workspace_id=r.workspace_id AND s.sha256=r.sha256 AND s.meeting_id=$3
+      WHERE r.workspace_id=$1 AND r.meeting_id=$2 ORDER BY r.id FOR UPDATE OF r,s`, [workspaceId,fromMeetingId,toMeetingId])).rows;
+  for (const duplicate of duplicates) await mergeRecordingIdentity(context,duplicate.from_id,duplicate.to_id);
+  await context.db.query('UPDATE meetings SET transcript_source_revision=transcript_source_revision+1 WHERE workspace_id=$1 AND id=ANY($2::uuid[])', [workspaceId,[fromMeetingId,toMeetingId]]);
   // The key stays: the object is where it was uploaded (0041's CHECK allows any meeting's prefix).
   await context.db.query(
     `UPDATE meeting_recordings SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2`,
@@ -328,7 +333,9 @@ export async function listFirmRecordings(
   const firm = await readFirm(context, firmId);
   if (firm === null || decideFirmRead(context, firm) !== 'assigned_or_admin') return null;
   const { rows } = await context.db.query<FirmRecordingRow>(
-    `SELECT r.id, r.meeting_id, r.segment, r.participant_label, r.state, r.created_at
+    `SELECT r.id, r.meeting_id, r.segment, r.participant_label,
+       CASE WHEN r.processing_status='ready' THEN 'transcribed' WHEN r.processing_status='transcribing' THEN 'transcribing'
+            WHEN r.processing_status IN ('failed','needs_reupload') THEN 'failed' ELSE r.state END AS state, r.created_at
        FROM meeting_recordings r
        JOIN meetings m ON m.workspace_id = r.workspace_id AND m.id = r.meeting_id
       WHERE r.workspace_id = $1 AND m.firm_id = $2
