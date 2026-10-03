@@ -1,3 +1,7 @@
+import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
+import { awsMeetingTranscription } from '../transcription/awsMeetingTranscribeClient.ts';
+import { meetingProcessingStore } from '../transcription/meetingAudioStore.ts';
+import { meetingMediaPreparer } from '../transcription/prepareMeetingAudio.ts';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { canaryHandler } from '@fss/domain/jobs/canary.ts';
@@ -87,6 +91,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly meetingTranscription?: MeetingTranscribeOptions | undefined;
   readonly classifier: ClassifyWorkerOptions | undefined;
   readonly mail: MailWorkerOptions | undefined;
   readonly send: OutboundSendDeps | undefined;
@@ -197,6 +202,7 @@ export function registerHandlers(
   // Slice C2. Calls Twilio for the recording and the provider for the transcript; collect-only
   // (review C3-N) with just the call-audio bucket, and then the heartbeat says it starts nothing.
   if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
+  if (composition.meetingTranscription !== undefined) registry.register(meetingTranscribeJobHandler(composition.meetingTranscription));
   // Slice C3b. Calls Anthropic, with the classifier's transport, so only with its key.
   for (const handler of callSummarizeHandlers(composition.summary)) registry.register(handler);
   // Slice 3a. Calls Anthropic, with the classifier's transport, so only with its key.
@@ -392,7 +398,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription'>): {
+  readonly meetingTranscription: boolean;
   readonly calcomReconcile: boolean;
   readonly transcription: boolean;
   readonly transcriptionCollector: boolean;
@@ -400,6 +407,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    meetingTranscription: composition.meetingTranscription !== undefined,
     calcomReconcile: composition.calcom !== undefined,
     // The held-transcription source starts new attempts, so only where they can start.
     transcription: composition.transcription?.provider !== undefined && composition.transcription.recordings !== undefined,
@@ -423,6 +431,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly meetingTranscription?: boolean;
     readonly calcomReconcile?: boolean;
     readonly transcription?: boolean;
     readonly summary?: boolean;
@@ -433,6 +442,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    meetingTranscriptionsSource(options.meetingTranscription === true),
     canarySource(),
     todayBuildSource(),
     sequenceActionSource(),
@@ -457,6 +467,18 @@ export function workerDueWorkSources(
     classifyReplySource(),
     routeValidationSource(),
   ];
+}
+
+export function readMeetingTranscriptionComposition(environment: NodeJS.ProcessEnv, signal?: AbortSignal): { options: MeetingTranscribeOptions | null; problem: string | null } {
+  const accountId = environment['FSS_AWS_ACCOUNT_ID'] ?? '', bucket = environment['FSS_CALL_AUDIO_BUCKET'] ?? '';
+  const region = environment['AWS_REGION'] ?? '', jobPrefix = environment['FSS_NAME_PREFIX'] ?? '';
+  if (!/^\d{12}$/u.test(accountId)) return { options: null, problem: 'FSS_AWS_ACCOUNT_ID' };
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u.test(bucket)) return { options: null, problem: 'FSS_CALL_AUDIO_BUCKET' };
+  if (!/^[a-z]{2}(?:-[a-z]+)+-\d$/u.test(region)) return { options: null, problem: 'AWS_REGION' };
+  if (!/^[A-Za-z0-9_-]{1,80}$/u.test(jobPrefix)) return { options: null, problem: 'FSS_NAME_PREFIX' };
+  return { options: { accountId, jobPrefix, signal,
+    preparer: meetingMediaPreparer({ store: meetingProcessingStore({ bucket, region }) }),
+    provider: awsMeetingTranscription({ bucket, region, jobPrefix }) }, problem: null };
 }
 
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
@@ -521,8 +543,11 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const summary = readCallSummaryComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
   // Slice 3a: the analysis rides the same transport; the model is the deployment's.
   const analysis = readCallAnalysisComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
+  const mediaAbort = new AbortController();
+  const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    ...(meetingTranscription.options === null ? {} : { meetingTranscription: meetingTranscription.options }),
     ...(calcomReconcile.client === null
       ? {}
       : { calcom: { client: calcomReconcile.client, log: (event, fields) => log.log('info', event, fields) } }),
@@ -544,6 +569,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // Whether reconciliation runs, and if not why, by field name only.
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
     // Whether transcription runs, and if not why, by field name only.
+    meeting_transcription: meetingTranscription.problem ?? 'configured',
     call_transcription: transcription.problem ?? 'configured',
     // Whether after-call summaries run, and with which model; never a key.
     call_summary: summary.problem ?? summary.options?.model ?? 'configured',
@@ -575,6 +601,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
 
     await new Promise<void>(resolve => {
       const shutdown = (signal: NodeJS.Signals): void => {
+        mediaAbort.abort();
         void runtime.stop(signal).then(() => resolve());
       };
       process.once('SIGTERM', shutdown);

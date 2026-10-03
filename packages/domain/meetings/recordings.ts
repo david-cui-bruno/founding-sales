@@ -1,3 +1,5 @@
+import { enqueueJob } from '../jobs/jobStore.ts';
+import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { mergeRecordingIdentity } from './recordingIdentity.ts';
 import type { FirmRecording, MeetingRecordingRefusalCode, RecordingCandidate, RecordingFile, RecordingsRegistered } from '@fss/contracts';
 import { MEETING_RECORDING_LIMITS } from '@fss/contracts';
@@ -30,8 +32,8 @@ import { loadFirmForUpdate, readFirm } from '../crm/firms.ts';
  *     `existing` and not checked again. Idempotent by (meeting, sha256): a duplicate discovery
  *     or a restart records nothing twice, whatever the command id.
  *
- * Nothing is enqueued. **M5's hook** is marked below: the `meeting.transcribe` job is
- * enqueued for each `new` row, in this same transaction.
+ * M5 enqueues a `meeting.transcribe` job for each new row in this same transaction.
+ * The worker rechecks configuration and eligibility before preparing or buying work.
  */
 
 type Refusal = { readonly ok: false; readonly reason: MeetingRecordingRefusalCode };
@@ -257,7 +259,8 @@ export async function registerMeetingRecordings(
     );
     const row = inserted[0];
     if (row !== undefined) {
-      // M5's hook: enqueue `meeting.transcribe` for this new row here, in this transaction.
+      await enqueueJob(context.db, { workspaceId, kind: 'meeting.transcribe',
+        idempotencyKey: jobIdempotencyKey.meetingTranscribe(row.id, 0), payload: { recordingId: row.id }, maxAttempts: 3 });
       answered.push({ recordingId: row.id, sha256: row.sha256, state: row.state, outcome: 'new' });
       continue;
     }

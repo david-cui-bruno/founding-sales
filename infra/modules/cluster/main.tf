@@ -75,9 +75,10 @@ locals {
   })
 
   worker_environment = merge(local.common_environment, var.worker_environment, {
-    FSS_ROLE       = "worker"
-    FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
-    FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
+    FSS_AWS_ACCOUNT_ID = var.aws_account_id
+    FSS_ROLE           = "worker"
+    FSS_SCHEMA_MIN     = tostring(var.worker_schema_range.min)
+    FSS_SCHEMA_MAX     = tostring(var.worker_schema_range.max)
     },
     # Slice BR1: `readModelTransport` in packages/domain/classification/modelTransport.ts.
     # Absent unless Bedrock is chosen, so the worker keeps its old default.

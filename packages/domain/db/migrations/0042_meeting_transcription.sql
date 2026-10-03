@@ -8,8 +8,11 @@ ALTER TABLE meeting_recordings
     ('queued','preparing','transcribing','ready','needs_reupload','failed','budget_held','funding_unverified','disabled')),
   ADD COLUMN processing_reason text CHECK (processing_reason ~ '^[a-z][a-z0-9_]{0,79}$'),
   ADD COLUMN duration_ms integer CHECK (duration_ms BETWEEN 0 AND 14400000),
+  ADD COLUMN processing_settings_version integer NOT NULL DEFAULT 0 CHECK (processing_settings_version >= 0),
   ADD COLUMN wake_revision integer NOT NULL DEFAULT 0 CHECK (wake_revision >= 0),
   ADD COLUMN next_wake_at timestamptz NOT NULL DEFAULT now();
+
+CREATE INDEX meeting_recordings_processing_due ON meeting_recordings(next_wake_at,id) WHERE processing_status IN ('queued','preparing','disabled','budget_held','funding_unverified');
 
 CREATE TABLE meeting_recording_aliases (
   workspace_id uuid NOT NULL, alias_id uuid NOT NULL, recording_id uuid NOT NULL,

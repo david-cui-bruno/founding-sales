@@ -27,7 +27,7 @@ const bad = (table: string, constraint: string, make: (f: F) => Promise<Row>, ov
 export const MEETING_TRANSCRIPTION_CONSTRAINT_CASES: readonly Case[] = [
     { constraint: 'meetings_transcript_source_revision_check', run: async (f) => await f.session.query('UPDATE meetings SET transcript_source_revision=-1 WHERE id=$1', [await meeting(f)]) },
     ...[
-        ['source_kind', 'other'], ['processing_status', 'other'], ['processing_reason', 'Not a code'], ['duration_ms', 14400001], ['wake_revision', -1],
+        ['source_kind', 'other'], ['processing_status', 'other'], ['processing_reason', 'Not a code'], ['duration_ms', 14400001], ['wake_revision', -1], ['processing_settings_version', -1],
     ].map(([column, value]): Case => ({ constraint: `meeting_recordings_${String(column)}_check`, run: async (f) => { const b = await base(f); return await f.session.query(`UPDATE meeting_recordings SET ${String(column)}=$2 WHERE id=$1`, [b.id, value]); } })),
     { constraint: 'meeting_recording_aliases_check', run: async (f) => { const row = await alias(f); return await insert(f, 'meeting_recording_aliases', { ...row, alias_id: row['recording_id'] }); } },
     bad('meeting_recording_aliases', 'meeting_recording_aliases_workspace_id_recording_id_fkey', alias, { recording_id: absent }),
