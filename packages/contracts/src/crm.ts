@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
-import { MEETING_STATES } from './meetings.ts';
+import { meetingStateWireSchema } from './meetings.ts';
 
 /**
  * The wire contract of the CRM (specification 7.2, 7.3, 8.1, 9.1, 14.1, Appendix F).
@@ -316,7 +316,9 @@ export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoS
  */
 export const boardCardSchema = z.object({
   value: z.object({ monthlyCents: z.number().int().min(0), kind: z.enum(['estimated', 'agreed']) }).nullable(),
-  meeting: z.object({ meetingId: uuid, state: z.enum(MEETING_STATES), startsAt: instant }).nullable(),
+  // The state is the wire shape, not the enum (lane M1, B0): an unknown one shows as
+  // "Meeting" rather than failing the whole board.
+  meeting: z.object({ meetingId: uuid, state: meetingStateWireSchema, startsAt: instant }).nullable(),
   /** The latest move's evidence, only while that move is the opportunity's latest (slice K). */
   evidence: z
     .object({ kind: z.string(), evidenceId: z.string(), occurredAt: instant, fromStageKey: z.string().nullable().optional() })

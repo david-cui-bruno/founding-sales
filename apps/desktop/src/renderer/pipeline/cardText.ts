@@ -1,4 +1,5 @@
 import type { BoardCard } from '@fss/contracts';
+import { meetingStateWord } from '../meetings/meetingText.ts';
 
 /**
  * The words on a Kanban card (slice K). Pure, so the card's rules are tested without
@@ -83,17 +84,9 @@ export const VALUE_PROBLEMS: Readonly<Record<Extract<ValueParse, { ok: false }>[
   too_large: 'That is more than $1,000,000 a month.',
 };
 
-const MEETING_WORDS: Readonly<Record<string, string>> = {
-  booked: 'Booked',
-  rescheduled: 'Rescheduled',
-  held: 'Held',
-  no_show: 'No-show',
-  cancelled: 'Cancelled',
-};
-
-/** "Booked · Oct 3, 2:00 PM". An unknown state shows as itself rather than vanishing. */
+/** "Booked · Oct 3, 2:00 PM". A state this build does not know reads "Meeting · …" (lane M1, B0). */
 export function meetingLabel(meeting: NonNullable<BoardCard['meeting']>): string {
-  return `${MEETING_WORDS[meeting.state] ?? meeting.state} · ${dayTimeOf(meeting.startsAt)}`;
+  return `${meetingStateWord(meeting.state)} · ${dayTimeOf(meeting.startsAt)}`;
 }
 
 /**
