@@ -1,4 +1,5 @@
 import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
+import { loadMeetingAudioStore } from '../integrations/meetingAudio.ts';
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
@@ -212,6 +213,9 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const callAudioRegion = environment['AWS_REGION']?.trim() ?? '';
   const callAudio =
     callAudioBucket === '' || callAudioRegion === '' ? undefined : await loadCallAudioRemover({ bucket: callAudioBucket, region: callAudioRegion });
+  // Lane M4: the same bucket, `meetings/` prefix, for a demo recording's upload and HEAD.
+  const meetingAudio =
+    callAudioBucket === '' || callAudioRegion === '' ? undefined : await loadMeetingAudioStore({ bucket: callAudioBucket, region: callAudioRegion });
   const server = createApiServer({
     connections: poolConnections(pool, log),
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
@@ -228,6 +232,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     suppressionJournal: deployment.suppressionJournal,
     // Slice C3a: the deletion workflow's best-effort delete in the call-audio bucket.
     ...(callAudio === undefined ? {} : { callAudio }),
+    ...(meetingAudio === undefined ? {} : { meetingAudio }),
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
     // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.
     upgradeUrl: deployment.upgradeUrl,

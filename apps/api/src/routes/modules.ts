@@ -34,6 +34,8 @@ import { CALL_RECAP_PATHS, routeCallRecap } from './callRecap.ts';
 import { CALL_TRIAL_PATHS, routeCallTrial } from './callTrial.ts';
 import { CALCOM_PATHS, routeCalcom } from './calcom.ts';
 import { MEETING_PATHS, routeMeetings } from './meetings.ts';
+// Lane M4: a demo's local recording, matched on the Mac and uploaded to S3.
+import { MEETING_RECORDING_PATHS, routeMeetingRecordings } from './meetingRecordings.ts';
 import { TWILIO_PATHS, routeTwilio } from './twilio.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
 // The calling numbers: the identity a dial is placed from.
@@ -184,6 +186,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // Slice M1: the firm page's meetings, the bookings to match, and the match. Exact
     // paths; none reaches Cal.com.
     moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
+    // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
+    moduleOf('meeting-recordings', { paths: MEETING_RECORDING_PATHS }, routeMeetingRecordings, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
     // The Gmail surface. Exact paths again, and two of them are not ours to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push

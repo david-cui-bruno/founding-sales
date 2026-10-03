@@ -6,6 +6,7 @@ import type { PushTokenVerifier } from '@fss/domain/mail/pushToken.ts';
 import type { AuthDeps } from '../auth/config.ts';
 import type { Logger } from '../bootstrap/log.ts';
 import type { CallAudioRemover } from '../integrations/callAudio.ts';
+import type { MeetingAudioStore } from '../integrations/meetingAudio.ts';
 import type { IntegrationDeps } from '../integrations/providers.ts';
 
 /**
@@ -72,6 +73,11 @@ export interface RoutingOptions {
    * Absent where the bucket is not configured; the bucket's one-day lifecycle is the guarantee.
    */
   readonly callAudio?: CallAudioRemover | undefined;
+  /**
+   * Lane M4: a meeting recording's presigned PUT and HEAD, in the call-audio bucket under
+   * `meetings/`. Absent where the bucket is not configured: the upload routes answer 404.
+   */
+  readonly meetingAudio?: MeetingAudioStore | undefined;
   /**
    * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
    *
