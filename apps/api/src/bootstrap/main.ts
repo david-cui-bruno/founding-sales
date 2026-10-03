@@ -76,13 +76,16 @@ import { createApiServer } from '../server.ts';
  * publishes directly, and the API goes first only when a desktop needs a route or a
  * field the deployed API does not have yet.
  *
- * The minimum has moved once since, and this is that release. 1.0.14 is the installed
- * build and the first one that needs nothing this release removed; the routes and
- * fields an older Mac reads are gone, so admitting one would be admitting a client to
- * a server that cannot answer it.
+ * The minimum has moved twice since. 1.0.14 (the 0021 release) was the first build that
+ * needed nothing that release removed. 1.0.36 (lane M1, migration 0039) is the first that
+ * knows a meeting can be `ended` and that attendance is a person's to confirm: 1.0.35
+ * reads the end of a meeting as `held` and offers no way to confirm, so it is told to
+ * update rather than left showing attendance nobody confirmed (review M1R, finding 3).
+ * Publish desktop 1.0.36 before this API is deployed, so the update it is told to take
+ * exists.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionPolicy = clientVersionPolicySchema.parse({
-  minimum: '1.0.14',
+  minimum: '1.0.36',
   ceiling: '1.x',
   incompatible: [],
 });

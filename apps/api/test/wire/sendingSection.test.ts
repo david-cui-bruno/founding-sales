@@ -47,7 +47,7 @@ import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 
 /**
  * When the sending section first shipped. The build under test is
- * `DESKTOP_VERSION_UNDER_TEST` (1.0.14, the installed one); this records the line the
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.36, the oldest admitted); this records the line the
  * minimum has to be at or above, which is what the last check in this file asserts.
  */
 const FIRST_VERSION_WITH_THE_FIX = '1.0.4';
@@ -181,12 +181,12 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
   });
 
   it('is a build the deployed API accepts', () => {
-    // From the 0021 release the minimum is 1.0.14, so the question is not whether the
+    // From the 0021 release the minimum is 1.0.14 (1.0.36 from 0039), so the question is not whether the
     // build that first carried the sending section is admitted — it is not — but that the
     // minimum admitted build is at or above it and may mutate.
     expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
     // The installed builds keep working until they take the update.
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.36');
   });
 });
