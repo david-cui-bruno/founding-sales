@@ -94,6 +94,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'pipeline stage-counts': 'database',
   // Lane PBM: whether a CSV import's firms are in a workspace, five counts, READ ONLY.
   'import-match report': 'database',
+  // Lane M1: what the attendance correction (0039) will change, counts only, READ ONLY.
+  'meetings attendance-report': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -351,6 +353,17 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: ['--workspace-id', '--external-id-prefix'],
     summary:
       'whether a CSV import\'s firms are in the workspace: active firms, external-id aliases with the prefix (on active and on merged firms) and firms created in the last 7 days, as counts only, in one READ ONLY transaction',
+  },
+  {
+    // Lane M1: Cal.com's MEETING_ENDED is the scheduled end, not attendance, so every stored
+    // `held` is to be corrected by migration 0039. This sizes it on production first. Counts
+    // only: the log is CloudWatch.
+    path: ['admin', 'meetings', 'attendance-report'],
+    valueFlags: ['--workspace-id', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--workspace-id'],
+    summary:
+      'what the attendance correction will change: meetings by state, held meetings past their end, no-shows that were held, meeting.held and meeting.booked facts, applied MEETING_ENDED deliveries, and meetings and opportunities with booked stage evidence, as counts only, in one READ ONLY transaction',
   },
 ]);
 

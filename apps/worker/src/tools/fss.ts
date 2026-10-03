@@ -24,6 +24,7 @@ import {
   type LaunchIdentity,
 } from './fss/admin.ts';
 import { importMatchReportCommand } from './fss/importMatch.ts';
+import { meetingsAttendanceReportCommand } from './fss/meetingsAttendance.ts';
 import { trialExportCommand } from './fss/trialExport.ts';
 import {
   TOOL_ENVIRONMENT_VARIABLES,
@@ -191,6 +192,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'pipeline stage-counts': pipelineStageCountsCommand,
   // Lane PBM: whether a CSV import's firms are in a workspace, as counts.
   'import-match report': importMatchReportCommand,
+  // Lane M1: what the attendance correction will change, as counts.
+  'meetings attendance-report': meetingsAttendanceReportCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
