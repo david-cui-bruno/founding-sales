@@ -390,33 +390,55 @@ a setting of this Mac). The Mac imports them (`apps/desktop/src/main/recordings/
 1. **Discovery.** `fs.watch` on the folder, a rescan every minute and a scan at start. Each
    session folder's start time comes from its name (`YYYY-MM-DD HH.MM.SS <topic> <number>`)
    or, failing that, the folder's own creation time. "Import a recording folder…" adds one
-   folder to the same pipeline. The folder rules are tables (`zoomFolder.ts`, assumptions
-   A1–A6) until a real listing confirms them.
-2. **Privacy.** One read, `GET /meetings/recordings/candidates?from=&to=` (the non-cancelled
-   meetings starting in the window; at most 35 days, 100 meetings), and a folder whose start
-   falls in no meeting's `[start − 30 min, end + 30 min]` is dropped from its name alone:
-   never listed, hashed, uploaded, stored or shown. No answer from the server decides
-   nothing. Video is never read.
+   folder to the same pipeline, held in memory until it is found to overlap a meeting. The
+   folder rules are tables (`zoomFolder.ts`, assumptions A1–A6) until a real listing
+   confirms them.
+2. **Privacy.** `GET /meetings/recordings/candidates?from=&to=` answers the non-cancelled
+   meetings starting in the window that this person may attach a recording to (an
+   administrator: all; anybody else: meetings on firms assigned to them), with the contact's
+   name and only the local part of the attendee's address; at most 35 days and 100 meetings,
+   and `truncated` when there were more. A truncated answer decides nothing: each folder is
+   read again on its own window, and one whose own window is still truncated waits. A folder
+   whose start falls in no meeting's `[start − 30 min, end + 30 min]` is dropped from its
+   name alone: never listed, hashed, uploaded or shown, and only a salted digest of its path
+   is kept (per person, once no meeting can still appear for it). No answer from the server
+   decides nothing. Video is never read.
 3. **Matching.** Exactly one meeting within ±30 minutes of the start, corroborated by the
-   attendee's name (the linked contact's, else the words of the address they booked with)
-   in the topic or a participant's file name, is matched. Anything else that overlapped is
-   **Needs matching**: Today's quiet Recordings group offers the overlapping meetings, or
-   "Not a Callie demo", which drops the folder for good.
-4. **Waiting.** A folder is ready when no `.zoom` or temporary file remains, its audio is
+   attendee's name (the linked contact's, else the words of the address's local part) as
+   whole words of the topic or of one participant's file name (camel case, separators and
+   digits split; "Ann Smith" is not in `audioJoannSmith1.m4a`), is matched. Anything else
+   that overlapped is **Needs matching**: Today's quiet Recordings group offers the
+   overlapping meetings, or "Not a Callie demo", which drops the folder for good.
+4. **Revalidation.** Every scan re-reads the candidates and re-checks every entry it keeps,
+   a queued or half-uploaded one included, before any of its files is read or sent: only a
+   folder revalidated in this session is uploaded. A meeting that is gone (folded, deleted,
+   cancelled, moved out of the window, its firm given to someone else) or that the server
+   refuses as such puts the folder back to Needs matching; one that no longer overlaps
+   anything removes it.
+5. **Waiting.** A folder is ready when no `.zoom` or temporary file remains, its audio is
    there (the per-participant files, or the mixed `audio*.m4a` when there are none) and the
    listing is unchanged across two scans at least 20 seconds apart.
-5. **Upload.** Per file: `POST /meetings/recordings/upload-url {meetingId, fileSha256,
-   sizeBytes, participantLabel, segment}` answers `registered` (nothing to send) or a
-   15-minute presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket
-   that binds `audio/mp4`, the size (≤ 300 MB) and the digest — S3 refuses any other body.
-   The URL is signed per answer and never stored. Then `POST /meetings/recordings/register
-   {meetingId, files}` under a command id saved before it is sent, so a restart replays it;
-   each new file is checked by HEAD (present, size, digest) before any row is written. The
+6. **Upload.** Per file: its box headers are read first, and a file that is not audio-only
+   MP4/M4A (`ftyp`, a sound track, no video track) fails as `not_audio`, never hashed or
+   sent. Then `POST /meetings/recordings/upload-url {meetingId, fileSha256, sizeBytes,
+   participantLabel, segment}` answers `registered` (nothing to send) or a 15-minute
+   presigned PUT to `meetings/<meeting>/<sha256>.m4a` in the call-audio bucket that binds
+   `audio/mp4`, the size (≤ 300 MB) and the digest — S3 refuses any other body. The URL is
+   signed per answer, a replay's too, after the permission is checked again, and never
+   stored. Then `POST /meetings/recordings/register {meetingId, files}` under a command id
+   saved before it is sent, so a restart replays it; each new file is checked by HEAD
+   (present, size, digest) before any row is written, and only a person an upload URL for it
+   was issued to (or an administrator) may register it. An object that is not there (expired,
+   or never arrived) is refused `object_missing` with its digests and no receipt: the Mac
+   sends those files again, three times at most, then fails the folder with Retry. The
    participant label is the file's name, kept as Zoom wrote it.
-6. **States**, kept in `recordings.json` per workspace and keyed by the folder path and the
-   audio files' identity (inode, size, mtime): Waiting for conversion, Uploading n/m,
-   Uploaded — waiting for transcription, Needs matching, Failed (Retry / Not a Callie demo).
-   The firm page tags each meeting with its recording state and lists its recordings.
+7. **States**, kept in `recordings.json` per person (workspace and user) and keyed by the
+   folder path and the audio files' identity (inode, size, mtime): Waiting for conversion,
+   Uploading n/m, Uploaded — waiting for transcription, Needs matching, Failed (Retry / Not a
+   Callie demo). Every change to an entry is a compare-and-set on its version, so a scan
+   never overwrites a newer choice and "Not a Callie demo" is final. A command answers its
+   own item at its version, and the window applies nothing else from it. The firm page tags
+   each meeting with its recording state and lists its recordings.
 
 Who may upload: an administrator, or the assignee of the meeting's firm (an unmatched
 meeting is an administrator's). `meeting_recordings` holds one row per file, unique by
