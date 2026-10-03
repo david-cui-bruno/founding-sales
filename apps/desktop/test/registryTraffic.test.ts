@@ -367,7 +367,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       });
       // M4 reset, R4: the firm's registered recordings, read through the client directly.
       const handlers = operationHandlers({ api, recordings: importer } as unknown as OperationHostDeps);
-      return { ...(importer as unknown as Host), recoveries: async () => await handlers['recordings.recoveries']({}), forFirm: async (input: unknown) => await handlers['recordings.forFirm'](input as never) } as unknown as Host;
+      return { ...(importer as unknown as Host), recoveries: async () => await handlers['recordings.recoveries']({} as never), forFirm: async (input: unknown) => await handlers['recordings.forFirm'](input as never) } as unknown as Host;
     })(),
     mailbox: createMailboxBridge({
       api,
