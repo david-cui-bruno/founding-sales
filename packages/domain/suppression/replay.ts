@@ -4,10 +4,10 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { openHold } from '../policy/holds.ts';
+import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { claimFinalization } from './finalize.ts';
-import { readSuppressionEvent, reviewHoldBlocks } from './events.ts';
+import { claimFinalization, readFinalization } from './finalize.ts';
+import { isMergeCopyId, lockSuppressionHistory, readSuppressionEvent, reviewHoldBlocks } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
@@ -77,6 +77,14 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
   if (channel !== 'phone' && channel !== 'email' && channel !== 'all') {
     return { ok: false, reason: 'field_missing', detail: 'channel' };
   }
+  // The firm the live write opened its review hold on (brief RF, X5): a string, or null when
+  // the write named none; absent on every object written before RF, which says nothing.
+  const firmId = object['firmId'];
+  if (firmId !== undefined && firmId !== null && typeof firmId !== 'string') {
+    return { ok: false, reason: 'field_missing', detail: 'firmId' };
+  }
+  // The release marker (J2): only `true` means committed; anything else is no marker.
+  const committed = object['committed'] === true;
   return {
     ok: true,
     value: {
@@ -92,6 +100,8 @@ export function parseSuppressionJournalRecord(body: string): JournalParseResult 
       supersessionReason: text('supersessionReason'),
       recordedAt: text('recordedAt') ?? '',
       channel,
+      ...(firmId === undefined ? {} : { firmId }),
+      ...(committed ? { committed: true as const } : {}),
     },
   };
 }
@@ -117,7 +127,39 @@ export interface JournalReplayReport {
   readonly finalized: number;
   /** Manual events still inside their window: a review hold and a finalizer job. */
   readonly windowsReopened: number;
+  /** Supersessions replayed: each a release of its original's review hold, never a stop. */
+  readonly released: number;
+  /**
+   * Supersessions of an event that another supersession of it already lifts (brief RF, R2):
+   * the journal object of a race's loser. Ids only; never inserted.
+   */
+  readonly competingSupersessions: readonly string[];
+  /**
+   * Supersessions whose original is neither in the database nor in the records read: there
+   * is nothing for them to lift, and the foreign key would refuse them. Ids only; skipped.
+   */
+  readonly orphanSupersessions: readonly string[];
+  /**
+   * Corrections whose original was already decided `finalized` when the replay reached them
+   * (brief RF, review P1): the correction never committed live (its stop was finalized
+   * instead), so it is neither inserted nor allowed to release anything. Ids only.
+   */
+  readonly staleCorrections: readonly string[];
+  /**
+   * Manual handle stops inside their window whose journal object predates RF and so does
+   * not say which firm the live write held (review P3). Their hold is not guessed. Ids only.
+   */
+  readonly unreconstructedHolds: readonly string[];
+  /**
+   * Releases journalled before the RF reset, without the `committed` marker (J3): written
+   * inside a transaction that may have rolled back, so not applied. David lifts the stop again
+   * if it should be lifted. Ids only.
+   */
+  readonly unverifiedLegacyReleases: readonly string[];
 }
+
+/** A merge's copy, in either form (`isMergeCopyId`), live a bare row: no claim, no hold, no finalizer. */
+const isMergeCopy = (record: SuppressionJournalRecord): boolean => isMergeCopyId(record.eventId);
 
 /** The sources that are terminal the instant they commit (10.2). Mirrors `events.ts`. */
 const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
@@ -126,6 +168,20 @@ const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
   'import',
   'deletion_tombstone',
 ]);
+
+/**
+ * The sources that lift another event (0001's `suppression_events_supersession_consistent`).
+ * A replayed one is a release, as the live write was (brief RF, R4): it opens no hold and is
+ * owed no finalizer, and it releases its original's review hold.
+ */
+const SUPERSESSION_SOURCES: ReadonlySet<string> = new Set(['mistaken_entry_correction', 'admin_supersession']);
+
+/** Earliest first, by the journalled instant and then the id: the replay's one order. */
+const byRecordedTime = (left: SuppressionJournalRecord, right: SuppressionJournalRecord): number => {
+  const difference = Date.parse(left.recordedAt) - Date.parse(right.recordedAt);
+  if (difference !== 0) return difference;
+  return left.eventId < right.eventId ? -1 : left.eventId > right.eventId ? 1 : 0;
+};
 
 export interface ReplayInput {
   readonly records: readonly SuppressionJournalRecord[];
@@ -142,25 +198,133 @@ export async function replaySuppressionJournal(
   context: RepositoryContext,
   input: ReplayInput,
 ): Promise<JournalReplayReport> {
-  // A replayed suppression stops sends exactly as the original did (lane g77).
+  // A replayed suppression stops sends exactly as the original did (lane g77). Then the
+  // history lock every supersession and the merge take (brief RF), in that order.
   await lockSendGateForStopFact(context);
+  await lockSuppressionHistory(context);
   const now = await databaseNow(context);
-  let inserted = 0;
   let alreadyPresent = 0;
   let foreign = 0;
-  let finalized = 0;
-  let windowsReopened = 0;
 
+  // The records this workspace is missing, once each.
+  const missing = new Map<string, SuppressionJournalRecord>();
   for (const record of input.records) {
     if (record.workspaceId !== context.scope.workspaceId) {
       foreign += 1;
       continue;
     }
+    if (missing.has(record.eventId)) continue;
     if ((await readSuppressionEvent(context, record.eventId)) !== null) {
       alreadyPresent += 1;
       continue;
     }
+    missing.set(record.eventId, record);
+  }
 
+  // J3 and J4 (RF reset): validity before selection. A release applies only when it carries
+  // the `committed` marker every release written since the reset has (appended after its
+  // commit); an unmarked one is reported, never applied. A correction whose original is
+  // already decided `finalized` lost its claim live and never committed. Only what remains
+  // competes in R2 below, so a stale candidate can never displace a valid one.
+  const unverifiedLegacyReleases: string[] = [];
+  const staleCorrections: string[] = [];
+  for (const record of [...missing.values()]) {
+    if (record.supersedesEventId === null) continue;
+    if (record.committed !== true) {
+      missing.delete(record.eventId);
+      unverifiedLegacyReleases.push(record.eventId);
+      continue;
+    }
+    if (record.source !== 'mistaken_entry_correction' || isMergeCopy(record)) continue;
+    const decided = await readFinalization(context, record.supersedesEventId);
+    const original = missing.get(record.supersedesEventId);
+    const lost = decided !== null ? decided.outcome === 'finalized' : original !== undefined && TERMINAL_SOURCES.has(original.source);
+    if (lost) {
+      missing.delete(record.eventId);
+      staleCorrections.push(record.eventId);
+    }
+  }
+
+  // R2: at most one supersession lifts an event (0001's partial unique index). One the
+  // database already holds wins; otherwise the earliest valid one by recorded time, then id.
+  // The rest are the journal objects of a race's losers, and are counted, not inserted.
+  const competingSupersessions: string[] = [];
+  const bySuperseded = new Map<string, SuppressionJournalRecord[]>();
+  for (const record of missing.values()) {
+    if (record.supersedesEventId === null) continue;
+    bySuperseded.set(record.supersedesEventId, [...(bySuperseded.get(record.supersedesEventId) ?? []), record]);
+  }
+  for (const [supersededId, rivals] of bySuperseded) {
+    const { rows } = await context.db.query(
+      'SELECT 1 FROM suppression_events WHERE workspace_id = $1 AND supersedes_event_id = $2 LIMIT 1',
+      [context.scope.workspaceId, supersededId],
+    );
+    const ordered = [...rivals].sort(byRecordedTime);
+    const losers = rows.length > 0 ? ordered : ordered.slice(1);
+    for (const loser of losers) {
+      missing.delete(loser.eventId);
+      competingSupersessions.push(loser.eventId);
+    }
+  }
+
+  // R3: an original before anything that supersedes it, whatever order the journal was
+  // listed in; otherwise earliest first. The foreign key to the original is immediate.
+  const ordered: SuppressionJournalRecord[] = [];
+  const orphanSupersessions: string[] = [];
+  const placed = new Set<string>();
+  const place = async (record: SuppressionJournalRecord): Promise<boolean> => {
+    if (placed.has(record.eventId)) return true;
+    if (record.supersedesEventId !== null) {
+      const original = missing.get(record.supersedesEventId);
+      const present = original === undefined && (await readSuppressionEvent(context, record.supersedesEventId)) !== null;
+      if (original !== undefined) {
+        if (!(await place(original))) {
+          orphanSupersessions.push(record.eventId);
+          return false;
+        }
+      } else if (!present) {
+        orphanSupersessions.push(record.eventId);
+        return false;
+      }
+    }
+    placed.add(record.eventId);
+    ordered.push(record);
+    return true;
+  };
+  for (const record of [...missing.values()].sort(byRecordedTime)) {
+    if (!placed.has(record.eventId) && !orphanSupersessions.includes(record.eventId)) await place(record);
+  }
+
+  // An original a replayed correction takes back is decided by that correction's claim, as
+  // it was live, never finalized ahead of it because its window has closed since.
+  const correctedBy = new Map<string, string>();
+  for (const record of ordered) {
+    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null && !isMergeCopy(record)) {
+      correctedBy.set(record.supersedesEventId, record.eventId);
+    }
+  }
+
+  let inserted = 0;
+  let finalized = 0;
+  let windowsReopened = 0;
+  let released = 0;
+  const unreconstructedHolds: string[] = [];
+  for (const record of ordered) {
+    // A correction is a claim before it is a row, as it was live. A lost claim means the stop
+    // was finalized instead: the correction did not commit, so it is not inserted (the row
+    // alone would lift the stop) and releases nothing (review P1).
+    if (record.source === 'mistaken_entry_correction' && record.supersedesEventId !== null && !isMergeCopy(record)) {
+      const claim = await claimFinalization(context, {
+        eventId: record.supersedesEventId,
+        outcome: 'corrected',
+        correctionEventId: record.eventId,
+        ...(record.actorUserId === null ? {} : { decidedByUserId: record.actorUserId }),
+      });
+      if (!claim.won && claim.outcome !== 'corrected') {
+        staleCorrections.push(record.eventId);
+        continue;
+      }
+    }
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
@@ -184,12 +348,27 @@ export async function replaySuppressionJournal(
     );
     inserted += 1;
 
+    // A merge's copy was, live, the row and nothing else (J1, J2): no finalization claim, no
+    // review hold, no finalizer, nothing released.
+    if (isMergeCopy(record)) continue;
+
+    if (SUPERSESSION_SOURCES.has(record.source) && record.supersedesEventId !== null) {
+      // R4: a lift is replayed as the lift it was: it releases the original's review hold (a
+      // correction has claimed its original above). It opens no hold and is owed no
+      // finalizer: `finalize.ts` answers `not_applicable` for it.
+      await releaseHoldsOfEvent(context, { sourceEventId: record.supersedesEventId, reasonCode: 'manual_suppression_review' });
+      released += 1;
+      continue;
+    }
+
     const terminal = TERMINAL_SOURCES.has(record.source);
     const deadline = Date.parse(record.recordedAt) + MANUAL_SUPPRESSION_CORRECTION_SECONDS * 1000;
     if (terminal || deadline <= Date.parse(now)) {
       // Appendix G 30 and the drill's step 2: a prospect-originated opt-out is
       // terminal, and a manual suppression whose window expired before the failure
-      // finalises terminally rather than reopening.
+      // finalises terminally rather than reopening — unless a replayed correction took it
+      // back inside its window, which decides it instead.
+      if (correctedBy.has(record.eventId)) continue;
       await claimFinalization(context, { eventId: record.eventId, outcome: 'finalized' });
       finalized += 1;
       continue;
@@ -197,10 +376,17 @@ export async function replaySuppressionJournal(
 
     // Still inside the window. The row the correction claims against has to exist and
     // the finalizer has to be owed, or the suppression would sit unfinalized forever.
-    if (record.scope === 'firm') {
+    // The hold is the one the live write opened (brief RF, X5): on the firm it named, which
+    // is the key of a firm stop and, since RF, journalled for a handle stop. A handle stop
+    // journalled before RF names no firm, and its live hold cannot be known.
+    const holdFirm = record.scope === 'firm' ? record.canonicalKey : (record.firmId ?? null);
+    // Review P3: a handle stop whose object predates RF says nothing about a firm. Its hold
+    // is reported, not guessed.
+    if (record.scope === 'handle' && record.firmId === undefined) unreconstructedHolds.push(record.eventId);
+    if (holdFirm !== null) {
       await openHold(context, {
         scopeKind: 'firm',
-        scopeKey: record.canonicalKey,
+        scopeKey: holdFirm,
         reasonCode: 'manual_suppression_review',
         // The set the original write opened (DESIGN-S3X §2.3a): the event's own channel.
         blockedActionKinds: reviewHoldBlocks(record.channel),
@@ -220,5 +406,17 @@ export async function replaySuppressionJournal(
     windowsReopened += 1;
   }
 
-  return { inserted, alreadyPresent, foreign, finalized, windowsReopened };
+  return {
+    inserted,
+    alreadyPresent,
+    foreign,
+    finalized,
+    windowsReopened,
+    released,
+    competingSupersessions,
+    orphanSupersessions,
+    staleCorrections,
+    unreconstructedHolds,
+    unverifiedLegacyReleases,
+  };
 }

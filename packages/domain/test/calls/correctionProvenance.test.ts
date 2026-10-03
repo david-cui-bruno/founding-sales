@@ -224,7 +224,7 @@ describe('X2: provenance, history and the trial hook', () => {
       expect.objectContaining({ id: stopId, conflicts: true, decisions: ['keep', 'lift'], appliedKey: null }),
     ]);
     const lifted = await withTransaction(world.session, async () =>
-      await recordAdminSupersession(david(world), { eventId: stopId ?? '', reason: 'correction', commandId: `lift-${randomUUID()}`, journal: recordingSuppressionJournal() }),
+      await recordAdminSupersession(david(world), { eventId: stopId ?? '', reason: 'correction', commandId: `lift-${randomUUID()}` }),
     );
     expect(lifted.ok).toBe(true);
     expect(await correct(world, logId, 'interested', { shown, decide: keepAll, context: db => david(world, db) })).toEqual({ ok: false, reason: 'effects_changed' });

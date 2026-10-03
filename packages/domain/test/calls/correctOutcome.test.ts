@@ -459,12 +459,12 @@ describe('X2: correcting a logged outcome', () => {
 
     // David confirms the first lift: the unchanged admin supersession, one journal object.
     const [first, second] = lifts;
-    const liftJournal = recordingSuppressionJournal();
     const lifted = await withTransaction(world.session, async () =>
-      await recordAdminSupersession(david(world), { eventId: first?.eventId ?? '', reason: 'correction', commandId: `lift-${randomUUID()}`, journal: liftJournal }),
+      await recordAdminSupersession(david(world), { eventId: first?.eventId ?? '', reason: 'correction', commandId: `lift-${randomUUID()}` }),
     );
     expect(lifted.ok, JSON.stringify(lifted)).toBe(true);
-    expect(liftJournal.appended.map(record => [record.source, record.supersedesEventId])).toEqual([['admin_supersession', first?.eventId]]);
+    // Its one journal record, which the route appends after the commit (brief RF).
+    expect(lifted.ok ? lifted.value.journalRecords.map(record => [record.source, record.supersedesEventId]) : null).toEqual([['admin_supersession', first?.eventId]]);
     expect(await effective(first?.eventId ?? '')).toBe(false);
     // He cancels the second confirm: it stays effective.
     expect(await effective(second?.eventId ?? '')).toBe(true);

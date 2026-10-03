@@ -425,6 +425,63 @@ describe('the fss admin commands a restore runs', () => {
     if (second.ok) expect(second.value['inserted']).toBe(0);
   });
 
+  it('prints the count of manual handle stops whose review hold a pre-RF journal cannot say (brief RF, review P3)', async () => {
+    const legacy = {
+      eventId: `sup_${'b'.repeat(64)}`,
+      workspaceId,
+      scope: 'handle' as const,
+      canonicalKey: '+14155550144',
+      canonicalizerVersion: 'e164-lower.1',
+      source: 'salesperson_manual',
+      actorUserId: null,
+      commandId: null,
+      supersedesEventId: null,
+      supersessionReason: null,
+      // Inside its ten-minute window, and written before RF: no firmId at all.
+      recordedAt: new Date().toISOString(),
+      channel: 'phone' as const,
+    };
+    const invocation: AdminInvocation = {
+      session,
+      config: readToolConfig({ DATABASE_URL: databaseUrl }),
+      environment: {},
+      options: { '--from': '2026-09-19T00:00:00Z' },
+      switches: new Set(),
+      journalSource: { read: async () => await Promise.resolve([legacy]) },
+    };
+    const replayed = await suppressionJournalReplayCommand(invocation);
+    expect(replayed).toMatchObject({ ok: true, value: { unreconstructedHoldCount: 1, unreconstructedHolds: [legacy.eventId] } });
+  });
+
+  it('prints the count of releases journalled before the RF reset, and applies none (J3)', async () => {
+    const stop = {
+      eventId: `sup_${'c'.repeat(64)}`,
+      workspaceId,
+      scope: 'handle' as const,
+      canonicalKey: 'legacy-release@example.test',
+      canonicalizerVersion: 'handle.1',
+      source: 'prospect_opt_out',
+      actorUserId: null,
+      commandId: null,
+      supersedesEventId: null,
+      supersessionReason: null,
+      recordedAt: '2026-09-20T00:00:00.000Z',
+      channel: 'all' as const,
+    };
+    // A lift with no `committed` marker: journalled inside a transaction that may have rolled back.
+    const legacyLift = { ...stop, eventId: `sup_${'d'.repeat(64)}`, source: 'admin_supersession', supersedesEventId: stop.eventId, supersessionReason: 'correction', recordedAt: '2026-09-20T00:05:00.000Z' };
+    const invocation: AdminInvocation = {
+      session,
+      config: readToolConfig({ DATABASE_URL: databaseUrl }),
+      environment: {},
+      options: { '--from': '2026-09-19T00:00:00Z' },
+      switches: new Set(),
+      journalSource: { read: async () => await Promise.resolve([legacyLift, stop]) },
+    };
+    const replayed = await suppressionJournalReplayCommand(invocation);
+    expect(replayed).toMatchObject({ ok: true, value: { inserted: 1, unverifiedLegacyReleaseCount: 1, unverifiedLegacyReleases: [legacyLift.eventId] } });
+  });
+
   it('keeps a Message-ID in a report only as a hash (lane g73)', () => {
     expect(redactedMessageId('<fss.00000000-0000-4000-8000-000000000001@example.test>')).toMatch(/^[0-9a-f]{16}$/u);
     expect(redactedMessageId('<a@example.test>')).not.toBe(redactedMessageId('<b@example.test>'));

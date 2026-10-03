@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -53,7 +54,7 @@ describe('mergeFirms and the send gate', () => {
       sendGateLockName(seeded.alpha.workspaceId),
     ]);
     const merging = withTransaction(database.session, async () =>
-      await mergeFirms(admin(), { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId }),
+      await mergeFirms(admin(), { journal: recordingSuppressionJournal(), sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId }),
     );
     let blocked = false;
     for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {

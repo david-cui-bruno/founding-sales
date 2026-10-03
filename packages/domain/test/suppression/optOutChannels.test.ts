@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { readFirmStops } from '../../crm/firmPage.ts';
 import { mergeFirms } from '../../crm/merges.ts';
 import { withTransaction } from '../../db/queryable.ts';
@@ -98,7 +99,7 @@ describe('P1-10: a merge keeps each firm stop’s channel', () => {
         });
       }
       const merged = await withTransaction(database.session, async () =>
-        await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { sourceFirmId: source.firmId, targetFirmId: target.firmId }),
+        await mergeFirms(userContext(database.session, seeded.alpha, 'admin'), { journal: recordingSuppressionJournal(), sourceFirmId: source.firmId, targetFirmId: target.firmId }),
       );
       expect(merged.ok, JSON.stringify(merged)).toBe(true);
       const { rows } = await database.session.query<{ channel: string; source: string }>(

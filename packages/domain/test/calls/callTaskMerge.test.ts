@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { mergeFirms } from '../../crm/merges.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { callTaskSource } from '../../today/build.ts';
@@ -44,7 +45,7 @@ describe('a firm merge carries the call tasks', () => {
     const withContact = await insertTask(contact[0]?.id ?? null, 'Send Quinn the pricing sheet', `task:${'b'.repeat(16)}`);
 
     const merged = await withTransaction(world.session, async () =>
-      await mergeFirms(world.admin(), { sourceFirmId: sourceId, targetFirmId: target.firmId, resolutions: { name: 'target' } }),
+      await mergeFirms(world.admin(), { journal: recordingSuppressionJournal(), sourceFirmId: sourceId, targetFirmId: target.firmId, resolutions: { name: 'target' } }),
     );
     expect(merged, JSON.stringify(merged)).toMatchObject({ ok: true });
     const { rows: moved } = await world.session.query<{ id: string; firm_id: string }>(

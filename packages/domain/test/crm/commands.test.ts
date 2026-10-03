@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { QueryOutcome, QueryResultRowLike, SessionQueryable } from '../../db/queryable.ts';
@@ -593,7 +594,7 @@ describe('CRM commands', () => {
         // so moving the contacts would have rewritten the source judgment's firm_id
         // onto the target's and violated the primary key. That is the merge this test
         // exists for.
-        const merged = await mergeFirms(context, {
+        const merged = await mergeFirms(context, { journal: recordingSuppressionJournal(),
           sourceFirmId: duplicate.value.id,
           targetFirmId: crm.alpha.firmId,
         });
@@ -677,7 +678,7 @@ describe('CRM commands', () => {
         );
 
         expect(
-          await mergeFirms(context, { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId }),
+          await mergeFirms(context, { journal: recordingSuppressionJournal(), sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId }),
         ).toMatchObject({ ok: true });
 
         const moved = await context.db.query<{ fit: string; likely_contact_id: string | null }>(
@@ -721,7 +722,7 @@ describe('CRM commands', () => {
         // The contacts move first, and the linked meeting's firm follows its contact
         // through ON UPDATE CASCADE while its opportunity is still the source's: the
         // opportunity key must not be checked until the opportunities have moved too.
-        expect(await mergeFirms(context, { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId })).toMatchObject({
+        expect(await mergeFirms(context, { journal: recordingSuppressionJournal(), sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId })).toMatchObject({
           ok: true,
         });
         const { rows } = await context.db.query<{ booking_uid: string; firm_id: string; contact_id: string | null; opportunity_id: string | null }>(
@@ -757,7 +758,7 @@ describe('CRM commands', () => {
           [seeded.alpha.workspaceId, `dup-suppression-${duplicate.value.id}`, duplicate.value.id],
         );
 
-        const merged = await mergeFirms(context, {
+        const merged = await mergeFirms(context, { journal: recordingSuppressionJournal(),
           sourceFirmId: duplicate.value.id,
           targetFirmId: crm.alpha.firmId,
         });
@@ -807,7 +808,7 @@ describe('CRM commands', () => {
           assignedUserId: seeded.alpha.salesperson.userId,
         });
         if (!duplicate.ok) return;
-        const merged = await mergeFirms(context, {
+        const merged = await mergeFirms(context, { journal: recordingSuppressionJournal(),
           sourceFirmId: duplicate.value.id,
           targetFirmId: crm.alpha.firmId,
         });
@@ -840,7 +841,7 @@ describe('CRM commands', () => {
         // The merge takes the source firm's row lock, so it cannot run past the
         // uncommitted enrichment and lose it.
         await merging.query('BEGIN');
-        const pending = mergeFirms(contextOn(merging, admin), {
+        const pending = mergeFirms(contextOn(merging, admin), { journal: recordingSuppressionJournal(),
           sourceFirmId: duplicateId,
           targetFirmId: crm.alpha.firmId,
         });
@@ -909,7 +910,7 @@ describe('CRM commands', () => {
         });
 
         expect(
-          await mergeFirms(context, { sourceFirmId, targetFirmId: crm.alpha.firmId }),
+          await mergeFirms(context, { journal: recordingSuppressionJournal(), sourceFirmId, targetFirmId: crm.alpha.firmId }),
         ).toMatchObject({ ok: true });
 
         const { rows } = await context.db.query<{ dedupe_key: string; firm_id: string }>(
@@ -939,7 +940,7 @@ describe('CRM commands', () => {
           assignedUserId: seeded.alpha.salesperson.userId,
         });
         if (!duplicate.ok) return;
-        await mergeFirms(context, { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId });
+        await mergeFirms(context, { journal: recordingSuppressionJournal(), sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId });
         expect(
           await updateFirm(context, { firmId: duplicate.value.id, patch: { name: 'Back from the dead' } }),
         ).toMatchObject({ ok: false, reason: 'firm_merged' });

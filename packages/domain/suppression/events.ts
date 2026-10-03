@@ -18,7 +18,7 @@ import {
   mayCorrectSuppression,
 } from '../src/rules/suppressionCanonicalization.ts';
 import { claimFinalization } from './finalize.ts';
-import { deterministicEventId, type SuppressionJournal } from './journal.ts';
+import { deterministicEventId, type SuppressionJournal, type SuppressionJournalRecord } from './journal.ts';
 
 /**
  * The insert-only suppression protocol (specification 10.2, Appendix A, Appendix G
@@ -47,10 +47,16 @@ import { deterministicEventId, type SuppressionJournal } from './journal.ts';
  * already made terminal.
  *
  * **The journal is durable before the row is.** `journal.append` is awaited inside
- * the command transaction and before the `INSERT`. A throw rolls the transaction
+ * the command transaction and before the commit. A throw rolls the transaction
  * back and nothing is suppressed; a success followed by a rollback leaves the
  * journal holding an event the database does not, which 10.2 calls out as the safe
- * direction because replay only ever re-adds a suppression.
+ * direction because replay only ever re-adds a suppression. That is a stop's rule. A
+ * supersession is the opposite direction, so its rule is the opposite (brief RF): it is
+ * journalled only AFTER its command transaction commits, by whoever ends that transaction
+ * (the API's suppression route). These functions return the record for that and never
+ * append it themselves. A lift whose journal write fails after the commit stays lifted and
+ * is logged; a later restore brings the stop back, which errs toward the stop. A lift in the
+ * journal that never committed would be the one thing a replay must not apply.
  */
 
 export type SuppressionResult<T> =
@@ -215,6 +221,34 @@ export interface RecordedSuppression {
   readonly replayed: boolean;
 }
 
+/**
+ * A stop this command already recorded on this key, under any channel that covers `channel`
+ * (brief RF, X6). Never a supersession, and never without a command id: an event with no
+ * command is identified by nothing but its id.
+ */
+async function sameCommandEvent(
+  context: RepositoryContext,
+  input: {
+    readonly scope: SuppressionScope;
+    readonly canonicalKey: string;
+    readonly source: string;
+    readonly commandId: string | undefined;
+    readonly channel: SuppressionChannel;
+  },
+): Promise<SuppressionEventRow | null> {
+  if (input.commandId === undefined) return null;
+  const { rows } = await context.db.query<EventDbRow>(
+    `SELECT ${EVENT_COLUMNS} FROM suppression_events
+      WHERE workspace_id = $1 AND scope = $2 AND canonical_key = $3 AND source = $4 AND command_id = $5
+        AND supersedes_event_id IS NULL AND channel IN ($6, 'all')
+      ORDER BY recorded_at, event_id
+      LIMIT 1`,
+    [context.scope.workspaceId, input.scope, input.canonicalKey, input.source, input.commandId, input.channel],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toEvent(row);
+}
+
 export async function recordSuppression(
   context: RepositoryContext,
   input: RecordSuppressionInput,
@@ -274,7 +308,19 @@ export async function recordSuppression(
     channel: input.channel,
   });
 
-  const existing = await readSuppressionEvent(context, eventId);
+  // The same command recorded the same fact: by the deterministic id or, across the 0037
+  // boundary (brief RF, X6), by the command itself. A command's id is not hashed with its
+  // channel when that channel is `all`, so an opt-out journalled before 0037 as `all` and
+  // reprocessed after a restore as `email` would otherwise get a second event. The earlier
+  // event answers when it covers the channel asked for (`all` covers every channel); one
+  // that covers less is not this fact, and the new stop is recorded beside it.
+  const existing = (await readSuppressionEvent(context, eventId)) ?? (await sameCommandEvent(context, {
+    scope: input.scope,
+    canonicalKey,
+    source: input.source,
+    commandId: input.commandId,
+    channel: input.channel,
+  }));
   if (existing !== null) {
     // The same command recorded the same fact. Idempotent by the deterministic id,
     // which is what makes Appendix E's journal replay safe.
@@ -306,6 +352,10 @@ export async function recordSuppression(
     supersessionReason: null,
     recordedAt: now,
     channel: input.channel,
+    // The firm the review hold below goes on, so a replay opens the same one (brief RF, X5);
+    // null, written as such, when there is none, so a replay can tell it from an object
+    // written before RF, which says nothing.
+    firmId: input.firmId ?? null,
   });
 
   await context.db.query(
@@ -387,7 +437,171 @@ export async function recordSuppression(
   });
 }
 
+const SUPERSESSION_SAVEPOINT = 'suppression_supersession';
+
+/** Whether some event already supersedes `eventId` (committed, or this transaction's own). */
+async function alreadySuperseded(context: RepositoryContext, eventId: string): Promise<boolean> {
+  const { rows } = await context.db.query(
+    'SELECT 1 FROM suppression_events WHERE workspace_id = $1 AND supersedes_event_id = $2 LIMIT 1',
+    [context.scope.workspaceId, eventId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Run `work` under a savepoint, and answer `false` when it lost the one-supersession race
+ * (brief RF, R1).
+ *
+ * `suppression_events_one_direct_supersession` (0001) is what serializes two supersessions
+ * of one event: the second INSERT waits on the first's index entry and, once the first
+ * commits, fails with 23505. Caught without a savepoint, that error leaves the command's
+ * transaction aborted, so the refusal could not even write its receipt. Rolled back to the
+ * savepoint, the transaction is whole again: the caller refuses `already_superseded`, the
+ * receipt commits, and nothing of the losing supersession (its finalization claim
+ * included) survives.
+ */
+async function underSupersessionSavepoint(context: RepositoryContext, work: () => Promise<boolean>): Promise<boolean> {
+  await context.db.query(`SAVEPOINT ${SUPERSESSION_SAVEPOINT}`);
+  try {
+    const done = await work();
+    await context.db.query(`RELEASE SAVEPOINT ${SUPERSESSION_SAVEPOINT}`);
+    return done;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && (error as { code?: string }).code === '23505') {
+      await context.db.query(`ROLLBACK TO SAVEPOINT ${SUPERSESSION_SAVEPOINT}`);
+      await context.db.query(`RELEASE SAVEPOINT ${SUPERSESSION_SAVEPOINT}`);
+      return false;
+    }
+    throw error;
+  }
+}
+
+/** The lock's name: one per workspace, like the send gate. */
+export function suppressionHistoryLockName(workspaceId: string): string {
+  return `fss.suppression-history:${workspaceId}`;
+}
+
+/**
+ * Serialise every write that reads a stop's history and writes from it (brief RF, review P2):
+ * a supersession (admin lift or correction), the merge's copy of a firm's stops, and the
+ * replay. Without it a lift that commits while a merge is between reading the source's
+ * stops and copying them is lost on the survivor. A supersession takes it first thing;
+ * the merge and the replay take it right after the send gate, before any row. Nothing
+ * takes the send gate after it, so the two locks never form a cycle. Transaction-scoped.
+ */
+export async function lockSuppressionHistory(context: RepositoryContext): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    suppressionHistoryLockName(context.scope.workspaceId),
+  ]);
+}
+
+/** The prefix of a merge copy's id (RF, review RFV). No pre-repair id starts with it. */
+const MERGE_COPY_PREFIX = 'mergecopy:';
+/** The prefix of a merge copy written before RF's last repair: `merge:<event>`, any survivor. */
+const LEGACY_MERGE_COPY_PREFIX = 'merge:';
+
+/**
+ * Carry a supersession onto every merge copy of the event it lifted (brief RF, review P2).
+ *
+ * A firm merge copies each source stop to the survivor as `mergeCopyId(event, survivor)`,
+ * `mergecopy:<event>@<survivor>`; before RF's last repair it wrote `merge:<event>`. A lift of
+ * the source's event after the merge is a lift of the stop the survivor inherited, so each
+ * copy is lifted with it, in the copy's own form: `mergeCopyId(supersession, survivor)` for a
+ * copy, `merge:<supersession>` for a pre-repair copy — exactly the row the merge would have
+ * copied had the lift come first. Copies of copies follow. Each copied lift is a release, so
+ * its journal record is returned for the caller to append after the commit (RF reset, J2),
+ * with the supersession's own.
+ *
+ * The two forms are told apart by prefix, and each is matched by equality only (review RFV):
+ * a pre-repair copy of `e` is exactly `merge:e`, a copy of `e` on the firm it sits on is
+ * exactly `mergecopy:e@<that firm's key>`. No id of one form starts with the other's prefix,
+ * so a copy of one lineage is never read as a child of another.
+ */
+async function liftMergeCopies(
+  context: RepositoryContext,
+  originalEventId: string,
+  supersessionEventId: string,
+): Promise<readonly SuppressionJournalRecord[]> {
+  const { rows } = await context.db.query<{ event_id: string; canonical_key: string }>(
+    `SELECT copy.event_id, copy.canonical_key FROM suppression_events copy
+      WHERE copy.workspace_id = $1 AND copy.scope = 'firm'
+        AND (copy.event_id = '${LEGACY_MERGE_COPY_PREFIX}' || $2
+             OR copy.event_id = '${MERGE_COPY_PREFIX}' || $2 || '@' || copy.canonical_key)
+        AND NOT EXISTS (
+          SELECT 1 FROM suppression_events lift
+           WHERE lift.workspace_id = copy.workspace_id AND lift.supersedes_event_id = copy.event_id
+        )`,
+    [context.scope.workspaceId, originalEventId],
+  );
+  const records: SuppressionJournalRecord[] = [];
+  for (const copy of rows) {
+    const copiedLift =
+      copy.event_id === `${LEGACY_MERGE_COPY_PREFIX}${originalEventId}`
+        ? `${LEGACY_MERGE_COPY_PREFIX}${supersessionEventId}`
+        : mergeCopyId(supersessionEventId, copy.canonical_key);
+    const inserted = await context.db.query<EventDbRow>(
+      `INSERT INTO suppression_events
+         (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id,
+          recorded_at, supersedes_event_id, supersession_reason, channel)
+       SELECT $1, $2, copy.scope, copy.canonical_key, copy.canonicalizer_version, lift.source, lift.actor_user_id,
+              lift.command_id, lift.recorded_at, copy.event_id, lift.supersession_reason, copy.channel
+         FROM suppression_events copy
+         JOIN suppression_events lift ON lift.workspace_id = copy.workspace_id AND lift.event_id = $3
+        WHERE copy.workspace_id = $1 AND copy.event_id = $4
+       RETURNING ${EVENT_COLUMNS}`,
+      [context.scope.workspaceId, copiedLift, supersessionEventId, copy.event_id],
+    );
+    const row = inserted.rows[0];
+    if (row !== undefined) records.push(journalRecordOf(context, toEvent(row)));
+    records.push(...(await liftMergeCopies(context, copy.event_id, copiedLift)));
+  }
+  return records;
+}
+
+/**
+ * The id of a merge's copy of `eventId` on the survivor `survivorFirmId` (RF, reviews RFR, RFV).
+ *
+ * The survivor is part of it: a copy is a different stop on each firm it is copied to, and a
+ * merge that rolled back after journalling its copy for one survivor must not own the id (and
+ * so the conditional journal object) a later merge to another survivor needs. Deterministic,
+ * so a retry of the same merge reaches the same id and the same object. Its prefix is not the
+ * pre-repair `merge:`, so no copy can share an id with a pre-repair copy or its descendants;
+ * the survivor is the firm key after the last `@` (a firm key is a UUID, with no `@`).
+ */
+export function mergeCopyId(eventId: string, survivorFirmId: string): string {
+  return `${MERGE_COPY_PREFIX}${eventId}@${survivorFirmId.toLowerCase()}`;
+}
+
+/** Whether an event id is a merge's copy, in either form (`mergecopy:` or pre-repair `merge:`). */
+export function isMergeCopyId(eventId: string): boolean {
+  return eventId.startsWith(MERGE_COPY_PREFIX) || eventId.startsWith(LEGACY_MERGE_COPY_PREFIX);
+}
+
+/** An event as the journal holds it. */
+export function journalRecordOf(context: RepositoryContext, event: SuppressionEventRow): SuppressionJournalRecord {
+  return {
+    eventId: event.eventId,
+    workspaceId: context.scope.workspaceId,
+    scope: event.scope,
+    canonicalKey: event.canonicalKey,
+    canonicalizerVersion: event.canonicalizerVersion,
+    source: event.source,
+    actorUserId: event.actorUserId,
+    commandId: event.commandId,
+    supersedesEventId: event.supersedesEventId,
+    supersessionReason: event.supersessionReason,
+    recordedAt: event.recordedAt,
+    channel: event.channel,
+  };
+}
+
 export interface CorrectionOutcome {
+  /**
+   * The releases this correction wrote, itself first and then any merge copy it lifted, for
+   * the caller to append once the command transaction has committed, marked (RF reset, J2):
+   * a release is never journalled before then.
+   */
+  readonly journalRecords: readonly SuppressionJournalRecord[];
   readonly correctionEventId: string;
   readonly originalEventId: string;
   readonly releasedHoldIds: readonly string[];
@@ -407,10 +621,11 @@ export interface CorrectionOutcome {
  */
 export async function recordCorrection(
   context: RepositoryContext,
-  input: { readonly eventId: string; readonly commandId?: string | undefined; readonly journal: SuppressionJournal },
+  input: { readonly eventId: string; readonly commandId?: string | undefined },
 ): Promise<SuppressionResult<CorrectionOutcome>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('not_your_event');
+  await lockSuppressionHistory(context);
 
   const original = await readSuppressionEvent(context, input.eventId);
   if (original === null) return refuse('suppression_unknown');
@@ -436,31 +651,24 @@ export async function recordCorrection(
     channel: original.channel,
   });
 
-  // The claim, before anything is written. The finalizer races for the same row.
-  const claim = await claimFinalization(context, {
-    eventId: original.eventId,
-    outcome: 'corrected',
-    correctionEventId,
-    decidedByUserId: actor.userId,
-  });
-  if (!claim.won) return refuse(claim.outcome === 'finalized' ? 'already_finalized' : 'already_superseded');
+  // A supersession already lifted this event: refused before anything is claimed or
+  // journalled (brief RF, R1).
+  if (await alreadySuperseded(context, original.eventId)) return refuse('already_superseded');
 
-  await input.journal.append({
-    eventId: correctionEventId,
-    workspaceId: context.scope.workspaceId,
-    scope: original.scope,
-    canonicalKey: original.canonicalKey,
-    canonicalizerVersion: original.canonicalizerVersion,
-    source: 'mistaken_entry_correction',
-    actorUserId: actor.userId,
-    commandId: input.commandId ?? null,
-    supersedesEventId: original.eventId,
-    supersessionReason: 'mistaken_entry',
-    recordedAt: now,
-    channel: original.channel,
-  });
-
-  try {
+  // The claim, before the row. The finalizer races for the same claim; another supersession
+  // races for the row, under the savepoint, which also takes the claim back if the row loses.
+  let claimLost: 'already_finalized' | 'already_superseded' | null = null;
+  const written = await underSupersessionSavepoint(context, async () => {
+    const claim = await claimFinalization(context, {
+      eventId: original.eventId,
+      outcome: 'corrected',
+      correctionEventId,
+      decidedByUserId: actor.userId,
+    });
+    if (!claim.won) {
+      claimLost = claim.outcome === 'finalized' ? 'already_finalized' : 'already_superseded';
+      return false;
+    }
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
@@ -479,12 +687,27 @@ export async function recordCorrection(
         original.channel,
       ],
     );
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && (error as { code?: string }).code === '23505') {
-      return refuse('already_superseded');
-    }
-    throw error;
-  }
+    return true;
+  });
+  if (!written) return refuse(claimLost ?? 'already_superseded');
+
+  const copiedLifts = await liftMergeCopies(context, original.eventId, correctionEventId);
+
+  // The record the caller journals after the commit (brief RF): never appended here.
+  const journalRecord: SuppressionJournalRecord = {
+    eventId: correctionEventId,
+    workspaceId: context.scope.workspaceId,
+    scope: original.scope,
+    canonicalKey: original.canonicalKey,
+    canonicalizerVersion: original.canonicalizerVersion,
+    source: 'mistaken_entry_correction',
+    actorUserId: actor.userId,
+    commandId: input.commandId ?? null,
+    supersedesEventId: original.eventId,
+    supersessionReason: 'mistaken_entry',
+    recordedAt: now,
+    channel: original.channel,
+  };
 
   // "It clears only this hold; remaining holds still apply."
   const released = await releaseHoldsOfEvent(context, {
@@ -503,6 +726,7 @@ export async function recordCorrection(
   });
 
   return accept({
+    journalRecords: [journalRecord, ...copiedLifts],
     correctionEventId,
     originalEventId: original.eventId,
     releasedHoldIds: released.map(hold => hold.id),
@@ -522,6 +746,10 @@ export async function recordCorrection(
  * finalized is not a race but a sequence — the terminal stops happened, and the
  * supersession lifts the suppression from here on. `already_superseded` comes from
  * migration 0001's partial unique index, so two admins racing produce one.
+ *
+ * The supersession is journalled by the caller after the command commits (brief RF): the
+ * result carries its record. A lift in the journal that never committed is the one journal
+ * object a replay must never apply.
  */
 export async function recordAdminSupersession(
   context: RepositoryContext,
@@ -529,12 +757,19 @@ export async function recordAdminSupersession(
     readonly eventId: string;
     readonly reason: 'correction' | 'documented_reconsent';
     readonly commandId?: string | undefined;
-    readonly journal: SuppressionJournal;
   },
-): Promise<SuppressionResult<{ readonly supersessionEventId: string; readonly originalEventId: string }>> {
+): Promise<
+  SuppressionResult<{
+    readonly supersessionEventId: string;
+    readonly originalEventId: string;
+    /** The releases written, the lift first, for the caller to append after the commit (J2). */
+    readonly journalRecords: readonly SuppressionJournalRecord[];
+  }>
+> {
   if (!isAdminScope(context.scope)) return refuse('admin_only');
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('admin_only');
+  await lockSuppressionHistory(context);
 
   const original = await readSuppressionEvent(context, input.eventId);
   if (original === null) return refuse('suppression_unknown');
@@ -551,22 +786,11 @@ export async function recordAdminSupersession(
     channel: original.channel,
   });
 
-  await input.journal.append({
-    eventId: supersessionEventId,
-    workspaceId: context.scope.workspaceId,
-    scope: original.scope,
-    canonicalKey: original.canonicalKey,
-    canonicalizerVersion: original.canonicalizerVersion,
-    source: 'admin_supersession',
-    actorUserId: actor.userId,
-    commandId: input.commandId ?? null,
-    supersedesEventId: original.eventId,
-    supersessionReason: input.reason,
-    recordedAt: now,
-    channel: original.channel,
-  });
-
-  try {
+  // Brief RF, R1: a supersession that already exists is a clean refusal, found before
+  // anything is journalled; one racing this command is decided by the unique index, under a
+  // savepoint, so the refusal leaves the transaction whole for its receipt.
+  if (await alreadySuperseded(context, original.eventId)) return refuse('already_superseded');
+  const written = await underSupersessionSavepoint(context, async () => {
     await context.db.query(
       `INSERT INTO suppression_events
          (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source,
@@ -586,12 +810,27 @@ export async function recordAdminSupersession(
         original.channel,
       ],
     );
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && (error as { code?: string }).code === '23505') {
-      return refuse('already_superseded');
-    }
-    throw error;
-  }
+    return true;
+  });
+  if (!written) return refuse('already_superseded');
+
+  const copiedLifts = await liftMergeCopies(context, original.eventId, supersessionEventId);
+
+  // The record the caller journals after the commit (brief RF): never appended here.
+  const journalRecord: SuppressionJournalRecord = {
+    eventId: supersessionEventId,
+    workspaceId: context.scope.workspaceId,
+    scope: original.scope,
+    canonicalKey: original.canonicalKey,
+    canonicalizerVersion: original.canonicalizerVersion,
+    source: 'admin_supersession',
+    actorUserId: actor.userId,
+    commandId: input.commandId ?? null,
+    supersedesEventId: original.eventId,
+    supersessionReason: input.reason,
+    recordedAt: now,
+    channel: original.channel,
+  };
 
   await releaseHoldsOfEvent(context, {
     sourceEventId: original.eventId,
@@ -604,5 +843,5 @@ export async function recordAdminSupersession(
     detail: { supersessionEventId, reason: input.reason },
   });
 
-  return accept({ supersessionEventId, originalEventId: original.eventId });
+  return accept({ supersessionEventId, originalEventId: original.eventId, journalRecords: [journalRecord, ...copiedLifts] });
 }

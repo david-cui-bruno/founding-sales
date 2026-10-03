@@ -358,6 +358,13 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
   let foreign = 0;
   let finalized = 0;
   let windowsReopened = 0;
+  let released = 0;
+  // Brief RF: the journal objects a replay skipped, by id only (no key, no address).
+  const competingSupersessions: string[] = [];
+  const orphanSupersessions: string[] = [];
+  const staleCorrections: string[] = [];
+  const unreconstructedHolds: string[] = [];
+  const unverifiedLegacyReleases: string[] = [];
   for (const [workspaceId, forWorkspace] of byWorkspace) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
     const report = await withTransaction(invocation.session, async () =>
@@ -368,6 +375,12 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     foreign += report.foreign;
     finalized += report.finalized;
     windowsReopened += report.windowsReopened;
+    released += report.released;
+    competingSupersessions.push(...report.competingSupersessions);
+    orphanSupersessions.push(...report.orphanSupersessions);
+    staleCorrections.push(...report.staleCorrections);
+    unreconstructedHolds.push(...report.unreconstructedHolds);
+    unverifiedLegacyReleases.push(...report.unverifiedLegacyReleases);
   }
 
   return accept({
@@ -379,6 +392,17 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
     foreign,
     finalized,
     windowsReopened,
+    released,
+    competingSupersessions,
+    orphanSupersessions,
+    staleCorrections,
+    // Review P3: manual handle stops whose review hold the journal cannot say. The count is
+    // the line an operator reads; the ids are the stops to look at.
+    unreconstructedHoldCount: unreconstructedHolds.length,
+    unreconstructedHolds,
+    // RF reset, J3: releases journalled before the reset, not applied. David lifts again.
+    unverifiedLegacyReleaseCount: unverifiedLegacyReleases.length,
+    unverifiedLegacyReleases,
     workspaces: byWorkspace.size,
   });
 }

@@ -294,7 +294,6 @@ describe('scenario 21: the insert-only protocol refuses everything else', () => 
     const correction = await recordCorrection(salespersonContext(), {
       eventId: 'unsupported-canonicalizer',
       commandId: 'cmd-unsupported',
-      journal: recordingSuppressionJournal(),
     });
     expect(correction).toEqual({ ok: false, reason: 'canonicalizer_unsupported' });
   });
@@ -351,7 +350,6 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       await recordCorrection(salespersonContext(session), {
         eventId: recorded.value.eventId,
         commandId: 'cmd-correct-first-correction',
-        journal: recordingSuppressionJournal(),
       }),
     );
     if (!correction.ok) throw new Error(`expected the correction to win, got ${correction.reason}`);
@@ -412,7 +410,6 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
       await recordCorrection(salespersonContext(session), {
         eventId: recorded.value.eventId,
         commandId: 'cmd-finalize-first-correction',
-        journal: recordingSuppressionJournal(),
       }),
     );
     expect(correction).toEqual({ ok: false, reason: 'already_finalized' });
@@ -448,7 +445,6 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
         const outcome = await recordCorrection(salespersonContext(session), {
           eventId: recorded.value.eventId,
           commandId,
-          journal: recordingSuppressionJournal(),
         });
         await session.query(outcome.ok ? 'COMMIT' : 'ROLLBACK');
         return outcome.ok;
@@ -488,7 +484,6 @@ describe('scenario 30: a prospect opt-out is never salesperson-reversible', () =
     const correction = await recordCorrection(context, {
       eventId: recorded.value.eventId,
       commandId: 'cmd-optout-correct',
-      journal: recordingSuppressionJournal(),
     });
     expect(correction).toEqual({ ok: false, reason: 'not_salesperson_originated' });
   });

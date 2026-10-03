@@ -42,9 +42,31 @@ happens to *enrollments*, not whether the handle is suppressed.
 
 ### 2. The journal is durable before the row is
 
-`journal.append` is awaited inside the command transaction and before the `INSERT`.
+**The journal errs toward the stop** (brief RF and its reset, J1–J4):
+
+- **J1: every write that creates or copies a stop is journalled before its commit.** A stop's
+  `journal.append` is awaited inside the command transaction and before its `INSERT`, and a
+  firm merge journals each copied stop (`mergecopy:<event>@<survivor>`, under the survivor's key) the same
+  way. A commit that then fails leaves the journal holding a stop the database lacks: a
+  replay adds an extra stop, never loses one.
+- **J2: every release is journalled only after its commit, marked `committed: true`.** An
+  admin lift, a correction, each merge copy a lift carries onto (`mergecopy:<lift>@<survivor>`), and each
+  lift a merge copies: `recordAdminSupersession`, `recordCorrection` and `mergeFirms` return
+  the records, and the route appends them once `runCommand` answered a fresh acceptance
+  (`journalCommittedLifts`), with a bounded retry. One whose write still fails stays committed
+  and logs `suppression_lift_unjournalled` (ids only; each failed put also logs
+  `suppression_journal_write_failed`, the critical alarm's event); a restore then brings that
+  stop back, which errs safe.
+- **J3: replay applies only marked releases.** One without the marker was journalled before
+  the reset, inside a transaction that may have rolled back: it is reported as
+  `unverifiedLegacyReleases` (ids; the CLI prints `unverifiedLegacyReleaseCount`) and not
+  applied. David lifts again if it should be lifted.
+- **J4: validity before selection.** Replay discards every invalid release (unmarked, or a
+  correction whose original is already `finalized`, reported as `staleCorrections`) before it
+  chooses one supersession per event, so a stale candidate never displaces a valid one.
+
 See `docs/archive/decisions/g4-journal-port.md` for the two failure modes and why the
-surviving-journal one is the safe direction.
+surviving-journal one is the safe direction for a stop.
 
 **Both processes write it.** The API writes from its three suppression routes; the
 worker writes when mail sync imports a prospect opt-out, which is the commonest way a
@@ -151,15 +173,18 @@ terminal stops end exactly the enrollments whose e-mail steps eligibility refuse
 | Apply's outcome | `edits.outcome.doNotCall`, the same rule |
 | an e-mail opt-out (`mail/effects.ts`, a confirmed reply) | handle `email`; the firm (one candidate, or ticked) `email` |
 | a deletion tombstone | `all` |
-| a merge | the original's channel |
+| a merge | the original's channel, and its lift: a stop the source had lifted is copied with the lift linked to the copy, so it stays lifted on the target (brief RF, X7); a lift of a source stop after the merge lifts the target's copy too, as `mergecopy:<lift>@<survivor>`. A copy's id names its survivor (review RFR): a merge that rolled back after journalling its copy for one survivor never owns the id, or the journal object, a later merge of the same source to another survivor needs, and a retry of the same merge reaches the same id. Copies made before this repair keep the form `merge:<event>`, and a later lift of one is copied as `merge:<lift>`. The two forms differ by prefix and each is matched by equality only (review RFV): a copy of `e` is exactly `merge:e` or exactly `mergecopy:e@<the copy's firm>`, so a copy in one lineage is never read as a child of another; replay treats both prefixes as copies |
 | a correction or an admin supersession | the original's channel; the trigger refuses another |
 | replay | the journalled channel, absent `all` |
+| the same command again, across the 0037 boundary | the earlier event, when its channel covers the one asked for (`all` covers all): an opt-out journalled before 0037 as `all` and reprocessed after a restore as `email` is that event, not a second one (brief RF, X6) |
 | `POST /suppressions/record` | `channel`, absent `all` (the installed desktop's "Stop all contact with this firm") |
 
 **The manual review hold follows the channel** (`reviewHoldBlocks`): `email` blocks
 `email_send` only (`enrollment_advance` is read by every sequence channel, so it cannot be
 part of an e-mail-only hold); `phone` blocks `call_task` and `dial_authorization`; `all`
-blocks all four. Replay opens the same set from the record's channel.
+blocks all four. Replay opens the same set from the record's channel, on the firm the live
+write named: a firm stop's own key, or the `firmId` a handle stop is journalled with since
+brief RF (X5). A handle stop journalled before RF names no firm and replays with no hold.
 
 **The journal** carries `channel` under the same schema, `fss.suppression.v1`: the field
 is additive, an older parser ignores it and replays the event as `all`, and this parser
@@ -192,7 +217,35 @@ There is no claim on the admin path. The ten-minute race belongs to the salesper
 window; an admin superseding an event the finalizer already finalized is not a race
 but a sequence — the terminal stops happened, and the supersession lifts the
 suppression from there on. Two admins racing produce one supersession, refused by
-migration 0001's partial unique index.
+migration 0001's partial unique index. The second waits on the first's index entry and,
+once the first commits, is refused `already_superseded` under a savepoint, so its command
+transaction is whole and its receipt is written; a supersession already committed is refused
+before anything is claimed. A correction takes its finalization claim under the same
+savepoint, so a correction that loses to an admin lift leaves no claim behind.
+
+**The stop-history lock** (`lockSuppressionHistory`, a transaction advisory lock per
+workspace, `fss.suppression-history:<workspace>`) is taken first thing by every supersession,
+and right after the send gate by the merge and the replay. So the race above is decided by the
+lock and the pre-check, with the index and the savepoint behind them, and a lift can no longer
+commit while a merge is between reading a source firm's stops and copying them: either the lift
+commits first and is copied with its stop, or it waits for the merge and then lifts the
+survivor's copy too. Nothing takes the send gate after this lock, so the two never form a cycle.
+
+**Replay** (`fss admin suppression-journal replay`, brief RF):
+
+- puts originals before what supersedes them, whatever order the bucket lists them in,
+  earliest first otherwise (R3);
+- keeps one supersession per event among the valid ones (J4): the one the database already holds, else the earliest
+  by recorded time and then id; the others are reported as `competingSupersessions`, ids
+  only (R2), and a supersession whose original is in neither the database nor the records
+  read is reported as `orphanSupersessions` and skipped;
+- replays a supersession as a release: it opens no hold, is owed no finalizer, releases its
+  original's review hold, and a correction claims its original `corrected` as it did live
+  (R4); a merge copy is replayed as the bare row it was live (no claim, no hold, no job);
+- reports a manual handle stop inside its window whose object predates RF (no `firmId` at all)
+  as `unreconstructedHolds`, and the CLI prints `unreconstructedHoldCount`: the firm its review
+  hold was on cannot be known, and is not guessed. A stop journalled since RF says `firmId:
+  null` when it named no firm.
 
 A supersession may not change the scope, the canonical key or (since 0037) the channel:
 a narrower or wider lift is a supersession followed by a new event. A CHECK cannot read
