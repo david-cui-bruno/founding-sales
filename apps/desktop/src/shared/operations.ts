@@ -28,6 +28,7 @@ import {
   instant,
   meetingAttendanceSetSchema,
   MEETING_ATTENDANCE_CHOICES,
+  meetingBriefResponseSchema,
   meetingMatchedSchema,
   stageSuggestionSchema,
   unmatchedMeetingDtoSchema,
@@ -1543,6 +1544,14 @@ export const OPERATIONS = {
     output: z.strictObject({ meetings: z.array(firmMeetingDtoSchema).nullable(), stageSuggestion: stageSuggestionSchema.nullable() }),
     transform:
       'none: the firm’s meetings with their state, time and how attendance was confirmed, and the one-click stage move a live booking suggests (lane M1); meetings null when the read did not answer',
+  },
+  // Lane M2: the meeting brief, opened from a Meetings row.
+  'meetings.brief': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/meetings/brief?meetingId={uuid}' }],
+    input: z.strictObject({ meetingId: uuid }),
+    output: z.strictObject({ brief: meetingBriefResponseSchema.nullable(), reason: z.string().max(80).nullable() }),
+    transform: 'none: the brief, or null with the reason when the read did not answer (not_found for a meeting the caller may not read)',
   },
   'meetings.unmatched': {
     kind: 'read',

@@ -13,6 +13,7 @@ import {
   firmBasicsResultSchema,
   firmMeetingsResponseSchema,
   meetingAttendanceSetSchema,
+  meetingBriefResponseSchema,
   loggedCallResultSchema,
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
@@ -357,6 +358,13 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       const { commandId, ...body } = input;
       const answer = await deps.api.command('/meetings/attendance', body, value => meetingAttendanceSetSchema.parse(value), { commandId });
       return answer.ok ? { set: answer.value, reason: null } : { set: null, reason: answer.reason.slice(0, 80) };
+    },
+    // Lane M2: the meeting brief; a refusal or a lost answer is a reason, never an empty brief.
+    'meetings.brief': async (input: { readonly meetingId: string }) => {
+      const answer = await deps.api.read(`/meetings/brief?meetingId=${encodeURIComponent(input.meetingId)}`, value =>
+        meetingBriefResponseSchema.parse(value),
+      );
+      return answer.ok ? { brief: answer.value, reason: null } : { brief: null, reason: answer.reason.slice(0, 80) };
     },
     'meetings.unmatched': async () => {
       const answer = await deps.api.read('/meetings/unmatched', value => unmatchedMeetingsResponseSchema.parse(value));

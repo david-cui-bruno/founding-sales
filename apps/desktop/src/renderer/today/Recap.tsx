@@ -18,7 +18,7 @@ import { Block, Label } from '../v2/parts.tsx';
 
 const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalThis.callieApi;
 
-const OBJECTION_WORDS: Readonly<Record<string, string>> = Object.freeze({
+export const OBJECTION_WORDS: Readonly<Record<string, string>> = Object.freeze({
   no_need: 'They don’t need it',
   has_solution: 'They already have something',
   timing: 'Not now',

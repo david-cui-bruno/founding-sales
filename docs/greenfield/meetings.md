@@ -145,6 +145,56 @@ its trigger: a meeting linked to a successor whose body was never read (below) t
 that booking's times from its first event, a cancellation included. As every event, it
 applies only when the ordering lets it; a cancelled meeting stays as it is.
 
+## What the booking says (lane M2, migration 0040)
+
+Besides its times, a meeting keeps what its booking says (`meetings/bookingDetails.ts`):
+
+| Column | From the webhook | From the API (reconciliation) |
+|---|---|---|
+| `event_title` (≤ 300) | `title` | `title` |
+| `attendee_name` (≤ 200) | `attendees[0].name` | `attendees[0].name` |
+| `booking_notes` (≤ 4,000) | `additionalNotes`, else `description`, else `responses.notes.value` | `bookingFieldsResponses.notes`, else `description` |
+| `booking_answers` (question → answer, text, ≤ 1,000 each, ≤ 8 KB) | `responses` by `label`, skipping hidden fields | `bookingFieldsResponses` by slug |
+| `location_type` (≤ 80) | `videoCallData.type`, else `integrations:…`, `link` or `other` | the same, `zoom_video` for a Zoom URL |
+| `video_call_url` (https, no query or fragment) | `videoCallData.url`, else `metadata.videoCallUrl`, else `location` | `location`, else `meetingUrl` |
+| `zoom_meeting_id` (digits) | `videoCallData.id` when `type` is `zoom_video`, else read from a Zoom join URL | read from the Zoom join URL |
+
+Sources: Cal.com's webhook reference (https://cal.com/docs/developing/guides/automation/webhooks),
+its API v2 bookings list (https://cal.com/docs/api-reference/v2/bookings/get-all-bookings) and
+the Zoom app's adapter, which returns `{ type: 'zoom_video', id: String(zoom.id), password, url:
+join_url }` (https://github.com/calcom/cal.com/blob/main/packages/app-store/zoomvideo/lib/VideoApiAdapter.ts).
+
+**Never stored:** the call's passcode (`videoCallData.password`, and a join URL's `?pwd=`), and
+among the answers the booker's name, address, phone numbers, guests, location choice and
+reschedule reason. Events about the current booking replace the details (a null never clears
+one); a reschedule takes the new booking's; a fold takes the newest row's, the survivor's next;
+a reconciliation read replaces them when it is at least as new as the meeting's last event, and
+otherwise only fills empty fields. They go with the meeting on deletion.
+
+## The meeting brief (lane M2)
+
+`GET /meetings/brief?meetingId=` (`meetings/brief.ts`) gathers, on read and with no model call,
+what Callie already knows for one meeting. Each item carries its source, its date and how far it
+can be trusted: `stated` (the booking form), `observed` (a verbatim quote, a logged outcome, an
+e-mail's subject), `inferred` (a model's summary or next step) or `unverified` (prepared
+research, not verified by Callie). Each section carries at most 12 items and counts the rest.
+
+* **Why this demo** — the booking's notes and answers; the `demo_request` quotes from the
+  firm's recent calls' analyses; those calls' stored summaries' next steps.
+* **Firm** — the prepared brief's first three lines (it is free text: its first lines are its
+  headline), then the research quotes `software_evidence` and `maintenance_workflow`.
+* **Previous conversations** — the last three calls (a logged call, or a placed call nobody
+  logged yet: outcome and a one-line summary, the analysis's before the stored one) and the
+  last two e-mail threads (subject and date only).
+* **Objections** — from the analyses, one per category, the most recent quote.
+* **Open commitments** — the summaries' commitments, de-duplicated.
+
+Readable by whoever may read the firm page in full (the assignee or an administrator, whose
+read of a colleague's firm is audited); anyone else, an unknown meeting and a meeting matched
+to no firm get the same `not_found`. The desktop opens it from the firm page's Meetings row
+("Brief") for a meeting starting within seven days or past and unconfirmed. Today shows no
+meetings, so it has no link there.
+
 ## Lock order: routing, then the send gate, then rows
 
 Cal.com names no workspace, so "the one workspace with `calendar_integration =
