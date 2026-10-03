@@ -10,7 +10,12 @@ import { instant, uuid } from '@fss/contracts';
  * listed, never read, and never in this view.
  */
 
-export const RECORDING_ITEM_STATES = ['waiting', 'needs_matching', 'uploading', 'uploaded', 'failed'] as const;
+/**
+ * Only what is not registered yet (M4 reset, R4): a registered recording is the server's, and
+ * the firm page reads it from there (`recordings.forFirm`), so a fold or another Mac's upload
+ * shows. This Mac's import never shows an uploaded folder of its own.
+ */
+export const RECORDING_ITEM_STATES = ['waiting', 'needs_matching', 'uploading', 'failed'] as const;
 export type RecordingItemState = (typeof RECORDING_ITEM_STATES)[number];
 
 /** A meeting the person may choose for a folder: when it was and whom with. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RecordingCandidate } from '@fss/contracts';
 import { guardIdentity } from '../src/main/identityReset.ts';
+import { applyAnswered } from '../src/renderer/recordings/recordingsMemory.ts';
 import { createRecordingImporter, itemIdOf, type RecordingImportHost } from '../src/main/recordings/importer.ts';
 import { STABLE_AFTER_MS } from '../src/main/recordings/zoomFolder.ts';
 import { memoryRecordingStore, type RecordingStore, type RecordingsFile } from '../src/main/recordings/store.ts';
@@ -17,8 +18,11 @@ import { fakeFile, fakeFs, fakeServer, fakeUploader, sha } from './support/recor
 const ROOT = '/Users/test/Movies/Callie Demos';
 const WORKSPACE = '22222222-2222-4222-8222-222222222222';
 const USER = '55555555-5555-4555-8555-555555555555';
-const PERSON = `${WORKSPACE}:${USER}`;
+const PERSON = `${WORKSPACE}:${USER}:member`;
+type Who = { workspaceId: string; userId: string; role: 'admin' | 'member' };
+const ME: Who = { workspaceId: WORKSPACE, userId: USER, role: 'member' };
 const T0 = new Date(2026, 9, 5, 14, 40, 0).getTime();
+const DAY = 24 * 60 * 60 * 1000;
 
 const local = (hour: number, minute: number): Date => new Date(2026, 9, 5, hour, minute, 0);
 const folderName = (start: Date, topic: string): string => {
@@ -46,7 +50,7 @@ function harness(options: { meetings?: RecordingCandidate[]; store?: RecordingSt
   const upload = fakeUploader(server, files);
   const store = options.store ?? memoryRecordingStore();
   let chosen: string | null = null;
-  let signedIn: { workspaceId: string; userId: string } | null = { workspaceId: WORKSPACE, userId: USER };
+  let signedIn: Who | null = ME;
   const build = (s: RecordingStore = store): RecordingImportHost =>
     createRecordingImporter({
       api: server.api,
@@ -71,13 +75,23 @@ function harness(options: { meetings?: RecordingCandidate[]; store?: RecordingSt
     setMeetings: (next: RecordingCandidate[]) => {
       meetings = next;
     },
-    signIn: (who: { workspaceId: string; userId: string } | null) => {
+    signIn: (who: Who | null) => {
       signedIn = who;
     },
     choose: (path: string | null) => {
       chosen = path;
     },
   };
+}
+
+/**
+ * The states of this person's entries as stored, newest first — `uploaded` included, which the
+ * window is never shown (R4: a registered recording is the server's).
+ */
+function stored(h: { store: { saved(): RecordingsFile } }, person = PERSON): string[] {
+  return Object.values(h.store.saved().people[person]?.entries ?? {})
+    .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+    .map(entry => entry.state);
 }
 
 /** Two scans far enough apart for the listing to count as stable, and the uploads they start. */
@@ -121,7 +135,8 @@ describe('CC3: a restart in the middle of an upload resumes exactly once', () =>
     expect(h.upload.puts.filter(path => path.endsWith('audioDavidCui11234567890.m4a'))).toHaveLength(1);
     expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(1);
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
-    expect((await restarted.state()).items.map(item => item.state)).toEqual(['uploaded']);
+    expect(stored(h)).toEqual(['uploaded']);
+    expect((await restarted.state()).items).toEqual([]);
   });
 
   it('a register on the wire when the app quits is replayed under the same command id after a restart, and records nothing twice', async () => {
@@ -143,7 +158,7 @@ describe('CC3: a restart in the middle of an upload resumes exactly once', () =>
     expect(registers).toHaveLength(2);
     expect(registers[0]?.commandId).toBe(registers[1]?.commandId);
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
-    expect((await restarted.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
     // Nothing was uploaded twice: the files were marked sent before the register.
     expect(h.upload.puts).toHaveLength(2);
   });
@@ -154,10 +169,9 @@ describe('the demo recording import (acceptance)', () => {
     const h = harness();
     const folder = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
     await settle(h);
-    const view = await h.importer.state();
-    expect(view.items).toEqual([
-      expect.objectContaining({ itemId: itemIdOf(PERSON, folder.path), state: 'uploaded', meetingId: meeting('1', local(14, 0)).meetingId, uploaded: 2, total: 2 }),
-    ]);
+    // Registered: the server's now (R4), so this Mac shows nothing of it.
+    expect((await h.importer.state()).items).toEqual([]);
+    expect(h.store.saved().people[PERSON]!.entries[folder.path]).toMatchObject({ state: 'uploaded', meetingId: meeting('1', local(14, 0)).meetingId });
     expect(h.upload.puts.map(path => path.slice(folder.path.length + 1))).toEqual([
       'Audio Record/audioDavidCui11234567890.m4a',
       'Audio Record/audioJordanPlaceholder21234567890.m4a',
@@ -193,7 +207,7 @@ describe('the demo recording import (acceptance)', () => {
     h.advance(STABLE_AFTER_MS + 1000);
     await h.importer.scan();
     await h.importer.idle();
-    expect((await h.importer.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
   });
 
   it('uploads several speakers and several segments under one meeting, each numbered', async () => {
@@ -228,8 +242,7 @@ describe('the demo recording import (acceptance)', () => {
     await settle(h);
     expect(h.upload.puts).toHaveLength(2);
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
-    const states = (await h.importer.state()).items.map(item => item.state);
-    expect(states).toEqual(['uploaded', 'uploaded']);
+    expect(stored(h)).toEqual(['uploaded', 'uploaded']);
   });
 
   it('asks when two meetings are near, uploads only after David chooses one, and “Not a Callie demo” drops it for good', async () => {
@@ -270,8 +283,7 @@ describe('the demo recording import (acceptance)', () => {
       expect(h.files.statted.some(entry => entry.startsWith(path))).toBe(false);
       expect(h.upload.puts.some(entry => entry.startsWith(path))).toBe(false);
     }
-    const view = await h.importer.state();
-    expect(view.items.map(item => item.folderName)).toEqual([expect.stringContaining('Jordan Placeholder')]);
+    expect(Object.values(h.store.saved().people[PERSON]!.entries).map(entry => entry.folderName)).toEqual([expect.stringContaining('Jordan Placeholder')]);
     // Nothing of them is stored either: not the name, only a digest of the path once it is old.
     expect(JSON.stringify(h.store.saved())).not.toContain('Chemistry');
   });
@@ -301,11 +313,13 @@ describe('the demo recording import (acceptance)', () => {
     h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
     h.upload.setBehaviour(path => (path.includes('Jordan') ? 'fail' : 'ok'));
     await settle(h);
-    h.advance(1000);
-    await h.importer.scan();
-    await h.importer.idle();
-    await h.importer.scan();
-    await h.importer.idle();
+    // Three PUTs of the file across three scans (R7), and the fourth scan fails the folder.
+    for (let round = 0; round < 3; round += 1) {
+      h.advance(1000);
+      await h.importer.scan();
+      await h.importer.idle();
+    }
+    expect(h.upload.puts.filter(path => path.includes('Jordan'))).toHaveLength(3);
     const failed = (await h.importer.state()).items[0]!;
     expect(failed).toMatchObject({ state: 'failed', failure: 'upload_failed' });
     h.upload.setBehaviour(() => 'ok');
@@ -313,7 +327,7 @@ describe('the demo recording import (acceptance)', () => {
     h.advance(STABLE_AFTER_MS + 1000);
     await h.importer.scan();
     await h.importer.idle();
-    expect((await h.importer.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
   });
 
@@ -321,9 +335,9 @@ describe('the demo recording import (acceptance)', () => {
     const h = harness();
     h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
     await settle(h);
-    expect((await h.importer.state()).items).toHaveLength(1);
+    expect(stored(h)).toHaveLength(1);
     await h.importer.forget();
-    h.signIn({ workspaceId: '33333333-3333-4333-8333-333333333333', userId: USER });
+    h.signIn({ workspaceId: '33333333-3333-4333-8333-333333333333', userId: USER, role: 'member' });
     h.setMeetings([]);
     expect((await h.importer.state()).items).toEqual([]);
     await settle(h);
@@ -371,10 +385,19 @@ describe('review M4R: the importer', () => {
     };
     const pending = h.importer.scan();
     await gate.began;
-    const ignored = await h.importer.ignore({ itemId: item.itemId });
-    expect(ignored.answered).toEqual({ itemId: item.itemId, version: item.version + 1, item: null });
+    // R1: the command is a turn of its own, after the scan's; it is applied to what the scan left.
+    let answeredEarly = false;
+    const ignoring = h.importer.ignore({ itemId: item.itemId }).then(view => {
+      answeredEarly = true;
+      return view;
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(answeredEarly).toBe(false);
     gate.release();
     await pending;
+    const ignored = await ignoring;
+    expect(ignored.answered).toMatchObject({ itemId: item.itemId, item: null });
+    expect(ignored.answered!.version).toBeGreaterThan(item.version);
     await h.importer.idle();
     h.files.fs.listFolder = list;
     await settle(h);
@@ -440,7 +463,7 @@ describe('review M4R: the importer', () => {
     // Answered again: revalidated, then resumed.
     h.server.setOfflineReads(0);
     await settle(h, restarted);
-    expect((await restarted.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
   });
 
   it('findings 2 and 11: a meeting David chose that was folded into another is not kept — needs matching, the survivor offered, nothing sent to the old id', async () => {
@@ -496,7 +519,7 @@ describe('review M4R: the importer', () => {
     h.advance(STABLE_AFTER_MS + 1000);
     await h.importer.scan();
     await h.importer.idle();
-    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+    expect(stored(h)).toEqual(['uploaded']);
   });
 
   it('finding 6: a sign-out while state() loads the store drops the late answer; the next read shows nothing', async () => {
@@ -533,15 +556,15 @@ describe('review M4R: the importer', () => {
     h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
     await settle(h);
     await h.importer.forget();
-    h.signIn({ workspaceId: WORKSPACE, userId: '66666666-6666-4666-8666-666666666666' });
+    h.signIn({ workspaceId: WORKSPACE, userId: '66666666-6666-4666-8666-666666666666', role: 'member' });
     h.setMeetings([]);
     const other = h.build();
     expect((await other.state()).items).toEqual([]);
     await settle(h, other);
     expect((await other.state()).items).toEqual([]);
     await other.forget();
-    h.signIn({ workspaceId: WORKSPACE, userId: USER });
-    expect((await other.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+    h.signIn(ME);
+    expect(stored(h)).toEqual(['uploaded']);
   });
 
   it('finding 9: a staged object that expired before the register is sent again, and registered', async () => {
@@ -554,7 +577,7 @@ describe('review M4R: the importer', () => {
     h.server.expireObjects();
     const restarted = h.build();
     for (let round = 0; round < 3; round += 1) await settle(h, restarted);
-    expect((await restarted.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
     expect(h.upload.puts).toHaveLength(4);
     expect(h.server.rows.get(meeting('1', local(14, 0)).meetingId)?.size).toBe(2);
   });
@@ -574,7 +597,7 @@ describe('review M4R: the importer', () => {
     h.server.setIntercept(null);
     await h.importer.retry({ itemId: failed.itemId });
     await settle(h);
-    expect((await h.importer.state()).items[0]?.state).toBe('uploaded');
+    expect(stored(h)).toEqual(['uploaded']);
   });
 
   it('finding 10: a truncated answer decides nothing — each folder is read on its own window, and one still truncated waits', async () => {
@@ -586,12 +609,12 @@ describe('review M4R: the importer', () => {
     await settle(h);
     expect(h.files.listed).toContain(demo.path);
     expect(h.files.listed).not.toContain(crowded.path);
-    expect((await h.importer.state()).items).toEqual([expect.objectContaining({ state: 'uploaded' })]);
+    expect(stored(h)).toEqual(['uploaded']);
     // Nothing was settled for the crowded folder: once the answer is complete, it is decided.
     h.server.setMaxCandidates(100);
     await settle(h);
     expect(h.files.listed).toContain(crowded.path);
-    expect((await h.importer.state()).items.map(item => item.state)).toEqual(['uploaded', 'needs_matching']);
+    expect(stored(h)).toEqual(['uploaded', 'needs_matching']);
   });
 
   it('a file named .m4a that is not audio-only MP4 fails as not_audio: never hashed, never sent', async () => {
@@ -620,5 +643,183 @@ describe('review M4R: the importer', () => {
     const stale = await h.importer.retry({ itemId: item.itemId });
     expect(stale.notice).toBe('recording_choice_stale');
     expect(stale.answered?.itemId).toBe(item.itemId);
+  });
+});
+
+describe('the M4 design reset (review M4F repros)', () => {
+  const two = (): RecordingCandidate[] => [meeting('1', local(14, 0)), meeting('2', local(14, 15), 'Riley Example')];
+
+  it('R1: a store load still under way when a scan and an ignore are asked for comes first; the ignore stays final, one load, nothing sent (M4F #1)', async () => {
+    const h = harness({ meetings: two() });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    expect(item.state).toBe('needs_matching');
+    const gate = latch();
+    let loads = 0;
+    const slow: RecordingStore = {
+      load: async () => {
+        loads += 1;
+        const saved = await h.store.load();
+        if (loads === 1) {
+          gate.started();
+          await gate.released;
+        }
+        return saved;
+      },
+      save: async value => {
+        await h.store.save(value);
+      },
+    };
+    const raw = h.build(slow);
+    const delayed = raw.state();
+    await gate.began;
+    // The reviewer's order: the scan and the ignore are asked for, and given every chance to
+    // finish, while the first load is still out. They wait for it (one writer).
+    let finished = 0;
+    const scanned = raw.scan().then(view => {
+      finished += 1;
+      return view;
+    });
+    const ignoring = raw.ignore({ itemId: item.itemId }).then(view => {
+      finished += 1;
+      return view;
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(finished).toBe(0);
+    gate.release();
+    await delayed;
+    await scanned;
+    expect((await ignoring).items).toEqual([]);
+    // Now the matcher would place it on its own: the ignore holds, and nothing is sent.
+    h.setMeetings([two()[0]!]);
+    h.advance(STABLE_AFTER_MS + 1000);
+    await raw.scan();
+    await raw.idle();
+    expect(loads).toBe(1);
+    expect(h.upload.puts).toEqual([]);
+    expect(stored(h)).toEqual(['ignored']);
+    expect((await raw.state()).items).toEqual([]);
+  });
+
+  it('R2: an interrupted upload whose meeting moved away is not resumed on the strength of the last scan when the reread is truncated (M4F #2)', async () => {
+    const h = harness();
+    const folder = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [
+      ...demoFiles(),
+      fakeFile('Audio Record/audioRileyExample31234567890.m4a', 'previously unread second speaker', 1),
+    ]);
+    h.upload.setBehaviour(() => 'fail');
+    await settle(h);
+    expect(stored(h)).toEqual(['uploading']);
+    const moved = meeting('1', local(17, 0));
+    const crowded = Array.from({ length: 101 }, (_, index) => meeting(String(500 + index), new Date(local(14, 0).getTime() - DAY + index * 60_000)));
+    h.setMeetings([...crowded, moved]);
+    h.upload.setBehaviour(() => 'ok');
+    const touched = h.files.touched().length;
+    const puts = h.upload.puts.length;
+    await h.importer.scan();
+    await h.importer.idle();
+    expect(h.files.touched().slice(touched).filter(path => path.startsWith(folder.path))).toEqual([]);
+    expect(h.upload.puts.length).toBe(puts);
+    expect(h.server.commandsTo('/meetings/recordings/register')).toHaveLength(0);
+  });
+
+  it('R2: a step more than 60 s after the scan reads the folder’s window again; the meeting moved meanwhile, so nothing is sent', async () => {
+    const h = harness();
+    const folder = h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await h.importer.scan();
+    h.advance(STABLE_AFTER_MS + 1000);
+    // Hashing the first file takes 61 seconds, and the meeting is moved meanwhile.
+    const hash = h.files.fs.sha256;
+    h.files.fs.sha256 = async path => {
+      h.advance(61_000);
+      h.setMeetings([meeting('1', local(17, 0))]);
+      return await hash(path);
+    };
+    const reads = h.server.calls.filter(call => call.path.includes('candidates')).length;
+    await h.importer.scan();
+    await h.importer.idle();
+    expect(h.server.calls.filter(call => call.path.includes('candidates')).length).toBe(reads + 2);
+    expect(h.upload.puts).toEqual([]);
+    expect(h.server.commandsTo('/meetings/recordings/upload-url')).toHaveLength(0);
+    expect(h.store.saved().people[PERSON]!.entries[folder.path]).toBeUndefined();
+  });
+
+  it('R5: the same person downgraded starts empty, with no candidates read, and stays empty when the read fails (M4F #4)', async () => {
+    const h = harness({ meetings: two() });
+    h.signIn({ ...ME, role: 'admin' });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    expect((await h.importer.state()).items.map(item => item.state)).toEqual(['needs_matching']);
+    await h.importer.forget();
+    h.signIn(ME);
+    h.setMeetings([]);
+    const calls = h.server.calls.length;
+    expect((await h.importer.state()).items).toEqual([]);
+    expect(h.server.calls).toHaveLength(calls);
+    h.server.setOfflineReads(1);
+    await h.importer.scan();
+    expect((await h.importer.state()).items).toEqual([]);
+    // The admin's entries are still the admin's.
+    expect(stored(h, `${WORKSPACE}:${USER}:admin`)).toEqual(['needs_matching']);
+  });
+
+  it('R1: an entry removed and recreated takes a newer version, so an older answer about it is not drawn (M4F #8)', async () => {
+    const h = harness({ meetings: two() });
+    h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const before = (await h.importer.state()).items[0]!;
+    h.server.setIntercept(path => (path === '/meetings/recordings/upload-url' ? { ok: false, reason: 'offline', offline: true } : null));
+    const oldAnswer = await h.importer.chooseMeeting({ itemId: before.itemId, meetingId: two()[0]!.meetingId });
+    await h.importer.idle();
+    h.setMeetings([]);
+    await h.importer.scan();
+    await h.importer.idle();
+    expect((await h.importer.state()).items).toEqual([]);
+    h.setMeetings(two());
+    await h.importer.scan();
+    await h.importer.idle();
+    const latest = await h.importer.state();
+    expect(latest.items[0]).toMatchObject({ itemId: before.itemId, state: 'needs_matching' });
+    expect(latest.items[0]!.version).toBeGreaterThan(oldAnswer.answered!.version);
+    const merged = applyAnswered(latest, oldAnswer);
+    expect(merged?.items[0]).toMatchObject({ state: 'needs_matching', meetingId: null });
+  });
+
+  it('R7: a meeting the server keeps refusing while the candidates keep offering it is sent at most three times, then fails with Retry (M4F loop)', async () => {
+    const h = harness();
+    h.files.add(folderName(local(14, 1), 'Callie demo between David Cui and Jordan Placeholder'), [fakeFile('Audio Record/audioJordanPlaceholder21234567890.m4a', 'jordan', 1)]);
+    h.server.setIntercept(path => (path === '/meetings/recordings/register' ? { ok: false, reason: 'meeting_unknown', offline: false } : null));
+    await settle(h);
+    for (let round = 0; round < 6; round += 1) {
+      await h.importer.scan();
+      await h.importer.idle();
+    }
+    expect(h.upload.puts).toHaveLength(3);
+    const failed = (await h.importer.state()).items[0]!;
+    expect(failed).toMatchObject({ state: 'failed', failure: 'upload_failed' });
+    // Retry resets the count.
+    h.server.setIntercept(null);
+    await h.importer.retry({ itemId: failed.itemId });
+    await settle(h);
+    expect(stored(h)).toEqual(['uploaded']);
+    expect(h.upload.puts).toHaveLength(4);
+  });
+
+  it('R4: a registered folder is not shown by this Mac at all, its folder removed or not; the firm page reads the server', async () => {
+    const h = harness({ meetings: two() });
+    const folder = h.files.add(folderName(local(14, 5), 'Callie demo between David Cui and Jordan Placeholder'), demoFiles());
+    await settle(h);
+    const item = (await h.importer.state()).items[0]!;
+    await h.importer.chooseMeeting({ itemId: item.itemId, meetingId: two()[0]!.meetingId });
+    await h.importer.idle();
+    expect(stored(h)).toEqual(['uploaded']);
+    expect((await h.importer.state()).items).toEqual([]);
+    h.files.remove(folder.path);
+    h.setMeetings([two()[1]!]);
+    await h.importer.scan();
+    await h.importer.idle();
+    expect((await h.importer.state()).items).toEqual([]);
+    expect(h.upload.puts).toHaveLength(2);
   });
 });

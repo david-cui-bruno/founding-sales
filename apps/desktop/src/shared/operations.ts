@@ -22,6 +22,7 @@ import {
   callSessionDtoSchema,
   callsPlacedTodayResponseSchema,
   firmMeetingDtoSchema,
+  firmRecordingSchema,
   firmTimelineSchema,
   firmBasicsIssueSchema,
   TODAY_CARD_BLOCKERS,
@@ -1655,6 +1656,15 @@ export const OPERATIONS = {
     input: z.strictObject({ itemId: recordingItemIdSchema }),
     output: recordingsViewSchema,
     transform: 'a failed folder is listed and evaluated afresh, and every file sent again under new commands',
+  },
+  // M4 reset, R4: the firm's registered recordings, from the server's rows (which follow a
+  // fold, and show another Mac's uploads), straight through the authenticated client.
+  'recordings.forFirm': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/meetings/recordings?firmId={uuid}' }],
+    input: z.strictObject({ firmId: uuid }),
+    output: z.strictObject({ recordings: z.array(firmRecordingSchema).nullable(), truncated: z.boolean() }),
+    transform: 'none: the registered recordings of the firm’s meetings, or null when the read did not answer',
   },
 } as const satisfies Readonly<Record<string, Operation>>;
 

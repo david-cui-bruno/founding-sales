@@ -58,7 +58,7 @@ export interface WindowBridges {
 /** Lane M4: what the recording import is built from. Absent in tests that never import one. */
 export interface RecordingImportWiring {
   readonly store: RecordingStore;
-  identity(): Promise<{ readonly workspaceId: string; readonly userId: string } | null>;
+  identity(): Promise<{ readonly workspaceId: string; readonly userId: string; readonly role: 'admin' | 'member' } | null>;
   readonly defaultFolder: string;
   openFolderDialog(purpose: 'watch' | 'import'): Promise<FileChoice>;
   readonly fs?: RecordingFs;

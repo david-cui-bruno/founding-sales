@@ -39,7 +39,7 @@ const item = (n: number, overrides: Partial<RecordingItem>): RecordingItem => ({
   version: 1,
   folderName: '2026-10-01 10.01.12 Callie demo between David Cui and Jordan Placeholder 81234567890',
   startedAt: '2026-10-01T15:01:12.000Z',
-  state: 'uploaded',
+  state: 'waiting',
   meetingId: null,
   uploaded: 0,
   total: 2,
@@ -98,16 +98,28 @@ test('the firm page: each meeting’s recording state, and its Recordings list',
         view([
           item(4, { state: 'waiting', meetingId: M(1), folderName: '2026-10-02 14.01.00 Callie demo between David Cui and Jordan Placeholder 81234567893', startedAt: '2026-10-02T19:01:00.000Z' }),
           item(5, { state: 'uploading', meetingId: M(4), uploaded: 1, total: 3 }),
-          item(6, { state: 'uploaded', meetingId: M(5), uploaded: 2, total: 2, folderName: '2026-09-30 09.59.00 Callie demo between David Cui and Sam Example 81234567894', startedAt: '2026-09-30T14:59:00.000Z' }),
           item(7, { state: 'failed', failure: 'no_audio', meetingId: M(3), folderName: '2026-09-29 10.00.00 Callie demo 81234567895', startedAt: '2026-09-29T15:00:00.000Z' }),
         ]),
+      // R4: a registered meeting's recordings come from the server.
+      'recordings.forFirm': () => ({
+        truncated: false,
+        recordings: [1, 2].map(n => ({
+          recordingId: `55555555-5555-4555-8555-55555555555${String(n)}`,
+          meetingId: M(5),
+          segment: 1,
+          participantLabel: n === 1 ? 'audioDavidCui11234567894.m4a' : 'audioSamExample21234567894.m4a',
+          state: 'uploaded' as const,
+          createdAt: '2026-09-30T15:30:00.000Z',
+        })),
+      }),
     },
   });
   await page.goto(app.url(`#firm/${FIRM_ID}`));
   await expect(page.getByTestId('meeting-recording-state')).toHaveCount(4);
   await page.getByTestId('firm-recordings').scrollIntoViewIfNeeded();
   await shoot(page, 'firm-recordings');
-  await page.getByTestId('firm-recording').nth(3).hover();
+  await expect(page.getByTestId('firm-recording-registered')).toHaveCount(1);
+  await page.getByTestId('firm-recording').nth(2).hover();
   await expect(page.getByTestId('firm-recording-retry')).toBeVisible();
   await shoot(page, 'firm-recordings-failed-hover');
 });

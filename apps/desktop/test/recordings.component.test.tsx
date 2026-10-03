@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import type { JSX, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FirmMeetingDto } from '@fss/contracts';
+import type { FirmMeetingDto, FirmRecording } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { resetAttendanceMemory } from '../src/renderer/meetings/attendanceMemory.ts';
 import { FirmMeetings, type FirmMeetingsPorts } from '../src/renderer/meetings/FirmMeetings.tsx';
@@ -54,6 +54,15 @@ const viewOf = (items: RecordingItem[], notice: string | null = null): Recording
   folder: { path: '/Users/test/Movies/Callie Demos', isDefault: true, available: true },
   items,
   notice,
+});
+
+const serverRow = (meetingId: string, participantLabel: string): FirmRecording => ({
+  recordingId: crypto.randomUUID(),
+  meetingId,
+  segment: 1,
+  participantLabel,
+  state: 'uploaded',
+  createdAt: '2026-10-05T19:00:00.000Z',
 });
 
 /** A command's answer: the whole view, and its own item at its version (review M4R, finding 12). */
@@ -431,7 +440,7 @@ describe('the states where David sees them', () => {
     expect(within(rows[0]!).getByTestId('recording-detail').textContent).toMatch(/only video/u);
     cleanup();
     resetRecordingsMemory();
-    const empty = harness(viewOf([item({ state: 'uploaded', meetingId: MEETING_ONE })]));
+    const empty = harness(viewOf([item({ state: 'uploading', meetingId: MEETING_ONE })]));
     const { container } = render(
       <Session>
         <RecordingsToSort ports={empty.ports} />
@@ -449,21 +458,47 @@ describe('the states where David sees them', () => {
       { meetingId: MEETING_TWO, state: 'ended', startsAt: '2026-10-04T18:00:00.000Z', endsAt: '2026-10-04T18:20:00.000Z', attendanceSource: null },
     ];
     const meetingPorts: FirmMeetingsPorts = { forFirm: async () => await Promise.resolve({ meetings }) };
-    const h = harness(
-      viewOf([
-        item({ itemId: 'c'.repeat(32), state: 'uploading', meetingId: MEETING_ONE, uploaded: 1, total: 3 }),
-        item({ itemId: 'e'.repeat(32), state: 'uploaded', meetingId: MEETING_TWO, uploaded: 2, total: 2, folderName: '2026-10-04 14.01.00 Callie demo 81234567890' }),
-      ]),
-    );
+    const h = harness(viewOf([item({ itemId: 'c'.repeat(32), state: 'uploading', meetingId: MEETING_ONE, uploaded: 1, total: 3 })]));
+    // R4: what is registered comes from the server's rows, not this Mac's import.
+    const asked: string[] = [];
+    const ports: RecordingsPorts = {
+      ...h.ports,
+      forFirm: async firmId => {
+        asked.push(firmId);
+        return await Promise.resolve({ truncated: false, recordings: [serverRow(MEETING_TWO, 'audioDavidCui11234567890.m4a'), serverRow(MEETING_TWO, 'audioJordanPlaceholder21234567890.m4a')] });
+      },
+    };
     render(
       <Session>
-        <FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={meetingPorts} recordingPorts={h.ports} />
+        <FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={meetingPorts} recordingPorts={ports} />
       </Session>,
     );
     await waitFor(() => {
       expect(screen.getAllByTestId('meeting-recording-state').map(node => node.textContent)).toEqual(['Uploading 1/3', 'Uploaded — waiting for transcription']);
     });
-    expect(screen.getAllByTestId('firm-recording').map(node => node.getAttribute('data-state'))).toEqual(['uploading', 'uploaded']);
+    expect(screen.getAllByTestId('firm-recording').map(node => node.getAttribute('data-state'))).toEqual(['uploading']);
+    expect(screen.getAllByTestId('firm-recording-registered').map(node => node.getAttribute('data-meeting-id'))).toEqual([MEETING_TWO]);
+    expect(screen.getByTestId('firm-recording-registered').textContent).toMatch(/2 files · 2 speakers/u);
+    expect(asked[0]).toBe('11111111-1111-4111-8111-111111111111');
+  });
+
+  it('R4: a recording registered by another Mac, or moved to the surviving meeting by a fold, shows under the meeting the server says (M4F #7)', async () => {
+    // The fold moved the rows to MEETING_TWO; this Mac's import has nothing for either meeting
+    // (its folder was removed). The firm page follows the server.
+    const meetings: FirmMeetingDto[] = [
+      { meetingId: MEETING_TWO, state: 'ended', startsAt: '2026-10-04T18:00:00.000Z', endsAt: '2026-10-04T18:20:00.000Z', attendanceSource: null },
+    ];
+    const h = harness(viewOf([]));
+    const ports: RecordingsPorts = { ...h.ports, forFirm: async () => await Promise.resolve({ truncated: false, recordings: [serverRow(MEETING_TWO, 'audioDavidCui11234567890.m4a')] }) };
+    render(
+      <Session>
+        <FirmMeetings firmId="11111111-1111-4111-8111-111111111111" ports={{ forFirm: async () => await Promise.resolve({ meetings }) }} recordingPorts={ports} />
+      </Session>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByTestId('meeting-recording-state').map(node => node.textContent)).toEqual(['Uploaded — waiting for transcription']);
+    });
+    expect(screen.getByTestId('firm-recording-registered').getAttribute('data-meeting-id')).toBe(MEETING_TWO);
   });
 
   it('Settings shows the folder and offers Choose… and Import a recording folder…', async () => {

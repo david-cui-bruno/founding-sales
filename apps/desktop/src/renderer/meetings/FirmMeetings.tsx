@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import { reasonSentence, type FirmMeetingDto, type MeetingAttendanceChoice, type MeetingAttendanceSet, type StageSuggestion } from '@fss/contracts';
+import { reasonSentence, type FirmMeetingDto, type FirmRecording, type MeetingAttendanceChoice, type MeetingAttendanceSet, type StageSuggestion } from '@fss/contracts';
 import { shortDayTime } from '../dates.ts';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { Button } from '../ui/button.tsx';
@@ -8,7 +8,7 @@ import { useAttendanceMemory, type AttendanceCommand } from './attendanceMemory.
 import { useBriefMemory } from './briefMemory.ts';
 import { MeetingBrief, type BriefReader } from './MeetingBrief.tsx';
 import { meetingRowWord, meetingStateWarns } from './meetingText.ts';
-import { FirmRecordings, MeetingRecordingTag, meetingRecordingItem } from '../recordings/FirmRecordings.tsx';
+import { FirmRecordings, MeetingRecordingTag, meetingRecordingItem, meetingServerState } from '../recordings/FirmRecordings.tsx';
 import { registryRecordingPorts, useRecordings, type RecordingsPorts } from '../recordings/recordingsMemory.ts';
 
 /**
@@ -110,6 +110,27 @@ export function FirmMeetings({
   const briefs = useBriefMemory();
   const recordings = useRecordings(recordingPorts);
   const successes = memory.successes.get(firmId) ?? 0;
+  // R4: the firm's registered recordings, from the server, with the firm they were read for.
+  const [server, setServer] = useState<{ readonly firmId: string; readonly rows: readonly FirmRecording[] | null } | null>(null);
+  const recordingPortsRef = useRef(recordingPorts);
+  recordingPortsRef.current = recordingPorts;
+  // Read again whenever this Mac's import moves (an item registered leaves the local list).
+  const localKey = (recordings.view?.items ?? []).map(item => `${item.itemId}:${String(item.version)}`).join(',');
+  useEffect(() => {
+    let current = true;
+    const read = recordingPortsRef.current?.forFirm;
+    if (read === undefined) return undefined;
+    void read(firmId).then(
+      answer => {
+        if (current) setServer({ firmId, rows: answer.recordings });
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [firmId, refreshKey, localKey]);
+  const serverRows = server !== null && server.firmId === firmId ? server.rows : null;
 
   useEffect(() => {
     let current = true;
@@ -296,7 +317,7 @@ export function FirmMeetings({
                     Brief
                   </Button>
                 ) : null}
-                <MeetingRecordingTag item={meetingRecordingItem(recordings.view?.items ?? [], row.meetingId)} />
+                <MeetingRecordingTag item={meetingRecordingItem(recordings.view?.items ?? [], row.meetingId)} server={meetingServerState(serverRows, row.meetingId)} />
                 <Tag data-testid="firm-meeting-state" tone={meetingStateWarns(row.state) ? 'warn' : 'none'}>
                   {meetingRowWord(row.state)}
                 </Tag>
@@ -325,7 +346,7 @@ export function FirmMeetings({
           );
         })}
       </ul>
-      <FirmRecordings recordings={recordings} meetingIds={meetings.map(meeting => meeting.meetingId)} actionsEnabled={actionsEnabled} />
+      <FirmRecordings recordings={recordings} meetings={meetings} server={serverRows} actionsEnabled={actionsEnabled} />
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
-import { reasonSentence } from '@fss/contracts';
+import { reasonSentence, type FirmRecording } from '@fss/contracts';
 import type { RecordingItem, RecordingsView } from '../../shared/recordings.ts';
 import { useSessionEpoch } from '../app/drafts.tsx';
 
@@ -83,6 +83,8 @@ export interface RecordingsPorts {
   retry(input: { readonly itemId: string }): Promise<RecordingsView>;
   chooseFolder?(): Promise<RecordingsView>;
   importFolder?(): Promise<RecordingsView>;
+  /** R4: the firm's registered recordings, from the server; null when the read did not answer. */
+  forFirm?(firmId: string): Promise<{ readonly recordings: readonly FirmRecording[] | null; readonly truncated: boolean }>;
 }
 
 export function registryRecordingPorts(): RecordingsPorts | null {
@@ -94,6 +96,7 @@ export function registryRecordingPorts(): RecordingsPorts | null {
     chooseMeeting: async input => await api.command('recordings.chooseMeeting', input),
     ignore: async input => await api.command('recordings.ignore', input),
     retry: async input => await api.command('recordings.retry', input),
+    forFirm: async firmId => await api.read('recordings.forFirm', { firmId }),
     ...(importer === undefined
       ? {}
       : { chooseFolder: async () => await importer.chooseRecordingsFolder(), importFolder: async () => await importer.importRecordingFolder() }),
@@ -251,12 +254,24 @@ export function recordingStateWords(item: Pick<RecordingItem, 'state' | 'uploade
       return 'Waiting for conversion';
     case 'uploading':
       return item.total > 0 ? `Uploading ${String(item.uploaded)}/${String(item.total)}` : 'Uploading';
-    case 'uploaded':
-      return 'Uploaded — waiting for transcription';
     case 'needs_matching':
       return 'Needs matching';
     case 'failed':
       return 'Failed';
+  }
+}
+
+/** The words for a registered recording's state, from the server's row (R4). */
+export function serverRecordingWords(state: FirmRecording['state']): string {
+  switch (state) {
+    case 'uploaded':
+      return 'Uploaded — waiting for transcription';
+    case 'transcribing':
+      return 'Transcribing';
+    case 'transcribed':
+      return 'Transcribed';
+    case 'failed':
+      return 'Transcription failed';
   }
 }
 

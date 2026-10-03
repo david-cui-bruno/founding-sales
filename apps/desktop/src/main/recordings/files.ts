@@ -42,7 +42,8 @@ export type PutOutcome = { readonly ok: true } | { readonly ok: false; readonly 
 
 export interface RecordingUploader {
   /** One PUT of the whole file to the presigned URL, with exactly the signed headers. */
-  put(url: string, headers: Readonly<Record<string, string>>, path: string): Promise<PutOutcome>;
+  /** `signal`: the import's turn was abandoned (a sign-out): the request is dropped at once. */
+  put(url: string, headers: Readonly<Record<string, string>>, path: string, signal?: AbortSignal): Promise<PutOutcome>;
 }
 
 /** The longest a single file's PUT may take before it counts as interrupted. */
@@ -150,11 +151,11 @@ export const nodeRecordingFs: RecordingFs = {
 
 /** The PUT over `node:https`, the file streamed with its exact length (S3 takes no chunked PUT). */
 export const httpsRecordingUploader: RecordingUploader = {
-  async put(url, headers, path) {
+  async put(url, headers, path, signal) {
     const target = new URL(url);
-    if (target.protocol !== 'https:') return { ok: false, status: null };
+    if (target.protocol !== 'https:' || signal?.aborted === true) return { ok: false, status: null };
     return await new Promise<PutOutcome>(resolve => {
-      const outgoing = request(target, { method: 'PUT', headers: { ...headers }, timeout: PUT_TIMEOUT_MS }, response => {
+      const outgoing = request(target, { method: 'PUT', headers: { ...headers }, timeout: PUT_TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) }, response => {
         response.resume();
         response.on('end', () => {
           const status = response.statusCode ?? 0;

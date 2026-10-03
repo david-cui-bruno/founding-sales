@@ -132,7 +132,7 @@ export interface SessionManager {
    * person's own durable state (the recording import) — or null. Main process only: it never
    * crosses the bridge.
    */
-  signedInIdentity(): Promise<{ readonly workspaceId: string; readonly userId: string } | null>;
+  signedInIdentity(): Promise<{ readonly workspaceId: string; readonly userId: string; readonly role: 'admin' | 'member' } | null>;
 }
 
 /** The name a Mac signs in under when nobody has named it. */
@@ -779,7 +779,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       const shown = snapshot();
       const held = device;
       if (held === null || !shown.mayMutate || shown.screen !== 'today' || shown.device?.workspaceId !== held.workspaceId) return null;
-      return { workspaceId: held.workspaceId, userId: held.userId };
+      // The role class keys the import's durable state too (M4 reset, R5): a downgraded person
+      // starts empty.
+      return { workspaceId: held.workspaceId, userId: held.userId, role: held.role === 'admin' ? 'admin' : 'member' };
     },
 
     onSessionChange(listener) {
