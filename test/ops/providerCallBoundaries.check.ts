@@ -93,6 +93,11 @@ export interface Allowed {
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
   {
+    file: 'packages/contracts/src/meetingTranscription.ts',
+    method: 'transcribe',
+    reason: "the Zod literal 'transcribe' identifies the service in audited credit-coverage metadata; it is not a provider reference or a paid call",
+  },
+  {
     file: 'apps/desktop/src/main/updateInstall.ts',
     method: 'extract',
     reason: "the string 'extract' names a failed install step (`step: 'extract'`) after `ditto` unzips an update; it is not the research provider",
