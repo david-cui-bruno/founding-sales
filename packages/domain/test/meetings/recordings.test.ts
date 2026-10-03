@@ -3,7 +3,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { foldMeetings, MEETING_COLUMNS, type MeetingRow } from '../../meetings/calcom.ts';
+import { foldMeetings, MEETING_COLUMNS, receiveCalcomEvent, type MeetingRow } from '../../meetings/calcom.ts';
 import { registerMeetingRecordings, type RecordingVerdict } from '../../meetings/recordings.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
@@ -115,6 +115,39 @@ describe('meeting recordings in the domain', () => {
       { sha256: sha('e'), s3_key: `meetings/${folded}/${sha('e')}.m4a` },
     ]);
     expect(await recordings(folded)).toEqual([]);
+  });
+
+  it('a replacement booking folded in by a late reschedule brings its recordings to the surviving meeting', async () => {
+    const send = async (trigger: string, createdAt: string, payload: Record<string, unknown>): Promise<void> => {
+      const body = { triggerEvent: trigger, createdAt, payload };
+      await withTransaction(database.session, async () =>
+        await receiveCalcomEvent(database.session, { workspaceId: workspaceId(), rawBody: Buffer.from(JSON.stringify(body)), body }),
+      );
+    };
+    const booking = (uid: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+      uid,
+      startTime: '2026-10-09T17:00:00.000Z',
+      endTime: '2026-10-09T17:30:00.000Z',
+      attendees: [{ email: 'partner@m4-fold.example', name: 'A Partner' }],
+      ...extra,
+    });
+    await send('BOOKING_CREATED', '2026-09-30T14:30:00.000Z', booking('m4foldA'));
+    // An early delivery about the replacement makes a row of its own first.
+    await send('BOOKING_CANCELLED', '2026-09-30T14:50:00.000Z', booking('m4foldB'));
+    const rowOf = async (uid: string): Promise<string> =>
+      (await database.session.query<{ id: string }>('SELECT meeting_id AS id FROM meeting_booking_uids WHERE booking_uid = $1', [uid])).rows[0]?.id ?? '';
+    const early = await rowOf('m4foldB');
+    expect(early).not.toBe('');
+    expect(early).not.toBe(await rowOf('m4foldA'));
+    await database.session.query(
+      `INSERT INTO meeting_recordings (workspace_id, meeting_id, segment, participant_label, sha256, size_bytes, s3_key)
+       VALUES ($1, $2, 1, 'audio1.m4a', $3, 10, $4)`,
+      [workspaceId(), early, sha('9'), `meetings/${early}/${sha('9')}.m4a`],
+    );
+    await send('BOOKING_RESCHEDULED', '2026-09-30T14:40:00.000Z', booking('m4foldB', { rescheduleUid: 'm4foldA' }));
+    const survivor = await rowOf('m4foldA');
+    expect(await rowOf('m4foldB')).toBe(survivor);
+    expect(await recordings(survivor)).toEqual([{ sha256: sha('9'), s3_key: `meetings/${early}/${sha('9')}.m4a` }]);
   });
 
   it('a deleted meeting takes its recordings with it', async () => {
