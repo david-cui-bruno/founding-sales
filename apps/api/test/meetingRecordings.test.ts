@@ -18,7 +18,7 @@ const sha = (text: string): string => createHash('sha256').update(text).digest('
 
 /** A bucket in memory: what was "put", what HEAD answers, how many URLs were signed. */
 function fakeBucket() {
-  const objects = new Map<string, { sizeBytes: number; sha256Base64: string | null; lastModified: string }>();
+  const objects = new Map<string, { sizeBytes: number; sha256Base64: string | null; uploadId: string | null }>();
   let unavailable = false;
   let signed = 0;
   const store: MeetingAudioStore = {
@@ -26,7 +26,12 @@ function fakeBucket() {
       signed += 1;
       return await Promise.resolve({
         url: `https://fss-test-call-audio-123456789012.s3.us-east-1.amazonaws.com/${input.key}?X-Amz-Signature=${String(signed)}`,
-        headers: { 'content-type': 'audio/mp4', 'content-length': String(input.sizeBytes), 'x-amz-checksum-sha256': sha256Base64(input.sha256Hex) },
+        headers: {
+          'content-type': 'audio/mp4',
+          'content-length': String(input.sizeBytes),
+          'x-amz-checksum-sha256': sha256Base64(input.sha256Hex),
+          'x-amz-meta-callie-upload': input.uploadId,
+        },
         expiresAt: new Date(Date.now() + 900_000).toISOString(),
       });
     },
@@ -39,13 +44,9 @@ function fakeBucket() {
   };
   return {
     store,
-    /** As S3 does: LastModified in whole seconds, now unless the test says when it was written. */
-    put: (key: string, sizeBytes: number, digest: string | null, writtenAt: Date = new Date()) =>
-      objects.set(key, {
-        sizeBytes,
-        sha256Base64: digest === null ? null : sha256Base64(digest),
-        lastModified: new Date(Math.floor(writtenAt.getTime() / 1000) * 1000).toISOString(),
-      }),
+    /** An object written under `key`, with the upload id its PUT's signed metadata header carried (null: none). */
+    put: (key: string, sizeBytes: number, digest: string | null, uploadId: string | null) =>
+      objects.set(key, { sizeBytes, sha256Base64: digest === null ? null : sha256Base64(digest), uploadId }),
     setUnavailable: (value: boolean) => {
       unavailable = value;
     },
@@ -88,6 +89,26 @@ describe('meeting recordings over the wire (lane M4)', () => {
     return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
   const envelope = (commandId: string = randomUUID()) => ({ commandId, clientVersion: CURRENT_CLIENT_VERSION });
+  type File = { sha256: string; sizeBytes: number; participantLabel: string; segment: number };
+  /** An upload URL for `file`, issued to `token`'s person: the upload id its PUT must write. */
+  const issue = async (token: string, meetingId: string, file: File): Promise<string> => {
+    const answered = await call(token, 'POST', '/meetings/recordings/upload-url', {
+      ...envelope(),
+      meetingId,
+      fileSha256: file.sha256,
+      sizeBytes: file.sizeBytes,
+      participantLabel: file.participantLabel,
+      segment: file.segment,
+    });
+    expect(answered.status, JSON.stringify(answered.body)).toBe(200);
+    const result = recordingUploadUrlSchema.parse(answered.body['result']);
+    if (result.status !== 'upload') throw new Error('nothing to upload');
+    return result.headers['x-amz-meta-callie-upload'];
+  };
+  /** The PUT through that URL: S3 writes the signed metadata header with the object. */
+  const uploadThrough = async (token: string, meetingId: string, file: File): Promise<void> => {
+    bucket.put(`meetings/${meetingId}/${file.sha256}.m4a`, file.sizeBytes, file.sha256, await issue(token, meetingId, file));
+  };
 
   async function meeting(firmId: string | null, contactId: string | null, startsAt: string, state = 'booked'): Promise<string> {
     const uid = `m4wire${randomUUID().replaceAll('-', '').slice(0, 20)}`;
@@ -222,17 +243,8 @@ describe('meeting recordings over the wire (lane M4)', () => {
       status: 409,
       body: { reason: 'recording_not_issued' },
     });
-    for (const file of files) {
-      const issued = await call(salesToken, 'POST', '/meetings/recordings/upload-url', {
-        ...envelope(),
-        meetingId: ownMeeting,
-        fileSha256: file.sha256,
-        sizeBytes: file.sizeBytes,
-        participantLabel: file.participantLabel,
-        segment: file.segment,
-      });
-      expect(issued.status).toBe(200);
-    }
+    const uploadIds: string[] = [];
+    for (const file of files) uploadIds.push(await issue(salesToken, ownMeeting, file));
     // Issued, but nothing uploaded yet: object_missing with every digest, no receipt, no row.
     const missingId = randomUUID();
     const missing = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(missingId), meetingId: ownMeeting, files });
@@ -240,7 +252,7 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect((await fixture.db.query('SELECT 1 FROM command_receipts WHERE command_id = $1', [missingId])).rows).toEqual([]);
     expect(await rowsOf(ownMeeting)).toEqual([]);
 
-    for (const file of files) bucket.put(`meetings/${ownMeeting}/${file.sha256}.m4a`, file.sizeBytes, file.sha256);
+    files.forEach((file, index) => bucket.put(`meetings/${ownMeeting}/${file.sha256}.m4a`, file.sizeBytes, file.sha256, uploadIds[index] ?? null));
     const commandId = randomUUID();
     const registered = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files });
     expect(registered.status, JSON.stringify(registered.body)).toBe(200);
@@ -271,22 +283,23 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect(url.body['result']).toEqual({ status: 'registered' });
   });
 
-  it('register: an administrator registers without an issued URL; a short or substituted object is refused; S3 not answering is a 503 with no receipt', async () => {
+  it('register: an administrator registers an object any issued URL wrote; a short or substituted object is refused; S3 not answering is a 503 with no receipt', async () => {
     const short = { sha256: sha('short file'), sizeBytes: 5000, participantLabel: 'audio1234567890.m4a', segment: 1 };
-    bucket.put(`meetings/${ownMeeting}/${short.sha256}.m4a`, 4000, short.sha256);
+    bucket.put(`meetings/${ownMeeting}/${short.sha256}.m4a`, 4000, short.sha256, await issue(adminToken, ownMeeting, short));
     expect(await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [short] })).toMatchObject({
       status: 409,
       body: { reason: 'recording_size_mismatch' },
     });
     const swapped = { sha256: sha('swapped file'), sizeBytes: 5000, participantLabel: 'audio1234567891.m4a', segment: 2 };
-    bucket.put(`meetings/${ownMeeting}/${swapped.sha256}.m4a`, 5000, sha('something else'));
+    bucket.put(`meetings/${ownMeeting}/${swapped.sha256}.m4a`, 5000, sha('something else'), await issue(adminToken, ownMeeting, swapped));
     expect(await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: ownMeeting, files: [swapped] })).toMatchObject({
       status: 409,
       body: { reason: 'recording_checksum_mismatch' },
     });
 
     const fine = { sha256: sha('arrives later'), sizeBytes: 900, participantLabel: 'audio1234567892.m4a', segment: 3 };
-    bucket.put(`meetings/${ownMeeting}/${fine.sha256}.m4a`, 900, fine.sha256);
+    // Written through the salesperson's URL: an administrator registers it (any issued URL).
+    await uploadThrough(salesToken, ownMeeting, fine);
     const commandId = randomUUID();
     bucket.setUnavailable(true);
     const down = await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(commandId), meetingId: ownMeeting, files: [fine] });
@@ -299,29 +312,29 @@ describe('meeting recordings over the wire (lane M4)', () => {
     expect((await rowsOf(ownMeeting)).map(row => row.sha256)).toContain(fine.sha256);
     expect((await rowsOf(ownMeeting)).map(row => row.sha256)).not.toContain(short.sha256);
   });
-  it('R6: an object somebody else staged before this person’s URL is not theirs to register, though the URL was issued (the reviewer’s repro)', async () => {
+  it('R6: an object written through somebody else’s URL is not this person’s, however the clocks fall; their own same-second upload is (M4RR finding 3)', async () => {
     const firm = await seedFirm(fixture, { name: 'Recording Binding Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
     const target = await meeting(firm, null, '2026-10-05T17:00:00Z');
     const file = { sha256: sha('staged by somebody else'), sizeBytes: 100, participantLabel: 'audioSomebody1.m4a', segment: 1 };
     const key = `meetings/${target}/${file.sha256}.m4a`;
-    // Somebody else's object is there first; this person then asks for a URL and sends NO PUT.
-    bucket.put(key, file.sizeBytes, file.sha256, new Date(Date.now() - 120_000));
-    const issued = await call(salesToken, 'POST', '/meetings/recordings/upload-url', {
-      ...envelope(),
-      meetingId: target,
-      fileSha256: file.sha256,
-      sizeBytes: file.sizeBytes,
-      participantLabel: file.participantLabel,
-      segment: 1,
+    // The reviewer's case: the object is already there (written at 18:00:00.000 through the
+    // administrator's URL); this person is issued a URL a moment later (18:00:00.900) and
+    // sends NO PUT. Whatever the clocks say, the object carries the other URL's upload id.
+    bucket.put(key, file.sizeBytes, file.sha256, await issue(adminToken, target, file));
+    await issue(salesToken, target, file);
+    expect(await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: target, files: [file] })).toMatchObject({
+      status: 409,
+      body: { reason: 'not_your_upload' },
     });
-    expect(issued.status).toBe(200);
+    // An object staged without any URL of ours at all: refused too.
+    bucket.put(key, file.sizeBytes, file.sha256, null);
     expect(await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: target, files: [file] })).toMatchObject({
       status: 409,
       body: { reason: 'not_your_upload' },
     });
     expect(await rowsOf(target)).toEqual([]);
-    // Their own PUT, after their URL, is theirs.
-    bucket.put(key, file.sizeBytes, file.sha256, new Date(Date.now() + 1000));
+    // Their own PUT, in the same second as their URL: theirs.
+    await uploadThrough(salesToken, target, file);
     const registered = await call(salesToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: target, files: [file] });
     expect(registered.status, JSON.stringify(registered.body)).toBe(200);
     expect(await rowsOf(target)).toHaveLength(1);
@@ -331,7 +344,7 @@ describe('meeting recordings over the wire (lane M4)', () => {
     const firm = await seedFirm(fixture, { name: 'Recording Listed Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.salesperson.userId });
     const target = await meeting(firm, null, '2026-10-05T18:00:00Z');
     const file = { sha256: sha('listed file'), sizeBytes: 100, participantLabel: 'audioListed1.m4a', segment: 1 };
-    bucket.put(`meetings/${target}/${file.sha256}.m4a`, file.sizeBytes, file.sha256);
+    await uploadThrough(adminToken, target, file);
     expect((await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: target, files: [file] })).status).toBe(200);
     for (const token of [salesToken, adminToken]) {
       const answer = await call(token, 'GET', '/meetings/recordings', undefined, new URLSearchParams({ firmId: firm }));
@@ -344,7 +357,7 @@ describe('meeting recordings over the wire (lane M4)', () => {
     const elsewhere = await seedFirm(fixture, { name: 'Recording Elsewhere Rentals Test Co', regionCode: 'TX', assignedUserId: fixture.alpha.admin.userId });
     const theirs = await meeting(elsewhere, null, '2026-10-05T18:30:00Z');
     const their = { sha256: sha('elsewhere file'), sizeBytes: 100, participantLabel: 'audioSomeoneNamed1.m4a', segment: 1 };
-    bucket.put(`meetings/${theirs}/${their.sha256}.m4a`, their.sizeBytes, their.sha256);
+    await uploadThrough(adminToken, theirs, their);
     expect((await call(adminToken, 'POST', '/meetings/recordings/register', { ...envelope(), meetingId: theirs, files: [their] })).status).toBe(200);
     const refused = await call(salesToken, 'GET', '/meetings/recordings', undefined, new URLSearchParams({ firmId: elsewhere }));
     expect(refused.status).toBe(404);

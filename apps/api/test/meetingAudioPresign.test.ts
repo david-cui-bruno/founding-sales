@@ -64,11 +64,12 @@ function signatureFor(url: URL, method: string, headers: Readonly<Record<string,
 }
 
 describe('CC1: the presigned PUT for a meeting recording', () => {
-  it('is an https PUT to meetings/<meeting>/<sha256>.m4a, valid 15 minutes, binding type, length and digest', async () => {
+  it('is an https PUT to meetings/<meeting>/<sha256>.m4a, valid 15 minutes, binding type, length, digest and the upload id', async () => {
     const store = await loadMeetingAudioStore({ bucket: BUCKET, region: REGION, sdk: realSdk, credentials, now: () => new Date('2026-10-03T12:00:00Z') });
     const key = meetingAudioKey(MEETING, SHA);
     expect(key).toBe(`meetings/${MEETING}/${SHA}.m4a`);
-    const put = await store.presignPut({ key, sizeBytes: SIZE, sha256Hex: SHA });
+    const UPLOAD = '66666666-6666-4666-8666-666666666666';
+    const put = await store.presignPut({ key, sizeBytes: SIZE, sha256Hex: SHA, uploadId: UPLOAD });
     const url = new URL(put.url);
 
     expect(url.protocol).toBe('https:');
@@ -76,13 +77,16 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
     expect(url.pathname).toBe(`/${key}`);
     expect(url.searchParams.get('X-Amz-Expires')).toBe(String(MEETING_AUDIO_URL_SECONDS));
     expect(MEETING_AUDIO_URL_SECONDS).toBe(900);
-    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host;x-amz-checksum-sha256');
+    // The upload id is a SIGNED header (M4RR finding 3): a PUT without it, or with another, fails.
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host;x-amz-checksum-sha256;x-amz-meta-callie-upload');
+    expect(url.searchParams.has('x-amz-meta-callie-upload')).toBe(false);
     expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD');
     expect(put.expiresAt).toBe('2026-10-03T12:15:00.000Z');
     expect(put.headers).toEqual({
       'content-type': 'audio/mp4',
       'content-length': String(SIZE),
       'x-amz-checksum-sha256': sha256Base64(SHA),
+      'x-amz-meta-callie-upload': UPLOAD,
     });
     // Nothing the Mac cannot send, and no encryption header: the bucket's default is SSE-S3.
     const everything = `${url.search} ${JSON.stringify(put.headers)}`.toLowerCase();
@@ -97,6 +101,9 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
       { ...put.headers, 'content-length': String(SIZE + 1) },
       { ...put.headers, 'content-type': 'video/mp4' },
       { ...put.headers, 'x-amz-checksum-sha256': sha256Base64(createHash('sha256').update('other').digest('hex')) },
+      { ...put.headers, 'x-amz-meta-callie-upload': '77777777-7777-4777-8777-777777777777' },
+      // A PUT that leaves the upload id out.
+      Object.fromEntries(Object.entries(put.headers).filter(([name]) => name !== 'x-amz-meta-callie-upload')),
     ]) {
       expect(signatureFor(url, 'PUT', changed, credentials.secretAccessKey)).not.toBe(url.searchParams.get('X-Amz-Signature'));
     }
@@ -106,7 +113,8 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
 
   it('HEAD: a found object with its checksum, NotFound and 403 as absent, anything else as no answer', async () => {
     const answers: unknown[] = [
-      { ContentLength: SIZE, ChecksumSHA256: sha256Base64(SHA), LastModified: new Date('2026-10-05T19:30:00Z') },
+      { ContentLength: SIZE, ChecksumSHA256: sha256Base64(SHA), Metadata: { 'callie-upload': '66666666-6666-4666-8666-666666666666' } },
+      { ContentLength: SIZE, ChecksumSHA256: sha256Base64(SHA) },
       Object.assign(new Error('nf'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }),
       Object.assign(new Error('slow'), { name: 'InternalError', $metadata: { httpStatusCode: 500 } }),
       Object.assign(new Error('denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } }),
@@ -129,7 +137,8 @@ describe('CC1: the presigned PUT for a meeting recording', () => {
     };
     const store = await loadMeetingAudioStore({ bucket: BUCKET, region: REGION, sdk, credentials });
     const key = meetingAudioKey(MEETING, SHA);
-    await expect(store.head(key)).resolves.toEqual({ found: true, sizeBytes: SIZE, sha256Base64: sha256Base64(SHA), lastModified: '2026-10-05T19:30:00.000Z' });
+    await expect(store.head(key)).resolves.toEqual({ found: true, sizeBytes: SIZE, sha256Base64: sha256Base64(SHA), uploadId: '66666666-6666-4666-8666-666666666666' });
+    await expect(store.head(key)).resolves.toEqual({ found: true, sizeBytes: SIZE, sha256Base64: sha256Base64(SHA), uploadId: null });
     await expect(store.head(key)).resolves.toEqual({ found: false });
     await expect(store.head(key)).rejects.toBeInstanceOf(MeetingAudioUnavailableError);
     // Review M4R, finding 9: without ListBucket a missing object is 403, which is "not there".

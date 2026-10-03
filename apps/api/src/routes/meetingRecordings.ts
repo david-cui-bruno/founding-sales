@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   MEETING_RECORDING_LIMITS,
   firmRecordingsResponseSchema,
@@ -51,9 +52,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     or 403: the role has no ListBucket) is 409 `object_missing` with the digests and no
  *     receipt, so the Mac uploads those files again (review M4R, finding 9). A wrong size or
  *     digest is a refusal the receipt keeps. A person who is not an administrator registers
- *     only objects whose upload URL was issued to them (`recording_not_issued`) no later than
- *     S3 says the object was written (`not_your_upload`; M4 reset, R6): an object somebody
- *     else staged before this person asked for a URL is not theirs to claim.
+ *     only objects whose upload URL was issued to them (`recording_not_issued`), and only an
+ *     object written through one of their URLs: each URL's signed PUT writes its receipt's
+ *     random upload id as the object's metadata, and HEAD reads it back (`not_your_upload`;
+ *     M4 reset R6, by nonce). An administrator needs the object written through any URL
+ *     issued for its key.
  *   * `GET /meetings/recordings?firmId=` — the registered recordings of the firm's meetings,
  *     from the rows (M4 reset, R4): a fold moves them, so they follow it. An administrator or
  *     the firm's assignee, as `/meetings/brief` (participant labels can carry names); anybody
@@ -122,14 +125,22 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
   if (request.path === '/meetings/recordings/upload-url') {
     type Kept =
       | { readonly status: 'registered' }
-      | { readonly status: 'upload'; readonly key: string; readonly sizeBytes: number; readonly sha256: string; readonly issuedTo: string };
+      | {
+          readonly status: 'upload';
+          readonly key: string;
+          readonly sizeBytes: number;
+          readonly sha256: string;
+          readonly issuedTo: string;
+          readonly uploadId: string;
+        };
     const answered = await runRouteCommand<typeof recordingUploadUrlCommandSchema, Kept>(deps, recordingUploadUrlCommandSchema, 'meeting_recording_upload_url', async (context, body) => {
       const authorized = await authorizeRecording(context, body.meetingId);
       if (!authorized.ok) return authorized;
       const recorded = await recordedDigests(context, body.meetingId, [body.fileSha256]);
       if (recorded.has(body.fileSha256)) return { ok: true, value: { status: 'registered' } };
-      // Kept on the receipt: the key, the size, the digest and who it was issued to (the
-      // register's uploader binding). Never the URL.
+      // Kept on the receipt: the key, the size, the digest, who it was issued to and a fresh
+      // random upload id the signed PUT writes as the object's metadata (the register's
+      // uploader binding). Never the URL. A replay signs again with the same upload id.
       return {
         ok: true,
         value: {
@@ -138,6 +149,7 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
           sizeBytes: body.sizeBytes,
           sha256: body.fileSha256,
           issuedTo: authenticated.principal.userId,
+          uploadId: randomUUID(),
         },
       };
     });
@@ -160,32 +172,34 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
   const verifyWithin = AbortSignal.timeout(MEETING_AUDIO_TOTAL_TIMEOUT_MS);
   const verify = async (key: string, file: { readonly sizeBytes: number; readonly sha256: string }): Promise<RecordingCheck> => {
     const head = await audio.head(key, verifyWithin);
-    if (!head.found) return { verdict: 'recording_missing', lastModified: null };
-    if (head.sizeBytes !== file.sizeBytes) return { verdict: 'recording_size_mismatch', lastModified: head.lastModified };
+    if (!head.found) return { verdict: 'recording_missing', uploadId: null };
+    if (head.sizeBytes !== file.sizeBytes) return { verdict: 'recording_size_mismatch', uploadId: head.uploadId };
     // The PUT binds the digest, so S3 verified the bytes; an object without a stored checksum
     // could only come from somewhere other than our URL, and is refused.
-    if (head.sha256Base64 !== sha256Base64(file.sha256)) return { verdict: 'recording_checksum_mismatch', lastModified: head.lastModified };
-    return { verdict: 'ok', lastModified: head.lastModified };
+    if (head.sha256Base64 !== sha256Base64(file.sha256)) return { verdict: 'recording_checksum_mismatch', uploadId: head.uploadId };
+    return { verdict: 'ok', uploadId: head.uploadId };
   };
-  // The uploader binding (review M4R; M4 reset, R6), for a person who is not an administrator:
-  // an upload-url receipt for this key issued to them (`issuedTo`), and one issued no later
-  // than S3 wrote the object. S3's LastModified is whole seconds, so the receipt's time is
-  // compared at the same precision: a URL issued in the same second as the write counts.
+  // The uploader binding (review M4R; M4 reset R6, by nonce after M4RR): the object's upload id
+  // (metadata the signed PUT wrote) names the receipt whose URL wrote it. A person who is not an
+  // administrator needs that receipt to be one issued to them; an administrator, any receipt
+  // for this key. No clock is compared.
   const receiptsFor = `FROM command_receipts
         WHERE workspace_id = $1 AND command_kind = 'meeting_recording_upload_url' AND result_status = 'accepted'
-          AND result ->> 'key' = $2 AND result ->> 'issuedTo' = $3`;
+          AND result ->> 'key' = $2`;
   const binding: UploaderBinding = {
     issued: async key => {
-      const { rows } = await auth.db.query(`SELECT 1 ${receiptsFor} LIMIT 1`, [authenticated.principal.workspaceId, key, authenticated.principal.userId]);
-      return rows.length > 0;
-    },
-    issuedBefore: async (key, lastModified) => {
-      const { rows } = await auth.db.query(`SELECT 1 ${receiptsFor} AND date_trunc('second', created_at) <= $4::timestamptz LIMIT 1`, [
+      const { rows } = await auth.db.query(`SELECT 1 ${receiptsFor} AND result ->> 'issuedTo' = $3 LIMIT 1`, [
         authenticated.principal.workspaceId,
         key,
         authenticated.principal.userId,
-        lastModified,
       ]);
+      return rows.length > 0;
+    },
+    wrote: async (key, uploadId, anyIssuer) => {
+      const { rows } = await auth.db.query(
+        `SELECT 1 ${receiptsFor} AND result ->> 'uploadId' = $3 AND ($4::boolean OR result ->> 'issuedTo' = $5) LIMIT 1`,
+        [authenticated.principal.workspaceId, key, uploadId, anyIssuer, authenticated.principal.userId],
+      );
       return rows.length > 0;
     },
   };
@@ -211,14 +225,14 @@ export async function routeMeetingRecordings(request: ApiRequest, options: Routi
 async function withFreshUrl(answered: RouteResult, store: MeetingAudioStore): Promise<RouteResult> {
   if (answered.status !== 200) return answered;
   const envelope = answered.body as { status: string; replayed: boolean; result: unknown };
-  const result = envelope.result as { status?: unknown; key?: unknown; sizeBytes?: unknown; sha256?: unknown } | null;
+  const result = envelope.result as { status?: unknown; key?: unknown; sizeBytes?: unknown; sha256?: unknown; uploadId?: unknown } | null;
   if (result?.status !== 'upload') {
     return { status: 200, body: { ...envelope, result: recordingUploadUrlSchema.parse({ status: 'registered' }) } };
   }
   const key = String(result.key);
   const sizeBytes = Number(result.sizeBytes);
   const sha256 = String(result.sha256);
-  const put = await store.presignPut({ key, sizeBytes, sha256Hex: sha256 });
+  const put = await store.presignPut({ key, sizeBytes, sha256Hex: sha256, uploadId: String(result.uploadId) });
   const answer = recordingUploadUrlSchema.parse({ status: 'upload', key, url: put.url, headers: put.headers, expiresAt: put.expiresAt });
   return { status: 200, body: { ...envelope, result: answer } };
 }

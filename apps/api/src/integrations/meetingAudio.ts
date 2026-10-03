@@ -12,13 +12,15 @@
  *
  * ## What the URL binds
  *
- * A SigV4 query-presigned PUT, valid for 15 minutes, whose signature covers four headers
+ * A SigV4 query-presigned PUT, valid for 15 minutes, whose signature covers five headers
  * the Mac must send exactly: `content-type: audio/mp4`, `content-length` (the declared
- * size), `x-amz-checksum-sha256` (the declared digest, base64) and `host`. S3 refuses a
+ * size), `x-amz-checksum-sha256` (the declared digest, base64), `x-amz-meta-callie-upload`
+ * (the issuing receipt's upload id: the object then carries, as metadata, which upload URL
+ * wrote it, and the register's uploader binding reads it back by HEAD) and `host`. S3 refuses a
  * body of another length, and computes the body's SHA-256 itself and refuses a mismatch
  * (flexible checksums), so an object under a key can only ever be the bytes the key's
- * digest names. The checksum header is kept a header (`unhoistableHeaders`) rather than a
- * query parameter, so S3 validates it rather than merely signing it.
+ * digest names. The checksum and the metadata headers are kept headers (`unhoistableHeaders`)
+ * rather than query parameters, so a PUT without them fails its signature.
  *
  * `requestChecksumCalculation: 'WHEN_REQUIRED'`: the SDK's default would add its own CRC32
  * header to the signature, which the Mac cannot know how to compute for a body it streams.
@@ -46,6 +48,10 @@ export function meetingAudioKey(meetingId: string, sha256Hex: string): string {
   return `${MEETING_AUDIO_PREFIX}${meetingId}/${sha256Hex}.m4a`;
 }
 
+/** The object metadata the PUT writes and HEAD reads back: the issuing receipt's upload id. */
+export const UPLOAD_ID_HEADER = 'x-amz-meta-callie-upload';
+const UPLOAD_ID_METADATA = 'callie-upload';
+
 /** The checksum header's value: the digest as base64, as S3 spells it. */
 export function sha256Base64(sha256Hex: string): string {
   return Buffer.from(sha256Hex, 'hex').toString('base64');
@@ -54,7 +60,7 @@ export function sha256Base64(sha256Hex: string): string {
 export interface PresignedPut {
   readonly url: string;
   /** Exactly the headers the signature covers, other than `host`. */
-  readonly headers: Readonly<Record<'content-type' | 'content-length' | 'x-amz-checksum-sha256', string>>;
+  readonly headers: Readonly<Record<'content-type' | 'content-length' | 'x-amz-checksum-sha256' | 'x-amz-meta-callie-upload', string>>;
   readonly expiresAt: string;
 }
 
@@ -64,8 +70,8 @@ export type HeadAnswer =
       readonly found: true;
       readonly sizeBytes: number;
       readonly sha256Base64: string | null;
-      /** S3's `LastModified`, ISO, whole seconds: the uploader binding orders it after the URL (R6). */
-      readonly lastModified: string | null;
+      /** The upload id the PUT wrote as metadata, or null: which upload URL wrote the object. */
+      readonly uploadId: string | null;
     };
 
 /** S3 did not answer definitely (a timeout, a 5xx, a refusal): nothing is decided from it. */
@@ -77,7 +83,7 @@ export class MeetingAudioUnavailableError extends Error {
 }
 
 export interface MeetingAudioStore {
-  presignPut(input: { readonly key: string; readonly sizeBytes: number; readonly sha256Hex: string }): Promise<PresignedPut>;
+  presignPut(input: { readonly key: string; readonly sizeBytes: number; readonly sha256Hex: string; readonly uploadId: string }): Promise<PresignedPut>;
   /** One HEAD with the checksum asked for. Throws `MeetingAudioUnavailableError` unless definite. */
   head(key: string, signal?: AbortSignal): Promise<HeadAnswer>;
 }
@@ -97,7 +103,7 @@ export interface MeetingAudioSdk {
 }
 
 /** The headers the URL's signature covers; the presigner always adds `host`. */
-export const SIGNED_PUT_HEADERS: readonly string[] = Object.freeze(['content-type', 'content-length', 'x-amz-checksum-sha256']);
+export const SIGNED_PUT_HEADERS: readonly string[] = Object.freeze(['content-type', 'content-length', 'x-amz-checksum-sha256', UPLOAD_ID_HEADER]);
 
 export async function loadMeetingAudioStore(options: {
   readonly bucket: string;
@@ -124,12 +130,13 @@ export async function loadMeetingAudioStore(options: {
         ContentType: MEETING_AUDIO_CONTENT_TYPE,
         ContentLength: input.sizeBytes,
         ChecksumSHA256: sha256Base64(input.sha256Hex),
+        Metadata: { [UPLOAD_ID_METADATA]: input.uploadId },
       });
       const issuedAt = now();
       const url = await sdk.getSignedUrl(client, command, {
         expiresIn: MEETING_AUDIO_URL_SECONDS,
         signableHeaders: new Set(SIGNED_PUT_HEADERS),
-        unhoistableHeaders: new Set(['x-amz-checksum-sha256']),
+        unhoistableHeaders: new Set(['x-amz-checksum-sha256', UPLOAD_ID_HEADER]),
       });
       return {
         url,
@@ -137,6 +144,7 @@ export async function loadMeetingAudioStore(options: {
           'content-type': MEETING_AUDIO_CONTENT_TYPE,
           'content-length': String(input.sizeBytes),
           'x-amz-checksum-sha256': sha256Base64(input.sha256Hex),
+          [UPLOAD_ID_HEADER]: input.uploadId,
         },
         expiresAt: new Date(issuedAt.getTime() + MEETING_AUDIO_URL_SECONDS * 1000).toISOString(),
       };
@@ -146,11 +154,17 @@ export async function loadMeetingAudioStore(options: {
       try {
         const answer = (await client.send(new sdk.HeadObjectCommand({ Bucket: options.bucket, Key: key, ChecksumMode: 'ENABLED' }), {
           abortSignal,
-        })) as { ContentLength?: unknown; ChecksumSHA256?: unknown; LastModified?: unknown };
+        })) as { ContentLength?: unknown; ChecksumSHA256?: unknown; Metadata?: unknown };
         const size = typeof answer.ContentLength === 'number' ? answer.ContentLength : Number.NaN;
         if (!Number.isSafeInteger(size)) throw new MeetingAudioUnavailableError('head answered no length');
-        const written = answer.LastModified instanceof Date && !Number.isNaN(answer.LastModified.getTime()) ? answer.LastModified.toISOString() : null;
-        return { found: true, sizeBytes: size, sha256Base64: typeof answer.ChecksumSHA256 === 'string' ? answer.ChecksumSHA256 : null, lastModified: written };
+        const metadata = typeof answer.Metadata === 'object' && answer.Metadata !== null ? (answer.Metadata as Record<string, unknown>) : {};
+        const uploadId = metadata[UPLOAD_ID_METADATA];
+        return {
+          found: true,
+          sizeBytes: size,
+          sha256Base64: typeof answer.ChecksumSHA256 === 'string' ? answer.ChecksumSHA256 : null,
+          uploadId: typeof uploadId === 'string' && uploadId !== '' ? uploadId : null,
+        };
       } catch (error) {
         if (error instanceof MeetingAudioUnavailableError) throw error;
         if (isNotFound(error)) return { found: false };

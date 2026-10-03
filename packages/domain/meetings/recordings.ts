@@ -151,21 +151,24 @@ export function meetingRecordingKey(meetingId: string, sha256: string): string {
 
 export type RecordingVerdict = 'ok' | 'recording_missing' | 'recording_size_mismatch' | 'recording_checksum_mismatch';
 
-/** What the HEAD said of one staged object: the verdict, and when S3 says it was written. */
+/** What the HEAD said of one staged object: the verdict, and the upload id its PUT wrote. */
 export interface RecordingCheck {
   readonly verdict: RecordingVerdict;
-  /** S3's `LastModified` (whole seconds), or null when it did not say. */
-  readonly lastModified: string | null;
+  /** The `x-amz-meta-callie-upload` the presigned PUT wrote, or null: which upload URL wrote it. */
+  readonly uploadId: string | null;
 }
 
 /**
- * The uploader binding (review M4R; M4 reset, R6), asked only for a person who is not an
- * administrator: `issued` — was an upload URL for this key ever issued to them; `before` — was
- * one issued no later than the object was written. Absent: not checked (the domain's own tests).
+ * The uploader binding (review M4R; M4 reset R6, repaired after M4RR: by nonce, never by
+ * clocks). Every upload URL is issued under a receipt with a fresh random upload id, which the
+ * signed PUT must write as the object's metadata. `issued` — was an upload URL for this key ever
+ * issued to this person (asked before any HEAD, of a person who is not an administrator);
+ * `wrote` — is the object's upload id that of a receipt for this key issued to this person, or,
+ * for an administrator (`anyIssuer`), to anybody. Absent: not checked (the domain's own tests).
  */
 export interface UploaderBinding {
   issued(key: string): Promise<boolean>;
-  issuedBefore(key: string, lastModified: string): Promise<boolean>;
+  wrote(key: string, uploadId: string, anyIssuer: boolean): Promise<boolean>;
 }
 
 /**
@@ -201,9 +204,10 @@ export async function registerMeetingRecordings(
   const already = await recordedDigests(context, input.meetingId, files.map(file => file.sha256));
   const fresh = files.filter(file => !already.has(file.sha256));
   const actor = context.scope.actor;
-  const bound = binding !== undefined && actor.kind === 'user' && actor.role !== 'admin' ? binding : null;
+  const admin = actor.kind !== 'user' || actor.role === 'admin';
+  const bound = binding ?? null;
   // Before any HEAD: a person never issued a URL for the key learns nothing about the object.
-  if (bound !== null) {
+  if (bound !== null && !admin) {
     for (const file of fresh) {
       if (!(await bound.issued(meetingRecordingKey(input.meetingId, file.sha256)))) return refuse('recording_not_issued');
     }
@@ -213,12 +217,13 @@ export async function registerMeetingRecordings(
   const missing = fresh.filter(file => checks.get(file.sha256)?.verdict === 'recording_missing').map(file => file.sha256);
   if (missing.length > 0) throw new RecordingObjectsMissingError(missing);
   for (const check of checks.values()) if (check.verdict !== 'ok') return refuse(check.verdict);
-  // R6: the object was written after a URL was issued to this person — the order proves the
-  // upload was theirs. An object somebody else staged before their URL is not theirs to claim.
+  // R6: the object carries the upload id of the URL that wrote it. It must be one issued to this
+  // person (an administrator: to anybody, for this key); an object somebody else wrote is not
+  // theirs to claim, whenever it was written.
   if (bound !== null) {
     for (const file of fresh) {
-      const written = checks.get(file.sha256)?.lastModified ?? null;
-      if (written === null || !(await bound.issuedBefore(meetingRecordingKey(input.meetingId, file.sha256), written))) return refuse('not_your_upload');
+      const uploadId = checks.get(file.sha256)?.uploadId ?? null;
+      if (uploadId === null || !(await bound.wrote(meetingRecordingKey(input.meetingId, file.sha256), uploadId, admin))) return refuse('not_your_upload');
     }
   }
 

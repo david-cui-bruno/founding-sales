@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { RecordingCandidate } from '@fss/contracts';
 import type { ApiOutcome } from '../../src/main/apiClient.ts';
 import type { AuthedClient } from '../../src/main/authedClient.ts';
@@ -150,7 +150,12 @@ export function fakeServer(meetings: () => readonly RecordingCandidate[]) {
           status: 'upload',
           key,
           url: `https://fss-test-call-audio-123456789012.s3.us-east-1.amazonaws.com/${key}?X-Amz-Signature=${String(calls.length)}`,
-          headers: { 'content-type': 'audio/mp4', 'content-length': String(body['sizeBytes']), 'x-amz-checksum-sha256': Buffer.from(digest, 'hex').toString('base64') },
+          headers: {
+            'content-type': 'audio/mp4',
+            'content-length': String(body['sizeBytes']),
+            'x-amz-checksum-sha256': Buffer.from(digest, 'hex').toString('base64'),
+            'x-amz-meta-callie-upload': randomUUID(),
+          },
           expiresAt: '2026-10-05T20:00:00.000Z',
         },
       };

@@ -101,8 +101,9 @@ export const MEETING_RECORDING_REFUSAL_CODES = [
   'object_missing',
   // Review M4R (uploader binding): no upload URL for this file was issued to this person.
   'recording_not_issued',
-  // M4 reset, R6: the object was there before this person's upload URL was issued, so it is
-  // somebody else's upload.
+  // M4 reset, R6 (as repaired after M4RR): the object was not written through an upload URL
+  // issued to this person (an administrator: through any URL issued for it). Read from the
+  // upload id the PUT wrote as the object's metadata, never from clocks.
   'not_your_upload',
 ] as const;
 export type MeetingRecordingRefusalCode = (typeof MEETING_RECORDING_REFUSAL_CODES)[number];
@@ -131,6 +132,8 @@ export const recordingUploadUrlSchema = z.discriminatedUnion('status', [
       'content-type': z.literal('audio/mp4'),
       'content-length': z.string().regex(/^[1-9][0-9]{0,9}$/u),
       'x-amz-checksum-sha256': z.string().regex(/^[A-Za-z0-9+/]{43}=$/u),
+      /** The issuing receipt's upload id, written as the object's metadata (the uploader binding). */
+      'x-amz-meta-callie-upload': uuid,
     }),
     expiresAt: instant,
   }),

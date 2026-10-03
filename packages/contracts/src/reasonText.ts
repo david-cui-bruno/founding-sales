@@ -418,7 +418,7 @@ export const MEETING_RECORDING_REFUSAL_SENTENCES: Readonly<Record<MeetingRecordi
   recording_checksum_mismatch: 'The uploaded file did not match the recording on this Mac. Retry sends it again.',
   object_missing: 'The upload did not arrive. Retry sends the recording again.',
   recording_not_issued: 'This recording was uploaded by somebody else. Retry sends it from this Mac.',
-  not_your_upload: 'This recording was staged by somebody else before this Mac asked to send it. Retry sends it from this Mac.',
+  not_your_upload: 'This recording was sent by somebody else, not through this Mac’s upload. Retry sends it from this Mac.',
 });
 
 /** The importer's own failures on this Mac (`main/recordings`), as the Today item and the firm page say them. */

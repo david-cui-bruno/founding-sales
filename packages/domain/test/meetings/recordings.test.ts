@@ -19,7 +19,7 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
  * Invented names only.
  */
 
-const verifyOk = async (): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', lastModified: '2026-10-05T19:30:00.000Z' });
+const verifyOk = async (): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', uploadId: '77777777-7777-4777-8777-777777777777' });
 const sha = (letter: string): string => letter.repeat(64);
 const file = (letter: string, segment = 1) => ({ sha256: sha(letter), sizeBytes: 100, participantLabel: `audioSpeaker${letter}1.m4a`, segment });
 
@@ -90,7 +90,7 @@ describe('meeting recordings in the domain', () => {
     const meetingId = await meeting(await firm());
     const answer = await withTransaction(database.session, async () =>
       await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c')] }, async key =>
-        await Promise.resolve({ verdict: key.includes(sha('c')) ? ('recording_size_mismatch' as const) : ('ok' as const), lastModified: null }),
+        await Promise.resolve({ verdict: key.includes(sha('c')) ? ('recording_size_mismatch' as const) : ('ok' as const), uploadId: null }),
       ),
     );
     expect(answer).toEqual({ ok: false, reason: 'recording_size_mismatch' });
@@ -99,7 +99,7 @@ describe('meeting recordings in the domain', () => {
     await expect(
       withTransaction(database.session, async () =>
         await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('b'), file('c'), file('d')] }, async key =>
-          await Promise.resolve({ verdict: key.includes(sha('b')) ? ('ok' as const) : ('recording_missing' as const), lastModified: null }),
+          await Promise.resolve({ verdict: key.includes(sha('b')) ? ('ok' as const) : ('recording_missing' as const), uploadId: null }),
         ),
       ),
     ).rejects.toMatchObject({ name: 'RecordingObjectsMissingError', missing: [sha('c'), sha('d')] });
@@ -158,23 +158,32 @@ describe('meeting recordings in the domain', () => {
     expect(JSON.stringify(listed)).not.toContain('@');
   });
 
-  it('R6: a person who is not an administrator registers an object only if a URL was issued to them before it was written', async () => {
+  it('R6: an object is registered only if it carries the upload id of a URL issued to this person (an administrator: to anybody, for this key)', async () => {
     const meetingId = await meeting(await firm());
-    const written = '2026-10-05T19:30:00.000Z';
-    const at = async (lastModified: string): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', lastModified });
-    const binding = (issued: boolean, before: boolean): UploaderBinding => ({
+    const mine = '77777777-7777-4777-8777-777777777777';
+    const theirs = '88888888-8888-4888-8888-888888888888';
+    const written = (uploadId: string | null) => async (): Promise<RecordingCheck> => await Promise.resolve({ verdict: 'ok', uploadId });
+    const asked: { uploadId: string; anyIssuer: boolean }[] = [];
+    const binding = (issued: boolean, ownIds: readonly string[], anyIds: readonly string[] = ownIds): UploaderBinding => ({
       issued: async () => await Promise.resolve(issued),
-      issuedBefore: async () => await Promise.resolve(before),
+      wrote: async (_key, uploadId, anyIssuer) => {
+        asked.push({ uploadId, anyIssuer });
+        return await Promise.resolve((anyIssuer ? anyIds : ownIds).includes(uploadId));
+      },
     });
-    const register = async (b: UploaderBinding, verify = async () => await at(written)) =>
-      await withTransaction(database.session, async () => await registerMeetingRecordings(salesperson(database.session), { meetingId, files: [file('7')] }, verify, b));
-    expect(await register(binding(false, false))).toEqual({ ok: false, reason: 'recording_not_issued' });
-    // A URL was issued, but only after somebody else's object was written: not theirs.
-    expect(await register(binding(true, false))).toEqual({ ok: false, reason: 'not_your_upload' });
-    // S3 did not say when it was written: not proven, refused.
-    expect(await register(binding(true, true), async () => await Promise.resolve({ verdict: 'ok', lastModified: null }))).toEqual({ ok: false, reason: 'not_your_upload' });
+    const admin = repositoryContext(workspaceScope(workspaceId(), { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }), database.session);
+    const register = async (b: UploaderBinding, verify: () => Promise<RecordingCheck>, context = salesperson(database.session)) =>
+      await withTransaction(database.session, async () => await registerMeetingRecordings(context, { meetingId, files: [file('7')] }, verify, b));
+    expect(await register(binding(false, []), written(mine))).toEqual({ ok: false, reason: 'recording_not_issued' });
+    // A URL was issued to this person, but the object was written through somebody else's.
+    expect(await register(binding(true, [mine]), written(theirs))).toEqual({ ok: false, reason: 'not_your_upload' });
+    // Not written through any URL of ours: refused, an administrator included.
+    expect(await register(binding(true, [mine]), written(null))).toEqual({ ok: false, reason: 'not_your_upload' });
+    expect(await register(binding(true, [], []), written(theirs), admin)).toEqual({ ok: false, reason: 'not_your_upload' });
     expect(await recordings(meetingId)).toEqual([]);
-    expect((await register(binding(true, true))).ok).toBe(true);
+    // An administrator: any URL issued for this key.
+    expect((await register(binding(false, [], [theirs]), written(theirs), admin)).ok).toBe(true);
+    expect(asked.at(-1)).toEqual({ uploadId: theirs, anyIssuer: true });
     expect(await recordings(meetingId)).toHaveLength(1);
   });
 
