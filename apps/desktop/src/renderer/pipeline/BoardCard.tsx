@@ -225,7 +225,7 @@ export function BoardCard({
   const suggestion = card?.stageSuggestion ?? null;
   const suggested =
     suggestion !== null && !lost && opportunityId !== undefined && suggestion.opportunityId === opportunityId
-      ? { opportunityId, stageKey: suggestion.stageKey }
+      ? { opportunityId, stageKey: suggestion.stageKey, expectedStageKey: suggestion.fromStageKey ?? stage.key }
       : null;
 
   return (
@@ -259,7 +259,7 @@ export function BoardCard({
           <span className="line-clamp-2">{firm.name}</span>
         </Button>
         {card?.pinned === true ? (
-          <Chip tone="outline" data-testid="card-pinned" title="A person placed this card here; automatic moves only go forward from it.">
+          <Chip tone="outline" data-testid="card-pinned" title="A person placed this card here. Only a person moves it on.">
             Pinned
           </Chip>
         ) : null}
@@ -297,7 +297,8 @@ export function BoardCard({
           disabled={!actionsEnabled || stageBusy}
           {...(stageBusy ? { 'aria-busy': true } : {})}
           onClick={() => {
-            onChangeStage({ opportunityId: suggested.opportunityId, toStageKey: suggested.stageKey, reason: null });
+            // The stage the card was read at goes with it: a deal moved since is refused (lane M1).
+            onChangeStage({ opportunityId: suggested.opportunityId, toStageKey: suggested.stageKey, reason: null, expectedStageKey: suggested.expectedStageKey });
           }}
         >
           Move to {nameOf(suggested.stageKey)}

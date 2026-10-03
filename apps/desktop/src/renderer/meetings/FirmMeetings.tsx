@@ -23,7 +23,9 @@ import { meetingRowWord, meetingStateWarns } from './meetingText.ts';
  *
  * **The stage suggestion.** A live booking no longer moves the deal (lane M1). When the read
  * says a move to Demo booked is due, one quiet line offers it; the click is the ordinary stage
- * command, made by the firm page (`onApplySuggestion`).
+ * command, made by the firm page (`onApplySuggestion`), for the firm it was read for. It is
+ * offered only while the page shows the deal's stage the read began under (`refreshKey`): a
+ * stage change hides it until the read that change caused lands.
  */
 
 export interface FirmMeetingsPorts {
@@ -67,12 +69,18 @@ export function FirmMeetings({
   readonly actionsEnabled?: boolean;
   /** Anything that should read the meetings again when it changes: the deal's stage, say. */
   readonly refreshKey?: string;
-  /** The ordinary stage command for "Move to Demo booked"; absent, the line is not offered. */
-  onApplySuggestion?(suggestion: StageSuggestion): void;
+  /**
+   * The ordinary stage command for "Move to Demo booked"; absent, the line is not offered. It
+   * is told the firm the suggestion was read for (review M1R, finding 2), never the page's.
+   */
+  onApplySuggestion?(suggestion: StageSuggestion, firmId: string): void;
   readonly suggestionBusy?: boolean;
 }): JSX.Element | null {
   const [meetings, setMeetings] = useState<readonly FirmMeetingDto[] | null | undefined>(undefined);
-  const [suggestion, setSuggestion] = useState<StageSuggestion | null>(null);
+  // The suggestion, with the firm and the `refreshKey` its read began under: offered only while
+  // both are still this row's, so a stage change hides it until the read it caused lands
+  // (review M1R, finding 6).
+  const [suggested, setSuggested] = useState<{ readonly firmId: string; readonly refreshKey: string; readonly suggestion: StageSuggestion } | null>(null);
   const portsRef = useRef(ports);
   portsRef.current = ports;
   const { memory, touch } = useAttendanceMemory();
@@ -82,13 +90,20 @@ export function FirmMeetings({
     let current = true;
     // A read that begins before an answer is dropped when it lands after it (K7): the answer
     // moves this firm's count, so this effect runs again — `current` drops the older read —
-    // and the answer is shown meanwhile.
+    // and the answer is shown meanwhile. One that lands before this effect runs again (the same
+    // turn as the answer) clears only the answers it began after (review M1R, finding 5).
+    const issued = memory.clock.now;
+    const readKey = refreshKey;
     void portsRef.current?.forFirm(firmId).then(
       answer => {
         if (!current) return;
-        for (const meeting of answer.meetings ?? []) memory.answered.delete(meeting.meetingId);
+        for (const meeting of answer.meetings ?? []) {
+          const kept = memory.answered.get(meeting.meetingId);
+          if (kept !== undefined && kept.at <= issued) memory.answered.delete(meeting.meetingId);
+        }
         setMeetings(answer.meetings);
-        setSuggestion(answer.stageSuggestion ?? null);
+        const offered = answer.stageSuggestion ?? null;
+        setSuggested(offered === null ? null : { firmId, refreshKey: readKey, suggestion: offered });
       },
       () => {
         if (current) setMeetings(null);
@@ -106,7 +121,7 @@ export function FirmMeetings({
   if (shownFirm.current !== firmId) {
     shownFirm.current = firmId;
     if (meetings !== undefined) setMeetings(undefined);
-    if (suggestion !== null) setSuggestion(null);
+    if (suggested !== null) setSuggested(null);
   }
 
   const send = (meetingId: string, attendance: MeetingAttendanceChoice, retry = false): void => {
@@ -134,7 +149,8 @@ export function FirmMeetings({
       }
       memory.commands.delete(meetingId);
       if (answer.set !== null) {
-        memory.answered.set(meetingId, answer.set);
+        memory.clock.now += 1;
+        memory.answered.set(meetingId, { set: answer.set, at: memory.clock.now });
         memory.successes.set(command.firmId, (memory.successes.get(command.firmId) ?? 0) + 1);
       } else {
         memory.notes.set(meetingId, { text: reasonSentence(reason), alert: true });
@@ -165,8 +181,10 @@ export function FirmMeetings({
     );
   }
   const canCommand = actionsEnabled && ports.setAttendance !== undefined;
+  // Read for this firm under the stage the page shows now, or not offered.
+  const suggestion = suggested !== null && suggested.firmId === firmId && suggested.refreshKey === refreshKey ? suggested : null;
   const shown = (meeting: FirmMeetingDto): Shown => {
-    const answered = memory.answered.get(meeting.meetingId);
+    const answered = memory.answered.get(meeting.meetingId)?.set;
     return {
       meetingId: meeting.meetingId,
       startsAt: meeting.startsAt,
@@ -187,7 +205,7 @@ export function FirmMeetings({
             disabled={!actionsEnabled || suggestionBusy}
             {...(suggestionBusy ? { 'aria-busy': true } : {})}
             onClick={() => {
-              onApplySuggestion(suggestion);
+              onApplySuggestion(suggestion.suggestion, suggestion.firmId);
             }}
           >
             Move to Demo booked

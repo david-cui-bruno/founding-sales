@@ -15,7 +15,7 @@ import { FirmMeetings, type FirmMeetingsPorts } from '../src/renderer/meetings/F
 import { BoardCard as BoardCardView } from '../src/renderer/pipeline/BoardCard.tsx';
 import { meetingLabel } from '../src/renderer/pipeline/cardText.ts';
 import type { OperationApi } from '../src/shared/operations.ts';
-import { crmState, FIRM_ID, OPPORTUNITY_ID, pipelineView } from './e2e/support/crmFixtures.ts';
+import { assigneeFirmPage, crmState, FIRM_ID, OPPORTUNITY_ID, pipelineView } from './e2e/support/crmFixtures.ts';
 
 /**
  * Lane M1: the firm page's attendance controls and the one-click stage suggestion, with the
@@ -280,7 +280,8 @@ describe('the stage suggestion (a booking no longer moves the deal)', () => {
       </Session>,
     );
     await userEvent.click(await screen.findByTestId('stage-suggestion-apply'));
-    expect(apply).toHaveBeenCalledWith(suggestion);
+    // With the firm it was read for (review M1R, finding 2).
+    expect(apply).toHaveBeenCalledWith(suggestion, FIRM_ID);
   });
 
   it('on the board card: one click sends the ordinary stage change, only for the deal this person may move', async () => {
@@ -311,10 +312,16 @@ describe('the stage suggestion (a booking no longer moves the deal)', () => {
       onSetValue: () => undefined,
       onOpenFirm: () => undefined,
     };
-    const shown = render(<BoardCardView {...common} card={card({ stageKey: 'engaged', opportunityId: OPPORTUNITY_ID })} opportunityId={OPPORTUNITY_ID} />);
+    const shown = render(<BoardCardView {...common} card={card({ stageKey: 'engaged', opportunityId: OPPORTUNITY_ID, fromStageKey: 'new' })} opportunityId={OPPORTUNITY_ID} />);
     await userEvent.click(screen.getByTestId('card-stage-suggestion'));
-    expect(changes).toEqual([{ opportunityId: OPPORTUNITY_ID, toStageKey: 'engaged', reason: null }]);
+    // With the stage the card was read at (review M1R, finding 6).
+    expect(changes).toEqual([{ opportunityId: OPPORTUNITY_ID, toStageKey: 'engaged', reason: null, expectedStageKey: 'new' }]);
     shown.unmount();
+    // A server that does not say: the column the card is drawn in.
+    const older = render(<BoardCardView {...common} card={card({ stageKey: 'engaged', opportunityId: OPPORTUNITY_ID })} opportunityId={OPPORTUNITY_ID} />);
+    await userEvent.click(screen.getByTestId('card-stage-suggestion'));
+    expect(changes.at(-1)).toEqual({ opportunityId: OPPORTUNITY_ID, toStageKey: 'engaged', reason: null, expectedStageKey: stage.key });
+    older.unmount();
     // A colleague's firm (no opportunity id for this person): nothing offered.
     render(<BoardCardView {...common} card={card({ stageKey: 'engaged', opportunityId: OPPORTUNITY_ID })} opportunityId={undefined} />);
     expect(screen.queryByTestId('card-stage-suggestion')).toBeNull();
@@ -354,5 +361,117 @@ describe('the stage suggestion (a booking no longer moves the deal)', () => {
     await userEvent.keyboard('j');
     await userEvent.keyboard('{Enter}');
     expect(calls.filter(name => name === 'crm.changeStage')).toEqual([]);
+  });
+});
+
+describe('review M1R', () => {
+  const booked = (): FirmMeetingDto => ({ meetingId: MEETING, state: 'booked', startsAt: '2099-06-02T15:00:00.000Z', endsAt: '2099-06-02T15:30:00.000Z', attendanceSource: null });
+
+  it('finding 6: a stage change hides the suggestion until the read it caused lands', async () => {
+    const pending = deferred<{ meetings: readonly FirmMeetingDto[]; stageSuggestion: StageSuggestion | null }>();
+    const suggestion = { stageKey: 'demo_booked', opportunityId: OPPORTUNITY_ID, fromStageKey: 'interested' };
+    const forFirm = vi
+      .fn<FirmMeetingsPorts['forFirm']>()
+      .mockResolvedValueOnce({ meetings: [booked()], stageSuggestion: suggestion })
+      .mockReturnValueOnce(pending.promise);
+    const apply = vi.fn();
+    const view = render(
+      <Session>
+        <FirmMeetings firmId={FIRM_ID} ports={{ forFirm }} onApplySuggestion={apply} refreshKey="deal:interested" />
+      </Session>,
+    );
+    await screen.findByTestId('stage-suggestion-apply');
+    view.rerender(
+      <Session>
+        <FirmMeetings firmId={FIRM_ID} ports={{ forFirm }} onApplySuggestion={apply} refreshKey="deal:proposal" />
+      </Session>,
+    );
+    expect(screen.queryByTestId('stage-suggestion-apply')).toBeNull();
+    expect(apply).not.toHaveBeenCalled();
+    // The fresh read: still due from the new stage, so offered again, from it.
+    const fresh = { ...suggestion, fromStageKey: 'proposal' };
+    await act(async () => {
+      pending.resolve({ meetings: [booked()], stageSuggestion: fresh });
+      await Promise.resolve();
+    });
+    await userEvent.click(await screen.findByTestId('stage-suggestion-apply'));
+    expect(apply).toHaveBeenCalledWith(fresh, FIRM_ID);
+  });
+
+  it('finding 5: a read that began before a success and lands in the same turn never puts the old state back', async () => {
+    const response = deferred<Answer>();
+    const stale = deferred<{ meetings: readonly FirmMeetingDto[] }>();
+    const fresh = deferred<{ meetings: readonly FirmMeetingDto[] }>();
+    const forFirm = vi
+      .fn<FirmMeetingsPorts['forFirm']>()
+      .mockResolvedValueOnce({ meetings: [row(MEETING, 'ended')] })
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValue(fresh.promise);
+    const setAttendance = vi.fn<NonNullable<FirmMeetingsPorts['setAttendance']>>().mockReturnValue(response.promise);
+    const ports: FirmMeetingsPorts = { forFirm, setAttendance };
+    const view = render(
+      <Session>
+        <FirmMeetings firmId={FIRM_ID} ports={ports} refreshKey="before" />
+      </Session>,
+    );
+    await userEvent.click(await screen.findByTestId('attendance-attended'));
+    // A read begins before the answer (the page's stage moved, say).
+    view.rerender(
+      <Session>
+        <FirmMeetings firmId={FIRM_ID} ports={ports} refreshKey="read-again" />
+      </Session>,
+    );
+    await act(async () => {
+      response.resolve({ set: { meetingId: MEETING, state: 'held', attendanceSource: 'manual' }, reason: null });
+      stale.resolve({ meetings: [row(MEETING, 'ended')] });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('firm-meeting-state').textContent).toBe('Held');
+    // The read that began after the answer is the one that replaces it.
+    await act(async () => {
+      fresh.resolve({ meetings: [row(MEETING, 'held', 'manual')] });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('firm-meeting-state').textContent).toBe('Held');
+  });
+
+  it('finding 2: the firm page opens a deal at the stage for the firm the suggestion was read for', async () => {
+    const page = assigneeFirmPage();
+    if (page.visibility !== 'assigned_or_admin') throw new Error('fixture');
+    const state = crmState({ screen: 'firm', firm: { ...page, opportunity: null } });
+    const calls: { name: string; input: unknown }[] = [];
+    const answer = (name: string, input: unknown): unknown => {
+      calls.push({ name, input });
+      switch (name) {
+        case 'meetings.forFirm':
+          return { meetings: [booked()], stageSuggestion: { stageKey: 'demo_booked', opportunityId: null, fromStageKey: null } };
+        case 'meetings.unmatched':
+          return { meetings: [] };
+        case 'calling.history':
+          return { calls: null };
+        case 'research.open':
+          return { firm: null, settings: null, worstCaseRunCents: null, spend: null, notice: null, mayMutate: true, role: 'salesperson' };
+        default:
+          return state;
+      }
+    };
+    globalThis.callieApi = {
+      read: async (name: string, input: unknown) => await Promise.resolve(answer(name, input)),
+      command: async (name: string, input: unknown) => await Promise.resolve(answer(name, input)),
+    } as unknown as OperationApi;
+    const source = createGeneration();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    render(
+      <QueryClientProvider client={client}>
+        <DraftsProvider>
+          <FirmsRoute route={{ name: 'firm', firmId: FIRM_ID }} identity="person-1" generation={0} guard={source.guard} />
+        </DraftsProvider>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByTestId('stage-suggestion-apply'));
+    await waitFor(() => {
+      expect(calls.filter(call => call.name === 'crm.openOpportunity').map(call => call.input)).toEqual([{ firmId: FIRM_ID, stageKey: 'demo_booked' }]);
+    });
+    globalThis.callieApi = undefined;
   });
 });

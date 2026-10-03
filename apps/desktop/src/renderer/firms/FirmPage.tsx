@@ -950,7 +950,8 @@ export function FirmPage({
   readonly guard?: Generation;
   readonly timelinePorts?: TimelinePorts | null;
   /** Lane M1: "Move to Demo booked" from the Meetings rows, through the ordinary stage command. */
-  onApplyStageSuggestion?(suggestion: StageSuggestion): void;
+  /** Lane M1: told the firm the suggestion was read for, which the command must use. */
+  onApplyStageSuggestion?(suggestion: StageSuggestion, firmId: string): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the

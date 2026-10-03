@@ -124,8 +124,12 @@ export interface CrmBridgeHost {
   openImport(): Promise<CrmState>;
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
-  /** Lane M1: `stageKey` opens it at that stage (the "Move to Demo booked" suggestion). */
-  openOpportunity(input?: { readonly stageKey?: string | undefined }): Promise<CrmState>;
+  /**
+   * Lane M1: `stageKey` opens it at that stage (the "Move to Demo booked" suggestion), for
+   * `firmId`, the firm whose suggestion the person clicked — never whichever page this
+   * bridge holds last (review M1R, finding 2). Without `firmId`, the open page's firm.
+   */
+  openOpportunity(input?: { readonly firmId?: string | undefined; readonly stageKey?: string | undefined }): Promise<CrmState>;
   takeOver(input: { readonly reason: string }): Promise<CrmState>;
   /** Name the firm of one held outgoing message on the open Firm page (S1 review P1-C). */
   resolveOutgoing(input: ResolveOutgoingRequest): Promise<CrmState>;
@@ -612,11 +616,13 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
      * enrolment serves an open opportunity (11.2), and a firm just added has none.
      */
     async openOpportunity(input = {}) {
-      if (firm === null) {
+      // The firm the person acted on, when the renderer names it: the page this bridge holds
+      // may be a different firm's late read (review M1R, finding 2).
+      const firmId = input.firmId ?? firm?.read.firm.id ?? null;
+      if (firmId === null) {
         notice = 'firm_unknown';
         return await snapshot();
       }
-      const firmId = firm.read.firm.id;
       const answer = await deps.api.command(
         '/opportunities/open',
         { firmId, ...(input.stageKey === undefined ? {} : { stageKey: input.stageKey }) },
@@ -750,13 +756,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
           opportunityId: input.opportunityId,
           toStageKey: input.toStageKey,
           ...(input.reason === null ? {} : { reason: input.reason }),
+          ...(input.expectedStageKey === undefined ? {} : { expectedStageKey: input.expectedStageKey }),
         },
         () => null,
       );
       notice = answer.ok ? 'stage_changed' : answer.reason;
-      if (answer.ok) await loadPipeline();
+      // Lane M1: a move refused because the deal moved elsewhere reads both again, so the
+      // stage the person sees, and the suggestion offered from it, are the current ones.
+      const reread = answer.ok || answer.reason === 'stage_changed_elsewhere';
+      if (reread) await loadPipeline();
       // Lane M1: the firm page's one-click move — the page open on that deal shows its new stage.
-      if (answer.ok && firm !== null && firm.visibility === 'assigned_or_admin' && firm.opportunity?.id === input.opportunityId) {
+      if (reread && firm !== null && firm.visibility === 'assigned_or_admin' && firm.opportunity?.id === input.opportunityId) {
         await loadFirm(firm.read.firm.id);
       }
       return await snapshot();

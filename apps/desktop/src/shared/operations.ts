@@ -321,6 +321,11 @@ const stageChangeInput = z.strictObject({
   toStageKey: z.string().min(1).max(80),
   /** Section 8.1: a Lost change requires one. The server enforces it; this sends it. */
   reason: z.string().max(500).nullable(),
+  /**
+   * Lane M1: the stage the person saw the deal at, sent by the one-click suggestion; a deal
+   * moved elsewhere since is refused (`stage_changed_elsewhere`) rather than moved.
+   */
+  expectedStageKey: z.string().min(1).max(40).optional(),
 });
 
 const mergeResolutionInput = z.strictObject({
@@ -1100,10 +1105,16 @@ export const OPERATIONS = {
       { method: 'POST', path: '/sequences/versions' },
       { method: 'POST', path: '/enrollments' },
     ],
-    // Lane M1: `stageKey` opens it at "Demo booked" from the firm's one-click suggestion.
-    input: z.strictObject({ stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u).optional() }),
+    // Lane M1: `stageKey` opens it at "Demo booked" from the firm's one-click suggestion, for
+    // `firmId`, the firm whose suggestion was drawn (review M1R, finding 2): a stage always
+    // names its firm, so the open never lands on whichever page the bridge read last.
+    input: z
+      .strictObject({ firmId: uuid.optional(), stageKey: z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u).optional() })
+      .refine(input => input.stageKey === undefined || input.firmId !== undefined, {
+        message: 'a stage names the firm it opens for',
+      }),
     output: crmStateSchema,
-    transform: 'the open firm page\u2019s own id, never the window\u2019s word for it; the stage it opens at, when one is named',
+    transform: 'the open firm page\u2019s own id; with a stage, the firm the window drew the suggestion for (lane M1: the page the bridge read last may be another firm\u2019s, and the server decides who may open one); the stage it opens at, when one is named',
   },
   'crm.takeOver': {
     kind: 'command',

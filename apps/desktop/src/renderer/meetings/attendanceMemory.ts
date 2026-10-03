@@ -14,8 +14,12 @@ import { useSessionEpoch } from '../app/drafts.tsx';
  *     exactly it, under its id, so the server answers it from its receipt (K3).
  *   * `inFlight` — the meetings whose command is on the wire now.
  *   * `notes` — the sentence the last answer earned, shown beside that meeting and no other.
- *   * `answered` — a success answer, shown over any read that began before it (K6: the answer
- *     clears the pending command; K7: an older read never puts the old state back).
+ *   * `answered` — a success answer and the success clock it moved to, shown over any read that
+ *     began before it (K6: the answer clears the pending command; K7: an older read never puts
+ *     the old state back). A read clears only the answers it began after (review M1R,
+ *     finding 5): one that began earlier and lands in the same turn as the answer leaves it.
+ *
+ * `clock` counts this session's successful answers; a read notes it when it begins.
  *
  * By firm id, `successes` counts the answers that changed a meeting there: a read that began
  * under an older count is stale and is dropped, and the row reads again (K7).
@@ -33,12 +37,19 @@ export interface AttendanceNote {
   readonly alert: boolean;
 }
 
+/** A success answer, and the success clock it moved to. */
+export interface AttendanceAnswer {
+  readonly set: MeetingAttendanceSet;
+  readonly at: number;
+}
+
 export interface AttendanceMemory {
   readonly commands: Map<string, AttendanceCommand>;
   readonly inFlight: Set<string>;
   readonly notes: Map<string, AttendanceNote>;
-  readonly answered: Map<string, MeetingAttendanceSet>;
+  readonly answered: Map<string, AttendanceAnswer>;
   readonly successes: Map<string, number>;
+  readonly clock: { now: number };
 }
 
 const fresh = (): AttendanceMemory => ({
@@ -47,6 +58,7 @@ const fresh = (): AttendanceMemory => ({
   notes: new Map(),
   answered: new Map(),
   successes: new Map(),
+  clock: { now: 0 },
 });
 
 let current: { epoch: object | null; memory: AttendanceMemory } = { epoch: null, memory: fresh() };
