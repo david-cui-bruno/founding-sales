@@ -56,8 +56,12 @@ run "separate_roles_an_append_only_journal_and_one_metric_namespace" {
       for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] :
       [
         for statement in jsondecode(policy).Statement : statement.Resource
-        # Slice C3a's call-audio bucket is the worker's other put, asserted below.
-        if contains(statement.Action, "s3:PutObject") && statement.Resource != ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+        # Slice C3a's call-audio bucket is the worker's other put, and lane M4's meetings/
+        # prefix of it the API's; both asserted below.
+        if contains(statement.Action, "s3:PutObject") && !contains([
+          ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"],
+          ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings/*"],
+        ], statement.Resource)
       ] == [["arn:aws:s3:::fss-test-suppression-journal-123456789012/*"]]
     ])
     error_message = "Both task roles append to the journal, and only on its object prefix."
@@ -112,8 +116,13 @@ run "the_worker_alone_may_stage_call_audio_and_run_this_stacks_transcription_job
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
         Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+        }, {
+        Sid      = "ReadMeetingRecordings"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings/*"]
     }]
-    error_message = "The worker may put, get and delete call audio under calls/ only, and do nothing else in that bucket."
+    error_message = "The worker may put, get and delete call audio under calls/, read meeting audio under meetings/ (lane M4), and do nothing else in that bucket."
   }
 
   assert {
@@ -143,8 +152,13 @@ run "the_worker_alone_may_stage_call_audio_and_run_this_stacks_transcription_job
         Effect   = "Allow"
         Action   = ["s3:DeleteObject"]
         Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/calls/*"]
+        }, {
+        Sid      = "StageMeetingRecordings"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = ["arn:aws:s3:::fss-test-call-audio-123456789012/meetings/*"]
     }]
-    error_message = "The API task role may only delete call audio under calls/ (the deletion workflow), and reaches no Transcribe action."
+    error_message = "The API task role may only delete call audio under calls/ (the deletion workflow), put and get meeting audio under meetings/ (lane M4's presigned upload and HEAD), and reaches no Transcribe action."
   }
 
   assert {
