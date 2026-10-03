@@ -30,6 +30,7 @@ import { AfterCallAnalysis, type ApplyCommand } from './AfterCallAnalysis.tsx';
 import { Overview } from './Overview.tsx';
 import { Recap } from './Recap.tsx';
 import { ReviewGroup, ReviewPanel } from './ReviewItems.tsx';
+import { RecordingsToSort } from '../recordings/RecordingsToSort.tsx';
 import { WAITING_WINDOW_MS, analysisKey, phaseOf, useAnalyses, useReview, type Watch } from './useAnalysis.ts';
 import { HomeExtras, UpdatedLine } from './TodayColumn.tsx';
 import { TodayBrief } from './TodayBrief.tsx';
@@ -775,6 +776,8 @@ export function TodayWorkspace({
                 review.items === null ? null : (
                   <>
                     <ReviewGroup items={review.items} cards={cards} selected={firmId} onSelect={select} onChanged={reload} />
+                    {/* Lane M4: a demo recording that needs a meeting chosen, or failed. Quiet otherwise. */}
+                    <RecordingsToSort />
                     {review.failed ? (
                       <p data-testid="review-refresh-failed" role="status" className="mb-3 flex items-center gap-1 px-2 text-xs text-muted-foreground">
                         Couldn’t refresh.

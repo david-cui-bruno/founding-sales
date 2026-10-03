@@ -8,6 +8,8 @@ import { useAttendanceMemory, type AttendanceCommand } from './attendanceMemory.
 import { useBriefMemory } from './briefMemory.ts';
 import { MeetingBrief, type BriefReader } from './MeetingBrief.tsx';
 import { meetingRowWord, meetingStateWarns } from './meetingText.ts';
+import { FirmRecordings, MeetingRecordingTag, meetingRecordingItem } from '../recordings/FirmRecordings.tsx';
+import { registryRecordingPorts, useRecordings, type RecordingsPorts } from '../recordings/recordingsMemory.ts';
 
 /**
  * The firm page's Meetings rows (slice M1; attendance, lane M1): each Cal.com booking with the
@@ -80,6 +82,7 @@ export function FirmMeetings({
   refreshKey = '',
   onApplySuggestion,
   suggestionBusy = false,
+  recordingPorts = registryRecordingPorts(),
 }: {
   readonly firmId: string;
   readonly ports?: FirmMeetingsPorts | null;
@@ -93,6 +96,8 @@ export function FirmMeetings({
    */
   onApplySuggestion?(suggestion: StageSuggestion, firmId: string): void;
   readonly suggestionBusy?: boolean;
+  /** Lane M4: this Mac's demo recording import, for each meeting's recording state. */
+  readonly recordingPorts?: RecordingsPorts | null;
 }): JSX.Element | null {
   const [meetings, setMeetings] = useState<readonly FirmMeetingDto[] | null | undefined>(undefined);
   // The suggestion, with the firm and the `refreshKey` its read began under: offered only while
@@ -103,6 +108,7 @@ export function FirmMeetings({
   portsRef.current = ports;
   const { memory, touch } = useAttendanceMemory();
   const briefs = useBriefMemory();
+  const recordings = useRecordings(recordingPorts);
   const successes = memory.successes.get(firmId) ?? 0;
 
   useEffect(() => {
@@ -290,6 +296,7 @@ export function FirmMeetings({
                     Brief
                   </Button>
                 ) : null}
+                <MeetingRecordingTag item={meetingRecordingItem(recordings.view?.items ?? [], row.meetingId)} />
                 <Tag data-testid="firm-meeting-state" tone={meetingStateWarns(row.state) ? 'warn' : 'none'}>
                   {meetingRowWord(row.state)}
                 </Tag>
@@ -318,6 +325,7 @@ export function FirmMeetings({
           );
         })}
       </ul>
+      <FirmRecordings recordings={recordings} meetingIds={meetings.map(meeting => meeting.meetingId)} actionsEnabled={actionsEnabled} />
     </section>
   );
 }

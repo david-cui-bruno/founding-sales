@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createBriefImport } from '../src/main/briefImport.ts';
+import { createRecordingImporter } from '../src/main/recordings/importer.ts';
+import { memoryRecordingStore } from '../src/main/recordings/store.ts';
 import { createCrmBridge } from '../src/main/crmBridge.ts';
 import { createMailboxBridge } from '../src/main/mailboxBridge.ts';
 import { createReplyBridge } from '../src/main/replyBridge.ts';
@@ -194,6 +196,9 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
     note: '',
   },
   'diagnostics.requeueJob': { jobId: UUID, reason: 'the mailbox was reconnected' },
+  'recordings.chooseMeeting': { itemId: 'a'.repeat(32), meetingId: UUID },
+  'recordings.ignore': { itemId: 'a'.repeat(32) },
+  'recordings.retry': { itemId: 'a'.repeat(32) },
   'diagnostics.resolveSend': { outboundMessageId: UUID, resolution: 'delivered' },
 });
 
@@ -342,6 +347,20 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         })(),
         calls: { logIncoming: async (input: unknown) => await handlers['calls.logIncoming'](input as never) },
       };
+    })(),
+    // Lane M4: the import the main process holds. Its four operations make no request of
+    // their own (its scan and upload traffic is the importer's, in its own suite).
+    recordings: (() => {
+      const importer = createRecordingImporter({
+        api,
+        fs: { listRoot: async () => await Promise.resolve([]), statFolder: async () => await Promise.resolve(null), listFolder: async () => await Promise.resolve([]), statFile: async () => await Promise.resolve(null), sha256: async () => await Promise.resolve(''), watch: () => null },
+        uploader: { put: async () => await Promise.resolve({ ok: true as const }) },
+        store: memoryRecordingStore(),
+        identity: async () => await Promise.resolve({ workspaceId: UUID }),
+        defaultFolder: '/tmp/Callie Demos',
+        openFolderDialog: async () => await Promise.resolve({ canceled: true, filePaths: [] }),
+      });
+      return importer as unknown as Host;
     })(),
     mailbox: createMailboxBridge({
       api,

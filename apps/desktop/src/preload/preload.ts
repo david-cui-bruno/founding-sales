@@ -19,6 +19,7 @@ import {
 } from '../shared/contract.ts';
 import { crmStateSchema } from '../renderer/firmWorkspaceContract.ts';
 import { briefImportViewSchema } from '../shared/briefImport.ts';
+import { recordingsViewSchema } from '../shared/recordings.ts';
 import { todayStateSchema, type TodayState } from '../renderer/todayContract.ts';
 import { UPDATE_IPC_CHANNELS, updateStatusSchema, type UpdateBridge, type UpdateStatus } from '../shared/updateContract.ts';
 
@@ -86,6 +87,8 @@ const dial: DialBridge = {
 const importer: ImportBridge = {
   choose: async () => crmStateSchema.parse(await ipcRenderer.invoke(IMPORT_IPC_CHANNELS.choose)),
   chooseBriefs: async () => briefImportViewSchema.parse(await ipcRenderer.invoke(IMPORT_IPC_CHANNELS.chooseBriefs)),
+  chooseRecordingsFolder: async () => recordingsViewSchema.parse(await ipcRenderer.invoke(IMPORT_IPC_CHANNELS.chooseRecordingsFolder)),
+  importRecordingFolder: async () => recordingsViewSchema.parse(await ipcRenderer.invoke(IMPORT_IPC_CHANNELS.importRecordingFolder)),
 };
 
 const bridge: DesktopBridge = {

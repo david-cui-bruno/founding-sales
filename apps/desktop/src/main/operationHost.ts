@@ -30,6 +30,7 @@ import {
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
 import type { BriefImportHost } from './briefImport.ts';
+import type { RecordingImportHost } from './recordings/importer.ts';
 import type { CrmBridgeHost } from './crmBridge.ts';
 import type { MailboxBridgeHost } from './mailboxBridge.ts';
 import type { ReplyBridgeHost } from './replyBridge.ts';
@@ -71,6 +72,8 @@ export interface OperationHostDeps {
   readonly mailbox: MailboxBridgeHost;
   /** Lane PB: the prepared-brief import the main process holds. */
   readonly briefImport: BriefImportHost;
+  /** Lane M4: the demo recording import the main process holds. */
+  readonly recordings: RecordingImportHost;
 }
 
 type Handler = (input: never) => Promise<unknown>;
@@ -89,6 +92,7 @@ const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
   sequences: 'sequences.state',
   settings: 'settings.state',
   mailbox: 'mailbox.state',
+  recordings: 'recordings.state',
 });
 
 /**
@@ -391,6 +395,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'firms.briefImportState': async () => await deps.briefImport.state(),
     'firms.briefImportCommit': async (input: OperationInput<'firms.briefImportCommit'>) => await deps.briefImport.commit(input),
     'firms.briefImportReset': async () => await deps.briefImport.reset(),
+    // Lane M4: answered from the import the main process holds.
+    'recordings.state': async () => await deps.recordings.state(),
+    'recordings.chooseMeeting': async (input: OperationInput<'recordings.chooseMeeting'>) => await deps.recordings.chooseMeeting(input),
+    'recordings.ignore': async (input: OperationInput<'recordings.ignore'>) => await deps.recordings.ignore(input),
+    'recordings.retry': async (input: OperationInput<'recordings.retry'>) => await deps.recordings.retry(input),
     'calls.logIncoming': async (input: OperationInput<'calls.logIncoming'>) => {
       const answer = await deps.api.command(
         '/calls/log',
