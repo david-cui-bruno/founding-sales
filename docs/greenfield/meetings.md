@@ -615,3 +615,9 @@ for review; deletion removes recap content with the source.
 The existing durable worker materializes preparation/finalization jobs. Delivery remains
 in `sequence.action`; no separate polling sender, paid authoring model or subscription
 is introduced. Production sending stays paused until separately enabled by David.
+
+Final follow-through recovery rules:
+- The final dispatcher recomputes every nudge from proven delivery history and the current/frozen holiday calendar. A stale prepared fence cannot outlive its permitted follow-up date.
+- A missing open opportunity is retried after the prerequisite is corrected, with a fresh editing window. Reply, communication-stop, manual-takeover and ambiguous manual-mail holds are never cleared by editing the recap or by a timer.
+- An exact verified manual recap can precede enrollment while sending is paused. On resume, current meeting authority is verified and ordinal 1 is recorded as already delivered in the enrollment transaction; only remaining permitted work is created.
+- Cancel future follow-ups remains available after submission or delivery. It stops remaining plan work, preserves sent bytes and continues reconciliation of an ambiguous submission. It does not create a contact stop or claim to recall email.

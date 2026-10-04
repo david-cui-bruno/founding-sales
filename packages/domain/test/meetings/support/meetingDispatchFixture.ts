@@ -16,7 +16,7 @@ import type { SendHandoff } from '../../../sequences/sendHandoff.ts';
 import { composeEligibility } from '../../../sequences/eligibility.ts';
 import { runDueStepExecution } from '../../../sequences/executions.ts';
 
-export async function meetingDispatchFixture(options: { steps?: number; material?: string } = {}) {
+export async function preparedMeetingFixture(options: { steps?: number; material?: string; paused?: boolean } = {}) {
   const world = await createOutboundWorld(), db = world.database.session, workspace = world.alpha.workspace.workspaceId;
   const context = world.systemContext(workspace);
   const admin = repositoryContext(workspaceScope(workspace, { kind: 'user', userId: world.alpha.workspace.admin.userId, role: 'admin' }), db);
@@ -48,9 +48,15 @@ export async function meetingDispatchFixture(options: { steps?: number; material
   }
   await db.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1", [sequenceVersionId, world.alpha.workspace.admin.userId]);
   await withTransaction(db, () => updateSetting(admin, { settingKey: 'meeting_follow_through', value: { sequenceVersionId }, changeNote: 'Fixture' }));
+  if (options.paused) await db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[workspace]);
   const prepared = await withTransaction(db, () => prepareMeetingRecap(admin, { meetingId, expectedSourceHash: input.value.sourceHash, at: new Date(now.getTime() - 40 * 60_000).toISOString() }));
   if (!prepared.ok || prepared.value.currentDraft === null) throw new Error(`prepare: ${JSON.stringify(prepared)}`);
-  const enrolled = await withTransaction(db, () => enrollMeetingFollowThrough(admin, { planId: prepared.value.planId!, expectedVersion: prepared.value.version, at }));
+  return { world, db, workspace, context, admin, ...firm, meetingId, at, before, planId: prepared.value.planId!, version: prepared.value.version, templateVersionId, draft: prepared.value.currentDraft };
+}
+export async function meetingDispatchFixture(options: { steps?: number; material?: string } = {}) {
+  const f = await preparedMeetingFixture(options);
+  const { db, context, admin, at } = f;
+  const enrolled = await withTransaction(db, () => enrollMeetingFollowThrough(admin, { planId: f.planId, expectedVersion: f.version, at }));
   if (!enrolled.ok) throw new Error(`enroll: ${enrolled.reason}`);
   const executionId = (await db.query<{ id: string }>('SELECT id FROM step_executions WHERE enrollment_id=$1', [enrolled.value.enrollmentId])).rows[0]!.id;
   await db.query('UPDATE step_executions SET due_at=$2,not_before=$2 WHERE id=$1', [executionId, at]);
@@ -63,5 +69,5 @@ export async function meetingDispatchFixture(options: { steps?: number; material
     if (result.kind !== 'handed_to_send') throw new Error(`step: ${JSON.stringify(result)}`);
     return (await readFenceByStepExecution(context, executionId))!;
   };
-  return { world, db, workspace, context, admin, ...firm, meetingId, executionId, at, before, prepare, planId: prepared.value.planId!, templateVersionId, draft: prepared.value.currentDraft };
+  return { ...f, executionId, prepare };
 }

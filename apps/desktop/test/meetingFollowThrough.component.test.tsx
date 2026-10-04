@@ -33,8 +33,10 @@ it('retries a lost edit command with the same identity and keeps source-conflict
   fireEvent.change(input,{target:{value:'My correction'}});fireEvent.click(screen.getByRole('button',{name:'Save recap'}));
   await waitFor(()=>expect(screen.getByText(/changed.*draft is kept/i)).toBeTruthy());expect((screen.getByLabelText('Recap message') as HTMLTextAreaElement).value).toBe('My correction');
 });
-it.each(['submitted','sent'] as const)('does not pretend it can cancel a %s message',async state=>{
+it.each(['submitted','sent'] as const)('can cancel future work without editing a %s message',async state=>{
   const p=ports();p.read=vi.fn(async()=>({view:{...followThroughView(),sendingPaused:false,blockers:[],currentDraft:{...followThroughView().currentDraft!,state}},reason:null}));
   render(<DraftsProvider><MeetingFollowThrough meetingId={MID} ports={p}/></DraftsProvider>);open();
-  await screen.findByText(state==='sent'?'Recap sent':'Delivery in progress');expect(screen.queryByRole('button',{name:'Cancel follow-up'})).toBeNull();
+  await screen.findByText(state==='sent'?'Recap sent':'Delivery in progress');expect(screen.queryByRole('button',{name:'Edit recap'})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'Cancel future follow-ups'}));
+  await waitFor(()=>expect(p.edit).toHaveBeenCalledWith(expect.objectContaining({action:'cancel'})));
 });

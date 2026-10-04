@@ -1,3 +1,4 @@
+import { meetingDeliveryHistory } from './followThroughHistory.ts';
 import { meetingPlanInterruption } from './followThroughLifecycle.ts';
 import { recapIsStale, nextMeetingFollowThroughAction } from './followThroughSchedule.ts';
 import { meetingScheduleContext } from './followThroughJobs.ts';
@@ -68,7 +69,9 @@ export async function enrollMeetingFollowThrough(context: RepositoryContext, inp
   const eligible = await planAuthority(context, plan, input.at);
   if (!eligible.ok) return eligible;
   const draft = await currentMeetingDraft(context, plan);
-  if (draft === null || draft.source_hash !== plan.source_hash || draft.state !== 'ready') return { ok: false, reason: 'draft_not_ready' };
+  const manualRecap = draft?.state === 'sent' && draft.ordinal === 1 && draft.manual_message_id !== null
+    ? (await meetingDeliveryHistory(context, plan.id)).find(d => d.ordinal === 1 && d.messageId === draft.manual_message_id) : undefined;
+  if (draft === null || draft.source_hash !== plan.source_hash || (draft.state !== 'ready' && manualRecap === undefined)) return { ok: false, reason: 'draft_not_ready' };
   const resolved = await resolveMeetingFollowThroughScope(context, { meetingId: plan.meeting_id, contactId: plan.contact_id!, sourceHash: plan.source_hash });
   if (!resolved.ok) return resolved;
   const version = await readSequenceVersion(context, plan.sequence_version_id!);
@@ -87,6 +90,14 @@ export async function enrollMeetingFollowThrough(context: RepositoryContext, inp
   }
   await context.db.query("UPDATE meeting_follow_through SET enrollment_id=$3,status='scheduled',version=version+1,updated_at=$4 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id, enrolled.value.enrollmentId, input.at]);
   await context.db.query('UPDATE step_executions SET due_at=GREATEST(due_at,$3::timestamptz) WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, enrolled.value.firstExecutionId, draft.not_before.toISOString()]);
+  if (manualRecap !== undefined) {
+    // The same transaction records ordinal 1 as already delivered before any worker can claim it.
+    // Enrollment/permission initialization precedes the execution module's channel tables.
+    const { completeStepExecution } = await import('../sequences/executions.ts');
+    const completed = await completeStepExecution(context, { stepExecutionId: enrolled.value.firstExecutionId, completionSource: 'system', result: 'sent', completedAt: manualRecap.sentAt });
+    if (!completed.ok) throw new Error('manual_recap_completion_failed');
+    await context.db.query("UPDATE meeting_follow_through SET status='awaiting_reply' WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id]);
+  }
   await recordCrmAuditEvent(context, { action: 'meeting.follow_through_enrolled', subjectKind: 'meeting', subjectId: plan.meeting_id, detail: { planId: plan.id, enrollmentId: enrolled.value.enrollmentId } });
   return { ok: true, value: { enrollmentId: enrolled.value.enrollmentId } };
 }
@@ -108,6 +119,11 @@ export async function verifyMeetingFollowThrough(context: RepositoryContext, inp
   if (draft.ordinal === 1 && plan.scope?.agreedReminder != null) {
     const agreed = nextMeetingFollowThroughAction({ plan: { scope: plan.scope, maxMessages: 1 }, deliveryHistory: [], at: input.at, calendar: schedule.calendar, zone });
     if (agreed.kind !== 'nudge' || Date.parse(agreed.dueAt) > Date.parse(input.at)) return { ok: false, reason: 'reminder_not_due' };
+  }
+  if (draft.ordinal > 1) {
+    const action = nextMeetingFollowThroughAction({ plan: { scope: plan.scope, maxMessages: schedule.version?.steps.length ?? 0 }, deliveryHistory: await meetingDeliveryHistory(context, plan.id), at: input.at, calendar: schedule.calendar, zone });
+    if (action.kind === 'review') return { ok: false, reason: action.reason };
+    if (action.kind !== 'nudge' || action.ordinal !== draft.ordinal || Date.parse(action.dueAt) > Date.parse(input.at)) return { ok: false, reason: 'nudge_not_due' };
   }
   const execution = (await context.db.query<{ ordinal: number; template_version_id: string | null }>(`SELECT s.ordinal,s.template_version_id FROM step_executions e JOIN sequence_steps s ON s.workspace_id=e.workspace_id AND s.id=e.step_id
     JOIN sequence_enrollments n ON n.workspace_id=e.workspace_id AND n.id=e.enrollment_id AND n.ended_at IS NULL

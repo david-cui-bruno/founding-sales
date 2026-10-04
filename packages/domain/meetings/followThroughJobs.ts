@@ -20,7 +20,7 @@ import { enrollMeetingFollowThrough } from './followThroughEligibility.ts';
 import { nextMeetingFollowThroughAction, recapIsStale } from './followThroughSchedule.ts';
 import { ensureUnresolvedMeetingTask, fulfillDeliveredMeetingMaterials } from './followThroughTasks.ts';
 import type { FollowThroughRow } from './followThroughTypes.ts';
-import { invalidateMeetingFollowThrough, meetingPlanInterruption } from './followThroughLifecycle.ts';
+import { invalidateMeetingFollowThrough, meetingPlanInterruption, requiresExplicitMeetingReview } from './followThroughLifecycle.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 export { invalidateMeetingFollowThrough } from './followThroughLifecycle.ts';
 export async function meetingScheduleContext(context: RepositoryContext, plan: FollowThroughRow) {
@@ -45,7 +45,14 @@ export async function runMeetingFollowThrough(context: RepositoryContext, input:
   if (['cancelled','completed'].includes(plan.status)) return;
   const interruption = await meetingPlanInterruption(context, plan);
   if (interruption !== null) { await invalidateMeetingFollowThrough(context, { meetingId: plan.meeting_id, reason: interruption, eventId: plan.id }); return; }
-  const schedule = await meetingScheduleContext(context, plan), zone = schedule.row?.time_zone;
+  if (requiresExplicitMeetingReview(plan.blockers)) return;
+  if (plan.blockers.includes('opportunity_required')) {
+    // The current prerequisite was rechecked above; clear only this recoverable fact.
+    await context.db.query("UPDATE meeting_follow_through SET blockers=$3::jsonb,status='draft',pause_observed_at=COALESCE(pause_observed_at,$4),version=version+1,next_wake_at=$4,updated_at=$4 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id, JSON.stringify(plan.blockers.filter(r => r !== 'opportunity_required')), input.at]);
+    plan = (await readMeetingPlan(context, plan.id))!;
+  }
+  let schedule = await meetingScheduleContext(context, plan);
+  const zone = schedule.row?.time_zone;
   if (zone == null) { await hold(context, plan, 'time_zone_unresolved'); return; }
   const unverified = (await context.db.query(`SELECT m.id FROM meeting_follow_through_drafts d JOIN outbound_messages m ON m.workspace_id=d.workspace_id AND m.id=d.outbound_message_id
     WHERE d.workspace_id=$1 AND d.plan_id=$2 AND m.state='sent' AND (m.rendered_hash<>d.rendered_hash OR EXISTS(SELECT 1 FROM outbound_message_events ev WHERE ev.workspace_id=m.workspace_id AND ev.outbound_message_id=m.id AND ev.detail->>'sentBytes'='unverified')) LIMIT 1`, [context.scope.workspaceId,plan.id])).rows[0];
@@ -86,6 +93,12 @@ export async function runMeetingFollowThrough(context: RepositoryContext, input:
     if (action.kind === 'review') { await hold(context, plan, action.reason); return; }
     if (draft !== null) await context.db.query('UPDATE step_executions SET due_at=GREATEST(due_at,$3::timestamptz),not_before=GREATEST(not_before,$3::timestamptz) WHERE workspace_id=$1 AND enrollment_id=$2 AND ordinal=1', [context.scope.workspaceId, plan.enrollment_id, action.kind === 'nudge' ? new Date(Math.max(Date.parse(action.dueAt), draft.not_before.getTime())).toISOString() : draft.not_before.toISOString()]);
     return;
+  }
+  if (plan.enrollment_id === null && plan.blockers.length === 0 && plan.source_hash === locked.value.sourceHash) {
+    const enrolled = await enrollMeetingFollowThrough(context, { planId: plan.id, expectedVersion: plan.version, at: input.at });
+    if (!enrolled.ok) { await hold(context, plan, enrolled.reason); return; }
+    plan = (await readMeetingPlan(context, plan.id))!;
+    schedule = await meetingScheduleContext(context, plan);
   }
   if (plan.source_hash !== locked.value.sourceHash || plan.blockers.length > 0) { await hold(context, plan, 'source_changed'); return; }
   const action = nextMeetingFollowThroughAction({ plan: { scope: plan.scope, maxMessages: schedule.version?.steps.length ?? 0 }, deliveryHistory: deliveries, at: input.at, calendar: schedule.calendar, zone });

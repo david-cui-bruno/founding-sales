@@ -5,6 +5,10 @@ import { lockMeetingFollowThrough } from './followThrough.ts';
 import { holdPreparedMeetingFence } from './followThroughDelivery.ts';
 import type { FollowThroughRow } from './followThroughTypes.ts';
 import { stopEnrollments } from '../sequences/enrollments.ts';
+/** These event-based holds require a separate explicit conversation decision, never a timer or recap Save. */
+export function requiresExplicitMeetingReview(blockers: readonly string[]): boolean {
+  return blockers.some(reason => ['reply_received','manual_email_review','suppressed','enrollment_stopped','opportunity_manual','not_assigned','meeting_fold_review'].includes(reason));
+}
 /** Read again at the final claim; a delayed lifecycle job is never permission to send. */
 export async function meetingPlanInterruption(context: RepositoryContext, plan: FollowThroughRow): Promise<string | null> {
   const current = (await context.db.query<{ assigned_user_id: string | null; status: string; opportunity_id: string | null; opportunity_status: string | null; control_mode: string | null; control_mode_origin: string | null; end_reason: string | null }>(`SELECT f.assigned_user_id,f.status,m.opportunity_id,o.status AS opportunity_status,o.control_mode,o.control_mode_origin,e.end_reason
@@ -38,7 +42,7 @@ export async function invalidateMeetingFollowThrough(context: RepositoryContext,
     const cancelled = input.reason === 'new_meeting';
     if (cancelled && plan.enrollment_id !== null) await stopEnrollments(context, { enrollmentId: plan.enrollment_id, reason: 'admin_stop', cancelReason: 'terminal_stop' });
     if (plan.blockers.includes(input.reason) && (cancelled ? plan.status === 'cancelled' : plan.status === 'needs_review')) continue;
-    await context.db.query("UPDATE meeting_follow_through SET status=$3,blockers=$4::jsonb,version=version+1,next_wake_at='9999-01-01',updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id, cancelled ? 'cancelled' : 'needs_review', JSON.stringify([...new Set([...plan.blockers, input.reason])])]);
+    await context.db.query("UPDATE meeting_follow_through SET status=$3,blockers=$4::jsonb,version=version+1,next_wake_at=CASE WHEN $5 THEN clock_timestamp()+interval '5 minutes' ELSE '9999-01-01'::timestamptz END,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, plan.id, cancelled ? 'cancelled' : 'needs_review', JSON.stringify([...new Set([...plan.blockers, input.reason])]), input.reason === 'opportunity_required']);
     await recordCrmAuditEvent(context, { action: 'meeting.follow_through_interrupted', subjectKind: 'meeting', subjectId: input.meetingId, detail: { planId: plan.id, reason: input.reason, eventId: input.eventId } });
   }
 }
