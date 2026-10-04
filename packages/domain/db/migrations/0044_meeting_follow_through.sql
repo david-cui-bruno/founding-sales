@@ -1,4 +1,4 @@
--- changes: meeting_tasks, workspace_settings
+-- changes: meeting_tasks, workspace_settings, sending_domains
 -- Per-meeting content and permission scope; delivery remains in the existing sequence/fence tables.
 CREATE TABLE meeting_follow_through (
   workspace_id uuid NOT NULL REFERENCES workspaces(id), id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -9,6 +9,7 @@ CREATE TABLE meeting_follow_through (
   status text NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','held','scheduled','awaiting_reply','completed','cancelled','needs_review')),
   scope jsonb, blockers jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(blockers)='array'),
   editing boolean NOT NULL DEFAULT false, pause_observed_at timestamptz,
+  reviewed_at timestamptz, reviewed_draft_version integer NOT NULL DEFAULT 0 CHECK(reviewed_draft_version>=0),
   next_wake_at timestamptz NOT NULL DEFAULT now(), wake_revision integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,id,meeting_id), UNIQUE(workspace_id,enrollment_id),
@@ -28,7 +29,7 @@ CREATE TABLE meeting_follow_through_drafts (
   subject text NOT NULL CHECK(length(btrim(subject)) BETWEEN 1 AND 998 AND subject !~ E'[\r\n]'),
   body text NOT NULL CHECK(length(btrim(body)) BETWEEN 1 AND 4000), rendered_hash text NOT NULL CHECK(rendered_hash ~ '^[a-f0-9]{64}$'),
   template_version_id uuid NOT NULL, template_content_hash text NOT NULL CHECK(template_content_hash ~ '^[a-f0-9]{64}$'),
-  outbound_message_id uuid, material_task_ids jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(material_task_ids)='array'), source_hash text NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
+  outbound_message_id uuid, manual_message_id uuid, material_task_ids jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(material_task_ids)='array'), source_hash text NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
   material_references jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(material_references)='array'),
   created_at timestamptz NOT NULL, not_before timestamptz NOT NULL,
   state text NOT NULL DEFAULT 'ready' CHECK(state IN ('ready','held','editing','cancelled','superseded','submitted','sent')),
@@ -37,13 +38,14 @@ CREATE TABLE meeting_follow_through_drafts (
   FOREIGN KEY(workspace_id,plan_id) REFERENCES meeting_follow_through(workspace_id,id) ON DELETE CASCADE,
   FOREIGN KEY(workspace_id,template_version_id) REFERENCES template_versions(workspace_id,id),
   FOREIGN KEY(workspace_id,outbound_message_id) REFERENCES outbound_messages(workspace_id,id),
+  CONSTRAINT meeting_draft_manual_message FOREIGN KEY(workspace_id,manual_message_id) REFERENCES mail_messages(workspace_id,id) ON DELETE SET NULL (manual_message_id),
   FOREIGN KEY(workspace_id,created_by_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
   CHECK(not_before>=created_at), CHECK(NOT email_has_optout_link(subject) AND NOT email_has_optout_link(body))
 );
 CREATE FUNCTION keep_meeting_draft_bytes() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF (to_jsonb(NEW)-'state'-'outbound_message_id') IS DISTINCT FROM (to_jsonb(OLD)-'state'-'outbound_message_id')
-    OR (OLD.outbound_message_id IS NOT NULL AND NEW.outbound_message_id IS DISTINCT FROM OLD.outbound_message_id) THEN
+  IF (to_jsonb(NEW)-'state'-'outbound_message_id'-'manual_message_id') IS DISTINCT FROM (to_jsonb(OLD)-'state'-'outbound_message_id'-'manual_message_id')
+    OR (OLD.outbound_message_id IS NOT NULL AND NEW.outbound_message_id IS DISTINCT FROM OLD.outbound_message_id) OR (OLD.manual_message_id IS NOT NULL AND NEW.manual_message_id IS NOT NULL AND NEW.manual_message_id IS DISTINCT FROM OLD.manual_message_id) THEN
     RAISE EXCEPTION 'meeting draft revisions are immutable' USING ERRCODE='23514';
   END IF;
   RETURN NEW;
@@ -62,3 +64,29 @@ ALTER TABLE workspace_settings DROP CONSTRAINT workspace_settings_key_known,
   ADD CONSTRAINT workspace_settings_key_known
   CHECK (setting_key IN ('business_time_zone','postal_address','sending_enabled','calling_provider','calendar_integration','telephony_budget','voicemail_script','call_transcription','monthly_cash_ceiling_cents','meeting_transcription','meeting_analysis','meeting_follow_through'));
 GRANT SELECT,INSERT,UPDATE,DELETE ON meeting_follow_through,meeting_follow_through_drafts TO app_runtime,migration;
+
+-- Remember even a pause that begins and ends between scheduler passes. Writers hold
+-- the exclusive send gate; final claims cannot miss the new editing-window barrier.
+CREATE FUNCTION note_meeting_domain_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE meeting_follow_through p SET pause_observed_at=COALESCE(p.pause_observed_at,clock_timestamp()),
+    next_wake_at=LEAST(p.next_wake_at,clock_timestamp())
+    WHERE p.workspace_id=NEW.workspace_id AND p.status NOT IN ('cancelled','completed')
+    AND EXISTS(SELECT 1 FROM mailboxes b WHERE b.workspace_id=p.workspace_id
+      AND b.owner_user_id=p.owner_user_id AND lower(split_part(b.email_address,'@',2))=NEW.domain);
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_domain_pause AFTER UPDATE OF automated_sending_enabled ON sending_domains
+  FOR EACH ROW WHEN (NOT NEW.automated_sending_enabled) EXECUTE FUNCTION note_meeting_domain_pause();
+CREATE FUNCTION note_meeting_workspace_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE meeting_follow_through p SET pause_observed_at=COALESCE(p.pause_observed_at,clock_timestamp()),
+    next_wake_at=LEAST(p.next_wake_at,clock_timestamp())
+    WHERE p.workspace_id=NEW.workspace_id AND p.status NOT IN ('cancelled','completed');
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_workspace_pause AFTER INSERT OR UPDATE OF value ON workspace_settings
+  FOR EACH ROW WHEN (NEW.setting_key='sending_enabled' AND NEW.value->>'enabled'='false')
+  EXECUTE FUNCTION note_meeting_workspace_pause();

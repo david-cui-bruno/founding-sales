@@ -1,3 +1,4 @@
+import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
 import { awsMeetingTranscription } from '../transcription/awsMeetingTranscribeClient.ts';
@@ -169,6 +170,7 @@ export function registerHandlers(
 ): HandlerRegistry {
   const { classifier } = composition;
   registry.register(canaryHandler());
+  registry.register(meetingFollowThroughJobHandler());
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
   // The source is composed here rather than added to `defaultTodaySources()` because
@@ -449,6 +451,7 @@ export function workerDueWorkSources(
 ): readonly DueWorkSource[] {
   return [
     meetingAnalysesSource(options.meetingAnalysis === true),
+    meetingFollowThroughSource(),
     meetingTranscriptionsSource(options.meetingTranscription === true),
     canarySource(),
     todayBuildSource(),

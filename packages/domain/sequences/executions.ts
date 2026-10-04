@@ -1,3 +1,4 @@
+import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
 import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
@@ -818,7 +819,9 @@ async function createSuccessor(
   const previous = version.steps.find(step => step.ordinal === input.afterOrdinal);
 
   const calendar = await calendarOfEnrollment(context, input.enrollment);
-  const due = successorDue({
+  const meetingDue = await meetingSuccessorDue(context, input.enrollment, next.ordinal, input.completedAt);
+  if (meetingDue === null) return null;
+  const due = meetingDue ?? successorDue({
     previous: previous === undefined ? undefined : stepForCadence(previous),
     next: stepForCadence(next),
     startedAt: input.enrollment.startedAt,

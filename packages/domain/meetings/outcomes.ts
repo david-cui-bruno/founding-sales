@@ -24,9 +24,9 @@ export async function readMeetingOutcomes(context: RepositoryContext, input: { m
   const sourceHash = meetingSourceHash(input.meetingId, meeting.notes_revision, meeting.transcript_source_revision);
   const analysis = (await context.db.query<{ id: string; source_hash: string; state: string; overview: string; items: unknown[]; review_reasons: string[]; source_complete: boolean }>(
     'SELECT id,source_hash,state,overview,items,review_reasons,source_complete FROM meeting_analyses WHERE workspace_id=$1 AND meeting_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1', [workspace, input.meetingId])).rows[0];
-  const tasks = (await context.db.query<{ id: string; commitment_id: string; label: string; owner_user_id: string; deadline: unknown; status: string; version: number; user_edited: boolean; evidence: unknown }>(
+  const tasks = (await context.db.query<{ id: string; commitment_id: string | null; follow_through_plan_id: string | null; label: string; owner_user_id: string; deadline: unknown; status: string; version: number; user_edited: boolean; evidence: unknown }>(
     'SELECT * FROM meeting_tasks WHERE workspace_id=$1 AND meeting_id=$2 ORDER BY due_at,id LIMIT 200', [workspace, input.meetingId])).rows.map(row => meetingTaskViewSchema.parse({
-      id: row.id, meetingId: input.meetingId, firmId: firm.id, source: { kind: 'promise', commitmentId: row.commitment_id }, label: row.label,
+      id: row.id, meetingId: input.meetingId, firmId: firm.id, source: row.follow_through_plan_id === null ? { kind: 'promise', commitmentId: row.commitment_id } : { kind: 'follow_through', planId: row.follow_through_plan_id }, label: row.label,
       ownerUserId: row.owner_user_id, deadline: row.deadline, status: row.status, version: row.version, userEdited: row.user_edited, evidence: row.evidence,
     }));
   // Reads consist of several queries; do not return a prior assignee's content after a move or source edit.
@@ -48,11 +48,11 @@ export async function readMeetingOutcomes(context: RepositoryContext, input: { m
 
 /** Direct lookup, independent of the bounded meeting panel. Caller may hold meeting locks. */
 export async function readMeetingTask(context: RepositoryContext, taskId: string): Promise<MeetingTaskView | null> {
-  const row = (await context.db.query<{ id: string; meeting_id: string; firm_id: string; commitment_id: string; label: string; owner_user_id: string; deadline: unknown; status: string; version: number; user_edited: boolean; evidence: unknown }>(
+  const row = (await context.db.query<{ id: string; meeting_id: string; firm_id: string; commitment_id: string | null; follow_through_plan_id: string | null; label: string; owner_user_id: string; deadline: unknown; status: string; version: number; user_edited: boolean; evidence: unknown }>(
     'SELECT * FROM meeting_tasks WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, taskId])).rows[0];
   if (row === undefined) return null;
   const firm = await readFirm(context, row.firm_id);
   if (firm === null || firm.status === 'merged' || decideFirmRead(context, firm) !== 'assigned_or_admin') return null;
-  return meetingTaskViewSchema.parse({ id: row.id, meetingId: row.meeting_id, firmId: row.firm_id, source: { kind: 'promise', commitmentId: row.commitment_id },
+  return meetingTaskViewSchema.parse({ id: row.id, meetingId: row.meeting_id, firmId: row.firm_id, source: row.follow_through_plan_id === null ? { kind: 'promise', commitmentId: row.commitment_id } : { kind: 'follow_through', planId: row.follow_through_plan_id },
     label: row.label, ownerUserId: row.owner_user_id, deadline: row.deadline, status: row.status, version: row.version, userEdited: row.user_edited, evidence: row.evidence });
 }

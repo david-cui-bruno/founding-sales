@@ -1,3 +1,5 @@
+import { applyManualMeetingSend } from '../meetings/followThroughManual.ts';
+import { interruptMeetingPlansForFirm } from '../meetings/followThroughLifecycle.ts';
 import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
@@ -219,6 +221,7 @@ export async function applyClassificationEffects(
   // difference between them is who may release it, not whether one exists.
   if (classification.class === 'human' || classification.class === 'uncertain') {
     for (const candidate of candidates) {
+      await interruptMeetingPlansForFirm(context, { firmId: candidate.firmId, reason: 'reply_received', messageId: message.id, at: message.internalDate });
       const effect = await holdCandidate(context, {
         messageId: message.id,
         candidate,
@@ -542,6 +545,7 @@ export async function applyDirectSendEffects(
     addresses: [...message.headerTo, ...message.headerCc],
   });
 
+  await applyManualMeetingSend(context, { firmId: candidate.firmId, contactIds: recipientContactIds, message, at: sentAt });
   const ended: string[] = [];
   const { rows: prospecting } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments

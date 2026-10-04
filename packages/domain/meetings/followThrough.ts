@@ -1,3 +1,6 @@
+import { meetingDeliveryHistory } from './followThroughHistory.ts';
+import { resolveMeetingFollowThroughScope } from './followThroughScope.ts';
+import { stopEnrollments } from '../sequences/enrollments.ts';
 import { hasOptOutLink, meetingDraftEditSchema, meetingFollowThroughSettingSchema, meetingFollowThroughViewSchema,
   type MeetingDraftEdit, type MeetingFollowThroughView, type MeetingOutcomesView } from '@fss/contracts';
 import { holdPreparedMeetingFence } from './followThroughDelivery.ts';
@@ -24,10 +27,10 @@ export async function readMeetingPlan(context: RepositoryContext, planId: string
 export async function currentMeetingDraft(context: RepositoryContext, plan: FollowThroughRow): Promise<FollowThroughDraftRow | null> {
   return (await context.db.query<FollowThroughDraftRow>('SELECT * FROM meeting_follow_through_drafts WHERE workspace_id=$1 AND plan_id=$2 AND version=$3', [context.scope.workspaceId, plan.id, plan.current_draft_version])).rows[0] ?? null;
 }
-export async function meetingSendingPaused(context: RepositoryContext): Promise<boolean> {
+export async function meetingSendingPaused(context: RepositoryContext, ownerUserId?: string | null): Promise<boolean> {
   const setting = (await readSetting(context, 'sending_enabled')).value as { enabled?: boolean };
   if (setting.enabled !== true) return true;
-  const row = (await context.db.query<{ enabled: boolean }>("SELECT automated_sending_enabled AS enabled FROM sending_domains WHERE workspace_id=$1 AND domain='usecallie.com'", [context.scope.workspaceId])).rows[0];
+  const row = (await context.db.query<{ enabled: boolean }>("SELECT automated_sending_enabled AS enabled FROM sending_domains WHERE workspace_id=$1 AND domain=COALESCE((SELECT split_part(email_address,'@',2) FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2),'usecallie.com')", [context.scope.workspaceId, ownerUserId ?? null])).rows[0];
   return row?.enabled !== true;
 }
 
@@ -52,11 +55,13 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
   const workspace = context.scope.workspaceId;
   const plan = (await context.db.query<FollowThroughRow>('SELECT * FROM meeting_follow_through WHERE workspace_id=$1 AND meeting_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1', [workspace, input.meetingId])).rows[0];
   const draft = plan === undefined ? null : await currentMeetingDraft(context, plan);
-  const sendingPaused = await meetingSendingPaused(context);
+  const sendingPaused = await meetingSendingPaused(context, plan?.owner_user_id);
   const blockers = [...(plan?.blockers ?? [])];
   if (plan !== undefined && plan.source_hash !== outcomes.sourceHash) blockers.push('source_changed');
   if (plan?.editing === true) blockers.push('editing');
   if (sendingPaused) blockers.push('sending_paused');
+  const steps = plan?.enrollment_id == null ? [] : (await context.db.query<{ ordinal: number; due_at: Date; state: string }>('SELECT ordinal,due_at,state FROM step_executions WHERE workspace_id=$1 AND enrollment_id=$2 ORDER BY ordinal LIMIT 3', [workspace, plan.enrollment_id])).rows;
+  const sent = plan === undefined ? [] : await meetingDeliveryHistory(context, plan.id);
   const final = await readMeetingOutcomes(context, input);
   if (final === null || final.firmId !== outcomes.firmId || final.sourceHash !== outcomes.sourceHash) return null;
   return meetingFollowThroughViewSchema.parse({ meetingId: input.meetingId, firmId: outcomes.firmId, contactId: plan?.contact_id ?? null,
@@ -65,7 +70,7 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
     currentDraft: draft === null ? null : { id: draft.id, version: draft.version, ordinal: draft.ordinal, subject: draft.subject, body: draft.body,
       renderedHash: draft.rendered_hash, templateVersionId: draft.template_version_id, sourceHash: draft.source_hash, materialReferences: draft.material_references,
       createdAt: draft.created_at.toISOString(), notBefore: draft.not_before.toISOString(), state: draft.state },
-    scope: plan?.scope ?? null, blockers: [...new Set(blockers)].slice(0, 30), sendingPaused, plannedSteps: [], sentMessages: [] });
+    scope: plan?.scope ?? null, blockers: [...new Set(blockers)].slice(0, 30), sendingPaused, plannedSteps: steps.map(s => ({ ordinal: s.ordinal, dueAt: s.due_at.toISOString(), state: s.state })), sentMessages: sent });
 }
 
 export async function appendMeetingDraft(context: RepositoryContext, plan: FollowThroughRow, content: {
@@ -104,8 +109,9 @@ export async function prepareMeetingRecap(context: RepositoryContext, input: { m
   const first = version?.steps[0];
   const template = first?.templateVersionId === undefined || first.templateVersionId === null ? null : await readTemplateVersion(context, first.templateVersionId);
   const contactId = (await context.db.query<{ contact_id: string | null }>('SELECT contact_id FROM meetings WHERE workspace_id=$1 AND id=$2', [workspace, input.meetingId])).rows[0]?.contact_id ?? null;
+  const resolved = contactId === null ? null : await resolveMeetingFollowThroughScope(context, { meetingId: input.meetingId, contactId, sourceHash: outcomes.sourceHash });
   const content = template === null ? { ok: false as const, reasons: ['recap_template_required'] }
-    : buildMeetingRecapContent({ outcomes, template, variables: contactId === null ? {} : await templateVariablesFor(context, { firmId: outcomes.firmId, contactId }) });
+    : buildMeetingRecapContent({ mode: resolved?.ok === true && resolved.value.agreedReminder !== null ? 'reminder' : 'recap', outcomes, template, variables: contactId === null ? {} : await templateVariablesFor(context, { firmId: outcomes.firmId, contactId }) });
   const blockers = content.ok ? [] : [...content.reasons];
   if (contactId === null) blockers.push('recipient_unresolved');
   if (version?.state !== 'published' || version.steps.length > 3 || version.steps.some(step => step.channel !== 'email')) blockers.push('recap_sequence_required');
@@ -125,7 +131,7 @@ export async function prepareMeetingRecap(context: RepositoryContext, input: { m
     const appended = await appendMeetingDraft(context, plan, { ...content, ...(sameSource ? { subject: draft.subject, body: presentation.body, materialReferences: draft.material_references } : {}), templateVersionId: template.id, sourceHash: outcomes.sourceHash, at: input.at });
     if (!appended.ok) blockers.push(appended.reason);
   }
-  const paused = await meetingSendingPaused(context);
+  const paused = await meetingSendingPaused(context, plan.owner_user_id);
   await context.db.query(`UPDATE meeting_follow_through SET source_hash=$3,notes_revision=$4,analysis_id=$5,blockers=$6::jsonb,status=$7,
     pause_observed_at=CASE WHEN $8 THEN COALESCE(pause_observed_at,$9) ELSE pause_observed_at END,updated_at=$9,
     sequence_version_id=COALESCE(sequence_version_id,$10) WHERE workspace_id=$1 AND id=$2`,
@@ -148,6 +154,7 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   if (draft.state === 'submitted' || draft.state === 'sent') return { ok: false, reason: 'delivery_in_progress' };
   if (plan.status === 'cancelled' || plan.status === 'completed') return { ok: false, reason: 'plan_finished' };
   await holdPreparedMeetingFence(context, plan);
+  if (input.action === 'cancel' && plan.enrollment_id !== null) await stopEnrollments(context, { enrollmentId: plan.enrollment_id, reason: 'admin_stop', cancelReason: 'terminal_stop' });
   const now = at ?? (await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
   if (input.action === 'save' && !plan.editing) return { ok: false, reason: 'editing_not_started' };
   if (input.action === 'save' && (hasOptOutLink(input.subject) || hasOptOutLink(input.body) || /<[^>]+>/u.test(input.body))) return { ok: false, reason: 'recap_content_invalid' };
@@ -167,6 +174,7 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   } else await context.db.query('UPDATE meeting_follow_through_drafts SET state=$3 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, draft.id, input.action === 'cancel' ? 'cancelled' : 'editing']);
   await context.db.query('UPDATE meeting_follow_through SET version=version+1,editing=$3,status=$4,updated_at=$5 WHERE workspace_id=$1 AND id=$2',
     [context.scope.workspaceId, plan.id, input.action === 'begin_edit', input.action === 'cancel' ? 'cancelled' : input.action === 'begin_edit' ? 'held' : 'draft', now]);
+  if (input.action === 'save') await context.db.query('UPDATE meeting_follow_through SET reviewed_at=$3,reviewed_draft_version=current_draft_version WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, plan.id, now]);
   await recordCrmAuditEvent(context, { action: `meeting.recap_${input.action}`, subjectKind: 'meeting', subjectId: plan.meeting_id, detail: { planId: plan.id, draftVersion: draft.version } });
   return { ok: true, value: (await readMeetingFollowThrough(context, { meetingId: plan.meeting_id }))! };
 }

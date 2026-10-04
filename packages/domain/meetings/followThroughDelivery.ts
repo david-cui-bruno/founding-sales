@@ -75,8 +75,8 @@ export async function recordMeetingDelivery(context: RepositoryContext, input: {
   await context.db.query(`WITH delivered AS (
     UPDATE meeting_follow_through_drafts d SET state='sent' FROM outbound_messages m
     WHERE d.workspace_id=$1 AND d.outbound_message_id=m.id AND m.workspace_id=d.workspace_id AND m.id=$2 AND m.step_execution_id=$3
-      AND m.state='sent' AND m.rendered_hash=d.rendered_hash AND d.state IN ('submitted','sent') RETURNING d.plan_id
-    ) UPDATE meeting_follow_through p SET status=CASE WHEN p.status IN ('cancelled','completed') THEN p.status ELSE 'awaiting_reply' END,
+      AND m.state='sent' AND m.rendered_hash=d.rendered_hash AND NOT EXISTS(SELECT 1 FROM outbound_message_events ev WHERE ev.workspace_id=m.workspace_id AND ev.outbound_message_id=m.id AND ev.detail->>'sentBytes'='unverified') RETURNING d.plan_id,d.version
+    ) UPDATE meeting_follow_through p SET status=CASE WHEN p.status IN ('cancelled','completed','needs_review') OR NOT EXISTS(SELECT 1 FROM delivered x WHERE x.plan_id=p.id AND x.version=p.current_draft_version) THEN p.status ELSE 'awaiting_reply' END,
       next_wake_at=LEAST(next_wake_at,clock_timestamp()),updated_at=clock_timestamp()
       WHERE p.workspace_id=$1 AND p.id IN (SELECT plan_id FROM delivered)`, [context.scope.workspaceId, input.messageId, input.executionId]);
 }

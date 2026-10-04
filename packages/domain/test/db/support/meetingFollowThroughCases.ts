@@ -28,7 +28,7 @@ async function task(f: F): Promise<Row> {
 const bad = (table: string, constraint: string, make: (f: F) => Promise<Row>, changes: Row): Case => ({ constraint, run: async f => await insert(f, table, { ...await make(f), ...changes }) });
 const twice = (table: string, constraint: string, make: (f: F) => Promise<Row>, changes: () => Row = () => ({})): Case => ({ constraint, run: async f => { const row = await make(f); await insert(f, table, row); return await insert(f, table, { ...row, ...changes() }); } });
 export const MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES: readonly Case[] = [
-  ...[['source_hash', 'bad'], ['notes_revision', -1], ['version', 0], ['current_draft_version', -1], ['status', 'bad'], ['blockers', '{}']].map(([key, value]) =>
+  ...[['source_hash', 'bad'], ['notes_revision', -1], ['reviewed_draft_version', -1], ['version', 0], ['current_draft_version', -1], ['status', 'bad'], ['blockers', '{}']].map(([key, value]) =>
     bad('meeting_follow_through', `meeting_follow_through_${String(key)}_check`, plan, { [String(key)]: value })),
   ...[['workspace_id', 'workspace_id'], ['firm_id', 'workspace_id_meeting_id_firm_id'], ['contact_id', 'workspace_id_contact_id_firm_id'], ['owner_user_id', 'workspace_id_owner_user_id'],
     ['analysis_id', 'workspace_id_analysis_id_meeting_id'], ['sequence_version_id', 'workspace_id_sequence_version_id'], ['permission_id', 'workspace_id_permission_id'], ['enrollment_id', 'workspace_id_enrollment_id']].map(([key, name]) =>
@@ -50,6 +50,7 @@ export const MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES: readonly Case[] = [
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_check', draft, { not_before: '2026-10-05T14:00:00Z' }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_check1', draft, { body: 'Unsubscribe at https://example.test/stop' }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_outbound_messag_fkey', draft, { outbound_message_id: missing }),
+  bad('meeting_follow_through_drafts', 'meeting_draft_manual_message', draft, { manual_message_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_plan_id_fkey', draft, { plan_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_template_versio_fkey', draft, { template_version_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_created_by_user_fkey', draft, { created_by_user_id: missing }),

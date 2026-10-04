@@ -16,7 +16,7 @@ import type { SendHandoff } from '../../../sequences/sendHandoff.ts';
 import { composeEligibility } from '../../../sequences/eligibility.ts';
 import { runDueStepExecution } from '../../../sequences/executions.ts';
 
-export async function meetingDispatchFixture() {
+export async function meetingDispatchFixture(options: { steps?: number; material?: string } = {}) {
   const world = await createOutboundWorld(), db = world.database.session, workspace = world.alpha.workspace.workspaceId;
   const context = world.systemContext(workspace);
   const admin = repositoryContext(workspaceScope(workspace, { kind: 'user', userId: world.alpha.workspace.admin.userId, role: 'admin' }), db);
@@ -34,12 +34,18 @@ export async function meetingDispatchFixture() {
   if (!items.ok) throw new Error(items.reason);
   const analysis = await withTransaction(db, () => materializeMeetingAnalysis(context, { meetingId, at })); if (!analysis.ok) throw new Error(analysis.reason);
   await db.query("UPDATE meeting_analyses SET state='ready',items=$2::jsonb,source_complete=true,tasks_pending=false WHERE id=$1", [analysis.value.analysisId, JSON.stringify(items.value.items)]);
-  const templateId = randomUUID(), subject = 'Our meeting', body = 'Thanks for meeting.\n\n{meeting_recap}\n\nSigned off';
+  const templateId = randomUUID(), subject = 'Our meeting', body = `Thanks for meeting.\n\n{meeting_recap}${options.material === undefined ? '' : `\n\n${options.material}`}\n\nSigned off`;
   const templateVersionId = (await db.query<{ id: string }>(`INSERT INTO template_versions(workspace_id,template_id,version,name,subject,body,content_hash,footer_sign_off,required_variables,approved_at,approved_by_user_id)
     VALUES($1,$2,1,'Meeting recap',$3,$4,$5,'Signed off',ARRAY['meeting_recap'],now(),$6) RETURNING id`, [workspace, templateId, subject, body, templateContentHash({ templateId, version: 1, subject, body }), world.alpha.workspace.admin.userId])).rows[0]!.id;
   const sequenceId = (await db.query<{ id: string }>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id', [workspace, randomUUID(), world.alpha.workspace.admin.userId])).rows[0]!.id;
   const sequenceVersionId = (await db.query<{ id: string }>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id', [workspace, sequenceId])).rows[0]!.id;
   await db.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,1,'email','elapsed',0,$3)", [workspace, sequenceVersionId, templateVersionId]);
+  for (let n = 2; n <= (options.steps ?? 1); n++) {
+    const id = randomUUID(), text = 'Following up on our conversation. Is there a useful next step?\n\nSigned off';
+    const template = (await db.query<{ id: string }>(`INSERT INTO template_versions(workspace_id,template_id,version,name,subject,body,content_hash,footer_sign_off,required_variables,approved_at,approved_by_user_id)
+      VALUES($1,$2,1,'Nudge','Following up',$3,$4,'Signed off','{}',now(),$5) RETURNING id`, [workspace, id, text, templateContentHash({ templateId: id, version: 1, subject: 'Following up', body: text }), world.alpha.workspace.admin.userId])).rows[0]!.id;
+    await db.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,$3,'email','elapsed',$4,$5)", [workspace, sequenceVersionId, n, n * 168, template]);
+  }
   await db.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1", [sequenceVersionId, world.alpha.workspace.admin.userId]);
   await withTransaction(db, () => updateSetting(admin, { settingKey: 'meeting_follow_through', value: { sequenceVersionId }, changeNote: 'Fixture' }));
   const prepared = await withTransaction(db, () => prepareMeetingRecap(admin, { meetingId, expectedSourceHash: input.value.sourceHash, at: new Date(now.getTime() - 40 * 60_000).toISOString() }));

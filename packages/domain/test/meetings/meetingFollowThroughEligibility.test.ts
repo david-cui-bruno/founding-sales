@@ -22,6 +22,7 @@ describe('meeting-backed follow-through authority', () => {
     const current = { ...r, ...await f.publish(r.meetingId, r.items) };
     const result = await tx(() => prepareMeetingRecap(f.context, { ...current, at }));
     if (!result.ok || result.value.planId === null) throw new Error(`fixture plan: ${JSON.stringify(result)}`);
+    await f.db.session.query('UPDATE meeting_follow_through SET pause_observed_at=NULL WHERE id=$1', [result.value.planId]);
     return { ...current, opportunityId, at, planId: result.value.planId, version: result.value.version, draftVersion: result.value.currentDraft!.version };
   }
   it('limits a routine attended demo to its one recipient, three messages and 30 days from completion', async () => {

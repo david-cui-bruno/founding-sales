@@ -1,3 +1,6 @@
+import { meetingPlanInterruption } from './followThroughLifecycle.ts';
+import { recapIsStale, nextMeetingFollowThroughAction } from './followThroughSchedule.ts';
+import { meetingScheduleContext } from './followThroughJobs.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { verifyFollowUpPermission, type FollowUpPermissionRow, type FollowUpSubject } from '../sequences/followUpPermissions.ts';
 import { enrollContact } from '../sequences/enrollments.ts';
@@ -13,6 +16,8 @@ async function planAuthority(context: RepositoryContext, plan: FollowThroughRow,
   if (plan.contact_id === null || plan.owner_user_id === null || plan.sequence_version_id === null) return { ok: false, reason: 'recipient_unresolved' };
   if (['cancelled', 'completed', 'needs_review'].includes(plan.status) || plan.blockers.length > 0) return { ok: false, reason: 'plan_held' };
   if (plan.editing) return { ok: false, reason: 'editing' };
+  const interruption = await meetingPlanInterruption(context, plan);
+  if (interruption !== null) return { ok: false, reason: interruption };
   const resolved = await resolveMeetingFollowThroughScope(context, { meetingId: plan.meeting_id, contactId: plan.contact_id, sourceHash: plan.source_hash });
   if (!resolved.ok) return resolved;
   if (Date.parse(resolved.value.expiresAt) <= Date.parse(at)) return { ok: false, reason: 'follow_up_expired' };
@@ -95,6 +100,15 @@ export async function verifyMeetingFollowThrough(context: RepositoryContext, inp
   if (draft === null || draft.version !== input.draftVersion) return { ok: false, reason: 'draft_changed' };
   if (draft.source_hash !== plan.source_hash) return { ok: false, reason: 'source_changed' };
   if (draft.state !== 'ready' || draft.not_before.getTime() > Date.parse(input.at)) return { ok: false, reason: 'draft_not_ready' };
+  if (plan.pause_observed_at !== null) return { ok: false, reason: 'resume_window_required' };
+  const schedule = await meetingScheduleContext(context, plan), zone = schedule.row?.time_zone;
+  if (zone == null) return { ok: false, reason: 'time_zone_unresolved' };
+  if (draft.ordinal === 1 && plan.scope?.agreedReminder == null && recapIsStale(schedule.row!.ends_at.toISOString(), input.at, zone, schedule.calendar)
+    && !(plan.reviewed_at !== null && plan.reviewed_draft_version === draft.version && !recapIsStale(plan.reviewed_at.toISOString(), input.at, zone, schedule.calendar))) return { ok: false, reason: 'recap_stale' };
+  if (draft.ordinal === 1 && plan.scope?.agreedReminder != null) {
+    const agreed = nextMeetingFollowThroughAction({ plan: { scope: plan.scope, maxMessages: 1 }, deliveryHistory: [], at: input.at, calendar: schedule.calendar, zone });
+    if (agreed.kind !== 'nudge' || Date.parse(agreed.dueAt) > Date.parse(input.at)) return { ok: false, reason: 'reminder_not_due' };
+  }
   const execution = (await context.db.query<{ ordinal: number; template_version_id: string | null }>(`SELECT s.ordinal,s.template_version_id FROM step_executions e JOIN sequence_steps s ON s.workspace_id=e.workspace_id AND s.id=e.step_id
     JOIN sequence_enrollments n ON n.workspace_id=e.workspace_id AND n.id=e.enrollment_id AND n.ended_at IS NULL
     WHERE e.workspace_id=$1 AND e.id=$2 AND e.enrollment_id=$3`, [context.scope.workspaceId, input.executionId, plan.enrollment_id])).rows[0];

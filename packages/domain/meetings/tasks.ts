@@ -54,7 +54,7 @@ export async function reconcileMeetingTasks(context: RepositoryContext, input: {
   if (!validated.ok) return { ok: false, reason: 'source_invalid' };
   const firm = await loadFirmForUpdate(context, firmId);
   const owner = firm?.assigned_user_id;
-  const existing = (await context.db.query<TaskRow>('SELECT * FROM meeting_tasks WHERE workspace_id=$1 AND meeting_id=$2 ORDER BY id FOR UPDATE', [context.scope.workspaceId, input.meetingId])).rows;
+  const existing = (await context.db.query<TaskRow>('SELECT * FROM meeting_tasks WHERE workspace_id=$1 AND meeting_id=$2 AND commitment_id IS NOT NULL ORDER BY id FOR UPDATE', [context.scope.workspaceId, input.meetingId])).rows;
   let created = 0, changed = 0, review = 0;
   const output: MeetingNoteItem[] = [], accepted: MeetingNoteItem[] = [];
   const sufficient = (source.value.complete && source.value.utterances.length > 0) || source.value.notes.sufficient;
