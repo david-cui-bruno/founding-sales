@@ -87,7 +87,7 @@ export const SETTINGS_READ_PATH = '/settings?include=postal_address';
  * with its own strict schema. An API from before C2 ignores the parameter, and the
  * section then has no transcription row.
  */
-export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through';
+export const INTEGRATIONS_READ_PATH = '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording';
 
 /**
  * Slice P1's read of what is still finishing after a switch went off. A path of its own,

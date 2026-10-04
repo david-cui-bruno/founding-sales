@@ -380,7 +380,7 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
     // Slice C2: whether this runner can transcribe, for the API, which is not given the
     // transcription key and reads this instead (`transcriptionWorkerAvailable`). A
     // collect-only handler (review C3-N) is registered but cannot start one: false.
-    detail: { claimed: claims.length, completed, failed, [TRANSCRIPTION_HEARTBEAT_FLAG]: callTranscribeStartsNewAttempts(options.registry.get('call.transcribe')) },
+    detail: { meeting_recording_setup: options.registry.get('meeting.recording_setup')!==undefined, claimed: claims.length, completed, failed, [TRANSCRIPTION_HEARTBEAT_FLAG]: callTranscribeStartsNewAttempts(options.registry.get('call.transcribe')) },
   });
 
   return { reclaimed, claimed: claims.length, completed, failed, leaseLost, requeued, claimedClass };

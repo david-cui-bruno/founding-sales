@@ -1,3 +1,4 @@
+import { meetingRecordingSetupViewSchema } from '@fss/contracts';
 import { meetingFollowThroughViewSchema } from '@fss/contracts';
 import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
@@ -368,6 +369,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok ? { set: answer.value, reason: null } : { set: null, reason: answer.reason.slice(0, 80) };
     },
     // Lane M2: the meeting brief; a refusal or a lost answer is a reason, never an empty brief.
+    'meetings.recordingSetup': async(input:OperationInput<'meetings.recordingSetup'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read(`/meetings/recording-setup?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingRecordingSetupViewSchema.parse(value));
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'meetings.retryRecordingSetup': async(input:OperationInput<'meetings.retryRecordingSetup'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/meetings/recording-setup/retry',body,value=>meetingRecordingSetupViewSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
     'meetings.followThrough': async (input:OperationInput<'meetings.followThrough'>) => {
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read(`/meetings/follow-through?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingFollowThroughViewSchema.parse(value));

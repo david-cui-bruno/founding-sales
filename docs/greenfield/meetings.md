@@ -621,3 +621,7 @@ Final follow-through recovery rules:
 - A missing open opportunity is retried after the prerequisite is corrected, with a fresh editing window. Reply, communication-stop, manual-takeover and ambiguous manual-mail holds are never cleared by editing the recap or by a timer.
 - An exact verified manual recap can precede enrollment while sending is paused. On resume, current meeting authority is verified and ordinal 1 is recorded as already delivered in the enrollment transaction; only remaining permitted work is created.
 - Cancel future follow-ups remains available after submission or delivery. It stops remaining plan work, preserves sent bytes and continues reconciliation of an ambiguous submission. It does not create a contact stop or claim to recall email.
+
+## Demo local-recording setup (M3, schema 45)
+
+An optional disabled-by-default worker lane validates a current Cal.com demo and its Zoom meeting, enables only local automatic recording, and verifies readback. It has independent settings and no effect on processing or sending budgets. Status and versioned recovery appear on the firm page; it does not claim a local file exists. See [setup, acceptance and rollback](runbooks/zoom-demo-recording.md).

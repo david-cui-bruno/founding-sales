@@ -276,7 +276,7 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
   # both with `{}`, so a rehearsal worker registers no `call.transcribe` and never calls
   # Twilio or Deepgram.
   assert {
-    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice"])
+    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "calcom", "google-gmail-oauth-client", "transcription", "twilio-voice", "zoom-meetings"])
     error_message = "A rehearsal worker is handed the Gmail client, the Cal.com, transcription and Twilio entries and its database entry, and never the classifier key."
   }
 

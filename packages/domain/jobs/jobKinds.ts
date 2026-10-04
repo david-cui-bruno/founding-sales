@@ -40,6 +40,7 @@ export const JOB_KINDS = [
   'meeting.transcribe',
   'meeting.analyze',
   'meeting.follow_through',
+  'meeting.recording_setup',
   'call.summarize',
   'call.analyze',
   'call.analyze_sweep',
@@ -127,6 +128,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'meeting.transcribe': 'business_uniqueness',
   'meeting.analyze': 'business_uniqueness',
   'meeting.follow_through': 'business_uniqueness',
+  'meeting.recording_setup': 'outbound_fence',
   // Slice C3b. One summary per call session (`call_summaries_pkey`), inserted `ON CONFLICT
   // DO NOTHING`, and every cent goes through a `provider_reservations` row per attempt,
   // closed once by a compare-and-set on its state (`calls/summary.ts`).
@@ -319,6 +321,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'meeting.transcribe': 'bulk',
   'meeting.analyze': 'bulk',
   'meeting.follow_through': 'bulk',
+  'meeting.recording_setup': 'bulk',
   // Slice C3b: nor on its summary, which follows the transcript onto the firm page.
   'call.summarize': 'bulk',
   // Slice 3a: the analysis is read later, after the call, like the summary it replaces.

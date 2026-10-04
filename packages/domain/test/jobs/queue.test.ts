@@ -47,6 +47,24 @@ describe('the job queue', () => {
     await database.drop();
   });
 
+  it('preserves the first claim across a crash and reclaim from a second connection', async () => {
+    const job = await enqueueJob(database.session, {workspaceId:seeded.alpha.workspaceId,kind:'meeting.recording_setup',idempotencyKey:'first-claim-crash',payload:{},maxAttempts:4});
+    const first = (await claimJobs(database.session,{owner:'crashed',kinds:['meeting.recording_setup'],limit:1,leaseSeconds:90}))[0]!;
+    const initial = (await database.session.query<{first_claimed_at:Date;attempt_count:number}>('SELECT first_claimed_at,attempt_count FROM jobs WHERE id=$1',[job.jobId])).rows[0]!;
+    expect(initial.first_claimed_at).toBeInstanceOf(Date); expect(initial.attempt_count).toBe(1);
+    await database.session.query("UPDATE jobs SET lease_expires_at=now()-interval '1 second' WHERE id=$1",[job.jobId]);
+    const second = await database.appRuntimeSession();
+    {
+      await reclaimExpiredLeases(second, {limit:10});
+      await second.query('UPDATE jobs SET not_before=now() WHERE id=$1',[job.jobId]);
+      const next = (await claimJobs(second,{owner:'replacement',kinds:['meeting.recording_setup'],limit:1,leaseSeconds:90}))[0]!;
+      expect(next.fencingToken).not.toBe(first.fencingToken);
+      const row=(await second.query<{first_claimed_at:Date;attempt_count:number}>('SELECT first_claimed_at,attempt_count FROM jobs WHERE id=$1',[job.jobId])).rows[0]!;
+      expect(row.first_claimed_at).toEqual(initial.first_claimed_at); expect(row.attempt_count).toBe(2);
+      await completeJob(second,next);
+    }
+  });
+
   it('collapses a second enqueue of the same key and keeps the workspaces apart', async () => {
     const specification = {
       kind: seeded.collidingJobKey.kind,

@@ -1,3 +1,4 @@
+import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from './support/meetingAutoRecordingCases.ts';
 import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from './support/meetingFollowThroughCases.ts';
 import { MEETING_OUTCOMES_CONSTRAINT_CASES } from './support/meetingOutcomesCases.ts';
 import { MEETING_TRANSCRIPTION_CONSTRAINT_CASES } from './support/meetingTranscriptionCases.ts';
@@ -1407,6 +1408,7 @@ const cases: readonly Case[] = [
   ...MEETING_TRANSCRIPTION_CONSTRAINT_CASES,
   ...MEETING_OUTCOMES_CONSTRAINT_CASES,
   ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES,
+  ...MEETING_AUTO_RECORDING_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

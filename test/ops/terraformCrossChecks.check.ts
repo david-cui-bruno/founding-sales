@@ -327,3 +327,10 @@ describe('BR1: the Bedrock grant and the transport’s model table agree', () =>
     expect(STACK).toContain('worker_model_transport = local.is_production ? "bedrock" : "anthropic"');
   });
 });
+
+it('keeps Zoom meeting credentials on the worker alone', () => {
+  expect(WORKER).toContain('zoom-meetings');
+  expect(API).not.toContain('zoom-meetings');
+  expect(OPERATIONS).not.toContain('zoom-meetings');
+  expect(DEFAULT_SECRET_NAMES).toContain('zoom-meetings');
+});

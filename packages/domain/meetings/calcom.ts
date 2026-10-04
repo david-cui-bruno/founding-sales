@@ -1,3 +1,4 @@
+import { foldMeetingRecordingSetup } from './autoRecordingLifecycle.ts';
 import { invalidateMeetingFollowThrough } from './followThroughLifecycle.ts';
 import { lockTodayForFirmChange } from '../today/build.ts';
 import { foldMeetingOutcomes } from './outcomeCorrections.ts';
@@ -742,6 +743,7 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
     survivor.id,
   ]);
   // Lane M4: its uploaded recordings, likewise, before the row's cascade would take them (0041).
+  await foldMeetingRecordingSetup(context,{sourceMeetingId:replacement.id,targetMeetingId:survivor.id,at:new Date().toISOString()});
   await moveRecordingsToSurvivor(context, replacement.id, survivor.id);
   // The person who booked stays on a row (review fold 3, finding 7): the caller has
   // refused a fold of two different attendees, so this only fills an empty one. The firm
@@ -822,6 +824,7 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
       survivor.id,
     ]);
     // Lane M4: its uploaded recordings go with the meeting they were of (0041).
+    await foldMeetingRecordingSetup(context,{sourceMeetingId:other.id,targetMeetingId:survivor.id,at:new Date().toISOString()});
     await moveRecordingsToSurvivor(context, other.id, survivor.id);
     await context.db.query(
       `DELETE FROM stage_review_items

@@ -26,6 +26,23 @@ export interface HeadSeed {
 
 export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
   {
+    name: 'existing claimed job gains no invented first claim (0045)',
+    fromVersions: [44],
+    seed: async session => {
+      const {rows}=await session.query<{id:string}>(`INSERT INTO jobs(workspace_id,kind,idempotency_key,payload,state,attempt_count,max_attempts)
+        SELECT id,'health.ping','upgrade0045-existing','{}','queued',1,4 FROM workspaces ORDER BY id LIMIT 1 RETURNING id`);
+      if(!rows[0])throw new Error('fixture has no workspace');
+      return rows[0].id;
+    },
+    verify: async(session,id)=>{
+      const {rows}=await session.query<{first_claimed_at:Date|null;attempt_count:number}>('SELECT first_claimed_at,attempt_count FROM jobs WHERE id=$1',[id]);
+      if(rows[0]?.first_claimed_at!==null||rows[0].attempt_count!==1)return 'existing job history changed';
+      const settings=await session.query("SELECT 1 FROM workspace_settings WHERE setting_key='meeting_auto_recording'");
+      const operations=await session.query('SELECT 1 FROM meeting_recording_setup');
+      return settings.rows.length===0&&operations.rows.length===0?null:'upgrade must not enable or schedule demo recording';
+    },
+  },
+  {
     name: 'spent follow-up permission (0026 backfills consumed_reason)',
     fromVersions: [25],
     seed: async session => {

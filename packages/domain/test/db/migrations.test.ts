@@ -1,3 +1,4 @@
+import { recordingSetupSchemaCases } from './support/meetingRecordingSetupCases.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
@@ -518,3 +519,5 @@ describe('migration 0019 refuses (FS019) while a value it drops is stored', () =
     expect(await tableExists(database.session, 'research_providers')).toBe(false);
   });
 });
+
+recordingSetupSchemaCases();

@@ -1,3 +1,4 @@
+import { readMeetingAutoRecordingConfiguration } from '../meetings/autoRecordingSettings.ts';
 import {
   DEFAULT_SETTING_VALUES,
   DEFAULT_STORED_SETTING_VALUES,
@@ -12,7 +13,7 @@ import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { bindReleaseAttestation } from '../release/records.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
-import { lockCalendarRoutingForWrite } from '../policy/calendarRouting.ts';
+import { lockCalendarRoutingForRead, lockCalendarRoutingForWrite } from '../policy/calendarRouting.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 
 /**
@@ -293,6 +294,11 @@ export async function updateSetting(
   // routing lock EXCLUSIVE and then this workspace's gate — in that order, before the
   // setting's own lock — and enabling B waits for an in-flight reconcile of A as
   // turning A off does.
+  if (input.settingKey === 'meeting_auto_recording') {
+    await lockCalendarRoutingForRead(context.db);
+    await lockSendGateForStopFact(context);
+    if ((value as {enabled:boolean}).enabled && !(await readMeetingAutoRecordingConfiguration(context)).configured.ready) return {ok:false,reason:'invalid_value'};
+  }
   if (input.settingKey === 'calendar_integration') {
     await lockCalendarRoutingForWrite(context.db);
     await lockSendGateForStopFact(context);
