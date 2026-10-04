@@ -328,7 +328,7 @@ export function FirmMeetings({
               {ports.brief !== undefined && briefOffered(row) && briefs.memory.open.has(row.meetingId) ? (
                 <MeetingBrief meetingId={row.meetingId} read={ports.brief} />
               ) : null}
-              <MeetingAutoRecording meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
+              <MeetingAutoRecording meetingId={row.meetingId} actionsEnabled={actionsEnabled} refreshKey={`${refreshKey}:${row.state}:${row.startsAt}:${String(successes)}`} />
               <MeetingOutcomes key={row.meetingId} meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               <MeetingFollowThrough meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               {note === undefined ? null : (

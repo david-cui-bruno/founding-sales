@@ -23,7 +23,7 @@ export async function meetingAutoRecordingFixture() {
   const create=async(id=meetingId,generation=0)=>{
     const row=(await db.session.query<{current_booking_uid:string;zoom_meeting_id:string;starts_at:Date;ends_at:Date}>('SELECT * FROM meetings WHERE workspace_id=$1 AND id=$2',[workspace,id])).rows[0]!;
     const target:RecordingSetupTarget={workspaceId:workspace,meetingId:id,firmId:firm,contactId:null,bookingUid:row.current_booking_uid,zoomMeetingId:row.zoom_meeting_id,attendeeEmail:'pm@example.com',organizerEmail:'host@example.com',startsAt:row.starts_at.toISOString(),endsAt:row.ends_at.toISOString(),settingsVersion:1};
-    const operationId=(await db.session.query<{id:string}>(`INSERT INTO meeting_recording_setup(workspace_id,meeting_id,target,target_hash,retry_generation) VALUES($1,$2,$3::jsonb,$4,$5) RETURNING id`,[workspace,id,JSON.stringify(target),recordingSetupTargetHash(target),generation])).rows[0]!.id;
+    const operationId=(await db.session.query<{id:string}>(`INSERT INTO meeting_recording_setup(workspace_id,meeting_id,target,target_hash,retry_generation,explicit_retry) VALUES($1,$2,$3::jsonb,$4,$5,$6) RETURNING id`,[workspace,id,JSON.stringify(target),recordingSetupTargetHash(target),generation,generation>0])).rows[0]!.id;
     await enqueueJob(db.session,{workspaceId:workspace,kind:'meeting.recording_setup',idempotencyKey:operationId,payload:{operationId},maxAttempts:4});
     return {operationId,target};
   };

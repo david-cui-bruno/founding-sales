@@ -55,15 +55,18 @@ export async function runMeetingRecordingSetup(session:SessionQueryable,input:Re
   const {row,setting}=reserved,signal=new AbortController().signal;
   const booking=await input.calcom.readBooking(row.target.bookingUid,signal);
   if(booking.kind!=='ok'){await failure(session,input,booking.kind,booking.code,booking.retryAfterMs);return;}
+  const validationStartedAt=new Date().toISOString();
   const zoom=await input.zoom.readMeeting(row.target.zoomMeetingId,signal);
   if(zoom.kind!=='ok'){await failure(session,input,zoom.kind,zoom.code,zoom.retryAfterMs);return;}
   const eligible=recordingSetupEligibility({target:row.target,setting,booking:booking.value,zoom:zoom.value,at:input.now(),reusedZoomId:reserved.reused});
   if(!eligible.ok){await currentBoundary(session,input,async(c,r)=>await setRecordingState(c,r.id,'manual',eligible.reason));return;}
-  const ready=async()=>await currentBoundary(session,input,async(c,r,at)=>{
+  const ready=async(readStartedAt:string)=>await currentBoundary(session,input,async(c,r,at)=>{
+    // This readback settles only intents that existed before its provider read began.
+    await c.db.query(`UPDATE meeting_recording_setup SET reconciled_at=$3 WHERE workspace_id=$1 AND meeting_id=$2 AND target->>'zoomMeetingId'=$4 AND write_intent_at<=$5 AND reconciled_at IS NULL AND write_certainty IN ('intent','unknown','acknowledged')`,[input.workspaceId,r.meeting_id,at,r.target.zoomMeetingId,readStartedAt]);
     await c.db.query(`UPDATE meeting_recording_setup SET state='ready',reason=NULL,verified_at=$3,version=version+1,write_certainty=CASE WHEN write_intent_at IS NOT NULL THEN 'acknowledged' ELSE write_certainty END,applied_by_us=applied_by_us OR write_intent_at IS NOT NULL WHERE workspace_id=$1 AND id=$2`,[input.workspaceId,r.id,at]);
   });
-  if(eligible.action==='observe'){await ready();return;}
-  if(reserved.history.uncertain||reserved.history.changed&&row.retry_generation===0){await currentBoundary(session,input,async(c,r)=>await setRecordingState(c,r.id,'manual',reserved.history.uncertain?'ambiguous_write':'manual_override'));return;}
+  if(eligible.action==='observe'){await ready(validationStartedAt);return;}
+  if(reserved.history.uncertain||reserved.history.changed&&!row.explicit_retry){await currentBoundary(session,input,async(c,r)=>await setRecordingState(c,r.id,'manual',reserved.history.uncertain?'ambiguous_write':'manual_override'));return;}
   const intent=await currentBoundary(session,input,async(c,r,at)=>{
     if((await recordingHistory(c,r)).uncertain||await reusedRecordingZoomId(c,r.target))return false;
     await c.db.query(`UPDATE meeting_recording_setup SET write_intent_at=$3,write_owner_token=$4::bigint,write_job_id=$5,write_certainty='intent',previous_mode='none',version=version+1 WHERE workspace_id=$1 AND id=$2`,[input.workspaceId,r.id,at,input.fencingToken,input.jobId]);return true;
@@ -79,10 +82,11 @@ export async function runMeetingRecordingSetup(session:SessionQueryable,input:Re
   if(write.kind==='refused'){
     await failure(session,input,['auth_failed','provider_refused','zoom_mismatch'].includes(write.code??'')?'refused':'retry',write.code??'provider_refused',write.retryAfterMs);return;
   }
+  const readbackStartedAt=new Date().toISOString();
   const observed=await input.zoom.readMeeting(row.target.zoomMeetingId,signal);
   if(observed.kind!=='ok'){await failure(session,input,observed.kind,observed.code,observed.retryAfterMs);return;}
   const checked=recordingSetupEligibility({target:row.target,setting,booking:booking.value,zoom:observed.value,at:input.now(),reusedZoomId:reserved.reused});
-  if(checked.ok&&checked.action==='observe')await ready();
+  if(checked.ok&&checked.action==='observe')await ready(readbackStartedAt);
   else await currentBoundary(session,input,async(c,r)=>await setRecordingState(c,r.id,'manual','ambiguous_write'));
 }
 export { readMeetingRecordingSetup,retryMeetingRecordingSetup } from './autoRecordingView.ts';

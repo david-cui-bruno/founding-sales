@@ -16,6 +16,7 @@ CREATE TABLE meeting_recording_setup (
   write_intent_at timestamptz, write_owner_token bigint, write_job_id uuid,
   write_certainty text NOT NULL DEFAULT 'none' CHECK(write_certainty IN ('none','intent','acknowledged','refused','unknown')),
   previous_mode text CHECK(previous_mode IN ('none','local','cloud','unknown')),
+  explicit_retry boolean NOT NULL DEFAULT false, reconciled_at timestamptz,
   verified_at timestamptz, applied_by_us boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,meeting_id,target_hash,retry_generation),

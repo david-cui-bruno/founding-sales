@@ -38,4 +38,15 @@ describe('recording setup execution',()=>{
     f.zoom.setLocalAutoRecording=async()=>({kind:'unknown',code:'ambiguous_write',retryAfterMs:null});
     await run(await f.claim());expect(await f.read()).toMatchObject({state:'manual',reason:'ambiguous_write'});
   });
+  it('respects a manual disable after observing an already-local meeting',async()=>{
+    f.mode('local');const first=await f.claim();await run(first);await completeJob(f.db.session,first);expect(f.patches()).toBe(0);
+    f.mode('none');await f.db.session.query('UPDATE meetings SET current_booking_uid=$2 WHERE id=$1',[f.meetingId,'observed-reschedule']);
+    const next=await f.create();await run(await f.claim(),next.operationId);expect(f.patches()).toBe(0);expect(await f.read(next.operationId)).toMatchObject({state:'manual',reason:'manual_override'});
+  });
+  it('a reconciled old uncertainty does not block a later explicit retry',async()=>{
+    const old=await f.claim();await f.db.session.query(`UPDATE meeting_recording_setup SET state='manual',write_certainty='unknown',write_intent_at=now(),write_owner_token=$2,write_job_id=$3 WHERE id=$1`,[f.operation.operationId,old.fencingToken,old.id]);await completeJob(f.db.session,old);
+    f.mode('local');const one=await f.create(f.meetingId,1),oneJob=await f.claim();await run(oneJob,one.operationId);await completeJob(f.db.session,oneJob);expect(await f.read(one.operationId)).toMatchObject({state:'ready'});
+    f.mode('none');const two=await f.create(f.meetingId,2);await run(await f.claim(),two.operationId);expect(f.patches()).toBe(1);expect(await f.read(two.operationId)).toMatchObject({state:'ready'});
+  });
+
 });

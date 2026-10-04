@@ -1,3 +1,6 @@
+import {foldMeetingRecordingSetup} from '../../meetings/autoRecordingLifecycle.ts';
+import {runMeetingRecordingSetup} from '../../meetings/autoRecording.ts';
+import {enqueueJob,completeJob} from '../../jobs/jobStore.ts';
 import { afterEach,beforeEach,describe,expect,it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { scheduleMeetingRecordingSetup } from '../../meetings/autoRecordingJobs.ts';
@@ -33,4 +36,12 @@ describe('bounded recording setup scheduler',()=>{
   it('disabled or unconfigured integration schedules nothing',async()=>{
     const id=await f.meeting('12345679999');expect(id).toBeTruthy();expect(await schedule(undefined,false)).toEqual([]);await f.set(false);expect(await schedule()).toEqual([]);
   });
+  it('fold schedules one fresh survivor generation without overriding manual recording changes',async()=>{
+    const job=await f.claim();await runMeetingRecordingSetup(f.db.session,{workspaceId:f.workspace,operationId:f.operation.operationId,jobId:job.id,fencingToken:job.fencingToken,calcom:f.calcom,zoom:f.zoom,now:()=>new Date().toISOString()});await completeJob(f.db.session,job);f.mode('none');
+    const source=await f.meeting('99999999999');await withTransaction(f.db.session,()=>foldMeetingRecordingSetup(f.context,{sourceMeetingId:source,targetMeetingId:f.meetingId,at:new Date().toISOString()}));await f.db.session.query('DELETE FROM meetings WHERE id=$1',[source]);
+    const jobs=await schedule();expect(jobs).toHaveLength(1);expect(await schedule()).toEqual([]);
+    await enqueueJob(f.db.session,jobs[0]!);const next=await f.claim();await runMeetingRecordingSetup(f.db.session,{workspaceId:f.workspace,operationId:String(next.payload['operationId']),jobId:next.id,fencingToken:next.fencingToken,calcom:f.calcom,zoom:f.zoom,now:()=>new Date().toISOString()});
+    expect(f.patches()).toBe(1);expect(await f.read(String(next.payload['operationId']))).toMatchObject({state:'manual',reason:'manual_override'});
+  });
+
 });

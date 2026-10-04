@@ -25,7 +25,7 @@ export async function scheduleMeetingRecordingSetup(session:SessionQueryable,at:
     const candidates=(await session.query<{id:string}>(`SELECT m.id FROM meetings m JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
       WHERE m.workspace_id=$1 AND f.status='active' AND m.state IN ('booked','rescheduled') AND m.starts_at>$2 AND m.starts_at<=$2::timestamptz+interval '60 days'
       AND m.zoom_meeting_id IS NOT NULL AND m.attendee_email IS NOT NULL AND m.organizer_email IS NOT NULL
-      AND NOT EXISTS(SELECT 1 FROM meeting_recording_setup o WHERE o.workspace_id=m.workspace_id AND o.meeting_id=m.id
+      AND NOT EXISTS(SELECT 1 FROM meeting_recording_setup o WHERE o.workspace_id=m.workspace_id AND o.meeting_id=m.id AND o.state<>'obsolete' AND o.target->>'meetingId'=m.id::text
         AND o.target->>'firmId'=m.firm_id::text AND (o.target->>'contactId') IS NOT DISTINCT FROM m.contact_id::text
         AND o.target->>'bookingUid'=m.current_booking_uid AND o.target->>'zoomMeetingId'=m.zoom_meeting_id
         AND o.target->>'attendeeEmail'=m.attendee_email AND o.target->>'organizerEmail'=m.organizer_email
@@ -33,7 +33,7 @@ export async function scheduleMeetingRecordingSetup(session:SessionQueryable,at:
       ORDER BY m.starts_at,m.id LIMIT $4`,[workspace.id,at,String(config.version),20-jobs.length])).rows;
     for(const candidate of candidates){
       const target=await currentRecordingTarget(c,candidate.id,config.version);if(!target)continue;
-      const inserted=(await session.query<{id:string}>(`INSERT INTO meeting_recording_setup(workspace_id,meeting_id,target,target_hash,next_attempt_at,version) VALUES($1,$2,$3::jsonb,$4,$5,(SELECT COALESCE(MAX(version),0)+1 FROM meeting_recording_setup WHERE workspace_id=$1 AND meeting_id=$2)) ON CONFLICT(workspace_id,meeting_id,target_hash,retry_generation) DO NOTHING RETURNING id`,[workspace.id,candidate.id,JSON.stringify(target),recordingSetupTargetHash(target),at])).rows[0];
+      const inserted=(await session.query<{id:string}>(`INSERT INTO meeting_recording_setup(workspace_id,meeting_id,target,target_hash,next_attempt_at,retry_generation,version) VALUES($1,$2,$3::jsonb,$4,$5,(SELECT COALESCE(MAX(retry_generation),-1)+1 FROM meeting_recording_setup WHERE workspace_id=$1 AND meeting_id=$2 AND target_hash=$4),(SELECT COALESCE(MAX(version),0)+1 FROM meeting_recording_setup WHERE workspace_id=$1 AND meeting_id=$2)) ON CONFLICT(workspace_id,meeting_id,target_hash,retry_generation) DO NOTHING RETURNING id`,[workspace.id,candidate.id,JSON.stringify(target),recordingSetupTargetHash(target),at])).rows[0];
       if(inserted)jobs.push({workspaceId:workspace.id,kind:'meeting.recording_setup',idempotencyKey:`meeting-recording:${inserted.id}`,payload:{operationId:inserted.id},maxAttempts:4});
     }
   }

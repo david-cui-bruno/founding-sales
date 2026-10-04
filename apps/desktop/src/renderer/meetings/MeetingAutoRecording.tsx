@@ -1,4 +1,4 @@
-import {useEffect,useRef,type JSX} from 'react';
+import {useCallback,useEffect,useRef,type JSX} from 'react';
 import type {MeetingRecordingSetupView} from '@fss/contracts';
 import {Button} from '../ui/button.tsx';
 import {noDefiniteAnswer} from '../today/afterCallModel.ts';
@@ -18,15 +18,28 @@ const reasons:Record<string,string>={
   auth_failed:'Reconnect the meeting service in Settings.',rate_limited:'The meeting service asked Callie to wait.',ambiguous_write:'The result of an earlier change is uncertain. Retry checks Zoom before doing anything else.',
   manual_override:'The recording setting changed after setup. Retry may enable it again.',target_changed:'The booking changed. Check the current meeting before retrying.',expired:'Automatic setup ran out of time.',attempt_limit:'Automatic setup could not finish after four attempts.',not_future:'The meeting has already started.',
 };
-export function MeetingAutoRecording({meetingId,ports=defaults,actionsEnabled=true}:{meetingId:string;ports?:RecordingSetupPorts;actionsEnabled?:boolean}):JSX.Element|null {
+export function MeetingAutoRecording({meetingId,ports=defaults,actionsEnabled=true,refreshKey=''}:{meetingId:string;ports?:RecordingSetupPorts;actionsEnabled?:boolean;refreshKey?:string}):JSX.Element|null {
   const {entry,touch}=useRecordingSetupMemory(meetingId),port=useRef(ports);port.current=ports;
-  useEffect(()=>{const generation=++entry.generation;void port.current.read(meetingId).then(answer=>{if(generation!==entry.generation)return;if(answer.view?.meetingId===meetingId)entry.view=answer.view;else if(answer.reason==='not_found')entry.view=null;touch();}).catch(()=>{});},[entry,meetingId,touch]);
+  const polls=useRef(0);
+  const read=useCallback(async()=>{
+    const generation=++entry.generation;
+    try{const answer=await port.current.read(meetingId);if(generation!==entry.generation)return;if(answer.view?.meetingId===meetingId)entry.view=answer.view;else if(answer.reason==='not_found')entry.view=null;touch();}catch{/* A failed refresh is not a new setting result. */}
+  },[entry,meetingId,touch]);
+  useEffect(()=>{polls.current=0;entry.view=null;touch();void read();return()=>{++entry.generation;};},[entry,read,refreshKey,touch]);
+  const state=entry.view?.state,busy=entry.busy;
+  useEffect(()=>{
+    if(!['pending','verifying'].includes(state??'')||busy)return undefined;
+    let cancelled=false,timer:ReturnType<typeof setTimeout>|undefined;
+    const schedule=()=>{if(!cancelled&&polls.current<30)timer=setTimeout(()=>{void poll();},10000);};
+    const poll=async()=>{polls.current++;await read();if(['pending','verifying'].includes(entry.view?.state??''))schedule();};
+    schedule();return()=>{cancelled=true;clearTimeout(timer);};
+  },[entry,read,state,busy,refreshKey]);
   const view=entry.view;if(!view||view.meetingId!==meetingId)return null;
   const label=view.state==='ready'?'Auto-recording set':['pending','verifying'].includes(view.state)?'Setting up auto-recording':'Start recording manually';
   const retry=async()=>{
     if(entry.busy||!actionsEnabled||!view.canRetry&&entry.pending===null)return;
     entry.pending??={meetingId,expectedVersion:view.version,commandId:crypto.randomUUID()};const command=entry.pending;
-    entry.busy=true;entry.message=null;++entry.generation;touch();
+    entry.busy=true;entry.message=null;polls.current=0;++entry.generation;touch();
     try{
       const answer=await port.current.retry(command);
       if(answer.view?.meetingId===meetingId){entry.view=answer.view;entry.pending=null;}
@@ -36,7 +49,7 @@ export function MeetingAutoRecording({meetingId,ports=defaults,actionsEnabled=tr
     finally{entry.busy=false;touch();}
   };
   return <div className="min-w-0 text-xs text-muted-foreground" data-testid="meeting-auto-recording">
-    <Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={()=>{entry.open=!entry.open;touch();}}>{label}</Button>
+    <Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={()=>{entry.open=!entry.open;if(entry.open){polls.current=0;void read();}touch();}}>{label}</Button>
     {entry.open?<div className="space-y-2 px-3 pb-3">
       <p>{view.state==='ready'?'Zoom is set to record locally when you host from its desktop app.':reasons[view.reason??'']??'Press Record in Zoom if automatic setup is unavailable.'}</p>
       {view.checkedAt?<p>Checked {new Date(view.checkedAt).toLocaleString()}</p>:null}
