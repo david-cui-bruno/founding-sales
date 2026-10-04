@@ -2,8 +2,8 @@
 -- First claim survives lease recovery. Existing jobs acquire it only on their next claim.
 ALTER TABLE jobs ADD COLUMN first_claimed_at timestamptz;
 ALTER TABLE workspace_settings DROP CONSTRAINT workspace_settings_key_known,
-  ADD CONSTRAINT workspace_settings_key_known CHECK(setting_key IN
-  ('business_time_zone','postal_address','sending_enabled','calling_provider','calendar_integration','telephony_budget','voicemail_script','call_transcription','monthly_cash_ceiling_cents','meeting_transcription','meeting_analysis','meeting_follow_through','meeting_auto_recording'));
+  ADD CONSTRAINT workspace_settings_key_known
+  CHECK (setting_key IN ('business_time_zone','postal_address','sending_enabled','calling_provider','calendar_integration','telephony_budget','voicemail_script','call_transcription','monthly_cash_ceiling_cents','meeting_transcription','meeting_analysis','meeting_follow_through','meeting_auto_recording'));
 CREATE TABLE meeting_recording_setup (
   workspace_id uuid NOT NULL REFERENCES workspaces(id), id uuid NOT NULL DEFAULT gen_random_uuid(),
   meeting_id uuid NOT NULL, target jsonb NOT NULL CHECK(jsonb_typeof(target)='object'),

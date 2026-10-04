@@ -44,7 +44,7 @@ function alarmKeysInTerraform(): Set<string> {
 }
 
 /** Pages in the directory that are not one alarm's runbook. */
-const NOT_AN_ALARM_PAGE = new Set(['README.md', 'restore.md', 'operate.md']);
+const NOT_AN_ALARM_PAGE = new Set(['README.md', 'restore.md', 'operate.md', 'zoom-demo-recording.md']);
 
 function runbookFiles(): Set<string> {
   return new Set(

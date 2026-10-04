@@ -30,6 +30,7 @@ describe('recording setup API',()=>{
     expect((await call('/meetings/recording-setup')).body).toMatchObject({state:'manual',canRetry:true});
     const command={meetingId,expectedVersion:1,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
     const first=await call('/meetings/recording-setup/retry',command);expect(first.status).toBe(200);expect(first.body).toMatchObject({result:{state:'pending'}});
+    expect((first.body as {result:{version:number}}).result.version).toBeGreaterThan(command.expectedVersion);
     expect((await call('/meetings/recording-setup/retry',command)).body).toMatchObject({replayed:true});
     expect((await f.db.query('SELECT id FROM meeting_recording_setup WHERE meeting_id=$1',[meetingId])).rows).toHaveLength(2);
     expect((await call('/meetings/recording-setup/retry',{...command,commandId:randomUUID()})).status).toBe(409);
