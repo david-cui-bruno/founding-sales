@@ -33,7 +33,8 @@ function checkedPromise(item: MeetingNoteItem, input: MeetingAnalysisInput): Mee
     const anchorAt = source.kind === 'transcript' ? input.startsAt : input.notes.savedAt;
     if (anchorAt !== null) {
       const resolved = resolveMeetingDeadline({ text: item.deadlineText, anchorAt, zone, sourceKind: source.kind });
-      if (resolved.ok) { deadline = resolved.value; reasons.delete('deadline_unclear'); }
+      // Parsing a phrase cannot resolve uncertainty about when it was said.
+      if (resolved.ok) deadline = resolved.value;
     }
   }
   if (deadline === null) reasons.add('deadline_unclear');

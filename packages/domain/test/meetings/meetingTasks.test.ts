@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
+import { meetingNoteItemSchema } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { meetingTasksFixture } from './support/meetingTasksFixture.ts';
 describe('meeting promises become tasks', () => {
@@ -43,13 +44,45 @@ describe('meeting promises become tasks', () => {
     expect(await f.tasks(p.meetingId)).toHaveLength(1);
   });
 });
-it('resolves a clear date even when the model defers its interpretation', async () => {
+it('retains date uncertainty even when the isolated date phrase parses', async () => {
   const f = await meetingTasksFixture();
   try {
     const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
     const p = await f.promise('I will send the guide tomorrow.');
     const analysis = await f.publish(p.meetingId, [{ ...p.item, reviewReasons: ['deadline_unclear'] }]);
-    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, analysis))).toMatchObject({ ok: true, value: { created: 1 } });
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, analysis))).toMatchObject({ ok: true, value: { created: 0, review: 1 } });
+  } finally { await f.db.drop(); }
+});
+it('holds analysis-level conflicts until an explicit item correction resolves the promise', async () => {
+  const f = await meetingTasksFixture();
+  try {
+    const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
+    const p = await f.promise('I will send the guide tomorrow.');
+    await f.db.session.query("UPDATE meeting_analyses SET review_reasons='[\"source_conflict\"]' WHERE id=$1", [p.analysisId]);
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, p))).toMatchObject({ ok: true, value: { created: 0, review: 1 } });
+    expect(await f.tasks(p.meetingId)).toHaveLength(0);
+    const { readCurrentMeetingNotes } = await import('../../meetings/outcomes.ts');
+    const { saveMeetingOutcomeCorrections } = await import('../../meetings/outcomeCorrections.ts');
+    const notes = await readCurrentMeetingNotes(f.context, p.meetingId);
+    await withTransaction(f.db.session, () => saveMeetingOutcomeCorrections(f.context, { meetingId: p.meetingId, expectedRevision: notes.revision,
+      debrief: notes.debrief, sufficient: true, speakerMappings: notes.speakerMappings,
+      itemOverrides: [{ itemId: p.items[0]!.id, decision: 'confirmed', text: 'Send the guide', owner: 'you', deadline: { precision: 'date', localDate: '2026-10-06', zone: 'America/New_York' } }] }));
+    const next = await f.publish(p.meetingId, [p.item]);
+    await f.db.session.query("UPDATE meeting_analyses SET review_reasons='[\"source_conflict\"]' WHERE id=$1", [next.analysisId]);
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, next))).toMatchObject({ ok: true, value: { created: 1, review: 0 } });
+  } finally { await f.db.drop(); }
+});
+it('does not anchor a quoted historical debrief promise to the date the notes were saved', async () => {
+  const f = await meetingTasksFixture();
+  try {
+    const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
+    const { sampleAnswer } = await import('./fixtures/outcomes/sample.ts');
+    const meetingId = await f.meeting(), quote = "At yesterday's demo, I promised to send the guide tomorrow.";
+    await f.save(meetingId, quote);
+    await f.db.session.query("UPDATE meeting_note_revisions SET created_at='2026-10-03T12:00:00Z' WHERE meeting_id=$1", [meetingId]);
+    const p = await f.publish(meetingId, [meetingNoteItemSchema.parse({ ...sampleAnswer().items[0]!, reviewReasons: ['deadline_unclear'], evidence: [{ kind: 'debrief', revision: 1, quote, startOffset: 0, endOffset: quote.length }] })]);
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, p))).toMatchObject({ ok: true, value: { created: 0, review: 1 } });
+    expect(await f.tasks(meetingId)).toHaveLength(0);
   } finally { await f.db.drop(); }
 });
 it('keeps a known prospect promise as a note without asking David to resolve its owner', async () => {

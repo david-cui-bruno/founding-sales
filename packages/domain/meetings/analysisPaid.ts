@@ -1,7 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSettingForRead, readSetting } from '../settings/store.ts';
 import { readMeetingAnalysisSetting } from './analysisSettings.ts';
-import { meetingBudgetDay } from './transcriptionBudget.ts';
+import { lockMeetingBudget, meetingBudgetDay } from './transcriptionBudget.ts';
 import { reserveAttempt, correctSettledCents, markCalling, settleAttempt, listAttempts, type ReservationRow } from '../research/reservations.ts';
 import { recordProviderCall } from '../research/ledger.ts';
 import { bedrockModelOf } from '../classification/modelTransport.ts';
@@ -14,7 +14,9 @@ export interface MeetingAnalysisDeps { accountId: string; port: MeetingAnalysisP
 export type AnalysisBegin = { kind: 'done' } | { kind: 'held'; reason: string } | { kind: 'reserved'; reservationId: string };
 export type AnalysisDispatch = { kind: 'done' } | { kind: 'held'; reason: string } | { kind: 'dispatch'; call: MeetingAnalysisCall; prepared: PreparedMeetingAnalysis };
 export async function lockMeetingAnalysisBudget(context: RepositoryContext): Promise<void> {
-  await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`${context.scope.workspaceId}:meeting_analysis_budget`]);
+  // The scheduler settles both kinds in one transaction. Share only the mutex,
+  // never the allowance, so it cannot retain a firm lock before the other budget.
+  await lockMeetingBudget(context);
 }
 export async function meetingAnalysisFunding(context: RepositoryContext, at: string, deps: MeetingAnalysisDeps) {
   const setting = await readMeetingAnalysisSetting(context), stored = await readSetting(context, 'meeting_analysis'), coverage = setting.creditCoverage;
@@ -22,6 +24,19 @@ export async function meetingAnalysisFunding(context: RepositoryContext, at: str
     : coverage === null || coverage.accountId !== deps.accountId || coverage.status !== 'verified'
       || Date.parse(coverage.verifiedAt) > Date.parse(at) || Date.parse(coverage.validUntil) <= Date.parse(at) ? 'funding_unverified' : null;
   return { setting, version: stored.version, reason };
+}
+async function analysisSpent(context: RepositoryContext, date: string): Promise<number> {
+  return Number((await context.db.query<{ cents: string }>(`SELECT COALESCE(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END),0)::text AS cents
+    FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='meeting_analysis' AND business_date=$2::date`, [context.scope.workspaceId, date])).rows[0]?.cents ?? 0);
+}
+/** Read again immediately before HTTP as well as under the mark-calling locks. */
+export async function meetingAnalysisDispatchFunding(context: RepositoryContext, input: { requestId: string; reservationId: string; at: string }, deps: MeetingAnalysisDeps) {
+  const funding = await meetingAnalysisFunding(context, input.at, deps), day = await meetingBudgetDay(context, input.at);
+  const attempt = (await listAttempts(context, subject(input.requestId))).find(a => a.id === input.reservationId);
+  const reason = funding.reason ?? (attempt === undefined || !['reserved', 'calling'].includes(attempt.state) ? 'reservation_unavailable'
+    : attempt.businessDate !== day.date || attempt.businessTimeZone !== day.zone ? 'budget_date_changed'
+      : await analysisSpent(context, day.date) > funding.setting.dailyCeilingCents ? 'budget_held' : null);
+  return { ...funding, reason, next: reason === 'budget_held' ? day.next : reason === 'budget_date_changed' ? input.at : '9999-01-01T00:00:00Z' };
 }
 async function hold(context: RepositoryContext, id: string, reason: string, version: number, next: string, at: string): Promise<{ kind: 'held'; reason: string }> {
   for (const attempt of await listAttempts(context, subject(id))) if (attempt.state === 'reserved') await settleAttempt(context, { reservationId: attempt.id, at, outcome: { kind: 'released' } });
@@ -71,8 +86,7 @@ export async function beginMeetingAnalysisRequest(context: RepositoryContext, in
   const prepared = await deps.port.prepare(call.value);
   if (!prepared.ok) return await fail(context, row.id, prepared.reason, input.at);
   const day = await meetingBudgetDay(context, input.at), cents = cost(row.model_name, prepared.value.inputTokens, prepared.value.request.max_tokens);
-  const spent = Number((await context.db.query<{ cents: string }>(`SELECT COALESCE(sum(CASE WHEN state IN ('reserved','calling') THEN cents ELSE settled_cents END),0)::text AS cents
-    FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='meeting_analysis' AND business_date=$2::date`, [context.scope.workspaceId, day.date])).rows[0]?.cents ?? 0);
+  const spent = await analysisSpent(context, day.date);
   if (spent + cents > funding.setting.dailyCeilingCents) return await hold(context, row.id, 'budget_held', funding.version, day.next, input.at);
   const reservation = await reserveAttempt(context, { ...subject(row.id), providerKey: MEETING_ANALYSIS_PROVIDER, attempt: row.reservation_count + 1, at: input.at,
     businessTimeZone: day.zone, cents, modelName: row.model_name, maxInputTokens: prepared.value.inputTokens, maxOutputTokens: prepared.value.request.max_tokens });
@@ -85,7 +99,7 @@ export async function dispatchMeetingAnalysisRequest(context: RepositoryContext,
   await lockSettingForRead(context, 'meeting_analysis'); await lockMeetingAnalysisBudget(context);
   const row = await lockRequest(context, input.requestId);
   if (row === null || row.state !== 'reserved' || row.reservation_id !== input.reservationId) return { kind: 'done' };
-  const funding = await meetingAnalysisFunding(context, input.at, deps);
+  const funding = await meetingAnalysisDispatchFunding(context, input, deps);
   const call = await readAnalysisCall(context, row);
   const request = call.ok ? buildMeetingAnalysisRequest(call.value) : null;
   const attempt = (await listAttempts(context, subject(row.id))).find(a => a.id === input.reservationId);
@@ -93,7 +107,7 @@ export async function dispatchMeetingAnalysisRequest(context: RepositoryContext,
     ?? (row.deadline_at !== null && row.deadline_at.getTime() <= Date.parse(input.at) ? 'deadline_exceeded' : null);
   if (reason !== null || attempt === undefined || row.paid_attempts >= 2) {
     await settleAttempt(context, { reservationId: input.reservationId, at: input.at, outcome: { kind: 'released' } });
-    return await hold(context, row.id, reason ?? 'attempt_limit', funding.version, '9999-01-01T00:00:00Z', input.at);
+    return await hold(context, row.id, reason ?? 'attempt_limit', funding.version, funding.next, input.at);
   }
   if (!call.ok || request === null || !await markCalling(context, attempt.id)) return { kind: 'done' };
   await context.db.query("UPDATE meeting_analysis_requests SET state='calling',paid_attempts=paid_attempts+1 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, row.id]);
@@ -142,11 +156,11 @@ async function settleAbandoned(context: RepositoryContext, attempt: ReservationR
 }
 
 /** Only the fenced worker that owns the committed calling marker may assert it did not call. */
-export async function abandonMeetingAnalysisDispatch(context: RepositoryContext, input: { requestId: string; reservationId: string; at: string; reason: string }): Promise<void> {
+export async function abandonMeetingAnalysisDispatch(context: RepositoryContext, input: { requestId: string; reservationId: string; at: string; reason: string; next?: string }): Promise<void> {
   await lockMeetingAnalysisBudget(context);
   const row = await lockRequest(context, input.requestId);
   if (row?.state !== 'calling' || row.reservation_id !== input.reservationId) return;
   await settleAttempt(context, { reservationId: input.reservationId, at: input.at, outcome: { kind: 'released_not_called' } });
   await context.db.query("UPDATE meeting_analysis_requests SET paid_attempts=paid_attempts-1 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, row.id]);
-  await hold(context, row.id, input.reason, row.settings_version, '9999-01-01T00:00:00Z', input.at);
+  await hold(context, row.id, input.reason, row.settings_version, input.next ?? '9999-01-01T00:00:00Z', input.at);
 }

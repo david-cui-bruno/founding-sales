@@ -4,7 +4,7 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { JobHandler, JobChunk } from '@fss/domain/jobs/handlerRegistry.ts';
 import { scheduleMeetingAnalyses } from '@fss/domain/meetings/analysisJobs.ts';
 import { materializeMeetingAnalysis, readAnalysisCall, readAnalysisRequest } from '@fss/domain/meetings/analysisRequests.ts';
-import { beginMeetingAnalysisRequest, dispatchMeetingAnalysisRequest, completeMeetingAnalysisRequest, abandonMeetingAnalysisDispatch, meetingAnalysisFunding, type MeetingAnalysisDeps } from '@fss/domain/meetings/analysisPaid.ts';
+import { beginMeetingAnalysisRequest, dispatchMeetingAnalysisRequest, completeMeetingAnalysisRequest, abandonMeetingAnalysisDispatch, meetingAnalysisDispatchFunding, type MeetingAnalysisDeps } from '@fss/domain/meetings/analysisPaid.ts';
 import { analysisHash } from '@fss/domain/meetings/analysisInput.ts';
 import { buildMeetingAnalysisRequest } from '@fss/domain/meetings/analysisModel.ts';
 import { meetingAnalysisPort, type MeetingAnalysisAttempt } from '@fss/domain/meetings/analysisAdapter.ts';
@@ -34,10 +34,10 @@ export function meetingAnalyzeJobHandler(options: MeetingAnalyzeOptions): JobHan
       if (row.state === 'calling') {
         // A restarted/reclaimed job must never repeat an ambiguous submission.
         if (progress?.['step'] !== 'dispatch' || progress['fencing'] !== String(input.job.fencingToken) || progress['reservationId'] !== row.reservation_id || row.reservation_id === null) return done();
-        const funding = await meetingAnalysisFunding(context, at, options), call = await readAnalysisCall(context, row);
+        const funding = await meetingAnalysisDispatchFunding(context, { requestId, reservationId: row.reservation_id, at }, options), call = await readAnalysisCall(context, row);
         const request = call.ok ? buildMeetingAnalysisRequest(call.value) : null;
         if (funding.reason !== null || request === null || analysisHash(request) !== row.prepared_hash || !call.ok) {
-          await abandonMeetingAnalysisDispatch(context, { requestId, reservationId: row.reservation_id, at, reason: funding.reason ?? 'source_changed' }); return done();
+          await abandonMeetingAnalysisDispatch(context, { requestId, reservationId: row.reservation_id, at, reason: funding.reason ?? 'source_changed', next: funding.next }); return done();
         }
         // No send gate, Today, firm or meeting lock is held over the provider request.
         let timeout: ReturnType<typeof setTimeout> | undefined;

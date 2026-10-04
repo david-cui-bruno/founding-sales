@@ -45,4 +45,28 @@ describe('meeting analysis through the real worker', () => {
     expect((await f.db.session.query('SELECT tasks_pending FROM meeting_analyses')).rows).toEqual([{ tasks_pending: false }]);
     expect(calls).toBe(1);
   });
+  it('checks a lowered nonzero ceiling again in the final provider chunk', async () => {
+    const { meetingAnalyzeJobHandler } = await import('../src/handlers/meetingAnalyze.ts');
+    const { repositoryContext } = await import('@fss/domain/db/workspaceScope.ts');
+    let calls = 0, lowered = false;
+    const value = { enabled: true, dailyCeilingCents: 100, creditCoverage: { accountId: '123456789012', service: 'bedrock', evidenceRef: 'synthetic', verifiedAt: '2026-01-01T00:00:00Z', validUntil: '2030-01-01T00:00:00Z', status: 'verified' } };
+    await withTransaction(f.db.session, () => updateSetting(f.context, { settingKey: 'meeting_analysis', value }));
+    const port = meetingAnalysisPort({ transport: { kind: 'bedrock', countTokens: async () => 100,
+      create: async () => { calls++; return { usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: JSON.stringify({ overview: 'Discussed maintenance.', items: [], reviewReasons: [] }) }] }; } } });
+    const handler = meetingAnalyzeJobHandler({ accountId: '123456789012', port });
+    const registry = new HandlerRegistry().register({ ...handler, async handle(input) {
+      const progress = input.job.payload['progress'] as Record<string, unknown> | undefined;
+      if (progress?.['step'] === 'dispatch') {
+        await updateSetting(repositoryContext(f.context.scope, input.session), { settingKey: 'meeting_analysis', value: { ...value, dailyCeilingCents: 1 } }); lowered = true;
+      }
+      return await handler.handle(input);
+    } });
+    const meetingId = await f.meeting(); await f.save(meetingId, 'Discussed maintenance.');
+    await runOnce(f.db.session, { registry, owner: 'budget-boundary', limit: 5 });
+    await withTransaction(f.db.session, async () => { for (const job of await scheduleMeetingAnalyses(f.db.session, new Date().toISOString())) await enqueueJob(f.db.session, job); });
+    expect((await runOnce(f.db.session, { registry, owner: 'budget-boundary', limit: 5 })).failed).toBe(0);
+    expect(lowered).toBe(true); expect(calls).toBe(0);
+    expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations')).rows).toEqual([{ state: 'released', settled_cents: 0 }]);
+    expect((await f.db.session.query('SELECT paid_attempts,reason FROM meeting_analysis_requests')).rows).toEqual([{ paid_attempts: 0, reason: 'budget_held' }]);
+  });
 });

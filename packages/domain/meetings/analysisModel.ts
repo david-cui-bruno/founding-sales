@@ -53,6 +53,16 @@ function sourceOwner(e: MeetingEvidence, input: MeetingAnalysisInput): MeetingNo
   const u = input.utterances.find(row => row.id === e.utteranceId);
   return input.notes.speakerMappings.find(m => m.recordingId === u?.recordingId && m.speaker === u.speaker)?.owner ?? 'unknown';
 }
+/** A correction save changes the revision, not the identity of an unchanged promise. */
+function evidenceIdentity(e: MeetingEvidence, input: MeetingAnalysisInput): unknown {
+  if (e.kind !== 'debrief') return e;
+  const first = input.notes.debrief.indexOf(e.quote);
+  // Repeated quotes cannot safely follow a moved occurrence. Keep those tied to
+  // their exact document and offset instead of guessing which one was corrected.
+  return first >= 0 && input.notes.debrief.indexOf(e.quote, first + 1) === -1
+    ? { kind: e.kind, quote: e.quote }
+    : { kind: e.kind, quote: e.quote, startOffset: e.startOffset, document: analysisHash(input.notes.debrief) };
+}
 /** Validation is also applied to cached results against the current corrections before publishing. */
 export function validateMeetingAnalysisAnswer(text: string, input: MeetingAnalysisInput): MeetingResult<ValidatedMeetingAnalysis> {
   if (Buffer.byteLength(text) > MEETING_ANALYSIS_LIMITS.requestBytes) return { ok: false, reason: 'output_too_large' };
@@ -66,20 +76,21 @@ export function validateMeetingAnalysisAnswer(text: string, input: MeetingAnalys
     if (anchored.some(e => e === null)) return { ok: false, reason: 'evidence_invalid' };
     const item = { ...rawItem, evidence: anchored as MeetingEvidence[] };
     if (item.evidence.some(e => !validEvidence(e, input))) return { ok: false, reason: 'evidence_invalid' };
-    const id = `item:${analysisHash({ sourceMeetingId: input.meetingId, kind: item.kind, evidence: item.evidence }).slice(0, 32)}`;
+    const identity = item.evidence.map(e => evidenceIdentity(e, input)).sort((a, b) => analysisHash(a).localeCompare(analysisHash(b)));
+    const id = `item:${analysisHash({ sourceMeetingId: input.meetingId, kind: item.kind, evidence: identity }).slice(0, 32)}`;
     const override = input.notes.itemOverrides.find(o => o.itemId === id);
     if (override?.decision === 'dismissed') continue;
     const owners = new Set(item.evidence.map(e => sourceOwner(e, input)));
     const resolved = owners.size === 1 ? [...owners][0] ?? 'unknown' : 'unknown';
     // A debrief can report somebody else's promise; source identity never upgrades the model's unknown/prospect owner.
     let owner = item.evidence.every(e => e.kind === 'debrief') ? item.owner : item.owner === resolved ? resolved : 'unknown';
-    const reviewReasons = new Set(item.reviewReasons);
+    const reviewReasons = new Set([...item.reviewReasons, ...(item.kind === 'commitment' ? parsed.data.reviewReasons : [])]);
     if (new Set(item.evidence.filter(e => e.kind === 'transcript').map(e => e.recordingId)).size > 1) reviewReasons.add('cross_source_timing');
     if (owner === 'unknown') reviewReasons.add('owner_unknown');
     if (item.evidence.some(e => /ignore (?:all |previous |your )?instructions|system prompt|send everything/iu.test(e.quote))) reviewReasons.add('instruction_in_source');
     if (item.deadlineText !== null && !item.evidence.some(e => e.quote.includes(item.deadlineText ?? ''))) reviewReasons.add('deadline_unclear');
     if (item.provenance === 'inferred') reviewReasons.add('inferred');
-    if (override !== undefined) { for (const reason of ['commitment_uncertain', 'inferred', 'cross_source_timing']) reviewReasons.delete(reason); owner = override.owner; if (owner !== 'unknown') reviewReasons.delete('owner_unknown'); if (override.deadline !== null) reviewReasons.delete('deadline_unclear'); }
+    if (override !== undefined) { for (const reason of ['commitment_uncertain', 'inferred', 'cross_source_timing', 'source_conflict']) reviewReasons.delete(reason); owner = override.owner; if (owner !== 'unknown') reviewReasons.delete('owner_unknown'); if (override.deadline !== null) reviewReasons.delete('deadline_unclear'); }
     const next = { ...item, id, owner, text: override?.text ?? item.text, deadline: override?.deadline ?? null, reviewReasons: [...reviewReasons] };
     if (!items.some(i => i.id === id)) items.push(next);
   }

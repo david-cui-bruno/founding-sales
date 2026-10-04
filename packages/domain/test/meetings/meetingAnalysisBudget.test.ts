@@ -75,5 +75,15 @@ describe('credit-only meeting analysis', () => {
     expect(await withTransaction(f.db.session, () => beginMeetingAnalysisRequest(f.context, { requestId: seeded.requestId, at }, d))).toMatchObject({ kind: 'held' });
     expect((await f.db.session.query('SELECT state FROM provider_reservations WHERE id=$1', [reserved.reservationId])).rows).toEqual([{ state: 'released' }]);
   });
+  it('releases unsubmitted work after a nonzero ceiling is lowered below outstanding spend', async () => {
+    const { beginMeetingAnalysisRequest, dispatchMeetingAnalysisRequest } = await import('../../meetings/analysisPaid.ts');
+    await configure(); const seeded = await seed(), d = deps();
+    const reserved = await withTransaction(f.db.session, () => beginMeetingAnalysisRequest(f.context, { requestId: seeded.requestId, at }, d));
+    if (reserved.kind !== 'reserved') throw new Error(reserved.kind);
+    await configure({ dailyCeilingCents: 1 });
+    expect(await withTransaction(f.db.session, () => dispatchMeetingAnalysisRequest(f.context, { requestId: seeded.requestId, reservationId: reserved.reservationId, at }, d))).toMatchObject({ kind: 'held', reason: 'budget_held' });
+    expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1', [reserved.reservationId])).rows).toEqual([{ state: 'released', settled_cents: 0 }]);
+    expect((await f.db.session.query('SELECT paid_attempts,next_wake_at FROM meeting_analysis_requests WHERE id=$1', [seeded.requestId])).rows).toEqual([{ paid_attempts: 0, next_wake_at: new Date('2026-10-05T04:00:00Z') }]);
+  });
 
 });

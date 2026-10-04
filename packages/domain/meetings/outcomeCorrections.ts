@@ -9,8 +9,22 @@ export async function saveMeetingOutcomeCorrections(context: RepositoryContext, 
   const saved = await saveMeetingNotes(context, input);
   if (!saved.ok) return saved;
   const invalidated = input.itemOverrides.filter(o => o.decision === 'dismissed' || o.owner === 'prospect').map(o => o.itemId);
+  const previous = (await context.db.query<{ speaker_mappings: SaveMeetingNotes['speakerMappings'] }>(
+    'SELECT speaker_mappings FROM meeting_note_revisions WHERE workspace_id=$1 AND meeting_id=$2 AND revision=$3',
+    [context.scope.workspaceId, input.meetingId, input.expectedRevision])).rows[0]?.speaker_mappings ?? [];
+  const changedSpeakers = previous.filter(old => old.owner === 'you' && !input.speakerMappings.some(next =>
+    next.recordingId === old.recordingId && next.speaker === old.speaker && next.owner === 'you'));
   const changed = await context.db.query<{ id: string; firm_id: string }>(`UPDATE meeting_tasks SET status='cancelled',version=version+1,updated_at=now()
-    WHERE workspace_id=$1 AND meeting_id=$2 AND commitment_id=ANY($3::text[]) AND status='open' AND NOT user_edited RETURNING id,firm_id`, [context.scope.workspaceId, input.meetingId, invalidated]);
+    WHERE workspace_id=$1 AND meeting_id=$2 AND status='open' AND NOT user_edited AND (
+      commitment_id=ANY($3::text[]) OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements(meeting_tasks.evidence) e
+        JOIN meeting_transcripts t ON t.workspace_id=meeting_tasks.workspace_id AND t.id::text=e->>'transcriptId'
+        CROSS JOIN LATERAL jsonb_array_elements(t.utterances) WITH ORDINALITY u(speech,ordinal)
+        CROSS JOIN jsonb_array_elements($4::jsonb) m
+        WHERE e->>'kind'='transcript' AND e->>'recordingId'=m->>'recordingId'
+          AND e->>'utteranceId'=t.id::text || ':' || u.ordinal::text
+          AND (u.speech->>'speaker') IS NOT DISTINCT FROM (m->>'speaker')
+      )) RETURNING id,firm_id`, [context.scope.workspaceId, input.meetingId, invalidated, JSON.stringify(changedSpeakers)]);
   for (const task of changed.rows) await recordCrmAuditEvent(context, { action: 'meeting.task_invalidated', subjectKind: 'meeting_task', subjectId: task.id, detail: { notesRevision: saved.value.revision } });
   const firmId = changed.rows[0]?.firm_id;
   if (firmId !== undefined) await refreshTodayForFirm(context, { firmId });
