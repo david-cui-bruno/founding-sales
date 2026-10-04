@@ -1,0 +1,8 @@
+{"id":"clear-host-tomorrow","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"prospect-promise","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"unknown-speaker","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"negation","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"conditional","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"vague-deadline","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"pain-no-promise","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}
+{"id":"clear-host-exact-date","outcome":"provider_refused","pass":false,"derivedTasks":0,"usage":null}

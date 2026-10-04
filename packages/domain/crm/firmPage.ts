@@ -140,6 +140,7 @@ export async function readFirmPage(
     readonly includePreparedBrief?: boolean | undefined;
     /** `include: ['tasks']` (S4F): the firm's open work. */
     readonly includeTasks?: boolean | undefined;
+    readonly includeMeetingTasks?: boolean | undefined;
     /** `include: ['timeline']` (S4F): one page of the activity timeline. */
     readonly includeTimeline?: boolean | undefined;
     /** The timeline cursor (`timelineBefore`): the page older than it. */
@@ -229,7 +230,7 @@ export async function readFirmPage(
     ),
     ...(input.includeStops === true ? { stops: await readFirmStops(context, input.firmId) } : {}),
     ...(input.includePreparedBrief === true ? { preparedBrief: await readPreparedBrief(context, input.firmId) } : {}),
-    ...(input.includeTasks === true ? { tasks: [...(await readFirmTasks(context, input.firmId))] } : {}),
+    ...(input.includeTasks === true ? { tasks: [...(await readFirmTasks(context, input.firmId, input.includeMeetingTasks === true))] } : {}),
     ...(input.includeTimeline === true ? { timeline: await readFirmTimeline(context, input.firmId, input.timelineBefore) } : {}),
   });
 }

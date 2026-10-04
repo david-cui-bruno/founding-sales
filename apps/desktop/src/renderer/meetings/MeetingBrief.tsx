@@ -53,6 +53,8 @@ function originOf(entry: MeetingBriefItem): string {
       return 'Booking form';
     case 'call_signal':
     case 'call_objection':
+    case 'meeting_task':
+      return 'Meeting task';
     case 'call_commitment':
       return 'Quoted from a call';
     case 'call_next_step':

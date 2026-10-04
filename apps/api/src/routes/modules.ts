@@ -1,3 +1,4 @@
+import { MEETING_OUTCOMES_PATHS, routeMeetingOutcomes } from './meetingOutcomes.ts';
 import { buildHealthReport } from '../health.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { BootstrapRequest, BootstrapResponse, RouteModule } from '../bootstrap/routeRegistry.ts';
@@ -188,6 +189,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // paths; none reaches Cal.com.
     moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
+    moduleOf('meeting-outcomes', { paths: MEETING_OUTCOMES_PATHS }, routeMeetingOutcomes, routing),
     moduleOf('meeting-transcription', { paths: MEETING_TRANSCRIPTION_PATHS }, routeMeetingTranscription, routing),
     moduleOf('meeting-recordings', { paths: MEETING_RECORDING_PATHS }, routeMeetingRecordings, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),

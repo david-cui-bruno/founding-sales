@@ -112,6 +112,7 @@ export interface MeetingBriefSources {
   /** The firm's most recent e-mail threads, newest first. */
   readonly threads: readonly { readonly subject: string | null; readonly at: Date }[];
   readonly now: Date;
+  readonly meetingTasks?: readonly { label: string; at: Date }[];
 }
 
 export interface BriefCall {
@@ -122,7 +123,7 @@ export interface BriefCall {
 }
 
 /** The brief, or null when the meeting is unknown, matched to no firm, or not the caller's to read. */
-export async function readMeetingBrief(context: RepositoryContext, meetingId: string): Promise<MeetingBriefResponse | null> {
+export async function readMeetingBrief(context: RepositoryContext, meetingId: string, options: { includeMeetingTasks?: boolean } = {}): Promise<MeetingBriefResponse | null> {
   if (!/^[0-9a-f-]{36}$/iu.test(meetingId)) return null;
   const { rows: meetings } = await context.db.query<MeetingRow & { created_at: Date }>(
     `SELECT ${MEETING_COLUMNS}, created_at FROM meetings WHERE workspace_id = $1 AND id = $2`,
@@ -152,6 +153,7 @@ export async function readMeetingBrief(context: RepositoryContext, meetingId: st
     facts: await listFirmFacts(context, firmId),
     threads: await recentThreads(context, firmId),
     now: new Date(),
+    meetingTasks: options.includeMeetingTasks === true ? (await context.db.query<{ label: string; at: Date }>("SELECT label,created_at AS at FROM meeting_tasks WHERE workspace_id=$1 AND firm_id=$2 AND status='open' ORDER BY due_at,id LIMIT 100", [context.scope.workspaceId, firmId])).rows : [],
   });
 }
 
@@ -250,7 +252,7 @@ export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBrief
   }
 
   // ---- Open commitments: the summaries', de-duplicated --------------------------------
-  const commitments: MeetingBriefItem[] = [];
+  const commitments: MeetingBriefItem[] = (sources.meetingTasks ?? []).map(t => item({ label: 'You · open task', text: t.label, source: 'meeting_task', provenance: 'observed', at: t.at.toISOString() }));
   const seenCommitments = new Set<string>();
   for (const call of calls) {
     for (const commitment of summaryOf(call)?.commitments ?? []) {

@@ -268,7 +268,7 @@ export function newFirmSource(): TodaySource {
 
 /** The sources that have a table to read today. G7 and G8 add theirs to this array. */
 export function defaultTodaySources(): readonly TodaySource[] {
-  return [callbackSource(), callTaskSource(), newFirmSource()];
+  return [callbackSource(), callTaskSource(), meetingWorkSource(), newFirmSource()];
 }
 
 export interface BuildTodaySnapshotInput {
@@ -414,4 +414,25 @@ async function buildFrom(
     cancelled,
     sources: sources.map(source => source.name),
   };
+}
+
+/** Meeting work is separately negotiated on reads; no call-task identity is reused. */
+export function meetingWorkSource(): TodaySource {
+  return { name: 'meeting_work', sourceKinds: ['meeting_task', 'meeting_review'], find: async (context, input) => {
+    const tasks = await context.db.query<{ id: string; firm_id: string; due_at: Date }>(`SELECT t.id,t.firm_id,t.due_at FROM meeting_tasks t
+      JOIN firms f ON f.workspace_id=t.workspace_id AND f.id=t.firm_id
+      WHERE t.workspace_id=$1 AND t.status='open' AND f.status='active' AND ($4::uuid IS NULL OR t.firm_id=$4)
+      AND CASE WHEN t.deadline->>'precision'='date' THEN (t.deadline->>'localDate')::date <= ($5::timestamptz AT TIME ZONE (t.deadline->>'zone'))::date
+        ELSE (t.due_at AT TIME ZONE $2)::date <= $3::date END ORDER BY t.due_at,t.id`,
+      [context.scope.workspaceId, input.businessTimeZone, input.businessDate, input.firmId ?? null, input.now]);
+    const review = await context.db.query<{ id: string; firm_id: string; starts_at: Date }>(`SELECT m.id,m.firm_id,m.starts_at FROM meetings m
+      JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
+      LEFT JOIN LATERAL (SELECT * FROM meeting_analyses a WHERE a.workspace_id=m.workspace_id AND a.meeting_id=m.id ORDER BY a.created_at DESC,a.id DESC LIMIT 1) a ON true
+      WHERE m.workspace_id=$1 AND f.status='active' AND ($2::uuid IS NULL OR m.firm_id=$2)
+      AND (m.outcomes_review_required OR (a.notes_revision=m.notes_revision AND a.transcript_revision=m.transcript_source_revision AND a.state='ready'
+        AND (jsonb_array_length(a.review_reasons)>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(a.items) i WHERE jsonb_array_length(i->'reviewReasons')>0))))`,
+      [context.scope.workspaceId, input.firmId ?? null]);
+    return [...tasks.rows.map(t => ({ firmId: t.firm_id, itemKey: `meeting-task:${t.id}`, kind: 'task' as const, dueAt: t.due_at.toISOString(), sourceKind: 'meeting_task' as const, sourceId: t.id })),
+      ...review.rows.map(m => ({ firmId: m.firm_id, itemKey: `meeting-review:${m.id}`, kind: 'task' as const, dueAt: m.starts_at.toISOString(), sourceKind: 'meeting_review' as const, sourceId: m.id }))];
+  } };
 }

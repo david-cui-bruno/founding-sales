@@ -1,0 +1,162 @@
+{
+  "at": "2026-10-04T03:12:56.676Z",
+  "account": "326255650484",
+  "coverageEvidence": "https://us-east-1.console.aws.amazon.com/costmanagement/home?region=us-east-1#/credits/10059725569",
+  "maximumCents": 6,
+  "results": [
+    {
+      "case": {
+        "id": "typed-host-debrief",
+        "text": "I will send the setup guide tomorrow.",
+        "owner": "you",
+        "expected": 1,
+        "deadline": "2026-10-04"
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "I will send the setup guide tomorrow.",
+          "sufficient": true,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [],
+        "recordings": []
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1767,
+          "cachedInputTokens": 0,
+          "outputTokens": 106
+        },
+        "content": {
+          "overview": "The host committed to sending a setup guide tomorrow.",
+          "items": [
+            {
+              "id": "item:36376d9c556b1b3864ff141f0c35a125",
+              "kind": "commitment",
+              "text": "Send the setup guide",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "debrief",
+                  "revision": 1,
+                  "quote": "I will send the setup guide tomorrow.",
+                  "startOffset": 0,
+                  "endOffset": 37
+                }
+              ],
+              "owner": "you",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": []
+            }
+          ],
+          "reviewReasons": []
+        }
+      },
+      "derivedTasks": [
+        {
+          "label": "Send the setup guide",
+          "deadline": {
+            "precision": "date",
+            "localDate": "2026-10-04",
+            "zone": "America/New_York"
+          }
+        }
+      ],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "reported-prospect-in-debrief",
+        "text": "The property manager promised to send their vendor list tomorrow. I did not promise to send anything.",
+        "owner": "you",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "The property manager promised to send their vendor list tomorrow. I did not promise to send anything.",
+          "sufficient": true,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [],
+        "recordings": []
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1778,
+          "cachedInputTokens": 0,
+          "outputTokens": 120
+        },
+        "content": {
+          "overview": "The property manager committed to sending their vendor list tomorrow. No commitments were made by the host.",
+          "items": [
+            {
+              "id": "item:b97c2f523cbf2f82d27cac6e9bfb396f",
+              "kind": "commitment",
+              "text": "Send vendor list",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "debrief",
+                  "revision": 1,
+                  "quote": "The property manager promised to send their vendor list tomorrow.",
+                  "startOffset": 0,
+                  "endOffset": 65
+                }
+              ],
+              "owner": "prospect",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": []
+            }
+          ],
+          "reviewReasons": []
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    }
+  ]
+}

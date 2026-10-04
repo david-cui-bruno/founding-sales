@@ -24,27 +24,30 @@ const SUBJECT_MAX = 80;
  * Open callbacks, open call tasks and pending or held call and LinkedIn steps, soonest due
  * first. A step that is an e-mail is the sequence's, not a task a person does.
  */
-export async function readFirmTasks(context: RepositoryContext, firmId: string): Promise<readonly FirmTaskDto[]> {
-  const { rows } = await context.db.query<{ key: string; kind: FirmTaskDto['kind']; label: string; due_at: Date; status: 'open' | 'held' }>(
+export async function readFirmTasks(context: RepositoryContext, firmId: string, includeMeetingTasks = false): Promise<readonly FirmTaskDto[]> {
+  const { rows } = await context.db.query<{ key: string; kind: FirmTaskDto['kind']; label: string; due_at: Date; status: 'open' | 'held'; deadline: FirmTaskDto['deadline'] }>(
     `SELECT * FROM (
-       SELECT 'callback:' || id::text AS key, 'callback' AS kind, 'callback' AS label, due_at, 'open' AS status
+       SELECT 'callback:' || id::text AS key, 'callback' AS kind, 'callback' AS label, due_at, 'open' AS status, NULL::jsonb AS deadline
          FROM callbacks
         WHERE workspace_id = $1 AND firm_id = $2 AND status = 'open'
        UNION ALL
-       SELECT 'call_task:' || id::text, 'call_task', text, due_at, 'open'
+       SELECT 'call_task:' || id::text, 'call_task', text, due_at, 'open', NULL::jsonb
          FROM call_tasks
         WHERE workspace_id = $1 AND firm_id = $2 AND status = 'open'
        UNION ALL
-       SELECT 'step:' || id::text, 'step', channel, due_at, CASE WHEN state = 'held' THEN 'held' ELSE 'open' END
+       SELECT 'step:' || id::text, 'step', channel, due_at, CASE WHEN state = 'held' THEN 'held' ELSE 'open' END, NULL::jsonb
          FROM step_executions
         WHERE workspace_id = $1 AND firm_id = $2 AND state IN ('pending', 'held')
           AND channel IN ('call_task', 'linkedin_task')
+       UNION ALL
+       SELECT 'meeting_task:' || id::text, 'meeting_task', left(label,300), due_at, 'open', deadline
+         FROM meeting_tasks WHERE workspace_id=$1 AND firm_id=$2 AND status='open' AND $3::boolean
      ) tasks
      ORDER BY due_at, key
      LIMIT 100`,
-    [context.scope.workspaceId, firmId],
+    [context.scope.workspaceId, firmId, includeMeetingTasks],
   );
-  return rows.map(row => ({ key: row.key, kind: row.kind, label: row.label, dueAt: row.due_at.toISOString(), status: row.status }));
+  return rows.map(row => ({ ...(row.deadline == null ? {} : { deadline: row.deadline }), key: row.key, kind: row.kind, label: row.label, dueAt: row.due_at.toISOString(), status: row.status }));
 }
 
 // ---------------------------------------------------------------------------------------

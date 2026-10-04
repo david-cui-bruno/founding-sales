@@ -308,6 +308,7 @@ export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, un
  */
 const integrationConfigured = z.strictObject({ ok: z.boolean(), missing: z.array(z.string().max(64)).max(16) });
 export const integrationsSettingsResponseSchema = z.strictObject({
+  meetingAnalysis: z.strictObject({ setting: meetingAnalysisSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   meetingTranscription: z.strictObject({ setting: meetingTranscriptionSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   callingProvider: z.enum(['tel', 'twilio']),
   telephonyBudget: telephonyBudgetSettingSchema,

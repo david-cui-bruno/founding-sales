@@ -1,0 +1,817 @@
+{
+  "at": "2026-10-04T03:08:50.858Z",
+  "account": "326255650484",
+  "coverageEvidence": "https://us-east-1.console.aws.amazon.com/costmanagement/home?region=us-east-1#/credits/10059725569",
+  "maximumCents": 24,
+  "results": [
+    {
+      "case": {
+        "id": "clear-host-tomorrow",
+        "text": "I will send the setup guide tomorrow.",
+        "owner": "you",
+        "expected": 1,
+        "deadline": "2026-10-04"
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will send the setup guide tomorrow.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1940,
+          "cachedInputTokens": 0,
+          "outputTokens": 194
+        },
+        "content": {
+          "overview": "One commitment identified: the speaker will send a setup guide tomorrow. Speaker identity is confirmed through debrief mapping (David = you).",
+          "items": [
+            {
+              "id": "item:7dd24b73f3f52d9100325a8748760022",
+              "kind": "commitment",
+              "text": "Send the setup guide",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "I will send the setup guide tomorrow.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "you",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": []
+            }
+          ],
+          "reviewReasons": []
+        }
+      },
+      "derivedTasks": [
+        {
+          "label": "Send the setup guide",
+          "deadline": {
+            "precision": "date",
+            "localDate": "2026-10-04",
+            "zone": "America/New_York"
+          }
+        }
+      ],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "prospect-promise",
+        "text": "I will send our vendor list tomorrow.",
+        "owner": "prospect",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "prospect",
+              "label": "Prospect",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will send our vendor list tomorrow.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1941,
+          "cachedInputTokens": 0,
+          "outputTokens": 200
+        },
+        "content": {
+          "overview": "Prospect committed to sending vendor list tomorrow (2026-10-04). Speaker identity is unclear from attribution source_label.",
+          "items": [
+            {
+              "id": "item:460caa127e51141994d09cd672c82812",
+              "kind": "commitment",
+              "text": "Send vendor list",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "I will send our vendor list tomorrow.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "prospect",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": [
+                "owner_unknown"
+              ]
+            }
+          ],
+          "reviewReasons": [
+            "owner_unknown"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "unknown-speaker",
+        "text": "I will send the setup guide tomorrow.",
+        "owner": "unknown",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": []
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will send the setup guide tomorrow.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1897,
+          "cachedInputTokens": 0,
+          "outputTokens": 211
+        },
+        "content": {
+          "overview": "One next step identified from participant David's transcript. The speaker is unlabeled in the transcript and David's identity is not confirmed through speaker mapping, creating ownership uncertainty.",
+          "items": [
+            {
+              "id": "item:02a358655ef7012c4a388d1dd818c23c",
+              "kind": "next_step",
+              "text": "Send the setup guide",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "I will send the setup guide tomorrow.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "unknown",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": [
+                "owner_unknown"
+              ]
+            }
+          ],
+          "reviewReasons": [
+            "owner_unknown"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "negation",
+        "text": "I will not send the guide tomorrow. We are not ready.",
+        "owner": "you",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will not send the guide tomorrow. We are not ready.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1945,
+          "cachedInputTokens": 0,
+          "outputTokens": 50
+        },
+        "content": {
+          "overview": "Meeting on 2026-10-03 with participant David. One utterance states a negative commitment about sending a guide tomorrow.",
+          "items": [],
+          "reviewReasons": [
+            "instruction_in_source"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "conditional",
+        "text": "If we sign an agreement I might send the guide tomorrow.",
+        "owner": "you",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "If we sign an agreement I might send the guide tomorrow.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1944,
+          "cachedInputTokens": 0,
+          "outputTokens": 240
+        },
+        "content": {
+          "overview": "David stated a conditional commitment about sending a guide, contingent on signing an agreement. The speaker mapping confirms David as 'you' (the host). No debrief notes were provided. The utterance contains a hypothetical and uncertainty markers ('might'), making the commitment contingent rather than firm.",
+          "items": [
+            {
+              "id": "item:c097603cdffaa4c28a54fa1a8cc0441c",
+              "kind": "commitment",
+              "text": "Send the guide tomorrow",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "If we sign an agreement I might send the guide tomorrow.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "you",
+              "deadline": null,
+              "deadlineText": "tomorrow",
+              "reviewReasons": [
+                "commitment_uncertain"
+              ]
+            }
+          ],
+          "reviewReasons": [
+            "commitment_uncertain"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "vague-deadline",
+        "text": "I will send the guide sometime next week.",
+        "owner": "you",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will send the guide sometime next week.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1941,
+          "cachedInputTokens": 0,
+          "outputTokens": 207
+        },
+        "content": {
+          "overview": "David committed to sending a guide next week. Speaker identity is confirmed via recording metadata (participant label David matches speaker mapping owner 'you').",
+          "items": [
+            {
+              "id": "item:6d14496ce2b89a9dd8019462b13eb5cf",
+              "kind": "next_step",
+              "text": "Send the guide",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "I will send the guide sometime next week.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "you",
+              "deadline": null,
+              "deadlineText": "sometime next week",
+              "reviewReasons": [
+                "deadline_unclear"
+              ]
+            }
+          ],
+          "reviewReasons": [
+            "deadline_unclear"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "pain-no-promise",
+        "text": "We receive too many maintenance requests after hours. Manual entry takes time.",
+        "owner": "prospect",
+        "expected": 0
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "prospect",
+              "label": "Prospect",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "We receive too many maintenance requests after hours. Manual entry takes time.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1947,
+          "cachedInputTokens": 0,
+          "outputTokens": 214
+        },
+        "content": {
+          "overview": "Meeting with prospect on 2026-10-03. Prospect identified a need: too many after-hours maintenance requests and manual entry delays.",
+          "items": [
+            {
+              "id": "item:b019692d0124ac22126ef5196f47a161",
+              "kind": "need",
+              "text": "Reduce after-hours maintenance requests and manual entry time",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "We receive too many maintenance requests after hours. Manual entry takes time.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "prospect",
+              "deadline": null,
+              "deadlineText": null,
+              "reviewReasons": []
+            }
+          ],
+          "reviewReasons": [
+            "notes_incomplete"
+          ]
+        }
+      },
+      "derivedTasks": [],
+      "pass": true,
+      "reservedMaximumCents": 3
+    },
+    {
+      "case": {
+        "id": "clear-host-exact-date",
+        "text": "I will send the setup guide on October 8, 2026.",
+        "owner": "you",
+        "expected": 1,
+        "deadline": "2026-10-08"
+      },
+      "input": {
+        "meetingId": "11111111-1111-4111-8111-111111111111",
+        "firmId": "44444444-4444-4444-8444-444444444444",
+        "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "transcriptRevision": 1,
+        "startsAt": "2026-10-03T14:00:00.000Z",
+        "businessZone": "America/New_York",
+        "complete": true,
+        "notes": {
+          "meetingId": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "debrief": "",
+          "sufficient": false,
+          "savedAt": "2026-10-03T15:00:00.000Z",
+          "itemOverrides": [],
+          "speakerMappings": [
+            {
+              "recordingId": "22222222-2222-4222-8222-222222222222",
+              "speaker": null,
+              "owner": "you",
+              "label": "David",
+              "zone": "America/New_York"
+            }
+          ]
+        },
+        "utterances": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333:1",
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "startMs": 0,
+            "endMs": 1000,
+            "text": "I will send the setup guide on October 8, 2026.",
+            "speaker": null,
+            "attribution": "source_label"
+          }
+        ],
+        "recordings": [
+          {
+            "recordingId": "22222222-2222-4222-8222-222222222222",
+            "meetingId": "11111111-1111-4111-8111-111111111111",
+            "participantLabel": "David",
+            "segment": 1,
+            "sourceKind": "participant",
+            "status": "ready",
+            "reason": null,
+            "transcriptId": "33333333-3333-4333-8333-333333333333",
+            "transcriptVersion": 1,
+            "durationMs": 1000
+          }
+        ]
+      },
+      "result": {
+        "outcome": "accepted",
+        "usage": {
+          "inputTokens": 1947,
+          "cachedInputTokens": 0,
+          "outputTokens": 203
+        },
+        "content": {
+          "overview": "One commitment extracted from the meeting on 2026-10-03.",
+          "items": [
+            {
+              "id": "item:d68b379157e76cd79ba185a7fb21f5c9",
+              "kind": "commitment",
+              "text": "Send the setup guide on October 8, 2026",
+              "provenance": "stated",
+              "evidence": [
+                {
+                  "kind": "transcript",
+                  "recordingId": "22222222-2222-4222-8222-222222222222",
+                  "transcriptId": "33333333-3333-4333-8333-333333333333",
+                  "transcriptVersion": 1,
+                  "utteranceId": "33333333-3333-4333-8333-333333333333:1",
+                  "quote": "I will send the setup guide on October 8, 2026.",
+                  "startMs": 0,
+                  "endMs": 1000
+                }
+              ],
+              "owner": "you",
+              "deadline": null,
+              "deadlineText": "October 8, 2026",
+              "reviewReasons": []
+            }
+          ],
+          "reviewReasons": []
+        }
+      },
+      "derivedTasks": [
+        {
+          "label": "Send the setup guide on October 8, 2026",
+          "deadline": {
+            "precision": "date",
+            "localDate": "2026-10-08",
+            "zone": "America/New_York"
+          }
+        }
+      ],
+      "pass": true,
+      "reservedMaximumCents": 3
+    }
+  ]
+}

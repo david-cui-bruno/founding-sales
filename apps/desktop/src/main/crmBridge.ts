@@ -372,7 +372,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       pageVersion: FIRM_PAGE_VERSION,
       // Lane PB (migration 0038): and the firm's prepared brief, or null.
       // S4F: the firm's open work and the newest page of its timeline.
-      include: ['stops', 'preparedBrief', 'tasks', 'timeline'],
+      include: ['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks'],
     });
     if (!page.ok) {
       notice = page.reason;

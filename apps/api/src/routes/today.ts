@@ -42,8 +42,8 @@ export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/
  * negotiates the same with `include: ['tasks']` in its body. `POST /today/tasks/complete
  * {taskId}` marks one done (`calls/callTasks.ts`), a command with a receipt.
  */
-function includesTasks(query: URLSearchParams): boolean {
-  return query.getAll('include').some(value => value.split(',').some(part => part.trim() === 'tasks'));
+function includesTasks(query: URLSearchParams, capability = 'tasks'): boolean {
+  return query.getAll('include').some(value => value.split(',').some(part => part.trim() === capability));
 }
 
 /*
@@ -75,7 +75,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     // built and not the one this task's clock believes in (Appendix D).
     return {
       status: 200,
-      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query) }),
+      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query), includeMeetingTasks: includesTasks(request.query, 'meeting_tasks') }),
     };
   }
 
@@ -103,6 +103,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     firmId: parsed.data.firmId,
     now: await databaseNow(context),
     includeTasks: parsed.data.include?.includes('tasks') === true,
+    includeMeetingTasks: parsed.data.cardVersion === 2 && parsed.data.include?.includes('meeting_tasks') === true,
     // Lane PB (migration 0038): the prepared brief, negotiated like the tasks.
     includePreparedBrief: parsed.data.include?.includes('preparedBrief') === true,
   });

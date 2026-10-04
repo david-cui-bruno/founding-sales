@@ -1,3 +1,4 @@
+import { meetingTaskViewSchema } from './meetingOutcomes.ts';
 import { z } from 'zod';
 import { callBriefSchema } from './research.ts';
 import { preparedBriefDtoSchema } from './preparedBriefs.ts';
@@ -131,6 +132,8 @@ const todayTaskDtoSchema = z.object({
    * parses the task strictly): the call task behind a `task` item, which
    * `POST /today/tasks/complete` marks done, and its words. Null on every other kind.
    */
+  meetingTask: meetingTaskViewSchema.nullable().optional(),
+  meetingReviewId: uuid.nullable().optional(),
   callTaskId: uuid.nullable().optional(),
   taskText: z.string().min(1).max(300).nullable().optional(),
 });
@@ -153,7 +156,7 @@ export const todayFirmRequestSchema = z.strictObject({
    * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief` to the card, the
    * firm's prepared brief or null.
    */
-  include: z.array(z.enum(['tasks', 'preparedBrief'])).max(2).optional(),
+  include: z.array(z.enum(['tasks', 'preparedBrief', 'meeting_tasks'])).max(3).optional(),
 });
 
 /**

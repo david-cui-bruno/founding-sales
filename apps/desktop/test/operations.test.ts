@@ -131,7 +131,7 @@ describe('the operation registry', () => {
       'firms.briefImportReset',
     ]);
     // Slice M1: the firm page's meetings and the bookings to match, straight through the client.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('meetings.'))).toEqual(['meetings.forFirm', 'meetings.outcomes', 'meetings.saveNotes', 'meetings.changeTask', 'meetings.brief', 'meetings.unmatched', 'meetings.match', 'meetings.setAttendance', 'meetings.transcript']);
     // Slice C1: placing a call from Callie, when `calling_provider = twilio`.
     expect(OPERATION_NAMES.filter(name => name.startsWith('calling.'))).toEqual([
       'calling.status',

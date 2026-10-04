@@ -1,4 +1,4 @@
-import { meetingNotesRevisionSchema, meetingOutcomesViewSchema, meetingTaskViewSchema, type MeetingNotesRevision, type MeetingOutcomesView } from '@fss/contracts';
+import { meetingNotesRevisionSchema, meetingOutcomesViewSchema, meetingTaskViewSchema, type MeetingNotesRevision, type MeetingOutcomesView, type MeetingTaskView } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { readFirm } from '../crm/firms.ts';
 import { decideFirmRead, firmReadIsAudited } from '../crm/authorization.ts';
@@ -39,9 +39,20 @@ export async function readMeetingOutcomes(context: RepositoryContext, input: { m
   if (final.outcomes_review_required) holds.push('merged_notes_review');
   if (!setting.enabled || setting.dailyCeilingCents === 0) holds.push('analysis_disabled');
   const stale = analysis !== undefined && (analysis.source_hash !== sourceHash || analysis.state === 'stale');
-  const state = stale ? 'stale' : analysis?.state === 'ready' ? analysis.source_complete || notes.sufficient ? 'current' : 'partial' : analysis === undefined ? 'empty' : 'pending';
+  const state = stale ? 'stale' : analysis?.state === 'ready' ? analysis.source_complete || notes.sufficient ? 'current' : 'partial' : analysis === undefined ? 'empty' : analysis.state === 'failed' || analysis.state === 'held' ? 'partial' : 'pending';
   if (firmReadIsAudited(context, currentFirm)) await recordCrmAuditEvent(context, { action: 'meeting.outcomes_read', subjectKind: 'meeting', subjectId: input.meetingId });
   return meetingOutcomesViewSchema.parse({ meetingId: input.meetingId, firmId: firm.id, notes, analysisId: analysis?.id ?? null, sourceHash, state,
     attendance: final.state === 'held' ? 'attended' : final.state === 'no_show' ? 'no_show' : final.state === 'cancelled' ? 'cancelled' : 'unconfirmed',
     overview: analysis?.overview ?? '', items: analysis?.items ?? [], tasks, holds: [...new Set(holds)].slice(0, 30) });
+}
+
+/** Direct lookup, independent of the bounded meeting panel. Caller may hold meeting locks. */
+export async function readMeetingTask(context: RepositoryContext, taskId: string): Promise<MeetingTaskView | null> {
+  const row = (await context.db.query<{ id: string; meeting_id: string; firm_id: string; commitment_id: string; label: string; owner_user_id: string; deadline: unknown; status: string; version: number; user_edited: boolean; evidence: unknown }>(
+    'SELECT * FROM meeting_tasks WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, taskId])).rows[0];
+  if (row === undefined) return null;
+  const firm = await readFirm(context, row.firm_id);
+  if (firm === null || firm.status === 'merged' || decideFirmRead(context, firm) !== 'assigned_or_admin') return null;
+  return meetingTaskViewSchema.parse({ id: row.id, meetingId: row.meeting_id, firmId: row.firm_id, source: { kind: 'promise', commitmentId: row.commitment_id },
+    label: row.label, ownerUserId: row.owner_user_id, deadline: row.deadline, status: row.status, version: row.version, userEdited: row.user_edited, evidence: row.evidence });
 }

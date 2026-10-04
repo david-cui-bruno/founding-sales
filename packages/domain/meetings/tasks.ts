@@ -8,7 +8,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { assembleMeetingAnalysisInput, type MeetingAnalysisInput } from './analysisInput.ts';
 import { lockAnalysisMeeting } from './analysisRequests.ts';
 import { validateMeetingAnalysisAnswer } from './analysisModel.ts';
-import { readMeetingOutcomes } from './outcomes.ts';
+import { readMeetingTask } from './outcomes.ts';
 import { meetingDeadlineDueAt, resolveMeetingDeadline } from './taskDeadlines.ts';
 import type { MeetingResult } from './outcomeTypes.ts';
 interface TaskRow { [key: string]: unknown; id: string; commitment_id: string; label: string; status: string; user_edited: boolean; version: number; owner_user_id: string; deadline: MeetingTaskView['deadline']; evidence: MeetingTaskView['evidence']; }
@@ -33,7 +33,7 @@ function checkedPromise(item: MeetingNoteItem, input: MeetingAnalysisInput): Mee
     const anchorAt = source.kind === 'transcript' ? input.startsAt : input.notes.savedAt;
     if (anchorAt !== null) {
       const resolved = resolveMeetingDeadline({ text: item.deadlineText, anchorAt, zone, sourceKind: source.kind });
-      if (resolved.ok) deadline = resolved.value;
+      if (resolved.ok) { deadline = resolved.value; reasons.delete('deadline_unclear'); }
     }
   }
   if (deadline === null) reasons.add('deadline_unclear');
@@ -58,7 +58,7 @@ export async function reconcileMeetingTasks(context: RepositoryContext, input: {
   const output: MeetingNoteItem[] = [], accepted: MeetingNoteItem[] = [];
   const sufficient = (source.value.complete && source.value.utterances.length > 0) || source.value.notes.sufficient;
   for (const raw of validated.value.items) {
-    if (raw.kind !== 'commitment') { output.push(raw); continue; }
+    if (raw.kind !== 'commitment' || raw.owner === 'prospect') { output.push(raw); continue; }
     let item = checkedPromise(raw, source.value);
     const held = existing.find(t => t.commitment_id === item.id);
     const duplicate = held === undefined && (existing.some(t => similar(t.label, item.text)) || accepted.some(i => similar(i.text, item.text)));
@@ -97,9 +97,8 @@ export async function changeMeetingTask(context: RepositoryContext, input: Chang
     await context.db.query("UPDATE meeting_tasks SET status=$3,completed_at=CASE WHEN $3='done' THEN $4::timestamptz END,user_edited=true,version=version+1,updated_at=now() WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, row.id, input.action === 'complete' ? 'done' : 'cancelled', await databaseNow(context)]);
   }
   await recordCrmAuditEvent(context, { action: `meeting.task_${input.action}`, subjectKind: 'meeting_task', subjectId: row.id });
-  const view = await readMeetingOutcomes(context, { meetingId: located.meeting_id });
-  const task = view?.tasks.find(t => t.id === row.id);
-  if (task === undefined || view === null) throw new Error('changed_meeting_task_not_readable');
-  await refreshTodayForFirm(context, { firmId: view.firmId });
+  const task = await readMeetingTask(context, row.id);
+  if (task === null) throw new Error('changed_meeting_task_not_readable');
+  await refreshTodayForFirm(context, { firmId: task.firmId });
   return { ok: true, value: meetingTaskViewSchema.parse(task) };
 }

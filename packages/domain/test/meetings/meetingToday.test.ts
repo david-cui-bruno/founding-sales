@@ -1,0 +1,26 @@
+import { readFirmTasks } from '../../crm/firmActivity.ts';
+import { readMeetingBrief } from '../../meetings/brief.ts';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { meetingTasksFixture } from './support/meetingTasksFixture.ts';
+import { withTransaction } from '../../db/queryable.ts';
+import { reconcileMeetingTasks } from '../../meetings/tasks.ts';
+import { buildTodaySnapshot } from '../../today/build.ts';
+import { readTodayFirm } from '../../today/dto.ts';
+let f: Awaited<ReturnType<typeof meetingTasksFixture>>;
+beforeEach(async () => { f = await meetingTasksFixture(); });
+afterEach(async () => { await f.db.drop(); });
+it('shows a date-only promise on its local day, separately negotiated from call tasks', async () => {
+  const p = await f.promise('I will send the guide tomorrow.');
+  await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, p));
+  const now = '2026-10-04T15:00:00.000Z';
+  await withTransaction(f.db.session, () => buildTodaySnapshot(f.context, { now, businessDate: '2026-10-04' }));
+  const firmId = (await f.tasks(p.meetingId))[0]!['firm_id'] as string;
+  expect((await readFirmTasks(f.context, firmId)).some(t => t.kind === 'meeting_task')).toBe(false);
+  expect(await readFirmTasks(f.context, firmId, true)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'meeting_task', deadline: { precision: 'date', localDate: '2026-10-04', zone: 'America/New_York' } })]));
+  expect((await readMeetingBrief(f.context, p.meetingId))?.sections.commitments.items.some(i => i.source === 'meeting_task')).toBe(false);
+  expect((await readMeetingBrief(f.context, p.meetingId, { includeMeetingTasks: true }))?.sections.commitments.items.some(i => i.source === 'meeting_task')).toBe(true);
+  const old = await readTodayFirm(f.context, { firmId, now, includeTasks: true });
+  expect(old?.tasks.filter(t => t.kind === 'task') ?? []).toHaveLength(0);
+  const current = await readTodayFirm(f.context, { firmId, now, includeTasks: true, includeMeetingTasks: true });
+  expect(current?.tasks.find(t => t.meetingTask !== null && t.meetingTask !== undefined)).toMatchObject({ callTaskId: null, meetingTask: { label: 'Send the guide', deadline: { precision: 'date', localDate: '2026-10-04' } } });
+});

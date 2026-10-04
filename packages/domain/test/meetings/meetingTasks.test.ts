@@ -43,3 +43,20 @@ describe('meeting promises become tasks', () => {
     expect(await f.tasks(p.meetingId)).toHaveLength(1);
   });
 });
+it('resolves a clear date even when the model defers its interpretation', async () => {
+  const f = await meetingTasksFixture();
+  try {
+    const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
+    const p = await f.promise('I will send the guide tomorrow.');
+    const analysis = await f.publish(p.meetingId, [{ ...p.item, reviewReasons: ['deadline_unclear'] }]);
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, analysis))).toMatchObject({ ok: true, value: { created: 1 } });
+  } finally { await f.db.drop(); }
+});
+it('keeps a known prospect promise as a note without asking David to resolve its owner', async () => {
+  const f = await meetingTasksFixture();
+  try {
+    const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
+    const p = await f.promise('I will send the vendor list tomorrow.', 'prospect');
+    expect(await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, p))).toMatchObject({ ok: true, value: { created: 0, review: 0 } });
+  } finally { await f.db.drop(); }
+});

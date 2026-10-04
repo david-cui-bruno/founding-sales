@@ -63,4 +63,9 @@ export const MEETING_OUTCOME_REFUSALS = ['invalid_input', 'meeting_unknown', 'me
   'notes_changed', 'source_changed', 'source_invalid', 'analysis_unknown', 'task_unknown', 'task_changed', 'owner_unknown', 'deadline_unclear', 'notes_incomplete'] as const;
 export const meetingOutcomeRefusalSchema = z.enum(MEETING_OUTCOME_REFUSALS);
 export const saveMeetingNotesCommandSchema = saveMeetingNotesSchema.safeExtend({ commandId: commandIdSchema, clientVersion: semanticVersionSchema });
-export const changeMeetingTaskCommandSchema = z.intersection(changeMeetingTaskSchema, z.object({ commandId: commandIdSchema, clientVersion: semanticVersionSchema }));
+const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
+export const changeMeetingTaskCommandSchema = z.discriminatedUnion('action', [
+  changeMeetingTaskSchema.options[0].extend(commandEnvelope),
+  changeMeetingTaskSchema.options[1].extend(commandEnvelope),
+  changeMeetingTaskSchema.options[2].extend(commandEnvelope),
+]);

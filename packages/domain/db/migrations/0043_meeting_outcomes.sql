@@ -1,3 +1,4 @@
+-- changes: meetings, provider_reservations, today_items, workspace_settings
 -- Meeting-specific source revisions, analysis accounting and promise tasks. All paid settings default off.
 ALTER TABLE meetings ADD COLUMN notes_revision integer NOT NULL DEFAULT 0 CHECK (notes_revision >= 0),
   ADD CONSTRAINT meetings_firm_identity UNIQUE (workspace_id,id,firm_id);

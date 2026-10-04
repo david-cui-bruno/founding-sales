@@ -1,3 +1,4 @@
+import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
   applyCallProposalsResultSchema,
   callLogsResponseSchema,
@@ -366,8 +367,26 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok ? { set: answer.value, reason: null } : { set: null, reason: answer.reason.slice(0, 80) };
     },
     // Lane M2: the meeting brief; a refusal or a lost answer is a reason, never an empty brief.
+    'meetings.outcomes': async (input: OperationInput<'meetings.outcomes'>) => {
+      const generation = deps.recordings.identity.current();
+      const answer = await deps.api.read(`/meetings/outcomes?meetingId=${encodeURIComponent(input.meetingId)}`, value => meetingOutcomesViewSchema.parse(value));
+      if (generation !== deps.recordings.identity.current()) return { view: null, reason: 'not_found' };
+      return answer.ok ? { view: answer.value, reason: null } : { view: null, reason: answer.reason.slice(0,80) };
+    },
+    'meetings.saveNotes': async (input: OperationInput<'meetings.saveNotes'>) => {
+      const generation = deps.recordings.identity.current(), { commandId, ...body } = input;
+      const answer = await deps.api.command('/meetings/notes', body, value => meetingNotesRevisionSchema.parse(value), { commandId });
+      if (generation !== deps.recordings.identity.current()) return { notes: null, reason: 'not_found' };
+      return answer.ok ? { notes: answer.value, reason: null } : { notes: null, reason: answer.reason.slice(0,80) };
+    },
+    'meetings.changeTask': async (input: OperationInput<'meetings.changeTask'>) => {
+      const generation = deps.recordings.identity.current(), { commandId, ...body } = input;
+      const answer = await deps.api.command('/meetings/tasks/change', body, value => meetingTaskViewSchema.parse(value), { commandId });
+      if (generation !== deps.recordings.identity.current()) return { task: null, reason: 'not_found' };
+      return answer.ok ? { task: answer.value, reason: null } : { task: null, reason: answer.reason.slice(0,80) };
+    },
     'meetings.brief': async (input: { readonly meetingId: string }) => {
-      const answer = await deps.api.read(`/meetings/brief?meetingId=${encodeURIComponent(input.meetingId)}`, value =>
+      const answer = await deps.api.read(`/meetings/brief?meetingId=${encodeURIComponent(input.meetingId)}&include=meeting_tasks`, value =>
         meetingBriefResponseSchema.parse(value),
       );
       return answer.ok ? { brief: answer.value, reason: null } : { brief: null, reason: answer.reason.slice(0, 80) };
