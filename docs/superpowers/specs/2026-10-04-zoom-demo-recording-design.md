@@ -1,6 +1,6 @@
 # M3: automatic local recording for Callie demos
 
-Status: proposed written design, awaiting David's review. No product code or runtime changes in this revision.
+Status: approved by David on 4 October 2026 ("eya" in response to the written-design approval request). Implementation planning follows; no product code or runtime changes in this revision.
 
 ## Intent and agreed constraints
 
