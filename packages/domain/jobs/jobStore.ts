@@ -172,6 +172,7 @@ export async function claimJobs(db: Queryable, options: ClaimOptions): Promise<C
             lease_owner = $3,
             lease_expires_at = now() + make_interval(secs => $4::double precision),
             claimed_at = now(),
+            first_claimed_at = COALESCE(j.first_claimed_at, now()),
             attempt_count = j.attempt_count + 1,
             fencing_token = j.fencing_token + 1,
             updated_at = now()

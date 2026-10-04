@@ -1,3 +1,4 @@
+import { DEFAULT_MEETING_AUTO_RECORDING, meetingAutoRecordingSettingSchema } from './meetingAutoRecording.ts';
 import { z } from 'zod';
 import { DEFAULT_MEETING_TRANSCRIPTION, meetingTranscriptionSettingSchema } from './meetingTranscription.ts';
 import { commandIdSchema } from './auth.ts';
@@ -215,6 +216,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'meeting_transcription',
   'meeting_analysis',
   'meeting_follow_through',
+  'meeting_auto_recording',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -283,6 +285,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   meeting_transcription: meetingTranscriptionSettingSchema,
   meeting_analysis: meetingAnalysisSettingSchema,
   meeting_follow_through: meetingFollowThroughSettingSchema,
+  meeting_auto_recording: meetingAutoRecordingSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -295,6 +298,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   meeting_transcription: DEFAULT_MEETING_TRANSCRIPTION,
   meeting_analysis: DEFAULT_MEETING_ANALYSIS,
   meeting_follow_through: DEFAULT_MEETING_FOLLOW_THROUGH,
+  meeting_auto_recording: DEFAULT_MEETING_AUTO_RECORDING,
 });
 
 /** The schema and default for any stored key. */

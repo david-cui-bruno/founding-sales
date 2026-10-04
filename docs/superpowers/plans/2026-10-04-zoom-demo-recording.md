@@ -10,7 +10,7 @@
 
 **Spec:** [Approved M3 design](../specs/2026-10-04-zoom-demo-recording-design.md).
 
-**Status:** Proposed implementation plan; design approved, plan review pending. No application implementation is included in this commit.
+**Status:** Design and implementation plan approved by David on 4 October 2026. Native execution with one whole-branch review; runtime activation follows the disabled release.
 
 ## Global Constraints
 
