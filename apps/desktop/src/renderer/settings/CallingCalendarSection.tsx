@@ -1,3 +1,4 @@
+import { MeetingAnalysisSection } from './MeetingAnalysisSection.tsx';
 import { MeetingTranscriptionSection } from './MeetingTranscriptionSection.tsx';
 import type { JSX } from 'react';
 import {
@@ -336,6 +337,7 @@ function Loaded({
           <TranscriptionRows transcription={integrations.transcription} editable={editable} busy={busy} onSave={onSave} />
         )}
 
+        {integrations.meetingAnalysis === undefined ? null : <MeetingAnalysisSection setting={integrations.meetingAnalysis.setting} spentTodayCents={integrations.meetingAnalysis.spentTodayCents} editable={editable} busy={busy('meeting_analysis')} onSave={value => { onSave({ settingKey: 'meeting_analysis', value }); }} />}
         {integrations.meetingTranscription === undefined ? null : <MeetingTranscriptionSection setting={integrations.meetingTranscription.setting} spentTodayCents={integrations.meetingTranscription.spentTodayCents} editable={editable} busy={busy('meeting_transcription')} onSave={value => { onSave({ settingKey: 'meeting_transcription', value }); }} />}
         {integrations.month === undefined ? null : (
           <MonthRow month={integrations.month} editable={editable} busy={busy} onSave={onSave} />

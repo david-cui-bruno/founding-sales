@@ -1,3 +1,4 @@
+import { meetingDeadlineSchema } from './meetingOutcomes.ts';
 import { z } from 'zod';
 import { followUpPermissionDtoSchema } from './followUps.ts';
 import { commandIdSchema } from './auth.ts';
@@ -341,7 +342,7 @@ export const firmPageRequestSchema = z.strictObject({
    * Lane PB (migration 0038): `['preparedBrief']` adds `preparedBrief`, the firm's prepared
    * brief or null. Negotiated for the same reason.
    */
-  include: z.array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline'])).max(4).optional(),
+  include: z.array(z.enum(['stops', 'preparedBrief', 'tasks', 'timeline', 'meeting_tasks'])).max(5).optional(),
   /**
    * S4F: with `include: ['timeline']`, the page of the activity timeline older than this
    * cursor (an opaque `nextBefore` from an earlier answer). Absent: the newest page.
@@ -357,8 +358,9 @@ export const firmPageRequestSchema = z.strictObject({
  *  * `call_task` — a promise made on a call (`call_tasks.text`);
  *  * `step` — a pending or held call or LinkedIn step of a sequence (`step_executions`).
  */
-export const FIRM_TASK_KINDS = ['callback', 'call_task', 'step'] as const;
+export const FIRM_TASK_KINDS = ['callback', 'call_task', 'step', 'meeting_task'] as const;
 export const firmTaskDtoSchema = z.strictObject({
+  deadline: meetingDeadlineSchema.optional(),
   key: z.string().max(80),
   kind: z.enum(FIRM_TASK_KINDS),
   /** A short label: the task's own text, or a code the desktop puts in words. */

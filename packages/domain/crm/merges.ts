@@ -1,3 +1,4 @@
+import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { databaseNow } from '../policy/clock.ts';
@@ -116,6 +117,7 @@ export async function mergeFirms(
   // after the firm locks, it closed a cycle with a Twilio call's consumption, which
   // holds the gate SHARED and then locks the firm (review fold 2).
   await lockSendGateForStopFact(context);
+  await lockTodayForFirmChange(context);
   // Then the stop-history lock (brief RF, review P2): a lift of a source stop either
   // commits before this merge reads the source's stops, and is copied with them, or waits
   // for the merge and then lifts the survivor's copy too (`liftMergeCopies`).
@@ -235,6 +237,8 @@ export async function mergeFirms(
   await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey IMMEDIATE');
   // And a meeting that named only the firm follows the firm that survives.
   await move('meetings');
+  if (target.assigned_user_id !== null) await context.db.query("UPDATE meeting_tasks SET owner_user_id=$3,version=version+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND status='open' AND owner_user_id<>$3", [context.scope.workspaceId, target.id, target.assigned_user_id]);
+  await refreshTodayForFirm(context, { firmId: target.id });
 
   await preserveIdentifiers(context, source, target);
   const journalAfterCommit = await preserveFirmSuppressions(context, source.id, target.id, input.commandId, input.journal);
@@ -498,6 +502,7 @@ async function preserveFirmSuppressions(
 ): Promise<readonly SuppressionJournalRecord[]> {
   // The target inherits a stop fact, so the insert takes the send gate.
   await lockSendGateForStopFact(context);
+  await lockTodayForFirmChange(context);
   // Brief RF, X7: each copy carries its history. A stop the source had lifted is copied
   // with the lift, linked to the copy, so it is lifted on the target too; a stop that was
   // active stays active, because a lift is copied only onto the copy of the event it lifted.

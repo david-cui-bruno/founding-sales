@@ -117,7 +117,7 @@ describe('the words and the actions on a meeting row', () => {
       'Booked',
     ]);
     const buttons = (node: HTMLElement): string[] => within(node).queryAllByRole('button').map(button => button.textContent ?? '');
-    expect(rows.map(buttons)).toEqual([['Attended', 'No-show'], ['Undo'], [], []]);
+    expect(rows.map(buttons)).toEqual([['Attended', 'No-show', 'Notes & tasks'], ['Undo', 'Notes & tasks'], ['Notes & tasks'], ['Notes & tasks']]);
     // Quiet until hover or focus (David's taste): the actions are hidden at rest.
     expect(within(rows[0] as HTMLElement).getByTestId('attendance-actions').className).toContain('opacity-0');
   });
@@ -130,7 +130,7 @@ describe('the words and the actions on a meeting row', () => {
       </Session>,
     );
     const [only] = await screen.findAllByTestId('firm-meeting-row');
-    expect(within(only as HTMLElement).queryAllByRole('button')).toEqual([]);
+    expect(within(only as HTMLElement).queryAllByRole('button').map(button => button.textContent)).toEqual(['Notes & tasks']);
   });
 
   it('the board card says ended is not confirmed', () => {

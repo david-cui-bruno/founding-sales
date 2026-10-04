@@ -1,3 +1,4 @@
+import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
 import { awsMeetingTranscription } from '../transcription/awsMeetingTranscribeClient.ts';
 import { meetingProcessingStore } from '../transcription/meetingAudioStore.ts';
@@ -91,6 +92,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
   readonly meetingTranscription?: MeetingTranscribeOptions | undefined;
   readonly classifier: ClassifyWorkerOptions | undefined;
   readonly mail: MailWorkerOptions | undefined;
@@ -202,6 +204,7 @@ export function registerHandlers(
   // Slice C2. Calls Twilio for the recording and the provider for the transcript; collect-only
   // (review C3-N) with just the call-audio bucket, and then the heartbeat says it starts nothing.
   if (composition.transcription !== undefined) registry.register(callTranscribeJobHandler(composition.transcription));
+  if (composition.meetingAnalysis !== undefined) registry.register(meetingAnalyzeJobHandler(composition.meetingAnalysis));
   if (composition.meetingTranscription !== undefined) registry.register(meetingTranscribeJobHandler(composition.meetingTranscription));
   // Slice C3b. Calls Anthropic, with the classifier's transport, so only with its key.
   for (const handler of callSummarizeHandlers(composition.summary)) registry.register(handler);
@@ -398,7 +401,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis'>): {
+  readonly meetingAnalysis: boolean;
   readonly meetingTranscription: boolean;
   readonly calcomReconcile: boolean;
   readonly transcription: boolean;
@@ -407,6 +411,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    meetingAnalysis: composition.meetingAnalysis !== undefined,
     meetingTranscription: composition.meetingTranscription !== undefined,
     calcomReconcile: composition.calcom !== undefined,
     // The held-transcription source starts new attempts, so only where they can start.
@@ -431,6 +436,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly meetingAnalysis?: boolean;
     readonly meetingTranscription?: boolean;
     readonly calcomReconcile?: boolean;
     readonly transcription?: boolean;
@@ -442,6 +448,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    meetingAnalysesSource(options.meetingAnalysis === true),
     meetingTranscriptionsSource(options.meetingTranscription === true),
     canarySource(),
     todayBuildSource(),
@@ -544,9 +551,11 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // Slice 3a: the analysis rides the same transport; the model is the deployment's.
   const analysis = readCallAnalysisComposition(classifier, environment, (event, fields) => log.log('info', event, fields));
   const mediaAbort = new AbortController();
+  const meetingAnalysis = readMeetingAnalysisComposition(classifier, environment);
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),
     ...(meetingTranscription.options === null ? {} : { meetingTranscription: meetingTranscription.options }),
     ...(calcomReconcile.client === null
       ? {}
@@ -569,6 +578,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // Whether reconciliation runs, and if not why, by field name only.
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
     // Whether transcription runs, and if not why, by field name only.
+    meeting_analysis: meetingAnalysis.problem ?? 'configured',
     meeting_transcription: meetingTranscription.problem ?? 'configured',
     call_transcription: transcription.problem ?? 'configured',
     // Whether after-call summaries run, and with which model; never a key.

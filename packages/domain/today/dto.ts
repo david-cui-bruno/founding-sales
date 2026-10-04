@@ -1,3 +1,5 @@
+import { readMeetingTask } from '../meetings/outcomes.ts';
+import type { MeetingTaskView } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
@@ -103,6 +105,8 @@ export interface TodayTaskDtoV2 extends TodayTaskDto {
    */
   readonly callTaskId?: string | null;
   readonly taskText?: string | null;
+  readonly meetingTask?: MeetingTaskView | null;
+  readonly meetingReviewId?: string | null;
 }
 
 /**
@@ -380,6 +384,7 @@ export interface ReadTodayInput {
    * is in no card, count or expansion — an installed desktop's contract has no such kind.
    */
   readonly includeTasks?: boolean | undefined;
+  readonly includeMeetingTasks?: boolean | undefined;
 }
 
 /**
@@ -390,26 +395,27 @@ export interface ReadTodayInput {
  * Only firms with an open task on the date are touched; the order is then 8.2's comparator,
  * stable, so cards no task touched keep the database's order among themselves.
  */
-async function withoutCallTasks(
+async function negotiatedCards(
   context: RepositoryContext,
   snapshotDate: string,
   cards: readonly TodayCardRow[],
+  input: { includeTasks?: boolean | undefined; includeMeetingTasks?: boolean | undefined },
 ): Promise<readonly TodayCardRow[]> {
   if (cards.length === 0) return cards;
   const { rows } = await context.db.query<{ firm_id: string; tasks: number; lane: TodayLane | null; due_at: Date | null }>(
     `SELECT t.firm_id, t.tasks, first.lane, first.due_at
        FROM (SELECT firm_id, count(*)::int AS tasks
                FROM today_items
-              WHERE workspace_id = $1 AND snapshot_date = $2::date AND status = 'open' AND kind = 'task'
+              WHERE workspace_id = $1 AND snapshot_date = $2::date AND status = 'open' AND kind = 'task' AND NOT ((source_kind='call_task' AND $3::boolean) OR (source_kind IN ('meeting_task','meeting_review') AND $4::boolean))
               GROUP BY firm_id) t
        LEFT JOIN LATERAL (
          SELECT o.lane, o.due_at
            FROM today_items o
           WHERE o.workspace_id = $1 AND o.snapshot_date = $2::date AND o.firm_id = t.firm_id
-            AND o.status = 'open' AND o.kind <> 'task'
+            AND o.status = 'open' AND (o.kind <> 'task' OR (o.source_kind='call_task' AND $3::boolean) OR (o.source_kind IN ('meeting_task','meeting_review') AND $4::boolean))
           ORDER BY o.lane_precedence, o.due_at, o.item_key
           LIMIT 1) first ON true`,
-    [context.scope.workspaceId, snapshotDate],
+    [context.scope.workspaceId, snapshotDate, input.includeTasks === true, input.includeMeetingTasks === true],
   );
   if (rows.length === 0) return cards;
   const touched = new Map(rows.map(row => [row.firm_id, row]));
@@ -444,7 +450,7 @@ export async function readTodayList(
     snapshotDate,
     ...(assignedUserId === undefined ? {} : { assignedUserId }),
   });
-  const cards = input.includeTasks === true ? listed : await withoutCallTasks(context, snapshotDate, listed);
+  const cards = await negotiatedCards(context, snapshotDate, listed, input);
   // Lane 4's order, but only on a date whose every card was built under this
   // algorithm — asked of the date rather than of this viewer's slice of it.
   const ordered = (await snapshotIsCurrent(context, snapshotDate))
@@ -480,6 +486,7 @@ export async function readTodayFirm(
     readonly firmId: string;
     readonly now: string;
     readonly includeTasks?: boolean | undefined;
+  readonly includeMeetingTasks?: boolean | undefined;
     /** Lane PB: `include: ['preparedBrief']` adds the firm's prepared brief. */
     readonly includePreparedBrief?: boolean | undefined;
   },
@@ -491,14 +498,16 @@ export async function readTodayFirm(
     ...(assignedUserId === undefined ? {} : { assignedUserId }),
   });
   const includeTasks = input.includeTasks === true;
-  const cards = includeTasks ? listed : await withoutCallTasks(context, snapshotDate, listed);
+  const cards = await negotiatedCards(context, snapshotDate, listed, input);
   const card = cards.find(entry => entry.firmId === input.firmId);
   if (card === undefined) return null;
 
   const items = (await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId })).filter(
-    item => includeTasks || item.kind !== 'task',
+    item => item.kind !== 'task' || (item.sourceKind === 'call_task' && includeTasks) || (['meeting_task', 'meeting_review'].includes(item.sourceKind) && input.includeMeetingTasks === true),
   );
   const taskTexts = includeTasks ? await callTaskTexts(context, items) : new Map<string, string>();
+  const meetingTasks = new Map<string, MeetingTaskView | null>();
+  for (const item of items) if (item.sourceKind === 'meeting_task' && item.sourceId !== null) meetingTasks.set(item.sourceId, await readMeetingTask(context, item.sourceId));
   const pauses = await pausesByItem(context, input.firmId, items);
   const held = await heldDaysByExecution(context, items, input.now);
 
@@ -546,6 +555,7 @@ export async function readTodayFirm(
       callLogId: callLogIdOfItemKey(item.itemKey),
       pauseHoldId: pauses.get(item.id) ?? null,
       heldDays: item.sourceKind === 'step_execution' && item.sourceId !== null ? (held.get(item.sourceId) ?? null) : null,
+      ...(input.includeMeetingTasks === true ? { meetingTask: item.sourceKind === 'meeting_task' && item.sourceId !== null ? meetingTasks.get(item.sourceId) ?? null : null, meetingReviewId: item.sourceKind === 'meeting_review' ? item.sourceId : null } : {}),
       ...(includeTasks
         ? {
             callTaskId: item.sourceKind === 'call_task' ? item.sourceId : null,

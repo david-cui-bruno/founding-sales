@@ -29,6 +29,7 @@ export const MEETING_BRIEF_SOURCES = [
   'email_thread',
   'call_objection',
   'call_commitment',
+  'meeting_task',
 ] as const;
 export type MeetingBriefSource = (typeof MEETING_BRIEF_SOURCES)[number];
 

@@ -1,3 +1,4 @@
+import { deadlineLabel } from '../meetings/MeetingTaskControls.tsx';
 import { holdEnrollmentLine, reasonSentence, type ContactDto, type FirmDetailDto, type FirmPageResponse, type HeldOutgoingMessage, type RouteDto } from '@fss/contracts';
 import { useEffect, useState, type JSX, type ReactNode } from 'react';
 import type { BoardCard, StageSuggestion } from '@fss/contracts';
@@ -837,7 +838,7 @@ function NextAction({ card, timeZone }: { readonly card: BoardCard | undefined; 
   );
 }
 
-const TASK_WORDS: Readonly<Record<FirmTaskDto['kind'], string>> = { callback: 'Callback', call_task: 'Task', step: 'Sequence step' };
+const TASK_WORDS: Readonly<Record<FirmTaskDto['kind'], string>> = { callback: 'Callback', call_task: 'Task', meeting_task: 'Meeting task', step: 'Sequence step' };
 
 /**
  * The firm's open work, soonest first (S4F). Read-only: acting on a task stays where it is
@@ -861,7 +862,7 @@ function FirmTasks({ tasks }: { readonly tasks: readonly FirmTaskDto[] }): JSX.E
               </span>
               <span className="text-xs text-muted-foreground">{TASK_WORDS[task.kind]}</span>
               {task.status === 'held' ? <Chip tone="warn">Held</Chip> : null}
-              <span className="w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{shortDayTime(task.dueAt)}</span>
+              <span className="w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{task.deadline === undefined ? shortDayTime(task.dueAt) : deadlineLabel(task.deadline)}</span>
             </li>
           ))}
         </ul>

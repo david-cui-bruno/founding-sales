@@ -183,7 +183,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       // know; then the cache's own strict shape, which is what may be written to disk
       // (lane g78). Before g78 the cache schema read the wire directly, so any field the
       // API added would have made every Mac refuse its own Today list.
-      return parsed(await call('/today?include=tasks', { method: 'GET', accessToken }), value =>
+      return parsed(await call('/today?include=tasks&include=meeting_tasks', { method: 'GET', accessToken }), value =>
         cachedTodaySchema.parse(todayListResponseSchema.parse(value)),
       );
     },

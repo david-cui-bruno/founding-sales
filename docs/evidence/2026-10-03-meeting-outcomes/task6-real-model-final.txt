@@ -1,0 +1,8 @@
+{"id":"clear-host-tomorrow","outcome":"accepted","pass":true,"derivedTasks":1,"usage":{"inputTokens":1940,"cachedInputTokens":0,"outputTokens":194}}
+{"id":"prospect-promise","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1941,"cachedInputTokens":0,"outputTokens":200}}
+{"id":"unknown-speaker","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1897,"cachedInputTokens":0,"outputTokens":211}}
+{"id":"negation","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1945,"cachedInputTokens":0,"outputTokens":50}}
+{"id":"conditional","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1944,"cachedInputTokens":0,"outputTokens":240}}
+{"id":"vague-deadline","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1941,"cachedInputTokens":0,"outputTokens":207}}
+{"id":"pain-no-promise","outcome":"accepted","pass":true,"derivedTasks":0,"usage":{"inputTokens":1947,"cachedInputTokens":0,"outputTokens":214}}
+{"id":"clear-host-exact-date","outcome":"accepted","pass":true,"derivedTasks":1,"usage":{"inputTokens":1947,"cachedInputTokens":0,"outputTokens":203}}

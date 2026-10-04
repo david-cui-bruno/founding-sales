@@ -838,7 +838,7 @@ describe('the Today bridge', () => {
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.expand({ firmId: FIRM_ID });
-    expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2, include: ['tasks', 'preparedBrief'] });
+    expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2, include: ['tasks', 'preparedBrief', 'meeting_tasks'] });
   });
 
   it('records the outcome against its task and the number the call used, on the server’s clock (C04, C15)', async () => {

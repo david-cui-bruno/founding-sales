@@ -61,6 +61,7 @@ describe('job kind classes', () => {
       // Slice C2: a call's transcript, read later on the firm page.
       'call.transcribe',
       'meeting.transcribe',
+      'meeting.analyze',
       // Slice C3b: its summary, read with it.
       'call.summarize',
       // Slice 3a: its analysis, which replaces the summary for a new call.

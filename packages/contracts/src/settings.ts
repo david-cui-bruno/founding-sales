@@ -194,6 +194,14 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
  *     Month-to-date spend is every provider's settled cost plus its open reservations on
  *     the workspace business time zone's calendar month.
  */
+export const meetingAnalysisSettingSchema = z.strictObject({
+  enabled: z.boolean(), dailyCeilingCents: z.number().int().min(0).max(500),
+  creditCoverage: z.strictObject({ ...meetingTranscriptionSettingSchema.shape.creditCoverage.unwrap().shape, service: z.literal('bedrock') })
+    .refine(value => Date.parse(value.validUntil) > Date.parse(value.verifiedAt), 'coverage must expire after verification').nullable(),
+});
+export type MeetingAnalysisSetting = z.infer<typeof meetingAnalysisSettingSchema>;
+export const DEFAULT_MEETING_ANALYSIS: MeetingAnalysisSetting = { enabled: false, dailyCeilingCents: 0, creditCoverage: null };
+
 export const INTEGRATION_SETTING_KEYS = [
   'calling_provider',
   'calendar_integration',
@@ -202,6 +210,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'call_transcription',
   'monthly_cash_ceiling_cents',
   'meeting_transcription',
+  'meeting_analysis',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -268,6 +277,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   call_transcription: callTranscriptionSettingSchema,
   monthly_cash_ceiling_cents: monthlyCashCeilingSettingSchema,
   meeting_transcription: meetingTranscriptionSettingSchema,
+  meeting_analysis: meetingAnalysisSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -278,6 +288,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   call_transcription: { enabled: false, dailyCeilingCents: 0, unitPriceMicros: DEFAULT_TRANSCRIPTION_UNIT_PRICE_MICROS },
   monthly_cash_ceiling_cents: { cents: DEFAULT_MONTHLY_CASH_CEILING_CENTS },
   meeting_transcription: DEFAULT_MEETING_TRANSCRIPTION,
+  meeting_analysis: DEFAULT_MEETING_ANALYSIS,
 });
 
 /** The schema and default for any stored key. */
@@ -297,6 +308,7 @@ export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, un
  */
 const integrationConfigured = z.strictObject({ ok: z.boolean(), missing: z.array(z.string().max(64)).max(16) });
 export const integrationsSettingsResponseSchema = z.strictObject({
+  meetingAnalysis: z.strictObject({ setting: meetingAnalysisSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   meetingTranscription: z.strictObject({ setting: meetingTranscriptionSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   callingProvider: z.enum(['tel', 'twilio']),
   telephonyBudget: telephonyBudgetSettingSchema,

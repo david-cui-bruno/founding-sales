@@ -1,3 +1,6 @@
+import { MeetingTaskControls } from '../meetings/MeetingTaskControls.tsx';
+import { outcomesPorts } from '../meetings/MeetingOutcomes.tsx';
+import { navigate } from '../routes.ts';
 import { callbackInstant } from '@fss/contracts';
 import type { JSX } from 'react';
 import { useDraft } from '../app/drafts.tsx';
@@ -162,6 +165,8 @@ export function TaskRow({
   readonly actionsEnabled: boolean;
   readonly actions: TodayActions;
 }): JSX.Element {
+  if (entry.task.meetingTask != null) return <li data-testid="today-meeting-task" className="border-b border-border py-2"><MeetingTaskControls task={entry.task.meetingTask} change={outcomesPorts.changeTask} enabled={actionsEnabled} onChanged={changed => { actions.expand(changed.firmId); }} /></li>;
+  if (entry.task.meetingReviewId != null) return <li data-testid="today-meeting-review" className="flex items-center justify-between border-b border-border py-2 text-sm"><span>Review meeting notes</span><Button size="sm" variant="quiet" onClick={() => { if (state.expanded !== null) navigate({ name: 'firm', firmId: state.expanded.firmId }); }}>Open meeting</Button></li>;
   const holdId = entry.task.pauseHoldId;
   const callLogId = entry.task.callLogId;
   const until = entry.task.snoozeUntil === null ? null : dueLabel(entry.task.snoozeUntil, state.businessTimeZone, state.snapshotDate);

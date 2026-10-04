@@ -92,6 +92,10 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
+  ...['analysisAdapter', 'analysisInput', 'analysisRequests'].map(name => ({
+    file: `packages/domain/meetings/${name}.ts`, method: 'extract',
+    reason: "the literal 'extract' names the meeting-analysis phase (versus merge), never a research provider method; paid analysis dispatch is gated by analysisPaid and the meeting worker",
+  })),
   {
     file: 'packages/contracts/src/meetingTranscription.ts',
     method: 'transcribe',

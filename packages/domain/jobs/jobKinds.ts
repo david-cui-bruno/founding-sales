@@ -38,6 +38,7 @@ export const JOB_KINDS = [
   'calcom.reconcile',
   'call.transcribe',
   'meeting.transcribe',
+  'meeting.analyze',
   'call.summarize',
   'call.analyze',
   'call.analyze_sweep',
@@ -123,6 +124,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // per attempt, closed once by a compare-and-set on its state (`calls/transcription.ts`).
   'call.transcribe': 'business_uniqueness',
   'meeting.transcribe': 'business_uniqueness',
+  'meeting.analyze': 'business_uniqueness',
   // Slice C3b. One summary per call session (`call_summaries_pkey`), inserted `ON CONFLICT
   // DO NOTHING`, and every cent goes through a `provider_reservations` row per attempt,
   // closed once by a compare-and-set on its state (`calls/summary.ts`).
@@ -149,6 +151,8 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
+  meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
+  meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
   meetingTranscribe: (recordingId: string, revision: number): string => `meeting-transcribe:${recordingId}:r${String(revision)}`,
   meetingCollect: (attemptId: string, look: number): string => `meeting-collect:${attemptId}:l${String(look)}`,
 
@@ -311,6 +315,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.
   'call.transcribe': 'bulk',
   'meeting.transcribe': 'bulk',
+  'meeting.analyze': 'bulk',
   // Slice C3b: nor on its summary, which follows the transcript onto the firm page.
   'call.summarize': 'bulk',
   // Slice 3a: the analysis is read later, after the call, like the summary it replaces.

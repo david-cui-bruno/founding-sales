@@ -1,3 +1,4 @@
+import { enqueueMeetingAnalysis } from './analysisJobs.ts';
 import { randomUUID } from 'node:crypto';
 import { MEETING_TRANSCRIPTION_LIMITS, meetingSpeechSchema, type MeetingProcessingStatus, type RecordingSourceKind } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -186,6 +187,7 @@ export async function completeMeetingTranscription(context: RepositoryContext, i
       SELECT $1,$2,$3,COALESCE(max(version),0)+1,$4,$5,$6::jsonb,$7 FROM meeting_transcripts WHERE workspace_id=$1 AND original_recording_id=$3`, [context.scope.workspaceId, source.id, attempt.original_recording_id, attempt.duration_ms, result.language, JSON.stringify(utterances), input.at]);
     await context.db.query("UPDATE meeting_recordings SET state='transcribed',processing_status='ready',processing_reason=NULL,duration_ms=$3 WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, source.id, attempt.duration_ms]);
     await context.db.query('UPDATE meetings SET transcript_source_revision=transcript_source_revision+1 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, source.meeting_id]);
+    await enqueueMeetingAnalysis(context, source.meeting_id);
     return 'complete';
   }
   await holdMeetingSource(context, source.id, reason ?? 'output_invalid', input.at, 0);

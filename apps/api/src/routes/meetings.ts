@@ -90,7 +90,7 @@ export async function routeMeetings(request: ApiRequest, options: RoutingOptions
   if (request.path === '/meetings/brief') {
     const meetingId = uuid.safeParse(request.query.get('meetingId') ?? '');
     if (!meetingId.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    const brief = await readMeetingBrief(scoped.context, meetingId.data);
+    const brief = await readMeetingBrief(scoped.context, meetingId.data, { includeMeetingTasks: request.query.getAll('include').includes('meeting_tasks') });
     if (brief === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
     return { status: 200, body: meetingBriefResponseSchema.parse(brief) };
   }

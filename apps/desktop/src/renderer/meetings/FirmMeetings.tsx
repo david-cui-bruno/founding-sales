@@ -1,3 +1,4 @@
+import { MeetingOutcomes } from './MeetingOutcomes.tsx';
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { reasonSentence, type FirmMeetingDto, type FirmRecording, type MeetingAttendanceChoice, type MeetingAttendanceSet, type StageSuggestion } from '@fss/contracts';
 import { shortDayTime } from '../dates.ts';
@@ -325,6 +326,7 @@ export function FirmMeetings({
               {ports.brief !== undefined && briefOffered(row) && briefs.memory.open.has(row.meetingId) ? (
                 <MeetingBrief meetingId={row.meetingId} read={ports.brief} />
               ) : null}
+              <MeetingOutcomes key={row.meetingId} meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               {note === undefined ? null : (
                 <p data-testid="attendance-note" role={note.alert ? 'alert' : 'status'} className="mt-0.5 flex items-center gap-2 text-xs text-destructive">
                   <span>{note.text}</span>

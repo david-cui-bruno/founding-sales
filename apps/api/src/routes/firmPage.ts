@@ -50,6 +50,7 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
     // S4F: the firm's open work and one page of its activity, only when asked for, for the
     // same reason; `timelineBefore` is the cursor of the page older than one already shown.
     includeTasks: parsed.data.include?.includes('tasks') === true,
+    includeMeetingTasks: parsed.data.pageVersion === 2 && parsed.data.include?.includes('meeting_tasks') === true,
     includeTimeline: parsed.data.include?.includes('timeline') === true,
     timelineBefore: parsed.data.timelineBefore,
   });

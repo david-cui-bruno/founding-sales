@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { saveMeetingNotesSchema, changeMeetingTaskSchema, meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
 import {
   CALL_OUTCOMES,
   meetingTranscriptPageSchema,
@@ -1280,7 +1281,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: nothing,
     output: adminStateSchema,
@@ -1298,7 +1299,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: z.strictObject({ screen: z.enum(SETTINGS_TAB_SCREENS) }),
     output: adminStateSchema,
@@ -1315,7 +1316,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: saveSettingInputSchema,
     output: adminStateSchema,
@@ -1325,7 +1326,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/settings/update' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: saveIntegrationInputSchema,
     output: adminStateSchema,
@@ -1372,7 +1373,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: z.strictObject({ stageKey: z.string().min(1).max(80) }),
     output: adminStateSchema,
@@ -1435,7 +1436,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis' },
     ],
     input: recordHolidayCalendarInputSchema,
     output: adminStateSchema,
@@ -1550,9 +1551,22 @@ export const OPERATIONS = {
       'none: the firm’s meetings with their state, time and how attendance was confirmed, and the one-click stage move a live booking suggests (lane M1); meetings null when the read did not answer',
   },
   // Lane M2: the meeting brief, opened from a Meetings row.
+  'meetings.outcomes': {
+    kind: 'read', calls: [{ method: 'GET', path: '/meetings/outcomes?meetingId={uuid}' }], input: z.strictObject({ meetingId: uuid }),
+    output: z.strictObject({ view: meetingOutcomesViewSchema.nullable(), reason: z.string().max(80).nullable() }), transform: 'current correctable meeting notes and tasks, never cached on disk',
+  },
+  'meetings.saveNotes': {
+    kind: 'command', calls: [{ method: 'POST', path: '/meetings/notes' }], input: saveMeetingNotesSchema.safeExtend({ commandId: uuid }),
+    output: z.strictObject({ notes: meetingNotesRevisionSchema.nullable(), reason: z.string().max(80).nullable() }), transform: 'versioned notes save with retained command identity',
+  },
+  'meetings.changeTask': {
+    kind: 'command', calls: [{ method: 'POST', path: '/meetings/tasks/change' }],
+    input: z.discriminatedUnion('action', [changeMeetingTaskSchema.options[0].extend({ commandId: uuid }), changeMeetingTaskSchema.options[1].extend({ commandId: uuid }), changeMeetingTaskSchema.options[2].extend({ commandId: uuid })]),
+    output: z.strictObject({ task: meetingTaskViewSchema.nullable(), reason: z.string().max(80).nullable() }), transform: 'versioned edit, completion or cancellation of a meeting task',
+  },
   'meetings.brief': {
     kind: 'read',
-    calls: [{ method: 'GET', path: '/meetings/brief?meetingId={uuid}' }],
+    calls: [{ method: 'GET', path: '/meetings/brief?meetingId={uuid}&include=meeting_tasks' }],
     input: z.strictObject({ meetingId: uuid }),
     output: z.strictObject({ brief: meetingBriefResponseSchema.nullable(), reason: z.string().max(80).nullable() }),
     transform: 'none: the brief, or null with the reason when the read did not answer (not_found for a meeting the caller may not read)',
