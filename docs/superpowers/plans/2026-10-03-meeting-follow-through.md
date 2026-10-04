@@ -71,17 +71,17 @@ Keep delivery through `runDueStepExecution` → `prepareOutboundMessage` → `di
 
 **Consumes:** Task 1 plan/scope and M6 current notes. **Produces:** `resolveMeetingFollowThroughScope(context,{meetingId,contactId,sourceHash}):Promise<MeetingResult<MeetingFollowThroughScope>>`; `verifyMeetingFollowThrough(context,{planId,executionId,draftVersion,at}):Promise<MeetingResult<{planId:string,planVersion:number}>>`; `enrollMeetingFollowThrough(context,{planId,expectedVersion,at}):Promise<MeetingResult<{enrollmentId:string}>>`.
 
-- [ ] Add tests for missing/unknown attendance, alias-only booking reference, cancelled meeting, unmatched/other-firm recipient, narrower request, three-message maximum and one active contact:
+- [x] Add tests for missing/unknown attendance, alias-only booking reference, cancelled meeting, unmatched/other-firm recipient, narrower request, three-message maximum and one active contact:
   ```ts
   expect(await eligibilityForUnconfirmedAttendance()).toMatchObject({ ok: false });
   expect(await eligibilityForSecondAttendee()).toMatchObject({ ok: false });
   expect(await eligibilityForOldAliasOfSameMeeting()).toMatchObject({ ok: true });
   expect(await eligibilityForFourthMessage()).toMatchObject({ ok: false });
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingFollowThroughEligibility.test.ts test/sequences/followUpEligibility.test.ts test/outbound/permissionSpend.test.ts`; confirm new failures.
-- [ ] Replace only the reserved `booking_communications` cases with actual persisted-meeting validation, including booking aliases, current firm/contact, confirmed attendance, complete/sufficient current notes, source scope and expiry. Bind exact plan/sequence version and max messages. The existing 30-day booking scope is not silently extended; a reminder beyond it remains drafted/reviewable until supported by a separately recorded valid scope. A rejection or narrower request wins over defaults.
-- [ ] Enroll under existing firm exclusivity and supersession rules, retaining historical rows. Do not forge a call, create an agreed-sequence permission or enroll every attendee. New automated work cannot commandeer a human takeover. Test the same permission at prepare time and final dispatch, including source correction and contact reassignment between them.
-- [ ] Rerun tests/typecheck and commit `feat: verify meeting-backed follow-through eligibility`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingFollowThroughEligibility.test.ts test/sequences/followUpEligibility.test.ts test/outbound/permissionSpend.test.ts`; confirm new failures.
+- [x] Replace only the reserved `booking_communications` cases with actual persisted-meeting validation, including booking aliases, current firm/contact, confirmed attendance, complete/sufficient current notes, source scope and expiry. Bind exact plan/sequence version and max messages. The existing 30-day booking scope is not silently extended; a reminder beyond it remains drafted/reviewable until supported by a separately recorded valid scope. A rejection or narrower request wins over defaults.
+- [x] Enroll under existing firm exclusivity and supersession rules, retaining historical rows. Do not forge a call, create an agreed-sequence permission or enroll every attendee. New automated work cannot commandeer a human takeover. Test the same permission at prepare time and final dispatch, including source correction and contact reassignment between them.
+- [x] Rerun tests/typecheck and commit `feat: verify meeting-backed follow-through eligibility`.
 
 ## Task 3: connect drafts to the existing send fence
 

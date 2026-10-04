@@ -17,7 +17,7 @@ function similar(left: string, right: string): boolean {
   const a = words(left), b = words(right);
   return a.size > 0 && b.size > 0 && [...a].filter(w => b.has(w)).length / Math.min(a.size, b.size) >= 0.8;
 }
-function checkedPromise(item: MeetingNoteItem, input: MeetingAnalysisInput): MeetingNoteItem {
+export function checkedPromise(item: MeetingNoteItem, input: MeetingAnalysisInput): MeetingNoteItem {
   const reasons = new Set(item.reviewReasons), override = input.notes.itemOverrides.find(o => o.itemId === item.id && o.decision === 'confirmed');
   if (item.owner !== 'you') reasons.add('owner_unknown');
   if (item.provenance !== 'stated' && override === undefined) reasons.add('inferred');

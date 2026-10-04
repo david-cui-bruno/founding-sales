@@ -901,24 +901,13 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     });
   });
 
-  it('booking_communications is reserved and says so, rather than being waved through', async () => {
+  it('a booking reference without a verified meeting plan grants nothing', async () => {
     const contactId = await addContact('Booked');
     const granted = await grantFollowUpPermission(salesperson(), {
-      firmId: crm.alpha.firmId,
-      contactId,
-      bookingReference: 'cal-booking-0001',
+      firmId: crm.alpha.firmId, contactId, bookingReference: 'cal-booking-0001',
       grantedByUserId: seeded.alpha.salesperson.userId,
     });
-    if (!granted.ok) throw new Error(`refused: ${granted.reason}`);
-    const refused = await enrollContact(salesperson(), {
-      sequenceVersionId: sequences.alpha.publishedVersionId,
-      originKind: 'follow_up',
-      permissionId: granted.value.id,
-      opportunityId: crm.alpha.opportunityId,
-      firmId: crm.alpha.firmId,
-      contactId,
-    });
-    expect(refused).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+    expect(granted).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
   });
 });
 
