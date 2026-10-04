@@ -275,6 +275,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // A file name (which may carry a participant's display name) and a digest of their voice:
   // it goes with the meeting, as the meeting's uids do. The object expires with the bucket.
   meeting_recording_aliases: coverage(['deletion_removes'], 'Folded recording identities, removed with the surviving recording.'),
+  meeting_note_revisions: coverage(['deletion_removes'], 'Human debriefs and corrections cascade with their meeting.'),
+  meeting_analyses: coverage(['deletion_removes'], 'Structured meeting evidence cascades with its meeting.'),
+  meeting_tasks: coverage(['deletion_removes'], 'Meeting promises and evidence cascade with their meeting.'),
+  meeting_analysis_requests: coverage(['deletion_redacts', 'retained'], 'Request identity and spend survive deletion; the database scrubs result content when its meeting link is cleared.'),
   meeting_transcripts: coverage(['deletion_removes'], 'Demo speech and attribution, removed with the recording and meeting.'),
   meeting_transcription_attempts: coverage(['operational'], 'Provider job IDs, object keys and reservations, without speech; retains accounting after subject deletion.'),
   meeting_recordings: coverage(
