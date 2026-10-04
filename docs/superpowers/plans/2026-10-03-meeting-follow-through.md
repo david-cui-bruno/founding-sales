@@ -129,7 +129,7 @@ Keep delivery through `runDueStepExecution` → `prepareOutboundMessage` → `di
 
 **Consumes:** Tasks 1–4 read/edit commands and delivery state. **Produces:** `meetings.followThrough` read and `meetings.editRecap` command; meeting-panel draft/time/edit/cancel controls and actionable holds in Today.
 
-- [ ] Write user-flow tests for an empty/partial meeting, eligible recap, paused sending, an edit racing with due time, browser/desktop navigation loss and source conflicts:
+- [x] Write user-flow tests for an empty/partial meeting, eligible recap, paused sending, an edit racing with due time, browser/desktop navigation loss and source conflicts:
   ```ts
   expect(screen.getByText('Sending paused')).toBeVisible();
   expect(screen.queryByText(/sending in/i)).toBeNull();
@@ -137,8 +137,8 @@ Keep delivery through `runDueStepExecution` → `prepareOutboundMessage` → `di
   expect(outdatedEditorSave.status).toBe(409);
   expect(todayMetricsRowsAdded).toBe(0);
   ```
-- [ ] Run `npm test --workspace apps/api -- test/meetingFollowThrough.test.ts` and `npm test --workspace apps/desktop -- test/meetingFollowThrough.component.test.tsx`; verify the new behavior fails before implementation.
-- [ ] Wire the existing command receipt/version and current-authorization checks. Wait for `begin_edit` acknowledgement before enabling editing; show submitted/reconciling states honestly without pretending cancellation can recall sent mail. Keep drafts keyed to workspace/user/meeting and clear at sign-out. Explain holds in plain language; link to the evidence or task needing action. Do not add a status bar or metrics to Today.
+- [x] Run `npm test --workspace apps/api -- test/meetingFollowThrough.test.ts` and `npm test --workspace apps/desktop -- test/meetingFollowThrough.component.test.tsx`; verify the new behavior fails before implementation.
+- [x] Wire the existing command receipt/version and current-authorization checks. Wait for `begin_edit` acknowledgement before enabling editing; show submitted/reconciling states honestly without pretending cancellation can recall sent mail. Keep drafts keyed to workspace/user/meeting and clear at sign-out. Explain holds in plain language; link to the evidence or task needing action. Do not add a status bar or metrics to Today.
 - [ ] Run focused suites and `npm run test:desktop:e2e -- meetingFollowThroughScreens.spec.ts`; inspect narrow/desktop screen states. Run full `npm run gate:greenfield`, secrets verification and the existing schema upgrade/rehearsal checks. Test the full desktop → scheduler → dispatcher path with fake delivery and paused production posture, including no provider calls under pause. One independent whole-branch review; resolve findings and verify final head.
 - [ ] Commit `feat: complete meeting follow-through workflow`, open/attach the normal PR and release through existing protected mechanics with sending paused. A real delivery check to David's designated test address is a separate controlled acceptance action; this plan does not lift a global/domain sending switch. Report what was simulated, what was exercised end to end, and what remains disabled.
 

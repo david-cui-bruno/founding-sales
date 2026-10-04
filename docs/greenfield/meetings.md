@@ -575,3 +575,43 @@ No paid AWS transcription or real-account Zoom recording has been exercised by
 this implementation's synthetic tests. Synthetic tests establish media bounds,
 replay/ambiguity behavior, holds, recovery and UI states; they cannot establish the
 user's Zoom folder layout or future credit applicability.
+
+## Meeting recap and follow-through (schema 44)
+
+The firm meeting panel has a Follow-up drawer beside Notes & tasks. It shows the
+current immutable recap, editing controls and plain-language holds. Beginning an edit
+first records a durable sending hold. Closing the drawer or navigating away preserves
+unsaved text for this session; signing out clears it. A lost command retries with the
+same command ID. A changed source or version cannot overwrite the newer draft.
+
+Calling & calendar exposes an explicit recap sequence choice: one to three published
+email steps with approved templates. The first uses `{meeting_recap}` and later steps
+use approved nudge copy. No sequence is selected automatically. Configuration prepares
+drafts; it does not enable sending, analysis or transcription. Existing clients request
+this optional settings field with `include=meeting_follow_through`.
+
+A completed, attendance-confirmed meeting with sufficient current notes and one resolved
+contact supports the bounded recap scope. Existing permission, send-window, cap,
+mailbox, stop and firm-exclusivity checks still run at the final claim. There is one
+sender and one sequence execution path. Drafts wait 30 minutes; a paused overdue draft
+gets a new window on resume, and a recap older than two business days requires review.
+
+Nudges follow actual recap delivery by seven and fourteen local calendar days, adjusted
+through the existing calendar and send windows. A single agreed reminder replaces the
+recap and nudge plan. Colliding or obsolete nudges are omitted or held. After the last
+message, an unanswered conversation creates one task two business days later. Repeated
+finalization preserves completed and user-edited tasks.
+
+Human replies hold pending work before classification. New bookings cancel old nudges.
+Manual Gmail messages to the intended contact are checked for exact current-draft
+fulfillment using complete matched content; a proven match completes the existing step
+without sending another copy. Ambiguity holds for review. Outgoing content is fetched
+only for a matched firm with an active meeting plan; other outgoing mail remains
+metadata-only. Sent-message evidence alone never proves delivery of a promised material:
+the exact approved URL and task must be linked. Restored envelopes with unverified bytes
+cannot complete tasks. Meeting folds retain identities while cancelling old automation
+for review; deletion removes recap content with the source.
+
+The existing durable worker materializes preparation/finalization jobs. Delivery remains
+in `sequence.action`; no separate polling sender, paid authoring model or subscription
+is introduced. Production sending stays paused until separately enabled by David.

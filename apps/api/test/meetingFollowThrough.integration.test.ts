@@ -1,0 +1,41 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll,beforeAll,describe,expect,it } from 'vitest';
+import type { MeetingFollowThroughView } from '@fss/contracts';
+import { meetingDispatchFixture } from '@fss/domain/test/meetings/support/meetingDispatchFixture.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { runMeetingFollowThrough } from '@fss/domain/meetings/followThroughJobs.ts';
+import { dispatchOutboundMessage } from '@fss/domain/outbound/send.ts';
+import { dispatch } from '../src/server.ts';
+import { createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture } from './support/authFixture.ts';
+import { issueSessionFor } from './support/sessionFixture.ts';
+import { createAuthedClient } from '../../desktop/src/main/authedClient.ts';
+import { operationHandlers,answerOperation,type OperationHostDeps } from '../../desktop/src/main/operationHost.ts';
+describe('desktop meeting operations through API, scheduler and dispatch',()=>{
+  let f:Awaited<ReturnType<typeof meetingDispatchFixture>>,auth:AuthFixture;
+  beforeAll(async()=>{f=await meetingDispatchFixture();auth=await createAuthFixture();},180_000);
+  afterAll(async()=>{await auth?.stop();await f?.world.stop();});
+  it('persists the edited draft but makes zero provider calls while paused',async()=>{
+    const account=f.world.alpha.workspace.salesperson;
+    const user=(await f.db.query<{google_sub:string;email:string}>('SELECT google_sub,email FROM users WHERE id=$1',[account.userId])).rows[0]!;
+    const joined={...auth,db:f.db,hostedDomain:'example.test',deps:{...auth.deps,db:f.db,config:{...auth.deps.config,oidc:{...auth.deps.config.oidc,hostedDomain:'example.test'}}}};
+    const grant=await issueSessionFor(joined,{...auth.alpha,workspaceId:f.workspace,slug:f.world.alpha.workspace.slug},{googleSub:user.google_sub,email:user.email});
+    const api=createAuthedClient({baseUrl:'https://example.test',clientVersion:CURRENT_CLIENT_VERSION,accessToken:async()=>({token:grant.accessToken,generation:1}),send:async(url,init)=>{
+      const address=new URL(url);return await dispatch({method:init.method,path:address.pathname,query:address.searchParams,headers:init.headers,body:init.body===undefined?undefined:JSON.parse(init.body) as unknown},{session:f.db,auth:joined.deps,supportedClientVersions:joined.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
+    }});
+    const handlers=operationHandlers({api,recordings:{identity:{current:()=>1}}} as unknown as OperationHostDeps);
+    const fence=await f.prepare();
+    await f.db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[f.workspace]);
+    const read=await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId}) as {view:MeetingFollowThroughView};
+    expect(read.view.sendingPaused).toBe(true);
+    const begun=await answerOperation(handlers,'command','meetings.editRecap',{planId:read.view.planId,expectedPlanVersion:read.view.version,expectedDraftVersion:read.view.currentDraft!.version,action:'begin_edit',commandId:randomUUID()}) as {view:MeetingFollowThroughView};
+    expect(begun.view.currentDraft!.state).toBe('editing');
+    const body='Updated recap from the desktop.\n\nSigned off';
+    const saved=await answerOperation(handlers,'command','meetings.editRecap',{planId:begun.view.planId,expectedPlanVersion:begun.view.version,expectedDraftVersion:begun.view.currentDraft!.version,action:'save',subject:'Meeting follow-up',body,commandId:randomUUID()}) as {view:MeetingFollowThroughView};
+    expect(saved.view.currentDraft!.body).toBe(body);
+    await withTransaction(f.db,()=>runMeetingFollowThrough(f.context,{meetingId:f.meetingId,at:f.at}));
+    const gmail=f.world.clientWith(f.world.alpha,{});
+    await dispatchOutboundMessage(f.context,f.world.sendDeps(f.world.alpha,{gmail,now:()=>new Date(f.at)}),{outboundMessageId:fence.id});
+    expect(gmail.sends).toHaveLength(0);
+    expect(await answerOperation(handlers,'read','meetings.followThrough',{meetingId:f.meetingId})).toMatchObject({view:{sendingPaused:true,currentDraft:{body}}});
+  });
+});

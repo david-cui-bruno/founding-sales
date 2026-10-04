@@ -120,7 +120,7 @@ describe('the transcription half of the integrations read', () => {
     const admin = scripted({ '/settings/integrations': { status: 200, body: withTranscription } });
     const state = await createAdminBridge({ api: admin.api, session: session('admin') }).state();
     // Slice P1 asks for the month by name beside it.
-    expect(admin.calls.find(call => call.path === '/settings/integrations')?.search).toBe('?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis');
+    expect(admin.calls.find(call => call.path === '/settings/integrations')?.search).toBe('?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through');
     expect(state.integrations?.transcription).toEqual(withTranscription.transcription);
   });
 
