@@ -1,6 +1,6 @@
 # Meeting outcomes and follow-through
 
-Written design for review · 3 October 2026 · baseline `6fc1a0a7`, schema 42, desktop 1.0.40.
+Design approved by David after the plain-language summary · 3 October 2026 · baseline `6fc1a0a7`, schema 42, desktop 1.0.40.
 
 ## What David gets
 
@@ -149,4 +149,4 @@ Use labelled synthetic meetings for deterministic tests and a small credit-cover
 
 No meeting bots, Zoom cloud recording, new telephony provider, native speech-capture service, vector database, generalized workflow builder, website redesign or release-system rewrite. Cold email, social publishing and targeted sourcing retain their agreed later positions.
 
-Next: review this written design, then write separate implementation plans for M6 and M7. Retain native execution in this chat and the previously preferred single independent whole-branch review; do not add reviews per task.
+Next: review the separate [M6 implementation plan](../plans/2026-10-03-meeting-outcomes.md) and [M7 implementation plan](../plans/2026-10-03-meeting-follow-through.md), then implement M6 followed by M7. Retain native execution in this chat and the previously preferred single independent whole-branch review per release; do not add reviews per task. This design approval does not activate processing or sending.
