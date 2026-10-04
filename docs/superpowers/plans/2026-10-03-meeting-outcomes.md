@@ -79,17 +79,17 @@ All public commands also use the existing `commandId` and `clientVersion` envelo
 
 **Produces:** `assembleMeetingAnalysisInput(context,{meetingId}):Promise<MeetingResult<MeetingAnalysisInput>>`; `buildMeetingAnalysisBlocks(input):MeetingResult<readonly MeetingAnalysisBlock[]>`; `validateMeetingAnalysisAnswer(text,input):MeetingResult<ValidatedMeetingAnalysis>`; `meetingAnalysisPort({transport}):MeetingAnalysisPort`. Define `MeetingAnalysisInput` (source hash, revision vector, date/zones, ordered per-source evidence, human overrides and completeness), `MeetingAnalysisBlock` (stable hash, purpose and source evidence), `ValidatedMeetingAnalysis` (overview/items/review reasons) and `MeetingAnalysisPort.run({model,purpose,maxOutputTokens,input})` returning accepted/refusal/malformed/schema_invalid/provider_refused/provider_error, validated content and nullable token usage.
 
-- [ ] Write tests for 201+ utterances, revision changes midway through pagination, 2-hour fixtures, source-track order changes, hallucinated references, quoted prompt injection and absent/unknown speakers:
+- [x] Write tests for 201+ utterances, revision changes midway through pagination, 2-hour fixtures, source-track order changes, hallucinated references, quoted prompt injection and absent/unknown speakers:
   ```ts
   expect(input.utterances).toHaveLength(401);
   expect(blocks.every(b => b.sourceBytes <= 32768)).toBe(true);
   expect(validateMeetingAnalysisAnswer(inventedQuote, input)).toMatchObject({ ok: false });
   expect(result.items[0]).toMatchObject({ owner: 'unknown' });
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingAnalysisInput.test.ts test/meetings/meetingAnalysisModel.test.ts`; observe the relevant failure.
-- [ ] Assemble all pages against one source revision; restart assembly on a changed revision before paying. Split only at utterance boundaries, max 16 blocks, keeping per-source timing. Hash transcript blocks separately from debrief blocks and include their actual speaker mapping in each key. Validate exact evidence quotes, finite timestamps and source ownership. Bound a complete serialized provider request to 1 MiB and 180,000 counted input tokens; if unavailable, use the conservative UTF-8 byte token bound. Oversize input/result holds, never truncates. Retain source conflicts and human overrides; never infer global turn order.
-- [ ] Use the existing mapped `claude-haiku-4-5` model and JSON-schema validation. Apply 4,096/8,192 output-token limits; merge only validated blocks. One-block input may use its validated result without an extra merge call. A schema-valid promise still needs Task 4's owner/deadline/action checks.
-- [ ] Rerun these tests and domain typecheck. Commit `feat: validate evidence-backed meeting analysis`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingAnalysisInput.test.ts test/meetings/meetingAnalysisModel.test.ts`; observe the relevant failure.
+- [x] Assemble all pages against one source revision; restart assembly on a changed revision before paying. Split only at utterance boundaries, max 16 blocks, keeping per-source timing. Hash transcript blocks separately from debrief blocks and include their actual speaker mapping in each key. Validate exact evidence quotes, finite timestamps and source ownership. Bound a complete serialized provider request to 1 MiB and 180,000 counted input tokens; if unavailable, use the conservative UTF-8 byte token bound. Oversize input/result holds, never truncates. Retain source conflicts and human overrides; never infer global turn order.
+- [x] Use the existing mapped `claude-haiku-4-5` model and JSON-schema validation. Apply 4,096/8,192 output-token limits; merge only validated blocks. One-block input may use its validated result without an extra merge call. A schema-valid promise still needs Task 4's owner/deadline/action checks.
+- [x] Rerun these tests and domain typecheck. Commit `feat: validate evidence-backed meeting analysis`.
 
 ## Task 3: bounded, credit-only analysis jobs
 
