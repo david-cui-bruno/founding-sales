@@ -40,7 +40,9 @@ describe('meeting analysis through the real worker', () => {
     expect(calls).toBe(1);
     expect((await f.db.session.query('SELECT state,tasks_pending FROM meeting_analyses')).rows).toEqual([{ state: 'ready', tasks_pending: true }]);
     expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE subject_kind=$1', ['meeting_analysis'])).rows).toEqual([{ state: 'settled', settled_cents: 1 }]);
+    await withTransaction(f.db.session, async () => { for (const job of await scheduleMeetingAnalyses(f.db.session, new Date().toISOString())) await enqueueJob(f.db.session, job); });
     await runOnce(f.db.session, { registry, owner: 'meeting-analysis-restart', limit: 5 });
+    expect((await f.db.session.query('SELECT tasks_pending FROM meeting_analyses')).rows).toEqual([{ tasks_pending: false }]);
     expect(calls).toBe(1);
   });
 });

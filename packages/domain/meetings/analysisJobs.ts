@@ -15,6 +15,10 @@ export async function scheduleMeetingAnalyses(session: SessionQueryable, at: str
     WHERE state IN ('queued','held','reserved','calling') AND deadline_at<=$1 ORDER BY deadline_at,id LIMIT 50`, [at])).rows;
   for (const row of expired) await expireMeetingAnalysisRequest(repositoryContext(workspaceScope(row.workspace_id, { kind: 'system', component: 'scheduler' }), session), row.id, at);
   const jobs: JobSpecification[] = [];
+  const pendingTasks = (await session.query<{ workspace_id: string; id: string; meeting_id: string; source_hash: string }>(
+    "SELECT workspace_id,id,meeting_id,source_hash FROM meeting_analyses WHERE state='ready' AND tasks_pending ORDER BY completed_at,id LIMIT 25")).rows;
+  for (const row of pendingTasks) jobs.push({ workspaceId: row.workspace_id, kind: 'meeting.analyze', idempotencyKey: `meeting-tasks:${row.id}`,
+    payload: { meetingId: row.meeting_id, analysisId: row.id, sourceHash: row.source_hash }, maxAttempts: 3 });
   const missing = (await session.query<{ workspace_id: string; id: string; notes_revision: number; transcript_source_revision: number }>(`SELECT m.workspace_id,m.id,m.notes_revision,m.transcript_source_revision
     FROM meetings m WHERE m.firm_id IS NOT NULL AND (m.notes_revision>0 OR m.transcript_source_revision>0)
     AND NOT EXISTS (SELECT 1 FROM meeting_analyses a WHERE a.workspace_id=m.workspace_id AND a.meeting_id=m.id AND a.notes_revision=m.notes_revision AND a.transcript_revision=m.transcript_source_revision)

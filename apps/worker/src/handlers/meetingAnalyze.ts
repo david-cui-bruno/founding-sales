@@ -1,3 +1,4 @@
+import { reconcileMeetingTasks } from '@fss/domain/meetings/tasks.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { JobHandler, JobChunk } from '@fss/domain/jobs/handlerRegistry.ts';
@@ -17,6 +18,12 @@ export function meetingAnalyzeJobHandler(options: MeetingAnalyzeOptions): JobHan
       const context = repositoryContext(input.scope, input.session), at = await clock(input.session);
       const done = (): JobChunk => ({ done: true, progress: { step: 'done' } });
       const requestId = input.job.payload['requestId'], meetingId = input.job.payload['meetingId'];
+      const analysisId = input.job.payload['analysisId'], sourceHash = input.job.payload['sourceHash'];
+      if (typeof analysisId === 'string' && typeof meetingId === 'string' && typeof sourceHash === 'string') {
+        const reconciled = await reconcileMeetingTasks(context, { meetingId, analysisId, expectedSourceHash: sourceHash });
+        if (!reconciled.ok) await context.db.query("UPDATE meeting_analyses SET tasks_pending=false,review_reasons=review_reasons || $3::jsonb WHERE workspace_id=$1 AND id=$2", [input.scope.workspaceId, analysisId, JSON.stringify([reconciled.reason])]);
+        return done();
+      }
       if (typeof requestId !== 'string') {
         if (typeof meetingId === 'string') await materializeMeetingAnalysis(context, { meetingId, at });
         return done();

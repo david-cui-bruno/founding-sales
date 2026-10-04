@@ -283,6 +283,7 @@ export async function reassignFirm(
   // A change of owner holds the firm's automated work, so it is a stop fact and takes
   // the send gate before the firm's row (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
+  await lockTodayForFirmChange(context);
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
   if (firm.status === 'merged') return refuse('firm_merged');
@@ -307,6 +308,9 @@ export async function reassignFirm(
     if (isForeignKeyViolation(error, 'firms_assignee_fkey')) return refuse('assignee_unknown');
     throw error;
   }
+
+  await context.db.query("UPDATE meeting_tasks SET owner_user_id=$3,version=version+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND status='open' AND owner_user_id<>$3", [context.scope.workspaceId, input.firmId, input.toUserId]);
+  await refreshTodayForFirm(context, { firmId: input.firmId });
 
   // Section 4.3 and 15: a hold names its scope, its reason, the action kinds it
   // blocks, its source event and the recovery that clears it. Nothing else clears it.

@@ -119,7 +119,7 @@ All public commands also use the existing `commandId` and `clientVersion` envelo
 
 **Produces:** `reconcileMeetingTasks(context,{meetingId,analysisId,expectedSourceHash}):Promise<MeetingResult<{created:number,changed:number,review:number}>>`; `changeMeetingTask(context,input:ChangeMeetingTask):Promise<MeetingResult<MeetingTaskView>>`; `resolveMeetingDeadline({text,anchorAt,zone,sourceKind}):MeetingResult<MeetingDeadline>`; `saveMeetingOutcomeCorrections(context,input:SaveMeetingNotes)` delegates the CAS notes contract while reconciling affected tasks.
 
-- [ ] Add source-backed tests for clear promises, negation/hypotheticals, prospect-owned promises, missing zones, repeated names, dates near midnight/DST and debrief/transcript duplicates:
+- [x] Add source-backed tests for clear promises, negation/hypotheticals, prospect-owned promises, missing zones, repeated names, dates near midnight/DST and debrief/transcript duplicates:
   ```ts
   expect(tasksFor('I will send the guide tomorrow', confirmedDavid)).toHaveLength(1);
   expect(tasksFor('I might send the guide', confirmedDavid)).toHaveLength(0);
@@ -129,10 +129,10 @@ All public commands also use the existing `commandId` and `clientVersion` envelo
   expect(replayedTask.status).toBe('done');
   ```
   `tasksFor` is a test-fixture wrapper around real reconciliation, not a string-matching production implementation.
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingTasks.test.ts test/meetings/meetingTaskDeadlines.test.ts test/meetings/meetingOutcomeCorrections.test.ts`; confirm the new behavior is absent.
-- [ ] Require confirmed owner, positive explicit commitment, resolvable deadline and current/sufficient notes. Enforce exact-date resolution in code, not by trusting a model-produced timestamp. Use a stable commitment identity attached to evidence; possible cross-source duplicates go to review. Date-only task storage retains local date/zone and computes overdue after local day-end; Today sorting uses a derived instant but UI does not show a fabricated time.
-- [ ] Reconciliation takes send gate shared → Today shared → firm → meeting → current analysis/tasks. Human edits/corrections take send gate exclusive → Today shared → firm → meeting → notes/tasks. Completed/user-edited tasks survive automatic reruns; cancel only untouched tasks explicitly invalidated by source correction and audit the cause. Uncertain corrections create review work; do not automatically retract a sent message or change a deal.
-- [ ] Rerun tests, including concurrent corrections/completion and task-owner reassignment. Commit `feat: create meeting tasks from clear promises`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingTasks.test.ts test/meetings/meetingTaskDeadlines.test.ts test/meetings/meetingOutcomeCorrections.test.ts`; confirm the new behavior is absent.
+- [x] Require confirmed owner, positive explicit commitment, resolvable deadline and current/sufficient notes. Enforce exact-date resolution in code, not by trusting a model-produced timestamp. Use a stable commitment identity attached to evidence; possible cross-source duplicates go to review. Date-only task storage retains local date/zone and computes overdue after local day-end; Today sorting uses a derived instant but UI does not show a fabricated time.
+- [x] Reconciliation takes send gate shared → Today shared → firm → meeting → current analysis/tasks. Human edits/corrections take send gate exclusive → Today shared → firm → meeting → notes/tasks. Completed/user-edited tasks survive automatic reruns; cancel only untouched tasks explicitly invalidated by source correction and audit the cause. Uncertain corrections create review work; do not automatically retract a sent message or change a deal.
+- [x] Rerun tests, including concurrent corrections/completion and task-owner reassignment. Commit `feat: create meeting tasks from clear promises`.
 
 ## Task 5: lifecycle, retention and merge correctness
 
