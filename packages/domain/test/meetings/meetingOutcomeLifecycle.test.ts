@@ -48,6 +48,35 @@ describe('meeting outcome lifecycle', () => {
     expect((await f.db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1', [q.attemptId])).rows).toEqual([{ state: 'settled', settled_cents: 1 }]);
     expect((await readMeetingOutcomes(f.context, { meetingId: p.meetingId }))?.holds).toContain('merged_notes_review');
   });
+  it('keeps a corrected debrief promise linked to its original task after a booking fold and reanalysis', async () => {
+    const { meetingNoteItemSchema } = await import('@fss/contracts');
+    const { sampleAnswer } = await import('./fixtures/outcomes/sample.ts');
+    const { saveMeetingOutcomeCorrections } = await import('../../meetings/outcomeCorrections.ts');
+    const { reconcileMeetingTasks } = await import('../../meetings/tasks.ts');
+    const source = await f.meeting(), target = await f.meeting(), quote = 'I will send the guide tomorrow.';
+    await f.save(source, quote); await f.save(target, 'Earlier context.');
+    const item = meetingNoteItemSchema.parse({ ...sampleAnswer().items[0]!, evidence: [{ kind: 'debrief', revision: 1, quote, startOffset: 0, endOffset: quote.length }] });
+    const initial = await f.publish(source, [item]);
+    await withTransaction(f.db.session, () => saveMeetingOutcomeCorrections(f.context, { meetingId: source, expectedRevision: 1, debrief: quote, sufficient: true, speakerMappings: [],
+      itemOverrides: [{ itemId: initial.items[0]!.id, decision: 'confirmed', text: 'Send corrected pricing', owner: 'you', deadline: { precision: 'date', localDate: '2026-10-20', zone: 'America/New_York' } }] }));
+    const corrected = await f.publish(source, [{ ...item, evidence: [{ kind: 'debrief', revision: 2, quote, startOffset: 0, endOffset: quote.length }] }]);
+    await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, corrected));
+    const taskId = (await f.tasks(source))[0]!['id'];
+    await withTransaction(f.db.session, async () => {
+      await lockSendGateForStopFact(f.context); await lockTodayForFirmChange(f.context); await loadFirmForUpdate(f.context, f.firmId);
+      const rows = (await f.db.session.query<MeetingRow>('SELECT * FROM meetings WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [[source, target]])).rows;
+      await foldMeetings(f.context, rows, target);
+    });
+    const merged = (await readMeetingOutcomes(f.context, { meetingId: target }))!.notes;
+    expect((await withTransaction(f.db.session, () => saveMeetingOutcomeCorrections(f.context, { meetingId: target, expectedRevision: merged.revision,
+      debrief: merged.debrief, speakerMappings: merged.speakerMappings, itemOverrides: merged.itemOverrides, sufficient: true }))).ok).toBe(true);
+    const startOffset = merged.debrief.indexOf(quote);
+    const next = await f.publish(target, [{ ...item, evidence: [{ kind: 'debrief', revision: merged.revision + 1, quote, startOffset, endOffset: startOffset + quote.length }] }]);
+    expect(next.items[0]).toMatchObject({ text: 'Send corrected pricing', deadline: { localDate: '2026-10-20' } });
+    await withTransaction(f.db.session, () => reconcileMeetingTasks(f.context, next));
+    expect(await f.tasks(target)).toMatchObject([{ id: taskId, label: 'Send corrected pricing', status: 'open' }]);
+    expect(await f.tasks(target)).toHaveLength(1);
+  });
   it('scrubs content on deletion and accepts late actual usage after timeout without resurrecting notes', async () => {
     const q = await paid();
     await withTransaction(f.db.session, () => expireMeetingAnalysisRequest(f.context, q.requestId, '2026-10-04T13:00:00Z'));

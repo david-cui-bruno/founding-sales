@@ -74,3 +74,17 @@ it('lets an explicit human confirmation resolve semantic uncertainty while retai
   input.notes.itemOverrides = [{ itemId: initial.value.items[0]!.id, decision: 'confirmed', text: 'Send the guide', owner: 'you', deadline: { precision: 'date', localDate: '2026-10-04', zone: 'America/New_York' } }];
   expect(validateMeetingAnalysisAnswer(JSON.stringify(raw), input)).toMatchObject({ ok: true, value: { items: [{ reviewReasons: ['possible_duplicate'] }] } });
 });
+it('keeps repeated debrief quotes distinct and applies a correction only to the chosen occurrence', async () => {
+  const { validateMeetingAnalysisAnswer } = await import('../../meetings/analysisModel.ts');
+  const input = sampleInput(), quote = 'I will send the guide tomorrow.', prefix = `👋 ${quote}\n\n`;
+  input.utterances = []; input.notes.debrief = prefix + quote;
+  const starts = [2, [...prefix].length];
+  const answer = { ...sampleAnswer(), items: starts.map(startOffset => ({ ...sampleAnswer().items[0]!, evidence: [{ kind: 'debrief', revision: 1, quote, startOffset, endOffset: startOffset + quote.length }] })) };
+  const initial = validateMeetingAnalysisAnswer(JSON.stringify(answer), input); if (!initial.ok) throw new Error(initial.reason);
+  expect(new Set(initial.value.items.map(i => i.id)).size).toBe(2);
+  input.notes.itemOverrides = [{ itemId: initial.value.items[1]!.id, decision: 'confirmed', text: 'The corrected second promise', owner: 'you', deadline: { precision: 'date', localDate: '2026-10-20', zone: 'America/New_York' } }];
+  input.notes.revision = 2; answer.items.forEach(i => { i.evidence[0]!.revision = 2; });
+  const next = validateMeetingAnalysisAnswer(JSON.stringify(answer), input); if (!next.ok) throw new Error(next.reason);
+  expect(next.value.items.map(i => i.id)).toEqual(initial.value.items.map(i => i.id));
+  expect(next.value.items.map(i => i.text)).toEqual(['Send the guide', 'The corrected second promise']);
+});

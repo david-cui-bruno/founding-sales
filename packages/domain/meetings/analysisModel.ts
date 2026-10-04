@@ -54,14 +54,19 @@ function sourceOwner(e: MeetingEvidence, input: MeetingAnalysisInput): MeetingNo
   return input.notes.speakerMappings.find(m => m.recordingId === u?.recordingId && m.speaker === u.speaker)?.owner ?? 'unknown';
 }
 /** A correction save changes the revision, not the identity of an unchanged promise. */
-function evidenceIdentity(e: MeetingEvidence, input: MeetingAnalysisInput): unknown {
+function evidenceIdentity(e: MeetingEvidence, debrief: string): unknown {
   if (e.kind !== 'debrief') return e;
-  const first = input.notes.debrief.indexOf(e.quote);
+  const first = debrief.indexOf(e.quote);
   // Repeated quotes cannot safely follow a moved occurrence. Keep those tied to
   // their exact document and offset instead of guessing which one was corrected.
-  return first >= 0 && input.notes.debrief.indexOf(e.quote, first + 1) === -1
+  return first >= 0 && debrief.indexOf(e.quote, first + 1) === -1
     ? { kind: e.kind, quote: e.quote }
-    : { kind: e.kind, quote: e.quote, startOffset: e.startOffset, document: analysisHash(input.notes.debrief) };
+    : { kind: e.kind, quote: e.quote, startOffset: e.startOffset, document: analysisHash(debrief) };
+}
+/** Booking folds rebind this key atomically with corrections and existing tasks. */
+export function meetingItemIdentity(meetingId: string, item: Pick<MeetingNoteItem, 'kind' | 'evidence'>, debrief: string): string {
+  const identity = item.evidence.map(e => evidenceIdentity(e, debrief)).sort((a, b) => analysisHash(a).localeCompare(analysisHash(b)));
+  return `item:${analysisHash({ sourceMeetingId: meetingId, kind: item.kind, evidence: identity }).slice(0, 32)}`;
 }
 /** Validation is also applied to cached results against the current corrections before publishing. */
 export function validateMeetingAnalysisAnswer(text: string, input: MeetingAnalysisInput): MeetingResult<ValidatedMeetingAnalysis> {
@@ -76,8 +81,7 @@ export function validateMeetingAnalysisAnswer(text: string, input: MeetingAnalys
     if (anchored.some(e => e === null)) return { ok: false, reason: 'evidence_invalid' };
     const item = { ...rawItem, evidence: anchored as MeetingEvidence[] };
     if (item.evidence.some(e => !validEvidence(e, input))) return { ok: false, reason: 'evidence_invalid' };
-    const identity = item.evidence.map(e => evidenceIdentity(e, input)).sort((a, b) => analysisHash(a).localeCompare(analysisHash(b)));
-    const id = `item:${analysisHash({ sourceMeetingId: input.meetingId, kind: item.kind, evidence: identity }).slice(0, 32)}`;
+    const id = meetingItemIdentity(input.meetingId, item, input.notes.debrief);
     const override = input.notes.itemOverrides.find(o => o.itemId === id);
     if (override?.decision === 'dismissed') continue;
     const owners = new Set(item.evidence.map(e => sourceOwner(e, input)));
