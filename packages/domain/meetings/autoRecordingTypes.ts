@@ -12,3 +12,10 @@ export interface ZoomMeetingSnapshot {
   readonly id:string; readonly hostEmail:string; readonly type:number; readonly usePmi:boolean|null;
   readonly startsAt:string; readonly durationMinutes:number; readonly autoRecording:string;
 }
+export type ProviderRead<T> = {kind:'ok';value:T}|{kind:'retry'|'refused';code:string;retryAfterMs:number|null};
+export type ZoomWriteResult = {kind:'acknowledged'|'refused'|'unknown';code:string|null;retryAfterMs:number|null};
+export interface CalcomDemoClient { readBooking(uid:string,signal:AbortSignal):Promise<ProviderRead<CalcomDemoBooking>> }
+export interface ZoomMeetingsClient {
+  readMeeting(id:string,signal:AbortSignal):Promise<ProviderRead<ZoomMeetingSnapshot>>;
+  setLocalAutoRecording(id:string,signal:AbortSignal):Promise<ZoomWriteResult>;
+}
