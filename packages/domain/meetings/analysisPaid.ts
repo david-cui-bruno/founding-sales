@@ -2,7 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSettingForRead, readSetting } from '../settings/store.ts';
 import { readMeetingAnalysisSetting } from './analysisSettings.ts';
 import { meetingBudgetDay } from './transcriptionBudget.ts';
-import { reserveAttempt, markCalling, settleAttempt, listAttempts, type ReservationRow } from '../research/reservations.ts';
+import { reserveAttempt, correctSettledCents, markCalling, settleAttempt, listAttempts, type ReservationRow } from '../research/reservations.ts';
 import { recordProviderCall } from '../research/ledger.ts';
 import { bedrockModelOf } from '../classification/modelTransport.ts';
 import { analysisHash } from './analysisInput.ts';
@@ -29,9 +29,18 @@ async function hold(context: RepositoryContext, id: string, reason: string, vers
   return { kind: 'held', reason };
 }
 async function lockRequest(context: RepositoryContext, id: string): Promise<AnalysisRequestRow | null> {
-  const located = await readAnalysisRequest(context, id);
-  if (located?.meeting_id !== null && located?.meeting_id !== undefined && await lockAnalysisMeeting(context, located.meeting_id) === null) return null;
-  return await readAnalysisRequest(context, id, true);
+  for (let retry = 0; retry < 3; retry++) {
+    const located = await readAnalysisRequest(context, id);
+    if (located === null) return null;
+    if (located.meeting_id !== null && await lockAnalysisMeeting(context, located.meeting_id) === null) {
+      const moved = await readAnalysisRequest(context, id);
+      if (moved?.meeting_id !== located.meeting_id) continue;
+      return null;
+    }
+    const current = await readAnalysisRequest(context, id, true);
+    if (current?.meeting_id === located.meeting_id) return current;
+  }
+  throw new Error('meeting_analysis_subject_changed');
 }
 const subject = (id: string) => ({ subjectKind: 'meeting_analysis' as const, subjectId: id });
 function cost(model: string, inputTokens: number, outputTokens: number): number {
@@ -49,12 +58,14 @@ export async function beginMeetingAnalysisRequest(context: RepositoryContext, in
   const row = await lockRequest(context, input.requestId);
   if (row === null || ['ready', 'failed', 'estimated', 'calling'].includes(row.state)) return { kind: 'done' };
   const funding = await meetingAnalysisFunding(context, input.at, deps);
+  const inherited = (await context.db.query<{ paid: string; reserved: string }>(`SELECT COALESCE(sum(paid_attempts),0)::text AS paid,COALESCE(sum(reservation_count),0)::text AS reserved FROM meeting_analysis_requests
+    WHERE workspace_id=$1 AND meeting_id=$2 AND request_hash=$3 AND prompt_version=$4 AND model_name=$5`, [context.scope.workspaceId, row.meeting_id, row.request_hash, row.prompt_version, row.model_name])).rows[0]!;
   if (funding.reason !== null) return await hold(context, row.id, funding.reason, funding.version, '9999-01-01T00:00:00Z', input.at);
-  if (row.meeting_id === null || row.paid_attempts >= 2 || bedrockModelOf(row.model_name) === undefined) return await fail(context, row.id, 'attempt_limit', input.at);
+  if (row.meeting_id === null || Number(inherited.paid) >= 2 || bedrockModelOf(row.model_name) === undefined) return await fail(context, row.id, 'attempt_limit', input.at);
   if (row.deadline_at !== null && row.deadline_at.getTime() <= Date.parse(input.at)) return await fail(context, row.id, 'deadline_exceeded', input.at);
   const attempts = await listAttempts(context, subject(row.id)), open = attempts.find(a => a.state === 'reserved');
   if (open !== undefined) return { kind: 'reserved', reservationId: open.id };
-  if (row.reservation_count >= 6) return await fail(context, row.id, 'attempt_limit', input.at);
+  if (Number(inherited.reserved) >= 6) return await fail(context, row.id, 'attempt_limit', input.at);
   const call = await readAnalysisCall(context, row);
   if (!call.ok) return await fail(context, row.id, call.reason, input.at);
   const prepared = await deps.port.prepare(call.value);
@@ -91,9 +102,13 @@ export async function dispatchMeetingAnalysisRequest(context: RepositoryContext,
 export async function completeMeetingAnalysisRequest(context: RepositoryContext, input: { requestId: string; attemptId: string; result: MeetingAnalysisAttempt; at: string }): Promise<'accepted' | 'stale' | 'retry' | 'failed'> {
   await lockMeetingAnalysisBudget(context);
   const row = await lockRequest(context, input.requestId);
-  if (row === null || row.reservation_id !== input.attemptId || row.state !== 'calling') return 'stale';
+  if (row === null || row.reservation_id !== input.attemptId) return 'stale';
   const attempt = (await listAttempts(context, subject(row.id))).find(a => a.id === input.attemptId);
   if (attempt === undefined) return 'stale';
+  if (row.state !== 'calling') {
+    if (attempt.state === 'estimated' && input.result.usage !== null) await correctSettledCents(context, { reservationId: attempt.id, cents: cost(row.model_name, input.result.usage.inputTokens + input.result.usage.cachedInputTokens, input.result.usage.outputTokens) });
+    return 'stale';
+  }
   await recordProviderCall(context, { providerKey: MEETING_ANALYSIS_PROVIDER, at: input.at, businessTimeZone: attempt.businessTimeZone, costCents: 0 });
   const result = input.result;
   const outcome = result.outcome === 'provider_refused' ? { kind: 'settled' as const, cents: 0 } : result.usage === null ? { kind: 'estimated' as const }

@@ -39,7 +39,7 @@ export function validateMeetingAnalysisAnswer(text: string, input: MeetingAnalys
   const items: MeetingNoteItem[] = [];
   for (const item of parsed.data.items) {
     if (item.evidence.some(e => !validEvidence(e, input))) return { ok: false, reason: 'evidence_invalid' };
-    const id = `item:${analysisHash({ kind: item.kind, evidence: item.evidence }).slice(0, 32)}`;
+    const id = `item:${analysisHash({ sourceMeetingId: input.meetingId, kind: item.kind, evidence: item.evidence }).slice(0, 32)}`;
     const override = input.notes.itemOverrides.find(o => o.itemId === id);
     if (override?.decision === 'dismissed') continue;
     const owners = new Set(item.evidence.map(e => sourceOwner(e, input)));

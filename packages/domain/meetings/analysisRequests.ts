@@ -25,6 +25,9 @@ export async function lockAnalysisMeeting(context: RepositoryContext, meetingId:
   return row?.firm_id === firm.id ? firm.id : null;
 }
 async function ensureRequest(context: RepositoryContext, meetingId: string, hash: string, purpose: 'extract' | 'merge', at: string): Promise<string> {
+  const inherited = (await context.db.query<{ id: string }>(`SELECT id FROM meeting_analysis_requests WHERE workspace_id=$1 AND meeting_id=$2 AND request_hash=$3 AND prompt_version=$4 AND model_name=$5
+    ORDER BY (state='ready') DESC,paid_attempts DESC,created_at,id LIMIT 1`, [context.scope.workspaceId, meetingId, hash, MEETING_ANALYSIS_PROMPT_VERSION, MEETING_ANALYSIS_MODEL])).rows[0];
+  if (inherited !== undefined) return inherited.id;
   const inserted = await context.db.query<{ id: string }>(`INSERT INTO meeting_analysis_requests(workspace_id,meeting_id,original_meeting_id,request_hash,prompt_version,model_name,purpose,next_wake_at)
     VALUES($1,$2,$2,$3,$4,$5,$6,$7) ON CONFLICT(workspace_id,original_meeting_id,request_hash,prompt_version,model_name) DO UPDATE SET meeting_id=EXCLUDED.meeting_id RETURNING id`,
     [context.scope.workspaceId, meetingId, hash, MEETING_ANALYSIS_PROMPT_VERSION, MEETING_ANALYSIS_MODEL, purpose, at]);

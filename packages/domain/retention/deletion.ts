@@ -1,3 +1,5 @@
+import { deleteMeetingOutcomeContent } from '../meetings/outcomeCorrections.ts';
+import { lockTodayForFirmChange } from '../today/build.ts';
 import { createHash } from 'node:crypto';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
@@ -657,6 +659,7 @@ export async function commitDeletion(
   // the tombstones below do too — and so does a Cal.com booking: a booking that commits
   // while this deletion runs is either measured (and tombstoned) or waits for it.
   await lockSendGateForStopFact(context);
+  await lockTodayForFirmChange(context);
 
   const request = await context.db.query<{
     id: string;
@@ -693,6 +696,10 @@ export async function commitDeletion(
       scope.firmId,
     ]);
   }
+  // Linked/attendee-matched meetings may include another firm; lock all before monthly spend.
+  await context.db.query(`SELECT f.id FROM firms f WHERE f.workspace_id=$1 AND f.id IN
+    (SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE}) ORDER BY f.id FOR UPDATE`,
+    [context.scope.workspaceId, scope.contactId, scope.firmId]);
   // Slice C2 (review fold 1, P1): every call session this deletion removes is locked now,
   // after the gate and before anything is measured — its transcription lock and its row —
   // and held to the commit. A transcription that has not begun waits and then finds the
@@ -993,6 +1000,8 @@ export async function commitDeletion(
         AND ${MEETING_IN_SCOPE}`,
     byContact,
   );
+  const outcomeMeetings = (await context.db.query<{ id: string }>(`SELECT m.id FROM meetings m WHERE m.workspace_id=$1 AND ${MEETING_IN_SCOPE}`, byContact)).rows;
+  await deleteMeetingOutcomeContent(context, { meetingIds: outcomeMeetings.map(m => m.id) });
   await remove(
     'meetings',
     `DELETE FROM meetings m WHERE m.workspace_id = $1 AND ${MEETING_IN_SCOPE}`,

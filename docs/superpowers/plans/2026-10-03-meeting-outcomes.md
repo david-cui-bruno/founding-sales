@@ -140,17 +140,17 @@ All public commands also use the existing `commandId` and `clientVersion` envelo
 
 **Consumes/produces:** Preserve Task 1–4 interfaces; expose `foldMeetingOutcomes(context,{sourceMeetingId,targetMeetingId})` and `deleteMeetingOutcomeContent(context,{meetingIds})` in `meetings/outcomeCorrections.ts`, used only inside the existing owning transaction. They never acquire Today after a firm lock; outer callers needing immediate task refresh take Today before firm locks, otherwise enqueue a refresh after commit.
 
-- [ ] Write real two-session tests for fold during model request, fold during task reconciliation, deletion before late completion and restore of pending work:
+- [x] Write real two-session tests for fold during model request, fold during task reconciliation, deletion before late completion and restore of pending work:
   ```ts
   expect(taskIdsAfterFold).toEqual(taskIdsBeforeFold);
   expect(providerAttemptsAfterFold).toBe(providerAttemptsBeforeFold);
   expect(contentAfterDeletedSubjectCompletion).toHaveLength(0);
   expect(restoredWork.canDispatchWithoutCurrentChecks).toBe(false);
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingOutcomeLifecycle.test.ts test/retention test/restore`; observe the new failing scenario, not just an invalid fixture.
-- [ ] Preserve original request/task/evidence identities through folds and union inherited attempt accounting. Never reset paid limits on canonicalization. Cascade subject content under retention rules; retained sanitized accounting has no speech/labels. Late results settle without publishing deleted/stale content. Restore revalidates sources, funding and settings before work resumes.
-- [ ] Audit existing outer lock order against the new helpers; test fold vs correction vs Today build and settings-off vs final provider dispatch with concurrent database sessions. Make narrowly scoped caller adjustments rather than introducing a global lock.
-- [ ] Rerun lifecycle tests and domain typecheck. Commit `fix: preserve meeting outcome identity across lifecycle changes`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingOutcomeLifecycle.test.ts test/retention test/restore`; observe the new failing scenario, not just an invalid fixture.
+- [x] Preserve original request/task/evidence identities through folds and union inherited attempt accounting. Never reset paid limits on canonicalization. Cascade subject content under retention rules; retained sanitized accounting has no speech/labels. Late results settle without publishing deleted/stale content. Restore revalidates sources, funding and settings before work resumes.
+- [x] Audit existing outer lock order against the new helpers; test fold vs correction vs Today build and settings-off vs final provider dispatch with concurrent database sessions. Make narrowly scoped caller adjustments rather than introducing a global lock.
+- [x] Rerun lifecycle tests and domain typecheck. Commit `fix: preserve meeting outcome identity across lifecycle changes`.
 
 ## Task 6: API, meeting panel, Today and acceptance
 

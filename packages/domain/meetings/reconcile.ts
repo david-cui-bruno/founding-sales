@@ -1,3 +1,4 @@
+import { lockMeetingFirmsForUids } from './calcom.ts';
 import { createHash } from 'node:crypto';
 import type { MeetingState } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
@@ -276,6 +277,7 @@ export interface StoredMeeting {
  * large for a review item (review fold 4): left alone all the same, and counted.
  */
 async function unifyChain(context: RepositoryContext, uids: readonly string[]): Promise<StoredMeeting | 'conflict' | 'conflict_unrecorded' | null> {
+  await lockMeetingFirmsForUids(context, uids);
   const { rows: found } = await context.db.query<{ id: string; position: string }>(
     `SELECT m.id, min(u.position) AS position
        FROM unnest($2::text[]) WITH ORDINALITY AS u(uid, position)

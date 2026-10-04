@@ -14,8 +14,8 @@ export async function readCurrentMeetingNotes(context: RepositoryContext, meetin
 }
 export async function readMeetingOutcomes(context: RepositoryContext, input: { meetingId: string }): Promise<MeetingOutcomesView | null> {
   const workspace = context.scope.workspaceId;
-  const locate = async () => (await context.db.query<{ firm_id: string | null; notes_revision: number; transcript_source_revision: number; state: string }>(
-    'SELECT firm_id,notes_revision,transcript_source_revision,state FROM meetings WHERE workspace_id=$1 AND id=$2', [workspace, input.meetingId])).rows[0];
+  const locate = async () => (await context.db.query<{ firm_id: string | null; notes_revision: number; transcript_source_revision: number; state: string; outcomes_review_required: boolean }>(
+    'SELECT firm_id,notes_revision,transcript_source_revision,state,outcomes_review_required FROM meetings WHERE workspace_id=$1 AND id=$2', [workspace, input.meetingId])).rows[0];
   const meeting = await locate();
   if (meeting?.firm_id === undefined || meeting.firm_id === null) return null;
   const firm = await readFirm(context, meeting.firm_id);
@@ -36,6 +36,7 @@ export async function readMeetingOutcomes(context: RepositoryContext, input: { m
     || final.notes_revision !== meeting.notes_revision || final.transcript_source_revision !== meeting.transcript_source_revision) return null;
   const setting = await readMeetingAnalysisSetting(context);
   const holds = [...(analysis?.review_reasons ?? [])];
+  if (final.outcomes_review_required) holds.push('merged_notes_review');
   if (!setting.enabled || setting.dailyCeilingCents === 0) holds.push('analysis_disabled');
   const stale = analysis !== undefined && (analysis.source_hash !== sourceHash || analysis.state === 'stale');
   const state = stale ? 'stale' : analysis?.state === 'ready' ? analysis.source_complete || notes.sufficient ? 'current' : 'partial' : analysis === undefined ? 'empty' : 'pending';

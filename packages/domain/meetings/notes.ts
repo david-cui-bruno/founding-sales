@@ -38,7 +38,7 @@ export async function saveMeetingNotes(context: RepositoryContext, input: SaveMe
   await context.db.query(`INSERT INTO meeting_note_revisions(workspace_id,meeting_id,firm_id,revision,debrief,speaker_mappings,item_overrides,sufficient,created_by_user_id)
     VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)`, [workspace, value.meetingId, firm.id, value.expectedRevision + 1, value.debrief,
     JSON.stringify(value.speakerMappings), JSON.stringify(value.itemOverrides), value.sufficient, context.scope.actor.userId]);
-  await context.db.query('UPDATE meetings SET notes_revision=notes_revision+1 WHERE workspace_id=$1 AND id=$2', [workspace, value.meetingId]);
+  await context.db.query('UPDATE meetings SET notes_revision=notes_revision+1,outcomes_review_required=false WHERE workspace_id=$1 AND id=$2', [workspace, value.meetingId]);
   await context.db.query("UPDATE meeting_analyses SET state='stale' WHERE workspace_id=$1 AND meeting_id=$2 AND state IN ('pending','ready','held')", [workspace, value.meetingId]);
   await recordCrmAuditEvent(context, { action: 'meeting.notes_saved', subjectKind: 'meeting', subjectId: value.meetingId, detail: { revision: value.expectedRevision + 1 } });
   await enqueueMeetingAnalysis(context, value.meetingId);

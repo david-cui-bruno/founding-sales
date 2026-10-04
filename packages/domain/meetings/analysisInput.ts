@@ -17,6 +17,7 @@ export async function assembleMeetingAnalysisInput(context: RepositoryContext, i
     try {
       const before = await readMeetingOutcomes(context, input);
       if (before === null) return { ok: false, reason: 'meeting_unknown' };
+      if (before.holds.includes('merged_notes_review')) return { ok: false, reason: 'merged_notes_review' };
       const meta = (await context.db.query<{ starts_at: Date; business_time_zone: string }>(
         'SELECT m.starts_at,w.business_time_zone FROM meetings m JOIN workspaces w ON w.id=m.workspace_id WHERE m.workspace_id=$1 AND m.id=$2', [context.scope.workspaceId, input.meetingId])).rows[0];
       if (meta === undefined) return { ok: false, reason: 'meeting_unknown' };

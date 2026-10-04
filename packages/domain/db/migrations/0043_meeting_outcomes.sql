@@ -87,3 +87,31 @@ CREATE TRIGGER meeting_analysis_result_deletion BEFORE INSERT OR UPDATE ON meeti
 ALTER TABLE meeting_analyses ADD COLUMN request_ids jsonb NOT NULL DEFAULT '[]', ADD COLUMN merge_request_id uuid, ADD COLUMN tasks_pending boolean NOT NULL DEFAULT false,
   ADD CONSTRAINT meeting_analyses_merge_request FOREIGN KEY(workspace_id,merge_request_id) REFERENCES meeting_analysis_requests(workspace_id,id);
 ALTER TABLE meeting_analysis_requests ADD COLUMN prepared_hash text, ADD COLUMN settings_version integer NOT NULL DEFAULT 0, ADD COLUMN wake_revision integer NOT NULL DEFAULT 0;
+
+ALTER TABLE meetings ADD COLUMN outcomes_review_required boolean NOT NULL DEFAULT false;
+ALTER TABLE meeting_note_revisions ADD COLUMN original_meeting_id uuid, ADD COLUMN original_revision integer;
+-- Calendar context is part of a source snapshot, even when the speech did not change.
+CREATE FUNCTION meeting_analysis_context_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.starts_at IS DISTINCT FROM OLD.starts_at OR NEW.firm_id IS DISTINCT FROM OLD.firm_id THEN
+    NEW.transcript_source_revision := NEW.transcript_source_revision + 1;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_analysis_context BEFORE UPDATE OF starts_at,firm_id ON meetings
+  FOR EACH ROW EXECUTE FUNCTION meeting_analysis_context_changed();
+CREATE FUNCTION meeting_analysis_zone_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.business_time_zone IS DISTINCT FROM OLD.business_time_zone THEN
+    UPDATE meetings SET transcript_source_revision=transcript_source_revision+1 WHERE workspace_id=NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_analysis_zone AFTER UPDATE OF business_time_zone ON workspaces
+  FOR EACH ROW EXECUTE FUNCTION meeting_analysis_zone_changed();
+ALTER TABLE meeting_analyses ADD CONSTRAINT meeting_analyses_meeting_identity UNIQUE(workspace_id,id,meeting_id);
+ALTER TABLE meeting_tasks DROP CONSTRAINT meeting_tasks_workspace_id_analysis_id_fkey,
+  ADD CONSTRAINT meeting_tasks_workspace_id_analysis_id_fkey FOREIGN KEY(workspace_id,analysis_id,meeting_id)
+    REFERENCES meeting_analyses(workspace_id,id,meeting_id) ON DELETE SET NULL (analysis_id) DEFERRABLE INITIALLY IMMEDIATE;

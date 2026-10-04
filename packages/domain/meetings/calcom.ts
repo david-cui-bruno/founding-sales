@@ -1,3 +1,5 @@
+import { lockTodayForFirmChange } from '../today/build.ts';
+import { foldMeetingOutcomes } from './outcomeCorrections.ts';
 import { createHash } from 'node:crypto';
 import { CALCOM_APPLIED_TRIGGERS, type CalcomAppliedTrigger, type MeetingAttendanceSource, type MeetingState } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
@@ -421,8 +423,18 @@ export async function receiveSynthesizedCalcomEvent(
   return await recordAndApply(context, input.eventId, input.event);
 }
 
+/** Booking writers take firm locks before meeting rows, matching analysis/task writers. */
+export async function lockMeetingFirmsForUids(context: RepositoryContext, uids: readonly string[]): Promise<void> {
+  await lockTodayForFirmChange(context);
+  await context.db.query(`SELECT f.id FROM firms f WHERE f.workspace_id=$1 AND f.id IN (
+    SELECT m.firm_id FROM meetings m WHERE m.workspace_id=$1 AND
+      (m.booking_uid=ANY($2::text[]) OR m.current_booking_uid=ANY($2::text[]) OR m.id IN
+        (SELECT a.meeting_id FROM meeting_booking_uids a WHERE a.workspace_id=$1 AND a.booking_uid=ANY($2::text[])))) ORDER BY f.id FOR UPDATE`, [context.scope.workspaceId, [...uids]]);
+}
+
 /** Dedupe on the delivery id, apply, and record the outcome. The send gate is held. */
 async function recordAndApply(context: RepositoryContext, eventId: string, parsed: ParsedEvent): Promise<CalcomReceipt> {
+  await lockMeetingFirmsForUids(context, [parsed.uid, parsed.rescheduleUid].filter((uid): uid is string => uid !== null));
   const db = context.db;
   const workspaceId = context.scope.workspaceId;
   const trigger = /^[A-Z][A-Z_]{1,63}$/u.test(parsed.trigger) ? parsed.trigger : 'UNKNOWN';
@@ -762,6 +774,7 @@ async function foldReplacement(context: RepositoryContext, survivor: MeetingRow,
       WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
     [workspaceId, replacement.id],
   );
+  await foldMeetingOutcomes(context, { sourceMeetingId: replacement.id, targetMeetingId: survivor.id });
   await context.db.query('DELETE FROM meetings WHERE workspace_id = $1 AND id = $2', [workspaceId, replacement.id]);
   await recordCrmAuditEvent(context, {
     action: 'meeting.replacement_folded',
@@ -799,6 +812,7 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
   const linked = survivor.firm_id === null ? (others.find(row => row.firm_id !== null) ?? null) : null;
   // The newest row's state, unless any row holds a confirmation (lane M1): that is kept.
   const write = keepConfirmation(stateOf(newest), rows);
+  if (linked !== null) await context.db.query('UPDATE meetings SET firm_id=$3,contact_id=$4,opportunity_id=$5 WHERE workspace_id=$1 AND id=$2', [workspaceId, survivor.id, linked.firm_id, linked.contact_id, linked.opportunity_id]);
   for (const other of others) {
     await context.db.query('UPDATE calcom_events SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [workspaceId, other.id, survivor.id]);
     await context.db.query('UPDATE meeting_booking_uids SET meeting_id = $3 WHERE workspace_id = $1 AND meeting_id = $2', [
@@ -813,6 +827,7 @@ export async function foldMeetings(context: RepositoryContext, rows: readonly Me
         WHERE workspace_id = $1 AND evidence_kind = 'meeting.booked' AND evidence_id = $2 AND resolved_at IS NULL`,
       [workspaceId, other.id],
     );
+    await foldMeetingOutcomes(context, { sourceMeetingId: other.id, targetMeetingId: survivor.id });
     await context.db.query('DELETE FROM meetings WHERE workspace_id = $1 AND id = $2', [workspaceId, other.id]);
   }
   const { rows: folded } = await context.db.query<MeetingRow>(
