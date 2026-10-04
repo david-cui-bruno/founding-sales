@@ -53,17 +53,17 @@ Keep delivery through `runDueStepExecution` → `prepareOutboundMessage` → `di
 
 **Produces:** `prepareMeetingRecap(context,{meetingId,expectedSourceHash,at}):Promise<MeetingResult<MeetingFollowThroughView>>`; `editMeetingRecap(context,input:MeetingDraftEdit):Promise<MeetingResult<MeetingFollowThroughView>>`; `readMeetingFollowThrough(context,{meetingId}):Promise<MeetingFollowThroughView|null>`.
 
-- [ ] Add tests for sourced routine content, unavailable material, unapproved promises, conflicting facts, source changes and edit-window versioning:
+- [x] Add tests for sourced routine content, unavailable material, unapproved promises, conflicting facts, source changes and edit-window versioning:
   ```ts
   expect(Date.parse(draft.notBefore) - Date.parse(draft.createdAt)).toBe(30 * 60_000);
   expect(savedDraft.version).toBe(originalDraft.version + 1);
   expect(await prepareWithMissingMaterial()).toMatchObject({ ok: true, value: { status: 'needs_review' } });
   expect(cancelledPlan.contactSuppressed).toBe(false);
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingRecapDrafts.test.ts test/meetings/meetingFollowThroughRead.test.ts test/db/migrations.test.ts`; confirm new failures.
-- [ ] Add `meeting_follow_through` and append-only `meeting_follow_through_drafts`, with references to M6 sources and existing sequence/delivery IDs. Extend `meeting_tasks` with a workspace/meeting-scoped `follow_through_plan_id` foreign key, exactly-one-source checks (promise commitment or follow-through plan) and one task per plan; preserve all M6 task IDs and promise identities. Drafts hold exact bytes/hash and template/material versions; plan changes use optimistic versions. Use existing approved plain-text templates with a new explicitly allowlisted meeting-recap variable. No model output may invent a product or offer fact. At this baseline there is no proven normalized asset/offer catalog: require each automated material URL and claim to come from the referenced approved template version; missing content is review work, not a new asset-management subsystem.
-- [ ] `begin_edit` sets a durable hold before the UI offers editable content. A crashed editor stays held with Resume editing/Discard, never expires into an automatic send. Save changed bytes creates a new revision and 30-minute window; discard restores the current unedited draft with a fresh window when overdue. Automatic source/content changes supersede the prior draft and restart the window. Cancel cancels the recap and any dependent default nudge schedule; it never sets a communication stop.
-- [ ] Rerun tests/typecheck and commit `feat: prepare versioned meeting recap drafts`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingRecapDrafts.test.ts test/meetings/meetingFollowThroughRead.test.ts test/db/migrations.test.ts`; confirm new failures.
+- [x] Add `meeting_follow_through` and append-only `meeting_follow_through_drafts`, with references to M6 sources and existing sequence/delivery IDs. Extend `meeting_tasks` with a workspace/meeting-scoped `follow_through_plan_id` foreign key, exactly-one-source checks (promise commitment or follow-through plan) and one task per plan; preserve all M6 task IDs and promise identities. Drafts hold exact bytes/hash and template/material versions; plan changes use optimistic versions. Use existing approved plain-text templates with a new explicitly allowlisted meeting-recap variable. No model output may invent a product or offer fact. At this baseline there is no proven normalized asset/offer catalog: require each automated material URL and claim to come from the referenced approved template version; missing content is review work, not a new asset-management subsystem.
+- [x] `begin_edit` sets a durable hold before the UI offers editable content. A crashed editor stays held with Resume editing/Discard, never expires into an automatic send. Save changed bytes creates a new revision and 30-minute window; discard restores the current unedited draft with a fresh window when overdue. Automatic source/content changes supersede the prior draft and restart the window. Cancel cancels the recap and any dependent default nudge schedule; it never sets a communication stop.
+- [x] Rerun tests/typecheck and commit `feat: prepare versioned meeting recap drafts`.
 
 ## Task 2: real meeting-backed permission and plan enrollment
 

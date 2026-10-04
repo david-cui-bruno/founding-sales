@@ -202,6 +202,9 @@ export const meetingAnalysisSettingSchema = z.strictObject({
 export type MeetingAnalysisSetting = z.infer<typeof meetingAnalysisSettingSchema>;
 export const DEFAULT_MEETING_ANALYSIS: MeetingAnalysisSetting = { enabled: false, dailyCeilingCents: 0, creditCoverage: null };
 
+export const meetingFollowThroughSettingSchema = z.strictObject({ sequenceVersionId: z.string().uuid().nullable() });
+export const DEFAULT_MEETING_FOLLOW_THROUGH = { sequenceVersionId: null };
+
 export const INTEGRATION_SETTING_KEYS = [
   'calling_provider',
   'calendar_integration',
@@ -211,6 +214,7 @@ export const INTEGRATION_SETTING_KEYS = [
   'monthly_cash_ceiling_cents',
   'meeting_transcription',
   'meeting_analysis',
+  'meeting_follow_through',
 ] as const;
 export type IntegrationSettingKey = (typeof INTEGRATION_SETTING_KEYS)[number];
 
@@ -278,6 +282,7 @@ export const INTEGRATION_SETTING_VALUE_SCHEMAS = {
   monthly_cash_ceiling_cents: monthlyCashCeilingSettingSchema,
   meeting_transcription: meetingTranscriptionSettingSchema,
   meeting_analysis: meetingAnalysisSettingSchema,
+  meeting_follow_through: meetingFollowThroughSettingSchema,
 } as const satisfies Record<IntegrationSettingKey, z.ZodType>;
 
 export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSettingKey, unknown>> = Object.freeze({
@@ -289,6 +294,7 @@ export const DEFAULT_INTEGRATION_SETTING_VALUES: Readonly<Record<IntegrationSett
   monthly_cash_ceiling_cents: { cents: DEFAULT_MONTHLY_CASH_CEILING_CENTS },
   meeting_transcription: DEFAULT_MEETING_TRANSCRIPTION,
   meeting_analysis: DEFAULT_MEETING_ANALYSIS,
+  meeting_follow_through: DEFAULT_MEETING_FOLLOW_THROUGH,
 });
 
 /** The schema and default for any stored key. */

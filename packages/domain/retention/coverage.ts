@@ -278,6 +278,8 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   meeting_note_revisions: coverage(['deletion_removes'], 'Human debriefs and corrections cascade with their meeting.'),
   meeting_analyses: coverage(['deletion_removes'], 'Structured meeting evidence cascades with its meeting.'),
   meeting_tasks: coverage(['deletion_removes'], 'Meeting promises and evidence cascade with their meeting.'),
+  meeting_follow_through: coverage(['deletion_removes'], 'Meeting follow-through scope and scheduling cascade with their meeting.'),
+  meeting_follow_through_drafts: coverage(['deletion_removes'], 'Personalized recap revisions cascade with their meeting plan.'),
   meeting_analysis_requests: coverage(['deletion_redacts', 'retained'], 'Request identity and spend survive deletion; the database scrubs result content when its meeting link is cleared.'),
   meeting_transcripts: coverage(['deletion_removes'], 'Demo speech and attribution, removed with the recording and meeting.'),
   meeting_transcription_attempts: coverage(['operational'], 'Provider job IDs, object keys and reservations, without speech; retains accounting after subject deletion.'),
