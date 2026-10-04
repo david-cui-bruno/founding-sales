@@ -1,3 +1,4 @@
+import { MeetingAutoRecording } from './MeetingAutoRecording.tsx';
 import { MeetingFollowThrough } from './MeetingFollowThrough.tsx';
 import { MeetingOutcomes } from './MeetingOutcomes.tsx';
 import { useEffect, useRef, useState, type JSX } from 'react';
@@ -327,6 +328,7 @@ export function FirmMeetings({
               {ports.brief !== undefined && briefOffered(row) && briefs.memory.open.has(row.meetingId) ? (
                 <MeetingBrief meetingId={row.meetingId} read={ports.brief} />
               ) : null}
+              <MeetingAutoRecording meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               <MeetingOutcomes key={row.meetingId} meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               <MeetingFollowThrough meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               {note === undefined ? null : (

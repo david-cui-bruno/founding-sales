@@ -85,3 +85,4 @@ export async function runMeetingRecordingSetup(session:SessionQueryable,input:Re
   if(checked.ok&&checked.action==='observe')await ready();
   else await currentBoundary(session,input,async(c,r)=>await setRecordingState(c,r.id,'manual','ambiguous_write'));
 }
+export { readMeetingRecordingSetup,retryMeetingRecordingSetup } from './autoRecordingView.ts';

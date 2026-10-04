@@ -1,3 +1,4 @@
+import { readMeetingAutoRecordingConfiguration } from '@fss/domain/meetings/autoRecordingSettings.ts';
 import { readMeetingFollowThroughConfiguration } from '@fss/domain/meetings/followThroughConfiguration.ts';
 import { readMeetingAnalysisSetting, meetingAnalysisSpent } from '@fss/domain/meetings/analysisSettings.ts';
 import {
@@ -136,6 +137,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     return {
       status: 200,
       body: integrationsSettingsResponseSchema.parse({
+        ...(request.query.getAll('include').includes('meeting_auto_recording') ? {meetingAutoRecording:await readMeetingAutoRecordingConfiguration(scoped.context)} : {}),
         ...(request.query.getAll('include').includes('meeting_follow_through') ? { meetingFollowThrough: await readMeetingFollowThroughConfiguration(scoped.context) } : {}),
         ...(request.query.getAll('include').includes('meeting_analysis') ? { meetingAnalysis: { setting: await readMeetingAnalysisSetting(scoped.context), spentTodayCents: await meetingAnalysisSpent(scoped.context, (await meetingBudgetDay(scoped.context, new Date().toISOString())).date) } } : {}),
         ...(request.query.getAll('include').includes('meeting_transcription') ? { meetingTranscription: { setting: await readMeetingTranscription(scoped.context), spentTodayCents: await meetingSpent(scoped.context, (await meetingBudgetDay(scoped.context, new Date().toISOString())).date) } } : {}),

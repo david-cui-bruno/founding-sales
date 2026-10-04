@@ -1,3 +1,4 @@
+import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
 import { meetingDraftEditSchema,meetingFollowThroughViewSchema } from '@fss/contracts';
 import { z } from 'zod';
 import { saveMeetingNotesSchema, changeMeetingTaskSchema, meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
@@ -1282,7 +1283,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: nothing,
     output: adminStateSchema,
@@ -1300,7 +1301,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/calling-identities' },
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: z.strictObject({ screen: z.enum(SETTINGS_TAB_SCREENS) }),
     output: adminStateSchema,
@@ -1317,7 +1318,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: saveSettingInputSchema,
     output: adminStateSchema,
@@ -1327,7 +1328,7 @@ export const OPERATIONS = {
     kind: 'command',
     calls: [
       { method: 'POST', path: '/settings/update' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: saveIntegrationInputSchema,
     output: adminStateSchema,
@@ -1374,7 +1375,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: z.strictObject({ stageKey: z.string().min(1).max(80) }),
     output: adminStateSchema,
@@ -1437,7 +1438,7 @@ export const OPERATIONS = {
       { method: 'GET', path: '/postures/reference' },
       { method: 'GET', path: '/postures' },
       { method: 'GET', path: '/pipeline/stages' },
-      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through' },
+      { method: 'GET', path: '/settings/integrations?include=transcription&include=month&include=credits&include=meeting_transcription&include=meeting_analysis&include=meeting_follow_through&include=meeting_auto_recording' },
     ],
     input: recordHolidayCalendarInputSchema,
     output: adminStateSchema,
@@ -1552,6 +1553,14 @@ export const OPERATIONS = {
       'none: the firm’s meetings with their state, time and how attendance was confirmed, and the one-click stage move a live booking suggests (lane M1); meetings null when the read did not answer',
   },
   // Lane M2: the meeting brief, opened from a Meetings row.
+  'meetings.recordingSetup': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/recording-setup?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
+    output:z.strictObject({view:meetingRecordingSetupViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'current recording setting, never a claim that audio exists',
+  },
+  'meetings.retryRecordingSetup': {
+    kind:'command',calls:[{method:'POST',path:'/meetings/recording-setup/retry'}],input:retryMeetingRecordingSetupSchema.extend({commandId:uuid}),
+    output:z.strictObject({view:meetingRecordingSetupViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'audited versioned retry with retained command identity',
+  },
   'meetings.followThrough': {
     kind:'read', calls:[{method:'GET',path:'/meetings/follow-through?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
     output:z.strictObject({view:meetingFollowThroughViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'current recap and follow-through, never cached on disk',

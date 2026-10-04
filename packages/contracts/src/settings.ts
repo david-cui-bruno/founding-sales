@@ -318,6 +318,7 @@ export const DEFAULT_STORED_SETTING_VALUES: Readonly<Record<StoredSettingKey, un
  */
 const integrationConfigured = z.strictObject({ ok: z.boolean(), missing: z.array(z.string().max(64)).max(16) });
 export const integrationsSettingsResponseSchema = z.strictObject({
+  meetingAutoRecording: z.strictObject({setting:meetingAutoRecordingSettingSchema,version:z.number().int().nonnegative(),configured:z.strictObject({ready:z.boolean(),workerFresh:z.boolean()})}).optional(),
   meetingFollowThrough: z.strictObject({ setting: meetingFollowThroughSettingSchema, choices: z.array(z.strictObject({ id: z.string().uuid(), label: z.string().max(240) })).max(100) }).optional(),
   meetingAnalysis: z.strictObject({ setting: meetingAnalysisSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
   meetingTranscription: z.strictObject({ setting: meetingTranscriptionSettingSchema, spentTodayCents: z.number().int().nonnegative() }).optional(),
