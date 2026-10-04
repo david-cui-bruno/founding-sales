@@ -175,7 +175,9 @@ export async function enrollContact(
   if (input.originKind === 'prospecting') {
     if (input.permissionId !== undefined) return refuseSequence('invalid_input');
     const atFirm = await listEnrollments(context, { firmId: input.firmId, liveOnly: true });
-    if (atFirm.some(enrollment => enrollment.originKind === 'prospecting')) {
+    const meetingRun = (await context.db.query(`SELECT p.id FROM meeting_follow_through p JOIN sequence_enrollments e ON e.workspace_id=p.workspace_id AND e.id=p.enrollment_id
+      WHERE p.workspace_id=$1 AND p.firm_id=$2 AND e.ended_at IS NULL LIMIT 1`, [context.scope.workspaceId, input.firmId])).rows[0];
+    if (meetingRun !== undefined || atFirm.some(enrollment => enrollment.originKind === 'prospecting')) {
       return refuseSequence('firm_already_enrolled');
     }
   } else {

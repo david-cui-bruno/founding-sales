@@ -1,3 +1,4 @@
+import { foldMeetingFollowThrough } from './followThroughLifecycle.ts';
 import type { MeetingNoteItem, SaveMeetingNotes } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
@@ -36,11 +37,12 @@ export async function saveMeetingOutcomeCorrections(context: RepositoryContext, 
 export async function foldMeetingOutcomes(context: RepositoryContext, input: { sourceMeetingId: string; targetMeetingId: string }): Promise<void> {
   if (input.sourceMeetingId === input.targetMeetingId) return;
   const workspace = context.scope.workspaceId;
-  await context.db.query('SET CONSTRAINTS meeting_tasks_workspace_id_analysis_id_fkey DEFERRED');
+  await context.db.query('SET CONSTRAINTS meeting_tasks_workspace_id_analysis_id_fkey,meeting_follow_through_workspace_id_analysis_id_meeting_id_fkey,meeting_tasks_plan_source DEFERRED');
   const rows = (await context.db.query<{ id: string; firm_id: string | null; notes_revision: number }>('SELECT id,firm_id,notes_revision FROM meetings WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE', [workspace, [input.sourceMeetingId, input.targetMeetingId]])).rows;
   const source = rows.find(r => r.id === input.sourceMeetingId), target = rows.find(r => r.id === input.targetMeetingId);
   if (source === undefined || target === undefined || source.firm_id === null) return;
   if (target.firm_id !== source.firm_id) throw new Error('meeting_outcome_fold_firm_conflict');
+  await foldMeetingFollowThrough(context, source.id, target.id);
   const sourceNotes = await readCurrentMeetingNotes(context, source.id), targetNotes = await readCurrentMeetingNotes(context, target.id);
   const offset = target.notes_revision;
   const debrief = [targetNotes.debrief, sourceNotes.debrief].filter(t => t.trim() !== '').join('\n\n');
@@ -97,7 +99,7 @@ export async function foldMeetingOutcomes(context: RepositoryContext, input: { s
   await context.db.query("UPDATE meeting_analyses SET state='stale',tasks_pending=false WHERE workspace_id=$1 AND meeting_id=$2", [workspace, target.id]);
   // Deadline cleanup uses the normal budget-before-firm order in a separate scheduler transaction.
   await context.db.query("UPDATE meeting_analysis_requests SET deadline_at=now(),next_wake_at='9999-01-01' WHERE workspace_id=$1 AND meeting_id=$2 AND state IN ('queued','held','reserved','calling')", [workspace, target.id]);
-  await context.db.query('SET CONSTRAINTS meeting_tasks_workspace_id_analysis_id_fkey IMMEDIATE');
+  await context.db.query('SET CONSTRAINTS meeting_tasks_workspace_id_analysis_id_fkey,meeting_follow_through_workspace_id_analysis_id_meeting_id_fkey,meeting_tasks_plan_source IMMEDIATE');
   await recordCrmAuditEvent(context, { action: 'meeting.outcomes_folded', subjectKind: 'meeting', subjectId: target.id, detail: { sourceMeetingId: source.id, preservedTasks: tasks.length } });
 }
 
@@ -106,5 +108,5 @@ export async function deleteMeetingOutcomeContent(context: RepositoryContext, in
   if (input.meetingIds.length === 0) return;
   await context.db.query('UPDATE meeting_analysis_requests SET result=NULL,deadline_at=now() WHERE workspace_id=$1 AND meeting_id=ANY($2::uuid[])', [context.scope.workspaceId, [...input.meetingIds]]);
   await context.db.query("DELETE FROM today_items WHERE workspace_id=$1 AND ((source_kind='meeting_task' AND source_id IN (SELECT id FROM meeting_tasks WHERE workspace_id=$1 AND meeting_id=ANY($2::uuid[]))) OR (source_kind='meeting_review' AND source_id=ANY($2::uuid[])))", [context.scope.workspaceId, [...input.meetingIds]]);
-  for (const table of ['meeting_tasks', 'meeting_analyses', 'meeting_note_revisions']) await context.db.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND meeting_id=ANY($2::uuid[])`, [context.scope.workspaceId, [...input.meetingIds]]);
+  for (const table of ['meeting_tasks', 'meeting_follow_through', 'meeting_analyses', 'meeting_note_revisions']) await context.db.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND meeting_id=ANY($2::uuid[])`, [context.scope.workspaceId, [...input.meetingIds]]);
 }

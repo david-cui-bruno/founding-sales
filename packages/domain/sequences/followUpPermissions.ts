@@ -6,6 +6,7 @@ import {
   type FollowUpPermissionKind,
   type FollowUpPermissionScope,
 } from '@fss/contracts';
+import { verifyMeetingBookingPermission } from '../meetings/followThroughEligibility.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { REACHED_OUTCOMES } from '../dial/outcomes.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
@@ -189,6 +190,7 @@ export interface FollowUpSubject {
   readonly enrollmentId?: string | null | undefined;
   /** How many steps the enrollment has, against `max_steps`. */
   readonly stepCount?: number | undefined;
+  readonly stepOrdinal?: number | undefined;
   /**
    * The template version whose bytes would leave. Checked against the permitted one for
    * `single_email`: "the agreed overview", not "whatever approved template was picked".
@@ -272,8 +274,7 @@ async function agreedScheduleMoved(context: RepositoryContext, enrollmentId: str
  *   5. it has not expired;
  *   6. its scope still has room: `single_email` and `contextual_reply` once each and
  *      bound to their own content, `agreed_sequence` for its own immutable version and
- *      its own run within `max_steps`, and `booking_communications` **never** — reserved
- *      until a booking table exists.
+ *      its own run within `max_steps`, and `booking_communications` only through a current, bound meeting plan.
  *
  * `expires_at` is compared against database time passed in, never `Date.now()`.
  */
@@ -296,7 +297,7 @@ export async function verifyFollowUpPermission(
     return { ok: false, refusal: 'follow_up_not_permitted', detail: 'revoked' };
   }
 
-  const evidence = await verifyEvidence(context, permission);
+  const evidence = await verifyEvidence(context, permission, subject);
   if (evidence !== null) return { ok: false, refusal: 'follow_up_not_permitted', detail: evidence };
 
   if (Date.parse(permission.expiresAt) <= Date.parse(subject.now)) {
@@ -370,12 +371,8 @@ export async function verifyFollowUpPermission(
       }
       break;
     case 'booking_communications':
-      // Reserved, and said out loud rather than waved through. David named the origin
-      // ("a booking permits relevant booking communications") before Cal.com exists, so
-      // there is no booking table, and `booking_reference` is a text nothing can check.
-      // A scope whose evidence cannot be re-read cannot satisfy the rule this file is
-      // for, so it refuses until the table arrives.
-      return { ok: false, refusal: 'follow_up_not_permitted', detail: 'booking_scope_reserved' };
+      // verifyEvidence checked the linked plan, version, count and meeting together.
+      break;
   }
 
   // The step limit last of the three, because "that permission is not for this plan"
@@ -425,6 +422,7 @@ export async function verifyFollowUpPermission(
 async function verifyEvidence(
   context: RepositoryContext,
   permission: FollowUpPermissionRow,
+  subject: FollowUpSubject,
 ): Promise<string | null> {
   if (permission.callLogId !== null) {
     const { rows } = await context.db.query<{
@@ -484,9 +482,7 @@ async function verifyEvidence(
     );
     return rows[0] === undefined ? 'inbound_request_unconfirmed' : null;
   }
-  // `follow_up_permissions_one_evidence` leaves only the booking reference, and the
-  // scope arm above refuses it before anything can rest on it.
-  return 'booking_scope_reserved';
+  return await verifyMeetingBookingPermission(context, permission, subject);
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +591,7 @@ export async function grantFollowUpPermission(
     contactId: permission.contactId,
     now: grantedAt,
   });
-  if (!verdict.ok && verdict.detail !== 'booking_scope_reserved') {
+  if (!verdict.ok) {
     throw new FollowUpEvidenceError(verdict.detail);
   }
   return acceptSequence(permission);
@@ -607,7 +603,7 @@ export async function grantFollowUpPermission(
  * A call log supports exactly what it recorded as agreed — the `agreed_follow_up`
  * column and the version it names — and nothing when it recorded no agreement or was
  * not a conversation. An inbound message supports one contextual reply. A booking
- * reference supports the reserved scope, which the verification then refuses.
+ * reference alone supports nothing; the meeting flow must bind its verified plan.
  */
 async function termsOfEvidence(
   context: RepositoryContext,
@@ -654,13 +650,8 @@ async function termsOfEvidence(
       maxSteps: 1,
     };
   }
-  return {
-    kind: 'booking',
-    scope: 'booking_communications',
-    templateVersionId: null,
-    sequenceVersionId: null,
-    maxSteps: null,
-  };
+  // Real completed-demo authority is minted only by enrollMeetingFollowThrough.
+  return null;
 }
 
 async function stepCountOfVersion(context: RepositoryContext, versionId: string): Promise<number> {

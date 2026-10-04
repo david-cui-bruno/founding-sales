@@ -12,6 +12,7 @@ import {
   recordReconcileMiss,
 } from './fence.ts';
 import { RECONCILE_WINDOW_HOURS, reconcileBackoffSeconds } from './types.ts';
+import { recordMeetingDelivery } from '../meetings/followThroughDelivery.ts';
 
 /**
  * Sent-folder reconciliation (Appendix B, Appendix G 5 and 12).
@@ -142,6 +143,9 @@ export async function reconcileOutboundMessage(
       ...(deps.actor === undefined ? {} : { actor: deps.actor }),
     });
     if (recorded.ok) {
+      if (fence.stepExecutionId !== null) await recordMeetingDelivery(context, {
+        executionId: fence.stepExecutionId, messageId: fence.id, sentAt: recorded.value.sentAt!,
+      });
       // The doubt is over, so the hold the doubt opened comes off. Only that one:
       // `releaseHoldsOfEvent` releases what this fence opened and nothing else, so a
       // suppression or a cap hold on the same firm survives.

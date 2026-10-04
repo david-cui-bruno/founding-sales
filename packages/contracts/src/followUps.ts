@@ -20,8 +20,7 @@ import { instant, uuid } from './foundationRows.ts';
  * Which recorded event granted the permission.
  *
  * `conversation` is a call whose outcome was `interested`; `request` is an inbound
- * e-mail or a confirmed reply; `booking` is a confirmed meeting (reserved — no booking
- * table exists yet); `agreed_sequence` is a follow-up programme the person agreed to.
+ * e-mail or a confirmed reply; `booking` is a confirmed, attended meeting bound to a current follow-through plan; `agreed_sequence` is a follow-up programme the person agreed to.
  */
 export const FOLLOW_UP_PERMISSION_KINDS = ['conversation', 'request', 'booking', 'agreed_sequence'] as const;
 export const followUpPermissionKindSchema = z.enum(FOLLOW_UP_PERMISSION_KINDS);
@@ -35,8 +34,8 @@ export type FollowUpPermissionKind = (typeof FOLLOW_UP_PERMISSION_KINDS)[number]
  *   * `contextual_reply` — an inbound question permits a contextual reply. One reply
  *     step, and a sequence of more than one step is refused at enrollment.
  *   * `booking_communications` — a booking permits relevant booking communications.
- *     **Reserved**: `followUpPermissionSource` refuses it until a booking table exists
- *     and the evidence can be re-read.
+ *     A linked meeting plan binds the recipient, current sources, version, count and expiry;
+ *     a booking reference without that plan is refused.
  *   * `agreed_sequence` — an agreed follow-up sequence runs within its agreed scope: the
  *     named `sequence_id`, and no other.
  */

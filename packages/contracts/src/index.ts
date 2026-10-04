@@ -34,3 +34,5 @@ export * from './preparedBriefs.ts';
 export * from './meetingTranscription.ts';
 
 export * from './meetingOutcomes.ts';
+
+export * from './meetingFollowThrough.ts';

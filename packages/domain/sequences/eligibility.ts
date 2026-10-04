@@ -346,6 +346,7 @@ export function followUpPermissionSource(): StepEligibilitySource {
         sequenceVersionId: enrollment.sequence_version_id,
         enrollmentId: input.execution.enrollmentId,
         stepCount: Number(enrollment.step_count),
+        stepOrdinal: input.execution.ordinal,
         // The bytes this step would send: the frozen fence's template version at the
         // dispatch asking, the step's own at preparation. A `single_email` permission
         // is the agreed overview and not whatever approved template was picked (P0-2).
@@ -457,9 +458,9 @@ export function firmExclusivitySource(): StepEligibilitySource {
             AND firm_id = $2
             AND id <> $3
             AND ended_at IS NULL
-            AND origin_kind = 'prospecting'
-            AND (started_at, id) < (SELECT started_at, id FROM sequence_enrollments
-                                     WHERE workspace_id = $1 AND id = $3)
+            AND ((origin_kind = 'prospecting' AND (started_at, id) < (SELECT started_at, id FROM sequence_enrollments
+                                     WHERE workspace_id = $1 AND id = $3))
+              OR EXISTS (SELECT 1 FROM meeting_follow_through p WHERE p.workspace_id=$1 AND p.enrollment_id=sequence_enrollments.id))
           ORDER BY started_at, id
           LIMIT 1`,
         [context.scope.workspaceId, input.firmId, input.execution.enrollmentId],

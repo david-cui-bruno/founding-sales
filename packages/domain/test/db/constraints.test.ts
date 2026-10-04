@@ -1,3 +1,4 @@
+import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from './support/meetingFollowThroughCases.ts';
 import { MEETING_OUTCOMES_CONSTRAINT_CASES } from './support/meetingOutcomesCases.ts';
 import { MEETING_TRANSCRIPTION_CONSTRAINT_CASES } from './support/meetingTranscriptionCases.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -1405,6 +1406,7 @@ const cases: readonly Case[] = [
   ...MEETING_RECORDINGS_CONSTRAINT_CASES,
   ...MEETING_TRANSCRIPTION_CONSTRAINT_CASES,
   ...MEETING_OUTCOMES_CONSTRAINT_CASES,
+  ...MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

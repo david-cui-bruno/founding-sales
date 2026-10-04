@@ -7,6 +7,7 @@ import { CHANNEL_ACTION_KINDS, composeEligibility, suppressionSource, type StepE
 import { readEnrollment, readStepExecution } from '../sequences/rows.ts';
 import type { EnrollmentRow, StepExecutionRow } from '../sequences/types.ts';
 import type { OutboundFenceRow } from './fence.ts';
+import { verifyMeetingFence } from '../meetings/followThroughDelivery.ts';
 import { acceptSend, refuseSend, type SendRefusalCode, type SendResult } from './types.ts';
 
 /**
@@ -135,6 +136,8 @@ export async function decideStepPermission(
     const detail = outcome.detail === undefined ? outcome.reasonCode : `${outcome.reasonCode}:${outcome.detail}`;
     return refuseSend(sendRefusalForIneligibility(outcome.reasonCode), detail);
   }
+  const meeting = await verifyMeetingFence(context, { fenceId: fence.id, at: now.toISOString() });
+  if (!meeting.ok) return refuseSend('step_ineligible', `follow_up_not_permitted:${meeting.reason}`);
   return acceptSend({ execution, enrollment });
 }
 

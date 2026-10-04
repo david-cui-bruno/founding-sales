@@ -327,6 +327,19 @@ export async function processMessageIds(
           // else waits for `resolveAmbiguity`, which applies it to the one selected.
           const only = await directSendTargetOf(context, stored.message.id);
           if (only !== undefined) {
+            // Only an active meeting draft needs outgoing content to prove fulfillment.
+            // Other outgoing mail retains the existing metadata-only import behavior.
+            const meetingDraft = (await context.db.query(`SELECT p.id FROM meeting_follow_through p
+              WHERE p.workspace_id=$1 AND p.firm_id=$2 AND p.status NOT IN ('cancelled','completed')
+              AND p.created_at<=$3 LIMIT 1`, [context.scope.workspaceId,only.firmId,stored.message.internalDate])).rows[0];
+            if (meetingDraft !== undefined) {
+              const read = await gmailRead(() => deps.gmail.getBody(input.access,providerMessageId));
+              if (!read.ok) return { ok:false,read:'body',detail:read.detail };
+              if (read.value !== null) {
+                bodiesFetched += 1;
+                await storeMessageBody(context,{messageId:stored.message.id,text:read.value.text,truncated:read.value.truncated});
+              }
+            }
             const outcome = await applyDirectSendEffects(context, { message: stored.message, candidate: only });
             if (outcome.recorded) directSendsRecorded += 1;
           }

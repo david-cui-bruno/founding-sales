@@ -132,6 +132,7 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'contact_first_name',
   'contact_full_name',
   'contact_title',
+  'meeting_recap',
 ] as const;
 export type TemplateVariableName = (typeof TEMPLATE_VARIABLE_NAMES)[number];
 
