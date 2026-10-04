@@ -10,6 +10,6 @@ export interface FollowThroughRow {
 export interface FollowThroughDraftRow {
   readonly [column: string]: unknown;
   id: string; plan_id: string; version: number; ordinal: number; subject: string; body: string; rendered_hash: string;
-  template_version_id: string; source_hash: string; material_references: string[]; created_at: Date; not_before: Date;
+  template_version_id: string; template_content_hash: string; outbound_message_id: string | null; material_task_ids: string[]; source_hash: string; material_references: string[]; created_at: Date; not_before: Date;
   state: 'ready' | 'held' | 'editing' | 'cancelled' | 'superseded' | 'submitted' | 'sent';
 }

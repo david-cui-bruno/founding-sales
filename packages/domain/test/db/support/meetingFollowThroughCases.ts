@@ -17,7 +17,7 @@ async function draft(f: F): Promise<Row> {
   const p = await plan(f); await insert(f, 'meeting_follow_through', p);
   const template = (await f.session.query<{ id: string }>('SELECT id FROM template_versions WHERE workspace_id=$1 LIMIT 1', [f.seeded.alpha.workspaceId])).rows[0]!.id;
   return { workspace_id: p['workspace_id'], id: randomUUID(), plan_id: p['id'], version: 1, subject: 'Meeting recap', body: 'Thanks for the discussion.', rendered_hash: 'b'.repeat(64),
-    template_version_id: template, source_hash: 'a'.repeat(64), created_at: '2026-10-05T15:00:00Z', not_before: '2026-10-05T15:30:00Z' };
+    template_version_id: template, template_content_hash: 'c'.repeat(64), source_hash: 'a'.repeat(64), created_at: '2026-10-05T15:00:00Z', not_before: '2026-10-05T15:30:00Z' };
 }
 async function task(f: F): Promise<Row> {
   const p = await plan(f); await insert(f, 'meeting_follow_through', p);
@@ -45,10 +45,11 @@ export const MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES: readonly Case[] = [
     await insert(f, 'meeting_follow_through', { ...await plan(f), enrollment_id: enrollment });
     return await insert(f, 'meeting_follow_through', { ...await plan(f), enrollment_id: enrollment });
   } },
-  ...[['version', 0], ['ordinal', 4], ['subject', 'Two\nlines'], ['body', ''], ['rendered_hash', 'bad'], ['source_hash', 'bad'], ['material_references', '{}'], ['state', 'bad']].map(([key, value]) =>
+  ...[['version', 0], ['ordinal', 4], ['subject', 'Two\nlines'], ['body', ''], ['rendered_hash', 'bad'], ['source_hash', 'bad'], ['template_content_hash','bad'], ['material_task_ids','{}'], ['material_references', '{}'], ['state', 'bad']].map(([key, value]) =>
     bad('meeting_follow_through_drafts', `meeting_follow_through_drafts_${String(key)}_check`, draft, { [String(key)]: value })),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_check', draft, { not_before: '2026-10-05T14:00:00Z' }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_check1', draft, { body: 'Unsubscribe at https://example.test/stop' }),
+  bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_outbound_messag_fkey', draft, { outbound_message_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_plan_id_fkey', draft, { plan_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_template_versio_fkey', draft, { template_version_id: missing }),
   bad('meeting_follow_through_drafts', 'meeting_follow_through_drafts_workspace_id_created_by_user_fkey', draft, { created_by_user_id: missing }),

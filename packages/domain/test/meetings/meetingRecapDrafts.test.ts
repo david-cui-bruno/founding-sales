@@ -35,6 +35,7 @@ describe('recap drafts preserve the review window and exact content', () => {
     expect(await withTransaction(f.db.session, () => editMeetingRecap(f.context, changed, RECAP_AT))).toEqual({ ok: false, reason: 'draft_changed' });
     const rows = (await f.db.session.query('SELECT version,subject FROM meeting_follow_through_drafts ORDER BY version')).rows;
     expect(rows).toEqual([{ version: 1, subject: 'Our conversation' }, { version: 2, subject: 'Our next steps' }]);
+    expect(await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: '2026-10-05T16:05:00.000Z' }))).toMatchObject({ ok: true, value: { currentDraft: { version: 2, subject: changed.subject, body: changed.body } } });
   });
   it('cancels the plan without adding a contact stop', async () => {
     const { prepareMeetingRecap, editMeetingRecap } = await import('../../meetings/followThrough.ts');
@@ -105,5 +106,23 @@ describe('recap drafts preserve the review window and exact content', () => {
     const p = await f.ready();
     await f.db.session.query('UPDATE meetings SET contact_id=NULL WHERE id=$1', [p.meetingId]);
     expect(await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: RECAP_AT }))).toMatchObject({ ok: true, value: { status: 'needs_review', contactId: null, blockers: expect.arrayContaining(['recipient_unresolved']) } });
+  });
+  it('starts a fresh revision and window when the configured email footer changes', async () => {
+    const { prepareMeetingRecap } = await import('../../meetings/followThrough.ts');
+    const { updateSetting } = await import('../../settings/store.ts');
+    const p = await f.ready();
+    await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: RECAP_AT }));
+    await withTransaction(f.db.session, () => updateSetting(f.context, { settingKey: 'postal_address', value: { address: '123 Example Street, Providence RI 02912' } }));
+    const result = await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: '2026-10-05T16:00:00.000Z' }));
+    expect(result).toMatchObject({ ok: true, value: { currentDraft: { version: 2, body: expect.stringContaining('123 Example Street'), notBefore: '2026-10-05T16:30:00.000Z' } } });
+  });
+  it('returns an actionable refusal when a saved body cannot fit its footer', async () => {
+    const { prepareMeetingRecap, editMeetingRecap } = await import('../../meetings/followThrough.ts');
+    const p = await f.ready();
+    const prepared = await withTransaction(f.db.session, () => prepareMeetingRecap(f.context, { ...p, at: RECAP_AT }));
+    if (!prepared.ok) throw new Error(prepared.reason);
+    const begun = await withTransaction(f.db.session, () => editMeetingRecap(f.context, { planId: prepared.value.planId!, expectedPlanVersion: prepared.value.version, expectedDraftVersion: 1, action: 'begin_edit' }, RECAP_AT));
+    if (!begun.ok) throw new Error(begun.reason);
+    expect(await withTransaction(f.db.session, () => editMeetingRecap(f.context, { planId: begun.value.planId!, expectedPlanVersion: begun.value.version, expectedDraftVersion: 1, action: 'save', subject: 'Recap', body: 'x'.repeat(4000) }, RECAP_AT))).toMatchObject({ ok: false, reason: expect.stringContaining('presentation_') });
   });
 });

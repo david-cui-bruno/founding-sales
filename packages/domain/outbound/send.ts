@@ -25,6 +25,7 @@ import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
 import { countAutomatedSend, recordDaySignal } from './ramp.ts';
 import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
+import { verifyMeetingFence, markMeetingDraftSubmitted, recordMeetingDelivery } from '../meetings/followThroughDelivery.ts';
 
 /**
  * The dispatch path: the only code in FSS that sends an email (specification 12.5,
@@ -253,6 +254,9 @@ export async function dispatchOutboundMessage(
       // happen if something else reconciled it. Gmail has the message either way.
       return { outcome: 'not_ready', outboundMessageId: fence.id, refusal: recorded.reason };
     }
+    if (envelope.stepExecutionId !== null) await recordMeetingDelivery(context, {
+      executionId: envelope.stepExecutionId, messageId: fence.id, sentAt: recorded.value.sentAt!,
+    });
     return { outcome: 'sent', outboundMessageId: fence.id, providerMessageId: sent.messageId };
   }
 
@@ -430,6 +434,13 @@ async function recheckAndClaim(
       };
     }
 
+    const meeting = await verifyMeetingFence(context, { fenceId: fence.id, at: (deps.now?.() ?? new Date()).toISOString() });
+    if (!meeting.ok) {
+      await holdFence(context, { outboundMessageId: fence.id, reason: 'follow_up_not_permitted' });
+      await context.db.query('COMMIT');
+      return { kind: 'held', fence, reason: 'step_ineligible', detail: `follow_up_not_permitted:${meeting.reason}` };
+    }
+
     // The reservation: a conditional UPDATE rather than a read-then-write, so two
     // workers racing the last slot of the day cannot both win it (Appendix G 33), on
     // the business date of *this* decision (S05).
@@ -483,6 +494,10 @@ async function recheckAndClaim(
         await context.db.query('ROLLBACK');
         return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_expired' };
       }
+    }
+    if (!(await markMeetingDraftSubmitted(context, fence.id))) {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_not_permitted:draft_changed' };
     }
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value };

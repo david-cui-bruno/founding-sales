@@ -89,17 +89,17 @@ Keep delivery through `runDueStepExecution` → `prepareOutboundMessage` → `di
 
 **Consumes:** Task 2 live permission and Task 1 immutable draft. **Produces:** `meetingDraftForExecution(context,{executionId,at}):Promise<MeetingResult<{draftId:string,draftVersion:number,subject:string,body:string,renderedHash:string,notBefore:string}>>`; `verifyMeetingFence(context,{fenceId,at}):Promise<MeetingResult<{planId:string}>>`; `recordMeetingDelivery(context,{executionId,messageId,sentAt}):Promise<void>`.
 
-- [ ] Write tests using the real dispatcher with a fake external adapter: pause, edit/save/cancel, notes revision, suppression, reply and reassignment between prepare and claim; unknown send outcome:
+- [x] Write tests using the real dispatcher with a fake external adapter: pause, edit/save/cancel, notes revision, suppression, reply and reassignment between prepare and claim; unknown send outcome:
   ```ts
   expect(adapter.sends).toHaveLength(0); // every committed pre-claim hold wins
   expect(sentEnvelope.renderedHash).toBe(currentDraft.renderedHash);
   expect(adapter.sends).toHaveLength(1); // retry after ambiguous submission reconciles
   expect(taskAfterDraftOrQueue.status).toBe('open');
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingRecapDispatch.test.ts test/outbound/dispatchRace.test.ts test/outbound/dispatchRecheck.test.ts`; observe failures.
-- [ ] Attach plan/draft identity through the execution's existing source link. Freeze the current rendered bytes and approved template hash in the normal fence, then verify current plan/draft/source versions again before claim. Old prepared fences are held/superseded using existing fence operations; dispatching/reconciling fences are immutable. A newer draft cannot send until an older ambiguous submission resolves. Keep template approval, postal/footer presentation, mailbox health, route checks and ramping intact.
-- [ ] Draft mutations, notes invalidation and stop facts take the exclusive send gate before firm/meeting/plan rows; final send claims use its shared gate and existing row order. Never nest Today's lock inside dispatch. Successful/reconciled delivery schedules post-commit task fulfillment and plan progression. Mark a promised-material task done only on a successful message linked to that exact task/material, not on queued status or a recap that merely mentions the promise.
-- [ ] Rerun tests/typecheck and commit `feat: deliver meeting recaps through existing send controls`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingRecapDispatch.test.ts test/outbound/dispatchRace.test.ts test/outbound/dispatchRecheck.test.ts`; observe failures.
+- [x] Attach plan/draft identity through the execution's existing source link. Freeze the current rendered bytes and approved template hash in the normal fence, then verify current plan/draft/source versions again before claim. Old prepared fences are held/superseded using existing fence operations; dispatching/reconciling fences are immutable. A newer draft cannot send until an older ambiguous submission resolves. Keep template approval, postal/footer presentation, mailbox health, route checks and ramping intact.
+- [x] Draft mutations, notes invalidation and stop facts take the exclusive send gate before firm/meeting/plan rows; final send claims use its shared gate and existing row order. Never nest Today's lock inside dispatch. Successful/reconciled delivery schedules post-commit task fulfillment and plan progression. Mark a promised-material task done only on a successful message linked to that exact task/material, not on queued status or a recap that merely mentions the promise.
+- [x] Rerun tests/typecheck and commit `feat: deliver meeting recaps through existing send controls`.
 
 ## Task 4: follow-up timing, interruptions and lifecycle
 

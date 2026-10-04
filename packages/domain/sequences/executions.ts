@@ -39,6 +39,7 @@ import {
 } from './types.ts';
 import type { StepChannel, StepCompletionSource, StepResult } from '@fss/contracts';
 import { templateVariablesFor } from './variables.ts';
+import { meetingDraftForExecution, meetingPlanForExecution, attachMeetingFence } from '../meetings/followThroughDelivery.ts';
 
 export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
 
@@ -254,6 +255,10 @@ export async function runDueStepExecution(
 
   const fenceId = fence.outboundMessageId ?? null;
   if ((fence.state === 'prepared' || fence.state === 'held') && fenceId !== null) {
+    if (await meetingPlanForExecution(context, execution.id) !== null) {
+      const draft = await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
+      if (!draft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [draft.reason] });
+    }
     // The bytes were decided and frozen when the fence was prepared, and nothing was
     // attempted with them. Appendix B: "Prepared, and Gmail request provably not
     // started — retry same fence". The dispatch that follows the commit re-decides
@@ -443,11 +448,12 @@ async function runEmailStep(
     return await holdExecution(context, execution, 'template_unapproved');
   }
 
-  const values = await templateVariablesFor(context, {
-    firmId: enrollment.firmId,
-    contactId: enrollment.contactId,
-  });
-  const rendered = renderTemplateVersion(template, values);
+  const meetingPlan = await meetingPlanForExecution(context, execution.id);
+  const meetingDraft = meetingPlan === null ? null : await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
+  if (meetingDraft !== null && !meetingDraft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [meetingDraft.reason] });
+  const rendered = meetingDraft?.ok === true
+    ? { rendered: true as const, subject: meetingDraft.value.subject, body: meetingDraft.value.body }
+    : renderTemplateVersion(template, await templateVariablesFor(context, { firmId: enrollment.firmId, contactId: enrollment.contactId }));
   if (!rendered.rendered) {
     // 11.1: "Missing required variables hold the step." This is the one hold this
     // lane opens itself, because it is the one nobody else can see.
@@ -513,6 +519,7 @@ async function runEmailStep(
   };
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
+  if (meetingPlan !== null) await attachMeetingFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
 
   await context.db.query(
     `UPDATE step_executions SET state = 'dispatched', hold_reason_code = NULL, updated_at = now()

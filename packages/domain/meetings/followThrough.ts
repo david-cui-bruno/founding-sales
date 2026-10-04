@@ -1,5 +1,6 @@
 import { hasOptOutLink, meetingDraftEditSchema, meetingFollowThroughSettingSchema, meetingFollowThroughViewSchema,
   type MeetingDraftEdit, type MeetingFollowThroughView, type MeetingOutcomesView } from '@fss/contracts';
+import { holdPreparedMeetingFence } from './followThroughDelivery.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
@@ -9,6 +10,7 @@ import { readSetting } from '../settings/store.ts';
 import { readSequenceVersion } from '../sequences/rows.ts';
 import { readTemplateVersion } from '../templates/templates.ts';
 import { templateVariablesFor } from '../sequences/variables.ts';
+import { composeBodyForWorkspace } from '../outbound/footer.ts';
 import { renderedHash } from '../outbound/fence.ts';
 import { readMeetingOutcomes } from './outcomes.ts';
 import { buildMeetingRecapContent } from './recapDrafts.ts';
@@ -68,14 +70,23 @@ export async function readMeetingFollowThrough(context: RepositoryContext, input
 
 export async function appendMeetingDraft(context: RepositoryContext, plan: FollowThroughRow, content: {
   subject: string; body: string; templateVersionId: string; sourceHash: string; materialReferences: readonly string[]; at: string; ordinal?: number;
-}): Promise<void> {
+}): Promise<MeetingResult<null>> {
   const at = new Date(content.at).toISOString();
+  const template = await readTemplateVersion(context, content.templateVersionId);
+  if (template === null || template.approvedAt === null || template.retiredAt !== null) return { ok: false, reason: 'template_unapproved' };
+  const composed = await composeBodyForWorkspace(context, { body: content.body, signOff: template.footerSignOff });
+  if (!composed.composed) return { ok: false, reason: `presentation_${composed.reason}` };
+  const references = content.materialReferences.filter(url => composed.body.includes(url));
+  const tasks = (await readMeetingOutcomes(context, { meetingId: plan.meeting_id }))?.tasks ?? [];
+  const materialTaskIds = tasks.filter(task => task.status === 'open' && /^\s*(?:send|email|share|provide)\b/iu.test(task.label)
+    && references.some(url => task.label.includes(url) && task.evidence.some(e => e.quote.includes(url)))).map(task => task.id);
   await context.db.query("UPDATE meeting_follow_through_drafts SET state='superseded' WHERE workspace_id=$1 AND plan_id=$2 AND version=$3 AND state NOT IN ('submitted','sent')", [context.scope.workspaceId, plan.id, plan.current_draft_version]);
-  await context.db.query(`INSERT INTO meeting_follow_through_drafts(workspace_id,plan_id,version,ordinal,subject,body,rendered_hash,template_version_id,source_hash,material_references,created_at,not_before,created_by_user_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`, [context.scope.workspaceId, plan.id, plan.current_draft_version + 1, content.ordinal ?? 1,
-    content.subject, content.body, renderedHash(content.subject, content.body), content.templateVersionId, content.sourceHash, JSON.stringify(content.materialReferences), at,
-    new Date(Date.parse(at) + RECAP_EDIT_WINDOW_MS).toISOString(), context.scope.actor.kind === 'user' ? context.scope.actor.userId : null]);
+  await context.db.query(`INSERT INTO meeting_follow_through_drafts(workspace_id,plan_id,version,ordinal,subject,body,rendered_hash,template_version_id,source_hash,material_references,created_at,not_before,created_by_user_id,template_content_hash,material_task_ids)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15::jsonb)`, [context.scope.workspaceId, plan.id, plan.current_draft_version + 1, content.ordinal ?? 1,
+    content.subject, composed.body, renderedHash(content.subject, composed.body), content.templateVersionId, content.sourceHash, JSON.stringify(references), at,
+    new Date(Date.parse(at) + RECAP_EDIT_WINDOW_MS).toISOString(), context.scope.actor.kind === 'user' ? context.scope.actor.userId : null, template.contentHash, JSON.stringify(materialTaskIds)]);
   await context.db.query('UPDATE meeting_follow_through SET current_draft_version=current_draft_version+1,version=version+1,editing=false,updated_at=$3 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, plan.id, at]);
+  return { ok: true, value: null };
 }
 
 export async function prepareMeetingRecap(context: RepositoryContext, input: { meetingId: string; expectedSourceHash: string; at: string }): Promise<MeetingResult<MeetingFollowThroughView>> {
@@ -107,8 +118,12 @@ export async function prepareMeetingRecap(context: RepositoryContext, input: { m
   }
   const draft = await currentMeetingDraft(context, plan);
   if (draft?.state === 'submitted' || draft?.state === 'sent') return { ok: false, reason: 'delivery_in_progress' };
-  if (content.ok && template !== null && (draft === null || plan.source_hash !== outcomes.sourceHash || draft.template_version_id !== template.id)) {
-    await appendMeetingDraft(context, plan, { ...content, templateVersionId: template.id, sourceHash: outcomes.sourceHash, at: input.at });
+  const sameSource = draft !== null && draft.source_hash === outcomes.sourceHash && draft.template_version_id === template?.id && draft.template_content_hash === template.contentHash;
+  const presentation = content.ok && template !== null ? await composeBodyForWorkspace(context, { body: sameSource ? draft.body : content.body, signOff: template.footerSignOff }) : null;
+  if (presentation !== null && !presentation.composed) blockers.push(`presentation_${presentation.reason}`);
+  if (content.ok && template !== null && presentation?.composed === true && (draft === null || draft.source_hash !== outcomes.sourceHash || draft.template_version_id !== template.id || draft.template_content_hash !== template.contentHash || draft.body !== presentation.body)) {
+    const appended = await appendMeetingDraft(context, plan, { ...content, ...(sameSource ? { subject: draft.subject, body: presentation.body, materialReferences: draft.material_references } : {}), templateVersionId: template.id, sourceHash: outcomes.sourceHash, at: input.at });
+    if (!appended.ok) blockers.push(appended.reason);
   }
   const paused = await meetingSendingPaused(context);
   await context.db.query(`UPDATE meeting_follow_through SET source_hash=$3,notes_revision=$4,analysis_id=$5,blockers=$6::jsonb,status=$7,
@@ -132,6 +147,7 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   if (plan.version !== input.expectedPlanVersion || draft?.version !== input.expectedDraftVersion) return { ok: false, reason: 'draft_changed' };
   if (draft.state === 'submitted' || draft.state === 'sent') return { ok: false, reason: 'delivery_in_progress' };
   if (plan.status === 'cancelled' || plan.status === 'completed') return { ok: false, reason: 'plan_finished' };
+  await holdPreparedMeetingFence(context, plan);
   const now = at ?? (await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
   if (input.action === 'save' && !plan.editing) return { ok: false, reason: 'editing_not_started' };
   if (input.action === 'save' && (hasOptOutLink(input.subject) || hasOptOutLink(input.body) || /<[^>]+>/u.test(input.body))) return { ok: false, reason: 'recap_content_invalid' };
@@ -144,8 +160,9 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   if (input.action === 'save' || input.action === 'discard') {
     if (plan.source_hash !== locked.value.sourceHash) return { ok: false, reason: 'source_changed' };
     if (input.action === 'save' && (input.subject !== draft.subject || input.body !== draft.body) || Date.parse(draft.not_before.toISOString()) <= Date.parse(now)) {
-      await appendMeetingDraft(context, plan, { subject: input.action === 'save' ? input.subject : draft.subject, body: input.action === 'save' ? input.body : draft.body,
+      const appended = await appendMeetingDraft(context, plan, { subject: input.action === 'save' ? input.subject : draft.subject, body: input.action === 'save' ? input.body : draft.body,
         templateVersionId: draft.template_version_id, sourceHash: draft.source_hash, materialReferences: draft.material_references, at: now, ordinal: draft.ordinal });
+      if (!appended.ok) return appended;
     } else await context.db.query("UPDATE meeting_follow_through_drafts SET state='ready' WHERE workspace_id=$1 AND id=$2", [context.scope.workspaceId, draft.id]);
   } else await context.db.query('UPDATE meeting_follow_through_drafts SET state=$3 WHERE workspace_id=$1 AND id=$2', [context.scope.workspaceId, draft.id, input.action === 'cancel' ? 'cancelled' : 'editing']);
   await context.db.query('UPDATE meeting_follow_through SET version=version+1,editing=$3,status=$4,updated_at=$5 WHERE workspace_id=$1 AND id=$2',

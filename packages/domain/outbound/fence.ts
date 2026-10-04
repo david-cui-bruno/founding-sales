@@ -1191,29 +1191,32 @@ export async function rewritePreparedBody(
   input: {
     readonly outboundMessageId: string;
     readonly body: string;
+    readonly subject?: string | undefined;
     readonly reason: string;
     readonly actor?: string | undefined;
   },
 ): Promise<SendResult<OutboundFenceRow>> {
+  if (input.subject !== undefined && (input.subject.trim() === '' || input.subject.length > 998 || /[\r\n]/u.test(input.subject))) return refuseSend('footer_not_composed', 'subject_invalid');
   const issue = sendBodyIssue(input.body);
   if (issue !== null) return refuseSend('footer_not_composed', issue);
   const current = await readFence(context, input.outboundMessageId);
   if (current === null) return refuseSend('fence_unknown');
   // The rewrite is an insert of final bytes as much as the prepare is: the same guard,
   // over the body about to be written and the subject already stored.
-  if (hasOptOutLink(input.body) || hasOptOutLink(current.subject)) {
+  if (hasOptOutLink(input.body) || hasOptOutLink(input.subject ?? current.subject)) {
     return refuseSend('footer_not_composed', 'optout_link');
   }
   const { rows } = await context.db.query<FenceDbRow>(
     `UPDATE outbound_messages
-        SET body = $3, rendered_hash = $4, updated_at = now()
+        SET body = $3, rendered_hash = $4, subject=$5, updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND attempt_token IS NULL AND state IN ('prepared', 'held')
       RETURNING ${FENCE_COLUMNS}`,
     [
       context.scope.workspaceId,
       input.outboundMessageId,
       input.body,
-      renderedHash(current.subject, input.body),
+      renderedHash(input.subject ?? current.subject, input.body),
+      input.subject ?? current.subject,
     ],
   );
   const row = rows[0];

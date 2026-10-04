@@ -27,7 +27,8 @@ CREATE TABLE meeting_follow_through_drafts (
   version integer NOT NULL CHECK(version>0), ordinal integer NOT NULL DEFAULT 1 CHECK(ordinal BETWEEN 1 AND 3),
   subject text NOT NULL CHECK(length(btrim(subject)) BETWEEN 1 AND 998 AND subject !~ E'[\r\n]'),
   body text NOT NULL CHECK(length(btrim(body)) BETWEEN 1 AND 4000), rendered_hash text NOT NULL CHECK(rendered_hash ~ '^[a-f0-9]{64}$'),
-  template_version_id uuid NOT NULL, source_hash text NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
+  template_version_id uuid NOT NULL, template_content_hash text NOT NULL CHECK(template_content_hash ~ '^[a-f0-9]{64}$'),
+  outbound_message_id uuid, material_task_ids jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(material_task_ids)='array'), source_hash text NOT NULL CHECK(source_hash ~ '^[a-f0-9]{64}$'),
   material_references jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(material_references)='array'),
   created_at timestamptz NOT NULL, not_before timestamptz NOT NULL,
   state text NOT NULL DEFAULT 'ready' CHECK(state IN ('ready','held','editing','cancelled','superseded','submitted','sent')),
@@ -35,12 +36,14 @@ CREATE TABLE meeting_follow_through_drafts (
   PRIMARY KEY(workspace_id,id), UNIQUE(workspace_id,plan_id,version),
   FOREIGN KEY(workspace_id,plan_id) REFERENCES meeting_follow_through(workspace_id,id) ON DELETE CASCADE,
   FOREIGN KEY(workspace_id,template_version_id) REFERENCES template_versions(workspace_id,id),
+  FOREIGN KEY(workspace_id,outbound_message_id) REFERENCES outbound_messages(workspace_id,id),
   FOREIGN KEY(workspace_id,created_by_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
   CHECK(not_before>=created_at), CHECK(NOT email_has_optout_link(subject) AND NOT email_has_optout_link(body))
 );
 CREATE FUNCTION keep_meeting_draft_bytes() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF (to_jsonb(NEW)-'state') IS DISTINCT FROM (to_jsonb(OLD)-'state') THEN
+  IF (to_jsonb(NEW)-'state'-'outbound_message_id') IS DISTINCT FROM (to_jsonb(OLD)-'state'-'outbound_message_id')
+    OR (OLD.outbound_message_id IS NOT NULL AND NEW.outbound_message_id IS DISTINCT FROM OLD.outbound_message_id) THEN
     RAISE EXCEPTION 'meeting draft revisions are immutable' USING ERRCODE='23514';
   END IF;
   RETURN NEW;
