@@ -52,6 +52,7 @@ interface Boundary {
  * is a one-line change here.
  */
 export const BOUNDARIES: readonly Boundary[] = [
+  { name:'Zoom local recording update', site:'packages/domain/meetings/autoRecording.ts', owner:'runMeetingRecordingSetup', methods:{setLocalAutoRecording:1} },
   {
     name: 'Gmail send',
     site: 'packages/domain/outbound/send.ts',

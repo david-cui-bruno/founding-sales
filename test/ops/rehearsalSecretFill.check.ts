@@ -163,7 +163,7 @@ describe('the rehearsal fills every secret the stack declares', () => {
   it('passes the same name once the loop, or the exclusion list, covers it (fixture)', () => {
     const withDummy = TERRAFORM.replace('"app-runtime-database",', '"app-runtime-database",\n    "dummy-new-secret",');
     const declared = declaredSecretNames(withDummy);
-    const covered = RELEASE.replace('twilio-voice|calcom|transcription)', 'twilio-voice|calcom|transcription|dummy-new-secret)');
+    const covered = RELEASE.replace('twilio-voice|calcom|transcription|zoom-meetings)', 'twilio-voice|calcom|transcription|zoom-meetings|dummy-new-secret)');
     expect(covered).not.toBe(RELEASE);
     expect(uncoveredSecretNames(declared, filledSecretNames(covered), {})).toEqual([]);
     expect(uncoveredSecretNames(declared, filledSecretNames(RELEASE), { 'dummy-new-secret': 'fixture' })).toEqual([]);

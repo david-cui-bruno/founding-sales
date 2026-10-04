@@ -1,3 +1,4 @@
+import { recordHeartbeat } from '../../../jobs/heartbeats.ts';
 import { randomUUID } from 'node:crypto';
 import { createTestDatabase } from '../../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope } from '../../../db/workspaceScope.ts';
@@ -11,6 +12,7 @@ export async function meetingAutoRecordingFixture() {
   const db=await createTestDatabase(),seeded=await seedTwoWorkspaces(db.session),workspace=seeded.alpha.workspaceId;
   const context=repositoryContext(workspaceScope(workspace,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
   const at=new Date().toISOString(),startsAt=new Date(Date.now()+86400000).toISOString(),endsAt=new Date(Date.parse(startsAt)+1800000).toISOString();
+  await recordHeartbeat(db.session,{component:'worker',instanceKey:'fixture-ready',detail:{meeting_recording_setup:true}});
   const set=async(enabled:boolean)=>await withTransaction(db.session,()=>updateSetting(context,{settingKey:'meeting_auto_recording',value:{enabled,hostEmail:'host@example.com',calcomEventTypeId:42}}));
   await withTransaction(db.session,()=>updateSetting(context,{settingKey:'calendar_integration',value:{integration:'calcom'}}));await set(true);
   const firm=(await db.session.query<{id:string}>("INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES($1,'Demo firm',$2) RETURNING id",[workspace,seeded.alpha.admin.userId])).rows[0]!.id;

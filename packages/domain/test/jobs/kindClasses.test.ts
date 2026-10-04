@@ -63,6 +63,7 @@ describe('job kind classes', () => {
       'meeting.transcribe',
       'meeting.analyze',
       'meeting.follow_through',
+      'meeting.recording_setup',
       // Slice C3b: its summary, read with it.
       'call.summarize',
       // Slice 3a: its analysis, which replaces the summary for a new call.

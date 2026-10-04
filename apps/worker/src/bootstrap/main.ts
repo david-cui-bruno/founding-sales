@@ -1,3 +1,7 @@
+import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../handlers/meetingAutoRecording.ts';
+import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
+import { calcomDemoClient } from '../calcom/bookingClient.ts';
+import { readCalcomSecret } from '@fss/domain/meetings/calcomSecret.ts';
 import { meetingFollowThroughJobHandler, meetingFollowThroughSource } from '../handlers/meetingFollowThrough.ts';
 import { meetingAnalyzeJobHandler, meetingAnalysesSource, readMeetingAnalysisComposition, type MeetingAnalyzeOptions } from '../handlers/meetingAnalyze.ts';
 import { meetingTranscribeJobHandler, meetingTranscriptionsSource, type MeetingTranscribeOptions } from '../handlers/meetingTranscribe.ts';
@@ -93,6 +97,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
   readonly meetingTranscription?: MeetingTranscribeOptions | undefined;
   readonly classifier: ClassifyWorkerOptions | undefined;
@@ -171,6 +176,7 @@ export function registerHandlers(
   const { classifier } = composition;
   registry.register(canaryHandler());
   registry.register(meetingFollowThroughJobHandler());
+  if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
   // The source is composed here rather than added to `defaultTodaySources()` because
@@ -403,7 +409,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'>): {
+  readonly meetingAutoRecording: boolean;
   readonly meetingAnalysis: boolean;
   readonly meetingTranscription: boolean;
   readonly calcomReconcile: boolean;
@@ -413,6 +420,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    meetingAutoRecording: composition.meetingAutoRecording !== undefined,
     meetingAnalysis: composition.meetingAnalysis !== undefined,
     meetingTranscription: composition.meetingTranscription !== undefined,
     calcomReconcile: composition.calcom !== undefined,
@@ -438,6 +446,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly meetingAutoRecording?: boolean;
     readonly meetingAnalysis?: boolean;
     readonly meetingTranscription?: boolean;
     readonly calcomReconcile?: boolean;
@@ -452,6 +461,7 @@ export function workerDueWorkSources(
   return [
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),
+    meetingAutoRecordingSource(options.meetingAutoRecording===true),
     meetingTranscriptionsSource(options.meetingTranscription === true),
     canarySource(),
     todayBuildSource(),
@@ -547,6 +557,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   });
   // Slice M1: the key is read once, here, and lives only in the client's closure.
   const calcomReconcile = readCalcomReconcileClient(environment);
+  const zoomRecording=readZoomMeetingsConfiguration(environment);
+  const calRecording=readCalcomSecret(environment['calcom']);
   // Slice C2: the transcription key and the recording credentials, each read once, here.
   const transcription = readTranscriptionComposition(environment, (event, fields) => log.log('info', event, fields));
   // Slice C3b: the summary rides the classifier's transport; the model is the deployment's.
@@ -558,6 +570,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),
     ...(meetingTranscription.options === null ? {} : { meetingTranscription: meetingTranscription.options }),
     ...(calcomReconcile.client === null
@@ -579,6 +592,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // `ARG FSS_BUILD_COMMIT`; null on a laptop and on any image built before it existed.
     build_commit: buildCommit(environment),
     // Whether reconciliation runs, and if not why, by field name only.
+    meeting_recording_setup: zoomRecording.problem??(calRecording.ok&&calRecording.apiKey!==null?'configured':'calcom_api_key'),
     calcom_reconcile: calcomReconcile.problem ?? 'configured',
     // Whether transcription runs, and if not why, by field name only.
     meeting_analysis: meetingAnalysis.problem ?? 'configured',

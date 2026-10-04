@@ -28,6 +28,7 @@ locals {
     # switch on; see the note in `infra/modules/cluster` about entering a value first.
     "twilio-voice",
     "calcom",
+    "zoom-meetings",
     # Call transcription (slice C2): `{"provider": "deepgram", "api_key": "..."}`. The
     # worker alone reads it (`apps/worker/src/transcription/deepgramClient.ts`); the API
     # learns from the worker's heartbeat whether it is in place. `{}` until a key exists.

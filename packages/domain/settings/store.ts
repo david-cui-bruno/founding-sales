@@ -1,3 +1,4 @@
+import { readMeetingAutoRecordingConfiguration } from '../meetings/autoRecordingSettings.ts';
 import {
   DEFAULT_SETTING_VALUES,
   DEFAULT_STORED_SETTING_VALUES,
@@ -296,6 +297,7 @@ export async function updateSetting(
   if (input.settingKey === 'meeting_auto_recording') {
     await lockCalendarRoutingForRead(context.db);
     await lockSendGateForStopFact(context);
+    if ((value as {enabled:boolean}).enabled && !(await readMeetingAutoRecordingConfiguration(context)).configured.ready) return {ok:false,reason:'invalid_value'};
   }
   if (input.settingKey === 'calendar_integration') {
     await lockCalendarRoutingForWrite(context.db);
