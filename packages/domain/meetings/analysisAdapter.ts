@@ -1,3 +1,4 @@
+import { routeOfTransport } from '../classification/routedTransport.ts';
 import type { AnthropicMessagesTransport } from '../classification/anthropicClient.ts';
 import { providerErrorOf } from '../classification/providerError.ts';
 import { bedrockModelOf } from '../classification/modelTransport.ts';
@@ -16,7 +17,7 @@ export interface MeetingAnalysisPort {
 }
 export function meetingAnalysisPort(options: { transport: AnthropicMessagesTransport }): MeetingAnalysisPort {
   const prepare = async (input: MeetingAnalysisCall): Promise<MeetingResult<PreparedMeetingAnalysis>> => {
-    if (options.transport.kind !== 'bedrock' || bedrockModelOf(input.model) === undefined) return { ok: false, reason: 'route_unavailable' };
+    if (options.transport.kind !== 'bedrock' || routeOfTransport(options.transport)(input.model) !== 'bedrock' || bedrockModelOf(input.model) === undefined) return { ok: false, reason: 'route_unavailable' };
     const limit = input.purpose === 'extract' ? MEETING_ANALYSIS_LIMITS.extractOutput : MEETING_ANALYSIS_LIMITS.mergeOutput;
     if (input.maxOutputTokens !== limit) return { ok: false, reason: 'invalid_configuration' };
     const request = buildMeetingAnalysisRequest(input);
@@ -27,8 +28,8 @@ export function meetingAnalysisPort(options: { transport: AnthropicMessagesTrans
     if (inputTokens > MEETING_ANALYSIS_LIMITS.inputTokens) return { ok: false, reason: 'input_too_large' };
     return { ok: true, value: { request, inputTokens } };
   };
-  return { kind: options.transport.kind === 'bedrock' ? 'bedrock' : 'unavailable', prepare, run: async (input, prepared) => {
-    if (options.transport.kind !== 'bedrock' || bedrockModelOf(input.model) === undefined) return { outcome: 'provider_refused', usage: null, content: null };
+  return { kind: options.transport.kind === 'bedrock' && routeOfTransport(options.transport)('claude-haiku-4-5') === 'bedrock' ? 'bedrock' : 'unavailable', prepare, run: async (input, prepared) => {
+    if (options.transport.kind !== 'bedrock' || routeOfTransport(options.transport)(input.model) !== 'bedrock' || bedrockModelOf(input.model) === undefined) return { outcome: 'provider_refused', usage: null, content: null };
     const built = prepared === undefined ? await prepare(input) : { ok: true as const, value: prepared };
     if (!built.ok) return { outcome: 'provider_refused', usage: null, content: null };
     try {

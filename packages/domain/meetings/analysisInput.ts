@@ -58,7 +58,7 @@ export function buildMeetingAnalysisBlocks(input: MeetingAnalysisInput): Meeting
       // Snapshot counters/debrief corrections do not enter transcript cache identity.
       const hash = analysisHash({ startsAt: input.startsAt, businessZone: input.businessZone, utterances: batch, mappings, sourceKind: recordings[0]?.sourceKind });
       blocks.push({ hash, purpose: 'extract', sourceBytes: bytes, input: { ...input, utterances: batch, recordings,
-        notes: { ...input.notes, revision: 0, debrief: '', savedAt: null, speakerMappings: mappings, itemOverrides: [] } } });
+        notes: { ...input.notes, revision: 0, debrief: '', savedAt: null, sufficient: false, speakerMappings: mappings, itemOverrides: [] } } });
       batch = []; bytes = 0;
     };
     for (const utterance of group) {

@@ -32,6 +32,7 @@ export const MEETING_OUTCOMES_CONSTRAINT_CASES: readonly Case[] = [
   duplicate('meeting_note_revisions', 'meeting_note_revisions_pkey', notes),
   bad('meeting_note_revisions', 'meeting_note_revisions_workspace_id_created_by_user_id_fkey', notes, { created_by_user_id: absent }),
   bad('meeting_note_revisions', 'meeting_note_revisions_workspace_id_meeting_id_firm_id_fkey', notes, { firm_id: absent }),
+  bad('meeting_analyses', 'meeting_analyses_merge_request', analysis, { merge_request_id: absent }),
   ...[['notes_revision', -1], ['transcript_revision', -1], ['prompt_version', 0], ['source_hash', 'bad'], ['state', 'bad'], ['overview', 'x'.repeat(6001)], ['items', '{}'], ['review_reasons', '{}']].map(([column, value]) => bad('meeting_analyses', `meeting_analyses_${String(column)}_check`, analysis, { [String(column)]: value })),
   duplicate('meeting_analyses', 'meeting_analyses_pkey', analysis, () => ({ source_hash: 'c'.repeat(64) })),
   duplicate('meeting_analyses', 'meeting_analyses_workspace_id_meeting_id_source_hash_prompt_key', analysis, () => ({ id: randomUUID() })),

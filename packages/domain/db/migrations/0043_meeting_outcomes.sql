@@ -83,3 +83,7 @@ END;
 $$;
 CREATE TRIGGER meeting_analysis_result_deletion BEFORE INSERT OR UPDATE ON meeting_analysis_requests
   FOR EACH ROW EXECUTE FUNCTION scrub_deleted_meeting_analysis_result();
+
+ALTER TABLE meeting_analyses ADD COLUMN request_ids jsonb NOT NULL DEFAULT '[]', ADD COLUMN merge_request_id uuid, ADD COLUMN tasks_pending boolean NOT NULL DEFAULT false,
+  ADD CONSTRAINT meeting_analyses_merge_request FOREIGN KEY(workspace_id,merge_request_id) REFERENCES meeting_analysis_requests(workspace_id,id);
+ALTER TABLE meeting_analysis_requests ADD COLUMN prepared_hash text, ADD COLUMN settings_version integer NOT NULL DEFAULT 0, ADD COLUMN wake_revision integer NOT NULL DEFAULT 0;

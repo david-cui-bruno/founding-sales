@@ -1,4 +1,5 @@
 import { saveMeetingNotesSchema, type SaveMeetingNotes, type MeetingNotesRevision } from '@fss/contracts';
+import { enqueueMeetingAnalysis } from './analysisJobs.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
@@ -40,5 +41,6 @@ export async function saveMeetingNotes(context: RepositoryContext, input: SaveMe
   await context.db.query('UPDATE meetings SET notes_revision=notes_revision+1 WHERE workspace_id=$1 AND id=$2', [workspace, value.meetingId]);
   await context.db.query("UPDATE meeting_analyses SET state='stale' WHERE workspace_id=$1 AND meeting_id=$2 AND state IN ('pending','ready','held')", [workspace, value.meetingId]);
   await recordCrmAuditEvent(context, { action: 'meeting.notes_saved', subjectKind: 'meeting', subjectId: value.meetingId, detail: { revision: value.expectedRevision + 1 } });
+  await enqueueMeetingAnalysis(context, value.meetingId);
   return { ok: true, value: await readCurrentMeetingNotes(context, value.meetingId) };
 }

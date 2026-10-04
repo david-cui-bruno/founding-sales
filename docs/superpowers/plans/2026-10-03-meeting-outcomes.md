@@ -99,17 +99,17 @@ All public commands also use the existing `commandId` and `clientVersion` envelo
 
 **Produces:** `scheduleMeetingAnalyses(session,at):Promise<readonly JobSpecification[]>`; `meetingAnalyzeJobHandler(options):JobHandler`; `meetingAnalysesSource(enabled):DueWorkSource`; `beginMeetingAnalysisRequest(context,{requestId,at},deps)` and `completeMeetingAnalysisRequest(context,{requestId,attemptId,result,at})`, returning done/held/reserved and accepted/stale/retry/failed respectively. `deps` supplies account, Bedrock route, port, clock and abort signal; it cannot supply a direct cash transport.
 
-- [ ] Add tests proving zero provider calls while disabled, zero allowance, expired/wrong-service/wrong-account coverage, unsupported model or direct route; two paid attempts/six reservations maximum; unchanged cached blocks reused after a debrief edit; expiry/restart/poison job bounded:
+- [x] Add tests proving zero provider calls while disabled, zero allowance, expired/wrong-service/wrong-account coverage, unsupported model or direct route; two paid attempts/six reservations maximum; unchanged cached blocks reused after a debrief edit; expiry/restart/poison job bounded:
   ```ts
   expect(fakeProvider.calls).toHaveLength(0);
   expect(request.paidAttempts).toBeLessThanOrEqual(2);
   expect(request.reservations).toHaveLength(6);
   expect(transcriptBlockRequestIdsAfterEdit).toEqual(transcriptBlockRequestIdsBeforeEdit);
   ```
-- [ ] Run `npm test --workspace packages/domain -- test/meetings/meetingAnalysisBudget.test.ts test/meetings/meetingAnalysisJobs.test.ts` and `npm test --workspace apps/worker -- test/meetingAnalyze.test.ts`; observe new failures.
-- [ ] Implement chunked reserve → final eligibility check/mark calling → request/settlement. Preserve token estimates for unknown outcomes, no cash fallback, and no model/prompt-only mass rerun. Reserve full input/output bounds with the existing provider price table. Worker leases are 120 seconds, provider requests time out at 60 seconds, and each scheduler job permits 3 infrastructure attempts. A persisted request deadline of 120 minutes is enforced by the scheduler independently of a crashing handler; disabled/budget-held requests wait for a setting change or next budget day without busy-loop paid retries. New data materializes analysis work; it does not pay while disabled.
-- [ ] Keep paid accounting transactions separate from task publication: setting read lock → analysis budget → firm → meeting → request/reservation. Re-read current ownership after locks. Completion persists results and queues a separate task-reconciliation job; it must not acquire Today's lock while holding a firm. No model HTTP request holds Today or the send gate.
-- [ ] Rerun the focused tests including a simultaneous setting-off and final request boundary, then typecheck. Commit `feat: run bounded meeting analysis through Bedrock`.
+- [x] Run `npm test --workspace packages/domain -- test/meetings/meetingAnalysisBudget.test.ts test/meetings/meetingAnalysisJobs.test.ts` and `npm test --workspace apps/worker -- test/meetingAnalyze.test.ts`; observe new failures.
+- [x] Implement chunked reserve → final eligibility check/mark calling → request/settlement. Preserve token estimates for unknown outcomes, no cash fallback, and no model/prompt-only mass rerun. Reserve full input/output bounds with the existing provider price table. Worker leases are 120 seconds, provider requests time out at 60 seconds, and each scheduler job permits 3 infrastructure attempts. A persisted request deadline of 120 minutes is enforced by the scheduler independently of a crashing handler; disabled/budget-held requests wait for a setting change or next budget day without busy-loop paid retries. New data materializes analysis work; it does not pay while disabled.
+- [x] Keep paid accounting transactions separate from task publication: setting read lock → analysis budget → firm → meeting → request/reservation. Re-read current ownership after locks. Completion persists results and queues a separate task-reconciliation job; it must not acquire Today's lock while holding a firm. No model HTTP request holds Today or the send gate.
+- [x] Rerun the focused tests including a simultaneous setting-off and final request boundary, then typecheck. Commit `feat: run bounded meeting analysis through Bedrock`.
 
 ## Task 4: clear promises become correctable tasks
 
