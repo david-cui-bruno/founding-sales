@@ -276,6 +276,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // it goes with the meeting, as the meeting's uids do. The object expires with the bucket.
   meeting_recording_aliases: coverage(['deletion_removes'], 'Folded recording identities, removed with the surviving recording.'),
   meeting_note_revisions: coverage(['deletion_removes'], 'Human debriefs and corrections cascade with their meeting.'),
+  meeting_recording_setup: coverage(['deletion_removes'], 'Demo identity and recording setup history cascade with their meeting.'),
   meeting_analyses: coverage(['deletion_removes'], 'Structured meeting evidence cascades with its meeting.'),
   meeting_tasks: coverage(['deletion_removes'], 'Meeting promises and evidence cascade with their meeting.'),
   meeting_follow_through: coverage(['deletion_removes'], 'Meeting follow-through scope and scheduling cascade with their meeting.'),

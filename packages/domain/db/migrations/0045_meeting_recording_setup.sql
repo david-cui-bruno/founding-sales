@@ -38,3 +38,34 @@ END;
 $$;
 CREATE TRIGGER meeting_recording_target BEFORE UPDATE ON meeting_recording_setup FOR EACH ROW EXECUTE FUNCTION keep_meeting_recording_target();
 GRANT SELECT,INSERT,UPDATE,DELETE ON meeting_recording_setup TO app_runtime,migration;
+-- Every authoritative identity writer (including merges) invalidates the old revision.
+CREATE FUNCTION invalidate_meeting_recording_target() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE meeting_recording_setup SET state='obsolete',reason='target_changed',version=version+1,updated_at=clock_timestamp()
+    WHERE workspace_id=NEW.workspace_id AND meeting_id=NEW.id AND state<>'obsolete';
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_recording_identity AFTER UPDATE ON meetings FOR EACH ROW
+  WHEN ((OLD.firm_id,OLD.contact_id,OLD.current_booking_uid,OLD.zoom_meeting_id,OLD.attendee_email,OLD.organizer_email,OLD.starts_at,OLD.ends_at,OLD.state)
+    IS DISTINCT FROM (NEW.firm_id,NEW.contact_id,NEW.current_booking_uid,NEW.zoom_meeting_id,NEW.attendee_email,NEW.organizer_email,NEW.starts_at,NEW.ends_at,NEW.state))
+  EXECUTE FUNCTION invalidate_meeting_recording_target();
+-- Restored local state cannot prove which Zoom effects happened after the restore point.
+CREATE FUNCTION disable_restored_meeting_recording() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE prior workspace_settings%ROWTYPE;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id::text||':meeting_auto_recording',0));
+  SELECT * INTO prior FROM workspace_settings WHERE workspace_id=NEW.workspace_id AND setting_key='meeting_auto_recording' AND superseded_at IS NULL FOR UPDATE;
+  IF FOUND AND prior.value->>'enabled'='true' THEN
+    UPDATE workspace_settings SET superseded_at=GREATEST(now(),changed_at),superseded_by_version=version+1 WHERE workspace_id=prior.workspace_id AND id=prior.id;
+    INSERT INTO workspace_settings(workspace_id,setting_key,version,value,change_note)
+      VALUES(prior.workspace_id,'meeting_auto_recording',prior.version+1,jsonb_set(prior.value,'{enabled}','false'),'Disabled for database restore');
+  END IF;
+  UPDATE meeting_recording_setup SET state='manual',reason='ambiguous_write',version=version+1,updated_at=clock_timestamp()
+    WHERE workspace_id=NEW.workspace_id AND state IN ('pending','verifying');
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER meeting_recording_restore AFTER INSERT ON active_holds FOR EACH ROW
+  WHEN (NEW.reason_code='restore_in_progress' AND NEW.released_at IS NULL)
+  EXECUTE FUNCTION disable_restored_meeting_recording();
