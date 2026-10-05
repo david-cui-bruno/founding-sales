@@ -4,6 +4,8 @@
 
 Goal: repeatedly discover relevant firms without manual CSV batches, retaining source provenance and uncertainty and respecting the free search allowance.
 
+Current status, 5 October: deployed and enabled; first production search/results verification remains pending the quota reset. See the release record below. The original checklist and findings are retained as implementation history, not current operator instructions.
+
 Architecture: reuse Tavily's bounded Basic adapter, the worker/job scheduler, Postgres and the sourcing review surface. Search proposes URLs, never confirmed firm identity, local presence or unmet need. Existing kept-candidate monitoring remains separate. Do not schedule the rejected v2 query set.
 
 ## Delivery tasks
@@ -15,7 +17,7 @@ Architecture: reuse Tavily's bounded Basic adapter, the worker/job scheduler, Po
 - [ ] **Visible operation.** Extend the sourcing view with enabled/paused status, last attempt, next run, remaining search allowance and stopped/error reason. Reuse research controls where applicable. Make unverified discovery results and verified source observations visibly distinct. No compulsory call questionnaires.
 - [ ] **Verification and release.** Tests for concurrent reservations, rollback/crash, replay, missing key, usage mismatch, research holds, cross-workspace isolation, duplicates, dismissed results, query-scope versus actual-location and no outreach effects. Run the full gate and a fresh review; rehearse the schema release before deploying. Store Tavily through the existing secret mechanism, confirm free plan/overage disabled, then enable and observe one production cycle. Report production completion only after persisted results and UI reads are verified.
 
-## Current findings
+## Findings when planning began (historical)
 
 - The existing source-monitor slice is implemented on this draft branch, not deployed.
 - The only current search ledger is single-host evaluation state; it is not suitable for shared worker accounting.
@@ -29,7 +31,7 @@ Architecture: reuse Tavily's bounded Basic adapter, the worker/job scheduler, Po
 - Ruling: first rollout is one query per workspace per day, rotating metro and suburban queries, max5 hits; 20/day and600/month remain shared hard ceilings. This limits unreviewed result accumulation; increasing throughput later is straightforward, but this default may deliver fewer useful prospects than David wants.
 - Ruling: a shared search request in flight temporarily prevents other workspace dispatch; any uncertain failure halts the account until examined. Conservative choice costs availability after transient failures but prevents unbounded unaccounted usage.
 - Review fixes: preserve original snippets separately from uncertainty; retain native result provenance; check pre-existing candidate source URLs including dismissed rows; flag known CRM domains without merging franchise branches; filter research holds before bounded scheduling; halt on orphaned dispatches.
-- Pending: final green gate, release rehearsal, schema/infra deployment, account counter bootstrap, workspace enablement, first production readback. Do not describe discovery as live before these complete.
+- At implementation handoff, pending: final green gate, release rehearsal, schema/infra deployment, account counter bootstrap, workspace enablement, first production readback. The release record below supersedes this historical list.
 
 ### Release configuration
 
@@ -55,3 +57,13 @@ The corrected production-root test run passed all35 tests (exit0), completing th
 Final scheduler regression: deferred work is reconsidered hourly; the committed workspace/day attempt fence continues to limit actual provider dispatch to one per day. The test failed before the change and passed afterward; all3 worker discovery tests and10 domain discovery tests pass, with worker typecheck and affected-file lint clean.
 
 Release preflight correction: deployed IAM policy equals the repository policy. Two apparent denials were simulator resource mismatches for cloudfront:ListDistributions and logs:DescribeLogGroups; a direct account-wide simulation allows both. Corrected only the checker resource overrides, with a regression that failed first;56 policy tests and affected-file lint pass. No IAM policy was changed.
+
+### Release and activation record (5 October)
+
+- PR 397 merged as `94919b17573da23b44b3b38b0b8e85771e4a0841`. Schema rehearsal [37350259930](https://github.com/david-cui-bruno/founding-sales/actions/runs/37350259930) passed, including cleanup. Production migrated from schema 45 to 49; all six smoke checks passed. Desktop 1.0.44 was signed, notarized and published, and David reports it installed.
+- The first activation refused `launcher_unknown` without writing settings or spending search quota. PR 398 fixed discovery's operations-launcher identity resolution and added regression coverage. Its merge is `32684e23230acb033113ec688be357b0dcfacdb4`.
+- Fix gate [37360237473](https://github.com/david-cui-bruno/founding-sales/actions/runs/37360237473), image build [37360368026](https://github.com/david-cui-bruno/founding-sales/actions/runs/37360368026), and complete production deployment/readback [37360965916](https://github.com/david-cui-bruno/founding-sales/actions/runs/37360965916) succeeded. Production health read schema 49 and commit `32684e23230acb033113ec688be357b0dcfacdb4`. The subsequent Terraform apply updated only the migration and operations task definitions to the reviewed images.
+- The audited operations task `6310c3af67ab4b4a9064e1344812e207` exited successfully with `enabled: true` and `existingQuotaPreserved: true`. No further credential handoff is needed. Workspace ID was verified through the existing read-only administrative command before activation.
+- The shared account preserves 20 requests used on 5 October and 20 used this month. No new search is due before **6 October 00:00 UTC / 5 October 20:00 America/New_York**. The hourly scheduler may dispatch after that instant; it is not a promise of results at exactly 20:00.
+- **Still unverified:** the first actual production search, its persisted candidates, and their desktop readback. Activation and smoke success are not evidence of those results. No quota bypass or evaluation rerun is authorized by this note.
+- No email sending switch changed. The next priority is [qualification and admission](2026-10-05-sourcing-qualification-admission.md), followed by autonomous email as a separate feature.
