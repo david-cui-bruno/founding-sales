@@ -1,3 +1,5 @@
+import {firmQualificationReadSchema} from '@fss/contracts';
+import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
@@ -820,6 +822,17 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'sourcing.feedback': {
+    kind:'command',calls:[{method:'POST',path:'/sourcing/qualification/feedback'}],
+    input:sourcingFeedbackSchema.extend({commandId:uuid}),
+    output:z.object({result:sourcingFeedbackSavedSchema.nullable(),reason:z.string().nullable()}),
+    transform:'Record feedback against the evidence shown without changing stops or deals',
+  },
+  'sourcing.firmQualification': {
+    kind:'read',calls:[{method:'POST',path:'/sourcing/qualification/firm'}],input:firmQualificationReadSchema,
+    output:z.object({view:qualificationViewSchema.nullable(),reason:z.string().nullable()}),
+    transform:'Sourcing evidence attached explicitly to this firm',
+  },
   'sourcing.qualification': {
     kind: 'read', calls: [{method:'POST',path:'/sourcing/qualification/read'}],
     input: qualificationReadSchema,

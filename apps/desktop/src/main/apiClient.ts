@@ -183,9 +183,18 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       // know; then the cache's own strict shape, which is what may be written to disk
       // (lane g78). Before g78 the cache schema read the wire directly, so any field the
       // API added would have made every Mac refuse its own Today list.
-      return parsed(await call('/today?include=tasks&include=meeting_tasks', { method: 'GET', accessToken }), value =>
-        cachedTodaySchema.parse(todayListResponseSchema.parse(value)),
-      );
+      let cursor:string|null=null,restarts=0;
+      let cards:z.infer<typeof todayListResponseSchema>['cards']=[];
+      const seen=new Set<string>();
+      for(;;){
+        const answer:ApiOutcome<z.infer<typeof todayListResponseSchema>>=parsed(await call(`/today?include=tasks&include=meeting_tasks&paged=true${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`,{method:'GET',accessToken}),value=>todayListResponseSchema.parse(value));
+        if(!answer.ok)return answer;
+        const page:z.infer<typeof todayListResponseSchema>=answer.value;
+        if(page.orderChanged){if(++restarts>1)return {ok:false,reason:'today_order_changed',offline:false};cards=[];seen.clear();}
+        cards.push(...page.cards);cursor=page.nextCursor??null;
+        if(cursor===null)return parsed({ok:true,value:{workspaceId:page.workspaceId,snapshotDate:page.snapshotDate,businessTimeZone:page.businessTimeZone,cards}},value=>cachedTodaySchema.parse(value));
+        if(seen.has(cursor))return {ok:false,reason:'invalid_response',offline:false};seen.add(cursor);
+      }
     },
   };
 }

@@ -1,3 +1,5 @@
+import {navigate} from '../routes.ts';
+import {QualificationPanel} from './QualificationPanel.tsx';
 import {useCallback,useEffect,useRef,type JSX} from 'react';
 import {candidateInputSchema,type SourcingCandidate} from '@fss/contracts';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
@@ -63,6 +65,7 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
   return <section className="space-y-5" aria-label="Candidate review">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Research prospects before adding them to your call queue. Keeping starts weekly source checks while research is enabled.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.view?.discovery?<p className="text-sm text-muted-foreground">Discovery {m.view.discovery.halted?'needs attention':m.view.discovery.enabled?'enabled':'paused'} · next scheduled {m.view.discovery.nextRunAt.slice(0,10)} · {m.view.discovery.dailyRemaining} searches left today, {m.view.discovery.monthlyRemaining} this month. Last result: {m.view.discovery.lastResult??'not run'}. Research holds and settings also apply.</p>:null}
+    {m.view?.qualificationWaitReason?<p role="status" className="text-sm text-muted-foreground">{m.view.qualificationWaitReason==='daily_firm_ceiling'?'Waiting for research budget':m.view.qualificationWaitReason==='research_disabled'?'Qualification waits while research is paused.':'Qualification waits while research is on hold.'}</p>:null}
     {m.message?<p role="status" className="text-sm">{m.message}</p>:null}
     {m.pending!==null?<Button disabled={m.busy||!enabled} onClick={()=>{if(m.pending)void perform(m.pending);}}>Retry action</Button>:null}
     {m.adding?<form className="space-y-3 rounded-lg border border-border p-4" onSubmit={e=>{e.preventDefault();save();}}>
@@ -80,6 +83,7 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
       <p className="text-sm">{signals[candidate.signal]}</p>{candidate.discoveryQuery?<p className="text-sm text-muted-foreground">Search result · name and location unverified. {candidate.discoveryKnownDomain?'Website domain already appears in your CRM; check for an existing firm. ':''}Query: {candidate.discoveryQuery}</p>:null}<p className="whitespace-pre-wrap break-words text-sm">{candidate.evidence}</p>
       <p className="text-xs text-muted-foreground">Prepared research · not verified by Callie · observed {candidate.observedOn} · {candidate.preparedBy}</p>
       <div className="flex gap-4 text-sm"><a className="underline underline-offset-4" href={candidate.sourceUrl} target="_blank" rel="noreferrer">Source evidence</a><a className="underline underline-offset-4" href={candidate.website} target="_blank" rel="noreferrer">Firm website</a></div>
+      <QualificationPanel onOpenFirm={firmId=>navigate({name:'firm',firmId})} candidateId={candidate.id} revision={candidate.revision} enabled={!blocked&&candidate.status!=='dismissed'}/>
       {candidate.status==='kept'?<p className="text-xs text-muted-foreground">Weekly source monitoring · next due {candidate.nextSourceCheckAt?.slice(0,10)??'when research is available'}. Returning to review or dismissing stops monitoring. Checks wait for research settings and allowance.</p>:null}
       {candidate.sourceCheck?<div className="space-y-2 rounded-md border border-border p-3 text-sm">
         <p>{candidate.sourceCheck.state==='pending'?'Source check queued':candidate.sourceCheck.state==='checked'?'Source checked':candidate.sourceCheck.lastSuccess?'Source check unavailable · previous evidence retained':'Source check unavailable'}</p>

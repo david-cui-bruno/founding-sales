@@ -75,7 +75,7 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     // built and not the one this task's clock believes in (Appendix D).
     return {
       status: 200,
-      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query), includeMeetingTasks: includesTasks(request.query, 'meeting_tasks') }),
+      body: await readTodayList(context, { now: await databaseNow(context), includeTasks: includesTasks(request.query), includeMeetingTasks: includesTasks(request.query, 'meeting_tasks'), ...(request.query?.get('paged')==='true'?{paged:true,cursor:request.query.get('cursor')??''}:{}) }),
     };
   }
 

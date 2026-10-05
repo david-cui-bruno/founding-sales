@@ -102,3 +102,17 @@ it('sees a stop committed while admission is waiting, before creating any firm',
  expect(await admission).toEqual({ok:false,reason:'phone_or_firm_stopped'});
  expect((await db.session.query("SELECT id FROM firms WHERE name='Stop Race PM'")).rows).toHaveLength(0);
 });
+it('keeps SQL and TypeScript sourcing order aligned and removes a wrong-firm contribution without deleting CRM history',async()=>{
+ const {listTodayCards,businessDateOf}=await import('../../today/snapshots.ts');const {compareTodayCards}=await import('../../today/lanes.ts');const {recordSourcingFeedback}=await import('../../sourcing/feedback.ts');const {readFirmQualification}=await import('../../sourcing/qualificationStore.ts');
+ const fit=await qualified('Rank Fit PM',{need:'We provide routine maintenance.'});const burden=await qualified('Rank Burden PM');
+ const fitResult=await tx(()=>admitCandidate(ctx(),fit)),burdenResult=await tx(()=>admitCandidate(ctx(),burden));if(!fitResult.ok||!burdenResult.ok)throw new Error('fixtures');
+ const snapshotDate=await businessDateOf(ctx(),new Date().toISOString());
+ const ids=new Set([fitResult.value.firmId,burdenResult.value.firmId]);
+ const cards=(await listTodayCards(ctx(),{snapshotDate})).filter(card=>ids.has(card.firmId));
+ expect(cards.map(card=>card.firmId)).toEqual([burdenResult.value.firmId,fitResult.value.firmId]);expect([...cards].reverse().sort(compareTodayCards)).toEqual(cards);
+ expect(await readFirmQualification(ctx(),burdenResult.value.firmId)).toMatchObject({candidateId:burden.candidateId});
+ await tx(()=>recordSourcingFeedback(ctx(),{candidateId:burden.candidateId,qualificationRunId:burden.qualificationRunId,code:'wrong_firm'}));
+ const corrected=(await listTodayCards(ctx(),{snapshotDate})).find(card=>card.firmId===burdenResult.value.firmId);
+ expect(corrected?.sourceRank).toBe(5);expect((await db.session.query('SELECT id FROM firms WHERE id=$1',[burdenResult.value.firmId])).rows).toHaveLength(1);
+ expect((await db.session.query('SELECT association_review_required FROM sourcing_admissions WHERE candidate_id=$1',[burden.candidateId])).rows[0]).toEqual({association_review_required:true});
+});

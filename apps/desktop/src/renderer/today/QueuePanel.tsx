@@ -1,5 +1,5 @@
 import { AlertCircle, CalendarClock, CheckCircle2, Clock, MailOpen, StickyNote } from 'lucide-react';
-import { useEffect, useRef, type JSX, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import { useDrafts } from '../app/drafts.tsx';
 import { cn } from '../lib/utils.ts';
 import type { TodayCard } from '../todayContract.ts';
@@ -56,7 +56,13 @@ export function QueuePanel({
   /** Where a call's notes are, by firm: a quiet line under the firm's name. */
   readonly marks?: Readonly<Record<string, string>>;
 }): JSX.Element {
-  const groups = queueGroups(cards);
+  const ordered=queueGroups(cards).flatMap(group=>group.cards);
+  const signature=ordered.map(card=>card.firmId).join(',');
+  const [page,setPage]=useState({signature,selected,offset:Math.max(0,Math.floor(ordered.findIndex(card=>card.firmId===selected)/50)*50)});
+  const changed=page.signature!==signature||page.selected!==selected;
+  const offset=changed?Math.max(0,Math.floor(ordered.findIndex(card=>card.firmId===selected)/50)*50):page.offset;
+  if(changed)setPage({signature,selected,offset});
+  const groups = queueGroups(ordered.slice(offset,offset+50));
   const callable = cards.filter(card => groupOf(card) !== 'blocked').length;
   const list = useRef<HTMLDivElement>(null);
   const drafts = useDrafts();
@@ -165,6 +171,11 @@ export function QueuePanel({
             </div>
           ))
         )}
+        {ordered.length>50?<nav aria-label="Queue pages" className="flex items-center justify-between gap-2 px-2 py-3 text-xs">
+          <button type="button" aria-label="Previous queue page" disabled={locked||offset===0} onClick={()=>setPage({signature,selected,offset:Math.max(0,offset-50)})}>Previous</button>
+          <span>{Math.floor(offset/50)+1} / {Math.ceil(ordered.length/50)}</span>
+          <button type="button" aria-label="Next queue page" disabled={locked||offset+50>=ordered.length} onClick={()=>setPage({signature,selected,offset:offset+50})}>Next</button>
+        </nav>:null}
         {footer}
       </div>
     </section>

@@ -75,3 +75,14 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_admissions_workspace_id_firm_id_fkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return admissionRow(f,{firm_id:absent});}},
  {constraint:'sourcing_admissions_workspace_id_route_id_fkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return admissionRow(f,{route_id:absent});}},
 );
+
+async function feedbackRow(f:Fixture,overrides:Record<string,unknown>={}) {
+ const row={workspace_id:f.seeded.alpha.workspaceId,id:absent,candidate_id:candidateId,run_id:runId,code:'real_pain',...overrides};
+ return f.session.query(`INSERT INTO sourcing_feedback(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ {constraint:'sourcing_feedback_code',run:async(f:Fixture)=>{await insert(f);await runRow(f);return feedbackRow(f,{code:'bad'});}},
+ {constraint:'sourcing_feedback_note',run:async(f:Fixture)=>{await insert(f);await runRow(f);return feedbackRow(f,{note:'x'.repeat(501)});}},
+ {constraint:'sourcing_feedback_run',run:async(f:Fixture)=>feedbackRow(f)},
+ {constraint:'sourcing_feedback_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);await feedbackRow(f);return feedbackRow(f);}},
+);

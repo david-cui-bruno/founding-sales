@@ -56,3 +56,19 @@ ALTER TABLE sourcing_discovery_settings ADD COLUMN auto_admission_enabled boolea
 ALTER TABLE sourcing_discovery_settings ADD COLUMN qualification_wait_reason text;
 
 ALTER TABLE sourcing_qualification_runs ADD COLUMN admission_reason text CONSTRAINT sourcing_admission_reason CHECK(length(admission_reason) BETWEEN 1 AND 120);
+ALTER TABLE sourcing_candidates ADD COLUMN qualification_blocked boolean NOT NULL DEFAULT false;
+ALTER TABLE sourcing_admissions ADD COLUMN association_review_required boolean NOT NULL DEFAULT false;
+CREATE TABLE sourcing_feedback (
+ workspace_id uuid NOT NULL,
+ id uuid NOT NULL DEFAULT gen_random_uuid(),
+ candidate_id uuid NOT NULL,
+ run_id uuid NOT NULL,
+ code text NOT NULL CONSTRAINT sourcing_feedback_code CHECK(code IN ('wrong_firm','already_covered','real_pain','not_relevant')),
+ note text CONSTRAINT sourcing_feedback_note CHECK(length(note)<=500),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,id),
+ CONSTRAINT sourcing_feedback_run FOREIGN KEY(workspace_id,candidate_id,run_id) REFERENCES sourcing_qualification_runs(workspace_id,candidate_id,id) ON DELETE CASCADE
+);
+GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_feedback TO app_runtime,migration;
+
+CREATE OR REPLACE FUNCTION today_algorithm_version() RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT 'today.3'::text $$;

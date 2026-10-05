@@ -24,8 +24,8 @@ export interface QualificationRunRow {
   observations:SourceObservation[];facts:QualificationFact[];verdict:QualificationVerdict|null;
   opening_question:string|null;requested_at:Date;deadline_at:Date;[key:string]:unknown;
 }
-interface CandidateRow {id:string;revision:number;status:string;[key:string]:unknown}
-const candidateRead='SELECT id,revision,status FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2';
+interface CandidateRow {id:string;revision:number;status:string;qualification_blocked:boolean;[key:string]:unknown}
+const candidateRead='SELECT id,revision,status,qualification_blocked FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2';
 const refused=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 
 /** Caller transaction holds the candidate before runs, matching triage/admission. */
@@ -37,6 +37,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   if(!candidate)return refused('not_found');
   if(candidate.revision!==input.expectedRevision)return refused('candidate_changed');
   if(candidate.status==='dismissed')return refused('candidate_dismissed');
+  if(candidate.qualification_blocked)return refused('identity_review_required');
   const now=await databaseNow(context),settings=await readResearchSettings(context);
   const fingerprint=createHash('sha256').update(JSON.stringify([candidate.revision,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName,now.slice(0,10)])).digest('hex');
   const previous=(await context.db.query<{id:string}>(
@@ -104,4 +105,11 @@ export async function finishQualification(context:RepositoryContext,input:{runId
     [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review'}});
   return {ok:true,value:{runId:run.id}};
+}
+
+/** One explicit admission association, never a domain/name guess. Admin research UI only. */
+export async function readFirmQualification(context:RepositoryContext,firmId:string):Promise<QualificationView|null> {
+ if(!decideAdminOnly(context).permitted)return null;
+ const row=(await context.db.query<{candidate_id:string}>(`SELECT a.candidate_id FROM sourcing_admissions a JOIN firms f ON f.workspace_id=a.workspace_id AND f.id=a.firm_id WHERE a.workspace_id=$1 AND a.firm_id=$2 AND f.status='active' ORDER BY a.admitted_at DESC,a.candidate_id LIMIT 1`,[context.scope.workspaceId,firmId])).rows[0];
+ return row?readQualification(context,{candidateId:row.candidate_id}):null;
 }

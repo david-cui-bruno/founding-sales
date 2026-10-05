@@ -1,3 +1,4 @@
+import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { Candidates } from '../sourcing/Candidates.tsx';
 import { useKept } from '../replies/kept.ts';
 import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
@@ -282,6 +283,7 @@ export function FirmsRoute({
         <>
           {/* Lane PB: the prepared brief, negotiated on the firm page read
               (`include: ['preparedBrief']`), beside Callie's own research. */}
+          {state.role==='admin'?<FirmQualification key={`qualification:${firm.read.firm.id}`} firmId={firm.read.firm.id} enabled={view.actionsEnabled}/>:null}
           {firm.visibility === 'assigned_or_admin' && firm.preparedBrief != null ? (
             <div className="mb-4">
               <PreparedBrief key={firm.read.firm.id} brief={firm.preparedBrief} />

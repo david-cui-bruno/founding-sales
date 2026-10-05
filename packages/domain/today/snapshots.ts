@@ -26,6 +26,9 @@ const CARD_COLUMNS = `s.snapshot_date::text AS snapshot_date, s.firm_id, f.name 
   s.algorithm_version`;
 
 interface CardDbRow {
+  readonly source_rank:number;
+  readonly source_count:number;
+  readonly source_observed_at:Date|null;
   readonly snapshot_date: string;
   readonly firm_id: string;
   readonly firm_name: string;
@@ -42,6 +45,9 @@ interface CardDbRow {
 
 function toCard(row: CardDbRow): TodayCardRow {
   return {
+    sourceRank: row.source_rank,
+    sourceCount: row.source_count,
+    sourceObservedAt: row.source_observed_at?.toISOString()??null,
     snapshotDate: row.snapshot_date,
     firmId: row.firm_id,
     firmName: row.firm_name,
@@ -192,15 +198,32 @@ export async function listTodayCards(
   input: ListTodayCardsInput,
 ): Promise<readonly TodayCardRow[]> {
   const { rows } = await context.db.query<CardDbRow>(
-    `SELECT ${CARD_COLUMNS}
+    `SELECT ${CARD_COLUMNS},priority.rank AS source_rank,priority.sources AS source_count,priority.observed AS source_observed_at
        FROM today_snapshots s
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
+       LEFT JOIN LATERAL (
+         SELECT CASE r.verdict->>'rank' WHEN 'help_request' THEN 0 WHEN 'operational_burden' THEN 1 WHEN 'investigation' THEN 2 ELSE 3 END AS rank,
+          LEAST(2,(SELECT count(DISTINCT o->>'relevantTextHash')::int FROM jsonb_array_elements(r.observations) o)) AS sources,
+          (SELECT max((o->>'retrievedAt')::timestamptz) FROM jsonb_array_elements(r.observations) o) AS observed
+         FROM sourcing_admissions a JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
+         JOIN LATERAL (SELECT * FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
+         WHERE a.workspace_id=s.workspace_id AND a.firm_id=s.firm_id AND NOT a.association_review_required AND NOT c.qualification_blocked AND c.status<>'dismissed'
+          AND r.candidate_revision=c.revision AND r.state IN ('eligible','review','admitted') AND r.reason IS NULL AND r.verdict IS NOT NULL
+          AND jsonb_array_length(r.observations)>0 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(r.observations) o WHERE (o->>'retrievedAt')::timestamptz<now()-interval '7 days' OR (o->>'retrievedAt')::timestamptz>now())
+         ORDER BY rank,sources DESC,observed DESC,a.candidate_id LIMIT 1
+       ) evidence ON true
+       LEFT JOIN firm_judgments j ON j.workspace_id=s.workspace_id AND j.firm_id=s.firm_id
+       CROSS JOIN LATERAL (SELECT
+         CASE WHEN s.lane='new_firm' AND NOT EXISTS(SELECT 1 FROM today_snapshots old WHERE old.workspace_id=s.workspace_id AND old.snapshot_date=s.snapshot_date AND old.algorithm_version<>today_algorithm_version())
+         THEN COALESCE(evidence.rank,CASE WHEN j.call_first THEN 4 ELSE 5 END) ELSE 5 END AS rank,
+         CASE WHEN s.lane='new_firm' AND NOT EXISTS(SELECT 1 FROM today_snapshots old WHERE old.workspace_id=s.workspace_id AND old.snapshot_date=s.snapshot_date AND old.algorithm_version<>today_algorithm_version()) THEN COALESCE(evidence.sources,0) ELSE 0 END AS sources,
+         CASE WHEN s.lane='new_firm' AND NOT EXISTS(SELECT 1 FROM today_snapshots old WHERE old.workspace_id=s.workspace_id AND old.snapshot_date=s.snapshot_date AND old.algorithm_version<>today_algorithm_version()) THEN evidence.observed ELSE NULL END AS observed) priority
       WHERE s.workspace_id = $1
         AND s.snapshot_date = $2::date
         AND s.open_items > 0
         AND f.status = 'active'
         AND ($3::uuid IS NULL OR s.assigned_user_id = $3::uuid)
-      ORDER BY s.lane_precedence, s.sort_at, f.name, s.firm_id`,
+      ORDER BY s.lane_precedence, priority.rank, priority.sources DESC, priority.observed DESC NULLS LAST, s.sort_at, f.name COLLATE "C", s.firm_id`,
     [context.scope.workspaceId, input.snapshotDate, input.assignedUserId ?? null],
   );
   return rows.map(toCard);

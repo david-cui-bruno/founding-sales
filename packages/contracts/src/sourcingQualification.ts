@@ -71,3 +71,7 @@ export const qualificationViewSchema=z.object({
 const envelope={commandId:commandIdSchema,clientVersion:semanticVersionSchema};
 export const qualificationRequestCommandSchema=qualificationRequestSchema.extend(envelope);
 export const qualificationAdmissionCommandSchema=qualificationAdmissionSchema.extend(envelope);
+export const sourcingFeedbackSchema=z.strictObject({candidateId:uuid,qualificationRunId:uuid,code:z.enum(['wrong_firm','already_covered','real_pain','not_relevant']),note:z.string().max(500).optional()});
+export const sourcingFeedbackCommandSchema=sourcingFeedbackSchema.extend(envelope);
+export const sourcingFeedbackSavedSchema=z.object({id:uuid});
+export const firmQualificationReadSchema=z.strictObject({firmId:uuid});

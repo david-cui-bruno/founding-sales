@@ -29,7 +29,7 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
 export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
  return {name:'sourcing-qualification',find:async(session,now)=>{
   const workspaces=(await session.query<{id:string}>(`SELECT w.id FROM workspaces w WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs r WHERE r.workspace_id=w.id AND r.state IN ('pending','running') AND r.deadline_at<=$1::timestamptz)
-   OR ($2 AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.status<>'dismissed')) ORDER BY w.id LIMIT 25`,[now,enabled])).rows;
+   OR ($2 AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.status<>'dismissed' AND NOT c.qualification_blocked)) ORDER BY w.id LIMIT 25`,[now,enabled])).rows;
   const jobs:JobSpecification[]=[];
   for(const workspace of workspaces){
    const ctx=repositoryContext(workspaceScope(workspace.id,{kind:'system',component:'scheduler'}),session);
@@ -37,7 +37,7 @@ export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
    if(!enabled)continue;
    const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
     (SELECT r.requested_at,r.candidate_revision,r.state,r.reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
-    WHERE c.workspace_id=$1 AND c.status<>'dismissed' AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
+    WHERE c.workspace_id=$1 AND c.status<>'dismissed' AND NOT c.qualification_blocked AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR
      ((c.status='kept' OR EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=c.workspace_id AND a.candidate_id=c.id)) AND last.requested_at<$2::timestamptz-interval '7 days') OR (last.state='unavailable' AND last.requested_at<$2::timestamptz-interval '1 day'))
     ORDER BY last.requested_at NULLS FIRST,c.created_at,c.id LIMIT 25`,[workspace.id,now])).rows;
    for(const candidate of due){

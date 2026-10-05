@@ -47,9 +47,10 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  const domain=websiteDomain(peek.payload.website),name=firmNameKey(peek.payload.firmName);
  const matches=(await ctx.db.query<{id:string;name:string;website:string|null;locality:string|null;region_code:string|null}>(
   `SELECT id,name,website,locality,region_code FROM firms WHERE workspace_id=$1 AND (lower(regexp_replace(trim(name),'\\s+',' ','g'))=$2 OR regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$3) ORDER BY id FOR UPDATE`,[w,name,domain])).rows;
- const candidate=(await ctx.db.query<{revision:number;status:string;payload:CandidateInput}>('SELECT revision,status,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
+ const candidate=(await ctx.db.query<{revision:number;status:string;qualification_blocked:boolean;payload:CandidateInput}>('SELECT revision,status,qualification_blocked,payload FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,input.candidateId])).rows[0];
  const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 AND candidate_id=$3 FOR UPDATE',[w,input.qualificationRunId,input.candidateId])).rows[0];
  if(!candidate||!run)return refused('not_found');
+ if(candidate.qualification_blocked)return refused('identity_review_required');
  if(candidate.revision!==input.expectedRevision||candidate.revision!==run.candidate_revision||candidate.status==='dismissed')return refused('candidate_changed');
  const already=(await ctx.db.query<{firm_id:string;route_id:string}>('SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId])).rows[0];
  if(already)return {ok:true,value:{firmId:already.firm_id,routeId:already.route_id,alreadyAdmitted:true}};

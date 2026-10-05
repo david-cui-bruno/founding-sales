@@ -42,6 +42,9 @@ export type { TodayItemKind, TodayLane };
 
 /** What the card comparator needs, and nothing else. */
 export interface TodayCardOrder {
+  readonly sourceRank?:number;
+  readonly sourceCount?:number;
+  readonly sourceObservedAt?:string|null;
   readonly lane: TodayLane;
   readonly sortAt: string;
   readonly firmName: string;
@@ -67,6 +70,11 @@ const compareStrings = (left: string, right: string): number => (left < right ? 
 export function compareTodayCards(left: TodayCardOrder, right: TodayCardOrder): number {
   const byLane = LANE_PRECEDENCE[left.lane] - LANE_PRECEDENCE[right.lane];
   if (byLane !== 0) return byLane;
+  if(left.lane==='new_firm'){
+    const rank=(left.sourceRank??5)-(right.sourceRank??5);if(rank)return rank;
+    const sources=Math.min(2,right.sourceCount??0)-Math.min(2,left.sourceCount??0);if(sources)return sources;
+    const observed=Date.parse(right.sourceObservedAt??'1970-01-01')-Date.parse(left.sourceObservedAt??'1970-01-01');if(observed)return observed;
+  }
   const byInstant = Date.parse(left.sortAt) - Date.parse(right.sortAt);
   if (byInstant !== 0) return byInstant;
   const byName = compareStrings(left.firmName, right.firmName);

@@ -1,3 +1,4 @@
+import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
@@ -162,6 +163,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'sourcing.feedback': async (input:OperationInput<'sourcing.feedback'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/qualification/feedback',body,value=>sourcingFeedbackSavedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.firmQualification': async (input:OperationInput<'sourcing.firmQualification'>) => {
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/sourcing/qualification/firm',value=>qualificationViewSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
     'sourcing.qualification': async (input:OperationInput<'sourcing.qualification'>) => {
       const generation=deps.recordings.identity.current();
       const answer=await deps.api.read('/sourcing/qualification/read',value=>qualificationViewSchema.parse(value),input);
