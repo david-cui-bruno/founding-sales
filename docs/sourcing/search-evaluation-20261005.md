@@ -39,3 +39,21 @@ Review of all returned titles, URLs and snippets found marketing aimed at landlo
 5. Distinguish customer-facing service promises and educational articles from admissions about the firm's own workload.
 6. Preserve per-hit source, timestamp, uncertainty and counterevidence. Deduplicate domains/entities and compare against existing CRM firms before admission.
 7. Repeat the benchmark with revised, versioned queries before adding the shared PostgreSQL budget reservations and unattended discovery scheduler. No success rate or conversion prediction is justified by this nine-query batch.
+
+## Version 2 live comparison
+
+Nine v2 requests completed without provider errors, using nine more reported credits: 41 hits, 41 distinct URLs, 36 normalized hostname groups. Both batches together used 18 credits. All review groups remained needs_review. Key was used only in process memory and the matching clipboard cleared again.
+
+| Family | DFW | Providence | Boston |
+| --- | ---: | ---: | ---: |
+| Workflow context | 5 | 5 | 3 |
+| Coordination hiring | 5 | 5 | 5 |
+| Fit only | 3 | 5 | 5 |
+
+**Reject v2 as an improvement for unattended discovery.** Review of all native result titles/URLs/snippets found all 15 hiring hits unsuitable as attributable PM hiring evidence. Results included dictionaries, health care, financial filings, unrelated municipal documents and a festival. Fit searches also deteriorated: flights, vacation listings, lenders and dumpster services appeared. More returned links did not mean more useful prospects. Query changes are confounded: this batch cannot isolate whether length, exclusions or another provider behavior caused the decline.
+
+Workflow searches retained some relevant firms. Two first-party spot checks through web reads:
+- [Heart maintenance](https://www.heartpm.com/maintenance): its emergency instructions use the same published number as its general contact. This is workflow context worth asking about, not proof that an owner answers, lacks coverage or experiences excessive workload. Its visible portal uses Rentvine.
+- [Nexus Providence](https://www.nexri.com/providence): confirms Providence-area rental management and states over 600 units with 24-hour maintenance support. Relevant geography, but not evidence of the original two-person/no-support customer pattern.
+
+Recommendation: keep the tested adapter and conservative review policy, but do not schedule these nine queries. Next benchmark should separate short geography-plus-service discovery from source checks on known firm domains. Verify team/portfolio fit first; then inspect that firm's team, maintenance and careers pages for attributed signals and counterevidence. A jobs page should only become a hiring signal after verifying an actual current vacancy. Use the existing shortlist as a comparison baseline. Do not keep expanding a single query with every desired attribute. No candidates or CRM records were created and no outreach was enabled.
