@@ -1,8 +1,9 @@
-import {candidateListInputSchema,candidateSaveCommandSchema,candidateReviewCommandSchema,candidateDeleteCommandSchema} from '@fss/contracts';
+import {requestSourceCheck} from '@fss/domain/sourcing/sourceCheck.ts';
+import {candidateCheckCommandSchema,candidateListInputSchema,candidateSaveCommandSchema,candidateReviewCommandSchema,candidateDeleteCommandSchema} from '@fss/contracts';
 import {saveCandidate,listCandidates,reviewCandidate,deleteCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_PATHS=['/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
+export const SOURCING_PATHS=['/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if(!(SOURCING_PATHS as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
@@ -10,6 +11,10 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
   const auth=options.auth,authenticated=await requirePrincipal(auth,request);
   if(!authenticated.ok)return authenticated.result;
   const deps={auth,request,principal:authenticated.principal};
+  if(request.path==='/sourcing/candidates/check')return await runRouteCommand(deps,candidateCheckCommandSchema,'sourcing.check',async(context,body)=>{
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;
+    return await requestSourceCheck(context,input);
+  });
   if(request.path==='/sourcing/candidates/save')return await runRouteCommand(deps,candidateSaveCommandSchema,'sourcing.save',async(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;
     return await saveCandidate(context,input);

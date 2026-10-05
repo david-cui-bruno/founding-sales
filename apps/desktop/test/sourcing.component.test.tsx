@@ -5,8 +5,8 @@ import {Candidates,type CandidatePorts} from '../src/renderer/sourcing/Candidate
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
-const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z'};
-const ports=():CandidatePorts=>({list:vi.fn(async()=>({view:{candidates:[candidate],hasMore:false},reason:null})),save:vi.fn(async()=>({result:{id:candidate.id,duplicate:false},reason:null})),review:vi.fn(async()=>({result:{id:candidate.id},reason:null})),remove:vi.fn(async()=>({result:{id:candidate.id},reason:null}))});
+const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',sourceCheck:null};
+const ports=():CandidatePorts=>({list:vi.fn(async()=>({view:{candidates:[candidate],hasMore:false},reason:null})),save:vi.fn(async()=>({result:{id:candidate.id,duplicate:false},reason:null})),review:vi.fn(async()=>({result:{id:candidate.id},reason:null})),check:vi.fn(async()=>({result:{id:candidate.id},reason:null})),remove:vi.fn(async()=>({result:{id:candidate.id},reason:null}))});
 function fill(){
  for(const [label,value] of Object.entries({'Firm name':'Example PM','Website':'https://example.test','City':'Dallas','Evidence':'Observed duties','Source URL':'https://example.test/about','Observed on':'2026-10-01','Prepared by':'Researcher'}))fireEvent.change(screen.getByLabelText(label),{target:{value}});
 }
@@ -67,4 +67,17 @@ it('explains a future observation date without submitting it',async()=>{
  fireEvent.change(screen.getByLabelText('Observed on'),{target:{value:'2999-01-01'}});
  fireEvent.click(screen.getByRole('button',{name:'Save candidate'}));
  expect(await screen.findByText('Observed on cannot be in the future.')).toBeTruthy();expect(p.save).not.toHaveBeenCalled();
+});
+
+it('requests a source check without treating it as qualification',async()=>{
+ const p=ports();render(<DraftsProvider><Candidates ports={p}/></DraftsProvider>);await screen.findByText(candidate.evidence);
+ fireEvent.click(screen.getByRole('button',{name:'Check source'}));
+ await waitFor(()=>expect(p.check).toHaveBeenCalledWith(expect.objectContaining({id:candidate.id,expectedRevision:1})));
+});
+it('shows historical source text after an unsuccessful refresh',async()=>{
+ const p=ports();p.list=vi.fn(async()=>({view:{hasMore:false,candidates:[{...candidate,sourceCheck:{checkId:candidate.id,jobId:candidate.id,requestedAt:'2026-10-05T00:00:00Z',checkedAt:'2026-10-05T00:01:00Z',state:'unavailable' as const,reason:'source_unavailable' as const,lastSuccess:{url:candidate.sourceUrl,contentHash:'a'.repeat(64),retrievedAt:'2026-10-04T00:00:00Z',excerpt:'Previous published words',quoteMatched:true,firstParty:true,truncated:false}}}]},reason:null}));
+ render(<DraftsProvider><Candidates ports={p}/></DraftsProvider>);
+ expect(await screen.findByText(/Source check unavailable/)).toBeTruthy();
+ expect(screen.getByText('Previous published words')).toBeTruthy();
+ expect(screen.getByText(/does not confirm unmet need/)).toBeTruthy();
 });

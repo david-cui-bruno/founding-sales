@@ -128,7 +128,7 @@ export const RESEARCH_PAGE_PATHS: readonly string[] = Object.freeze([
  * to the firm's own site than a list written here — and this is the filter that keeps
  * the discovery to the pages research was going to ask for anyway.
  */
-export const DISCOVERED_PATH_PATTERN = /about|service|team|staff|contact|career|job|hiring/iu;
+export const DISCOVERED_PATH_PATTERN = /about|service|team|staff|contact|career|job|hiring|resident|tenant|maintenance|emergency|faq/iu;
 
 /** How many same-site links one homepage may contribute before the filter is applied. */
 export const MAX_DISCOVERED_CANDIDATES = 20;
@@ -358,21 +358,12 @@ export function discoverSameSiteUrls(
     if (!candidates.includes(normalized)) candidates.push(normalized);
   }
 
-  /**
-   * Deduped against the paths this run will actually ask for — the bounded prefix of
-   * the fixed list, which is exactly what `researchUrlsForFirm` produced — and not
-   * against the whole of `RESEARCH_PAGE_PATHS`. Dropping a discovered `/careers/`
-   * because `/careers` appears somewhere in a list that this run is not reading that
-   * far down would lose the page and fetch nothing in its place.
-   */
-  const bounded = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
-  const fixed = new Set(
-    RESEARCH_PAGE_PATHS.slice(0, bounded).map(path => `https://${firmHost}${path === '/' ? '/' : path}`),
-  );
+  // Keep published navigation even when it matches a guessed URL; the fetcher
+  // promotes and deduplicates those URLs against its remaining queue.
   return Object.freeze(
     candidates.filter(url => {
       const path = new URL(url).pathname;
-      if (path === '/' || fixed.has(url)) return false;
+      if (path === '/') return false;
       return DISCOVERED_PATH_PATTERN.test(path);
     }),
   );

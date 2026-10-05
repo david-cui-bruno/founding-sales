@@ -62,7 +62,7 @@ import { COMPANY_PAGE_PROVIDER } from '@fss/domain/research/types.ts';
  * A fixed list of paths is a guess at what a site calls its pages. After the firm's
  * homepage is read, its own anchors are scanned (`anchorHrefs`, a lexical scan, no HTML
  * dependency), the same-site ones that look like an about/services/team/contact/careers
- * page are kept (`discoverSameSiteUrls`), and they are queued behind the fixed list.
+ * page are kept (`discoverSameSiteUrls`), and they are queued before remaining guessed paths.
  * They are fetched only while the firm-page budget — `max_pages_per_firm` — has room,
  * so in practice they fill the budget that a `404` on a guessed path freed. Every one
  * still goes through the permission rule, a resolution, robots and the byte cap.
@@ -186,13 +186,17 @@ async function systemRequest(options: RequestOptions): Promise<RawResponse> {
             abortedOverCap,
           });
         });
+        response.on('error',reject);
         response.on('close', () => {
+          if(!abortedOverCap && !response.complete)reject(new Error('page_interrupted'));
           if (abortedOverCap) {
             resolve({ statusCode: response.statusCode ?? 0, headers: response.headers, body: null, abortedOverCap });
           }
         });
       },
     );
+    const deadlineTimer=setTimeout(()=>message.destroy(new Error('page_deadline')),options.timeoutMilliseconds);
+    message.once('close',()=>clearTimeout(deadlineTimer));
     message.on('timeout', () => {
       message.destroy(new Error('page_timeout'));
     });
@@ -451,6 +455,12 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       const skips = skipCounter();
       const pages: FetchedPage[] = [];
       const deadline = clock() + FIRM_TIMEOUT_MILLISECONDS;
+      const boundedLookup: LookupFn = async hostname => await new Promise((resolve,reject)=>{
+        const remaining=Math.min(PAGE_TIMEOUT_MILLISECONDS,deadline-clock());
+        if(remaining<=0){reject(new Error('firm_timeout'));return;}
+        const timer=setTimeout(()=>reject(new Error('lookup_deadline')),remaining);
+        void Promise.resolve().then(()=>lookup(hostname)).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+      });
       /**
        * Keyed by host **and** by the address that answered: the rules that were read
        * are that server's rules, and a name that answers with a different address is
@@ -463,9 +473,9 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
        */
       let paused = false;
       const mayRequest = async (): Promise<boolean> => {
-        if (paused) return false;
+        if (paused || clock()>=deadline) return false;
         if (input.shouldContinue !== undefined && !(await input.shouldContinue())) paused = true;
-        return !paused;
+        return !paused && clock()<deadline;
       };
 
       const robotsFor = async (hostname: string, address: string): Promise<RobotsAnswer> => {
@@ -491,7 +501,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               address,
               hostname: new URL(url).hostname,
               maxBytes: MAX_ROBOTS_BYTES,
-              timeoutMilliseconds: PAGE_TIMEOUT_MILLISECONDS,
+              timeoutMilliseconds: Math.max(1,Math.min(PAGE_TIMEOUT_MILLISECONDS,deadline-clock())),
             });
           } catch {
             // A timeout or a reset is not permission.
@@ -516,7 +526,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               return { kind: 'unreadable' };
             }
             const nextHost = new URL(target).hostname.toLowerCase();
-            const nextAddress = await checkedAddress(lookup, nextHost);
+            const nextAddress = await checkedAddress(boundedLookup, nextHost);
             if (nextAddress === null) return { kind: 'unreadable' };
             followed += 1;
             url = target;
@@ -547,7 +557,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       const pageBudget = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
 
       /**
-       * The queue. Seeded with the caller's list, and appended to once by discovery,
+       * The queue. Seeded with the caller's list, and extended once by discovery,
        * which is why it is walked by index rather than iterated.
        */
       const queue: string[] = [...input.urls];
@@ -574,6 +584,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
         let permission: UrlPermission = permittedResearchUrl({ ...input, discovered }, url);
         let followed = 0;
         for (;;) {
+          if (clock()>=deadline) {skips.bump('firm_timeout');break;}
           if (paused) {
             skips.bump('paused');
             break;
@@ -583,7 +594,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             break;
           }
           const hostname = new URL(url).hostname.toLowerCase();
-          const address = await checkedAddress(lookup, hostname);
+          const address = await checkedAddress(boundedLookup, hostname);
           if (address === null) {
             skips.bump('address_not_public');
             break;
@@ -616,7 +627,7 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               address,
               hostname,
               maxBytes: input.maxBytes,
-              timeoutMilliseconds: PAGE_TIMEOUT_MILLISECONDS,
+              timeoutMilliseconds: Math.max(1,Math.min(PAGE_TIMEOUT_MILLISECONDS,deadline-clock())),
             });
           } catch {
             skips.bump('request_failed');
@@ -676,14 +687,17 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             // Once, from the first page of the firm's own site that answered — which is
             // the homepage, including a homepage that redirected somewhere first.
             discoveryDone = true;
+            const navigation: string[] = [];
             for (const candidate of discoverSameSiteUrls(input, {
               from: url,
               hrefs: anchorHrefs(response.body, contentType),
             })) {
-              if (queue.includes(candidate)) continue;
+              if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);
-              queue.push(candidate);
+              navigation.push(candidate);
             }
+            const remaining=queue.slice(index+1).filter(candidate=>!navigation.includes(candidate));
+            queue.splice(index+1,queue.length-index-1,...navigation,...remaining);
           }
           break;
         }

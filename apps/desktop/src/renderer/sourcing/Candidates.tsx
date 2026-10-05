@@ -10,10 +10,11 @@ export interface CandidatePorts {
   list(input:OperationInput<'sourcing.list'>):Promise<OperationOutput<'sourcing.list'>>;
   save(input:OperationInput<'sourcing.save'>):Promise<OperationOutput<'sourcing.save'>>;
   review(input:OperationInput<'sourcing.review'>):Promise<OperationOutput<'sourcing.review'>>;
+  check(input:OperationInput<'sourcing.check'>):Promise<OperationOutput<'sourcing.check'>>;
   remove(input:OperationInput<'sourcing.delete'>):Promise<OperationOutput<'sourcing.delete'>>;
 }
 function api(){const bridge=operations();if(!bridge)throw new Error('unavailable');return bridge;}
-const defaultPorts:CandidatePorts={list:async input=>api().read('sourcing.list',input),save:async input=>api().command('sourcing.save',input),review:async input=>api().command('sourcing.review',input),remove:async input=>api().command('sourcing.delete',input)};
+const defaultPorts:CandidatePorts={check:async input=>api().command('sourcing.check',input),list:async input=>api().read('sourcing.list',input),save:async input=>api().command('sourcing.save',input),review:async input=>api().command('sourcing.review',input),remove:async input=>api().command('sourcing.delete',input)};
 const signals:Record<SourcingCandidate['signal'],string>={explicit_help:'Asking for help',responsibility_overlap:'Manager handles maintenance too',coordination_hiring:'Hiring a coordinator',manual_handoff:'Manual handoffs',growth:'Expansion',tool_gap:'Gap in their current tools',fit_only:'Potential fit · need unknown'};
 const statuses:Record<SourcingCandidate['status'],string>={needs_review:'Needs review',kept:'Kept for research',dismissed:'Dismissed'};
 export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePorts;enabled?:boolean}):JSX.Element {
@@ -31,17 +32,17 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
     if(m.busy||!enabled)return;
     m.pending=pending;m.busy=true;m.message=null;++m.generation;m.loading=false;touch();
     try {
-      const answer=pending.kind==='save'?await portsRef.current.save(pending.input):pending.kind==='review'?await portsRef.current.review(pending.input):await portsRef.current.remove(pending.input);
+      const answer=pending.kind==='check'?await portsRef.current.check(pending.input):pending.kind==='save'?await portsRef.current.save(pending.input):pending.kind==='review'?await portsRef.current.review(pending.input):await portsRef.current.remove(pending.input);
       if(answer.result!==null){
         m.pending=null;m.deleteId=null;
         if(pending.kind==='save'){
           m.draft={region:'TX',signal:'fit_only'};m.adding=false;
           m.message='duplicate' in answer.result && answer.result.duplicate?'This candidate was already saved. Existing evidence and review were kept.':'Candidate saved for review.';
-        }else m.message=pending.kind==='remove'?'Candidate draft deleted.':'Research choice saved.';
+        }else m.message=pending.kind==='check'?'Source check queued. Refresh candidates to see the result.':pending.kind==='remove'?'Candidate draft deleted.':'Research choice saved.';
         m.filter.offset=0;
         await load();
       }else if(noDefiniteAnswer(answer.reason)){m.message='No definite answer. Retry the same action.';}
-      else {m.pending=null;m.message=answer.reason==='candidate_changed'?'This candidate changed elsewhere. Refresh before choosing again.':'The action was refused. Your draft is kept.';}
+      else {m.pending=null;m.message=answer.reason==='research_disabled'?'Research is disabled in Settings.':answer.reason==='research_held'?'Research is on hold.':answer.reason==='daily_firm_ceiling'?'Today’s research allowance is used up. Try tomorrow.':answer.reason==='source_not_permitted'?'This source cannot be fetched under the current research rules.':answer.reason==='check_in_progress'?'A source check is already queued. Refresh for its result.':answer.reason==='candidate_changed'?'This candidate changed elsewhere. Refresh before choosing again.':'The action was refused. Your draft is kept.';}
     }catch{m.message='No definite answer. Retry the same action.';}
     finally{m.busy=false;touch();}
   };
@@ -78,7 +79,13 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
       <p className="text-sm">{signals[candidate.signal]}</p><p className="whitespace-pre-wrap break-words text-sm">{candidate.evidence}</p>
       <p className="text-xs text-muted-foreground">Prepared research · not verified by Callie · observed {candidate.observedOn} · {candidate.preparedBy}</p>
       <div className="flex gap-4 text-sm"><a className="underline underline-offset-4" href={candidate.sourceUrl} target="_blank" rel="noreferrer">Source evidence</a><a className="underline underline-offset-4" href={candidate.website} target="_blank" rel="noreferrer">Firm website</a></div>
-      <div className="flex flex-wrap gap-2">{candidate.status!=='kept'?<Button variant="outline" size="sm" disabled={blocked} onClick={()=>review(candidate,'kept')}>Keep for research</Button>:null}{candidate.status!=='dismissed'?<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>review(candidate,'dismissed')}>Dismiss</Button>:null}{candidate.status!=='needs_review'?<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>review(candidate,'needs_review')}>Return to review</Button>:null}<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>{m.deleteId=candidate.id;touch();}}>Delete draft</Button></div>
+      {candidate.sourceCheck?<div className="space-y-2 rounded-md border border-border p-3 text-sm">
+        <p>{candidate.sourceCheck.state==='pending'?'Source check queued':candidate.sourceCheck.state==='checked'?'Source checked':candidate.sourceCheck.lastSuccess?'Source check unavailable · previous evidence retained':'Source check unavailable'}</p>
+        <p className="text-xs text-muted-foreground">Requested {candidate.sourceCheck.requestedAt.slice(0,10)}{candidate.sourceCheck.checkedAt?` · checked ${candidate.sourceCheck.checkedAt.slice(0,10)}`:''}</p>
+        {candidate.sourceCheck.lastSuccess?<><p className="whitespace-pre-wrap break-words">{candidate.sourceCheck.lastSuccess.excerpt}</p><p className="text-xs text-muted-foreground">Snapshot from {candidate.sourceCheck.lastSuccess.retrievedAt.slice(0,10)} · {candidate.sourceCheck.lastSuccess.firstParty?'Same website':'External source'} · {candidate.sourceCheck.lastSuccess.quoteMatched?'Saved text found':'Saved text not matched'}{candidate.sourceCheck.lastSuccess.truncated?' · excerpt limited':''}</p><a className="underline" href={candidate.sourceCheck.lastSuccess.url} target="_blank" rel="noreferrer">Checked source</a></>:null}
+        <p className="text-xs text-muted-foreground">A source check does not confirm unmet need, firm identity or buying intent.</p>
+      </div>:null}
+      <div className="flex flex-wrap gap-2">{candidate.status!=='dismissed'?<Button variant="outline" size="sm" disabled={blocked} onClick={()=>void perform({kind:'check',input:{id:candidate.id,expectedRevision:candidate.revision,commandId:crypto.randomUUID()}})}>Check source</Button>:null}{candidate.status!=='kept'?<Button variant="outline" size="sm" disabled={blocked} onClick={()=>review(candidate,'kept')}>Keep for research</Button>:null}{candidate.status!=='dismissed'?<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>review(candidate,'dismissed')}>Dismiss</Button>:null}{candidate.status!=='needs_review'?<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>review(candidate,'needs_review')}>Return to review</Button>:null}<Button variant="quiet" size="sm" disabled={blocked} onClick={()=>{m.deleteId=candidate.id;touch();}}>Delete draft</Button></div>
       {m.deleteId===candidate.id?<div className="flex items-center gap-2"><span className="text-sm">Remove this candidate and its evidence?</span><Button variant="outline" size="sm" disabled={blocked} onClick={()=>void perform({kind:'remove',input:{id:candidate.id,expectedRevision:candidate.revision,commandId:crypto.randomUUID()}})}>Confirm delete</Button><Button variant="quiet" size="sm" disabled={blocked} onClick={()=>{m.deleteId=null;touch();}}>Cancel</Button></div>:null}
     </li>)}</ul>{m.view.candidates.length===0?<p className="text-sm text-muted-foreground">No candidates in this view.</p>:null}<div className="flex gap-2"><Button variant="quiet" disabled={blocked||m.loading||m.filter.offset===0} onClick={()=>changeFilter(m.filter.status,Math.max(0,m.filter.offset-50))}>Previous page</Button><Button variant="quiet" disabled={blocked||m.loading||!m.view.hasMore} onClick={()=>changeFilter(m.filter.status,m.filter.offset+50)}>Next page</Button></div></>:null}
   </section>;

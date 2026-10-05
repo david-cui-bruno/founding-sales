@@ -36,3 +36,12 @@ it('refuses malformed evidence before saving it',async()=>{
  expect((await request('/sourcing/candidates/save',admin,envelope({...input,sourceUrl:'javascript:alert(1)'}))).status).toBe(400);
  expect((await request('/sourcing/candidates/save',sales,envelope(input))).body).toMatchObject({reason:'admin_only'});
 });
+
+it('queues a source check once and returns only its candidate id',async()=>{
+ const first=await request('/sourcing/candidates/save',admin,envelope(input));
+ const id=(first.body as {result:{id:string}}).result.id;
+ const check=envelope({id,expectedRevision:1});
+ expect((await request('/sourcing/candidates/check',sales,envelope({id,expectedRevision:1}))).body).toMatchObject({reason:'admin_only'});
+ expect((await request('/sourcing/candidates/check',admin,check)).body).toMatchObject({status:'accepted',result:{id}});
+ expect((await request('/sourcing/candidates/check',admin,check)).body).toMatchObject({replayed:true});
+});

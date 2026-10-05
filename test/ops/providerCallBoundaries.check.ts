@@ -93,6 +93,10 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
+  {
+    file:'packages/domain/sourcing/sourceCheck.ts',method:'fetchPages',
+    reason:'Candidate source checks cannot use firm enrichment without creating a callable CRM firm. requestSourceCheck consumes the shared daily research count before enqueue; runSourceCheck checks research settings/holds, the pending check ID, dismissal and deadline, then uses the same bounded page adapter with one URL/page. It never calls a model or search provider; tests cover limits, retries and stale results.',
+  },
   ...['analysisAdapter', 'analysisInput', 'analysisRequests'].map(name => ({
     file: `packages/domain/meetings/${name}.ts`, method: 'extract',
     reason: "the literal 'extract' names the meeting-analysis phase (versus merge), never a research provider method; paid analysis dispatch is gated by analysisPaid and the meeting worker",

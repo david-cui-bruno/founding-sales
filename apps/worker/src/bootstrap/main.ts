@@ -1,3 +1,4 @@
+import {sourcingCheckHandler} from '../handlers/sourcingCheck.ts';
 import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../handlers/meetingAutoRecording.ts';
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
 import { calcomDemoClient } from '../calcom/bookingClient.ts';
@@ -230,6 +231,7 @@ export function registerHandlers(
   // judgments `unknown`, which is a smaller answer rather than a failure. That is
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
+  if(composition.research)registry.register(sourcingCheckHandler(composition.research.pageFetch));
   for (const handler of researchHandlers(composition.research)) registry.register(handler);
   return registry;
 }

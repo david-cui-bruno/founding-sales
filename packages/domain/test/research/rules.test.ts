@@ -340,10 +340,9 @@ describe('the links a firm’s own homepage offers', () => {
     ).toEqual(['https://example.test/about-us', 'https://www.example.test/about-us']);
   });
 
-  it('does not offer a page this run is already fetching from the fixed list', () => {
-    // At four pages the run asks for `/`, `/about`, `/services` and `/careers`, so a
-    // link to any of them is a second fetch of the same bytes.
-    expect(discoverSameSiteUrls(firm, found('/about', '/services', '/careers'))).toEqual([]);
+  it('retains published navigation so the fetcher can promote and deduplicate guessed paths', () => {
+    // The adapter promotes these URLs instead of fetching them twice.
+    expect(discoverSameSiteUrls(firm, found('/about', '/services', '/careers'))).toEqual(['https://example.test/about','https://example.test/services','https://example.test/careers']);
     // At two it is not reading that far down, so `/careers` is a page it would lose.
     expect(discoverSameSiteUrls({ ...firm, maxPagesPerFirm: 2 }, found('/careers'))).toEqual([
       'https://example.test/careers',

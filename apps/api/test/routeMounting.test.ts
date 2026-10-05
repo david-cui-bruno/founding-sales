@@ -185,6 +185,7 @@ describe('what the API mounts', () => {
       '/settings/history',
       '/settings/integrations',
       '/settings/update',
+      '/sourcing/candidates/check',
       '/sourcing/candidates/delete',
       '/sourcing/candidates/list',
       '/sourcing/candidates/review',

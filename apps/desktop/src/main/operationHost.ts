@@ -179,6 +179,12 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
+    'sourcing.check': async (input:OperationInput<'sourcing.check'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/candidates/check',body,value=>candidateChangedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
     'sourcing.delete': async (input:OperationInput<'sourcing.delete'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/candidates/delete',body,value=>candidateChangedSchema.parse(value),{commandId});

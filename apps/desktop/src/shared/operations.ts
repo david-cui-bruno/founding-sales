@@ -837,6 +837,12 @@ export const OPERATIONS = {
     output: z.object({result:candidateChangedSchema.nullable(),reason:z.string().nullable()}),
     transform: 'revision-checked human research triage, never automatic verification',
   },
+  'sourcing.check': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/check'}],
+    input: candidateDeleteInputSchema.extend({commandId:uuid}),
+    output: z.object({result:candidateChangedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'revision-checked removal of an independent candidate draft',
+  },
   'sourcing.delete': {
     kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/delete'}],
     input: candidateDeleteInputSchema.extend({commandId:uuid}),

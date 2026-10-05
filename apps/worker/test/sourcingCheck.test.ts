@@ -1,0 +1,23 @@
+import {afterAll,beforeAll,it,expect,vi} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testDatabase.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {seedTwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
+import {saveCandidate,listCandidates} from '@fss/domain/sourcing/candidates.ts';
+import {requestSourceCheck} from '@fss/domain/sourcing/sourceCheck.ts';
+import {HandlerRegistry} from '@fss/domain/jobs/handlerRegistry.ts';
+import {runOnce} from '../src/runner/jobRunner.ts';
+import {sourcingCheckHandler} from '../src/handlers/sourcingCheck.ts';
+let db:TestDatabase;
+beforeAll(async()=>{db=await createTestDatabase();});afterAll(async()=>{await db.drop();});
+it('runs the queued check through the real worker without any AI call or CRM admission',async()=>{
+ const seeded=await seedTwoWorkspaces(db.session),context=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
+ const candidate=await withTransaction(db.session,()=>saveCandidate(context,{firmName:'PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',sourceUrl:'https://example.test/maintenance',evidence:'Call our manager for maintenance.',observedOn:'2026-10-01',preparedBy:'Test'}));if(!candidate.ok)throw new Error('save');
+ await withTransaction(db.session,()=>requestSourceCheck(context,{id:candidate.value.id,expectedRevision:1}));
+ const fetchPages=vi.fn(async()=>({ok:true as const,costCents:0,value:{pages:[{url:'https://example.test/maintenance',contentHash:'a'.repeat(64),contentType:'text/plain',body:new TextEncoder().encode('Call our manager for maintenance.'),retrievedAt:'2026-10-05T00:00:00Z',firstParty:true}],skipped:{}}}));
+ const registry=new HandlerRegistry();registry.register(sourcingCheckHandler({providerKey:'fixture',fetchPages}));
+ await runOnce(db.session,{registry,owner:'source-test',limit:5});await runOnce(db.session,{registry,owner:'source-test',limit:5});
+ expect(fetchPages).toHaveBeenCalledTimes(1);expect(fetchPages).toHaveBeenCalledWith(expect.objectContaining({urls:['https://example.test/maintenance'],maxPagesPerFirm:1}));
+ expect(await listCandidates(context,{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{sourceCheck:{state:'checked',lastSuccess:{quoteMatched:true}}}]}});
+ expect((await db.session.query('SELECT id FROM firms')).rows).toHaveLength(0);
+});

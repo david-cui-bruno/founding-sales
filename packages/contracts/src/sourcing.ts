@@ -26,7 +26,17 @@ export const candidateInputSchema = z.strictObject({
   preparedBy: z.string().trim().min(1).max(200),
 });
 export type CandidateInput = z.infer<typeof candidateInputSchema>;
+export const candidateSourceCheckSchema = z.object({
+  checkId:uuid,jobId:uuid,requestedAt:instant,
+  state:z.enum(['pending','checked','unavailable']),
+  reason:z.enum(['source_unavailable','source_not_permitted','no_readable_text','research_disabled','research_held','candidate_dismissed','job_failed','check_expired']).nullable(),
+  checkedAt:instant.nullable(),
+  lastSuccess:z.object({url:sourcingUrlSchema,contentHash:z.string().regex(/^[a-f0-9]{64}$/),retrievedAt:instant,
+    excerpt:z.string().max(4000),quoteMatched:z.boolean(),firstParty:z.boolean(),truncated:z.boolean()}).nullable(),
+});
+export type CandidateSourceCheck=z.infer<typeof candidateSourceCheckSchema>;
 export const candidateSchema = candidateInputSchema.extend({
+  sourceCheck:candidateSourceCheckSchema.nullable().default(null),
   id: uuid, status: candidateStatusSchema, revision: z.number().int().min(1), createdAt: instant,
 });
 export type SourcingCandidate = z.infer<typeof candidateSchema>;
@@ -44,3 +54,5 @@ const envelope = {commandId:commandIdSchema,clientVersion:semanticVersionSchema}
 export const candidateSaveCommandSchema = candidateInputSchema.extend(envelope);
 export const candidateReviewCommandSchema = candidateReviewInputSchema.extend(envelope);
 export const candidateDeleteCommandSchema = candidateDeleteInputSchema.extend(envelope);
+
+export const candidateCheckCommandSchema = candidateDeleteInputSchema.extend(envelope);

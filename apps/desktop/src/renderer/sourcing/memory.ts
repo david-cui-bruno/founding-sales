@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useReducer,useState} from 'react';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 import {useSessionEpoch} from '../app/drafts.tsx';
-export type Pending = {kind:'save';input:OperationInput<'sourcing.save'>}|{kind:'review';input:OperationInput<'sourcing.review'>}|{kind:'remove';input:OperationInput<'sourcing.delete'>};
+export type Pending = {kind:'check';input:OperationInput<'sourcing.check'>}|{kind:'save';input:OperationInput<'sourcing.save'>}|{kind:'review';input:OperationInput<'sourcing.review'>}|{kind:'remove';input:OperationInput<'sourcing.delete'>};
 interface Memory {
   draft:Record<string,string>;adding:boolean;filter:OperationInput<'sourcing.list'>;
   view:OperationOutput<'sourcing.list'>['view'];loading:boolean;failed:boolean;generation:number;
