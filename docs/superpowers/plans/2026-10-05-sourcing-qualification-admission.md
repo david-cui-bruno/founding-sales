@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node 24, TypeScript, PostgreSQL, existing job worker, AWS Bedrock, React/shadcn/Tailwind desktop. No new service or paid dependency.
 
-**Spec:** [Targeted lead sourcing](../specs/2026-10-04-targeted-lead-sourcing-design.md). Baseline: `32684e23230acb033113ec688be357b0dcfacdb4`, schema 49, desktop 1.0.44.
+**Spec:** [Targeted lead sourcing](../specs/2026-10-04-targeted-lead-sourcing-design.md) and the approved-for-planning [five-part roadmap](../specs/2026-10-05-sales-roadmap-design.md). Baseline: `32684e23230acb033113ec688be357b0dcfacdb4`, schema 49, desktop 1.0.44. This is release A within the [master build plan](2026-10-05-sales-roadmap.md); Tasks 1–7 here are referenced there as A1–A7.
 
 ## Global Constraints
 
@@ -45,7 +45,7 @@ This plan delivers A, including a small outcome-feedback loop. Employer job-feed
 | Presentation | Extend `apps/desktop/src/renderer/sourcing/Candidates.tsx`; add a small shared evidence component for Candidates/Today/firm detail. Extend `packages/domain/today/{snapshots,lanes,types,dto}.ts` and their contract for ordering/provenance. |
 | Evaluation | Add focused tests alongside existing suites and `docs/sourcing/qualification-evaluation-20261005.md` when the real batch is run. |
 
-New internal result type: `SourcingResult<T> = { ok: true; value: T } | { ok: false; reason: string }`. All command inputs carry `expectedRevision`; API envelopes retain `commandId` and `clientVersion`. All repository operations take `RepositoryContext`, scope every read/write to its workspace, and use database time.
+New internal result type: `SourcingResult<T> = { ok: true; value: T } | { ok: false; reason: string }`. Commands that change an existing revision carry `expectedRevision`; create commands retain `commandId` and `clientVersion` without inventing a prior version. All repository operations take `RepositoryContext`, scope every read/write to its workspace, and use database time.
 
 ### Task 1: Store versioned evidence and qualification attempts
 
@@ -53,7 +53,7 @@ New internal result type: `SourcingResult<T> = { ok: true; value: T } | { ok: fa
 
 **Interfaces:**
 - `requestQualification(ctx, { candidateId, expectedRevision }): Promise<SourcingResult<{ runId: string }>>` queues one run against the current candidate revision; no firm is created.
-- `readQualification(ctx, { candidateId }): Promise<QualificationView | null>` exposes status, source history, reasons, rank and any admission reference.
+- `readQualification(ctx, { candidateId }): Promise<QualificationView | null>` exposes `QualificationView = {candidateId:string,runId:string,status:QualificationStatus,observations:SourceObservation[],facts:QualificationFact[],verdict:QualificationVerdict|null,admission:{firmId:string,routeId:string}|null}`. `QualificationVerdict` is defined in Task 3.
 - `QualificationStatus = 'pending' | 'running' | 'review' | 'eligible' | 'admitted' | 'unavailable'` is independent of the candidate's existing kept/dismissed state.
 - `SourceObservation = { id, url, contentHash, relevantTextHash, retrievedAt, publishedAt: string | null, firstParty, blocks: { id, text }[], truncated }` stores bounded supporting text, not raw HTML. A published date needs a supporting block; retrieval time cannot substitute.
 - `QualificationFact = { kind, value, observationId, blockId }`; kind is one of `firm_identity`, `residential_management`, `service_area`, `business_phone`, `help_request`, `operational_burden`, `coordination_job`, `growth`, `tool_gap`, `existing_support`. Store contradictory evidence too. Validate each value against its cited text; unmatched values are unknown, not facts.
@@ -147,7 +147,7 @@ New internal result type: `SourcingResult<T> = { ok: true; value: T } | { ok: fa
 - [ ] Show a small admitted batch in the actual desktop. Verify identity/source links, order, review actions, pause/budget messaging and idempotent retries against persisted state. Confirm actual calls still use the existing dial authorization. State clearly which checks were fixtures and which were real provider/product checks.
 - [ ] Run `npm run gate:greenfield` with Node 24, the existing migration/upgrade checks and secret scan. Obtain one independent whole-branch review, repair material findings and rerun the affected checks. Rehearse any schema release using the existing release machinery before deploying.
 - [ ] Ship without changing any sending controls. Confirm version/schema, run production smoke and read back at least one persisted qualification/admission through the product/API. Record cost, corpus, remaining unknowns and any initial rollout bounds in the report.
-- [ ] Commit the evidence/status update. Then start a separate B plan for autonomous email using David's recorded preferences, with sender readiness, recipient selection, message/sequence quality, stop/reply handling, pacing and real send-path validation. A's qualification verdict is never email permission.
+- [ ] Commit the evidence/status update, then follow the already written [learning](2026-10-05-sales-learning.md) and [email](2026-10-05-autonomous-outreach.md) plans in master-plan order. A's qualification verdict is never email permission. Do not reopen the completed roadmap interview or postpone planning those subsystems until after A.
 
 ## Completion boundary and learning
 

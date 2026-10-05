@@ -4,6 +4,8 @@ Status: active planning, not an approved complete design. David requested planni
 
 The [consolidated five-part design draft](../superpowers/specs/2026-10-05-sales-roadmap-design.md) now brings these decisions together. It marks proposed combined-cadence defaults separately from confirmed answers. David subsequently reported account-specific Google permission and confirmed free native social scheduling; remaining checks concern implementation and actual lead yield.
 
+David then requested the [detailed build plan](../superpowers/plans/2026-10-05-sales-roadmap.md). It covers discovery verification, the existing reconciled qualification plan, outcome learning, autonomous outreach and social publishing. All tasks remain planned. Code inspection added two concrete requirements: firm-owned sequences because enrollment currently requires a deal, and separate durable social asset storage because the audio bucket expires every object after one day.
+
 ## Full scope
 
 1. Finish discovery verification: scheduling, quota accounting, persisted results and desktop readback. Discovery was enabled on 5 October; the first production result was not yet verified at activation.

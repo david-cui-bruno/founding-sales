@@ -2,6 +2,8 @@
 
 Status: consolidated design draft, 5 October 2026. This combines David's interview decisions with proposed engineering defaults. It is not an implementation or activation report. Plan all five parts before executing them. David reports account-specific Google permission for the intended Gmail API use and confirms that his social accounts support reliable free scheduling. Use those as user-supplied planning inputs; the integrations still need implementation and end-to-end validation.
 
+David requested the detailed build plan after these clarifications. The [master implementation plan and four linked subsystem plans](../plans/2026-10-05-sales-roadmap.md) now cover the complete roadmap. They are written for review, not executed.
+
 ## The result
 
 Give David a steady, useful queue of property managers to contact, with a defensible reason to call, coordinated follow-up, and evidence about what actually produces qualified demos. Then turn approved ideas and images into scheduled social posts.
@@ -97,6 +99,8 @@ The existing code refuses cold prospecting both in sequence eligibility and at G
 
 The application design can be specified independently: approved, versioned messaging and product facts; evidence-backed personalization; one firm/contact conversation plan; existing send fences and reconciliation. An uncertain provider result is reconciled before another send. Draft generation cannot lift a stop, authorize a sender or create a deal.
 
+Implementation inspection found that existing `enrollContact` requires an open opportunity. Add an explicit firm-outreach subject to the existing sequence engine, retaining its legacy opportunity branch. Do not create a fake Interested deal to satisfy the old schema. Approved reusable answer blocks extend the current template approach; the model selects supported answers rather than inventing pricing or commitments.
+
 **Proposed combined-cadence default:** one unsolicited touch per firm per local day, no simultaneous phone/email sequences. Preserve the established maximum four unanswered calls over 14 days, voicemail on attempts 1 and 4. Start email with one introduction and two useful follow-ups over two weeks; timing is an experiment, not a research-proven optimum. An explicit requested callback/reply takes priority and replaces obsolete scheduled work. These email/combined defaults are proposals for the full plan, not claims about a previously approved template.
 
 An inbound human reply immediately holds prospecting. Only supported routine responses can replace it; ambiguous intent goes to review. A booking ends obsolete prospecting and hands off to the existing meeting workflow. Recheck message/thread revision, direct-send takeover, stops and current eligibility at final dispatch. Honor the established phone-only, email-only and firm-wide stop semantics without adding a visible footer link against David's preference.
@@ -126,6 +130,8 @@ David confirms that his accounts support reliable free scheduling. Treat native 
 For a browser adapter, isolate the task session, keep credentials out of logs, pause on expired login/challenges, and request sign-in without taking over the mouse or screen. Native platform scheduling is preferred so posts already scheduled do not depend on the Mac staying awake. If scheduling/readback cannot be verified at zero X cost, provide a clearly labelled draft handoff and report automatic X publishing as incomplete; do not quietly spend money or claim handoff equals automation.
 
 The Codex browser is available for setup and investigation, not an assumed runtime dependency of Callie. The implementation plan must choose a narrow background browser runtime owned by the product, or a supported API, and account for session expiry and restarts. Prefer scheduling approved posts in advance; do not require a chat to wake up at every publication time.
+
+The detailed plan selects hidden sandboxed Electron sessions as the first background runtime, with a small integration probe before delivery development. Reuse existing AWS storage patterns but create a private social asset bucket: the existing audio bucket expires every object after one day and cannot hold a reusable image library. This preserves the audio retention rule rather than broadening it.
 
 **Done when:** each enabled destination can schedule an approved text/image post, read back its identity and content, cancel/reschedule reliably and confirm publication without duplicates. Verify with David-approved test content when setup begins. Show limitations by destination; one unavailable integration needn't block the others. No automated DMs, engagement bots, ads or video production in this scope.
 
