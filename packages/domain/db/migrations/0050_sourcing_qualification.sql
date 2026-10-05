@@ -48,3 +48,6 @@ ALTER TABLE provider_reservations DROP CONSTRAINT provider_reservations_subject_
     AND (subject_kind NOT IN ('call_session','call_transcription','meeting_transcription') OR
       (model_name IS NULL AND max_input_tokens IS NULL AND max_output_tokens IS NULL AND priced_unit='minute' AND priced_unit IS NOT NULL
        AND max_units IS NOT NULL AND max_units BETWEEN 1 AND 240 AND unit_price_micros IS NOT NULL AND unit_price_micros BETWEEN 0 AND 10000000)));
+ALTER TABLE sourcing_discovery_settings ADD COLUMN owner_user_id uuid;
+ALTER TABLE sourcing_discovery_settings ADD CONSTRAINT sourcing_owner_membership
+ FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id);

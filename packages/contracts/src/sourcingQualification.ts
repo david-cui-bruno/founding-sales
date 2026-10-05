@@ -1,3 +1,5 @@
+import {commandIdSchema} from './auth.ts';
+import {semanticVersionSchema} from './clientVersion.ts';
 import { z } from 'zod';
 import { instant, uuid } from './foundationRows.ts';
 import { sourcingUrlSchema } from './sourcing.ts';
@@ -55,3 +57,17 @@ export interface QualificationView {
   admission:{firmId:string;routeId:string}|null;
   history:{runId:string;observations:SourceObservation[];facts:QualificationFact[]}[];
 }
+
+export const qualificationReadSchema=z.strictObject({candidateId:uuid});
+export const qualificationAdmissionSchema=z.strictObject({candidateId:uuid,expectedRevision:z.number().int().positive(),qualificationRunId:uuid,mode:z.literal('reviewed')});
+export const qualificationQueuedSchema=z.object({runId:uuid});
+export const qualificationAdmittedSchema=z.object({firmId:uuid,routeId:uuid,alreadyAdmitted:z.boolean()});
+export const qualificationViewSchema=z.object({
+ candidateId:uuid,runId:uuid,candidateRevision:z.number().int().positive(),status:qualificationStatusSchema,reason:z.string().nullable(),requestedAt:instant,deadlineAt:instant,
+ observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema),verdict:qualificationVerdictSchema.nullable(),openingQuestion:z.string().nullable(),
+ admission:z.object({firmId:uuid,routeId:uuid}).nullable(),history:z.array(z.object({runId:uuid,observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema)})),
+});
+
+const envelope={commandId:commandIdSchema,clientVersion:semanticVersionSchema};
+export const qualificationRequestCommandSchema=qualificationRequestSchema.extend(envelope);
+export const qualificationAdmissionCommandSchema=qualificationAdmissionSchema.extend(envelope);
