@@ -33,6 +33,7 @@ export const JOB_KINDS = [
   'canary',
   'route.validate',
   'sourcing.check',
+  'sourcing.qualify',
   'sourcing.monitor',
   'sourcing.discover',
   'research.firm',
@@ -111,6 +112,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // write is that insert, so a second claim finds the row it already opened and
   // fetches nothing. See `packages/domain/research/runs.ts`.
   'sourcing.check': 'business_uniqueness',
+  'sourcing.qualify': 'outbound_fence',
   'sourcing.discover': 'outbound_fence',
   'sourcing.monitor': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
@@ -161,6 +163,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
+  sourcingQualify: (runId:string):string => `sourcing-qualify:${runId}`,
   sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
   meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
@@ -323,6 +326,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // Nobody is waiting on a page fetch: the brief is read the next morning, and an
   // import of two hundred firms is two hundred of these.
   'sourcing.check': 'bulk',
+  'sourcing.qualify': 'bulk',
   'sourcing.monitor': 'bulk',
   'sourcing.discover': 'bulk',
   'research.firm': 'bulk',

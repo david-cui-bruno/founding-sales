@@ -40,3 +40,5 @@ export * from './meetingFollowThrough.ts';
 export * from './meetingAutoRecording.ts';
 
 export * from './sourcing.ts';
+
+export * from './sourcingQualification.ts';

@@ -56,6 +56,8 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   sourcing_discovery_settings: coverage(['operational'], 'Workspace discovery schedule and status.'),
   sourcing_discovery_attempts: coverage(['retained'], 'Search dispatch and quota history, containing fixed queries only; required to prevent replay.'),
   sourcing_discovery_hits: coverage(['retained'], 'Public source URL deduplication tombstones; kept after candidate deletion to prevent rediscovery.'),
+  sourcing_qualification_runs: coverage(['deletion_removes'], 'Bounded candidate evidence and interpretations cascade on candidate deletion. Provider accounting remains independent.'),
+  sourcing_admissions: coverage(['deletion_removes'], 'Candidate-to-CRM provenance cascades with candidate evidence; deleting it does not delete a CRM firm or undo a stop.'),
   sourcing_candidates: coverage(['deletion_removes'], 'Independent unverified drafts; the admin candidate delete command removes the payload. No CRM contact or firm is created.'),
   // ------------------------------------------------------------- foundation
   workspaces: coverage(['operational'], 'The tenant itself.'),
