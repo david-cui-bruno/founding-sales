@@ -38,3 +38,10 @@ it('requires an audited launch to configure; repeated configuration cannot reset
  expect((await db.session.query('SELECT halted,daily_used,monthly_used FROM sourcing_search_account')).rows[0]).toMatchObject({halted:true,daily_used:20,monthly_used:20});
  expect((await db.session.query('SELECT enabled FROM sourcing_discovery_settings')).rows[0]).toMatchObject({enabled:false});
 });
+it('revisits deferred work in a later hour without retrying any dispatched search',async()=>{
+ await db.session.query("UPDATE sourcing_discovery_settings SET enabled=true,next_run_at=now()-interval '2 days'");
+ const first=await sourcingDiscoverySource(true).find(db.session,new Date().toISOString());
+ const later=await sourcingDiscoverySource(true).find(db.session,new Date(Date.now()+3_600_000).toISOString());
+ expect(first).toHaveLength(1);expect(later).toHaveLength(1);
+ expect(first[0]!.idempotencyKey).not.toBe(later[0]!.idempotencyKey);
+});

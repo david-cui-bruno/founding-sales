@@ -17,7 +17,8 @@ export function sourcingDiscoverySource(enabled:boolean):DueWorkSource {
   for(const row of rows){
    const ctx=repositoryContext(workspaceScope(row.workspace_id,{kind:'system',component:'scheduler'}),session);
    if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)continue;
-   jobs.push({workspaceId:row.workspace_id,kind:'sourcing.discover' as const,idempotencyKey:`sourcing-discover:${row.workspace_id}:${now.slice(0,10)}`,payload:{},maxAttempts:1});
+   // Reconsider deferred work hourly; the committed attempt fence still permits only one search per day.
+   jobs.push({workspaceId:row.workspace_id,kind:'sourcing.discover' as const,idempotencyKey:`sourcing-discover:${row.workspace_id}:${now.slice(0,13)}`,payload:{},maxAttempts:1});
   }
   return jobs;
  }};

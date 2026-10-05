@@ -51,3 +51,5 @@ Fresh independent review was completed. Important findings were addressed and co
 
 CI follow-up: the first infrastructure run rejected the declarative import block because mock providers cannot import resources. Removed that block, successfully adopted the existing secret with the operator import command, and ran the complete offline infrastructure gate with Terraform1.15.8. All modules and other roots passed; the production root then exposed a stale exact worker-secret inventory assertion. That assertion is updated to require the Tavily key on the worker only. No production apply or service restart occurred.
 The corrected production-root test run passed all35 tests (exit0), completing the previously failing portion of the offline infrastructure gate.
+
+Final scheduler regression: deferred work is reconsidered hourly; the committed workspace/day attempt fence continues to limit actual provider dispatch to one per day. The test failed before the change and passed afterward; all3 worker discovery tests and10 domain discovery tests pass, with worker typecheck and affected-file lint clean.
