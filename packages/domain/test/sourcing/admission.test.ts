@@ -15,7 +15,7 @@ const ctx=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'u
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
 beforeAll(async()=>{db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);await tx(()=>recordStatePosture(ctx(),{state:'TX',effectiveFrom:new Date(Date.now()-60000).toISOString(),confirmedStatements:Object.keys(POSTURE_STATEMENTS)}));});
 afterAll(async()=>db.drop());
-beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM daily_counters');});
+beforeEach(async()=>{await db.session.query('DELETE FROM sourcing_candidates');await db.session.query('DELETE FROM sourcing_discovery_settings');await db.session.query('DELETE FROM daily_counters');});
 let phoneSerial=100;
 async function qualified(name:string,options:{locality?:string;website?:string;need?:string;phone?:string}={}){
  const locality=options.locality??'Dallas',website=options.website??`https://${name.toLowerCase().replaceAll(' ','')}.example.test/`;
@@ -38,8 +38,9 @@ it('admits one firm-level route idempotently without creating deals, contacts or
  for(const table of ['contacts','opportunities','sequence_enrollments'])expect((await db.session.query(`SELECT id FROM ${table} WHERE workspace_id=$1 AND firm_id=$2`,[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(0);
  expect((await db.session.query('SELECT contact_id,e164 FROM phone_routes WHERE id=$1',[result.value.routeId])).rows[0]).toEqual({contact_id:null,e164:'+12145550100'});
 });
+async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v1',promptVersion:'qualification-v1',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
- const input=await qualified('Owner PM');expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});
+ const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});
 });
 it('refuses stale evidence, missing phone and an unresolved Texas locality with no CRM side effects',async()=>{
  const input=await qualified('Stale PM');await db.session.query("UPDATE sourcing_qualification_runs SET observations=jsonb_set(observations,'{0,retrievedAt}',to_jsonb((now()-interval '8 days')::text)) WHERE id=$1",[input.qualificationRunId]);
@@ -49,7 +50,7 @@ it('refuses stale evidence, missing phone and an unresolved Texas locality with 
  expect((await db.session.query("SELECT id FROM firms WHERE name IN ('Stale PM','No Phone PM','Zone PM')")).rows).toHaveLength(0);
 });
 it('keeps a fit-only candidate in review for automatic mode but permits explicit reviewed admission',async()=>{
- const input=await qualified('Fit PM',{need:'We provide 24/7 maintenance services.'});
+ const input=await qualified('Fit PM',{need:'We provide 24/7 maintenance services.'});await enableAutomatic();
  expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'qualification_requires_review'});
  expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
 });
@@ -115,4 +116,12 @@ it('keeps SQL and TypeScript sourcing order aligned and removes a wrong-firm con
  const corrected=(await listTodayCards(ctx(),{snapshotDate})).find(card=>card.firmId===burdenResult.value.firmId);
  expect(corrected?.sourceRank).toBe(5);expect((await db.session.query('SELECT id FROM firms WHERE id=$1',[burdenResult.value.firmId])).rows).toHaveLength(1);
  expect((await db.session.query('SELECT association_review_required FROM sourcing_admissions WHERE candidate_id=$1',[burden.candidateId])).rows[0]).toEqual({association_review_required:true});
+});
+
+it('rechecks activation and versioned evaluation inside admission while reviewed admission remains available',async()=>{
+ const input=await qualified('Activation PM');
+ expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'automatic_admission_disabled'});
+ await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id) VALUES($1,true,$2)',[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
+ expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'evaluation_required'});
+ expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
 });

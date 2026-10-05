@@ -1,3 +1,4 @@
+-- changes: provider_reservations, sourcing_candidates, sourcing_discovery_settings
 -- Qualification is evidence about a candidate, not authority to contact a firm.
 CREATE TABLE sourcing_qualification_runs (
   workspace_id uuid NOT NULL,
@@ -72,3 +73,9 @@ CREATE TABLE sourcing_feedback (
 GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_feedback TO app_runtime,migration;
 
 CREATE OR REPLACE FUNCTION today_algorithm_version() RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT 'today.3'::text $$;
+
+-- Activation records refer to an evaluated policy, never to a model's own approval.
+ALTER TABLE sourcing_discovery_settings ADD COLUMN qualification_evaluation jsonb
+ CHECK(qualification_evaluation IS NULL OR (jsonb_typeof(qualification_evaluation)='object' AND octet_length(qualification_evaluation::text)<=4096));
+ALTER TABLE sourcing_discovery_settings ADD COLUMN qualification_last_pass_at timestamptz;
+ALTER TABLE sourcing_qualification_runs ADD COLUMN admission_checked_at timestamptz;

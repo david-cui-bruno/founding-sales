@@ -28,7 +28,7 @@ export function QualificationPanel({candidateId,revision,enabled=true,ports=defa
   if(m.busy||!enabled)return;m.pending=pending;m.busy=true;m.message=null;touch();
   try{
    const answer=pending.kind==='qualify'?await ref.current.qualify(pending.input):pending.kind==='admit'?await ref.current.admit(pending.input):await ref.current.feedback(pending.input);
-   if(answer.result){m.pending=null;await load();m.message=pending.kind==='qualify'?'Checking evidence. Refresh to see the result.':pending.kind==='admit'?'Added to the call queue.':'Feedback saved.';}
+   if(answer.result){m.pending=null;await load();m.message=pending.kind==='qualify'?'Qualification request recorded. Refresh to see its current result.':pending.kind==='admit'?'Added to the call queue.':'Feedback saved.';}
    else if(noDefiniteAnswer(answer.reason))m.message='No definite answer. Retry the same action.';
    else {m.pending=null;m.view=null;m.message=explain(answer.reason??'action_refused');}
   }catch{m.message='No definite answer. Retry the same action.';}
@@ -53,6 +53,7 @@ export function QualificationPanel({candidateId,revision,enabled=true,ports=defa
      {v.observations.map(source=><div key={source.id}><a className="underline" href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname}</a><p className="text-xs text-muted-foreground">Checked {source.retrievedAt.slice(0,10)} · {source.publishedAt?`Published ${source.publishedAt.slice(0,10)}`:'Publication date unknown'}</p>{v.facts.filter(f=>f.observationId===source.id).map((fact,index)=><blockquote key={index} className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3">{fact.value}</blockquote>)}</div>)}
     </div></details>
    </>:null}
+   {v?.reason==='wrong_firm'||v?.reason==='identity_review_required'?<p className="text-muted-foreground">Automatic qualification is blocked. Dismiss an incorrect candidate, or request an identity review before rechecking. Keeping it does not clear this correction.</p>:null}
    {v?.history.length?<details><summary>Previous evidence · historical</summary>{v.history.map(run=><div key={run.runId}>{run.observations.map(source=><p key={source.id}><a href={source.url} target="_blank" rel="noreferrer">{source.url}</a> · checked {source.retrievedAt.slice(0,10)}</p>)}</div>)}</details>:null}
    <div className="flex flex-wrap gap-2">
     <Button size="sm" variant="outline" disabled={blocked||v?.status==='pending'||v?.status==='running'} onClick={()=>void perform({kind:'qualify',input:{candidateId,expectedRevision:revision,commandId:crypto.randomUUID()}})}>Check qualification</Button>

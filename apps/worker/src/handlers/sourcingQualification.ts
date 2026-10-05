@@ -28,13 +28,28 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
 /** Scheduler transaction owns these mutations; no network or nested transaction. */
 export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
  return {name:'sourcing-qualification',find:async(session,now)=>{
-  const workspaces=(await session.query<{id:string}>(`SELECT w.id FROM workspaces w WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs r WHERE r.workspace_id=w.id AND r.state IN ('pending','running') AND r.deadline_at<=$1::timestamptz)
-   OR ($2 AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.status<>'dismissed' AND NOT c.qualification_blocked)) ORDER BY w.id LIMIT 25`,[now,enabled])).rows;
+  const workspaces=(await session.query<{id:string}>(`SELECT w.id FROM workspaces w LEFT JOIN sourcing_discovery_settings scheduling ON scheduling.workspace_id=w.id WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs r WHERE r.workspace_id=w.id AND r.state IN ('pending','running') AND r.deadline_at<=$1::timestamptz)
+   OR ($2 AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.status<>'dismissed' AND NOT c.qualification_blocked)) ORDER BY scheduling.qualification_last_pass_at NULLS FIRST,w.id LIMIT 25`,[now,enabled])).rows;
   const jobs:JobSpecification[]=[];
   for(const workspace of workspaces){
    const ctx=repositoryContext(workspaceScope(workspace.id,{kind:'system',component:'scheduler'}),session);
+   await session.query('INSERT INTO sourcing_discovery_settings(workspace_id,qualification_last_pass_at) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET qualification_last_pass_at=$2',[workspace.id,now]);
    await expireQualificationsInTransaction(ctx);
    if(!enabled)continue;
+   // Re-evaluate stored evidence after activation; no new extraction or research counter.
+   const reconsider=(await session.query<{id:string;candidate_id:string;candidate_revision:number}>(`SELECT r.id,r.candidate_id,r.candidate_revision FROM sourcing_qualification_runs r
+    JOIN sourcing_candidates c ON c.workspace_id=r.workspace_id AND c.id=r.candidate_id
+    JOIN sourcing_discovery_settings s ON s.workspace_id=r.workspace_id
+    WHERE r.workspace_id=$1 AND s.auto_admission_enabled AND r.state='eligible' AND r.reason IS NULL
+     AND c.revision=r.candidate_revision AND c.status<>'dismissed' AND NOT c.qualification_blocked
+     AND (r.admission_checked_at IS NULL OR r.admission_checked_at<$2::timestamptz-interval '1 hour')
+     AND NOT EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id)
+     AND r.id=(SELECT newest.id FROM sourcing_qualification_runs newest WHERE newest.workspace_id=r.workspace_id AND newest.candidate_id=r.candidate_id ORDER BY newest.requested_at DESC,newest.id DESC LIMIT 1)
+    ORDER BY r.admission_checked_at NULLS FIRST,r.requested_at,r.id LIMIT 25 FOR UPDATE OF r`,[workspace.id,now])).rows;
+   for(const run of reconsider){
+    await session.query('UPDATE sourcing_qualification_runs SET admission_checked_at=$3 WHERE workspace_id=$1 AND id=$2',[workspace.id,run.id,now]);
+    jobs.push({workspaceId:workspace.id,kind:'sourcing.qualify',idempotencyKey:`sourcing-admission:${run.id}:${now.slice(0,13)}`,payload:{runId:run.id,candidateId:run.candidate_id,candidateRevision:run.candidate_revision,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION},maxAttempts:1});
+   }
    const due=(await session.query<{id:string;revision:number}>(`SELECT c.id,c.revision FROM sourcing_candidates c LEFT JOIN LATERAL
     (SELECT r.requested_at,r.candidate_revision,r.state,r.reason FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY r.requested_at DESC,r.id DESC LIMIT 1) last ON true
     WHERE c.workspace_id=$1 AND c.status<>'dismissed' AND NOT c.qualification_blocked AND (last.requested_at IS NULL OR last.candidate_revision<>c.revision OR

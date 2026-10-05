@@ -1,3 +1,5 @@
+import {readResearchSettings} from '../research/settings.ts';
+import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationStore.ts';
 import type {CandidateInput} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -54,6 +56,14 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(candidate.revision!==input.expectedRevision||candidate.revision!==run.candidate_revision||candidate.status==='dismissed')return refused('candidate_changed');
  const already=(await ctx.db.query<{firm_id:string;route_id:string}>('SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId])).rows[0];
  if(already)return {ok:true,value:{firmId:already.firm_id,routeId:already.route_id,alreadyAdmitted:true}};
+ if(input.mode==='automatic'){
+  const settings=(await ctx.db.query<{auto_admission_enabled:boolean;qualification_evaluation:{policyVersion?:string;promptVersion?:string;reportSha256?:string;reviewedEligible?:number;falseEligible?:number}|null}>('SELECT auto_admission_enabled,qualification_evaluation FROM sourcing_discovery_settings WHERE workspace_id=$1 FOR SHARE',[w])).rows[0];
+  if(!settings?.auto_admission_enabled)return refused('automatic_admission_disabled');
+  const evaluation=settings.qualification_evaluation;
+  if(!evaluation||evaluation.policyVersion!==QUALIFICATION_POLICY_VERSION||evaluation.promptVersion!==QUALIFICATION_PROMPT_VERSION||!evaluation.reportSha256?.match(/^[a-f0-9]{64}$/u)||!(Number(evaluation.reviewedEligible)>0)||evaluation.falseEligible!==0)return refused('evaluation_required');
+  if(!(await readResearchSettings(ctx)).enabled)return refused('research_disabled');
+  if((await listApplicableHolds(ctx,{actionKind:'research'})).length)return refused('research_held');
+ }
  if(!['review','eligible'].includes(run.state)||run.reason)return refused('evidence_unavailable');
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);
  const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});

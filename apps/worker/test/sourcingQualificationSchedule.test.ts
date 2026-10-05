@@ -35,3 +35,37 @@ it('leaves paused and quota-limited candidates pending with a visible reason, sh
  expect((await db.session.query('SELECT qualification_wait_reason FROM sourcing_discovery_settings WHERE workspace_id=$1',[workspaceId])).rows[0]).toEqual({qualification_wait_reason:'daily_firm_ceiling'});
  expect((await db.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(0);
 });
+
+it('reconsiders an eligible run after activation without another research reservation',async()=>{
+ await db.session.query('UPDATE research_settings SET enabled=true,daily_firm_ceiling=50 WHERE workspace_id=$1',[workspaceId]);
+ await db.session.query('DELETE FROM daily_counters');
+ const first=await withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()));
+ expect(first).toHaveLength(1);
+ const runId=first[0]!.payload['runId'];
+ await db.session.query("UPDATE sourcing_qualification_runs SET state='eligible' WHERE id=$1",[runId]);
+ const before=(await db.session.query('SELECT * FROM daily_counters')).rows;
+ expect(await withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()))).toHaveLength(0);
+ await db.session.query('UPDATE sourcing_discovery_settings SET auto_admission_enabled=true WHERE workspace_id=$1',[workspaceId]);
+ const retry=await withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()));
+ expect(retry).toHaveLength(1);expect(retry[0]!.payload['runId']).toBe(runId);
+ expect(retry[0]!.idempotencyKey).not.toBe(first[0]!.idempotencyKey);
+ expect((await db.session.query('SELECT * FROM daily_counters')).rows).toEqual(before);
+ expect(await withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date().toISOString()))).toHaveLength(0);
+});
+it('gives later workspaces a turn even when more than 25 earlier workspaces are paused',async()=>{
+ const wanted=new Set<string>();
+ for(let n=0;n<14;n++){
+  await db.session.query("UPDATE workspaces SET slug=slug||'-'||$1 WHERE slug IN ('alpha','beta')",[String(n)]);
+  const pair=await seedTwoWorkspaces(db.session);
+  for(const workspace of [pair.alpha,pair.beta]){
+   wanted.add(workspace.workspaceId);
+   const ctx=repositoryContext(workspaceScope(workspace.workspaceId,{kind:'system',component:'worker'}),db.session);
+   await saveCandidate(ctx,{firmName:'Waiting PM',website:'https://waiting.example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://waiting.example.test/',observedOn:'2026-10-01',preparedBy:'Fixture'});
+   await db.session.query('INSERT INTO research_settings(workspace_id,enabled) VALUES($1,false)',[workspace.workspaceId]);
+  }
+ }
+ for(let n=0;n<2;n++)await withTransaction(db.session,()=>sourcingQualificationSource(true).find(db.session,new Date(Date.now()+n*1000).toISOString()));
+ const visited=(await db.session.query<{workspace_id:string}>('SELECT workspace_id FROM sourcing_discovery_settings WHERE qualification_last_pass_at IS NOT NULL')).rows;
+ for(const row of visited)wanted.delete(row.workspace_id);
+ expect(wanted.size).toBe(0);
+});
