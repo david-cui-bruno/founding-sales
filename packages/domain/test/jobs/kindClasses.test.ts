@@ -55,6 +55,7 @@ describe('job kind classes', () => {
       // Lane R: a page fetch and a sweep. Nobody is watching the clock on either, and
       // an import of two hundred firms is two hundred of the first.
       'sourcing.check',
+      'sourcing.qualify',
       'sourcing.monitor',
       'sourcing.discover',
       'research.firm',

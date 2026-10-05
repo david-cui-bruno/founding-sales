@@ -1,7 +1,9 @@
 # Targeted lead sourcing for Callie
 
-Status: design revised 5 October for continuous discovery and AWS/GCP-only credits; bounded Nova evaluation completed. Candidate intake, explicit source checks and weekly kept-candidate monitoring implemented in draft PR 397, not deployed. Continuous new-firm discovery/admission remain planned; sending remains paused.
+Status, 5 October: candidate intake, source checks, weekly kept-candidate monitoring and bounded continuous discovery are deployed on schema 49; desktop 1.0.44 is published and David reports it installed. Discovery activation succeeded after the launcher-identity fix in PR 398. The first production search/results readback is still pending: the 20-request daily allowance was already consumed by evaluations, and activation preserved that usage. Qualification and automatic admission remain planned. This release changed no sending switches.
 Baseline: origin/main f967e636, identical product tree to the inspected 12c274ba checkout. The primary checkout's local main is an older September branch; it is not the baseline for this work.
+
+Roadmap decision, 5 October: David chose **A, then B** — first better-qualified firms entering the call queue; then autonomous email outreach as a separate workstream. The next implementation plan is [qualification and admission](../plans/2026-10-05-sourcing-qualification-admission.md). Social publishing follows those priorities. The separate ten-call suggestion trial does not block building sourcing qualification.
 
 ## Outcome and agreed scope
 

@@ -1,3 +1,4 @@
+import {paginateToday} from './pagination.ts';
 import { readMeetingTask } from '../meetings/outcomes.ts';
 import type { MeetingTaskView } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -48,6 +49,8 @@ export interface TodayCardDto {
 }
 
 export interface TodayListDto {
+  readonly nextCursor?:string|null;
+  readonly orderChanged?:boolean;
   readonly workspaceId: string;
   readonly snapshotDate: string;
   readonly businessTimeZone: string;
@@ -359,7 +362,7 @@ async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet
  * would get the new order on a date an admin sees as mixed, and the two of them would be
  * reading the same morning in two different orders. One snapshot, one answer.
  */
-function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string }>(
+function callFirstFirst<Card extends TodayCardRow>(
   cards: readonly Card[],
   callFirst: ReadonlySet<string>,
 ): readonly Card[] {
@@ -373,10 +376,12 @@ function callFirstFirst<Card extends { readonly lane: string; readonly firmId: s
   }
   // Lane 4 is the last lane by precedence, so the three groups concatenate in the
   // order the reader sees them.
-  return [...others, ...first, ...rest];
+  return [...others, ...[...first, ...rest].sort(compareTodayCards)];
 }
 
 export interface ReadTodayInput {
+  readonly paged?:boolean;
+  readonly cursor?:string;
   /** Database time. The business date is derived from it in the workspace zone. */
   readonly now: string;
   /**
@@ -457,7 +462,7 @@ export async function readTodayList(
     ? callFirstFirst(cards, await callFirstFirmIds(context))
     : cards;
   const blockers = await readFirmBasics(context, cards.map(card => card.firmId));
-  return {
+  const result:TodayListDto = {
     workspaceId: context.scope.workspaceId,
     snapshotDate,
     businessTimeZone,
@@ -470,6 +475,7 @@ export async function readTodayList(
       blockers: blockers.get(card.firmId)?.blockers ?? [],
     })),
   };
+  return input.paged?{...result,...paginateToday(result.cards,`${context.scope.workspaceId}:${assignedUserId??'all'}:${snapshotDate}:${TODAY_ALGORITHM_VERSION}`,input.cursor)}:result;
 }
 
 /**

@@ -39,7 +39,7 @@ export type TodaySourceKind = (typeof TODAY_SOURCE_KINDS)[number];
  * judgment says call it first ahead of the rest, each group still oldest first.
  * The order is part of the algorithm, so the string moved with it.
  */
-export const TODAY_ALGORITHM_VERSION = 'today.2';
+export const TODAY_ALGORITHM_VERSION = 'today.3';
 
 export const TODAY_REFUSAL_CODES = [
   'invalid_input',
@@ -85,6 +85,9 @@ export interface TodayCounts {
 
 /** One card, as the repository reads it. */
 export interface TodayCardRow {
+  readonly sourceRank?:number;
+  readonly sourceCount?:number;
+  readonly sourceObservedAt?:string|null;
   readonly firmId: string;
   readonly firmName: string;
   readonly snapshotDate: string;

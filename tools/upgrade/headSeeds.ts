@@ -26,6 +26,25 @@ export interface HeadSeed {
 
 export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
   {
+    name:'existing discovery candidates and quota remain review-only (0050)',
+    fromVersions:[49],
+    seed:async session=>{
+      const w=(await session.query<{id:string}>('SELECT id FROM workspaces ORDER BY id LIMIT 1')).rows[0]!.id;
+      await session.query('INSERT INTO sourcing_search_account(id,daily_used,monthly_used) VALUES(true,20,20) ON CONFLICT(id) DO UPDATE SET daily_used=20,monthly_used=20');
+      await session.query('INSERT INTO sourcing_discovery_settings(workspace_id,enabled) VALUES($1,true) ON CONFLICT(workspace_id) DO UPDATE SET enabled=true',[w]);
+      const row=(await session.query<{id:string}>(`INSERT INTO sourcing_candidates(workspace_id,identity_key,payload) VALUES($1,repeat('e',64),$2::jsonb) RETURNING id`,[w,JSON.stringify({firmName:'Upgrade PM',website:'https://upgrade.example.test/',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',sourceUrl:'https://upgrade.example.test/',observedOn:'2026-10-01',preparedBy:'Upgrade fixture'})])).rows[0]!;
+      return row.id;
+    },
+    verify:async(session,id)=>{
+      const row=(await session.query<{qualification_blocked:boolean;revision:number;auto_admission_enabled:boolean;qualification_evaluation:unknown;owner_user_id:string|null;enabled:boolean}>(`SELECT c.qualification_blocked,c.revision,s.auto_admission_enabled,s.qualification_evaluation,s.owner_user_id,s.enabled FROM sourcing_candidates c JOIN sourcing_discovery_settings s USING(workspace_id) WHERE c.id=$1`,[id])).rows[0];
+      if(!row||row.qualification_blocked||row.revision!==1||row.auto_admission_enabled||row.qualification_evaluation!==null||row.owner_user_id!==null||!row.enabled)return 'existing candidate changed or automatic admission was enabled';
+      const quota=(await session.query<{daily_used:number;monthly_used:number}>('SELECT daily_used,monthly_used FROM sourcing_search_account')).rows[0];
+      if(quota?.daily_used!==20||quota.monthly_used!==20)return 'search quota changed';
+      const count=(await session.query('SELECT id FROM sourcing_qualification_runs UNION ALL SELECT candidate_id AS id FROM sourcing_admissions')).rows.length;
+      return count===0?null:'upgrade invented qualification/admission';
+    },
+  },
+  {
     name: 'existing claimed job gains no invented first claim (0045)',
     fromVersions: [44],
     seed: async session => {

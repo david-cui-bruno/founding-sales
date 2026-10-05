@@ -45,3 +45,16 @@ it('queues a source check once and returns only its candidate id',async()=>{
  expect((await request('/sourcing/candidates/check',admin,check)).body).toMatchObject({status:'accepted',result:{id}});
  expect((await request('/sourcing/candidates/check',admin,check)).body).toMatchObject({replayed:true});
 });
+it('exposes revision-bound qualification and reviewed admission through authenticated receipts',async()=>{
+ const saved=await request('/sourcing/candidates/save',admin,envelope({...input,firmName:'Qualified API PM'}));const candidateId=(saved.body as {result:{id:string}}).result.id;
+ expect((await request('/sourcing/qualification/read',null,{candidateId})).status).toBe(401);
+ const command=envelope({candidateId,expectedRevision:1});
+ const queued=await request('/sourcing/qualification/request',admin,command);expect(queued.body).toMatchObject({status:'accepted'});
+ expect((await request('/sourcing/qualification/request',admin,command)).body).toMatchObject({replayed:true});
+ const runId=(queued.body as {result:{runId:string}}).result.runId;
+ expect((await request('/sourcing/qualification/read',admin,{candidateId})).body).toMatchObject({runId,status:'pending'});
+ expect((await request('/sourcing/qualification/read',beta,{candidateId})).status).toBe(404);
+ expect((await request('/sourcing/qualification/read',sales,{candidateId})).status).toBe(404);
+ expect((await request('/sourcing/qualification/admit',admin,envelope({candidateId,expectedRevision:1,qualificationRunId:runId,mode:'reviewed'}))).body).toMatchObject({reason:'evidence_unavailable'});
+ expect((await request('/sourcing/qualification/admit',admin,envelope({candidateId,expectedRevision:1,qualificationRunId:runId,mode:'automatic'}))).status).toBe(400);
+});

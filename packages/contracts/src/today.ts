@@ -70,6 +70,8 @@ export type TodayCardDto = z.infer<typeof todayCardDtoSchema>;
 
 /** `GET /today`. */
 export const todayListResponseSchema = z.object({
+  nextCursor:z.string().max(100).nullable().optional(),
+  orderChanged:z.boolean().optional(),
   workspaceId: uuid,
   snapshotDate: businessDate,
   businessTimeZone: ianaTimeZone,

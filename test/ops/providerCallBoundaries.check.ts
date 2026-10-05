@@ -52,6 +52,7 @@ interface Boundary {
  * is a one-line change here.
  */
 export const BOUNDARIES: readonly Boundary[] = [
+  {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
   {name:'discovery evaluation search',site:'apps/worker/src/sourcing/evaluateDiscovery.ts',owner:'evaluateDiscovery',methods:{discover:1}},
   { name:'Zoom local recording update', site:'packages/domain/meetings/autoRecording.ts', owner:'runMeetingRecordingSetup', methods:{setLocalAutoRecording:1} },
@@ -303,6 +304,9 @@ export function findViolations(
             if (reference.called) ownerCalls.set(key, (ownerCalls.get(key) ?? 0) + 1);
             continue;
           }
+          // Shared adapter vocabulary can have independently gated owners. Each owner
+          // still gets its own exact-call-count check; this is not a file exemption.
+          if (boundaries.some(other => other !== boundary && other.site === file && reference.method in other.methods && reference.enclosing.includes(other.owner))) continue;
           if (allowed.some(entry => entry.file === file && entry.method === reference.method)) continue;
           violations.push({
             boundary: boundary.name,
@@ -404,6 +408,15 @@ describe('the check itself', () => {
   const withSite = (extra: string, other: Readonly<Record<string, string>> = {}): Violation[] =>
     findViolations(scratch({ 'packages/domain/site.ts': SITE + extra, ...other }), TABLE);
   const kinds = (violations: readonly Violation[]): string[] => violations.map(v => `${v.kind}:${v.method}`);
+
+  it('counts shared method names independently without exempting helpers in either owner file',()=>{
+    const other={name:'Other gated send',site:'packages/domain/other.ts',owner:'otherOnce',methods:{sendMessage:1}};
+    const source='export function otherOnce(gmail:G){return gmail.sendMessage(a,b);}';
+    const table=[...TABLE,other];
+    expect(findViolations(scratch({'packages/domain/site.ts':SITE,'packages/domain/other.ts':source}),table)).toEqual([]);
+    expect(findViolations(scratch({'packages/domain/site.ts':SITE,'packages/domain/other.ts':source+'\nfunction bypass(gmail:G){return gmail.sendMessage(a,b);}'}),table).some(v=>v.kind==='outside-owner')).toBe(true);
+    expect(findViolations(scratch({'packages/domain/site.ts':SITE,'packages/domain/other.ts':source.replace('return gmail.sendMessage(a,b);','gmail.sendMessage(a,b);return gmail.sendMessage(a,b);')}),table).some(v=>v.kind==='owner-calls')).toBe(true);
+  });
 
   it('passes the clean fixture', () => {
     expect(withSite('')).toEqual([]);

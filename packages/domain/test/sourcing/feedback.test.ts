@@ -1,0 +1,25 @@
+import {randomUUID} from 'node:crypto';
+import {beforeAll,afterAll,it,expect} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {saveCandidate} from '../../sourcing/candidates.ts';
+import {requestQualification} from '../../sourcing/qualificationStore.ts';
+import {recordSourcingFeedback} from '../../sourcing/feedback.ts';
+let db:TestDatabase;let seeded:TwoWorkspaces;
+beforeAll(async()=>{db=await createTestDatabase();seeded=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('binds feedback to the displayed run and invalidates wrong identity without creating stops or deals',async()=>{
+ const ctx=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
+ const saved=await saveCandidate(ctx,{firmName:'PM',website:'https://pm.example.test',sourceUrl:'https://pm.example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Unknown',observedOn:'2026-10-01',preparedBy:'Fixture'});if(!saved.ok)throw new Error(saved.reason);
+ const requested=await withTransaction(db.session,()=>requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:1}));if(!requested.ok)throw new Error(requested.reason);
+ const input={candidateId:saved.value.id,qualificationRunId:requested.value.runId,code:'wrong_firm' as const};
+ expect(await withTransaction(db.session,()=>recordSourcingFeedback(ctx,{...input,qualificationRunId:randomUUID()}))).toEqual({ok:false,reason:'qualification_not_found'});
+ const answer=await withTransaction(db.session,()=>recordSourcingFeedback(ctx,input));expect(answer.ok).toBe(true);
+ expect((await db.session.query('SELECT state,reason FROM sourcing_qualification_runs WHERE id=$1',[requested.value.runId])).rows[0]).toEqual({state:'unavailable',reason:'wrong_firm'});
+ expect((await db.session.query('SELECT qualification_blocked FROM sourcing_candidates WHERE id=$1',[saved.value.id])).rows[0]).toEqual({qualification_blocked:true});
+ expect(await withTransaction(db.session,()=>requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:1}))).toEqual({ok:false,reason:'identity_review_required'});
+ expect((await db.session.query('SELECT id FROM opportunities')).rows).toHaveLength(0);
+ const other=repositoryContext(workspaceScope(seeded.beta.workspaceId,{kind:'user',userId:seeded.beta.admin.userId,role:'admin'}),db.session);
+ expect(await withTransaction(db.session,()=>recordSourcingFeedback(other,input))).toEqual({ok:false,reason:'candidate_not_found'});
+});

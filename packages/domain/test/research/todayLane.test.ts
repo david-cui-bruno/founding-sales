@@ -183,9 +183,9 @@ describe('lane 4 puts the call-first firms in front', () => {
     }
   });
 
-  it('is `today.2`, on both sides of the seam', async () => {
+  it('is `today.3`, on both sides of the seam', async () => {
     const { rows } = await database.session.query<{ version: string }>('SELECT today_algorithm_version() AS version');
-    expect(TODAY_ALGORITHM_VERSION).toBe('today.2');
+    expect(TODAY_ALGORITHM_VERSION).toBe('today.3');
     expect(rows[0]?.version).toBe(TODAY_ALGORITHM_VERSION);
   });
 });

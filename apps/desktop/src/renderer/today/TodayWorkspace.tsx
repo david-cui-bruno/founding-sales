@@ -1,3 +1,4 @@
+import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
@@ -914,6 +915,7 @@ export function TodayWorkspace({
                 ) : null}
 
                 {/* Lane PB: the prepared brief, negotiated on the card read, above Callie's own research. */}
+                {state?.role==='admin'?<FirmQualification key={`qualification:${expanded.firmId}`} firmId={expanded.firmId} enabled={state.mayMutate&&!live}/>:null}
                 {expanded.preparedBrief == null ? null : (
                   <div className="mt-6">
                     <PreparedBrief key={expanded.firmId} brief={expanded.preparedBrief} />

@@ -357,3 +357,17 @@ it('sourcing preserves the supplied command ID and validates evidence before rea
   await answerOperation(handlers,'command','sourcing.save',input);
   expect(command).toHaveBeenCalledWith('/sourcing/candidates/save',expect.objectContaining({firmName:'PM'}),expect.any(Function),{commandId:ITEM_ID});
 });
+it('qualification admission is explicitly reviewed and keeps its revision and command receipt', async () => {
+  const h=hosts();const command=vi.fn(async()=>({ok:true,value:{firmId:FIRM_ID,routeId:ITEM_ID,alreadyAdmitted:false}}));h.api.command=command as AuthedClient['command'];
+  const input={candidateId:ITEM_ID,expectedRevision:3,qualificationRunId:FIRM_ID,mode:'reviewed',commandId:ITEM_ID};
+  await answerOperation(operationHandlers(h),'command','sourcing.admit',input);
+  expect(command).toHaveBeenCalledWith('/sourcing/qualification/admit',{candidateId:ITEM_ID,expectedRevision:3,qualificationRunId:FIRM_ID,mode:'reviewed'},expect.any(Function),{commandId:ITEM_ID});
+  await expect(answerOperation(operationHandlers(h),'command','sourcing.admit',{...input,mode:'automatic'})).rejects.toThrow();
+  expect(command).toHaveBeenCalledTimes(1);
+});
+it('qualification discards evidence returned after switching workspace', async()=>{
+ const h=hosts();let generation=0;h.recordings.identity.current=()=>generation;
+ let finish!:(value:unknown)=>void;h.api.read=vi.fn(()=>new Promise(resolve=>{finish=resolve;})) as AuthedClient['read'];
+ const pending=answerOperation(operationHandlers(h),'read','sourcing.qualification',{candidateId:ITEM_ID});
+ generation++;finish({ok:true,value:{}});expect(await pending).toEqual({view:null,reason:'not_found'});
+});

@@ -153,3 +153,12 @@ describe('a firm card aggregates its own items', () => {
     expect(aggregateCard([])).toBeNull();
   });
 });
+it('ranks sourcing evidence only within new firms, leaving obligations first and legacy firms visible',()=>{
+ const base={sortAt:'2026-10-01T00:00:00Z',firmName:'PM',firmId:IDS[0]!};
+ const help={...base,lane:'new_firm' as const,sourceRank:0,sourceCount:1,sourceObservedAt:'2026-10-05T00:00:00Z'};
+ const fit={...base,firmId:IDS[1]!,lane:'new_firm' as const,sourceRank:3};
+ const legacy={...base,firmId:IDS[2]!,lane:'new_firm' as const};
+ const callback={...base,lane:'callback' as const,sortAt:'2026-10-10T00:00:00Z'};
+ expect([legacy,fit,help,callback].sort(compareTodayCards)).toEqual([callback,help,fit,legacy]);
+ expect(compareTodayCards({...help,sourceCount:2},help)).toBeLessThan(0);
+});

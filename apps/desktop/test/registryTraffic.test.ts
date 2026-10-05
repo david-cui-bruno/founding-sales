@@ -94,6 +94,11 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'sourcing.feedback':{candidateId:UUID,qualificationRunId:UUID,code:'real_pain',commandId:UUID},
+  'sourcing.firmQualification':{firmId:UUID},
+  'sourcing.qualification':{candidateId:UUID},
+  'sourcing.qualify':{candidateId:UUID,expectedRevision:1,commandId:UUID},
+  'sourcing.admit':{candidateId:UUID,expectedRevision:1,qualificationRunId:UUID,mode:'reviewed',commandId:UUID},
   'sourcing.list': {status:'needs_review',offset:0},
   'sourcing.save': {firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Example duties',sourceUrl:'https://example.test/team',observedOn:'2026-10-01',preparedBy:'Fixture',commandId:UUID},
   'sourcing.review': {id:UUID,expectedRevision:1,status:'kept',commandId:UUID},
@@ -308,7 +313,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     replies: createReplyBridge({ api, session }) as unknown as Host,
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
-      return Object.fromEntries(['list','save','review','delete','check'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
+      return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,

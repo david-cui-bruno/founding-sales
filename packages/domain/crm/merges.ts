@@ -207,6 +207,14 @@ export async function mergeFirms(
   // is the only way the append-only tables could move at all.
   await move('contacts');
   await move('phone_routes', ['contact_id', 'e164']);
+  // Admission history follows the surviving firm. A duplicate route may intentionally
+  // remain on the merged source, so point the mapping at its surviving equivalent.
+  await context.db.query(`UPDATE sourcing_admissions a SET firm_id=$3,route_id=COALESCE(
+      (SELECT target.id FROM phone_routes old JOIN phone_routes target ON target.workspace_id=old.workspace_id
+       AND target.firm_id=$3 AND target.e164=old.e164 AND target.contact_id IS NOT DISTINCT FROM old.contact_id
+       WHERE old.workspace_id=a.workspace_id AND old.id=a.route_id ORDER BY target.id LIMIT 1),a.route_id)
+    WHERE a.workspace_id=$1 AND a.firm_id=$2`,[context.scope.workspaceId,source.id,target.id]);
+
   await move('email_addresses', ['contact_id', 'address']);
   await move(
     'evidence_items',
