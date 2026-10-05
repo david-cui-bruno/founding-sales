@@ -247,7 +247,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore' || name.startsWith('release drain ')) {
+  if (name === 'holds release-restore' || name === 'discovery configure' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };
