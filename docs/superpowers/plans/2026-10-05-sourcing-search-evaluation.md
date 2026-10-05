@@ -17,4 +17,4 @@ No production scheduling, admission, outgoing messages, account purchase, paymen
 ## Review focus
 No exposed credentials; crash after debit cannot refund; no hidden paid fan-out; no raw third-party instructions executed; malformed/oversized responses safely fail; native URL required; benchmark does not admit leads or schedule production jobs.
 
-Verification: full Node 24 greenfield gate passed, 6,853 tests and 16 existing skips. Independent code review found no substantive findings. Live evaluation remains pending the Tavily free-plan onboarding completion; no search-quality conclusion yet.
+Verification: full Node 24 greenfield gate passed, 6,853 tests and 16 existing skips. Independent code review found no substantive findings. Live evaluation completed: nine requests/credits, 32 hits, 30 unique URLs. See docs/sourcing/search-evaluation-20261005.md; query and qualification quality need improvement before scheduling.
