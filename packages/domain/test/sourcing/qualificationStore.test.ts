@@ -115,3 +115,16 @@ it('enforces research pause and shared daily ceiling before queueing new work',a
   await tx(()=>reviewCandidate(context(),{id:candidateId,expectedRevision:1,status:'kept'}));
   expect(await tx(()=>requestQualification(context(),{candidateId,expectedRevision:2}))).toEqual({ok:false,reason:'daily_firm_ceiling'});
 });
+it('serializes concurrent requests at the shared daily research limit',async()=>{
+ const first=await create();
+ const saved=await tx(()=>saveCandidate(context(),{...candidate,firmName:'Other PM',website:'https://other.example.test/',sourceUrl:'https://other.example.test/'}));if(!saved.ok)throw new Error(saved.reason);
+ await database.session.query('INSERT INTO research_settings(workspace_id,daily_firm_ceiling) VALUES($1,1)',[seeded.alpha.workspaceId]);
+ const secondSession=await database.appRuntimeSession();
+ const other=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),secondSession);
+ const answers=await Promise.all([
+  tx(()=>requestQualification(context(),{candidateId:first,expectedRevision:1})),
+  withTransaction(secondSession,()=>requestQualification(other,{candidateId:saved.value.id,expectedRevision:1})),
+ ]);
+ expect(answers.filter(result=>result.ok)).toHaveLength(1);
+ expect(answers.filter(result=>!result.ok)).toEqual([{ok:false,reason:'daily_firm_ceiling'}]);
+});
