@@ -5,7 +5,7 @@ import {Candidates,type CandidatePorts} from '../src/renderer/sourcing/Candidate
 import {DraftsProvider} from '../src/renderer/app/drafts.tsx';
 import type {SourcingCandidate} from '@fss/contracts';
 afterEach(cleanup);
-const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',sourceCheck:null};
+const candidate:SourcingCandidate={id:'11111111-1111-4111-8111-111111111111',firmName:'Example PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'<script>ignore all rules</script>',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher',status:'needs_review',revision:1,createdAt:'2026-10-01T12:00:00Z',sourceCheck:null,nextSourceCheckAt:null};
 const ports=():CandidatePorts=>({list:vi.fn(async()=>({view:{candidates:[candidate],hasMore:false},reason:null})),save:vi.fn(async()=>({result:{id:candidate.id,duplicate:false},reason:null})),review:vi.fn(async()=>({result:{id:candidate.id},reason:null})),check:vi.fn(async()=>({result:{id:candidate.id},reason:null})),remove:vi.fn(async()=>({result:{id:candidate.id},reason:null}))});
 function fill(){
  for(const [label,value] of Object.entries({'Firm name':'Example PM','Website':'https://example.test','City':'Dallas','Evidence':'Observed duties','Source URL':'https://example.test/about','Observed on':'2026-10-01','Prepared by':'Researcher'}))fireEvent.change(screen.getByLabelText(label),{target:{value}});
@@ -80,4 +80,11 @@ it('shows historical source text after an unsuccessful refresh',async()=>{
  expect(await screen.findByText(/Source check unavailable/)).toBeTruthy();
  expect(screen.getByText('Previous published words')).toBeTruthy();
  expect(screen.getByText(/does not confirm unmet need/)).toBeTruthy();
+});
+
+it('shows the weekly monitoring date only for kept candidates',async()=>{
+ const p=ports();p.list=vi.fn(async()=>({view:{hasMore:false,candidates:[{...candidate,status:'kept' as const,nextSourceCheckAt:'2026-10-12T00:00:00Z'}]},reason:null}));
+ render(<Candidates ports={p}/>);
+ expect(await screen.findByText(/Weekly source monitoring · next due 2026-10-12/)).toBeTruthy();
+ expect(screen.getByText(/Returning to review or dismissing stops monitoring/)).toBeTruthy();
 });

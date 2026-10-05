@@ -5,6 +5,7 @@ const insert=(f:Fixture,overrides:Record<string,unknown>={})=>{
  return f.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,$4::jsonb,$5,$6)',Object.values(row));
 };
 export const SOURCING_CONSTRAINT_CASES=[
+ {constraint:'sourcing_monitoring_status',run:async(f:Fixture)=>{await insert(f);return f.session.query("UPDATE sourcing_candidates SET next_source_check_at=now() WHERE workspace_id=$1",[f.seeded.alpha.workspaceId]);}},
  {constraint:'sourcing_candidates_source_check_shape',run:async(f:Fixture)=>{await insert(f);return f.session.query("UPDATE sourcing_candidates SET source_check='[]'::jsonb WHERE workspace_id=$1",[f.seeded.alpha.workspaceId]);}},
  {constraint:'sourcing_candidates_source_check_shape',run:async(f:Fixture)=>{await insert(f);return f.session.query('UPDATE sourcing_candidates SET source_check=$2::jsonb WHERE workspace_id=$1',[f.seeded.alpha.workspaceId,JSON.stringify({text:'a'.repeat(16001)})]);}},
  {constraint:'sourcing_candidates_workspace_id_fkey',run:async(f:Fixture)=>insert(f,{workspace_id:'99999999-9999-4999-8999-999999999999'})},

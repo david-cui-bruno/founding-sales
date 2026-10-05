@@ -61,7 +61,7 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
   const blocked=!enabled||m.busy||m.pending!==null;
   const field=(key:string,label:string,type='text',maxLength=500)=><label key={key} className="grid gap-1 text-sm">{label}<Input type={type} maxLength={maxLength} value={m.draft[key]??''} disabled={blocked} onChange={e=>{m.draft[key]=e.target.value;touch();}}/></label>;
   return <section className="space-y-5" aria-label="Candidate review">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Research prospects before adding them to your call queue.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Research prospects before adding them to your call queue. Keeping starts weekly source checks while research is enabled.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.message?<p role="status" className="text-sm">{m.message}</p>:null}
     {m.pending!==null?<Button disabled={m.busy||!enabled} onClick={()=>{if(m.pending)void perform(m.pending);}}>Retry action</Button>:null}
     {m.adding?<form className="space-y-3 rounded-lg border border-border p-4" onSubmit={e=>{e.preventDefault();save();}}>
@@ -79,6 +79,7 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
       <p className="text-sm">{signals[candidate.signal]}</p><p className="whitespace-pre-wrap break-words text-sm">{candidate.evidence}</p>
       <p className="text-xs text-muted-foreground">Prepared research · not verified by Callie · observed {candidate.observedOn} · {candidate.preparedBy}</p>
       <div className="flex gap-4 text-sm"><a className="underline underline-offset-4" href={candidate.sourceUrl} target="_blank" rel="noreferrer">Source evidence</a><a className="underline underline-offset-4" href={candidate.website} target="_blank" rel="noreferrer">Firm website</a></div>
+      {candidate.status==='kept'?<p className="text-xs text-muted-foreground">Weekly source monitoring · next due {candidate.nextSourceCheckAt?.slice(0,10)??'when research is available'}. Returning to review or dismissing stops monitoring. Checks wait for research settings and allowance.</p>:null}
       {candidate.sourceCheck?<div className="space-y-2 rounded-md border border-border p-3 text-sm">
         <p>{candidate.sourceCheck.state==='pending'?'Source check queued':candidate.sourceCheck.state==='checked'?'Source checked':candidate.sourceCheck.lastSuccess?'Source check unavailable · previous evidence retained':'Source check unavailable'}</p>
         <p className="text-xs text-muted-foreground">Requested {candidate.sourceCheck.requestedAt.slice(0,10)}{candidate.sourceCheck.checkedAt?` · checked ${candidate.sourceCheck.checkedAt.slice(0,10)}`:''}</p>

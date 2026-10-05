@@ -1,6 +1,6 @@
 # Targeted lead sourcing for Callie
 
-Status: design revised 5 October for continuous discovery and AWS/GCP-only credits; bounded Nova evaluation completed. Candidate intake and explicit source checks implemented in draft PR 397, not deployed. Continuous discovery/admission remain planned; sending remains paused.
+Status: design revised 5 October for continuous discovery and AWS/GCP-only credits; bounded Nova evaluation completed. Candidate intake, explicit source checks and weekly kept-candidate monitoring implemented in draft PR 397, not deployed. Continuous new-firm discovery/admission remain planned; sending remains paused.
 Baseline: origin/main f967e636, identical product tree to the inspected 12c274ba checkout. The primary checkout's local main is an older September branch; it is not the baseline for this work.
 
 ## Outcome and agreed scope

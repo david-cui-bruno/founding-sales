@@ -33,6 +33,7 @@ export const JOB_KINDS = [
   'canary',
   'route.validate',
   'sourcing.check',
+  'sourcing.monitor',
   'research.firm',
   'research.sweep',
   'telephony.sweep',
@@ -109,6 +110,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // write is that insert, so a second claim finds the row it already opened and
   // fetches nothing. See `packages/domain/research/runs.ts`.
   'sourcing.check': 'business_uniqueness',
+  'sourcing.monitor': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
   // One sweep per workspace per business date. The key carries the date and the
   // sweep's own effect is enqueueing, which is itself unique on the run's revision,
@@ -220,6 +222,7 @@ export const jobIdempotencyKey = Object.freeze({
   researchFirm: (firmId: string, revision: number): string =>
     `${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:${String(revision)}`,
   /** One sweep per workspace business date, like the Today build's key rule. */
+  sourcingMonitor: (workspaceId:string,hour:string):string => `sourcing-monitor:${workspaceId}:${hour}`,
   researchSweep: (workspaceSlug: string, businessDate: string): string =>
     `research-sweep:${workspaceSlug}:${businessDate}`,
   /** One call-session reservation sweep per workspace per quarter hour, when it owes one. */
@@ -318,6 +321,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // Nobody is waiting on a page fetch: the brief is read the next morning, and an
   // import of two hundred firms is two hundred of these.
   'sourcing.check': 'bulk',
+  'sourcing.monitor': 'bulk',
   'research.firm': 'bulk',
   'research.sweep': 'bulk',
   // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.

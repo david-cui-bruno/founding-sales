@@ -29,12 +29,13 @@ async function blocked(context:RepositoryContext):Promise<'research_disabled'|'r
   if((await listApplicableHolds(context,{actionKind:'research'})).length>0)return 'research_held';
   return null;
 }
-export async function requestSourceCheck(context:RepositoryContext,input:{id:string;expectedRevision:number}):Promise<{ok:true;value:{id:string}}|{ok:false;reason:string}> {
+export async function requestSourceCheck(context:RepositoryContext,input:{id:string;expectedRevision:number},options:{scheduled?:boolean|undefined}={}):Promise<{ok:true;value:{id:string}}|{ok:false;reason:string}> {
   if(!decideAdminOnly(context).permitted)return {ok:false,reason:'admin_only'};
   if(!candidateDeleteInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
   const row=(await context.db.query<Row>(`${select} FOR UPDATE`,[context.scope.workspaceId,input.id])).rows[0];
   if(!row)return {ok:false,reason:'not_found'};
   if(row.revision!==input.expectedRevision)return {ok:false,reason:'candidate_changed'};
+  if(options.scheduled && row.status!=='kept')return {ok:false,reason:'candidate_not_monitored'};
   if(row.status==='dismissed')return {ok:false,reason:'candidate_dismissed'};
   const now=await databaseNow(context),previous=visibleSourceCheck(row.source_check,row.check_job_state);
   if(previous?.state==='pending' && Date.parse(now)-Date.parse(previous.requestedAt)<30*60_000)return {ok:false,reason:'check_in_progress'};
@@ -44,17 +45,17 @@ export async function requestSourceCheck(context:RepositoryContext,input:{id:str
   const count=await incrementDailyCounter(context,{subjectKind:'workspace',subjectKey:context.scope.workspaceId,counterKind:RESEARCH_FIRM_RUN_COUNTER,businessTimeZone:await workspaceBusinessZone(context),at:now},settings.dailyFirmCeiling);
   if(!count.allowed)return {ok:false,reason:'daily_firm_ceiling'};
   const checkId=randomUUID();
-  const job=await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'sourcing.check',idempotencyKey:jobIdempotencyKey.sourcingCheck(input.id,checkId),payload:{candidateId:input.id,checkId},maxAttempts:1});
+  const job=await enqueueJob(context.db,{workspaceId:context.scope.workspaceId,kind:'sourcing.check',idempotencyKey:jobIdempotencyKey.sourcingCheck(input.id,checkId),payload:{candidateId:input.id,checkId,...(options.scheduled?{scheduled:true}:{})},maxAttempts:1});
   const check:CandidateSourceCheck={checkId,jobId:job.jobId,requestedAt:now,state:'pending',reason:null,checkedAt:null,lastSuccess:previous?.lastSuccess??null};
-  await context.db.query('UPDATE sourcing_candidates SET source_check=$3::jsonb,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.id,JSON.stringify(check)]);
+  await context.db.query(`UPDATE sourcing_candidates SET next_source_check_at=CASE WHEN status='kept' THEN now()+interval '7 days' ELSE NULL END,source_check=$3::jsonb,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2`,[context.scope.workspaceId,input.id,JSON.stringify(check)]);
   await recordCrmAuditEvent(context,{action:'sourcing.source_check_requested',subjectKind:'sourcing_candidate',subjectId:input.id});
   return {ok:true,value:{id:input.id}};
 }
-export async function runSourceCheck(context:RepositoryContext,input:{candidateId:string;checkId:string},fetcher:PageFetchProvider):Promise<void>{
+export async function runSourceCheck(context:RepositoryContext,input:{candidateId:string;checkId:string;scheduled?:boolean|undefined},fetcher:PageFetchProvider):Promise<void>{
   const row=(await context.db.query<Row>(select,[context.scope.workspaceId,input.candidateId])).rows[0];if(!row)return;
   const parsed=candidateSourceCheckSchema.safeParse(row.source_check);
   if(!parsed.success || parsed.data.checkId!==input.checkId || parsed.data.state!=='pending')return;
-  const prior=parsed.data;let reason:CandidateSourceCheck['reason']=row.status==='dismissed'?'candidate_dismissed':await blocked(context);
+  const prior=parsed.data;let reason:CandidateSourceCheck['reason']=row.status==='dismissed'?'candidate_dismissed':input.scheduled && row.status!=='kept'?'candidate_not_monitored':await blocked(context);
   let lastSuccess=prior.lastSuccess;
   const source=withoutFragment(row.payload.sourceUrl);
   if(!reason && !isPublicResearchUrl(source))reason='source_not_permitted';
@@ -65,7 +66,7 @@ export async function runSourceCheck(context:RepositoryContext,input:{candidateI
       const result=await fetcher.fetchPages({urls:[source],firmWebsite:row.payload.website,links:[source],maxPagesPerFirm:1,maxBytes:settings.maxPageBytes,shouldContinue:async()=>{
         if(await blocked(context))return false;
         const current=(await context.db.query<Row>(select,[context.scope.workspaceId,input.candidateId])).rows[0];
-        return current!==undefined && current.status!=='dismissed' && candidateSourceCheckSchema.safeParse(current.source_check).success && (current.source_check as CandidateSourceCheck).checkId===input.checkId;
+        return current!==undefined && current.status!=='dismissed' && (!input.scheduled||current.status==='kept') && candidateSourceCheckSchema.safeParse(current.source_check).success && (current.source_check as CandidateSourceCheck).checkId===input.checkId;
       }});
       const page=result.ok?result.value.pages[0]:undefined;
       reason=await blocked(context);

@@ -1,3 +1,4 @@
+import {sourcingMonitorHandler,sourcingMonitorSource} from '../handlers/sourcingMonitor.ts';
 import {sourcingCheckHandler} from '../handlers/sourcingCheck.ts';
 import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../handlers/meetingAutoRecording.ts';
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
@@ -231,7 +232,10 @@ export function registerHandlers(
   // judgments `unknown`, which is a smaller answer rather than a failure. That is
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
-  if(composition.research)registry.register(sourcingCheckHandler(composition.research.pageFetch));
+  if(composition.research){
+    registry.register(sourcingCheckHandler(composition.research.pageFetch));
+    registry.register(sourcingMonitorHandler());
+  }
   for (const handler of researchHandlers(composition.research)) registry.register(handler);
   return registry;
 }
@@ -411,7 +415,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'>>): {
+  readonly sourcing: boolean;
   readonly meetingAutoRecording: boolean;
   readonly meetingAnalysis: boolean;
   readonly meetingTranscription: boolean;
@@ -422,6 +427,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,
     meetingAnalysis: composition.meetingAnalysis !== undefined,
     meetingTranscription: composition.meetingTranscription !== undefined,
@@ -448,6 +454,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly sourcing?: boolean;
     readonly meetingAutoRecording?: boolean;
     readonly meetingAnalysis?: boolean;
     readonly meetingTranscription?: boolean;
@@ -472,6 +479,7 @@ export function workerDueWorkSources(
     sendDayCloseSource(),
     retentionSource(),
     researchSweepSource(),
+    sourcingMonitorSource(options.sourcing === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
     // job only in a worker that has a Cal.com API key to run it with — a job no handler

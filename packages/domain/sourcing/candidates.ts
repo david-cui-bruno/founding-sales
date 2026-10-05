@@ -12,7 +12,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { databaseNow } from '../policy/clock.ts';
 
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};
-interface Row { id:string;payload:CandidateInput;status:SourcingCandidate['status'];revision:number;created_at:Date;source_check:unknown;check_job_state:string|null;[key:string]:unknown }
+interface Row { id:string;payload:CandidateInput;status:SourcingCandidate['status'];revision:number;created_at:Date;source_check:unknown;next_source_check_at:Date|null;check_job_state:string|null;[key:string]:unknown }
 const denied = (context:RepositoryContext):boolean => !decideAdminOnly(context).permitted;
 function identity(input:CandidateInput):string {
   const url = new URL(input.website);
@@ -43,9 +43,9 @@ export async function listCandidates(context:RepositoryContext,input:z.infer<typ
   if(denied(context)) return {ok:false,reason:'admin_only'};
   if(!candidateListInputSchema.safeParse(input).success) return {ok:false,reason:'invalid_input'};
   const {rows}=await context.db.query<Row>(
-    `SELECT id,payload,status,revision,created_at,source_check,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND status=$2 ORDER BY created_at DESC,id DESC LIMIT 51 OFFSET $3`,
+    `SELECT id,payload,status,revision,created_at,source_check,next_source_check_at,(SELECT state FROM jobs j WHERE j.workspace_id=sourcing_candidates.workspace_id AND j.id::text=source_check->>'jobId') AS check_job_state FROM sourcing_candidates WHERE workspace_id=$1 AND status=$2 ORDER BY created_at DESC,id DESC LIMIT 51 OFFSET $3`,
     [context.scope.workspaceId,input.status,input.offset]);
-  return {ok:true,value:{hasMore:rows.length>50,candidates:rows.slice(0,50).map(row=>candidateSchema.parse({...row.payload,sourceCheck:visibleSourceCheck(row.source_check,row.check_job_state),id:row.id,status:row.status,revision:row.revision,createdAt:row.created_at.toISOString()}))}};
+  return {ok:true,value:{hasMore:rows.length>50,candidates:rows.slice(0,50).map(row=>candidateSchema.parse({...row.payload,nextSourceCheckAt:row.next_source_check_at?.toISOString()??null,sourceCheck:visibleSourceCheck(row.source_check,row.check_job_state),id:row.id,status:row.status,revision:row.revision,createdAt:row.created_at.toISOString()}))}};
 }
 async function change(context:RepositoryContext,input:z.infer<typeof candidateDeleteInputSchema>,status:SourcingCandidate['status']|null):Promise<Result<{id:string}>> {
   if(denied(context)) return {ok:false,reason:'admin_only'};
@@ -56,7 +56,7 @@ async function change(context:RepositoryContext,input:z.infer<typeof candidateDe
   // Revision in the mutation also guards callers that do not hold a transaction.
   const changed=status===null
     ? await context.db.query('DELETE FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2 AND revision=$3 RETURNING id',[context.scope.workspaceId,input.id,input.expectedRevision])
-    : await context.db.query('UPDATE sourcing_candidates SET status=$4,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND revision=$3 RETURNING id',[context.scope.workspaceId,input.id,input.expectedRevision,status]);
+    : await context.db.query(`UPDATE sourcing_candidates SET next_source_check_at=CASE WHEN $4='kept' THEN COALESCE(next_source_check_at,now()) ELSE NULL END,status=$4,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND revision=$3 RETURNING id`,[context.scope.workspaceId,input.id,input.expectedRevision,status]);
   if(changed.rows.length===0)return {ok:false,reason:'candidate_changed'};
   await recordCrmAuditEvent(context,{action:status===null?'sourcing.candidate_deleted':'sourcing.candidate_reviewed',subjectKind:'sourcing_candidate',subjectId:input.id,detail:status===null?{}:{status}});
   return {ok:true,value:{id:input.id}};

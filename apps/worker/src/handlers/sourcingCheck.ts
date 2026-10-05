@@ -3,7 +3,7 @@ import type {JobHandler} from '@fss/domain/jobs/handlerRegistry.ts';
 import {repositoryContext} from '@fss/domain/db/workspaceScope.ts';
 import {runSourceCheck} from '@fss/domain/sourcing/sourceCheck.ts';
 import type {PageFetchProvider} from '@fss/domain/research/providers.ts';
-const payloadSchema=z.object({candidateId:z.uuid(),checkId:z.uuid()});
+const payloadSchema=z.object({candidateId:z.uuid(),checkId:z.uuid(),scheduled:z.boolean().optional()});
 export function sourcingCheckHandler(pageFetch:PageFetchProvider):JobHandler {
  return {kind:'sourcing.check',protection:'business_uniqueness',maxAttempts:1,leaseSeconds:60,
   handle:async input=>{
