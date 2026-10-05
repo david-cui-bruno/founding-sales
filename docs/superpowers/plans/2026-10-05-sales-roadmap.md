@@ -19,6 +19,7 @@
 - Gmail uses david@usecallie.com under David's reported account-specific Google permission. No visible unsubscribe link; recipient stops, domain pause, authentication, limits and direct-send takeover still apply. Do not enable sending merely by deploying code.
 - Social: David's LinkedIn/X profiles and Callie's Facebook Page; exact draft/image/account/time approval before scheduling; text, screenshots, web images and phone photos, no videos.
 - One active outreach contact per firm; no automatic creation or advancement of deals. Qualified means a held demo, a buying participant, real maintenance need and openness to paying.
+- Settled starting cadence: five total emails for email-only firms, or four emails plus up to four call attempts for call-first firms, over roughly 21 days. One cold touch per firm/local day; replies, requested callbacks, bookings and stops interrupt obsolete cold work. E3 defines spacing, weekday adjustment, lifetime caps and fixed expiry.
 - Keep React/shadcn/Tailwind, quiet Today and existing meeting follow-through. No whole-web crawler, vector database, workflow builder, account farming or release-system rewrite.
 - New commands use authenticated workspace scope, commandId/clientVersion, expectedRevision and audited mutations. Network work never runs while holding database row locks. Repository/database time governs deadlines.
 

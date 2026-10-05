@@ -1,10 +1,12 @@
 # Sales roadmap: planning decisions and research
 
-Status: active planning, not an approved complete design. David requested planning all five roadmap items, with questions one at a time and research into unresolved choices, before further implementation. The existing qualification/admission implementation plan is input to this broader design, not permission to begin it during the interview.
+Status: complete written build plan; implementation not started. David requested planning all five roadmap items, with questions one at a time and research into unresolved choices, before further implementation. The qualification/admission plan is now reconciled with the master plan and linked subsystem plans.
 
-The [consolidated five-part design draft](../superpowers/specs/2026-10-05-sales-roadmap-design.md) now brings these decisions together. It marks proposed combined-cadence defaults separately from confirmed answers. David subsequently reported account-specific Google permission and confirmed free native social scheduling; remaining checks concern implementation and actual lead yield.
+The [consolidated five-part design](../superpowers/specs/2026-10-05-sales-roadmap-design.md) brings these decisions together. David reported account-specific Google permission and confirmed free native social scheduling; remaining checks concern implementation and actual lead yield. The follow-up discussion settled five emails over roughly 21 days for email-only firms, or four emails plus up to four calls over roughly 21 days for call-first firms, with one cold touch per firm/day and interruption on replies/bookings/stops.
 
 David then requested the [detailed build plan](../superpowers/plans/2026-10-05-sales-roadmap.md). It covers discovery verification, the existing reconciled qualification plan, outcome learning, autonomous outreach and social publishing. All tasks remain planned. Code inspection added two concrete requirements: firm-owned sequences because enrollment currently requires a deal, and separate durable social asset storage because the audio bucket expires every object after one day.
+
+Cadence research for this revision: [Gong's guide](https://www.gong.io/files/gong-guide-how-to-master-cold-email-get-the-data-backed-guide-based-on-85-million-emails.pdf) recommends approximately six emails over 14–28 days; [Steli Efti's playbook](https://close.com/blog/cold-email-follow-up-plan) describes four total emails, optionally five; [Belkins' study](https://belkins.io/blog/sales-follow-up-statistics) recommends three to five email steps. These are observational vendor findings/practitioner recommendations, not controlled property-management trials. The selected cadence remains an experiment; compare positive replies and qualified demos per firm and per send, not raw reply totals alone.
 
 ## Full scope
 

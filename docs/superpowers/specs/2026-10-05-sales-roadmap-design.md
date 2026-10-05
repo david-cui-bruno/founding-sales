@@ -101,7 +101,7 @@ The application design can be specified independently: approved, versioned messa
 
 Implementation inspection found that existing `enrollContact` requires an open opportunity. Add an explicit firm-outreach subject to the existing sequence engine, retaining its legacy opportunity branch. Do not create a fake Interested deal to satisfy the old schema. Approved reusable answer blocks extend the current template approach; the model selects supported answers rather than inventing pricing or commitments.
 
-**Proposed combined-cadence default:** one unsolicited touch per firm per local day, no simultaneous phone/email sequences. Preserve the established maximum four unanswered calls over 14 days, voicemail on attempts 1 and 4. Start email with one introduction and two useful follow-ups over two weeks; timing is an experiment, not a research-proven optimum. An explicit requested callback/reply takes priority and replaces obsolete scheduled work. These email/combined defaults are proposals for the full plan, not claims about a previously approved template.
+**Settled starting cadence (5 October discussion):** one unsolicited touch per firm per local day, no simultaneous independent phone/email sequences. Email-only firms receive up to five total emails over roughly 21 days; call-first firms receive up to four emails plus four call attempts over roughly 21 days. Preserve the existing four-unanswered-call guard and voicemail on attempts 1 and 4. Email-only starts on nominal days 1/4/8/14/21, adjusted to weekdays; exact offsets remain tunable published versions. A human reply, requested callback, booking or stop interrupts and replaces/terminates obsolete cold work. This supersedes the earlier three-email proposal. Measure positive replies and qualified demos per firm and per send; published vendor research supports testing persistence but does not prove this cadence optimal for property managers.
 
 An inbound human reply immediately holds prospecting. Only supported routine responses can replace it; ambiguous intent goes to review. A booking ends obsolete prospecting and hands off to the existing meeting workflow. Recheck message/thread revision, direct-send takeover, stops and current eligibility at final dispatch. Honor the established phone-only, email-only and firm-wide stop semantics without adding a visible footer link against David's preference.
 
@@ -149,7 +149,7 @@ Across new code, test workspace isolation, duplicate jobs, stale results, concur
 
 ## Remaining decisions versus engineering work
 
-The interview has enough product direction for this overall design. The proposed combined cadence and image/approval behavior above need review with the full draft. Google permission and free native scheduling are now user-confirmed planning inputs, not repeated user questions. No credentials or purchase are needed just to finish the written plan.
+The interview has enough product direction for this overall design and the full build plan is written. The combined cadence has been settled; image/approval behavior is specified in the linked social plan. Google permission and free native scheduling are user-confirmed planning inputs, not repeated user questions. Exact reusable product/pricing answers and actual social posts need approval when those features are ready; they do not block fixture-based implementation. No credentials or purchase are needed to complete the written plan.
 
 Limit additional research to checks that could change the build:
 
