@@ -33,7 +33,7 @@ Architecture: reuse Tavily's bounded Basic adapter, the worker/job scheduler, Po
 
 ### Release configuration
 
-`infra/roots/production/sourcing_secret_import.tf` adopts the existing secret container; its value is never a Terraform input. Rehearsal receives a placeholder container value but never injects the search credential into its worker.
+The operator imported `module.stack.module.secrets.aws_secretsmanager_secret.this["sourcing-search"]` into the production state with Terraform1.15.8. Import succeeded; no resource was replaced and no secret value entered Terraform. The initial declarative import block was removed after CI correctly rejected it in mock-provider tests. Rehearsal receives a placeholder container value but never injects the search credential into its worker.
 
 After the schema49 release, use the audited operations task:
 
@@ -48,3 +48,5 @@ Do not run the local evaluation CLI with this shared key after enabling producti
 Full Node24 gate passed: typecheck, lint, 6,884 passing tests and16 existing skips. Three additional discovery regressions then passed in the10-test targeted suite (manual dismissal, UTC rollover, missing account). The production Terraform configuration validates with1.15.8. A read-only plan using production's current schema45 images showed1 import,1 add,4 changes,1 destroy: the destroy/add is worker task-definition replacement, not a database or service deletion. It has not been applied.
 
 Fresh independent review was completed. Important findings were addressed and covered by regressions. Deferred minor: secret injection shares the existing production-only classifier-credential switch; the workspace discovery setting independently controls execution. No new secret is injected into rehearsal. Separate deployment flags can be introduced if environments need independent search credential wiring.
+
+CI follow-up: the first infrastructure run rejected the declarative import block because mock providers cannot import resources. Removed that block, successfully adopted the existing secret with the operator import command, and ran the complete offline infrastructure gate (fmt, structural checks, validate/test every module and root) successfully with Terraform1.15.8. No production apply or service restart occurred.
