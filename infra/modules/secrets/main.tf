@@ -29,6 +29,7 @@ locals {
     "twilio-voice",
     "calcom",
     "zoom-meetings",
+    "sourcing-search",
     # Call transcription (slice C2): `{"provider": "deepgram", "api_key": "..."}`. The
     # worker alone reads it (`apps/worker/src/transcription/deepgramClient.ts`); the API
     # learns from the worker's heartbeat whether it is in place. `{}` until a key exists.

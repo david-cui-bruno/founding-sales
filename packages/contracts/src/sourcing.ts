@@ -15,6 +15,8 @@ export const sourcingUrlSchema = z.string().trim().max(500).refine(value => {
 }, 'Use a public HTTPS website.');
 export const candidateStatusSchema = z.enum(['needs_review', 'kept', 'dismissed']);
 export const candidateInputSchema = z.strictObject({
+  discoveryKnownDomain: z.boolean().optional(),
+  discoveryQuery: z.string().trim().min(1).max(400).optional(),
   firmName: z.string().trim().min(1).max(300),
   website: sourcingUrlSchema,
   locality: z.string().trim().min(1).max(120),
@@ -44,7 +46,8 @@ export type SourcingCandidate = z.infer<typeof candidateSchema>;
 export const candidateListInputSchema = z.strictObject({
   status: candidateStatusSchema, offset: z.number().int().min(0).max(1000000),
 });
-export const candidateListSchema = z.object({candidates:z.array(candidateSchema).max(50),hasMore:z.boolean()});
+export const discoveryStatusSchema=z.object({enabled:z.boolean(),nextRunAt:instant,lastResult:z.string().nullable(),dailyRemaining:z.number().int().min(0),monthlyRemaining:z.number().int().min(0),halted:z.boolean()});
+export const candidateListSchema = z.object({discovery:discoveryStatusSchema.nullable().optional(),candidates:z.array(candidateSchema).max(50),hasMore:z.boolean()});
 export const candidateReviewInputSchema = z.strictObject({
   id:uuid, expectedRevision:z.number().int().min(1), status:candidateStatusSchema,
 });

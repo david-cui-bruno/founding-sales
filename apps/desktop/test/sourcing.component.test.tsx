@@ -88,3 +88,11 @@ it('shows the weekly monitoring date only for kept candidates',async()=>{
  expect(await screen.findByText(/Weekly source monitoring · next due 2026-10-12/)).toBeTruthy();
  expect(screen.getByText(/Returning to review or dismissing stops monitoring/)).toBeTruthy();
 });
+it('labels discovered location as query scope and surfaces known-domain uncertainty and quota',async()=>{
+ const p=ports();p.list=vi.fn().mockResolvedValue({view:{candidates:[{...candidate,discoveryQuery:'Boston residential property management',discoveryKnownDomain:true}],hasMore:false,discovery:{enabled:true,halted:false,nextRunAt:'2026-10-06T12:00:00Z',lastResult:'complete',dailyRemaining:19,monthlyRemaining:579}},reason:null});
+ render(<DraftsProvider><Candidates ports={p}/></DraftsProvider>);
+ expect(await screen.findByText(/Search area: Dallas, TX/)).toBeTruthy();
+ expect(screen.getByText(/name and location unverified/)).toBeTruthy();
+ expect(screen.getByText(/Website domain already appears/)).toBeTruthy();
+ expect(screen.getByText(/19 searches left today/)).toBeTruthy();
+});

@@ -1,3 +1,4 @@
+import {discoveryConfigureCommand} from './fss/discoveryConfigure.ts';
 import { writeFile } from 'node:fs/promises';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
@@ -191,6 +192,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   // Call-to-booking (slice W): the 0028 remap report.
   'pipeline stage-counts': pipelineStageCountsCommand,
   // Lane PBM: whether a CSV import's firms are in a workspace, as counts.
+  'discovery configure': discoveryConfigureCommand,
   'import-match report': importMatchReportCommand,
   // Lane M1: what the attendance correction will change, as counts.
   'meetings attendance-report': meetingsAttendanceReportCommand,

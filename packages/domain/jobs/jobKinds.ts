@@ -34,6 +34,7 @@ export const JOB_KINDS = [
   'route.validate',
   'sourcing.check',
   'sourcing.monitor',
+  'sourcing.discover',
   'research.firm',
   'research.sweep',
   'telephony.sweep',
@@ -110,6 +111,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // write is that insert, so a second claim finds the row it already opened and
   // fetches nothing. See `packages/domain/research/runs.ts`.
   'sourcing.check': 'business_uniqueness',
+  'sourcing.discover': 'outbound_fence',
   'sourcing.monitor': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
   // One sweep per workspace per business date. The key carries the date and the
@@ -322,6 +324,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // import of two hundred firms is two hundred of these.
   'sourcing.check': 'bulk',
   'sourcing.monitor': 'bulk',
+  'sourcing.discover': 'bulk',
   'research.firm': 'bulk',
   'research.sweep': 'bulk',
   // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.
