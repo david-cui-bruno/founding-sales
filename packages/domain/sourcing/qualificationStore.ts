@@ -20,7 +20,7 @@ export const QUALIFICATION_POLICY_VERSION='qualification-v1';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;
-  prompt_version:string;policy_version:string;state:QualificationStatus;reason:string|null;
+  prompt_version:string;policy_version:string;state:QualificationStatus;reason:string|null;admission_reason:string|null;
   observations:SourceObservation[];facts:QualificationFact[];verdict:QualificationVerdict|null;
   opening_question:string|null;requested_at:Date;deadline_at:Date;[key:string]:unknown;
 }
@@ -29,7 +29,7 @@ const candidateRead='SELECT id,revision,status FROM sourcing_candidates WHERE wo
 const refused=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 
 /** Caller transaction holds the candidate before runs, matching triage/admission. */
-export async function requestQualification(context:RepositoryContext,input:{candidateId:string;expectedRevision:number}):Promise<SourcingResult<{runId:string}>> {
+export async function requestQualification(context:RepositoryContext,input:{candidateId:string;expectedRevision:number},options:{enqueue?:boolean}={}):Promise<SourcingResult<{runId:string}>> {
   if(!decideAdminOnly(context).permitted)return refused('admin_only');
   if(!qualificationRequestSchema.safeParse(input).success)return refused('invalid_input');
   const workspaceId=context.scope.workspaceId;
@@ -52,7 +52,7 @@ export async function requestQualification(context:RepositoryContext,input:{cand
   await context.db.query(`INSERT INTO sourcing_qualification_runs
     (workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[workspaceId,runId,candidate.id,candidate.revision,fingerprint,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,settings.modelName]);
-  await enqueueJob(context.db,{workspaceId,kind:'sourcing.qualify',idempotencyKey:jobIdempotencyKey.sourcingQualify(runId),
+  if(options.enqueue!==false)await enqueueJob(context.db,{workspaceId,kind:'sourcing.qualify',idempotencyKey:jobIdempotencyKey.sourcingQualify(runId),
     payload:{runId,candidateId:candidate.id,candidateRevision:candidate.revision,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:QUALIFICATION_POLICY_VERSION},maxAttempts:1});
   await recordCrmAuditEvent(context,{action:'sourcing.qualification_requested',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId,candidateRevision:candidate.revision}});
   return {ok:true,value:{runId}};
@@ -70,7 +70,7 @@ export async function readQualification(context:RepositoryContext,input:{candida
     (['pending','running'].includes(current.state) && current.deadline_at.getTime()<=Date.parse(now))?'qualification_expired':current.reason;
   const admission=(await context.db.query<{firm_id:string;route_id:string}>(
     'SELECT firm_id,route_id FROM sourcing_admissions WHERE workspace_id=$1 AND candidate_id=$2',[context.scope.workspaceId,candidate.id])).rows[0];
-  return {candidateId:candidate.id,runId:current.id,candidateRevision:current.candidate_revision,status:reason?'unavailable':current.state,reason,
+  return {candidateId:candidate.id,runId:current.id,candidateRevision:current.candidate_revision,status:reason?'unavailable':current.state,reason,admissionReason:current.admission_reason,
     requestedAt:current.requested_at.toISOString(),deadlineAt:current.deadline_at.toISOString(),observations:current.observations,facts:current.facts,
     verdict:reason?null:current.verdict,openingQuestion:reason?null:current.opening_question,
     admission:admission?{firmId:admission.firm_id,routeId:admission.route_id}:null,

@@ -26,3 +26,12 @@ it('refuses a direct API route without calling it and estimates ambiguous failur
  const failed=qualificationExtraction({...transport,kind:'bedrock',create:async()=>{throw new Error('timeout');}});
  expect(await failed.extract(input)).toMatchObject({ok:false,costEstimated:true});
 });
+
+it('registers qualification only with a page fetcher and keeps outbound-fence transaction ownership',async()=>{
+ const {HandlerRegistry}=await import('@fss/domain/jobs/handlerRegistry.ts');
+ const {registerHandlers}=await import('../src/bootstrap/main.ts');
+ const empty={classifier:undefined,mail:undefined,send:undefined,research:undefined};
+ expect(registerHandlers(new HandlerRegistry(),empty).get('sourcing.qualify')).toBeUndefined();
+ const registered=registerHandlers(new HandlerRegistry(),{...empty,research:{pageFetch:{providerKey:'test',fetchPages:async()=>({ok:false,costCents:0,failureCode:'unavailable'})}}}).get('sourcing.qualify');
+ expect(registered).toMatchObject({protection:'outbound_fence',maxAttempts:1});
+});

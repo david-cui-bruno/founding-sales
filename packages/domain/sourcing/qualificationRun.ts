@@ -108,12 +108,15 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
 /** Scheduler sweep is independent of whether any qualification handler manages to start. */
 export async function expireQualifications(ctx:RepositoryContext):Promise<void>{
  if(!decideAdminOnly(ctx).permitted)return;
- await withTransaction(ctx.db as SessionQueryable,async()=>{
+ await withTransaction(ctx.db as SessionQueryable,()=>expireQualificationsInTransaction(ctx));
+}
+export async function expireQualificationsInTransaction(ctx:RepositoryContext):Promise<void>{
+ if(!decideAdminOnly(ctx).permitted)return;
   const expired=(await ctx.db.query<{id:string}>("SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND state IN ('pending','running') AND deadline_at<=now() ORDER BY deadline_at LIMIT 50",[ctx.scope.workspaceId])).rows;
   for(const run of expired){
    const reservations=(await ctx.db.query<{id:string;state:string}>("SELECT id,state FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='sourcing_qualification' AND subject_id=$2 AND state IN ('reserved','calling')",[ctx.scope.workspaceId,run.id])).rows;
    for(const row of reservations)await settleAttempt(ctx,{reservationId:row.id,at:await databaseNow(ctx),outcome:{kind:row.state==='calling'?'estimated':'released'}});
    await ctx.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason='qualification_expired',finished_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running')",[ctx.scope.workspaceId,run.id]);
   }
- });
+
 }

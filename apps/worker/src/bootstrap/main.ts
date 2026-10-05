@@ -1,3 +1,5 @@
+import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
+import {qualificationExtraction} from '../sourcing/qualificationExtraction.ts';
 import {sourcingDiscoveryHandler,sourcingDiscoverySource} from '../handlers/sourcingDiscovery.ts';
 import {tavilySearch} from '../sourcing/tavilySearch.ts';
 import type {DiscoverySearchProvider} from '@fss/domain/sourcing/discoveryProvider.ts';
@@ -238,6 +240,7 @@ export function registerHandlers(
   // with no model has nothing at all to record.
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
+    registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
     registry.register(sourcingCheckHandler(composition.research.pageFetch));
     registry.register(sourcingMonitorHandler());
   }
@@ -420,7 +423,8 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'>>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'>>): {
+  readonly qualification: boolean;
   readonly discovery: boolean;
   readonly sourcing: boolean;
   readonly meetingAutoRecording: boolean;
@@ -433,6 +437,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
     sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,
@@ -461,6 +466,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly sourcing?: boolean;
     readonly meetingAutoRecording?: boolean;
@@ -487,7 +493,8 @@ export function workerDueWorkSources(
     sendDayCloseSource(),
     retentionSource(),
     researchSweepSource(),
-    sourcingMonitorSource(options.sourcing === true),
+    sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
+    sourcingQualificationSource(options.qualification===true),
     sourcingDiscoverySource(options.discovery === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a

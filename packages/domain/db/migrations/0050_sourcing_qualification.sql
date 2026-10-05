@@ -51,3 +51,8 @@ ALTER TABLE provider_reservations DROP CONSTRAINT provider_reservations_subject_
 ALTER TABLE sourcing_discovery_settings ADD COLUMN owner_user_id uuid;
 ALTER TABLE sourcing_discovery_settings ADD CONSTRAINT sourcing_owner_membership
  FOREIGN KEY(workspace_id,owner_user_id) REFERENCES workspace_memberships(workspace_id,user_id);
+
+ALTER TABLE sourcing_discovery_settings ADD COLUMN auto_admission_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE sourcing_discovery_settings ADD COLUMN qualification_wait_reason text;
+
+ALTER TABLE sourcing_qualification_runs ADD COLUMN admission_reason text CONSTRAINT sourcing_admission_reason CHECK(length(admission_reason) BETWEEN 1 AND 120);

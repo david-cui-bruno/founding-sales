@@ -1,3 +1,4 @@
+import {requestQualification} from './qualificationStore.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -67,6 +68,7 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
     const known=(await db.query("SELECT id FROM firms WHERE workspace_id=$1 AND regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$2 LIMIT 1",[ctx.scope.workspaceId,host])).rows.length>0;
     const saved=await saveCandidate(ctx,{firmName:hit.title.trim().slice(0,300)||new URL(hit.url).hostname,website:hit.url,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.',sourceUrl:hit.url,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryKnownDomain:known,discoveryQuery:attempt.query.query});
     if(!saved.ok)throw new Error('discovery_candidate_invalid');
+    await requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:1});
     await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,saved.value.id]);
    }
   }

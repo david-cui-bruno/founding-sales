@@ -18,6 +18,8 @@ it('reserves durably before external work; replay does not call again',async()=>
  await runDiscovery(context,provider);await runDiscovery(context,provider);
  expect(calls).toBe(1);
  expect((await db.session.query('SELECT * FROM sourcing_discovery_hits')).rows).toHaveLength(1);
+ expect((await db.session.query("SELECT id FROM jobs WHERE kind='sourcing.qualify'")).rows).toHaveLength(1);
+ expect((await db.session.query('SELECT id FROM sourcing_qualification_runs')).rows).toHaveLength(1);
 });
 it('keeps failures charged and does not retry a dispatched request',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');

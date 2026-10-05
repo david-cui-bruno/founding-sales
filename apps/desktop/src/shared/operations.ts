@@ -1,3 +1,4 @@
+import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
 import { meetingDraftEditSchema,meetingFollowThroughViewSchema } from '@fss/contracts';
@@ -819,6 +820,24 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'sourcing.qualification': {
+    kind: 'read', calls: [{method:'POST',path:'/sourcing/qualification/read'}],
+    input: qualificationReadSchema,
+    output: z.object({view:qualificationViewSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'Read current evidence and historical observations',
+  },
+  'sourcing.qualify': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/qualification/request'}],
+    input: qualificationRequestSchema.extend({commandId:uuid}),
+    output: z.object({result:qualificationQueuedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'Queue bounded research against the displayed candidate revision',
+  },
+  'sourcing.admit': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/qualification/admit'}],
+    input: qualificationAdmissionSchema.extend({commandId:uuid}),
+    output: z.object({result:qualificationAdmittedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'Explicit reviewed admission without starting outreach',
+  },
   'sourcing.list': {
     kind: 'read', calls: [{method:'POST',path:'/sourcing/candidates/list'}],
     input: candidateListInputSchema,

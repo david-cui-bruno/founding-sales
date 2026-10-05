@@ -51,7 +51,7 @@ export type QualificationFact = z.infer<typeof qualificationFactSchema>;
 export type QualificationVerdict = z.infer<typeof qualificationVerdictSchema>;
 export type QualificationStatus = z.infer<typeof qualificationStatusSchema>;
 export interface QualificationView {
-  candidateId:string;runId:string;candidateRevision:number;status:QualificationStatus;reason:string|null;
+  candidateId:string;runId:string;candidateRevision:number;status:QualificationStatus;reason:string|null;admissionReason:string|null;
   requestedAt:string;deadlineAt:string;observations:SourceObservation[];facts:QualificationFact[];
   verdict:QualificationVerdict|null;openingQuestion:string|null;
   admission:{firmId:string;routeId:string}|null;
@@ -63,7 +63,7 @@ export const qualificationAdmissionSchema=z.strictObject({candidateId:uuid,expec
 export const qualificationQueuedSchema=z.object({runId:uuid});
 export const qualificationAdmittedSchema=z.object({firmId:uuid,routeId:uuid,alreadyAdmitted:z.boolean()});
 export const qualificationViewSchema=z.object({
- candidateId:uuid,runId:uuid,candidateRevision:z.number().int().positive(),status:qualificationStatusSchema,reason:z.string().nullable(),requestedAt:instant,deadlineAt:instant,
+ candidateId:uuid,runId:uuid,candidateRevision:z.number().int().positive(),status:qualificationStatusSchema,reason:z.string().nullable(),admissionReason:z.string().nullable().default(null),requestedAt:instant,deadlineAt:instant,
  observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema),verdict:qualificationVerdictSchema.nullable(),openingQuestion:z.string().nullable(),
  admission:z.object({firmId:uuid,routeId:uuid}).nullable(),history:z.array(z.object({runId:uuid,observations:z.array(sourceObservationSchema),facts:z.array(qualificationFactSchema)})),
 });

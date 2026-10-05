@@ -60,6 +60,7 @@ const qualificationChecks:readonly [string,Record<string,unknown>][]=[
  ['opening_question_check',{opening_question:'x'.repeat(241)}],
 ];
 SOURCING_CONSTRAINT_CASES.push(
+ {constraint:'sourcing_admission_reason',run:async(f:Fixture)=>{await insert(f);return runRow(f,{admission_reason:''});}},
  {constraint:'sourcing_owner_membership',run:async(f:Fixture)=>f.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,owner_user_id) VALUES($1,$2)',[f.seeded.alpha.workspaceId,absent])},
  ...qualificationChecks.map(([name,overrides])=>({constraint:`sourcing_qualification_runs_${name}`,run:async(f:Fixture)=>{await insert(f);return runRow(f,overrides);}})),
  {constraint:'sourcing_qualification_deadline',run:async(f:Fixture)=>{await insert(f);return runRow(f,{deadline_at:'2000-01-01'});}},
