@@ -2,7 +2,7 @@
 
 Status: active planning, not an approved complete design. David requested planning all five roadmap items, with questions one at a time and research into unresolved choices, before further implementation. The existing qualification/admission implementation plan is input to this broader design, not permission to begin it during the interview.
 
-The [consolidated five-part design draft](../superpowers/specs/2026-10-05-sales-roadmap-design.md) now brings these decisions together. It marks proposed combined-cadence defaults separately from confirmed answers and preserves unresolved delivery dependencies.
+The [consolidated five-part design draft](../superpowers/specs/2026-10-05-sales-roadmap-design.md) now brings these decisions together. It marks proposed combined-cadence defaults separately from confirmed answers. David subsequently reported account-specific Google permission and confirmed free native social scheduling; remaining checks concern implementation and actual lead yield.
 
 ## Full scope
 
@@ -24,8 +24,12 @@ Preserve A before B: better-qualified leads entering the call queue before auton
 - **Cold-outreach reply autonomy (David: A):** automatically handle scheduling, straightforward product questions and approved pricing facts. Route discounts, custom commitments, uncertain technical answers and unusual requests to David. A working AppFolio integration may be described accurately; unbuilt integrations or special commercial terms cannot be promised. Use versioned approved product/offer facts, and hold unsupported answers for review rather than improvise. This applies when the outreach feature is built and enabled; it does not change current send controls.
 - **X posting cost (David's correction):** no spending on posting to X. Exclude paid X API usage, paid schedulers and a paid X subscription as dependencies. The proposed $2 social API allocation was not accepted; do not assume authorization for that allocation on another platform. Investigate free native scheduling and draft handoff, distinguishing user-operated scheduling from a verified supported automatic integration. If a free automatic route is unavailable, show that limitation rather than silently using a paid fallback.
 - **Social content formats (David's explicit choice):** text, product screenshots, images from online sources, and photos/images from his phone. No videos or automatic video editing in this roadmap. Support reusable image assets with a preview and per-platform crop/alt text. Preserve original assets and web source URLs; do not invent a source or permission claim. A phone-origin image is a supported input, not authorization to access the user's photo library wholesale. The first implementation can accept transferred/uploaded image files; a separate mobile content app is not implied.
+- **Gmail permission clarification (David, 5 October):** David states that Google granted permission for the intended API use and authorizes proceeding on that basis. Select the existing Gmail API with david@usecallie.com for the plan. Record the source as David's report, not independently verified approval or a general policy change. Scope implementation to the configured workspace/mailbox and preserve other sending controls; no repeated request for proof or alternative provider purchase is required to finish the plan.
+- **Free social scheduling clarification (David, 5 October):** David confirms his social accounts support reliable free scheduling. Native availability is user-confirmed. Our integration must still be tested for scheduling, receipts, editing/cancellation, session expiry and duplicates. Do not conflate a functioning native platform feature with an implemented Callie adapter.
 
 ## Research findings and limits
+
+The published-policy findings below describe general terms. David's later account-specific permission report above is the planning basis for his Gmail use; these historical findings are not a request to repeat the provider decision. Likewise, native social scheduling availability is now confirmed by David, while integration behavior remains to be tested.
 
 - [Gojiberry / Mindflow case study](https://gojiberry.ai/case-study-mindflow): combines observed signals, ICP filtering and contextual outreach. Vendor-reported results are useful hypotheses, not causal evidence or Callie conversion forecasts. The customer's enterprise security market differs from small property managers.
 - [Gong: call/email benchmarks](https://help.gong.io/docs/engage-analytics-benchmarks-and-best-practices): associates calls within an outreach flow with better email reply rates. This supports testing coordinated channels; it does not establish the best cadence or channel allocation for property managers.
@@ -51,8 +55,8 @@ Preserve A before B: better-qualified leads entering the call queue before auton
 - Unified contact history, combined cadence limits and transitions after replies/calls, implementing the confirmed channel allocation above.
 - Evidence quality versus useful coverage, and how to evaluate fit-only comparison leads without fabricating buying intent.
 - Feedback attribution and denominators: distinguish not reached, wrong contact, already covered, confirmed pain, held demo and purchase.
-- Email provider fit, sending health, sustainable ramp, messaging/sequence experiments, costs and failure recovery. Historical send-path documents are not current provider-policy verification.
-- Social source material, approval scope, scheduling integration options and publish/cancel/retry verification; verify the availability of the confirmed account destinations before setup.
+- Gmail eligibility at both existing gates under the configured account authorization; sending health, sustainable ramp, messaging/sequence experiments and failure recovery.
+- Social scheduling adapters and publish/cancel/retry verification on the free native scheduling capability David confirms. A background product runtime cannot assume the Codex browser is available after this chat.
 - Stage-specific acceptance criteria and a release order that allows each stage to work while later stages are developed.
 
 No cold email, social post, configuration change or new implementation was initiated by these planning notes.
