@@ -128,3 +128,13 @@ it('serializes concurrent requests at the shared daily research limit',async()=>
  expect(answers.filter(result=>result.ok)).toHaveLength(1);
  expect(answers.filter(result=>!result.ok)).toEqual([{ok:false,reason:'daily_firm_ceiling'}]);
 });
+it('records the deterministic verdict and replaces ungrounded generated questions',async()=>{
+ const {evaluateQualification}=await import('../../sourcing/qualificationDecision.ts');
+ const candidateId=await create(),runId=await request(candidateId);
+ await tx(()=>finishQualification(context(),{runId,observations:[observation()],facts:[],reason:null,openingQuestion:'Why is your team understaffed?'}));
+ expect(await tx(()=>evaluateQualification(context(),{runId}))).toMatchObject({ok:true});
+ const view=await readQualification(context(),{candidateId});
+ expect(view).toMatchObject({status:'review',openingQuestion:'How does your team handle maintenance calls and vendor follow-up today?',verdict:{decision:'review'}});
+ await tx(()=>reviewCandidate(context(),{id:candidateId,expectedRevision:1,status:'dismissed'}));
+ expect(await tx(()=>evaluateQualification(context(),{runId}))).toEqual({ok:false,reason:'candidate_changed'});
+});

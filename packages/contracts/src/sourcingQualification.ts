@@ -16,6 +16,11 @@ export const sourceObservationSchema = z.strictObject({
   if((value.publishedAt===null)!==(value.publishedAtBlockId===null) ||
     (value.publishedAtBlockId!==null && !value.blocks.some(block=>block.id===value.publishedAtBlockId)))
     ctx.addIssue({code:'custom',message:'A publication date requires its supporting source block.'});
+  if(value.publishedAt!==null){
+    const text=value.blocks.find(block=>block.id===value.publishedAtBlockId)?.text??'';
+    const published=/\b(?:published|posted)(?:\s+on)?\s*:?\s*(\d{4}-\d{2}-\d{2})\b/iu.exec(text)?.[1];
+    if(published!==value.publishedAt.slice(0,10))ctx.addIssue({code:'custom',message:'The publication date must match the cited text.'});
+  }
 });
 export const qualificationFactSchema = z.strictObject({
   kind:z.enum(['firm_identity','residential_management','service_area','business_phone','help_request','operational_burden','coordination_job','growth','tool_gap','existing_support']),
