@@ -52,6 +52,11 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  sourcing_search_account: coverage(['operational'], 'Shared search allowance and halt state; no credential material.'),
+  sourcing_discovery_settings: coverage(['operational'], 'Workspace discovery schedule and status.'),
+  sourcing_discovery_attempts: coverage(['retained'], 'Search dispatch and quota history, containing fixed queries only; required to prevent replay.'),
+  sourcing_discovery_hits: coverage(['retained'], 'Public source URL deduplication tombstones; kept after candidate deletion to prevent rediscovery.'),
+  sourcing_candidates: coverage(['deletion_removes'], 'Independent unverified drafts; the admin candidate delete command removes the payload. No CRM contact or firm is created.'),
   // ------------------------------------------------------------- foundation
   workspaces: coverage(['operational'], 'The tenant itself.'),
   users: coverage(['retained'], 'A Callie member, not a prospect; departure revokes the membership and leaves the person.'),

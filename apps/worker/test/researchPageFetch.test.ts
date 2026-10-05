@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_REDIRECTS,
   RESEARCH_USER_AGENT,
@@ -728,4 +728,45 @@ describe('the research pause, asked before each request', () => {
     expect(sent).toEqual(['https://example.test/robots.txt', 'https://example.test/']);
     expect(answer.ok && answer.value.pages.length).toBe(1);
   });
+});
+
+it('prefers discovered maintenance navigation over guessed paths within the page cap',async()=>{
+ const h=harness({answers:{'example.test':['8.8.8.8']},responses:{
+  'https://example.test/robots.txt':ok(''),
+  'https://example.test/':ok('<a href="/residents/maintenance-request/">Maintenance</a>'),
+  'https://example.test/about':ok('<p>Guessed page</p>'),
+  'https://example.test/residents/maintenance-request':ok('<p>Call the manager.</p>'),
+ }});
+ const answer=await h.provider.fetchPages({urls:['https://example.test/','https://example.test/about'],firmWebsite:'https://example.test',links:[],maxPagesPerFirm:2,maxBytes:10000});
+ expect(answer).toMatchObject({ok:true,value:{pages:[{url:'https://example.test/'},{url:'https://example.test/residents/maintenance-request'}]}});
+ expect(h.sent.map(r=>r.url)).not.toContain('https://example.test/about');
+});
+it('promotes published navigation even when the URL is already a guessed path',async()=>{
+ const h=harness({answers:{'example.test':['8.8.8.8']},responses:{
+  'https://example.test/robots.txt':ok(''),
+  'https://example.test/':ok('<a href="/careers">Careers</a><a href="/maintenance">Maintenance</a>'),
+  'https://example.test/about':ok('<p>About</p>'),
+  'https://example.test/careers':ok('<p>Hiring</p>'),
+  'https://example.test/maintenance':ok('<p>Help</p>'),
+ }});
+ const answer=await h.provider.fetchPages({urls:['https://example.test/','https://example.test/about','https://example.test/careers'],firmWebsite:'https://example.test',links:[],maxPagesPerFirm:3,maxBytes:10000});
+ expect(answer).toMatchObject({ok:true,value:{pages:[{url:'https://example.test/'},{url:'https://example.test/careers'},{url:'https://example.test/maintenance'}]}});
+});
+it('stops a redirect chain at the total fetch deadline',async()=>{
+ let now=0;const urls:string[]=[];
+ const provider=researchPageFetch({now:()=>now,lookup:async()=>['8.8.8.8'],request:async options=>{
+  urls.push(options.url);now+=16000;
+  return options.url.endsWith('robots.txt')?ok(''): {statusCode:302,headers:{location:'/next'},body:bytes(''),abortedOverCap:false};
+ }});
+ const answer=await provider.fetchPages({urls:['https://example.test/'],firmWebsite:'https://example.test',links:[],maxPagesPerFirm:1,maxBytes:10000});
+ expect(urls).toEqual(['https://example.test/robots.txt','https://example.test/']);expect(answer.ok && answer.value.pages).toHaveLength(0);
+});
+
+it('bounds a DNS lookup that never answers without opening a request',async()=>{
+ vi.useFakeTimers();try{
+  const request=vi.fn();const provider=researchPageFetch({lookup:async()=>await new Promise(()=>{}),request});
+  const pending=provider.fetchPages({urls:['https://example.test/'],firmWebsite:'https://example.test',links:[],maxPagesPerFirm:1,maxBytes:10000});
+  await vi.advanceTimersByTimeAsync(10001);
+  expect(await pending).toMatchObject({ok:true,value:{pages:[]}});expect(request).not.toHaveBeenCalled();
+ }finally{vi.useRealTimers();}
 });

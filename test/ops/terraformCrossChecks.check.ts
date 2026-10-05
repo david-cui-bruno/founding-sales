@@ -156,7 +156,7 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(WORKER_VARIABLES.classifierApiKey).toBe(reads);
     // Held back from the worker unless the root says it reads it, and the stack says
     // so for production alone.
-    expect(CLUSTER).toContain('if name != "llm-classifier-api-key" || var.worker_reads_classifier_key');
+    expect(CLUSTER).toContain('if !contains(["llm-classifier-api-key", "sourcing-search"], name) || var.worker_reads_classifier_key');
     expect(STACK).toContain('  worker_reads_classifier_key = local.is_production\n');
   });
 

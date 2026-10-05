@@ -38,3 +38,5 @@ export * from './meetingOutcomes.ts';
 export * from './meetingFollowThrough.ts';
 
 export * from './meetingAutoRecording.ts';
+
+export * from './sourcing.ts';

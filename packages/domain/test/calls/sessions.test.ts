@@ -385,6 +385,15 @@ describe('call sessions', () => {
 
     /** A resetting outcome for the firm at `at`: everything before it is out of the count. */
     async function reset(at: string): Promise<void> {
+      // Prior tests resume using wall-clock database time. Align their released
+      // fixture holds to this scripted reset, or crossing 5 Oct 2026 makes the
+      // first scripted attempt disappear from the next test's cadence count.
+      await database.session.query(
+        `UPDATE active_holds SET started_at=LEAST(started_at,$3::timestamptz),released_at=LEAST(released_at,$3::timestamptz)
+          WHERE workspace_id=$1 AND scope_key=$2 AND source_event_kind='call_cadence_parked'
+            AND released_at IS NOT NULL`,
+        [seeded.beta.workspaceId,crm.beta.firmId,at],
+      );
       await database.session.query(
         `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
          VALUES ($1, $2, 'interested', 'none', $3::timestamptz, $3::timestamptz, $4)`,

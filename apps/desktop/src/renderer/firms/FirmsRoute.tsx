@@ -1,3 +1,5 @@
+import { Candidates } from '../sourcing/Candidates.tsx';
+import { useKept } from '../replies/kept.ts';
 import { useEffect, useLayoutEffect, useRef, type JSX } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import type { Generation } from '../app/generation.ts';
@@ -86,6 +88,7 @@ export function FirmsRoute({
   const { memory, touch } = useCrmMemory(identity, generation);
   const crm = useCrm(route, identity, generation, guard, () => memory.panelFirmId, enterAtRoot);
   const state = crm.state;
+  const [firmsTab, setFirmsTab] = useKept('firms:tab', 'firms');
   // Which row asked for this view. The board answer is the same answer on both, so the
   // route says which reading of it to draw.
   const onPipelineRow = route.name === 'pipeline';
@@ -499,7 +502,10 @@ export function FirmsRoute({
           onResolve={crm.actions.resolveMerge}
         />
       ) : state.screen === 'pipeline' && state.pipeline !== null ? (
-        <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />
+        <>
+          {onFirmsList && state.role === 'admin' ? <div className="mb-5 flex gap-2" aria-label="Firms views"><Button size="sm" variant={firmsTab === 'firms' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'firms'} onClick={() => setFirmsTab('firms')}>All firms</Button><Button size="sm" variant={firmsTab === 'candidates' ? 'outline' : 'quiet'} aria-pressed={firmsTab === 'candidates'} onClick={() => setFirmsTab('candidates')}>Candidates</Button></div> : null}
+          {onFirmsList && state.role === 'admin' && firmsTab === 'candidates' ? <Candidates enabled={view.actionsEnabled} /> : <FirmsList pipeline={state.pipeline} onOpenFirm={crm.actions.openFirm} />}
+        </>
       ) : (
         // A screen with nothing in it is a state the main process should not produce, and
         // saying so is better than an empty page that looks like an empty pipeline.

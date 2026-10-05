@@ -1,3 +1,8 @@
+import {sourcingDiscoveryHandler,sourcingDiscoverySource} from '../handlers/sourcingDiscovery.ts';
+import {tavilySearch} from '../sourcing/tavilySearch.ts';
+import type {DiscoverySearchProvider} from '@fss/domain/sourcing/discoveryProvider.ts';
+import {sourcingMonitorHandler,sourcingMonitorSource} from '../handlers/sourcingMonitor.ts';
+import {sourcingCheckHandler} from '../handlers/sourcingCheck.ts';
 import { meetingAutoRecordingJobHandler,meetingAutoRecordingSource } from '../handlers/meetingAutoRecording.ts';
 import { readZoomMeetingsConfiguration } from '../zoom/meetingsClient.ts';
 import { calcomDemoClient } from '../calcom/bookingClient.ts';
@@ -97,6 +102,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
   readonly meetingTranscription?: MeetingTranscribeOptions | undefined;
@@ -230,6 +236,11 @@ export function registerHandlers(
   // judgments `unknown`, which is a smaller answer rather than a failure. That is
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
+  if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
+  if(composition.research){
+    registry.register(sourcingCheckHandler(composition.research.pageFetch));
+    registry.register(sourcingMonitorHandler());
+  }
   for (const handler of researchHandlers(composition.research)) registry.register(handler);
   return registry;
 }
@@ -409,7 +420,9 @@ export function readTranscriptionComposition(
 }
 
 /** Which optional sources materialize work, from what this worker composed. */
-export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'>): {
+export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'>>): {
+  readonly discovery: boolean;
+  readonly sourcing: boolean;
   readonly meetingAutoRecording: boolean;
   readonly meetingAnalysis: boolean;
   readonly meetingTranscription: boolean;
@@ -420,6 +433,8 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    discovery: composition.discovery !== undefined,
+    sourcing: composition.research !== undefined,
     meetingAutoRecording: composition.meetingAutoRecording !== undefined,
     meetingAnalysis: composition.meetingAnalysis !== undefined,
     meetingTranscription: composition.meetingTranscription !== undefined,
@@ -446,6 +461,8 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly discovery?: boolean;
+    readonly sourcing?: boolean;
     readonly meetingAutoRecording?: boolean;
     readonly meetingAnalysis?: boolean;
     readonly meetingTranscription?: boolean;
@@ -470,6 +487,8 @@ export function workerDueWorkSources(
     sendDayCloseSource(),
     retentionSource(),
     researchSweepSource(),
+    sourcingMonitorSource(options.sourcing === true),
+    sourcingDiscoverySource(options.discovery === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a
     // job only in a worker that has a Cal.com API key to run it with — a job no handler
@@ -570,6 +589,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),
     ...(meetingTranscription.options === null ? {} : { meetingTranscription: meetingTranscription.options }),

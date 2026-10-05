@@ -54,6 +54,9 @@ describe('job kind classes', () => {
       'route.validate',
       // Lane R: a page fetch and a sweep. Nobody is watching the clock on either, and
       // an import of two hundred firms is two hundred of the first.
+      'sourcing.check',
+      'sourcing.monitor',
+      'sourcing.discover',
       'research.firm',
       'research.sweep',
       // Slice M1: the hourly repair of a lost Cal.com webhook.

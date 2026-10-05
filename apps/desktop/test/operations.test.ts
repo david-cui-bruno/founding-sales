@@ -120,7 +120,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
+    expect(families).toEqual(['today', 'calling', 'review', 'suppressions', 'sourcing', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox', 'meetings', 'firms', 'calls', 'recordings']);
     // Slice S2: a firm's basics from Today and the firm page, and an incoming call.
     expect(OPERATION_NAMES.filter(name => name.startsWith('firms.') || name.startsWith('calls.'))).toEqual([
       'firms.saveBasics',
@@ -332,4 +332,28 @@ describe('the operation registry', () => {
     expect(registered).toEqual(['callie:op:read', 'callie:op:command']);
     expect(channels).toEqual(['callie:op:read', 'callie:op:command']);
   });
+});
+
+
+it('sourcing rejects a late read after the workspace identity changes', async () => {
+  const h = hosts();
+  let generation = 0;
+  h.recordings.identity.current = () => generation;
+  let finish!: (value: unknown) => void;
+  h.api.read = vi.fn(() => new Promise(resolve => { finish = resolve; })) as AuthedClient['read'];
+  const pending = answerOperation(operationHandlers(h), 'read', 'sourcing.list', {status:'needs_review',offset:0});
+  generation = 1;
+  finish({ok:true,value:{candidates:[],hasMore:false}});
+  expect(await pending).toEqual({view:null,reason:'not_found'});
+});
+it('sourcing preserves the supplied command ID and validates evidence before reaching the API', async () => {
+  const h = hosts();
+  const command = vi.fn(async () => ({ok:true,value:{id:ITEM_ID,duplicate:false}}));
+  h.api.command = command as AuthedClient['command'];
+  const input = {commandId:ITEM_ID,firmName:'PM',website:'https://example.test',locality:'Dallas',region:'TX',signal:'fit_only',evidence:'Need unknown',sourceUrl:'https://example.test/about',observedOn:'2026-10-01',preparedBy:'Researcher'};
+  const handlers = operationHandlers(h);
+  await expect(answerOperation(handlers,'command','sourcing.save',{...input,sourceUrl:'javascript:alert(1)'})).rejects.toThrow();
+  expect(command).not.toHaveBeenCalled();
+  await answerOperation(handlers,'command','sourcing.save',input);
+  expect(command).toHaveBeenCalledWith('/sourcing/candidates/save',expect.objectContaining({firmName:'PM'}),expect.any(Function),{commandId:ITEM_ID});
 });

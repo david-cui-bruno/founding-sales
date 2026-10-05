@@ -93,6 +93,7 @@ COPY packages/domain/templates packages/domain/templates
 # Lane J-facts: the funnel, reached through packages/domain/crm/firms.ts.
 COPY packages/domain/funnel packages/domain/funnel
 COPY packages/domain/research packages/domain/research
+COPY packages/domain/sourcing packages/domain/sourcing
 COPY packages/domain/retention packages/domain/retention
 COPY packages/domain/restore packages/domain/restore
 COPY packages/domain/release packages/domain/release

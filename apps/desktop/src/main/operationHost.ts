@@ -1,3 +1,4 @@
+import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema } from '@fss/contracts';
 import { meetingFollowThroughViewSchema } from '@fss/contracts';
 import { meetingNotesRevisionSchema, meetingTaskViewSchema, meetingOutcomesViewSchema } from '@fss/contracts';
@@ -160,6 +161,36 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'sourcing.list': async (input:OperationInput<'sourcing.list'>) => {
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/sourcing/candidates/list',value=>candidateListSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.save': async (input:OperationInput<'sourcing.save'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/candidates/save',body,value=>candidateSavedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.review': async (input:OperationInput<'sourcing.review'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/candidates/review',body,value=>candidateChangedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.check': async (input:OperationInput<'sourcing.check'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/candidates/check',body,value=>candidateChangedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.delete': async (input:OperationInput<'sourcing.delete'>) => {
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/candidates/delete',body,value=>candidateChangedSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
     'research.state': async () => await deps.research.state(),
     'research.open': async (input: { readonly firmId: string }) => await deps.research.open(input),
     'research.run': async (input: { readonly firmId: string }) => await deps.research.run(input),

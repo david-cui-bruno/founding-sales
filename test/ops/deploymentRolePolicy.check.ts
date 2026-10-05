@@ -823,6 +823,10 @@ done`;
     expect(callFor('cloudfront:CreateDistribution')).not.toContain('--resource-arns');
     expect(callFor('cloudfront:CreateDistribution')).toContain('aws:RequestTag/NamePrefix');
     expect(callFor('cloudfront:GetDistribution')).toContain(':distribution/');
+    for (const action of ['cloudfront:ListDistributions', 'logs:DescribeLogGroups']) {
+      expect(callFor(action)).not.toContain('--resource-arns');
+      expect(callFor(action)).not.toContain('--context-entries');
+    }
     // ECS: the seven denials of David's second run. Each action is judged on its own
     // resource type, never on the cluster.
     for (const action of ['ecs:CreateService', 'ecs:UpdateService', 'ecs:DeleteService']) {

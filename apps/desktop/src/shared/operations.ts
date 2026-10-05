@@ -1,3 +1,4 @@
+import { candidateInputSchema, candidateListInputSchema, candidateListSchema, candidateReviewInputSchema, candidateDeleteInputSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
 import { meetingRecordingSetupViewSchema,retryMeetingRecordingSetupSchema } from '@fss/contracts';
 import { meetingDraftEditSchema,meetingFollowThroughViewSchema } from '@fss/contracts';
 import { z } from 'zod';
@@ -816,6 +817,37 @@ export const OPERATIONS = {
     input: z.strictObject({ callSessionId: uuid }),
     output: callTranscriptViewSchema,
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
+  },
+
+  'sourcing.list': {
+    kind: 'read', calls: [{method:'POST',path:'/sourcing/candidates/list'}],
+    input: candidateListInputSchema,
+    output: z.object({view:candidateListSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'workspace-scoped candidate drafts; source evidence remains unverified',
+  },
+  'sourcing.save': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/save'}],
+    input: candidateInputSchema.extend({commandId:uuid}),
+    output: z.object({result:candidateSavedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'save or deduplicate a candidate without opening a firm, deal or enrollment',
+  },
+  'sourcing.review': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/review'}],
+    input: candidateReviewInputSchema.extend({commandId:uuid}),
+    output: z.object({result:candidateChangedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'revision-checked human research triage, never automatic verification',
+  },
+  'sourcing.check': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/check'}],
+    input: candidateDeleteInputSchema.extend({commandId:uuid}),
+    output: z.object({result:candidateChangedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'revision-checked removal of an independent candidate draft',
+  },
+  'sourcing.delete': {
+    kind: 'command', calls: [{method:'POST',path:'/sourcing/candidates/delete'}],
+    input: candidateDeleteInputSchema.extend({commandId:uuid}),
+    output: z.object({result:candidateChangedSchema.nullable(),reason:z.string().nullable()}),
+    transform: 'revision-checked removal of an independent candidate draft',
   },
 
   // --- Research (lane R) --------------------------------------------------

@@ -76,9 +76,9 @@ export function parsePageText(body: Uint8Array, contentType: string): PageText {
   const mime = mediaTypeOf(contentType);
   if (!MIME_PATTERN.test(mime)) return empty;
 
-  const decoded = new TextDecoder('utf-8').decode(body);
+  const decoded = new TextDecoder('utf-8').decode(body).replaceAll(String.fromCharCode(0),'\uFFFD');
   const candidates = mime === 'text/plain' ? decoded.split(/\r?\n/u) : htmlLines(decoded);
-  return assemble(candidates);
+  return assemble(mime === 'text/plain' ? candidates : candidates.map(decodeMarkupEntities));
 }
 
 /** The same bounds applied to already-plain text, for a provider that supplies it. */
@@ -127,18 +127,15 @@ export function anchorHrefs(body: Uint8Array, contentType: string): readonly str
  * would otherwise make two URLs out of one page.
  */
 function decodeMarkupEntities(value: string): string {
-  return value
-    .replace(/&#(\d{1,7});/gu, (_, digits: string) => codePoint(Number.parseInt(digits, 10)))
-    .replace(/&#[xX]([0-9a-fA-F]{1,6});/gu, (_, digits: string) => codePoint(Number.parseInt(digits, 16)))
-    .replace(/&quot;/giu, '"')
-    .replace(/&apos;/giu, "'")
-    .replace(/&lt;/giu, '<')
-    .replace(/&gt;/giu, '>')
-    .replace(/&amp;/giu, '&');
+  const named:Record<string,string>={quot:'"',apos:"'",lt:'<',gt:'>',amp:'&',nbsp:' '};
+  return value.replace(/&(#(?:[xX][0-9a-fA-F]{1,6}|[0-9]{1,7})|quot|apos|lt|gt|amp|nbsp);/giu,(_,token:string)=>{
+    if(token.startsWith('#'))return codePoint(token[1]?.toLowerCase()==='x'?Number.parseInt(token.slice(2),16):Number.parseInt(token.slice(1),10));
+    return named[token.toLowerCase()]??'';
+  });
 }
 
 function codePoint(value: number): string {
-  if (!Number.isInteger(value) || value <= 0 || value > 0x10ffff) return '';
+  if (!Number.isInteger(value) || value <= 0 || value > 0x10ffff || (value>=0xd800 && value<=0xdfff)) return '\uFFFD';
   return String.fromCodePoint(value);
 }
 
@@ -187,6 +184,13 @@ function htmlLines(source: string): string[] {
   };
 
   while (position < source.length) {
+    // Raw text is not HTML: a JavaScript '<' must not consume the closing script
+    // tag as if it were another opening tag. No script or style bytes become text.
+    if(droppedName!==null && ['script','style','title','textarea','xmp','iframe','noembed','noframes'].includes(droppedName)) {
+      const close=new RegExp(`</\\s*${droppedName}\\s*>`,'iu').exec(source.slice(position));
+      if(close===null)break;
+      position+=close.index+close[0].length;droppedName=null;droppedDepth=0;continue;
+    }
     const character = source[position];
     if (character !== '<') {
       if (droppedName === null) pending += character;

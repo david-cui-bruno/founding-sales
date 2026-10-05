@@ -52,6 +52,8 @@ interface Boundary {
  * is a one-line change here.
  */
 export const BOUNDARIES: readonly Boundary[] = [
+  {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
+  {name:'discovery evaluation search',site:'apps/worker/src/sourcing/evaluateDiscovery.ts',owner:'evaluateDiscovery',methods:{discover:1}},
   { name:'Zoom local recording update', site:'packages/domain/meetings/autoRecording.ts', owner:'runMeetingRecordingSetup', methods:{setLocalAutoRecording:1} },
   {
     name: 'Gmail send',
@@ -93,6 +95,12 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
+  {file:'apps/worker/src/sourcing/evaluateDiscovery.ts',method:'discover',reason:'Local evaluation owns a durable single-host pre-request debit; independently checked as the evaluation boundary.'},
+  {file:'packages/domain/sourcing/discovery.ts',method:'discover',reason:'Production discovery owns a committed shared PostgreSQL dispatch fence; independently checked as the continuous discovery boundary.'},
+  {
+    file:'packages/domain/sourcing/sourceCheck.ts',method:'fetchPages',
+    reason:'Candidate source checks cannot use firm enrichment without creating a callable CRM firm. requestSourceCheck consumes the shared daily research count before enqueue; runSourceCheck checks research settings/holds, the pending check ID, dismissal and deadline, then uses the same bounded page adapter with one URL/page. It never calls a model or search provider; tests cover limits, retries and stale results.',
+  },
   ...['analysisAdapter', 'analysisInput', 'analysisRequests'].map(name => ({
     file: `packages/domain/meetings/${name}.ts`, method: 'extract',
     reason: "the literal 'extract' names the meeting-analysis phase (versus merge), never a research provider method; paid analysis dispatch is gated by analysisPaid and the meeting worker",

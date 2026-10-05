@@ -32,6 +32,9 @@ export const JOB_KINDS = [
   'outbound.close_send_day',
   'canary',
   'route.validate',
+  'sourcing.check',
+  'sourcing.monitor',
+  'sourcing.discover',
   'research.firm',
   'research.sweep',
   'telephony.sweep',
@@ -107,6 +110,9 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // The run row is unique on `(workspace, firm, revision)` and the handler's first
   // write is that insert, so a second claim finds the row it already opened and
   // fetches nothing. See `packages/domain/research/runs.ts`.
+  'sourcing.check': 'business_uniqueness',
+  'sourcing.discover': 'outbound_fence',
+  'sourcing.monitor': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
   // One sweep per workspace per business date. The key carries the date and the
   // sweep's own effect is enqueueing, which is itself unique on the run's revision,
@@ -155,6 +161,7 @@ export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
+  sourcingCheck: (id:string,checkId:string):string => `sourcing-check:${id}:${checkId}`,
   meetingAnalyze: (meetingId: string, notes: number, transcript: number): string => `meeting-analyze:${meetingId}:n${String(notes)}:t${String(transcript)}`,
   meetingAnalysisRequest: (requestId: string, revision: number): string => `meeting-analysis-request:${requestId}:r${String(revision)}`,
   meetingTranscribe: (recordingId: string, revision: number): string => `meeting-transcribe:${recordingId}:r${String(revision)}`,
@@ -217,6 +224,7 @@ export const jobIdempotencyKey = Object.freeze({
   researchFirm: (firmId: string, revision: number): string =>
     `${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:${String(revision)}`,
   /** One sweep per workspace business date, like the Today build's key rule. */
+  sourcingMonitor: (workspaceId:string,hour:string):string => `sourcing-monitor:${workspaceId}:${hour}`,
   researchSweep: (workspaceSlug: string, businessDate: string): string =>
     `research-sweep:${workspaceSlug}:${businessDate}`,
   /** One call-session reservation sweep per workspace per quarter hour, when it owes one. */
@@ -314,6 +322,9 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'retention.batch': 'bulk',
   // Nobody is waiting on a page fetch: the brief is read the next morning, and an
   // import of two hundred firms is two hundred of these.
+  'sourcing.check': 'bulk',
+  'sourcing.monitor': 'bulk',
+  'sourcing.discover': 'bulk',
   'research.firm': 'bulk',
   'research.sweep': 'bulk',
   // Slice C2: nobody is waiting on a transcript; it is read later, on the firm page.
