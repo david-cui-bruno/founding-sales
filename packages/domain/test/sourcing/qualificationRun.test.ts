@@ -1,3 +1,4 @@
+import type {SourceObservation} from '@fss/contracts';
 import {afterAll,beforeAll,beforeEach,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {seedTwoWorkspaces} from '../db/support/fixtures.ts';
@@ -78,4 +79,27 @@ it('preserves historical evidence when a later read fails',async()=>{
  const next=await tx(()=>requestQualification(ctx(),{candidateId:ids.candidateId,expectedRevision:1}));if(!next.ok)throw new Error(next.reason);
  await runQualification(ctx(),{runId:next.value.runId},{pageFetch:{providerKey:'company_page',fetchPages:async()=>({ok:false,costCents:0,failureCode:'timeout'})},extraction:extractor(next.value.runId)});
  const view=await readQualification(ctx(),ids);expect(view).toMatchObject({status:'unavailable',observations:[],reason:'source_unavailable'});expect(view?.history[0]?.observations).toHaveLength(1);
+});
+
+it('settles expired spend even after a wrong-firm correction or candidate deletion',async()=>{
+ const {reserveAttempt,markCalling}=await import('../../research/reservations.ts');
+ const {recordSourcingFeedback}=await import('../../sourcing/feedback.ts');
+ for(const removed of [false,true]){
+  const ids=await pending();
+  const reservation=await tx(async()=>{const r=await reserveAttempt(ctx(),{subjectKind:'sourcing_qualification',subjectId:ids.runId,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx(),r.id);return r;});
+  const user=(await db.session.query<{user_id:string}>("SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND role='admin'",[workspaceId])).rows[0]!.user_id;
+  const admin=repositoryContext(workspaceScope(workspaceId,{kind:'user',role:'admin',userId:user}),db.session);
+  await tx(()=>recordSourcingFeedback(admin,{candidateId:ids.candidateId,qualificationRunId:ids.runId,code:'wrong_firm'}));
+  await db.session.query("UPDATE provider_reservations SET created_at=now()-interval '31 minutes' WHERE id=$1",[reservation.id]);
+  if(removed)await db.session.query('DELETE FROM sourcing_candidates WHERE id=$1',[ids.candidateId]);
+  await expireQualifications(ctx());
+  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1',[reservation.id])).rows[0]).toEqual({state:'estimated',settled_cents:2});
+  if(!removed)await db.session.query('DELETE FROM sourcing_candidates WHERE id=$1',[ids.candidateId]);
+ }
+});
+it('retains useful complete text after the first 32 blocks within existing parser bounds',async()=>{
+ const ids=await pending();const seen:SourceObservation[]=[];
+ const page:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url:'https://example.test/',contentHash:'e'.repeat(64),contentType:'text/html',body:new TextEncoder().encode('<nav>'+Array.from({length:40},(_,i)=>`<p>Navigation ${i}</p>`).join('')+'</nav><main>'+Array.from({length:40},(_,i)=>`<p>Published business detail ${i}</p>`).join('')+'<p>Example PM manages homes in Dallas, Texas.</p></main>'),retrievedAt:new Date().toISOString(),firstParty:true}],skipped:{}}})};
+ await runQualification(ctx(),ids,{pageFetch:page,extraction:{...extractor(ids.runId),extract:async input=>{seen.push(...input.observations);return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};}}});
+ expect(seen[0]?.blocks.some(b=>b.text.includes('Example PM'))).toBe(true);expect(seen[0]?.blocks.some(b=>b.text.includes('Navigation'))).toBe(false);expect(seen[0]?.truncated).toBe(false);
 });

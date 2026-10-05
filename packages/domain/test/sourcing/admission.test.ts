@@ -1,3 +1,4 @@
+import type {SourceObservation,QualificationFact,QualificationVerdict} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,beforeEach,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -124,4 +125,17 @@ it('rechecks activation and versioned evaluation inside admission while reviewed
  await db.session.query('INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,owner_user_id) VALUES($1,true,$2)',[seeded.alpha.workspaceId,seeded.alpha.admin.userId]);
  expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'evaluation_required'});
  expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
+});
+
+it('counts only independent supporting sources, not extra fetched pages or copied need text',async()=>{
+ const {listTodayCards,businessDateOf}=await import('../../today/snapshots.ts');
+ const input=await qualified('Corroboration PM');const admitted=await tx(()=>admitCandidate(ctx(),input));if(!admitted.ok)throw new Error(admitted.reason);
+ const row=(await db.session.query<{observations:SourceObservation[];facts:QualificationFact[];verdict:QualificationVerdict}>('SELECT observations,facts,verdict FROM sourcing_qualification_runs WHERE id=$1',[input.qualificationRunId])).rows[0]!;
+ const original=row.observations[0]!,copyId=randomUUID(),unrelatedId=randomUUID();
+ const duplicate={...original,id:copyId,url:original.url+'news',relevantTextHash:'c'.repeat(64)};
+ const unrelated={...original,id:unrelatedId,url:original.url+'contact',relevantTextHash:'d'.repeat(64)};
+ const need=row.facts.find(f=>f.kind==='operational_burden')!;
+ await db.session.query('UPDATE sourcing_qualification_runs SET observations=$2::jsonb,facts=$3::jsonb,verdict=$4::jsonb WHERE id=$1',[input.qualificationRunId,JSON.stringify([...row.observations,duplicate,unrelated]),JSON.stringify([...row.facts,{...need,observationId:copyId}]),JSON.stringify({...row.verdict,evidenceIds:[original.id,copyId]})]);
+ const cards=await listTodayCards(ctx(),{snapshotDate:await businessDateOf(ctx(),new Date().toISOString())});
+ expect(cards.find(c=>c.firmId===admitted.value.firmId)?.sourceCount).toBe(1);
 });

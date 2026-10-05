@@ -203,8 +203,9 @@ export async function listTodayCards(
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
        LEFT JOIN LATERAL (
          SELECT CASE r.verdict->>'rank' WHEN 'help_request' THEN 0 WHEN 'operational_burden' THEN 1 WHEN 'investigation' THEN 2 ELSE 3 END AS rank,
-          LEAST(2,(SELECT count(DISTINCT o->>'relevantTextHash')::int FROM jsonb_array_elements(r.observations) o)) AS sources,
-          (SELECT max((o->>'retrievedAt')::timestamptz) FROM jsonb_array_elements(r.observations) o) AS observed
+          LEAST(2,(SELECT LEAST(count(DISTINCT f->>'observationId'),count(DISTINCT lower(regexp_replace(trim(f->>'value'),'\\s+',' ','g'))))::int
+            FROM jsonb_array_elements(r.facts) f WHERE r.verdict->'evidenceIds' ? (f->>'observationId') AND f->>'kind' IN ('help_request','operational_burden'))) AS sources,
+          (SELECT max((o->>'retrievedAt')::timestamptz) FROM jsonb_array_elements(r.observations) o WHERE r.verdict->'evidenceIds' ? (o->>'id')) AS observed
          FROM sourcing_admissions a JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
          JOIN LATERAL (SELECT * FROM sourcing_qualification_runs r WHERE r.workspace_id=c.workspace_id AND r.candidate_id=c.id ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true
          WHERE a.workspace_id=s.workspace_id AND a.firm_id=s.firm_id AND NOT a.association_review_required AND NOT c.qualification_blocked AND c.status<>'dismissed'

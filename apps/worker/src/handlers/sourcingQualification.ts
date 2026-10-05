@@ -29,6 +29,7 @@ export function sourcingQualificationHandler(deps:{pageFetch:PageFetchProvider;e
 export function sourcingQualificationSource(enabled:boolean):DueWorkSource {
  return {name:'sourcing-qualification',find:async(session,now)=>{
   const workspaces=(await session.query<{id:string}>(`SELECT w.id FROM workspaces w LEFT JOIN sourcing_discovery_settings scheduling ON scheduling.workspace_id=w.id WHERE EXISTS(SELECT 1 FROM sourcing_qualification_runs r WHERE r.workspace_id=w.id AND r.state IN ('pending','running') AND r.deadline_at<=$1::timestamptz)
+   OR EXISTS(SELECT 1 FROM provider_reservations p WHERE p.workspace_id=w.id AND p.subject_kind='sourcing_qualification' AND p.state IN ('reserved','calling') AND p.created_at<=$1::timestamptz-interval '30 minutes')
    OR ($2 AND EXISTS(SELECT 1 FROM sourcing_candidates c WHERE c.workspace_id=w.id AND c.status<>'dismissed' AND NOT c.qualification_blocked)) ORDER BY scheduling.qualification_last_pass_at NULLS FIRST,w.id LIMIT 25`,[now,enabled])).rows;
   const jobs:JobSpecification[]=[];
   for(const workspace of workspaces){

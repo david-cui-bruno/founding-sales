@@ -6,6 +6,7 @@ const fold=(s:string)=>s.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCa
 const day=86400000;
 const maintenance=/\b(?:maintenance|vendor|repair|tenant calls|after.hours)\b/iu;
 const negated=/\b(?:not|no longer|never|don't|do not|doesn't|does not|without)\b/iu;
+const noncurrent=/\b(?:if|unless|would|could|might|hypothetically|previously|formerly|historically|resolved|used to|no longer|last year|years ago|were|was)\b/iu;
 const attribution=/\b(?:customer says|review|testimonial|residents?:|tenants?:|responsibilities:|duties:|we (?:offer|provide|help)|our clients|property managers who|you(?:'re| are))\b/iu;
 const unmet=/\b(?:we|our team|our staff|our property managers)\b.{0,50}\b(?:need|seeking|looking for|struggling|overwhelmed|overloaded|backlog|spend too much|cannot keep up|can't keep up)\b/iu;
 const help=/\b(?:we|our team|our staff)\b.{0,30}\b(?:need|seeking|looking for)\b.{0,60}\b(?:help|support|assistance|solution|provider|service)\b/iu;
@@ -50,7 +51,7 @@ export function qualifyCandidate(input:{facts:readonly QualificationFact[];obser
  if(!supportedBusinessPhone(current,input.identity))unknowns.push('business_phone_unresolved');
  const credible=(fact:QualificationFact)=>{
   const text=fact.value;
-  return maintenance.test(text)&&unmet.test(text)&&!attribution.test(text)&&!negated.test(text);
+  return maintenance.test(text)&&unmet.test(text)&&!noncurrent.test(text)&&!attribution.test(text)&&!negated.test(text);
  };
  const contradictions=current.some(f=>['help_request','operational_burden','existing_support'].includes(f.kind)&&maintenance.test(f.value)&&/\b(?:do not|don't|no longer) need|\bnot (?:overwhelmed|overloaded|struggling)\b/iu.test(f.value));
  if(contradictions)unknowns.push('need_evidence_conflicts');
@@ -62,14 +63,17 @@ export function qualifyCandidate(input:{facts:readonly QualificationFact[];obser
   if(age<0||age>30*day){unknowns.push('help_needs_revalidation');return false;}
   return true;
  });
- const burdens=current.filter(f=>f.kind==='operational_burden'&&credible(f)&&workload.test(f.value));
+ const burdens=current.filter(f=>{
+  if(f.kind!=='operational_burden'||!credible(f)||!workload.test(f.value))return false;
+  const date=sourceFor(f).publishedAt;if(date!==null&&(now-Date.parse(date)>90*day||now<Date.parse(date))){unknowns.push('event_needs_revalidation');return false;}return true;
+ });
  if(recentHelp.length||burdens.length){
   for(const fact of [...recentHelp,...burdens])evidenceIds.add(fact.observationId);
   reasons.push(recentHelp.length?'explicit_maintenance_help':'explicit_maintenance_burden');
   return result(recentHelp.length?'help_request':'operational_burden');
  }
  unknowns.push('maintenance_need_unconfirmed');
- const investigation=current.some(f=>f.kind==='coordination_job'&&/\b(?:coordinator|coordination|dispatch)\b/iu.test(f.value));
+ const investigation=current.some(f=>f.kind==='coordination_job'&&/\b(?:coordinator|coordination|dispatch)\b/iu.test(f.value)&&/\b(?:(?:we(?:'re| are)|now) hiring|job opening|open position|current opening|vacancy|apply (?:now|for))\b/iu.test(f.value)&&!negated.test(f.value)&&!noncurrent.test(f.value));
  for(const fact of current.filter(f=>f.kind==='growth'||f.kind==='coordination_job')){
   const source=sourceFor(fact);
   if(source.publishedAt===null)unknowns.push(fact.kind==='growth'?'growth_date_unknown':'job_date_unknown');

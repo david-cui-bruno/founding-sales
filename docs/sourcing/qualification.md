@@ -1,0 +1,15 @@
+# Candidate qualification and call readiness
+
+Qualification adds evidence to a candidate. It never grants email permission, starts a call, creates a deal or changes a stop. Discovery and qualification share the existing research count and spending controls. Only the Bedrock route is admitted; there is no direct-API fallback.
+
+In Firms → Candidates, open **Evidence and call readiness**. The panel separates checked sources, unknowns and historical evidence. Refreshing the panel is a read; **Check qualification** requests research. A repeated request in the same revision/day reuses its recorded request rather than repeating a paid call. Candidate changes or failures leave previous evidence historical.
+
+**Add to call queue** is an explicit reviewed admission. It requires supported identity, geography, residential-management fit and a business phone, but can admit an unknown maintenance need after review. It assigns the existing seller, preserves stops and existing enrollment ownership, and creates a firm-level route without inventing a person. The existing dial authorization still decides whether a call may start.
+
+Automatic admission is off at migration. The audited operations command `fss admin qualification configure` accepts `--workspace-id` and `--enabled`. Enabling additionally requires `--owner-user-id`, `--evaluation-sha256`, a positive `--reviewed-eligible` count and `--false-eligible 0`. The report must actually review eligible examples under the current prompt/policy. A zero-eligible batch does not establish precision and cannot authorize activation. The command does not change sending, search quotas, or research settings. Disabling preserves the report and provenance. Previously eligible candidates are reconsidered at most hourly, without another extraction charge.
+
+Wrong-firm feedback invalidates all qualification for the candidate and removes its ranking contribution. Keep does not undo it. Dismiss a wrong candidate; after a human verifies that the candidate's identity is correct, the audited `fss admin qualification resolve-identity` command requires `--workspace-id`, `--candidate-id`, the displayed `--expected-revision`, `--confirmed-identity true` and a `--reason`. This detaches stale source association and requires new research. It does not delete or reassign CRM history, stops, tasks, calls or deals. If the candidate identity itself is incorrect, create the corrected candidate instead of confirming it.
+
+Only the new-firm lane is reordered. Callbacks, replies and commitments retain their existing precedence. Corroboration counts distinct supporting evidence, not every page fetched. Today transports coherent 50-card pages and keeps its existing offline/keyboard behavior; source quotations are not added to its list cache.
+
+The independent deadline sweep accounts for paid work even if its run was corrected or deleted. Undispatched reservations are released; possibly dispatched work is estimated conservatively. Research pause does not disable accounting cleanup.

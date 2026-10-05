@@ -69,3 +69,12 @@ it('gives later workspaces a turn even when more than 25 earlier workspaces are 
  for(const row of visited)wanted.delete(row.workspace_id);
  expect(wanted.size).toBe(0);
 });
+it('settles an orphaned paid qualification even with all new research scheduling disabled',async()=>{
+ const {reserveAttempt,markCalling}=await import('@fss/domain/research/reservations.ts');
+ const {randomUUID}=await import('node:crypto');
+ const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
+ const reservation=await withTransaction(db.session,async()=>{const held=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:randomUUID(),attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at:new Date().toISOString(),businessTimeZone:'America/New_York',cents:2,modelName:'claude-haiku-4-5',maxInputTokens:100,maxOutputTokens:2048});await markCalling(ctx,held.id);return held;});
+ await db.session.query("UPDATE provider_reservations SET created_at=now()-interval '31 minutes' WHERE id=$1",[reservation.id]);
+ expect(await withTransaction(db.session,()=>sourcingQualificationSource(false).find(db.session,new Date().toISOString()))).toEqual([]);
+ expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE id=$1',[reservation.id])).rows[0]).toEqual({state:'estimated',settled_cents:2});
+});

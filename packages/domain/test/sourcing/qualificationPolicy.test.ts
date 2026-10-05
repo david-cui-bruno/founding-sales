@@ -25,6 +25,10 @@ it.each([
  ['We do not need help with maintenance coordination.','help_request'],
  ['A customer says: we need help with maintenance.','help_request'],
  ['We help property managers who are overwhelmed by maintenance calls.','operational_burden'],
+ ['If our team is overwhelmed by maintenance calls, we will hire additional staff.','operational_burden'],
+ ['We were overwhelmed by maintenance calls in 2020; today everything runs smoothly.','operational_burden'],
+ ['We would need help with maintenance coordination if we expanded.','help_request'],
+ ['Our team is overwhelmed by maintenance calls was how we described last year; the issue is resolved.','operational_burden'],
  ['Our team is not overwhelmed by maintenance calls.','operational_burden'],
 ] as const)('keeps ambiguous or non-need text in review: %s',(text,kind)=>{
  expect(qualifyCandidate(fixture(text,kind)).decision).toBe('review');
@@ -74,4 +78,8 @@ it('keeps growth in review at the 90-day freshness boundary and jobs with unknow
  }
  const job=fixture('We are hiring a maintenance coordinator.','coordination_job');job.observations[0]!.publishedAt=null;job.observations[0]!.publishedAtBlockId=null;
  expect(qualifyCandidate(job)).toMatchObject({decision:'review',rank:'investigation',unknowns:expect.arrayContaining(['job_date_unknown'])});
+});
+
+it('does not promote a maintenance-service breadcrumb as a coordination vacancy',()=>{
+ expect(qualifyCandidate(fixture('You are here: Home / Full-Service Property Management / Maintenance Coordination','coordination_job')).rank).toBe('fit_only');
 });

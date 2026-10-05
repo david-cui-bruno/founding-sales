@@ -48,8 +48,8 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null});
   if(!fetched.ok){await finish('source_unavailable');return;}
   observations=fetched.value.pages.slice(0,settings.maxPagesPerFirm).flatMap(page=>{
-   const parsed=parsePageText(page.body,page.contentType);
-   const blocks=parsed.blocks.filter(b=>b.text.length<=2000).slice(0,32);
+   const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true});
+   const blocks=parsed.blocks.filter(b=>b.text.length<=2000).slice(0,100);
    if(!blocks.length)return [];
    const publication=blocks.flatMap(block=>{
     const match=/\b(?:published|posted)(?:\s+on)?\s*:?\s*(\d{4}-\d{2}-\d{2})\b/iu.exec(block.text);
@@ -112,11 +112,13 @@ export async function expireQualifications(ctx:RepositoryContext):Promise<void>{
 }
 export async function expireQualificationsInTransaction(ctx:RepositoryContext):Promise<void>{
  if(!decideAdminOnly(ctx).permitted)return;
-  const expired=(await ctx.db.query<{id:string}>("SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND state IN ('pending','running') AND deadline_at<=now() ORDER BY deadline_at LIMIT 50",[ctx.scope.workspaceId])).rows;
-  for(const run of expired){
-   const reservations=(await ctx.db.query<{id:string;state:string}>("SELECT id,state FROM provider_reservations WHERE workspace_id=$1 AND subject_kind='sourcing_qualification' AND subject_id=$2 AND state IN ('reserved','calling')",[ctx.scope.workspaceId,run.id])).rows;
-   for(const row of reservations)await settleAttempt(ctx,{reservationId:row.id,at:await databaseNow(ctx),outcome:{kind:row.state==='calling'?'estimated':'released'}});
-   await ctx.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason='qualification_expired',finished_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running')",[ctx.scope.workspaceId,run.id]);
-  }
-
+  // A correction/deletion can retire the run while its paid call is still outstanding.
+  // Account for those calls by reservation age/deadline, independently of run state.
+  const reservations=(await ctx.db.query<{id:string;state:string}>(`SELECT p.id,p.state FROM provider_reservations p
+   LEFT JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.subject_id
+   WHERE p.workspace_id=$1 AND p.subject_kind='sourcing_qualification' AND p.state IN ('reserved','calling')
+    AND (p.created_at<=now()-interval '30 minutes' OR r.deadline_at<=now()) ORDER BY p.created_at,p.id LIMIT 100`,[ctx.scope.workspaceId])).rows;
+  for(const row of reservations)await settleAttempt(ctx,{reservationId:row.id,at:await databaseNow(ctx),outcome:{kind:row.state==='calling'?'estimated':'released'}});
+  await ctx.db.query(`UPDATE sourcing_qualification_runs SET state='unavailable',reason='qualification_expired',finished_at=now()
+   WHERE workspace_id=$1 AND id IN (SELECT id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND state IN ('pending','running') AND deadline_at<=now() ORDER BY deadline_at LIMIT 50)`,[ctx.scope.workspaceId]);
 }

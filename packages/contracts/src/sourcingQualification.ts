@@ -11,7 +11,7 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const sourceObservationSchema = z.strictObject({
   id:uuid,url:sourcingUrlSchema,contentHash:digest,relevantTextHash:digest,retrievedAt:instant,
   publishedAt:instant.nullable(),publishedAtBlockId:blockId.nullable(),firstParty:z.boolean(),truncated:z.boolean(),
-  blocks:z.array(z.strictObject({id:blockId,text:z.string().min(1).max(4000)})).min(1).max(32),
+  blocks:z.array(z.strictObject({id:blockId,text:z.string().min(1).max(4000)})).min(1).max(100),
 }).superRefine((value,ctx)=>{
   if(new Set(value.blocks.map(block=>block.id)).size!==value.blocks.length)
     ctx.addIssue({code:'custom',message:'Block identities must be unique.'});
