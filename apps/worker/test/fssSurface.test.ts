@@ -431,7 +431,7 @@ describe('what fss hands the restore commands (lane W3-S8 review)', () => {
     }
   });
 
-  describe('holds release-restore', () => {
+  describe('audited admin launcher identity', () => {
     const taskArn = 'arn:aws:ecs:us-east-1:123456789012:task/fss-prod/0123456789abcdef0123456789abcdef';
     const launcher = 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/david';
     let server: Server;
@@ -460,6 +460,28 @@ describe('what fss hands the restore commands (lane W3-S8 review)', () => {
     });
 
     const release = ['admin', 'holds', 'release-restore', '--note', 'nothing held here; checking the attribution'];
+
+    it('passes ECS identity through discovery configuration and refuses unattributed changes', async () => {
+      const workspace = (await session.query<{id: string}>(
+        'INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) RETURNING id',
+        [`discovery-${randomUUID()}`, 'Discovery test'],
+      )).rows[0]!.id;
+      const today = new Date().toISOString().slice(0, 10);
+      const configure = ['admin', 'discovery', 'configure', '--workspace-id', workspace,
+        '--enabled', 'true', '--prior-day', today, '--prior-day-used', '20', '--prior-month-used', '20'];
+      const done = await run(configure, {FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: origin});
+      expect(done.code, done.stderr).toBe(0);
+      expect((await session.query('SELECT enabled FROM sourcing_discovery_settings WHERE workspace_id=$1', [workspace])).rows).toEqual([{enabled: true}]);
+      expect((await session.query<{detail: unknown}>('SELECT detail FROM audit_events WHERE workspace_id=$1 AND action=$2', [workspace, 'sourcing.discovery_configured'])).rows[0]?.detail).toMatchObject({launchedBy: launcher, taskArn});
+      const pause = configure.map(value => value === 'true' ? 'false' : value);
+      const refusedChange = await run(pause, {ECS_CONTAINER_METADATA_URI_V4: origin});
+      expect(refusedChange.code).toBe(20);
+      expect(refused(refusedChange.stderr)).toBe('launcher_unknown');
+      const broken = await run(pause, {FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: `${origin}/broken`});
+      expect(refused(broken.stderr)).toBe('task_metadata_unreadable');
+      expect((await session.query('SELECT enabled FROM sourcing_discovery_settings WHERE workspace_id=$1', [workspace])).rows).toEqual([{enabled: true}]);
+    });
+
 
     it('is attributed to the launcher the task was given and the task the metadata endpoint names', async () => {
       const done = await run(release, { FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: origin });
