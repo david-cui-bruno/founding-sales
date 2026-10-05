@@ -53,3 +53,5 @@ CI follow-up: the first infrastructure run rejected the declarative import block
 The corrected production-root test run passed all35 tests (exit0), completing the previously failing portion of the offline infrastructure gate.
 
 Final scheduler regression: deferred work is reconsidered hourly; the committed workspace/day attempt fence continues to limit actual provider dispatch to one per day. The test failed before the change and passed afterward; all3 worker discovery tests and10 domain discovery tests pass, with worker typecheck and affected-file lint clean.
+
+Release preflight correction: deployed IAM policy equals the repository policy. Two apparent denials were simulator resource mismatches for cloudfront:ListDistributions and logs:DescribeLogGroups; a direct account-wide simulation allows both. Corrected only the checker resource overrides, with a regression that failed first;56 policy tests and affected-file lint pass. No IAM policy was changed.

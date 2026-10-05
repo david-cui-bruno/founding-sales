@@ -387,6 +387,9 @@ fi
 # (`-` for none) and the context that statement needs.
 override_for() { # override_for <action> -> "<resource>|<context>" or ""
   case "$1" in
+    # Account-wide listing cannot be judged against the group's individual resource.
+    cloudfront:ListDistributions|logs:DescribeLogGroups)
+      printf '%s|%s\n' "-" "" ;;
     ec2:CreateRoute|ec2:ReplaceRoute|ec2:DeleteRoute|ec2:AssociateRouteTable|ec2:DisassociateRouteTable)
       printf '%s|%s\n' "arn:aws:ec2:${REGION}:${ACCOUNT}:route-table/rtb-0000000000000000e" "ec2:ResourceTag/NamePrefix=${PREFIX}-example" ;;
     ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistribution)
