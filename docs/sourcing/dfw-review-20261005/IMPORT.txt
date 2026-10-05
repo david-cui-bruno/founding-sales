@@ -1,0 +1,17 @@
+Import the 5 October call-card briefs
+
+In Callie: Firms > Import > Import prepared briefs (JSON).
+Select call-card-briefs.json from this directory.
+Confirm the preview says 30 matched, then import and wait for 30 imported.
+If any are unmatched or ambiguous, stop and inspect the result; do not re-import the firms CSV.
+Open a firm or its expanded Today card to see the new prepared brief.
+
+This replaces each matched prepared brief. previous-briefs-20261002.json preserves the earlier file for reference or rollback; it is not a snapshot of current production data.
+The new file retains the original external IDs, names and websites.
+Suggested order is text only; it does not reorder the Today queue.
+No sending, enrollment, stop, contact, or deal changes are included.
+Public-web triage does not establish purchase intent or lack of maintenance support.
+
+Validation: 30 rows passed preparedBriefImportRowSchema; 30 unique external IDs.
+Existing desktop importer and prepared-brief tests: 14 passed, 1 skipped.
+Production matching/import has not been performed.
