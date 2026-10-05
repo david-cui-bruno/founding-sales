@@ -1,3 +1,4 @@
+import {mergeSourcingAttribution} from '../sourcing/attribution.ts';
 import { lockTodayForFirmChange, refreshTodayForFirm } from '../today/build.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -245,6 +246,7 @@ export async function mergeFirms(
   await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey IMMEDIATE');
   // And a meeting that named only the firm follows the firm that survives.
   await move('meetings');
+  await mergeSourcingAttribution(context, source.id, target.id);
   if (target.assigned_user_id !== null) await context.db.query("UPDATE meeting_tasks SET owner_user_id=$3,version=version+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND status='open' AND owner_user_id<>$3", [context.scope.workspaceId, target.id, target.assigned_user_id]);
   await refreshTodayForFirm(context, { firmId: target.id });
 

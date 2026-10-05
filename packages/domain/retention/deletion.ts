@@ -877,6 +877,13 @@ export async function commitDeletion(
       )`,
     byContact,
   );
+  // Learning contains references only, but deleted interactions must stop contributing.
+  await remove('sourcing_interactions', `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
+   (i.kind='call' AND (i.subject_id IN (SELECT id FROM call_sessions s WHERE s.workspace_id=$1 AND s.firm_id=$3 AND ${contactPredicate('s.contact_id', '$2')})
+    OR i.subject_id IN (SELECT id FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$3 AND ${contactPredicate('l.contact_id', '$2')})))
+   OR (i.kind='meeting' AND i.subject_id IN (SELECT id FROM meetings m WHERE m.workspace_id=$1 AND m.firm_id=$3 AND ${contactPredicate('m.contact_id', '$2')})))`, byContact);
+  if(scope.contactId===null)await remove('sourcing_attributions','DELETE FROM sourcing_attributions WHERE workspace_id=$1 AND firm_id=$2',[workspace,scope.firmId]);
+
   // Migration 0028's rows before the tickets and call logs they point at. A session's
   // open reservation is closed first, as the research sweep closes a run's: `reserved`
   // is released (no call can have happened), `calling` is estimated (one may have).

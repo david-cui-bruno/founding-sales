@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import {
   CALL_OCCURRED_AT_TOLERANCE_SECONDS,
   DEFAULT_DO_NOT_CALL_CHOICE,
@@ -523,6 +524,8 @@ export async function logCallOutcome(
     // Released at this first link only; the hold is never reopened (`calls/pendingHold.ts`).
     if (linkedSession !== undefined) await releasePendingHold(context, linkedSession);
   }
+
+  await attributeFirmInteraction(context,{firmId:input.firmId,kind:'call',subjectId:callLogId});
 
   // ---- 3. Apply -----------------------------------------------------------
   const applied = await withinSavepoint(context, async (): Promise<PolicyResult<AppliedEffects>> => {

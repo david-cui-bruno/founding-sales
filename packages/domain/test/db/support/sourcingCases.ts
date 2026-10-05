@@ -69,7 +69,7 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_qualification_runs_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
  {constraint:'sourcing_qualification_runs_workspace_id_candidate_id_finge_key',run:async(f:Fixture)=>{await insert(f);await runRow(f);return runRow(f,{id:absent});}},
  // The triple unique key overlaps the primary key; the primary key rejects duplicates first.
- {constraint:'sourcing_qualification_candidate_run',run:async(f:Fixture)=>{await f.session.query('ALTER TABLE sourcing_qualification_runs DROP CONSTRAINT sourcing_qualification_runs_pkey');await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
+ {constraint:'sourcing_qualification_candidate_run',run:async(f:Fixture)=>{await f.session.query('ALTER TABLE sourcing_attributions DROP CONSTRAINT sourcing_attributions_workspace_id_run_id_fkey');await f.session.query('ALTER TABLE sourcing_qualification_runs DROP CONSTRAINT sourcing_qualification_runs_pkey');await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
  {constraint:'sourcing_admissions_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);await admissionRow(f);return admissionRow(f);}},
  {constraint:'sourcing_admissions_workspace_id_candidate_id_fkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return admissionRow(f,{candidate_id:absent});}},
  {constraint:'sourcing_admissions_candidate_run',run:async(f:Fixture)=>{await insert(f);await runRow(f);await insert(f,{id:absent,identity_key:'b'.repeat(64)});return admissionRow(f,{candidate_id:absent});}},
@@ -86,4 +86,34 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_feedback_note',run:async(f:Fixture)=>{await insert(f);await runRow(f);return feedbackRow(f,{note:'x'.repeat(501)});}},
  {constraint:'sourcing_feedback_run',run:async(f:Fixture)=>feedbackRow(f)},
  {constraint:'sourcing_feedback_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);await feedbackRow(f);return feedbackRow(f);}},
+);
+
+const attributionId='66666666-6666-4666-8666-666666666666';
+async function learningRow(f:Fixture,table:string,overrides:Record<string,unknown>={}){
+ const base:Record<string,Record<string,unknown>>={
+  sourcing_attributions:{workspace_id:f.seeded.alpha.workspaceId,id:attributionId,firm_id:f.crm.alpha.firmId,source_key:'test',hypothesis:'unknown',policy_version:'v1',acquisition:'unknown'},
+  sourcing_interactions:{workspace_id:f.seeded.alpha.workspaceId,id:absent,attribution_id:attributionId,kind:'call',subject_id:runId,source_revision:0,occurred_at:new Date()},
+  sourcing_first_touches:{workspace_id:f.seeded.alpha.workspaceId,firm_id:f.crm.alpha.firmId,attribution_id:attributionId,occurred_at:new Date()},
+ };
+ const row={...base[table],...overrides},keys=Object.keys(row);
+ return f.session.query(`INSERT INTO ${table}(${keys.join(',')}) VALUES(${keys.map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+  ['sourcing_attribution_acquisition',{acquisition:'invented'}],['sourcing_attribution_codes',{hypothesis:''}],
+  ['sourcing_attributions_workspace_id_firm_id_fkey',{firm_id:absent}],
+  ['sourcing_attributions_workspace_id_candidate_id_fkey',{candidate_id:absent}],
+  ['sourcing_attributions_workspace_id_run_id_fkey',{run_id:absent}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>learningRow(f,'sourcing_attributions',overrides)})),
+ {constraint:'sourcing_attributions_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_attributions',{source_key:'other'});}},
+ {constraint:'sourcing_attributions_workspace_id_firm_id_source_key_key',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_attributions',{id:absent});}},
+ ...([
+  ['sourcing_interaction_kind',{kind:'unknown'}],['sourcing_interaction_revision',{source_revision:-1}],
+  ['sourcing_interactions_workspace_id_attribution_id_fkey',{attribution_id:runId}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_interactions',overrides);}})),
+ {constraint:'sourcing_interactions_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_interactions');return learningRow(f,'sourcing_interactions',{source_revision:1});}},
+ {constraint:'sourcing_interactions_workspace_id_kind_subject_id_source_r_key',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_interactions');return learningRow(f,'sourcing_interactions',{id:runId});}},
+ {constraint:'sourcing_first_touches_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_first_touches');return learningRow(f,'sourcing_first_touches');}},
+ {constraint:'sourcing_first_touches_workspace_id_firm_id_fkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_first_touches',{firm_id:absent});}},
+ {constraint:'sourcing_first_touches_workspace_id_attribution_id_fkey',run:async(f:Fixture)=>learningRow(f,'sourcing_first_touches')},
 );

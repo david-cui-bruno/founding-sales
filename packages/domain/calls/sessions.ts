@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import { randomUUID } from 'node:crypto';
 import {
   CALL_CADENCE,
@@ -873,6 +874,7 @@ export async function consumeCallSession(
     [input.workspaceId, session.reservation_id],
   );
   const maxSeconds = Math.max(60, Number(limits[0]?.max_units ?? 1) * 60);
+  await attributeFirmInteraction(context,{firmId:session.firm_id,kind:'call',subjectId:session.id});
   await recordFunnelFact(context, {
     kind: 'call.placed',
     source: 'telephony',
