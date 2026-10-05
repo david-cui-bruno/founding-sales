@@ -18,7 +18,7 @@ After the key is securely available in the environment:
 node apps/worker/src/sourcing/evaluateMain.ts --run
 ```
 
-Nine versioned queries cover DFW, Providence and Boston, each with an explicit-burden hypothesis, a coordinator-hiring hypothesis and a fit-only comparison. A search phrase is not a classifier: vendor advertisements, physical-repair roles and generic tenant workflows are expected false positives to measure.
+Nine versioned queries cover DFW, Providence and Boston, each with a workflow-context query, a coordinator-hiring query and a fit-only comparison. A search phrase is not a classifier: vendor advertisements, physical-repair roles and generic tenant workflows are expected false positives to measure.
 
 A run makes at most nine Basic requests and reserves one credit for each. Automatic parameter selection, advanced search, answers, raw content and images are disabled. Requests have a 15-second deadline, a 1MB response limit and no retry or redirect. At most five hits are retained per query. The tool stops on the first provider error or unexpected usage.
 
@@ -49,3 +49,11 @@ Review source pages with the existing bounded fetcher. Search snippets and crawl
 Provider contracts checked 5 October 2026:
 - https://docs.tavily.com/documentation/api-credits
 - https://docs.tavily.com/documentation/api-reference/endpoint/search
+
+## Version 2 review
+
+The v2 queries explicitly name Texas, Rhode Island and Massachusetts, narrow residential/single-family fit, and ask for hiring/application context. Workflow queries no longer imply that general maintenance copy proves the firm is overwhelmed. Query exclusions are hints to the provider, not reliable filters.
+
+Each live run also writes a private `review-<uuid>.json` artifact. It groups hits by hostname (normalizing only www), preserving every query and result. This is not legal-entity merging: franchises may share domains and related firms may use different domains. All evidence fields start unknown and every group starts `needs_review`. Nothing is admitted automatically.
+
+The review policy requires confirmed geography and residential-management fit, an explicit new-versus-existing CRM check, a public source URL, a valid review date and reviewer confirmation that the evidence is current. Wrong fit is excluded; an existing CRM match is routed back to that firm. A current active vacancy or direct statement of the firm's own workload can support a signal. Generic careers, marketing, existing maintenance support and missing evidence do not. `signal_supported` is a review classification, never permission to contact or proof of buying intent. Review artifacts are not automatically reloaded or applied to the CRM.

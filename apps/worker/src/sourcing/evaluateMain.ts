@@ -1,3 +1,6 @@
+import {writeFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {reviewEvaluation} from './discoveryReview.ts';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -13,7 +16,9 @@ export async function main(argv:readonly string[],env:NodeJS.ProcessEnv):Promise
  if(!key){process.stderr.write('FSS_TAVILY_API_KEY is required; never pass it as a command argument.\n');return 2;}
  try{
   const report=await evaluateDiscovery({directory:join(homedir(),'.local','share','callie','sourcing-evaluation'),provider:tavilySearch(key),queries:SOURCING_EVALUATION_QUERIES});
-  process.stdout.write(JSON.stringify({attempts:report.results.length,hits:report.results.reduce((n,r)=>n+(r.result.ok?r.result.hits.length:0),0),stopReason:report.stopReason})+'\n');
+  const review=reviewEvaluation(report);
+  await writeFile(join(homedir(),'.local','share','callie','sourcing-evaluation',`review-${randomUUID()}.json`),JSON.stringify({version:1,groups:review},null,2),{flag:'wx',mode:0o600});
+  process.stdout.write(JSON.stringify({reviewGroups:review.length,attempts:report.results.length,hits:report.results.reduce((n,r)=>n+(r.result.ok?r.result.hits.length:0),0),stopReason:report.stopReason})+'\n');
   return report.stopReason===null?0:1;
  }catch{process.stderr.write('Evaluation stopped. Check the local ledger and lock; no automatic reset was attempted.\n');return 1;}
 }
