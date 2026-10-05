@@ -1,6 +1,6 @@
 # Targeted lead sourcing for Callie
 
-Status: proposed design for review; no product changes or sending enabled.
+Status: design revised 5 October for continuous discovery and AWS/GCP-only credits; bounded Nova evaluation completed. No product changes or sending enabled.
 Baseline: origin/main f967e636, identical product tree to the inspected 12c274ba checkout. The primary checkout's local main is an older September branch; it is not the baseline for this work.
 
 ## Outcome and agreed scope
@@ -13,9 +13,25 @@ Automatically admit well-supported matches; send uncertain matches to review. Sh
 
 ## Approach comparison
 
-1. **Recommended: researched seed batches plus scheduled website monitoring.** Use research performed here or supplied by David to discover candidates, then let the existing worker refresh their first-party sources. Reuses the research stack and requires no paid search subscription. Initial discovery is batch-assisted, not a continuously searching autonomous agent.
-2. **Fully automated web/social discovery.** Broader reach, but requires a production search/data source and dependable social access. Chat browsing tools are not an API that the deployed worker can call. Defer until access and actual cost are established.
+1. **Recommended: bounded continuous discovery plus source monitoring.** The worker searches for new firms on a schedule and separately refreshes evidence on known firms. Search proposes candidates; direct source verification determines what is supported. Research batches remain useful seeds and a fallback, not the final discovery mechanism. Reuse the existing worker and Postgres. Chat browsing tools are not a production API.
+2. **Autonomous web/social browser agents.** Broader potential coverage but unnecessary complexity and fragile access for the first release. No authenticated social monitoring or whole-web crawler is required for the recommended approach.
 3. **Large static directory import.** Easy to produce volume but weak on need and timing. Directory reuse restrictions also vary. Do not make bulk directory harvesting a dependency.
+
+Run two research pools: signal-first queries for explicit relevant needs, and fit-first queries for plausible small residential managers who do not publish their problems. DFW Home might never appear in an intent search. Fit-first candidates remain unconfirmed and require review; this does not weaken the automatic-admission rules below.
+
+### Search and model choice after the 5 October evaluation
+
+Only AWS and GCP credits remain available. Remove assumptions of direct OpenAI or Anthropic grants. Claude through Bedrock is AWS-billed where the relevant credit coverage applies. Keep gross usage and verified cash cost separate; general Bedrock eligibility does not prove every grounding charge is covered.
+
+The 18-question Nova grounding probe completed with 40 search calls, 5,706 input tokens and 5,881 output tokens. Thirteen responses contained structured citations, one search failed and one response was content-filtered. Native citations improved on the first tiny probe, but source checks found identity errors, missed first-party facts, and confusion between coordination tasks and unmet coordination needs. This is a single-provider diagnostic run, not a head-to-head benchmark or a conversion test.
+
+Nova is a candidate URL source, not a trusted qualification engine. Preserve native citations and verify the cited pages independently. Resolve the employer domain before targeted searches; distinguish a failed source from an absent signal. Do not use an uncited or invented narrative URL when provider citation metadata points elsewhere.
+
+Five requests exceeded the prompt instruction of two searches. A prompt cap is not an enforceable spending limit. Recurring search must reserve a documented bounded cost or use application-controlled search requests with explicit limits; do not enable unlimited provider-managed fan-out under a claimed hard budget.
+
+[Google Cloud's service terms, sections 20(k) and 20(l)](https://cloud.google.com/terms/service-terms) restrict using grounded-search links for automated collection, indexing and crawler discovery; enterprise grounding inherits those restrictions. Do not use it as this pipeline's link-ingestion source without a separately applicable agreement. GCP can still support eligible compute or analysis of independently obtained material. No GCP account changes or paid tests have been made.
+
+[Exa](https://exa.ai/pricing) and [Tavily](https://www.tavily.com/pricing) offer free allowances without a payment card. They are optional explicit-search comparison candidates, not proven quality improvements and not cloud-credit expenses. Connect at most one initially, stop at its free quota, and leave paid overage disabled. No account was provisioned in this evaluation. A selected search provider's failed or exhausted quota should leave pending discovery visible while known-source monitoring continues within its own budget.
 
 ## Signals: evidence before scores
 
@@ -43,12 +59,15 @@ The inspected research implementation lives under `packages/domain/research`, wi
 
 Retain the existing worker, Postgres, budget accounting, bounded fetcher and source protections. Extend page discovery to include tenant, resident, maintenance, emergency and FAQ links within its page budget. Prefer relevant discovered links over guessing many paths. Reuse current import/matching behavior and CRM identities rather than build a second contact database.
 
-Add four narrow capabilities:
+Add five narrow capabilities:
 
 1. **Candidate intake:** accept discovered firm URL, location, source URL, discovery time and hypothesis. Research batches use a preview that reports duplicates, review cases and eligible candidates before durable intake. This stores candidates without starting outreach.
 2. **Evidence extraction:** return bounded structured facts with source references and supporting text. Keep observed facts, inferred hypotheses and unknowns separate. Page content is untrusted data, never instructions for tools or workflow.
 3. **Qualification/admission:** apply deterministic eligibility rules to verified evidence. Models propose facts; they cannot invent permissions, lift stops or create deals.
 4. **Refresh and learning:** refresh eligible sources, retain changed evidence and associate subsequent call feedback with the originating hypothesis.
+5. **Continuous discovery:** run persisted query families by geography and hypothesis, including fit-first queries; deduplicate results against candidates and firms before fetching or model analysis. Store provider, query/version, run time, native citations, usage and failure state. Rotate productive query families rather than rerun identical searches without tracking incremental yield.
+
+Use documented public employer job feeds where available, such as [Greenhouse](https://docs.greenhouse.io/job-board.html) and [Lever](https://github.com/lever/postings-api). Resolve each board to its employer first; these APIs are not a global employer directory. Store stable job identities so syndication, edits and reposting do not become independent events by accident.
 
 ## Admission and ranking
 
@@ -72,6 +91,8 @@ Honor existing crawl limits and source protections. Do not bypass login walls or
 
 Research work reserves budget through existing controls, including verified provider credit coverage. Once budget is exhausted, pending research waits; admitted queue items remain visible. No new cash allowance is implied. Stop refreshing rejected firms until a reason or meaningful source change warrants another check; this avoids indefinite low-value spending.
 
+Initial scheduling defaults: a bounded daily discovery run and weekly refresh for active known sources, with an extra freshness check before admission where required above. These are configurable product jobs, not a promise that this chat keeps running. Persist cursors, last successful checks and retry deadlines. Hash relevant content before model extraction so footer churn does not create false signals or repeated analysis spend. A newly observed page is not necessarily a newly published event.
+
 ## Validation and learning
 
 Start with 15–20 candidates per available strong hypothesis and a comparably sized fit-only comparison group, matched approximately by geography and size where known. Do not manufacture strong-signal leads to fill quotas. David reviews the comparison group before any queue admission. Record differences in contactability and warm introductions; otherwise they confound the comparison.
@@ -82,9 +103,9 @@ Acceptance checks cover: resident-page discovery; physical technician versus coo
 
 ## Delivery boundaries
 
-First ship candidate intake, evidence presentation and review using a small real batch. Then add deterministic admission and bounded scheduled refresh, followed by feedback reporting. These reuse the existing CRM rather than introduce a separate sourcing service, vector database or autonomous browser fleet.
+First ship candidate intake, evidence presentation and review using a small real batch. Then add source verification and scheduled monitoring, bounded continuous discovery, deterministic admission and feedback reporting. Candidate intake and monitoring can be implemented independently of the final search provider. These reuse the existing CRM rather than introduce a separate sourcing service, vector database or autonomous browser fleet.
 
-Not included: paid databases, automatic whole-web search, social account automation, new outbound permissions, automatic deals, or an email-volume increase. Those are independent workstreams. The ten-call suggestion trial remains separate from testing sourcing hypotheses.
+Not included: paid databases, building a whole-web index, social account automation, new outbound permissions, automatic deals, or an email-volume increase. Those are independent workstreams. The ten-call suggestion trial remains separate from testing sourcing hypotheses.
 
 ## Research basis and limits
 

@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  sourcing_candidates: coverage(['deletion_removes'], 'Independent unverified drafts; the admin candidate delete command removes the payload. No CRM contact or firm is created.'),
   // ------------------------------------------------------------- foundation
   workspaces: coverage(['operational'], 'The tenant itself.'),
   users: coverage(['retained'], 'A Callie member, not a prospect; departure revokes the membership and leaves the person.'),

@@ -1,3 +1,4 @@
+import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
 import { MEETING_AUTO_RECORDING_PATHS,routeMeetingAutoRecording } from './meetingAutoRecording.ts';
 import { MEETING_FOLLOW_THROUGH_PATHS,routeMeetingFollowThrough } from './meetingFollowThrough.ts';
 import { MEETING_OUTCOMES_PATHS, routeMeetingOutcomes } from './meetingOutcomes.ts';
@@ -146,6 +147,7 @@ function healthModule(routing: RoutingOptions): RouteModule {
 export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[] {
   return [
     healthModule(routing),
+    moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
     // This workspace's Macs and the revocation (wave 3b). Exact paths, and beside
     // `auth` rather than under it: `/auth` is what a Mac calls with no session, and
