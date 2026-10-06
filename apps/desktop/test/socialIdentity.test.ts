@@ -29,3 +29,4 @@ it('survives serialization into an isolated browser world without module depende
  const serialized=new Function('document','pageUrl',`return (${readLinkedInIdentity.toString()})(document,pageUrl)`);
  expect(serialized(document,url)).toEqual(readLinkedInIdentity(document,url));
 });
+it('reads the same sidebar while the native composer is open without navigating away',()=>{document.body.innerHTML=`<aside aria-label="Sidebar">${profile()}</aside><dialog open></dialog>`;expect(readLinkedInIdentity(document,'https://www.linkedin.com/sharing/compose')).toMatchObject({externalAccountId:'https://www.linkedin.com/in/example-founder/'});});

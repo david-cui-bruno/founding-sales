@@ -58,3 +58,9 @@ Closed navigation binds a detail read to the exact clicked native receipt, with 
 A text-only adapter now composes staging, guarded submission, independent receipt inspection and cancellation. The delivery runner passes the original approval snapshot into both new attempts and restart recovery, so recovery does not depend on downloading retained media. A lost-click-response test verifies a native receipt without a second click. Cancellation re-verifies the target; an already-absent row remains unknown because publication could have occurred between reads.
 
 Twenty focused adapter/runner/delivery tests and the full desktop suite (1,495 passed, 23 skipped) pass. Typecheck and focused lint pass. This is local composition, not live delivery activation: product-owned account/navigation/list/detail ports and platform acceptance still remain. Images remain refused, and the final guard holds when browser and approved timezone differ.
+
+### Product browser port wiring
+
+The adapter now has browser ports for account checks, composer entry, scheduled-list navigation, list readback and exact saved-detail inspection. Navigation uses only the observed clock and Scheduled tab, acts once per state, and stops after bounded polling. The sidebar identity probe supports the composer route without navigating away from staged content.
+
+Fourteen focused tests and the full desktop suite (1,501 passed, 23 skipped) pass; typecheck and focused lint pass. These ports are not registered for delivery yet. The complete flow still needs an integrated Electron fixture and live product-session acceptance; prior live tests used the separate Codex browser.

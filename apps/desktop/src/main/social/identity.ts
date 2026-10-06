@@ -25,7 +25,7 @@ export function readLinkedInIdentity(doc:ProbeDocument,pageUrl:string):ObservedS
    const style=doc.defaultView?.getComputedStyle(p);if(style?.display==='none'||style?.visibility==='hidden')return false;
   }return true;
  }
- const page=linkedInUrl(pageUrl);if(!page||page.pathname!=='/feed/')return null;
+ const page=linkedInUrl(pageUrl);if(!page||!['/feed/','/sharing/compose'].includes(page.pathname))return null;
  const sidebars=Array.from(doc.querySelectorAll('aside[aria-label="Sidebar"]')).filter(visible);
  if(sidebars.length!==1)return null;
  const profiles=new Map<string,{names:Set<string>;images:Set<string>}>();
