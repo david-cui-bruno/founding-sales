@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {z} from 'zod';
 import type {AccountIdentity,ApprovedPost,InspectionResult,SocialAdapter} from '../adapters.ts';
 import type {SocialAdapterContext} from '../deliveryRunner.ts';
 import {stageLinkedInText} from './linkedinStage.ts';
@@ -11,6 +12,7 @@ interface Port extends StagePort {
  account():Promise<AccountIdentity|null>;
  openComposer():Promise<void>;openScheduledList():Promise<void>;
  list():Promise<unknown>;detail(receiptId:string):Promise<unknown>;
+ published?(receiptId:string):Promise<unknown>;
 }
 /** Text-only adapter composition. Not a verified registration: native navigation
  * ports and the product-owned session still need platform acceptance.
@@ -43,7 +45,13 @@ export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):So
   if(input.fingerprint!==context.fingerprint||snapshot.images.length||!port.current())return unknown();
   try{
    if(!await same())return unknown();await port.openScheduledList();if(!port.current())return unknown();
-   return await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
+   const scheduled=await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
+   if(scheduled.state==='scheduled')return scheduled;
+   if(!port.published||!input.receiptId||!/^urn:li:share:\d+$/.test(input.receiptId)||Date.parse(snapshot.publishAt)>port.now()||!port.current())return unknown();
+   const result=z.strictObject({ok:z.literal(true),view:z.strictObject({shareId:z.string(),activityId:z.string().regex(/^urn:li:activity:\d+$/),authorExternalId:z.string(),text:z.string().max(10000),permalink:z.string(),publishedAt:z.null()})}).parse(await port.published(input.receiptId));
+   const v=result.view;
+   if(!port.current()||v.shareId!==input.receiptId||v.authorExternalId!==snapshot.account.externalId||v.text!==snapshot.text||v.permalink!==`https://www.linkedin.com/feed/update/${v.activityId}/`||!await same())return unknown();
+   return {state:'published',receiptId:input.receiptId,permalink:v.permalink,observedAt:new Date(port.now()).toISOString(),accountExternalId:snapshot.account.externalId,observedFingerprint:context.fingerprint,complete:true};
   }catch{return unknown();}
  },
  async cancel(receiptId){

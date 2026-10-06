@@ -90,3 +90,13 @@ The social bucket Terraform posture test passes with its mocked AWS provider. A 
 Read-only inspection of an existing post in the hidden Codex browser confirmed that its activity permalink ID differs from the share ID exposed by the same detail page’s native Boost link. The Boost link was read, not clicked. Added a text-only detail reader that requires one post, one explicit share mapping and one profile author; preserves explicit line breaks; rejects media and collapsed text; and never invents a publication timestamp. Four synthetic DOM tests pass, along with desktop typecheck and focused lint.
 
 This is an evidence primitive only. It is not wired into recovery, does not establish a successful scheduled-to-published transition, and cannot certify image posts. Exact approved-content/account/receipt comparison and product-session publication acceptance remain required. No existing post was changed, and the temporary inspection tab was closed.
+
+### Exact publication recovery wiring
+
+A read-only lookup of a known published share URL opened the same native post detail and independently exposed the distinct activity ID. The browser port now accepts only a validated stored share receipt, reads that detail with bounded polling, and restores the own-profile surface before checking the signed-in account again. It stops on session invalidation or unexpected navigation.
+
+Text-only recovery may report published only after the approved schedule time, with the exact stored share receipt, author, text and activity permalink. Missing receipts, changed content/account/session and malformed links remain unknown; no submission retry or cancellation follows from absence. Actual publication time is not inferred from the receipt.
+
+The full desktop suite passes 1,514 tests (26 skipped). Four focused hidden Electron flows pass, including scheduled-to-published recovery across account-window recreation with exactly one submission and zero deletion. Typecheck and focused lint pass. This is a local synthetic platform test, not live acceptance. The broader host suite had 25 passing tests and one package-launch failure: installed Callie was running, and the production entry point refuses a second instance. No repeat package launch or interruption of the installed app was attempted. Package launch remains unverified.
+
+The secret-scan diagnostic identified an 11-minute parent timeout (ETIMEDOUT/SIGTERM), not a findings report. A retry with a 30-minute bound and unchanged full-history scan coverage is running separately; no release clearance is claimed.

@@ -27,3 +27,32 @@ it('cancellation reinspects and does not claim cancellation for a row already ab
  vi.mocked(cancelLinkedInReceipt).mockResolvedValue({state:'absent'});expect(await adapter.cancel('urn:li:share:123')).toMatchObject({state:'unknown'});
  vi.mocked(cancelLinkedInReceipt).mockResolvedValue({state:'cancelled'});expect(await adapter.cancel('urn:li:share:123')).toMatchObject({state:'cancelled',complete:true});
 });
+
+it('recovers an exact published receipt after its scheduled time without another click',async()=>{
+ const h=setup();h.port.now=()=>Date.parse('2026-11-03T12:00:00Z');
+ vi.mocked(inspectLinkedInTextReceipt).mockResolvedValue({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(h.port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
+ const published=vi.fn(async()=>({ok:true,view:{shareId:'urn:li:share:123',activityId:'urn:li:activity:456',authorExternalId:'profile',text:'Approved',permalink:'https://www.linkedin.com/feed/update/urn:li:activity:456/',publishedAt:null}}));
+ const adapter=createLinkedInTextAdapter(context,{...h.port,published});
+ expect(await adapter.inspect({receiptId:'urn:li:share:123',fingerprint:context.fingerprint})).toMatchObject({state:'published',receiptId:'urn:li:share:123',complete:true,permalink:'https://www.linkedin.com/feed/update/urn:li:activity:456/'});
+ expect(h.port.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+ published.mockResolvedValueOnce({ok:true,view:{shareId:'urn:li:share:999',activityId:'urn:li:activity:456',authorExternalId:'profile',text:'Approved',permalink:'https://www.linkedin.com/feed/update/urn:li:activity:456/',publishedAt:null}});
+ expect(await adapter.inspect({receiptId:'urn:li:share:123',fingerprint:context.fingerprint})).toMatchObject({state:'unknown'});
+});
+it('does not search for a publication without a known receipt or before its scheduled time',async()=>{
+ const h=setup(),published=vi.fn();vi.mocked(inspectLinkedInTextReceipt).mockResolvedValue({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(h.port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
+ const adapter=createLinkedInTextAdapter(context,{...h.port,published});
+ await adapter.inspect({receiptId:'urn:li:share:123',fingerprint:context.fingerprint});
+ await adapter.inspect({receiptId:null,fingerprint:context.fingerprint});expect(published).not.toHaveBeenCalled();
+});
+it.each(['text','author','permalink','session','account'])('keeps publication unknown when %s changes during recovery',async change=>{
+ const h=setup();h.port.now=()=>Date.parse('2026-11-03T12:00:00Z');
+ vi.mocked(inspectLinkedInTextReceipt).mockResolvedValue({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(h.port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
+ let active=true;const published=async()=>{
+  if(change==='session')active=false;
+  if(change==='account')h.port.account.mockResolvedValue({...post.account,externalId:'other'});
+  return {ok:true,view:{shareId:'urn:li:share:123',activityId:'urn:li:activity:456',authorExternalId:change==='author'?'other':'profile',text:change==='text'?'Changed':'Approved',permalink:change==='permalink'?'https://evil.test/':'https://www.linkedin.com/feed/update/urn:li:activity:456/',publishedAt:null}};
+ };
+ const adapter=createLinkedInTextAdapter(context,{...h.port,current:()=>active,published});
+ expect(await adapter.inspect({receiptId:'urn:li:share:123',fingerprint:context.fingerprint})).toMatchObject({state:'unknown',complete:false});
+ expect(h.port.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+});

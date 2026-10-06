@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {linkedInPublishedDetailScript} from './linkedinPublishedDetail.ts';
 import {z} from 'zod';
 import {probeLinkedInIdentity} from '../identityProbe.ts';
 import type {stageLinkedInText} from './linkedinStage.ts';
@@ -30,6 +31,25 @@ export function createLinkedInBrowserPorts(port:Port){
    await port.wait();
   }
   throw new Error('scheduled_list_unavailable');
+ },
+ async published(receiptId:string){
+  if(!/^urn:li:share:\d+$/.test(receiptId)||!current())throw new Error('invalid_publication_lookup');
+  const target=`https://www.linkedin.com/feed/update/${receiptId}/`;
+  const atTarget=()=>port.current()&&port.contents.getURL()===target;
+  try{
+   await port.loadURL(target);if(!atTarget())throw new Error('publication_navigation_changed');
+   for(let i=0;i<30;i++){
+    if(!atTarget())throw new Error('session_changed');
+    const result=z.object({ok:z.boolean(),view:z.unknown().optional()}).parse(await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInPublishedDetailScript()}],false));
+    if(!atTarget())throw new Error('session_changed');
+    if(result.ok)return result;await port.wait();
+   }
+   return {ok:false};
+  }finally{
+   // Restore the independently observed own-profile surface before account recheck.
+   // Do not navigate a session that was signed out, redirected or invalidated.
+   if(atTarget())await port.loadURL('https://www.linkedin.com/feed/');
+  }
  },
  async list(){return execute(`(()=>{const result=${linkedInScheduledListScript()};return {...result,zone:Intl.DateTimeFormat().resolvedOptions().timeZone};})()`);},
  async detail(receiptId:string){
