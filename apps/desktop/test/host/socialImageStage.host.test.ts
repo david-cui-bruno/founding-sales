@@ -20,7 +20,7 @@ it.skipIf(!HOST_TESTS_ENABLED).each(['none','alt','text','extra_image'])('checks
   const line=stdout.split('\n').find(x=>x.startsWith('SOCIAL_IMAGE_PROBE:'));expect(line).toBeDefined();
   const output=JSON.parse(line!.slice('SOCIAL_IMAGE_PROBE:'.length));
   expect(output).toMatchObject({result:{visible:false,focused:false},shown:0,remaining:0});
-  if(fault==='none')expect(output.result).toMatchObject({stage:{ready:true},preview:{text:'Approved image post',alt:'Synthetic image',loaded:true,dialogs:1},proof:{ok:true,view:{sha256:createHash('sha256').update(bytes).digest('hex'),altText:'Synthetic image',bytes:bytes.length}}});
+  if(fault==='none')expect(output.result).toMatchObject({capture:{ok:true,view:{sha256:createHash('sha256').update(bytes).digest('hex'),platformId:'fixture-native'}},stage:{ready:true},preview:{text:'Approved image post',alt:'Synthetic image',loaded:true,dialogs:1},proof:{ok:true,view:{sha256:createHash('sha256').update(bytes).digest('hex'),altText:'Synthetic image',bytes:bytes.length}}});
   else expect(output.result.stage).toEqual({ready:false,reason:fault==='text'?'staged_content_changed':'image_completion_unverified'});
  }finally{await rm(root,{recursive:true,force:true});}
 },60_000);

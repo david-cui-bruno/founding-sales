@@ -1,3 +1,4 @@
+import {linkedInMediaCaptureScript} from '../../../src/main/social/adapters/linkedinMediaCapture.ts';
 import {app,BrowserWindow,session} from 'electron';
 import {linkedInDraftImageProofScript} from '../../../src/main/social/adapters/linkedinDraftImageProof.ts';
 import {stageLinkedInPost} from '../../../src/main/social/adapters/linkedinPostStage.ts';
@@ -17,6 +18,13 @@ void(async()=>{
   const stage=await stageLinkedInPost({deliveryId:'fixture',postId:'fixture',revision:1,account:{platform:'linkedin',externalId:'fixture',displayName:'Fixture Founder'},text:'Approved image post',images:[{assetId:'fixture',version:1,localPath:process.env['FSS_SOCIAL_IMAGE']!,sha256:process.env['FSS_SOCIAL_HASH']!,altText:'Synthetic image'}],publishAt:'2026-11-02T15:00:00Z',zone:'America/New_York',fingerprint:'fixture'},{root:process.env['FSS_SOCIAL_ROOT']!,contents:real.webContents,current:isCurrent,now:()=>Date.parse('2026-10-06T12:00:00Z'),wait:()=>new Promise(resolve=>setTimeout(resolve,20))});
   const preview=await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:'({text:document.querySelector("[contenteditable]").textContent,alt:document.querySelector("img")?.alt,loaded:document.querySelector("img")?.complete,dialogs:document.querySelectorAll("dialog[open]").length})'}]);
   const proof=await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInDraftImageProofScript()}]);
-  return {stage,preview,proof,visible:real.isVisible(),focused:real.isFocused()};
+  let capture:unknown=null;
+  if(stage.ready){
+   const input={token:'b6bacf0c-28b2-4290-8eaa-c8647020c3c8',sha256:process.env['FSS_SOCIAL_HASH']!,altText:'Synthetic image'};
+   await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInMediaCaptureScript({action:'arm',...input})}]);
+   await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:"document.querySelector('img').src='https://media.licdn.com/dms/image/v2/fixture-native/feedshare-shrink_1280/x'"}]);
+   capture=await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInMediaCaptureScript({action:'read',...input})}]);
+  }
+  return {stage,preview,proof,capture,visible:real.isVisible(),focused:real.isFocused()};
  });console.log('SOCIAL_IMAGE_PROBE:'+JSON.stringify({result,shown,remaining:BrowserWindow.getAllWindows().length}));await partition.protocol.unhandle('https');app.quit();
 })().catch(error=>{console.error(error);app.exit(1);});

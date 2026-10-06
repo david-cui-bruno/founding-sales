@@ -11,7 +11,7 @@ it.skipIf(!HOST_TESTS_ENABLED).each(['none','lost','changed','published','time-m
  const root=await mkdtemp(join(tmpdir(),'callie-social-submit-'));
  try{
   const script=join(root,'probe.mjs');
-  await build({entryPoints:[join(DESKTOP_ROOT,'test/host/support/socialFlowProbe.ts')],outfile:script,bundle:true,platform:'node',format:'esm',external:['electron'],target:'node24'});
+  await build({entryPoints:[join(DESKTOP_ROOT,'test/host/support/socialFlowProbe.ts')],outfile:script,bundle:true,platform:'node',format:'esm',external:['electron'],plugins:[{name:'sharp-host',setup(builder){builder.onResolve({filter:/^sharp$/},()=>({path:createRequire(import.meta.url).resolve('sharp'),external:true}));}}],target:'node24'});
   const env:NodeJS.ProcessEnv={...process.env,FSS_SOCIAL_PROBE_DATA:join(root,'data'),FSS_SOCIAL_FAULT:fault};delete env['ELECTRON_RUN_AS_NODE'];
   const {stdout}=await promisify(execFile)(createRequire(import.meta.url)('electron') as string,[script],{env,timeout:45_000,maxBuffer:1024*1024});
   const line=stdout.split('\n').find(x=>x.startsWith('SOCIAL_FLOW_PROBE:'));expect(line).toBeDefined();

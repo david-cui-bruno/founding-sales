@@ -24,3 +24,13 @@ it('recovers image receipts only against persisted native identity and verified 
  p.detail.mockResolvedValueOnce({...await p.detail(),images:[{platformId:'native-image',altText:'Different'}]});
  expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
 });
+it('binds an initial receipt only to original captured media, excluding every baseline receipt',async()=>{
+ const {inspectLinkedInSubmittedImage}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const proof={sha256:'b'.repeat(64),platformId:'original-media'};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'https://media.licdn.com/dms/image/v2/original-media/feedshare-shrink_160/x'}]}],zone:'America/New_York'}),detail:async()=>({...await setup().detail(row.receiptId),images:[{platformId:proof.platformId,altText:'Alt'}],altTextVerified:true})};
+ const raw={...expected,images:[{sha256:proof.sha256,altText:'Alt'}]};
+ expect(await inspectLinkedInSubmittedImage(raw,proof,[],p)).toMatchObject({state:'scheduled',mediaBinding:{receiptId:row.receiptId,images:[proof]}});
+ expect(await inspectLinkedInSubmittedImage(raw,proof,[row.receiptId],p)).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInSubmittedImage(raw,{...proof,sha256:'c'.repeat(64)},[],p)).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInSubmittedImage(raw,{...proof,platformId:'different'},[],p)).toMatchObject({state:'unknown'});
+});

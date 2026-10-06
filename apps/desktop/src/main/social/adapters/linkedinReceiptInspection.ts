@@ -55,3 +55,20 @@ async function inspectReceipt(raw:unknown,receiptId:string|null,port:Port,bindin
   return {state:'scheduled',receiptId:detail.receiptId,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:expected.accountExternalId,observedFingerprint:expected.fingerprint,complete:true,...(binding?{mediaBinding:binding}:{})};
  }catch{return unknown();}
 }
+
+/** Initial submission only: capture is read from the original draft's observer
+ * before navigating away. Baseline receipts prevent adopting a pre-existing post.
+ */
+export async function inspectLinkedInSubmittedImage(raw:unknown,capture:unknown,baseline:readonly string[],port:Port):Promise<InspectionResult>{
+ const unknown=():InspectionResult=>({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
+ try{
+  const expected=expectedSchema.parse(raw);
+  const proof=z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/),platformId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).parse(capture);
+  const images=z.array(z.strictObject({sha256:z.string(),altText:z.string()})).length(1).parse(expected.images);
+  if(images[0]!.sha256!==proof.sha256||!port.current())return unknown();
+  const list=listSchema.parse(await port.list());if(!list.complete||list.rows.length!==list.total||!port.current())return unknown();
+  const candidates=list.rows.filter(row=>!baseline.includes(row.receiptId)&&row.text===expected.text&&row.images.length===1&&z.object({src:z.string()}).safeParse(row.images[0]).success&&linkedInMediaId((row.images[0] as {src:string}).src)===proof.platformId);
+  if(candidates.length!==1)return unknown();
+  return inspectLinkedInImageReceipt(expected,{receiptId:candidates[0]!.receiptId,fingerprint:expected.fingerprint,images:[proof]},port);
+ }catch{return unknown();}
+}
