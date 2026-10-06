@@ -26,7 +26,7 @@ export function linkedInImageEditorScript(input:z.infer<typeof actionSchema>):st
  const single=Array.from(editor.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='1 of 1');
  if(action.action==='read')return {ok:true,view:{kind:altPanel?'alt':'editor',alt:field?field.value:null,single,busy:false,images:[]}};
  const button=name=>one(Array.from(editor.querySelectorAll('button')).filter(e=>visible(e)&&(e.textContent.trim()===name||e.getAttribute('aria-label')===name)));
- if(action.action==='openAlt'){if(altPanel||!single)return fail();return click(one(Array.from(editor.querySelectorAll('[role="checkbox"],input[type="checkbox"]')).filter(e=>visible(e)&&e.getAttribute('aria-label')==='Alternative text')));}
+ if(action.action==='openAlt'){if(altPanel||!single)return fail();return click(one(Array.from(editor.querySelectorAll('button[aria-pressed]')).filter(e=>visible(e)&&e.getAttribute('aria-label')==='Alternative text')));}
  if(action.action==='back')return altPanel?click(button('Back')):fail();
  if(action.action==='next')return !altPanel&&single?click(button('Next')):fail();
  if(!field)return fail();
