@@ -84,3 +84,9 @@ The gate also required the explicit API route/module inventory and provider-call
 The local upgrade rehearsal from schema 56 (base checkout `61727744`) to 60 passes, including existing-data preservation, runtime-role workflow checks, migration failure atomicity and refusal to run the schema-56 application against schema 60. Evidence is under `/tmp/social-upgrade-56-60`; no production migration was run.
 
 The social bucket Terraform posture test passes with its mocked AWS provider. A new test uses the actual AWS S3 presigner with synthetic credentials and no network: upload checksum, length, type, upload identity and conditional overwrite refusal are signed headers; URLs expire after ten minutes, and downloads request attachment disposition. All four social asset API tests, API typecheck and focused lint pass. This does not establish deployed IAM/S3 access; an actual private-object round trip remains a release check.
+
+### Published-post evidence reader
+
+Read-only inspection of an existing post in the hidden Codex browser confirmed that its activity permalink ID differs from the share ID exposed by the same detail page’s native Boost link. The Boost link was read, not clicked. Added a text-only detail reader that requires one post, one explicit share mapping and one profile author; preserves explicit line breaks; rejects media and collapsed text; and never invents a publication timestamp. Four synthetic DOM tests pass, along with desktop typecheck and focused lint.
+
+This is an evidence primitive only. It is not wired into recovery, does not establish a successful scheduled-to-published transition, and cannot certify image posts. Exact approved-content/account/receipt comparison and product-session publication acceptance remain required. No existing post was changed, and the temporary inspection tab was closed.
