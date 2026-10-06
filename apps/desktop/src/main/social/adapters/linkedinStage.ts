@@ -34,6 +34,8 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
   if(at.getUTCSeconds()||at.getUTCMilliseconds())return refuse('unsupported_time_precision');
   await act({action:'fillSchedule',date,time});await port.wait();view=await read();
   if(view.date!==date||view.time!==time||view.zone!==zone)return refuse('schedule_mismatch');
+  await act({action:'openTime'});await port.wait();await act({action:'selectTime',time});await port.wait();view=await read();
+  if(view.date!==date||view.time!==time||view.zone!==zone)return refuse('schedule_mismatch');
   await act({action:'confirmSchedule',date,time});view=await waitFor('composer');
   const labelParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,weekday:'short',month:'short',day:'numeric'}).formatToParts(at).map(p=>[p.type,p.value]));
   const expected=`Posting at ${labelParts['weekday']}, ${labelParts['month']} ${labelParts['day']}, ${time}`;

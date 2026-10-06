@@ -30,3 +30,9 @@ The saved-detail reader now preserves native media IDs and missing preview alt t
 A scheduling interaction also needs product acceptance: entering a time alone did not update the live summary until the visible time option was selected. Do not treat a local fixture's successful field assignment as proof of live staging.
 
 The earlier inspection paragraphs describe the initial probes only. They do not supersede these later test results. Facebook and X, final submission coordination, original media binding and the product-owned session's live acceptance remain unfinished.
+
+### Time-picker preparation correction
+
+A read-only control inspection of an empty composer confirmed a `time-picker-clock-button` and a `time-picker-menu` linked by the time input's `aria-controls`. Options are `menuitemradio` elements with `time-picker-option`. No draft text, image, schedule or post was created during this inspection.
+
+Preparation now opens that menu and selects the exact requested option before confirming the date/time panel. It refuses missing or duplicate options and rechecks date/time/zone afterward. Fifteen focused tests and seven hidden Electron host tests passed. This fixes the known interaction gap in code; live acceptance of the full product-owned scheduling flow remains outstanding.

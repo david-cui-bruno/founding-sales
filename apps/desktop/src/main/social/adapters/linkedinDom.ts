@@ -4,6 +4,7 @@ const actionSchema=z.discriminatedUnion('action',[
  z.strictObject({action:z.literal('read')}),z.strictObject({action:z.literal('focusText')}),
  z.strictObject({action:z.literal('openSchedule')}),z.strictObject({action:z.literal('openMedia')}),
  z.strictObject({action:z.literal('openIdentity'),name:z.string().min(1).max(200)}),
+ z.strictObject({action:z.literal('openTime')}),z.strictObject({action:z.literal('selectTime'),time}),
  z.strictObject({action:z.literal('fillSchedule'),date,time}),z.strictObject({action:z.literal('confirmSchedule'),date,time}),
 ]);
 export type LinkedInDomAction=z.infer<typeof actionSchema>;
@@ -31,6 +32,13 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
  if(input.action==='openMedia')return editor?click(one('button[aria-label="Media"]')):refuse('layout_changed');
  if(input.action==='openSchedule')return editor?click(one('a[aria-label="Scheduled"]')):refuse('layout_changed');
  if(!date||!time||editor)return refuse('layout_changed');
+ if(input.action==='openTime')return click(one('button[data-testid="time-picker-clock-button"][aria-label="Open time picker"]'));
+ if(input.action==='selectTime'){
+  const id=time.getAttribute('aria-controls');if(!id||time.getAttribute('aria-expanded')!=='true')return refuse('time_menu_unavailable');
+  const menus=all('[data-testid="time-picker-menu"][role="menu"]').filter(e=>e.id===id);if(menus.length!==1)return refuse('time_menu_unavailable');
+  const options=Array.from(menus[0].querySelectorAll('[data-testid="time-picker-option"][role="menuitemradio"]')).filter(e=>visible(e)&&text(e)===input.time);
+  return click(options.length===1?options[0]:null);
+ }
  if(input.action==='fillSchedule'){
   const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')?.set;if(!setter)return refuse('input_unavailable');
   for(const [element,value] of [[date,input.date],[time,input.time]]){setter.call(element,value);element.dispatchEvent(new window.Event('input',{bubbles:true}));element.dispatchEvent(new window.Event('change',{bubbles:true}));element.blur();}return {ok:true};
