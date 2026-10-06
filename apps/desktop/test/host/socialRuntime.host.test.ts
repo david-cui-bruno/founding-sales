@@ -13,7 +13,7 @@ it.skipIf(!HOST_TESTS_ENABLED)('loads a local composer in the real hidden Electr
   const script=join(root,'probe.mjs');
   await build({entryPoints:[join(DESKTOP_ROOT,'test/host/support/socialRuntimeProbe.ts')],outfile:script,bundle:true,platform:'node',format:'esm',external:['electron'],target:'node24'});
   const electron=createRequire(import.meta.url)('electron') as string;
-  const env={...process.env,FSS_SOCIAL_PROBE_DATA:join(root,'data')};delete env['ELECTRON_RUN_AS_NODE'];
+  const env:NodeJS.ProcessEnv={...process.env,FSS_SOCIAL_PROBE_DATA:join(root,'data')};delete env['ELECTRON_RUN_AS_NODE'];
   const {stdout}=await promisify(execFile)(electron,[script],{env,timeout:45_000,maxBuffer:1024*1024});
   const line=stdout.split('\n').find(x=>x.startsWith('SOCIAL_PROBE:'));expect(line).toBeDefined();
   expect(JSON.parse(line!.slice('SOCIAL_PROBE:'.length))).toEqual({result:{isolation:{node:'undefined',process:'undefined',bridge:'undefined',account:'fixture'},visible:false,focused:false,current:true,windows:1},shown:0,remaining:0});
