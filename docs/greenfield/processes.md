@@ -51,6 +51,8 @@ that talked to anything outside PostgreSQL would be a bug.
 
 | Source | What it materializes |
 |---|---|
+| `social-drafts` | Explicit requests and default-off weekly social draft opt-ins under shared credit reservations; two attempts and 30-minute expiry. Expiry runs even when generation is disabled. No approval or scheduling. |
+| `social-assets-cleanup` | Expire unfinished image uploads and retry private object deletion; release quota only after deletion succeeds. |
 | `outreach-replies` | Bounded Bedrock interpretation of current matched human replies; prepares one message-scoped answer through normal delivery gates; expires abandoned claims even while disabled. |
 | `canary` | One `canary_runs` row per workspace per quarter hour (13.3) |
 | `today-build` | The morning list, once per workspace per business date (8.2) |

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   API_SCHEMA_RANGE,
   CURRENT_SCHEMA_VERSION,
@@ -825,6 +825,8 @@ describe('Appendix G 22 (g70): a schema release stops before the apply, and the 
  * run must still end with both services at their declared counts on the release digest.
  */
 describe('RS-2: a schema release is two one-off tasks and one wait for both services', () => {
+  let eventNow=0;
+  beforeEach(()=>{eventNow=Date.now();});
   const oneOffCommands = (calls: readonly string[]): readonly string[] =>
     launched(calls).map(call => {
       // `--overrides <json>`: the container override's command is what ran.
@@ -884,7 +886,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
    * against, so the numbers are asserted exactly.
    */
   const iso = (offsetSeconds: number): string =>
-    new Date(Date.now() + offsetSeconds * 1000).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+    new Date(eventNow + offsetSeconds * 1000).toISOString().replace(/\.\d{3}Z$/u, 'Z');
   const event = (offsetSeconds: number, message: string): string =>
     `{"createdAt":"${iso(offsetSeconds)}","message":"(service ${ORDER_PREFIX}-api) ${message}"}`;
   const REGISTERED = 'registered 2 targets in (target-group tg)';
@@ -919,7 +921,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
-      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(eventNow / 1000) - 540)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('600s');
@@ -931,7 +933,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
-      stopInstant: `root=${canonicalRehearsalRoot()} prefix=fss-rh-somewhere-else api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=fss-rh-somewhere-else api_stopped_at=${String(Math.floor(eventNow / 1000) - 540)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('300s');
@@ -942,7 +944,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
       // Seven hours ago: past the window, so it is another release's stop.
-      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 7 * 60 * 60)}`,
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(eventNow / 1000) - 7 * 60 * 60)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('300s');
@@ -1008,7 +1010,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
-      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
+      stopInstant: `root=${canonicalRehearsalRoot()} prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(eventNow / 1000) - 540)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('600s');

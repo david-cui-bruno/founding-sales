@@ -1,3 +1,9 @@
+import {createSocialAccountsBridge} from '../src/main/social/accountsBridge.ts';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import sharp from 'sharp';
+import {createSocialImageImport} from '../src/main/social/imageImport.ts';
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createBriefImport } from '../src/main/briefImport.ts';
@@ -94,6 +100,17 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'social.thumbnail':{assetId:UUID,version:2},
+  'social.assets':{},
+  'social.removeAsset':{assetId:UUID,commandId:UUID},
+  'social.connectAccount':{accountId:UUID,commandId:UUID},
+  'social.disconnectAccount':{accountId:UUID,commandId:UUID},
+  'social.workspace':{},
+  'social.drafts':{},
+  'social.weekly':{},
+  'social.saveWeekly':{enabled:true,expectedRevision:0,commandId:UUID},
+  'social.requestDrafts':{sourceRefs:[{kind:'public',id:UUID,revision:1}],factBlocks:[],commandId:UUID},
+  'social.mutate':{action:'approve',postId:UUID,expectedRevision:1,commandId:UUID},
   'outreach.control':{},
   'outreach.preview':{mailboxId:UUID,candidateIds:[UUID],emailSequenceVersionId:null,callSequenceVersionId:null},
   'outreach.mutate':{action:'authorization',mailboxId:UUID,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission',commandId:UUID},
@@ -322,6 +339,15 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
+    social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const handlers=operationHandlers({api,socialAccounts,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+      const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
+      try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
+        const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});
+        const chosen=await host.choose({kind:'upload',usageNote:null});if(!chosen.stage)throw new Error('image fixture not prepared');
+        if(action==='discardImage')await host.upload({id:chosen.stage.id});
+        return await operationHandlers({api,socialImages:host} as unknown as OperationHostDeps)[`social.${action}` as OperationName]({id:chosen.stage.id} as never);
+      }finally{await rm(directory,{recursive:true,force:true});}
+    }]))} as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);

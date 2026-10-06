@@ -47,3 +47,5 @@ export * from './sourcingLearning.ts';
 export * from './outreach.ts';
 
 export * from './outreachControl.ts';
+
+export * from './social.ts';

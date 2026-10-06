@@ -123,8 +123,8 @@ async function pack(staging: string, outDirectory: string, stamp: ReleaseStamp):
     // packager cannot infer the runtime from one. It is the version installed in
     // this checkout, and the stamp records it.
     electronVersion: stamp.electronVersion,
-    // Everything is bundled, so there is nothing to prune and nothing to unpack.
-    asar: true,
+    // Native image libraries must remain outside asar for dlopen; signing follows packing.
+    asar: { unpack: '**/node_modules/@img/**' },
     prune: false,
     // Signing, fuses and notarization happen below, in an order the packager
     // cannot express: it would sign before the fuses are burned. Leaving both

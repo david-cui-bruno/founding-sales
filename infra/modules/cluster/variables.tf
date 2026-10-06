@@ -263,3 +263,19 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "social_assets_bucket_arn" {
+  description = "Private social originals and derivatives; separate from expiring recordings."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition     = var.social_assets_bucket_arn == null ? true : can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.social_assets_bucket_arn))
+    error_message = "Expected an S3 bucket ARN."
+  }
+}
+
+variable "enable_social_assets" {
+  type    = bool
+  default = false
+}

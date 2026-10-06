@@ -1,0 +1,11 @@
+/** @vitest-environment jsdom */
+import {afterEach,expect,it} from 'vitest';
+import {linkedInScheduledListScript} from '../src/main/social/adapters/linkedinScheduledList.ts';
+afterEach(()=>{document.body.innerHTML='';});
+function run(){return new Function('document','window',`return ${linkedInScheduledListScript()}`)(document,window);}
+function list(count:number,rows:string){document.body.innerHTML=`<dialog open data-testid="dialog"><div data-sdui-screen="com.linkedin.sdui.flagshipnav.sharing.ShareSchedulePostList"><a>Scheduled (${count})</a>${rows}</div></dialog>`;}
+const row='<div id="ScheduledPostRowSlot_urn:li:share:7513234862275706880_gen3"><a href="https://www.linkedin.com/sharing/compose"><div aria-label="Edit post"><p><span>Posting Tue, Oct 13, 2026 at 12:00 PM</span></p><div role="button"><svg aria-label="More options"></svg></div><div role="listitem"><img src="https://media.licdn.com/dms/image/v2/test/feedshare-shrink_160/x" alt=""><p>Exact approved text</p></div></div></a></div>';
+it('reads a native receipt separately from displayed content without claiming full approval match',()=>{list(1,row);expect(run()).toEqual({ok:true,total:1,complete:true,rows:[{receiptId:'urn:li:share:7513234862275706880',text:'Exact approved text',scheduleLabel:'Posting Tue, Oct 13, 2026 at 12:00 PM',images:[{src:'https://media.licdn.com/dms/image/v2/test/feedshare-shrink_160/x',alt:''}]}]});});
+it('does not claim absence when the list is only partially loaded',()=>{list(2,row);expect(run()).toMatchObject({ok:true,total:2,complete:false});list(0,'<p>When you schedule a post, it automatically posts at the date and time you chose</p>');expect(run()).toMatchObject({ok:true,total:0,complete:true,rows:[]});});
+it('refuses ambiguous lists or duplicate native identifiers',()=>{list(2,row+row);expect(run()).toEqual({ok:false});document.body.innerHTML+='<dialog open data-testid="dialog"><div data-sdui-screen="com.linkedin.sdui.flagshipnav.sharing.ShareSchedulePostList"></div></dialog>';expect(run()).toEqual({ok:false});});
+it('does not treat a zero-count loading shell as confirmed empty',()=>{list(0,'<div role="progressbar"></div>');expect(run()).toMatchObject({ok:true,total:0,complete:false});});

@@ -1,3 +1,8 @@
+import type {SocialAccountsBridge} from './social/accountsBridge.ts';
+import {socialWeeklySchema} from '@fss/contracts';
+import {socialDraftWorkspaceSchema} from '@fss/contracts';
+import type {SocialImageImport} from './social/imageImport.ts';
+import {socialAssetViewSchema,socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
@@ -74,6 +79,8 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  */
 
 export interface OperationHostDeps {
+  readonly socialAccounts?: SocialAccountsBridge;
+  readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
   readonly today: TodayBridgeHost;
   readonly replies: ReplyBridgeHost;
@@ -167,6 +174,37 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.imageStage':async()=>deps.socialImages?deps.socialImages.state():{stage:null,reason:null,savedAssetId:null},
+    'social.chooseImage':async(input:OperationInput<'social.chooseImage'>)=>deps.socialImages?deps.socialImages.choose(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.pasteImage':async(input:OperationInput<'social.pasteImage'>)=>deps.socialImages?deps.socialImages.paste(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.imageFromUrl':async(input:OperationInput<'social.imageFromUrl'>)=>deps.socialImages?deps.socialImages.fromUrl(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.editImage':async(input:OperationInput<'social.editImage'>)=>deps.socialImages?deps.socialImages.edit(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.uploadImage':async(input:OperationInput<'social.uploadImage'>)=>deps.socialImages?deps.socialImages.upload(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.discardImage':async(input:OperationInput<'social.discardImage'>)=>deps.socialImages?deps.socialImages.discard(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.thumbnail':async(input:OperationInput<'social.thumbnail'>)=>{
+      const generation=deps.recordings.identity.current(),current=()=>generation===deps.recordings.identity.current();
+      try{
+        const answer=await deps.api.read('/social/assets/read',v=>z.strictObject({asset:socialAssetViewSchema}).parse(v),{assetId:input.assetId});
+        if(!current()||!answer.ok)return {preview:null,reason:'image_unavailable'};
+        const image=answer.value.asset.objects.find(row=>row.version===input.version&&row.kind==='derivative'&&row.state==='ready');
+        if(!image)return {preview:null,reason:'image_unavailable'};
+        const location=await deps.api.read('/social/assets/download-url',v=>z.strictObject({url:z.string().url(),expiresAt:z.string().datetime()}).parse(v),input);
+        if(!current()||!location.ok)return {preview:null,reason:'image_unavailable'};
+        const {fetchSocialThumbnail}=await import('./social/imageThumbnail.ts');
+        const preview=await fetchSocialThumbnail(location.value,image);
+        return current()?{preview,reason:null}:{preview:null,reason:'image_unavailable'};
+      }catch{return {preview:null,reason:'image_unavailable'};}
+    },
+    'social.assets':async(input:OperationInput<'social.assets'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/social/assets',v=>socialAssetLibrarySchema.parse(v),input);if(generation!==deps.recordings.identity.current())return {assets:null,reason:'not_found'};return answer.ok?{assets:answer.value.assets,reason:null}:{assets:null,reason:answer.reason};},
+    'social.removeAsset':async(input:OperationInput<'social.removeAsset'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/social/assets/delete',{assetId:input.assetId},v=>z.unknown().parse(v),{commandId:input.commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'not_found'};return {accepted:answer.ok,reason:answer.ok?null:answer.reason};},
+    'social.connectAccount':async(input:OperationInput<'social.connectAccount'>)=>deps.socialAccounts?deps.socialAccounts.connect(input):{accepted:false,reason:'unavailable'},
+    'social.disconnectAccount':async(input:OperationInput<'social.disconnectAccount'>)=>deps.socialAccounts?deps.socialAccounts.disconnect(input):{accepted:false,reason:'unavailable'},
+    'social.weekly':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/weekly',v=>socialWeeklySchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
+    'social.saveWeekly':async(input:OperationInput<'social.saveWeekly'>)=>{const generation=deps.recordings.identity.current(),{commandId,...setting}=input;const answer=await deps.api.command('/social/weekly/save',setting,v=>socialWeeklySchema.parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
+    'social.drafts':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/drafts',v=>socialDraftWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
+    'social.requestDrafts':async(input:OperationInput<'social.requestDrafts'>)=>{const generation=deps.recordings.identity.current(),{commandId,...selection}=input;const answer=await deps.api.command('/social/drafts/request',selection,v=>z.strictObject({requestId:z.string().uuid()}).parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {requestId:null,reason:'not_found'};return answer.ok?{requestId:answer.value.requestId,reason:null}:{requestId:null,reason:answer.reason};},
+    'social.workspace':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
+    'social.mutate':async(input:OperationInput<'social.mutate'>)=>{const generation=deps.recordings.identity.current();const {action,commandId,...payload}=input;const paths={save:'/social/posts/save',approve:'/social/posts/approve',cancel:'/social/posts/cancel'} as const;const answer=await deps.api.command(paths[action],payload,v=>z.unknown().parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};if(!answer.ok)return {accepted:false,view:null,reason:answer.reason};const view=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};return {accepted:true,view:view.ok?view.value:null,reason:view.ok?null:'refresh_failed'};},
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
       const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control',value=>outreachControlSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};

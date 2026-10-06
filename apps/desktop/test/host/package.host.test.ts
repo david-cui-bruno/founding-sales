@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFile, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,6 +73,16 @@ describe.skipIf(!HOST_TESTS_ENABLED)('the package verifier, on a real bundle', (
    * windows, which is precisely the gap `docs/decisions/g9-bundle-scheme-map.md`
    * recorded under "what is still not tested".
    */
+  it('loads the packaged sharp binary and its unpacked libraries in Electron', async () => {
+    const script=join(out,'native-probe.cjs');
+    const asarMain=join(built.appPath,'Contents','Resources','app.asar','main','main.js');
+    await writeFile(script,`const {app}=require('electron');app.whenReady().then(async()=>{app.dock?.hide();const sharp=require('node:module').createRequire(${JSON.stringify(asarMain)})('sharp');const r=await sharp({create:{width:12,height:8,channels:3,background:'#fff'}}).png().toBuffer({resolveWithObject:true});console.log('NATIVE_IMAGE:'+JSON.stringify({width:r.info.width,height:r.info.height}));app.quit();}).catch(()=>app.exit(1));`);
+    const electron=createRequire(import.meta.url)('electron') as string;
+    const env:NodeJS.ProcessEnv={...process.env};delete env['ELECTRON_RUN_AS_NODE'];
+    const stdout=execFileSync(electron,[script],{env,timeout:45_000,encoding:'utf8'});
+    expect(stdout).toContain('NATIVE_IMAGE:{"width":12,"height":8}');
+  },60_000);
+
   it('serves every declared window out of the packaged asar', async () => {
     const outcome = await verifyPackagedApp(built.appPath, {
       mode: 'integrity',

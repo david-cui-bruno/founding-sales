@@ -1,3 +1,6 @@
+import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
+import {socialDraftModel} from '../social/draftModel.ts';
+import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
@@ -106,6 +109,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly socialAssets?:SocialDeletionPort|null;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
@@ -208,6 +212,7 @@ export function registerHandlers(
     }),
   );
   registry.register(retentionBatchJobHandler());
+  registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
   // so like `retention.batch` the deployment has nothing to say about them: one drains
   // the terminal stops G3a, G4 and G8 left for whoever ran the worker, the other
@@ -240,6 +245,7 @@ export function registerHandlers(
   // judgments `unknown`, which is a smaller answer rather than a failure. That is
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
+  registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
@@ -427,6 +433,7 @@ export function readTranscriptionComposition(
 
 /** Which optional sources materialize work, from what this worker composed. */
 export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'>>): {
+  readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
   readonly sourcing: boolean;
@@ -440,6 +447,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    socialDraft: composition.classifier?.processEnabled===true,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
     sourcing: composition.research !== undefined,
@@ -469,6 +477,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly sourcing?: boolean;
@@ -485,6 +494,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    socialDraftSource(options.socialDraft===true),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),
@@ -496,6 +506,7 @@ export function workerDueWorkSources(
     terminalStopSource(),
     sendDayCloseSource(),
     retentionSource(),
+    socialAssetsSource(),
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
@@ -600,6 +611,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    socialAssets:await socialDeletionPort(environment),
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),

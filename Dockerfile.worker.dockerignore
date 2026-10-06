@@ -29,6 +29,7 @@
 !packages/domain/sequences
 !packages/domain/templates
 !packages/domain/research
+!packages/domain/social
 !packages/domain/sourcing
 !packages/domain/outreach
 !packages/domain/retention

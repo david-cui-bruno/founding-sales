@@ -1,0 +1,10 @@
+/** @vitest-environment jsdom */
+import {afterEach,expect,it} from 'vitest';
+import {linkedInSubmitScript} from '../src/main/social/adapters/linkedinSubmit.ts';
+const input={token:'b6bacf0c-28b2-4290-8eaa-c8647020c3c8',postingName:'Founder',text:'Approved text',zone:Intl.DateTimeFormat().resolvedOptions().timeZone,scheduleLabel:'Posting at Tue, Oct 13, 12:00 PM'};
+function run(value=input){return new Function('document','window',`return ${linkedInSubmitScript(value)}`)(document,window);}
+function fixture(){document.body.innerHTML='<dialog open data-testid="dialog"><div role="button">Founder</div><div role="button">Post to Anyone</div><div role="button">Comments: Anyone</div><div contenteditable="true" role="textbox" componentkey="ShareBox_textEditor">Approved text</div><div>Posting at Tue, Oct 13, 12:00 PM</div><button>Schedule</button></dialog>';}
+afterEach(()=>{document.body.innerHTML='';delete (window as unknown as Record<string,unknown>)['__callieLinkedInSubmission'];});
+it('attempts exactly one final click and returns uncertainty rather than a scheduled receipt',()=>{fixture();let clicks=0;document.querySelector('button')!.onclick=()=>clicks++;expect(run()).toEqual({attempted:true});expect(run()).toEqual({attempted:false});expect(run({...input,token:'9b40c38a-ed43-43d0-b227-177c08724fc6'})).toEqual({attempted:false});expect(clicks).toBe(1);});
+it.each(['text','postingName','zone','scheduleLabel'] as const)('rejects changed %s before any click',key=>{fixture();let clicks=0;document.querySelector('button')!.onclick=()=>clicks++;expect(run({...input,[key]:'Changed'})).toEqual({attempted:false});expect(clicks).toBe(0);});
+it('refuses any image, disabled button, ambiguous button and progress',()=>{for(const extra of ['<img src="blob:https://www.linkedin.com/a" alt="">','<button>Schedule</button>','<div role="progressbar"></div>']){fixture();document.querySelector('dialog')!.innerHTML+=extra;expect(run()).toEqual({attempted:false});}fixture();document.querySelector('button')!.disabled=true;expect(run()).toEqual({attempted:false});});

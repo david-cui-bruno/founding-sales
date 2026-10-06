@@ -1,3 +1,4 @@
+import {SocialRoute} from '../social/SocialRoute.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import type { DesktopState } from '../../shared/contract.ts';
@@ -203,6 +204,8 @@ function Column({
           />
         ) : route.name === 'replies' ? (
           <RepliesRoute key={key} column={columnRef} />
+        ) : route.name === 'social' ? (
+          <SocialRoute key={key}/>
         ) : route.name === 'sequences' ? (
           <SequencesRoute key={key} identity={session.identity} generation={session.generation} guard={session.guard} />
         ) : (

@@ -32,7 +32,7 @@ const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
-  | { readonly name: 'today' | 'replies' | 'pipeline' | 'firms' | 'sequences' }
+  | { readonly name: 'today' | 'replies' | 'pipeline' | 'firms' | 'sequences' | 'social' }
   | { readonly name: 'firm'; readonly firmId: string }
   | {
       readonly name: 'settings';

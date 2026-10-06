@@ -816,16 +816,17 @@ describe('the state that crosses the bridge', () => {
 });
 
 describe('one window: the routes the menu and deep links may name (wave 1)', () => {
-  it('names exactly six views and eight targets, and nothing for any other value', () => {
+  it('names exactly seven views and nine targets, and nothing for any other value', () => {
     // Pipeline is a row of its own since 1.0.14: the board of opportunities being
     // worked, beside a Firms row that is every firm on file.
-    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'settings']);
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'social', 'settings']);
     expect(NAVIGATION_TARGETS).toEqual([
       'today',
       'replies',
       'pipeline',
       'firms',
       'sequences',
+      'social',
       'settings/administration',
       'settings/dashboard',
       'settings/diagnostics',
@@ -942,7 +943,7 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
 });
 
 describe('the Window menu (wave 1)', () => {
-  it('shows each view in the one window: ⌘1 to ⌘5, then Settings with ⌘, and its two tabs', () => {
+  it('shows each view in the one window: ⌘1 to ⌘6, then Settings with ⌘, and its two tabs', () => {
     const shown: string[] = [];
     const menu = windowMenuTemplate(route => {
       shown.push(route);
@@ -956,11 +957,12 @@ describe('the Window menu (wave 1)', () => {
       'Pipeline CmdOrCtrl+3',
       'Firms CmdOrCtrl+4',
       'Sequences CmdOrCtrl+5',
+      'Social CmdOrCtrl+6',
       'Settings CmdOrCtrl+,',
       // 1.0.14: Pipeline is a fifth selling view, so Sequences took ⌘5 and the two
       // Settings tabs moved down. One key cannot mean two views.
-      'Dashboard CmdOrCtrl+6',
-      'Diagnostics CmdOrCtrl+7',
+      'Dashboard CmdOrCtrl+7',
+      'Diagnostics CmdOrCtrl+8',
     ]);
     for (const item of views) if ('click' in item) item.click();
     expect(shown).toEqual([
@@ -969,6 +971,7 @@ describe('the Window menu (wave 1)', () => {
       'pipeline',
       'firms',
       'sequences',
+      'social',
       'settings/administration',
       'settings/dashboard',
       'settings/diagnostics',

@@ -269,3 +269,7 @@ output "one_off_task_families" {
   description = "The two one-off task definition families: migration, operations. Names, so a root test can assert them at plan time."
   value       = module.cluster.one_off_task_families
 }
+
+output "social_assets_bucket_name" {
+  value = module.social_assets.bucket_name
+}

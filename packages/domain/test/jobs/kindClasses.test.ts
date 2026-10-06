@@ -57,6 +57,9 @@ describe('job kind classes', () => {
       // an import of two hundred firms is two hundred of the first.
       'sourcing.check',
       'sourcing.qualify',
+      // Social drafts and media cleanup run off the interactive call/reply lane.
+      'social.draft',
+      'social.assets_cleanup',
       'sourcing.monitor',
       'sourcing.discover',
       'research.firm',

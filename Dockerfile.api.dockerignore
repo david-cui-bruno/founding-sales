@@ -37,6 +37,7 @@
 !packages/domain/settings
 !packages/domain/dashboard
 !packages/domain/research
+!packages/domain/social
 !packages/domain/sourcing
 !packages/domain/outreach
 !packages/domain/retention

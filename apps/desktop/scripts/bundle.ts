@@ -1,3 +1,4 @@
+import {copySocialImageRuntime} from './socialNative.ts';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -8,10 +9,9 @@ import { RELEASE_STAMP_FILE, type ReleaseStamp } from './releaseStamp.ts';
 /**
  * The application directory a packager turns into a bundle.
  *
- * Everything the app runs is bundled here, so the packaged tree contains no
- * `node_modules` at all: nothing to prune, nothing to audit inside the asar, and no
- * way for a development dependency to arrive in a release because somebody hoisted
- * it. Electron itself stays external, because it is the runtime rather than a
+ * JavaScript is bundled except for the explicit sharp runtime allowlist. Its
+ * native binaries are unpacked and signed with the app. Development dependencies
+ * are never copied from the workspace tree. Electron itself stays external, because it is the runtime rather than a
  * dependency.
  *
  * The four `define` values are the entire build-time configuration. They are public
@@ -39,6 +39,7 @@ export async function bundleApp(input: BundleInput): Promise<void> {
   const source = (...parts: string[]): string => join(input.root, 'src', ...parts);
   const target = (...parts: string[]): string => join(input.stagingDirectory, ...parts);
 
+  await copySocialImageRuntime(input.stagingDirectory);
   await mkdir(target('main'), { recursive: true });
   await mkdir(target('preload'), { recursive: true });
   await mkdir(target('renderer'), { recursive: true });
@@ -58,7 +59,7 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     target: 'node22',
     // ESM, because `main.ts` locates the renderer through `import.meta.dirname`.
     format: 'esm',
-    external: ['electron'],
+    external: ['electron','sharp'],
     define,
     sourcemap: false,
     minify: false,

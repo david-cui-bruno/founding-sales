@@ -1,0 +1,49 @@
+import {expect,it,vi} from 'vitest';
+import {inspectLinkedInTextReceipt} from '../src/main/social/adapters/linkedinReceiptInspection.ts';
+const expected={accountExternalId:'https://www.linkedin.com/in/founder/',postingName:'Founder',text:'Approved text',publishAt:'2026-10-13T16:00:00Z',fingerprint:'a'.repeat(64),images:[]};
+const row={receiptId:'urn:li:share:123',text:expected.text,scheduleLabel:'Posting Tue, Oct 13, 2026 at 12:00 PM',images:[]};
+function setup(){return {current:()=>true,now:()=>Date.parse('2026-10-06T12:00:00Z'),account:async()=>expected.accountExternalId,list:async()=>({ok:true,total:1,complete:true,rows:[row],zone:'America/New_York'}),detail:vi.fn(async(id:string)=>({receiptId:id,postingName:'Founder',text:expected.text,scheduleLabel:'Posting at Tue, Oct 13, 12:00 PM',zone:'America/New_York',images:[],altTextVerified:false}))};}
+it('requires independent saved detail before returning a matched receipt',async()=>{const p=setup();expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'scheduled',receiptId:row.receiptId,complete:true,observedFingerprint:expected.fingerprint});expect(p.detail).toHaveBeenCalledWith(row.receiptId);});
+it('keeps partial lists, duplicates and absent receipts unknown rather than permitting a resend',async()=>{for(const list of [{ok:true,total:2,complete:false,rows:[row],zone:'America/New_York'},{ok:true,total:2,complete:true,rows:[row,{...row,receiptId:'urn:li:share:456'}],zone:'America/New_York'},{ok:true,total:0,complete:true,rows:[],zone:'America/New_York'}]){const p=setup();p.list=async()=>list;expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown',complete:false});expect(p.detail).not.toHaveBeenCalled();}});
+it('refuses changed content, media, account and a mismatched requested receipt',async()=>{const p=setup();p.detail.mockResolvedValue({...await p.detail(row.receiptId),text:'Changed'});expect(await inspectLinkedInTextReceipt(expected,row.receiptId,p)).toMatchObject({state:'unknown'});expect(await inspectLinkedInTextReceipt({...expected,images:[{sha256:'b'.repeat(64),altText:'Image'}]},row.receiptId,setup())).toMatchObject({state:'unknown'});const q=setup();q.account=async()=> 'different';expect(await inspectLinkedInTextReceipt(expected,row.receiptId,q)).toMatchObject({state:'unknown'});expect(await inspectLinkedInTextReceipt(expected,'urn:li:share:999',setup())).toMatchObject({state:'unknown'});});
+it('refuses account/session changes after opening saved details',async()=>{const p=setup();let current=true;p.current=()=>current;p.detail.mockImplementation(async(id)=>{current=false;return {...await setup().detail(id)};});expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown'});});
+it('requires the saved schedule and timezone to agree, and rejects repeated DST times',async()=>{for(const change of [{scheduleLabel:'Posting at Tue, Oct 13, 1:00 PM'},{zone:'UTC'},{receiptId:'urn:li:share:456'},{images:[{}]}]){const p=setup();p.detail.mockResolvedValue({...await p.detail(row.receiptId),...change} as never);expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown'});}expect(await inspectLinkedInTextReceipt({...expected,publishAt:'2026-11-01T05:30:00Z'},null,setup())).toMatchObject({state:'unknown'});});
+it('keeps provider errors unknown',async()=>{const p=setup();p.detail.mockRejectedValue(new Error('Disconnected'));expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown',complete:false});});
+
+it('recovers image receipts only against persisted native identity and verified stored alt',async()=>{
+ const {inspectLinkedInImageReceipt}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const images=[{sha256:'b'.repeat(64),altText:'Stored alt'}];
+ const binding={receiptId:row.receiptId,fingerprint:expected.fingerprint,images:[{sha256:'b'.repeat(64),platformId:'native-image'}]};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'https://media.licdn.com/dms/image/v2/native-image/feedshare-shrink_160/x',alt:''}]}],zone:'America/New_York'}),detail:vi.fn(async()=>({...await setup().detail(row.receiptId),images:[{platformId:'native-image',altText:'Stored alt'}],altTextVerified:true}))};
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'scheduled',mediaBinding:binding,complete:true});
+ expect(await inspectLinkedInImageReceipt({...expected,images},null,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),images:[{platformId:'replacement',altText:'Stored alt'}]});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),altTextVerified:false});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),images:[{platformId:'native-image',altText:'Different'}]});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+});
+it('binds an initial receipt only to original captured media, excluding every baseline receipt',async()=>{
+ const {inspectLinkedInSubmittedImage}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const proof={sha256:'b'.repeat(64),platformId:'original-media'};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'https://media.licdn.com/dms/image/v2/original-media/feedshare-shrink_160/x'}]}],zone:'America/New_York'}),detail:async()=>({...await setup().detail(row.receiptId),images:[{platformId:proof.platformId,altText:'Alt'}],altTextVerified:true})};
+ const raw={...expected,images:[{sha256:proof.sha256,altText:'Alt'}]};
+ expect(await inspectLinkedInSubmittedImage(raw,proof,[],p)).toMatchObject({state:'scheduled',mediaBinding:{receiptId:row.receiptId,images:[proof]}});
+ expect(await inspectLinkedInSubmittedImage(raw,proof,[row.receiptId],p)).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInSubmittedImage(raw,{...proof,sha256:'c'.repeat(64)},[],p)).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInSubmittedImage(raw,{...proof,platformId:'different'},[],p)).toMatchObject({state:'unknown'});
+});
+
+it('accepts a loaded preview without native identity mapping and refuses old or changed posts',async()=>{
+ const {inspectLinkedInPreviewReceipt}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const raw={...expected,images:[{sha256:'b'.repeat(64),altText:'Image'}]};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'preview'}]}],zone:'America/New_York'}),detail:vi.fn(async()=>({...await setup().detail(row.receiptId),images:[{loaded:true}]}))};
+ expect(await inspectLinkedInPreviewReceipt(raw,null,p,[])).toMatchObject({state:'scheduled',receiptId:row.receiptId,complete:true});
+ expect(await inspectLinkedInPreviewReceipt(raw,null,p,[row.receiptId])).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInPreviewReceipt(raw,'urn:li:share:999',p)).toMatchObject({state:'unknown'});
+ for(const change of [{images:[{loaded:false}]},{images:[]},{text:'Edited'}]){
+  p.detail.mockResolvedValueOnce({...await p.detail(),...change});
+  expect(await inspectLinkedInPreviewReceipt(raw,row.receiptId,p)).toMatchObject({state:'unknown'});
+ }
+});

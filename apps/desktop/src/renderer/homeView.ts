@@ -81,6 +81,7 @@ export const NAV_ROWS: readonly NavRow[] = Object.freeze([
   { label: 'Pipeline', route: 'pipeline', keys: '⌘3' },
   { label: 'Firms', route: 'firms', keys: '⌘4' },
   { label: 'Sequences', route: 'sequences', keys: '⌘5' },
+  { label: 'Social', route: 'social', keys: '⌘6' },
 ]);
 
 /** The bottom-left entry. One row, with the gear the shell draws beside it. */
