@@ -73,6 +73,10 @@ it.skipIf(!scannerAvailable)('fixture exceptions cover only the exact fake value
  const files:Record<string,string>={
   'apps/desktop/test/linkedinSubmit.test.ts':`token: '${nonce}'\ntoken: '${other}'\ntoken: '${nonce.replace(/^b/,'c')}'`,
   'apps/desktop/test/linkedinDetailNavigation.test.ts':`token: '${nonce}'`,
+  'apps/desktop/test/linkedinImageSubmit.test.ts':`token: '${nonce}'`,
+  'apps/desktop/test/linkedinMediaCapture.test.ts':`token: '${nonce}'\ntoken: '${other}'`,
+  'apps/desktop/test/linkedinSavedAlt.test.ts':`token: '${nonce}'\ntoken: '${other}'`,
+  'apps/desktop/test/host/support/socialImageStageProbe.ts':`token: '${nonce}'`,
   'apps/desktop/test/host/support/socialTextSubmitProbe.ts':`token: '${nonce}'\ntoken: '${other}'`,
   'apps/api/test/integrationsSettings.test.ts':`api_key_secret: '${sentinel}'\napi_key_secret: '${sentinel}x'`,
   'outside.ts':`token: '${nonce}'\napi_key_secret: '${sentinel}'`,

@@ -3228,10 +3228,10 @@ regexes = ['''\A\n?\x20\x20\x20\x20\x20\x20\x27\x64\x61\x69\x6c\x79\x27\x2c\x20\
 # Fixed document-local nonces in synthetic DOM tests. These UUIDs never authenticate
 # to LinkedIn or a provider. Both exact value AND one exact test path must match.
 [[allowlists]]
-description = "Exact synthetic LinkedIn DOM guard nonces in their three fixture files only"
+description = "Exact synthetic LinkedIn DOM guard nonces in their enumerated fixture files only"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''\Aapps/desktop/test/(?:linkedinSubmit\.test\.ts|linkedinDetailNavigation\.test\.ts|host/support/socialTextSubmitProbe\.ts)\z''']
+paths = ['''\Aapps/desktop/test/(?:linkedinSubmit\.test\.ts|linkedinDetailNavigation\.test\.ts|linkedinImageSubmit\.test\.ts|linkedinMediaCapture\.test\.ts|linkedinSavedAlt\.test\.ts|host/support/socialTextSubmitProbe\.ts|host/support/socialImageStageProbe\.ts)\z''']
 regexTarget = "secret"
 regexes = ['''\A(?:b6bacf0c-28b2-4290-8eaa-c8647020c3c8|9b40c38a-ed43-43d0-b227-177c08724fc6)\z''']
 
