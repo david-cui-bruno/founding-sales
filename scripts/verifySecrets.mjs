@@ -1,3 +1,4 @@
+import { stageSecretHistory, historySnapshot } from './secretHistory.mjs';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,7 +6,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = () => { throw new Error('SECRET_VERIFICATION_FAILED'); };
-const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-scan', 'context-staging', 'context-scan', 'cleanup']);
+const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-staging', 'history-scan', 'context-staging', 'context-scan', 'cleanup']);
 const historyReasons = new Set(['git-unavailable', 'git-interrupted', 'repository-unavailable', 'unsafe-ownership', 'git-command-failed', 'shallow-history', 'unexpected-history-response']);
 function inPhase(phase, operation) {
   try { return operation(); }
@@ -95,9 +96,11 @@ export function verifySecrets({ root = projectRoot, run = spawnSync } = {}) {
   try {
     const stage = join(temporary, 'input'); inPhase('temporary-directory', () => privateDirectory(stage));
     inPhase('history-readiness', () => requireFullHistory(root, run));
-    results.push(inPhase('history-scan', () => scanWithGitleaks({ root, target: root, kind: 'history', temporary, run })));
+    const history = inPhase('history-staging', () => stageSecretHistory(root, join(temporary, 'history'), run));
+    results.push({ ...inPhase('history-scan', () => scanWithGitleaks({ root, target: history.path, kind: 'history', temporary, run })), versions: history.versions, paths: history.paths, scanBatches: history.commits });
     const files = inPhase('context-staging', () => stageBuildContext(root, stage, run));
     results.push({ ...inPhase('context-scan', () => scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run })), files });
+    inPhase('history-readiness', () => { if (historySnapshot(root, run) !== history.snapshot) fail(); });
     return results;
   } finally { inPhase('cleanup', () => rmSync(temporary, { recursive: true, force: true })); }
 }
