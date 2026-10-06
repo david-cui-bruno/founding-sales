@@ -31,7 +31,7 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
  if(input.action==='focusText'){if(!editor)return refuse('layout_changed');editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=window.getSelection();if(!selection)return refuse('editor_unavailable');selection.removeAllRanges();selection.addRange(range);return {ok:true};}
  if(input.action==='openIdentity'){const targets=headers.filter(e=>text(e)===input.name);return click(targets.length===1?targets[0]:null);}
  if(input.action==='openMedia')return editor?click(one('button[aria-label="Media"]')):refuse('layout_changed');
- if(input.action==='openSchedule')return editor?click(one('a[aria-label="Scheduled"]')):refuse('layout_changed');
+ if(input.action==='openSchedule'){if(!editor)return refuse('layout_changed');const links=all('a').filter(e=>{const ids=e.getAttribute('aria-labelledby');const label=ids?ids.trim().split(/ +/).map(id=>document.getElementById(id)?.textContent??'').join(' ').trim():e.getAttribute('aria-label')??'';return /^Scheduled(?: \\(\\d+\\))?$/.test(label);});return click(links.length===1?links[0]:null);}
  if(!date||!time||editor)return refuse('layout_changed');
  if(input.action==='openTime'){if(time.getAttribute('aria-expanded')==='true'){const id=time.getAttribute('aria-controls');const menus=all('[data-testid="time-picker-menu"][role="menu"]').filter(e=>e.id===id);return id&&menus.length===1?{ok:true}:refuse('time_menu_unavailable');}return click(one('button[data-testid="time-picker-clock-button"][aria-label="Open time picker"]'));}
  if(input.action==='selectTime'){

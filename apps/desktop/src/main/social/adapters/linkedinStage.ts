@@ -13,6 +13,19 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
  async function action(input:LinkedInDomAction){if(!current())throw new Error('session_changed');const answer=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInDomScript(input)}],false);if(!current())throw new Error('session_changed');return answer;}
  async function read(){const a=z.object({ok:z.literal(true),view:viewSchema}).parse(await action({action:'read'}));return a.view;}
  async function act(input:LinkedInDomAction){z.object({ok:z.literal(true)}).parse(await action(input));}
+ // Retry only explicit no-action responses, never thrown/lost results.
+ async function selectTime(time:string){
+  const unavailable=z.strictObject({ok:z.literal(false),reason:z.literal('time_menu_unavailable')});
+  for(let i=0;i<12;i++){
+   const opened=await action({action:'openTime'});
+   if(unavailable.safeParse(opened).success){await port.wait();continue;}
+   z.strictObject({ok:z.literal(true)}).parse(opened);await port.wait();
+   const selected=await action({action:'selectTime',time});
+   if(unavailable.safeParse(selected).success){await port.wait();continue;}
+   z.strictObject({ok:z.literal(true)}).parse(selected);return;
+  }
+  throw new Error('time_menu_unavailable');
+ }
  async function waitFor(kind:'composer'|'schedule'){for(let i=0;i<12;i++){const answer=await action({action:'read'});if(!z.strictObject({ok:z.literal(false),reason:z.literal('layout_changed')}).safeParse(answer).success){const {view}=z.object({ok:z.literal(true),view:viewSchema}).parse(answer);if(view.kind===kind)return view;}await port.wait();}throw new Error('layout_changed');}
  try{
   if(post.account.platform!=='linkedin'||post.images.length)return refuse('format_not_verified');
@@ -34,7 +47,7 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
   if(at.getUTCSeconds()||at.getUTCMilliseconds())return refuse('unsupported_time_precision');
   await act({action:'fillSchedule',date,time});await port.wait();view=await read();
   if(view.date!==date||view.time!==time||view.zone!==zone)return refuse('schedule_mismatch');
-  await act({action:'openTime'});await port.wait();await act({action:'selectTime',time});await port.wait();view=await read();
+  await selectTime(time);await port.wait();view=await read();
   if(view.date!==date||view.time!==time||view.zone!==zone)return refuse('schedule_mismatch');
   await act({action:'confirmSchedule',date,time});view=await waitFor('composer');
   const labelParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,weekday:'short',month:'short',day:'numeric'}).formatToParts(at).map(p=>[p.type,p.value]));
