@@ -32,3 +32,15 @@ it('materializes an opted-in weekly batch even when there are no existing draft 
  const jobs=await withTransaction(db.session,()=>socialDraftSource(true).find(db.session,new Date().toISOString()));expect(jobs).toHaveLength(1);
  }finally{await db.drop();}
 });
+it('does not spend the workspace scan limit on inactive weekly owners',async()=>{
+ const {vi}=await import('vitest');const {saveSocialWeekly}=await import('@fss/domain/social/weekly.ts');const db=await createTestDatabase();try{
+ const seed=await seedTwoWorkspaces(db.session),w=seed.alpha.workspaceId,u=seed.alpha.salesperson.userId;
+ const ctx=repositoryContext(workspaceScope(w,{kind:'user',userId:u,role:'salesperson'}),db.session);
+ await withTransaction(db.session,()=>saveSocialWeekly(ctx,{enabled:true,expectedRevision:0}));
+ await db.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[w,u]);
+ const spy=vi.spyOn(db.session,'query');
+ expect(await socialDraftSource(true).find(db.session,new Date().toISOString())).toEqual([]);
+ // An ineligible workspace must not consume a slot or perform per-workspace work.
+ expect(spy).toHaveBeenCalledTimes(1);spy.mockRestore();
+ }finally{await db.drop();}
+});

@@ -11,7 +11,7 @@ export function socialDraftHandler(port:SocialDraftPort|null):JobHandler{return 
 };}
 /** Manual requests and explicit weekly opt-ins; expiry also runs while disabled. */
 export function socialDraftSource(enabled:boolean):DueWorkSource{return {name:'social-drafts',find:async(session,at)=>{
- const workspaces=(await session.query<{workspace_id:string}>("SELECT workspace_id FROM social_draft_requests WHERE state IN ('queued','calling') GROUP BY workspace_id UNION SELECT workspace_id FROM social_weekly_settings WHERE enabled AND next_at<=now() ORDER BY workspace_id LIMIT 25")).rows;
+ const workspaces=(await session.query<{workspace_id:string}>("SELECT workspace_id FROM social_draft_requests WHERE state IN ('queued','calling') GROUP BY workspace_id UNION SELECT s.workspace_id FROM social_weekly_settings s JOIN workspace_memberships m ON m.workspace_id=s.workspace_id AND m.user_id=s.owner_user_id WHERE s.enabled AND s.next_at<=now() AND m.status='active' ORDER BY workspace_id LIMIT 25")).rows;
  const jobs:JobSpecification[]=[];
  for(const {workspace_id:workspace} of workspaces){
   const ctx=repositoryContext(workspaceScope(workspace,{kind:'system',component:'scheduler'}),session);
