@@ -1,3 +1,4 @@
+import {readSocialDeliveryQueue} from '@fss/domain/social/deliveryQueue.ts';
 import {socialWeeklyCommandSchema} from '@fss/contracts';
 import {readSocialWeekly,saveSocialWeekly} from '@fss/domain/social/weekly.ts';
 import {readSocialDraftWorkspace,socialDraftView} from '@fss/domain/social/draftWorkspace.ts';
@@ -13,7 +14,7 @@ import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,s
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=['/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=['/social/delivery/queue','/social/weekly','/social/weekly/save','/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
@@ -34,6 +35,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  if(request.path==='/social/posts/save')return runRouteCommand(deps,socialPostSaveCommandSchema,'social_post_save',(c,input)=>{const {commandId:_id,clientVersion:_client,...post}=input;return saveSocialPost(c,post);});
  if(request.path==='/social/posts/approve')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_approve',approveSocialPost);
  if(request.path==='/social/posts/cancel')return runRouteCommand(deps,socialPostActionCommandSchema,'social_post_cancel',requestSocialCancellation);
+ if(request.path==='/social/delivery/queue'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDeliveryQueue(ctx,principal.principal.deviceId)};}
  if(request.path==='/social/delivery/claim')return runRouteCommand(deps,socialPostActionCommandSchema,'social_delivery_claim',(c,input)=>claimSocialDelivery(c,{...input,deviceId:principal.principal.deviceId}));
  if(request.path==='/social/delivery/begin'){
   const answer=await runRouteCommand(deps,socialBeginCommandSchema,'social_delivery_begin',(c,input)=>beginSocialSubmission(c,{...input,deviceId:principal.principal.deviceId}));

@@ -1,3 +1,13 @@
+/** Structural DOM types keep the shared main-process import graph free of DOM globals. */
+interface ProbeElement {
+ parentElement:ProbeElement|null;textContent:string|null;
+ getAttribute(name:string):string|null;hasAttribute(name:string):boolean;
+ querySelector(selector:string):ProbeElement|null;querySelectorAll(selector:string):ArrayLike<ProbeElement>;
+}
+interface ProbeDocument {
+ querySelectorAll(selector:string):ArrayLike<ProbeElement>;
+ defaultView:{getComputedStyle(element:ProbeElement):{display:string;visibility:string}}|null;
+}
 export interface ObservedSocialIdentity {
  platform:'linkedin';externalAccountId:string;displayName:string;accountKind:'profile';
 }
@@ -5,12 +15,12 @@ export interface ObservedSocialIdentity {
  * No cookies, private application state, feed authors, or guessed account IDs.
  * A changed/ambiguous layout is unsupported rather than an identity guess.
  */
-export function readLinkedInIdentity(doc:Document,pageUrl:string):ObservedSocialIdentity|null {
+export function readLinkedInIdentity(doc:ProbeDocument,pageUrl:string):ObservedSocialIdentity|null {
  function linkedInUrl(value:string):URL|null{
   try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='www.linkedin.com'&&!u.username&&!u.password&&!u.port?u:null;}catch{return null;}
  }
- function visible(el:Element):boolean{
-  for(let p:Element|null=el;p;p=p.parentElement){
+ function visible(el:ProbeElement):boolean{
+  for(let p:ProbeElement|null=el;p;p=p.parentElement){
    if(p.hasAttribute('hidden')||p.getAttribute('aria-hidden')==='true')return false;
    const style=doc.defaultView?.getComputedStyle(p);if(style?.display==='none'||style?.visibility==='hidden')return false;
   }return true;

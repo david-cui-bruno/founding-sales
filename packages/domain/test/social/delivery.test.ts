@@ -35,3 +35,25 @@ it('keeps a confirmed future native schedule eligible for readback at publicatio
  const r=(await db.session.query<{next_inspection_at:Date;inspection_deadline:Date}>('SELECT next_inspection_at,inspection_deadline FROM social_deliveries WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,p.value.postId])).rows[0]!;
  expect(r.next_inspection_at.getTime()).toBeGreaterThan(Date.now()+6*86400_000);expect(r.inspection_deadline.getTime()).toBeGreaterThan(Date.now()+7*86400_000);
 });
+it('queues only owned pending work and binds restart inspection to its submitting device',async()=>{
+ const {readSocialDeliveryQueue}=await import('../../social/deliveryQueue.ts');const p=await ready();
+ const initial=await readSocialDeliveryQueue(ctx(),device);expect(initial.items.find(x=>x.postId===p.postId)).toMatchObject({action:'submit',fingerprint:p.fingerprint,snapshot:{text:'Fixture post'}});
+ const c=await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}));if(!c.ok)throw new Error(c.reason);
+ expect((await readSocialDeliveryQueue(ctx(),device)).items.some(x=>x.postId===p.postId)).toBe(false);
+ const b=await tx(()=>beginSocialSubmission(ctx(),{deviceId:device,...c.value}));if(!b.ok)throw new Error(b.reason);
+ expect((await readSocialDeliveryQueue(ctx(),device)).items.find(x=>x.postId===p.postId)).toMatchObject({action:'inspect',submissionId:b.value.submissionId});
+ expect((await readSocialDeliveryQueue(ctx(),otherDevice)).items.some(x=>x.postId===p.postId)).toBe(false);
+ const other=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.salesperson.userId,role:'salesperson'}),db.session);
+ expect(await readSocialDeliveryQueue(other,device)).toEqual({items:[]});
+ const foreign=repositoryContext(workspaceScope(seed.beta.workspaceId,{kind:'user',userId:seed.beta.admin.userId,role:'admin'}),db.session);
+ expect(await readSocialDeliveryQueue(foreign,device)).toEqual({items:[]});
+});
+it('makes a future scheduled cancellation immediately due without refreshing its deadline on repeat requests',async()=>{
+ const {readSocialDeliveryQueue}=await import('../../social/deliveryQueue.ts');const p=await ready();const c=await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}));if(!c.ok)throw new Error(c.reason);const b=await tx(()=>beginSocialSubmission(ctx(),{deviceId:device,...c.value}));if(!b.ok)throw new Error(b.reason);
+ await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:{state:'scheduled',receiptId:'cancel-fixture',permalink:null,observedAt:new Date().toISOString(),accountExternalId:'fixture',observedFingerprint:p.fingerprint,complete:true}}));
+ expect((await readSocialDeliveryQueue(ctx(),device)).items.some(x=>x.postId===p.postId)).toBe(false);
+ await tx(()=>requestSocialCancellation(ctx(),{postId:p.postId,expectedRevision:1}));
+ expect((await readSocialDeliveryQueue(ctx(),device)).items.find(x=>x.postId===p.postId)).toMatchObject({action:'cancel',receiptId:'cancel-fixture'});
+ const deadline=async()=>(await db.session.query('SELECT inspection_deadline FROM social_deliveries WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,p.postId])).rows[0]?.['inspection_deadline'];const first=await deadline();await tx(()=>requestSocialCancellation(ctx(),{postId:p.postId,expectedRevision:1}));expect(await deadline()).toEqual(first);
+ await db.session.query("UPDATE social_deliveries SET inspection_deadline=now()-interval '1 second' WHERE workspace_id=$1 AND post_id=$2",[seed.alpha.workspaceId,p.postId]);expect((await readSocialDeliveryQueue(ctx(),device)).items.some(x=>x.postId===p.postId)).toBe(false);
+});

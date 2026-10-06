@@ -68,3 +68,14 @@ export const socialWeeklySchema=z.strictObject({enabled:z.boolean(),revision:z.n
 export type SocialWeekly=z.infer<typeof socialWeeklySchema>;
 export const socialWeeklySaveSchema=z.strictObject({enabled:z.boolean(),expectedRevision:z.number().int().nonnegative()});
 export const socialWeeklyCommandSchema=socialWeeklySaveSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+/** Immutable approved bytes/metadata, never storage keys or local file paths. */
+export const socialApprovalSnapshotSchema=z.strictObject({
+ account:z.strictObject({id:uuid,platform:socialPlatformSchema,externalId:z.string().max(300),revision:z.number().int().positive(),adapterVersion:z.string()}),
+ text:z.string().max(10000),images:z.array(socialPostImageSchema.extend({sha256:z.string().regex(/^[a-f0-9]{64}$/u),mime:z.string(),width:z.number().int().positive().nullable(),height:z.number().int().positive().nullable()})).max(20),
+ publishAt:z.string().datetime(),zone:z.string(),
+});
+export const socialDeliveryQueueSchema=z.strictObject({items:z.array(z.strictObject({
+ deliveryId:uuid,postId:uuid,revision:z.number().int().positive(),action:z.enum(['submit','inspect','cancel']),
+ submissionId:uuid.nullable(),receiptId:z.string().nullable(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),snapshot:socialApprovalSnapshotSchema,
+})).max(25)});
+export type SocialDeliveryQueue=z.infer<typeof socialDeliveryQueueSchema>;
