@@ -54,3 +54,7 @@ export const socialConnectionSchema=z.strictObject({accountId:uuid,platform:soci
 export type SocialConnection=z.infer<typeof socialConnectionSchema>;
 export const socialConnectionCommandSchema=socialConnectionSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialDisconnectCommandSchema=z.strictObject({accountId:uuid,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+/** Call IDs name immutable call transcripts (revision 1); meeting IDs name a
+ * versioned meeting transcript; public IDs name sourcing candidate revisions. */
+export const socialDraftRequestSchema=z.strictObject({sourceRefs:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive()})).min(1).max(10),factBlocks:z.array(z.strictObject({id:uuid,version:z.number().int().positive()})).max(20)});
+export type SocialDraftRequest=z.infer<typeof socialDraftRequestSchema>;

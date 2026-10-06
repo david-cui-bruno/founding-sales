@@ -52,6 +52,16 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  social_library_usage: coverage(['operational'], 'Workspace storage quota; released only after physical object deletion.'),
+  social_assets: coverage(['retained'], 'Owner-authored library metadata; explicit asset deletion tombstones it and queues private object removal.'),
+  social_asset_objects: coverage(['retained'], 'Version/hash tombstones remain; pending uploads expire after 24 hours and their objects enter the deletion queue.'),
+  social_object_deletions: coverage(['operational'], 'Idempotent object deletion and quota-release receipts; no image bytes.'),
+  social_accounts: coverage(['retained'], 'Profile/Page identity and adapter observations; disconnect invalidates the connection but retains native schedule reconciliation identity.'),
+  social_posts: coverage(['retained'], 'Owner-authored content identity, retained with revision and delivery history.'),
+  social_post_revisions: coverage(['retained'], 'Authored public content revisions; retained independently of prospect evidence.'),
+  social_post_approvals: coverage(['retained'], 'Immutable exact-content approvals; retained to reconcile external schedules and prevent duplicate publication.'),
+  social_deliveries: coverage(['retained'], 'Native scheduling receipts and cancellation state; local deletion cannot recall an external schedule.'),
+  social_draft_requests: coverage(['retained'], 'Source references/hashes and anonymized draft suggestions, never copied transcripts; deleted or changed sources block generation and result acceptance.'),
   outreach_reply_deliveries: coverage(['retained'], 'Immutable draft hashes and delivery bindings only; source and permission gates refuse deleted or changed prospects.'),
   outreach_settings: coverage(['operational'], 'Disabled-by-default reply settings; no prospect text.'),
   outreach_reply_requests: coverage(['retained'], 'Coded decisions and immutable source hashes only; source deletion makes requests unavailable, plan deletion workflow stops dispatch.'),

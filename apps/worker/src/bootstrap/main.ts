@@ -1,3 +1,5 @@
+import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
+import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
@@ -243,6 +245,7 @@ export function registerHandlers(
   // judgments `unknown`, which is a smaller answer rather than a failure. That is
   // the opposite of `classify.reply`, and the difference is that a classification
   // with no model has nothing at all to record.
+  registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
@@ -430,6 +433,7 @@ export function readTranscriptionComposition(
 
 /** Which optional sources materialize work, from what this worker composed. */
 export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom' | 'transcription' | 'summary' | 'analysis' | 'meetingTranscription' | 'meetingAnalysis' | 'meetingAutoRecording'> & Partial<Pick<HandlerComposition,'research'|'discovery'|'classifier'>>): {
+  readonly socialDraft: boolean;
   readonly qualification: boolean;
   readonly discovery: boolean;
   readonly sourcing: boolean;
@@ -443,6 +447,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
   readonly analysis: boolean;
 } {
   return {
+    socialDraft: composition.classifier?.processEnabled===true,
     qualification: composition.research !== undefined && composition.classifier?.processEnabled===true,
     discovery: composition.discovery !== undefined,
     sourcing: composition.research !== undefined,
@@ -472,6 +477,7 @@ export function workerSourceFlags(composition: Pick<HandlerComposition, 'calcom'
  */
 export function workerDueWorkSources(
   options: {
+    readonly socialDraft?: boolean;
     readonly qualification?: boolean;
     readonly discovery?: boolean;
     readonly sourcing?: boolean;
@@ -488,6 +494,7 @@ export function workerDueWorkSources(
   } = {},
 ): readonly DueWorkSource[] {
   return [
+    socialDraftSource(options.socialDraft===true),
     outreachReplySource(),
     meetingAnalysesSource(options.meetingAnalysis === true),
     meetingFollowThroughSource(),
