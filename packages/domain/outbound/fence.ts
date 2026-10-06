@@ -1,3 +1,4 @@
+import {bindProspectingFence} from '../outreach/authorization.ts';
 import { createHash } from 'node:crypto';
 import { hasOptOutLink, sendBodyIssue } from '../src/rules/templates.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -350,6 +351,7 @@ export async function prepareOutboundMessage(
     return acceptSend({ outboundMessageId: raced.id, created: false });
   }
 
+  await bindProspectingFence(context,{fenceId:inserted.id,mailboxId:mailboxRow.id,stepExecutionId:request.stepExecutionId});
   await appendEvent(context, {
     outboundMessageId: inserted.id,
     fromState: null,

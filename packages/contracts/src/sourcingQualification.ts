@@ -25,7 +25,7 @@ export const sourceObservationSchema = z.strictObject({
   }
 });
 export const qualificationFactSchema = z.strictObject({
-  kind:z.enum(['firm_identity','residential_management','service_area','business_phone','help_request','operational_burden','coordination_job','growth','tool_gap','existing_support']),
+  kind:z.enum(['firm_identity','residential_management','service_area','business_phone','business_email','help_request','operational_burden','coordination_job','growth','tool_gap','existing_support']),
   value:z.string().trim().min(1).max(2000),observationId:uuid,blockId,
 });
 export const qualificationVerdictSchema = z.strictObject({

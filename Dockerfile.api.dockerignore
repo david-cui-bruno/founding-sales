@@ -38,6 +38,7 @@
 !packages/domain/dashboard
 !packages/domain/research
 !packages/domain/sourcing
+!packages/domain/outreach
 !packages/domain/retention
 !packages/domain/release
 !packages/domain/funnel

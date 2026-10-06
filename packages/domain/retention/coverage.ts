@@ -122,6 +122,10 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   today_snoozes: coverage(['deletion_removes'], 'A snoozed task naming the deleted firm and contact; derived work, removed with them.'),
 
   // ------------------------------------------------------------------ mail
+  gmail_prospecting_authorizations: coverage(['departure_revokes'], 'Mailbox-scoped authority; disconnected or departed identities cannot send. Restore explicitly revokes.'),
+  outreach_fence_authorizations: coverage(['retained'], 'Coded authorization binding retained with outbound reconciliation evidence; contains no message or recipient text.'),
+  outreach_answer_blocks: coverage(['retained'], 'Workspace product-content version identity; no CRM person identity.'),
+  outreach_answer_block_versions: coverage(['retained'], 'Explicitly approved reusable product/pricing content; not prospect conversation text.'),
   mailboxes: coverage(['departure_revokes'], 'Disconnected by departure; the row is what the firm’s messages hang off.'),
   mailbox_tokens: coverage(['departure_revokes'], 'The envelope-encrypted refresh token, deleted outright by departure.'),
   mailbox_watches: coverage(['departure_revokes'], 'Cancelled when the grant goes.'),

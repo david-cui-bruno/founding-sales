@@ -1,3 +1,4 @@
+import {authorizationForMailbox} from '../outreach/authorization.ts';
 import type {
   BlockedActionKind,
   EnrollmentOriginKind,
@@ -357,39 +358,8 @@ export function followUpPermissionSource(): StepEligibilitySource {
   };
 }
 
-/**
- * A prospecting e-mail has no transport yet (send-path v2, slice S4; David, 30
- * September 2026).
- *
- * > "Zero currently due emails is insufficient: creating an enrollment must not enable
- * > cold Gmail outreach."
- *
- * With the 28 September decision that cold outreach uses a non-Google mailbox, the only
- * dispatch path FSS has — the owner's Gmail mailbox, `outbound/send.ts` — is a
- * conversation path, and a first touch to a stranger must not leave through it. So an
- * e-mail step of a `prospecting` enrollment is refused here with
- * `cold_outreach_mailbox_required`, which `runDueStepExecution` stores as the step's
- * `hold_reason_code`: the step stays visible, held, on the card, and `listStepWakes`
- * keeps waking it so the hold is re-read rather than forgotten.
- *
- * **Unconditional, deliberately.** The question is not "is the owner's mailbox labelled
- * `cold_outreach`" (migration 0026 admits the label, and nothing sends through such a
- * mailbox): a label must never authorise the Gmail path as cold outreach (P0-5 of the
- * plan review). Until a real cold-outreach transport exists, nothing clears this; the
- * code is recoverable because the transport, when it comes, is what will.
- *
- * `follow_up` enrollments pass (David's permitted conversation), `cold_legacy` never
- * reaches here (`followUpPermissionSource` refused it one source earlier), and a call
- * task passes: calling a prospect is a person dialling, not Gmail.
- *
- * Asked after suppression and the follow-up permission, before the firm rule: a
- * prospecting e-mail with no transport is held for that reason whichever contact at the
- * firm is first, and the firm row is not locked for work that cannot go anyway.
- *
- * The dispatch claim asks its own version of the question about the fence it is about
- * to send (`outbound/stepPermission.ts`, `coldOutreachDispatchRefusal`), so a fence
- * prepared before this rule, or held and returning through dispatch, is refused there
- * too.
+/** The step and final Gmail dispatch share the same exact-mailbox authorization.
+ * This never changes a legacy origin, clears stops, or enables the sending switches.
  */
 export function coldOutreachTransportSource(): StepEligibilitySource {
   return {
@@ -397,7 +367,10 @@ export function coldOutreachTransportSource(): StepEligibilitySource {
     evaluate: async (context, input) => {
       if (input.channel !== 'email') return { ok: true };
       const origin = await originKindOf(context, input.execution.enrollmentId);
-      return origin === 'prospecting' ? { ok: false, reasonCode: 'cold_outreach_mailbox_required' } : { ok: true };
+      if(origin!=='prospecting')return {ok:true};
+      const mailbox=(await context.db.query<{id:string}>('SELECT id FROM mailboxes WHERE workspace_id=$1 AND owner_user_id=$2',[context.scope.workspaceId,input.ownerUserId])).rows[0];
+      const auth=mailbox?await authorizationForMailbox(context,mailbox.id):null;
+      return auth?.allowed?{ok:true}:{ok:false,reasonCode:'cold_outreach_mailbox_required'};
     },
   };
 }
