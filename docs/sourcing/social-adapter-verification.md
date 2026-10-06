@@ -64,3 +64,9 @@ Twenty focused adapter/runner/delivery tests and the full desktop suite (1,495 p
 The adapter now has browser ports for account checks, composer entry, scheduled-list navigation, list readback and exact saved-detail inspection. Navigation uses only the observed clock and Scheduled tab, acts once per state, and stops after bounded polling. The sidebar identity probe supports the composer route without navigating away from staged content.
 
 Fourteen focused tests and the full desktop suite (1,501 passed, 23 skipped) pass; typecheck and focused lint pass. These ports are not registered for delivery yet. The complete flow still needs an integrated Electron fixture and live product-session acceptance; prior live tests used the separate Codex browser.
+
+### Integrated hidden Electron verification
+
+The complete text flow now passes against a local synthetic platform using the actual browser ports, adapter and delivery loop: prepare → one final click → independent receipt readback → close/reopen account browser → reinspect → cancel. Separate cases lose the final-click response or change the saved text. Lost response still produces one submission; changed text remains unknown and is not cancelled.
+
+All 12 social Electron host checks pass. Windows stay hidden and unfocused and close cleanly. HTTPS is intercepted locally; no LinkedIn content was sent. Persistence is tested across browser-window recreation within one Electron process, not an operating-system/app restart. Typecheck and focused lint pass. Live product-session and actual future-publication acceptance are still outstanding.
