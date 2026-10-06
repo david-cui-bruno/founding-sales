@@ -294,6 +294,8 @@ export async function applyManualModeStop(
     readonly cause?: string | undefined;
   },
 ): Promise<{ readonly enrollmentsStopped: number; readonly executionsCancelled: number }> {
+  await lockSendGateForStopFact(context);
+  await context.db.query("UPDATE outreach_plans SET state=$3,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND state='active'",[context.scope.workspaceId,input.firmId,input.origin==='human_reply'?'reply_pending':'manual']);
   const reason = manualModeEndReason(input.origin);
   const stopped = await stopEnrollments(context, {
     firmId: input.firmId,

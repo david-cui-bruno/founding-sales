@@ -84,10 +84,10 @@ describe('one month, a call and a research run at its edge', () => {
     await database.session.query('DELETE FROM daily_counters');
     await database.session.query('DELETE FROM research_runs');
   };
-  const waitingOnAdvisory = async (pid: number, observer: SessionQueryable = database.session): Promise<boolean> => {
+  const waitingOnTransaction = async (pid: number, observer: SessionQueryable = database.session): Promise<boolean> => {
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const { rows } = await observer.query<{ waiting: boolean }>(
-        `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype = 'advisory') AS waiting`,
+        `SELECT pg_backend_pid() = ANY(pg_blocking_pids($1)) AS waiting`,
         [pid],
       );
       if (rows[0]?.waiting === true) return true;
@@ -111,7 +111,7 @@ describe('one month, a call and a research run at its edge', () => {
     try {
       expect((await call(database.session)).ok).toBe(true);
       const pending = withTransaction(otherSession, async () => await research(otherSession));
-      expect(await waitingOnAdvisory(await otherPid())).toBe(true);
+      expect(await waitingOnTransaction(await otherPid())).toBe(true);
       await database.session.query('COMMIT');
       open = false;
       expect(await pending).toEqual({ ok: false, reason: 'monthly_cash_ceiling' });
@@ -133,7 +133,7 @@ describe('one month, a call and a research run at its edge', () => {
       );
       expect(started).toMatchObject({ ok: true, value: { kind: 'reserved' } });
       const pending = withTransaction(database.session, async () => await call(database.session));
-      expect(await waitingOnAdvisory(mainPid, otherSession)).toBe(true);
+      expect(await waitingOnTransaction(mainPid, otherSession)).toBe(true);
       await otherSession.query('COMMIT');
       open = false;
       expect(await pending).toEqual({ ok: false, reason: 'monthly_cash_ceiling' });

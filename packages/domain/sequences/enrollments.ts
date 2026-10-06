@@ -1,3 +1,4 @@
+import {readOutreachCadence,outreachStepDue} from '../outreach/timing.ts';
 import {sequenceSubjectSchema,type SequenceSubject} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
@@ -236,7 +237,10 @@ export async function enrollContact(
   const calendar = await currentHolidayCalendar(context);
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
   const startedAt = (clock[0]?.now ?? new Date()).toISOString();
-  const due = resolveStepDue(
+  const frozenCadence=outreachPlanId!==null&&input.originKind==='prospecting'?await readOutreachCadence(context,outreachPlanId):null;
+  const frozenDue=frozenCadence?outreachStepDue(frozenCadence,{channel:firstStep.channel,channelOrdinal:1,lastTouch:null}):null;
+  if(outreachPlanId!==null&&input.originKind==='prospecting'&&(!frozenDue||Date.parse(frozenCadence!.expiresAt)<Date.parse(startedAt)))return refuseSequence('outreach_plan_unavailable');
+  const due = frozenDue ?? resolveStepDue(
     stepForCadence(firstStep),
     startedAt,
     firm.time_zone,

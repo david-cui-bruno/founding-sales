@@ -1,3 +1,5 @@
+import {reserveOutreachEmail,settleOutreachAction} from '../outreach/touchReservations.ts';
+import {databaseNow} from '../policy/clock.ts';
 import {bindProspectingFence} from '../outreach/authorization.ts';
 import { createHash } from 'node:crypto';
 import { hasOptOutLink, sendBodyIssue } from '../src/rules/templates.ts';
@@ -307,6 +309,9 @@ export async function prepareOutboundMessage(
   // a fence that briefly had no header is a fence a crash could leave unsearchable.
   const generated = await context.db.query<{ id: string }>('SELECT gen_random_uuid() AS id');
   const id = generated.rows[0]?.id ?? '';
+
+  const touch=await reserveOutreachEmail(context,request.stepExecutionId,await databaseNow(context));
+  if(!touch.ok)return refuseSend('step_ineligible',touch.reason);
 
   const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO outbound_messages
@@ -766,6 +771,7 @@ export async function markPreDispatchFenceSent(
   );
   const row = rows[0];
   if (row === undefined) return refuseSend('fence_not_ready');
+  await settleOutreachAction(context,row.step_execution_id,'email','accepted');
   await appendEvent(context, {
     outboundMessageId: input.outboundMessageId,
     fromState: 'dispatching',
@@ -922,6 +928,7 @@ export async function claimForDispatch(
     const current = await readFence(context, input.outboundMessageId);
     return refuseSend(current === null ? 'fence_unknown' : 'fence_not_ready', current?.state);
   }
+  await settleOutreachAction(context,row.step_execution_id,'email','unknown');
   const fence = toFence(row);
   const token = fence.attemptToken;
   if (token === null) throw new Error('the dispatch claim produced no attempt token');
@@ -970,6 +977,7 @@ export async function recordSent(
   );
   const row = rows[0];
   if (row === undefined) return refuseSend('fence_not_ready');
+  await settleOutreachAction(context,row.step_execution_id,'email','accepted');
   await appendEvent(context, {
     outboundMessageId: input.outboundMessageId,
     fromState: 'dispatching',
@@ -1053,6 +1061,7 @@ export async function recordReconciledSent(
   );
   const row = rows[0];
   if (row === undefined) return refuseSend('fence_not_ready');
+  await settleOutreachAction(context,row.step_execution_id,'email','accepted');
   await appendEvent(context, {
     outboundMessageId: input.outboundMessageId,
     fromState: 'reconciling',
@@ -1131,6 +1140,7 @@ export async function holdFence(
   );
   const row = rows[0];
   if (row === undefined) return refuseSend('fence_not_ready');
+  await settleOutreachAction(context,row.step_execution_id,'email','not_dispatched');
   await appendEvent(context, {
     outboundMessageId: input.outboundMessageId,
     fromState: 'prepared',

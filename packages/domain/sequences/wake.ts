@@ -202,7 +202,7 @@ export async function listStepWakes(
                  AND j.state IN ('queued', 'running', 'retryable')
                  AND j.payload ->> 'stepExecutionId' = e.id::text
             )
-      ORDER BY e.due_at, e.id
+      ORDER BY CASE WHEN n.origin_kind='follow_up' THEN 0 ELSE 1 END, e.due_at, e.id
       LIMIT $3`,
     [
       input.now,

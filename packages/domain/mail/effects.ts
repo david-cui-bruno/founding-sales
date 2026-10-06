@@ -549,6 +549,7 @@ export async function applyDirectSendEffects(
   });
 
   await applyManualMeetingSend(context, { firmId: candidate.firmId, contactIds: recipientContactIds, message, at: sentAt });
+  await context.db.query("UPDATE outreach_plans SET state='manual',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND state='active' AND created_at<=$3::timestamptz",[context.scope.workspaceId,candidate.firmId,sentAt]);
   const ended: string[] = [];
   const { rows: prospecting } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments

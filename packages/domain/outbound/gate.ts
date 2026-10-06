@@ -241,6 +241,16 @@ export async function decideSend(
     return refuseSend('daily_cap', `automated ${String(day.automatedSent)}/${String(cap)}`);
   }
 
+  if(permission.value.enrollment.originKind==='prospecting'){
+    const waiting=(await context.db.query<{n:number}>(`SELECT count(DISTINCT n.id)::int AS n FROM sequence_enrollments n
+      JOIN step_executions x ON x.workspace_id=n.workspace_id AND x.enrollment_id=n.id
+      JOIN follow_up_permissions p ON p.workspace_id=n.workspace_id AND p.id=n.permission_id
+      WHERE n.workspace_id=$1 AND n.assigned_user_id=$2 AND n.origin_kind='follow_up' AND n.ended_at IS NULL
+      AND x.channel='email' AND x.state IN ('pending','held') AND x.due_at<=$3::timestamptz AND x.not_before<=$3::timestamptz
+      AND p.revoked_at IS NULL AND p.consumed_at IS NULL AND p.expires_at>$3::timestamptz`,[context.scope.workspaceId,mailbox.owner_user_id,now.toISOString()])).rows[0]?.n??0;
+    if(day.automatedSent+waiting>=cap)return refuseSend('daily_cap','capacity_reserved_for_due_follow_ups');
+  }
+
   return acceptSend({
     fence,
     mailbox: { id: mailbox.id, address: mailbox.email_address, ownerUserId: mailbox.owner_user_id },

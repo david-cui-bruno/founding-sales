@@ -54,3 +54,18 @@ OUTREACH_CONSTRAINT_CASES.push(
 for(const [constraint,outreachPlanId] of [['reply_confirmation_one_authority',null],['reply_confirmation_outreach_firm',missing]] as const){
  OUTREACH_CONSTRAINT_CASES.push({constraint,run:f=>insert(f,'mail_reply_confirmations',{workspace_id:f.seeded.alpha.workspaceId,mail_message_id:f.mail.alpha.messageId,firm_id:f.crm.alpha.firmId,opportunity_id:null,outreach_plan_id:outreachPlanId,disposition:'interested',suggested_by:'none',corrected:true,confirmed_by_user_id:f.seeded.alpha.admin.userId})});
 }
+const reservationId='77777777-5555-4555-8555-555555555555';
+const touch=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_touch_reservations',{workspace_id:f.seeded.alpha.workspaceId,id:reservationId,plan_id:planId,firm_id:f.crm.alpha.firmId,action_id:'fixture',channel:'email',ordinal:1,local_date:'2026-10-05',claimed_at:'2026-10-05T14:00:00Z',...change});
+const touchFixture=async(f:Fixture)=>{await sourceFixture(f);await plan(f);};
+bad('outreach_touch_reservations',[
+ ['action_id_check',{action_id:''}],['channel_check',{channel:'linkedin'}],['ordinal_check',{ordinal:9}],['skipped_ordinals_check',{skipped_ordinals:[9]}],['state_check',{state:'queued'}],['workspace_id_plan_id_fkey',{plan_id:missing}],['workspace_id_firm_id_fkey',{firm_id:missing}],
+],touch,touchFixture);
+OUTREACH_CONSTRAINT_CASES.push(
+ {constraint:'outreach_cadence_pair',run:async f=>{await sourceFixture(f);return plan(f,{expires_at:new Date()});}},
+ {constraint:'outreach_cadence_shape',run:async f=>{await sourceFixture(f);return plan(f,{cadence:'{"version":"wrong"}',expires_at:new Date()});}},
+ {constraint:'outreach_touch_settlement',run:async f=>{await touchFixture(f);return touch(f,{state:'accepted'});}},
+ {constraint:'outreach_touch_reservations_pkey',run:async f=>{await touchFixture(f);await touch(f);return touch(f);}},
+ {constraint:'outreach_touch_reservations_workspace_id_channel_action_id_key',run:async f=>{await touchFixture(f);await touch(f);return touch(f,{id:missing,ordinal:2,local_date:'2026-10-06'});}},
+ {constraint:'outreach_touch_one_day',run:async f=>{await touchFixture(f);await touch(f);return touch(f,{id:missing,action_id:'second',ordinal:2});}},
+ {constraint:'outreach_touch_one_ordinal',run:async f=>{await touchFixture(f);await touch(f);return touch(f,{id:missing,action_id:'second',local_date:'2026-10-06'});}},
+);

@@ -99,6 +99,7 @@ export const HOLD_REASON_SENTENCES: Readonly<Record<HoldReasonCode, string>> = O
 // ---------------------------------------------------------------------------
 
 export const DIAL_REFUSAL_SENTENCES: Readonly<Record<DialRefusalCode, string>> = Object.freeze({
+  outreach_touch_unavailable: 'This firm’s outreach plan is waiting. Check its next scheduled touch before calling.',
   firm_suppressed: HOLD_REASON_SENTENCES.firm_suppressed,
   handle_suppressed: 'This number is suppressed, so Callie will not dial it. Try another number for the firm.',
   manual_suppression_review: HOLD_REASON_SENTENCES.manual_suppression_review,
@@ -268,6 +269,7 @@ export const MAIL_REFUSAL_SENTENCES: Readonly<Record<GrantRefusalCode | 'mailbox
 export const CALL_SESSION_REFUSAL_SENTENCES: Readonly<Record<CallSessionRefusalCode, string>> = Object.freeze({
   call_attempts_exhausted:
     'Four calls to this firm went unanswered in the last 14 days, so calling it is parked for review. Resume calling when you want to try again.',
+  outreach_touch_unavailable: 'This firm’s outreach plan is waiting. Check its next scheduled touch before calling.',
   call_attempt_today: 'This firm was already called today. Try again on another business day.',
   call_attempt_too_soon:
     'The last call was at about this time of day. Try at least two hours earlier or later in their day.',

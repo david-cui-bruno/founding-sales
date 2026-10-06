@@ -1,3 +1,5 @@
+import {databaseNow} from '../policy/clock.ts';
+import {reserveOutreachEmail} from '../outreach/touchReservations.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { directSendWithinQuietWindow } from '../mail/directSendRecency.ts';
@@ -409,6 +411,11 @@ async function recheckAndClaim(
       // mailbox's fence with it would send from the wrong account.
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'fence_not_ready', detail: 'mailbox_changed' };
+    }
+
+    if(fence.stepExecutionId!==null){
+      const touch=await reserveOutreachEmail(context,fence.stepExecutionId,deps.now?.().toISOString()??await databaseNow(context));
+      if(!touch.ok){await context.db.query('ROLLBACK');return {kind:'not_ready',refusal:'step_ineligible',detail:touch.reason};}
     }
 
     // The footer, before the claim and under the same lock. The bytes a fence dispatches
