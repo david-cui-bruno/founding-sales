@@ -62,3 +62,18 @@ it('cannot reopen an account while its session is being cleared',async()=>{
  expect(await runtime.withAccount(scope,async()=>true)).toEqual({ok:false,reason:'account_busy'});
  finish();await clearing;
 });
+it('shows a sandboxed login window only through the explicit connect operation',async()=>{
+ const h=harness(),runtime=createSocialRuntime(h.create);
+ const result=await runtime.connectAccount(scope,async session=>{expect(session.isCurrent()).toBe(true);expect(h.window.show).toHaveBeenCalledTimes(1);return {connected:true};});
+ expect(result).toEqual({connected:true});expect(h.window.destroy).toHaveBeenCalledTimes(1);
+ expect(h.create.mock.calls[0]![0].webPreferences).not.toHaveProperty('preload');
+ expect(h.create.mock.calls[0]![0].webPreferences.partition).toBe(socialPartition(scope));
+});
+it('bounds an abandoned connect operation and closes the login window',async()=>{
+ vi.useFakeTimers();try{
+ const h=harness(),runtime=createSocialRuntime(h.create);
+ const result=runtime.connectAccount(scope,async()=>new Promise(()=>{}));
+ await vi.advanceTimersByTimeAsync(600_001);
+ expect(await result).toEqual({ok:false,reason:'browser_unavailable'});expect(h.window.destroy).toHaveBeenCalledTimes(1);
+ }finally{vi.useRealTimers();}
+});
