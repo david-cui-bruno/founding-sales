@@ -23,3 +23,14 @@ it('admin proposal replay does not duplicate or approve it; approval replay does
  const applied=await call('/sourcing/targeting/apply',approval);expect(applied.status).toBe(200);expect((await call('/sourcing/targeting/apply',approval)).body).toMatchObject({replayed:true});
  expect((await f.db.query('SELECT version FROM sourcing_targeting_versions WHERE workspace_id=$1',[f.alpha.workspaceId])).rows).toHaveLength(2);
 });
+it('records a call confirmation through an authenticated replayable command without creating a meeting',async()=>{
+ const {seedFirm}=await import('./support/crmSeed.ts');
+ const firmId=await seedFirm(f,{name:'Call need API',regionCode:'TX',assignedUserId:f.alpha.admin.userId});
+ const callId=(await f.db.query<{id:string}>("INSERT INTO call_logs(workspace_id,firm_id,outcome,step_effect,actor_user_id,occurred_at) VALUES($1,$2,'interested','none',$3,now()) RETURNING id",[f.alpha.workspaceId,firmId,f.alpha.admin.userId])).rows[0]!.id;
+ const body={callLogId:callId,expectedRevision:0,expectedSourceRevision:0,answer:'yes',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call('/sourcing/call-need/save',body)).body).toMatchObject({status:'accepted',result:{revision:1}});
+ expect((await call('/sourcing/call-need/save',body)).body).toMatchObject({replayed:true});
+ expect((await call('/sourcing/call-need',{callLogId:callId})).body).toMatchObject({answer:'yes',revision:1});
+ token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
+ expect((await call('/sourcing/call-need',{callLogId:callId})).status).toBe(404);
+});

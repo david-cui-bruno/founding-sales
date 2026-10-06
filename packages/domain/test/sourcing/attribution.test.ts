@@ -52,7 +52,8 @@ it('retains original attribution but reports deleted source evidence unavailable
 });
 it('merges into one surviving cohort and preserves both interaction histories',async()=>{
  const a=await firm(),b=await firm(),sa=await source(a),sb=await source(b);
- await tx(async()=>attributeInteraction(ctx(),{attributionId:sa.id,kind:'call',subjectId:await call(a),sourceRevision:0}));
+ const firstCall=await call(a);await db.session.query("UPDATE call_logs SET occurred_at=now()-interval '1 second' WHERE id=$1",[firstCall]);
+ await tx(async()=>attributeInteraction(ctx(),{attributionId:sa.id,kind:'call',subjectId:firstCall,sourceRevision:0}));
  await tx(async()=>attributeInteraction(ctx(),{attributionId:sb.id,kind:'call',subjectId:await call(b),sourceRevision:0}));
  expect((await tx(()=>mergeFirms(ctx(),{sourceFirmId:a,targetFirmId:b,journal:recordingSuppressionJournal()}))).ok).toBe(true);
  const read=await readFirmSourcing(ctx(),b);expect(read?.primary?.id).toBe(sa.id);expect(read?.interactions).toHaveLength(2);
@@ -84,4 +85,10 @@ it('preserves unknown acquisition when research is attached to a firm contacted 
  const f=await firm();const old=await call(f);await db.session.query("UPDATE call_logs SET occurred_at=now()-interval '1 day' WHERE id=$1",[old]);
  await source(f);const next=await call(f);await tx(()=>attributeFirmInteraction(ctx(),{firmId:f,kind:'call',subjectId:next}));
  expect((await readFirmSourcing(ctx(),f))?.primary?.acquisition).toBe('unknown');
+});
+it('keeps a legacy manual firm out of a new first-contact cohort on its next call',async()=>{
+ const f=await firm(),old=await call(f);const date='2026-01-03T14:00:00.000Z';
+ await db.session.query('UPDATE call_logs SET occurred_at=$2 WHERE id=$1',[old,date]);
+ const next=await call(f);await tx(()=>attributeFirmInteraction(ctx(),{firmId:f,kind:'call',subjectId:next}));
+ expect((await readFirmSourcing(ctx(),f))?.firstContactedAt).toBe(date);
 });

@@ -74,6 +74,7 @@ export async function attributeInteraction(ctx:RepositoryContext,input:Interacti
 export async function attributeFirmInteraction(ctx:RepositoryContext,input:{firmId:string;kind:InteractionKind;subjectId:string;sourceRevision?:number}):Promise<void>{
  const firm=await loadFirmForUpdate(ctx,input.firmId);if(!firm||!decideFirmMutation(ctx,firm).permitted)return;
  const current=await interactionSource(ctx,input.kind,input.subjectId);if(!current||current.firm_id!==firm.id)return;
+ await preserveLegacyFirstCall(ctx,firm.id,current.subject_id);
  let id=(await ctx.db.query<{id:string}>(`SELECT attribution_id AS id FROM sourcing_interactions WHERE workspace_id=$1 AND kind=$2 AND subject_id=$3 ORDER BY source_revision LIMIT 1`,[ctx.scope.workspaceId,input.kind,current.subject_id])).rows[0]?.id;
  if(!id)id=(await ctx.db.query<{id:string}>("SELECT id FROM sourcing_attributions WHERE workspace_id=$1 AND firm_id=$2 AND date_trunc('milliseconds',created_at)<=$3 ORDER BY created_at DESC,id DESC LIMIT 1",[ctx.scope.workspaceId,firm.id,current.occurred_at])).rows[0]?.id;
  if(!id){const made=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:null,qualificationRunId:null,queryId:null,hypothesis:'unknown',policyVersion:'unknown',acquisition:'unknown'});if(!made.ok)throw new Error(`attribution_${made.reason}`);id=made.value.id;}
@@ -92,6 +93,7 @@ export async function readFirmSourcing(ctx:RepositoryContext,firmId:string){
  const first=(await ctx.db.query<{attribution_id:string;occurred_at:Date}>('SELECT attribution_id,occurred_at FROM sourcing_first_touches WHERE workspace_id=$1 AND firm_id=$2',[w,firmId])).rows[0];
  const mapped=sources.map(s=>({id:s.id,candidateId:s.candidate_id,qualificationRunId:s.run_id,queryId:s.query_id,hypothesis:s.source_available?s.hypothesis:'unknown',policyVersion:s.policy_version,acquisition:s.source_available?s.acquisition:'unknown',sourceAvailable:s.source_available}));
  const interactions=(await ctx.db.query<{id:string;kind:InteractionKind;subject_id:string;source_revision:number}>(`SELECT i.id,i.kind,i.subject_id,i.source_revision FROM sourcing_interactions i JOIN sourcing_attributions a ON a.workspace_id=i.workspace_id AND a.id=i.attribution_id WHERE i.workspace_id=$1 AND a.firm_id=$2 ORDER BY i.occurred_at,i.id`,[w,firmId])).rows;
+ const finalFirm=await readFirm(ctx,firmId);if(!finalFirm||finalFirm.status==='merged'||decideFirmRead(ctx,finalFirm)!=='assigned_or_admin')return null;
  return {primary:mapped.find(s=>s.id===first?.attribution_id)??null,firstContactedAt:first?.occurred_at.toISOString()??null,sources:mapped,interactions};
 }
 
@@ -107,7 +109,7 @@ export async function mergeSourcingAttribution(ctx:RepositoryContext,sourceId:st
 }
 
 /** Research attached later cannot turn an already-contacted firm into a newly sourced lead. */
-async function preserveLegacyFirstCall(ctx:RepositoryContext,firmId:string):Promise<void>{
+async function preserveLegacyFirstCall(ctx:RepositoryContext,firmId:string,currentSubjectId?:string):Promise<void>{
  const w=ctx.scope.workspaceId;
  if((await ctx.db.query('SELECT 1 FROM sourcing_first_touches WHERE workspace_id=$1 AND firm_id=$2',[w,firmId])).rows.length)return;
  const old=(await ctx.db.query<{id:string}>(`SELECT id FROM (
@@ -115,5 +117,5 @@ async function preserveLegacyFirstCall(ctx:RepositoryContext,firmId:string):Prom
   UNION ALL SELECT l.id,l.occurred_at FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$2 AND l.direction='outbound'
    AND NOT EXISTS(SELECT 1 FROM call_sessions s WHERE s.workspace_id=l.workspace_id AND s.call_log_id=l.id)
  ) x ORDER BY at,id LIMIT 1`,[w,firmId])).rows[0];
- if(old)await attributeFirmInteraction(ctx,{firmId,kind:'call',subjectId:old.id});
+ if(old&&old.id!==currentSubjectId)await attributeFirmInteraction(ctx,{firmId,kind:'call',subjectId:old.id});
 }

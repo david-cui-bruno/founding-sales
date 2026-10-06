@@ -45,3 +45,17 @@ it('freezes cold membership across extra signals and merges, and withdraws corre
  report=await tx(()=>readSourcingLearning(ctx(),range()));expect(report.cohorts.find(c=>c.acquisition==='cold_sourced')).toMatchObject({firms:1,confirmedPain:0});expect(report.firms.filter(x=>x.firmId===target)).toHaveLength(1);expect(report.firms.some(x=>x.firmId===f)).toBe(false);
  const sales=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.salesperson.userId,role:'salesperson'}),db.session);expect((await tx(()=>readSourcingLearning(sales,range()))).firms).toHaveLength(0);
 });
+it('counts explicitly confirmed pain on an answered call without needing a meeting, and withdraws corrections',async()=>{
+ const {saveCallNeed,readCallNeed}=await import('../../sourcing/callNeed.ts');
+ const f=await firm('manual','call-pain'),id=await call(f,'interested');
+ let view=await readCallNeed(ctx(),{callLogId:id});expect(view).toMatchObject({answer:'unknown',revision:0,sourceRevision:0});
+ const saved=await tx(()=>saveCallNeed(ctx(),{callLogId:id,expectedRevision:0,expectedSourceRevision:0,answer:'yes',commandId:randomUUID()}));expect(saved.ok).toBe(true);
+ let report=await tx(()=>readSourcingLearning(ctx(),range()));expect(report.cohorts.find(c=>c.hypothesis==='call-pain')).toMatchObject({confirmedPain:1,interactions:{answeredCalls:1,confirmedPainCalls:1},booked:0});
+ expect((await tx(()=>saveCallNeed(ctx(),{callLogId:id,expectedRevision:1,expectedSourceRevision:0,answer:'no',commandId:randomUUID()}))).ok).toBe(true);
+ report=await tx(()=>readSourcingLearning(ctx(),range()));expect(report.cohorts.find(c=>c.hypothesis==='call-pain')?.interactions.confirmedPainCalls).toBe(0);
+ await tx(()=>saveCallNeed(ctx(),{callLogId:id,expectedRevision:2,expectedSourceRevision:0,answer:'yes',commandId:randomUUID()}));
+ await db.session.query("INSERT INTO audit_events(workspace_id,actor_kind,actor_user_id,action,subject_kind,subject_id,detail) VALUES($1,'user',$2,'call.outcome_corrected','call_log',$3,'{}')",[seeded.alpha.workspaceId,seeded.alpha.admin.userId,id]);
+ view=await readCallNeed(ctx(),{callLogId:id});expect(view).toMatchObject({answer:'unknown',sourceRevision:1,stale:true});
+ expect(await tx(()=>saveCallNeed(ctx(),{callLogId:id,expectedRevision:3,expectedSourceRevision:0,answer:'yes',commandId:randomUUID()}))).toEqual({ok:false,reason:'source_changed'});
+ report=await tx(()=>readSourcingLearning(ctx(),range()));expect(report.cohorts.find(c=>c.hypothesis==='call-pain')?.interactions.confirmedPainCalls).toBe(0);
+});

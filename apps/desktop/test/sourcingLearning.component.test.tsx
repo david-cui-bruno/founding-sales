@@ -23,3 +23,8 @@ it('saves a targeting proposal without applying it and preserves an unsent draft
  expect((await screen.findByLabelText('Reason for change') as HTMLTextAreaElement).value).toContain('coordinator');
  fireEvent.click(screen.getByRole('button',{name:'Save proposal'}));expect(await screen.findByText(/Proposal saved/)).toBeTruthy();expect(ports.apply).not.toHaveBeenCalled();
 });
+it('uses held qualified demos, not bookings, as the conversion numerator',async()=>{
+ const cohort={hypothesis:'fit_only',policyVersion:'v1',acquisition:'manual',firms:1,contacted:1,reached:1,confirmedPain:0,booked:1,held:0,qualified:0,won:0,unreached:0,unknownQualification:1,interactions:{answeredCalls:1,confirmedPainCalls:0},researchGrossCents:0,researchCashCents:0};
+ render(<DraftsProvider><Learning read={async()=>({view:{...report,cohorts:[cohort]},reason:null})}/></DraftsProvider>);
+ expect(await screen.findByText(/Held qualified demos per contacted firm: 0 \/ 1 \(0%\)/)).toBeTruthy();
+});

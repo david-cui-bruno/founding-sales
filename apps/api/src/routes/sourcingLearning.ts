@@ -1,10 +1,12 @@
+import {callNeedReadSchema,callNeedCommandSchema} from '@fss/contracts';
+import {readCallNeed,saveCallNeed} from '@fss/domain/sourcing/callNeed.ts';
 import {learningInputSchema,targetingProposalCommandSchema,targetingApplyCommandSchema} from '@fss/contracts';
 import {withTransaction} from '@fss/domain/db/queryable.ts';
 import {readSourcingLearning} from '@fss/domain/sourcing/learningReport.ts';
 import {readTargetingView,saveTargetingProposal,applyTargetingProposal} from '@fss/domain/sourcing/targetingProposals.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_LEARNING_PATHS=['/sourcing/learning','/sourcing/targeting','/sourcing/targeting/save','/sourcing/targeting/apply'];
+export const SOURCING_LEARNING_PATHS=['/sourcing/call-need','/sourcing/call-need/save','/sourcing/learning','/sourcing/targeting','/sourcing/targeting/save','/sourcing/targeting/apply'];
 export async function routeSourcingLearning(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOURCING_LEARNING_PATHS.includes(request.path))return null;
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
@@ -12,6 +14,11 @@ export async function routeSourcingLearning(request:ApiRequest,options:RoutingOp
  const authenticated=await requirePrincipal(auth,request);if(!authenticated.ok)return authenticated.result;
  const scoped=contextForPrincipal(auth,authenticated.principal);if(!scoped.ok)return scoped.result;
  const deps={auth,request,principal:authenticated.principal};
+ if(request.path==='/sourcing/call-need'){
+  const parsed=callNeedReadSchema.safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
+  const view=await readCallNeed(scoped.context,parsed.data);return view?{status:200,body:view}:{status:404,body:{error:'not_found'}};
+ }
+ if(request.path==='/sourcing/call-need/save')return runRouteCommand(deps,callNeedCommandSchema,'sourcing.call_need',async(ctx,body)=>{const {clientVersion:_v,...input}=body;return saveCallNeed(ctx,input);});
  if(request.path==='/sourcing/learning'){
   const input=learningInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
   return withTransaction(auth.db,async()=>({status:200,body:await readSourcingLearning(scoped.context,input.data)}));

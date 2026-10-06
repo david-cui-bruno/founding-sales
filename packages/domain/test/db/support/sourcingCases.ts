@@ -152,3 +152,16 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'discovery_targeting_version',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,targeting_version) VALUES($1,'missing')",[f.seeded.alpha.workspaceId])},
  {constraint:'discovery_attempt_policy',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version) VALUES($1,'query','a query','missing')",[f.seeded.alpha.workspaceId])},
 );
+
+async function callNeedRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const callId='99999999-1111-4111-8111-111111111111';
+ await f.session.query("INSERT INTO call_logs(workspace_id,id,firm_id,outcome,step_effect,actor_user_id,occurred_at) VALUES($1,$2,$3,'interested','none',$4,now()) ON CONFLICT DO NOTHING",[f.seeded.alpha.workspaceId,callId,f.crm.alpha.firmId,member.user_id]);
+ const row={workspace_id:f.seeded.alpha.workspaceId,call_log_id:callId,revision:1,source_revision:0,source_outcome:'interested',answer:'yes',command_id:'need-fixture',confirmed_by:member.user_id,...overrides};
+ return f.session.query(`INSERT INTO call_need_revisions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([['revision_check',{revision:0}],['source_revision_check',{source_revision:-1}],['answer_check',{answer:'maybe'}],['command_id_check',{command_id:''}],['workspace_id_call_log_id_fkey',{call_log_id:absent}],['workspace_id_confirmed_by_fkey',{confirmed_by:absent}]] as const).map(([suffix,change])=>({constraint:`call_need_revisions_${suffix}`,run:async(f:Fixture)=>callNeedRow(f,change)})),
+ {constraint:'call_need_revisions_pkey',run:async(f:Fixture)=>{await callNeedRow(f);return callNeedRow(f,{command_id:'another'});}},
+ {constraint:'call_need_revisions_workspace_id_command_id_key',run:async(f:Fixture)=>{await callNeedRow(f);return callNeedRow(f,{revision:2});}},
+);

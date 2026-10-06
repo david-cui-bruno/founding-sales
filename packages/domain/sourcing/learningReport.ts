@@ -1,10 +1,11 @@
+import {readCallNeed,ANSWERED_CALL_OUTCOMES} from './callNeed.ts';
 import type {LearningReport,LearningCohort} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readFirmSourcing} from './attribution.ts';
 import {readMeetingQualification} from '../meetings/qualification.ts';
 import {providerFunding} from '../settings/funding.ts';
 export function learningRatio(numerator:number,denominator:number):number|null{return denominator>0?numerator/denominator:null;}
-const reachedOutcomes=new Set(['interested','referral_or_wrong_person','callback_requested','not_interested','do_not_call']);
+const reachedOutcomes=new Set<string>(ANSWERED_CALL_OUTCOMES);
 /** Caller transaction. Counts current accepted facts whose occurrence is at/before asOf,
  * not a reconstruction of what an old UI believed. Firm locks protect assigned-user reads.
  * The first-contact interval is [from,to); repeated touches never add cohort members.
@@ -31,6 +32,13 @@ export async function readSourcingLearning(ctx:RepositoryContext,input:{from:str
   const feedback=(await ctx.db.query<{code:string}>(`SELECT x.code FROM sourcing_feedback x JOIN sourcing_admissions a ON a.workspace_id=x.workspace_id AND a.candidate_id=x.candidate_id WHERE x.workspace_id=$1 AND a.firm_id=$2 AND NOT a.association_review_required AND x.created_at<=$3 ORDER BY x.created_at DESC,x.id DESC LIMIT 1`,[w,firm.id,asOf])).rows[0];
   let pain=feedback?.code==='real_pain',held=false,qualified=false,unknown=false;
   const painCalls=new Set<string>();
+  for(const id of answered){
+   const log=(await ctx.db.query<{id:string}>(`SELECT l.id FROM call_logs l WHERE l.workspace_id=$1 AND (l.id=$2 OR l.id=(SELECT s.call_log_id FROM call_sessions s WHERE s.workspace_id=$1 AND s.id=$2))`,[w,id])).rows[0];
+   if(!log)continue;
+   const confirmedAt=(await ctx.db.query<{created_at:Date}>('SELECT created_at FROM call_need_revisions WHERE workspace_id=$1 AND call_log_id=$2 ORDER BY revision DESC LIMIT 1',[w,log.id])).rows[0]?.created_at;
+   const need=await readCallNeed(ctx,{callLogId:log.id});
+   if(need?.answer==='yes'&&confirmedAt&&confirmedAt.getTime()<=Date.parse(asOf)){pain=true;painCalls.add(id);}
+  }
   const meetings=(await ctx.db.query<{id:string;attendance_confirmed_at:Date|null;qualification_at:Date|null}>(`SELECT m.id,m.attendance_confirmed_at,(SELECT max(q.created_at) FROM meeting_qualification_revisions q WHERE q.workspace_id=m.workspace_id AND q.meeting_id=m.id) AS qualification_at FROM meetings m WHERE m.workspace_id=$1 AND m.firm_id=$2 AND m.created_at<=$3`,[w,firm.id,asOf])).rows;
   if(meetings.length)c.booked++;
   for(const meeting of meetings){

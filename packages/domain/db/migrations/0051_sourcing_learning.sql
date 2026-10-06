@@ -111,3 +111,22 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_targeting_proposals TO app_runtime
 INSERT INTO sourcing_targeting_versions(workspace_id,version,queries,rank_order)
  SELECT id,'targeting-v1','[{"id": "dfw-simple-v3", "query": "Dallas Fort Worth residential property management", "locality": "DFW", "region": "TX"}, {"id": "providence-simple-v3", "query": "Providence Rhode Island property management", "locality": "Providence", "region": "RI"}, {"id": "boston-simple-v3", "query": "Boston residential property management", "locality": "Boston", "region": "MA"}, {"id": "arlington-simple-v3", "query": "Arlington Texas residential property management", "locality": "Arlington", "region": "TX"}, {"id": "plano-simple-v3", "query": "Plano Texas residential property management", "locality": "Plano", "region": "TX"}, {"id": "frisco-simple-v3", "query": "Frisco Texas residential property management", "locality": "Frisco", "region": "TX"}, {"id": "denton-simple-v3", "query": "Denton Texas residential property management", "locality": "Denton", "region": "TX"}, {"id": "warwick-simple-v3", "query": "Warwick Rhode Island property management", "locality": "Warwick", "region": "RI"}, {"id": "cranston-simple-v3", "query": "Cranston Rhode Island property management", "locality": "Cranston", "region": "RI"}, {"id": "cambridge-simple-v3", "query": "Cambridge Massachusetts residential property management", "locality": "Cambridge", "region": "MA"}, {"id": "somerville-simple-v3", "query": "Somerville Massachusetts residential property management", "locality": "Somerville", "region": "MA"}, {"id": "quincy-simple-v3", "query": "Quincy Massachusetts residential property management", "locality": "Quincy", "region": "MA"}]'::jsonb,'["help_request","operational_burden","investigation","fit_only"]'::jsonb FROM workspaces;
 UPDATE sourcing_discovery_settings SET targeting_version='targeting-v1';
+
+-- Explicit, optional confirmation on the actual call. No meeting or deal is needed.
+CREATE TABLE call_need_revisions (
+ workspace_id uuid NOT NULL,
+ call_log_id uuid NOT NULL,
+ revision integer NOT NULL CHECK(revision>0),
+ source_revision integer NOT NULL CHECK(source_revision>=0),
+ source_outcome text NOT NULL,
+ answer text NOT NULL CHECK(answer IN ('yes','no','unknown')),
+ command_id text NOT NULL CHECK(command_id ~ '^[0-9a-zA-Z_:-]{1,128}$'),
+ confirmed_by uuid NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,call_log_id,revision),
+ UNIQUE(workspace_id,command_id),
+ FOREIGN KEY(workspace_id,call_log_id) REFERENCES call_logs(workspace_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(workspace_id,confirmed_by) REFERENCES workspace_memberships(workspace_id,user_id)
+);
+GRANT SELECT,INSERT,DELETE ON call_need_revisions TO app_runtime;
+GRANT SELECT,INSERT,UPDATE,DELETE ON call_need_revisions TO migration;

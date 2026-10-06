@@ -27,7 +27,7 @@ export function Learning({read=defaultRead,enabled=true}:{read?:Read;enabled?:bo
     <p className="text-xs text-muted-foreground">Policy {c.policyVersion}</p>
     <p>{c.contacted} contacted firms · {c.reached} reached · {c.confirmedPain} confirmed maintenance need</p><p>{c.booked} booked · {c.held} attended · {c.qualified} qualified · {c.won} won</p>
     <p className="text-sm text-muted-foreground">{c.unreached} not reached · {c.unknownQualification} with unknown demo qualification</p>
-    <p className="text-sm">Demos per contacted firm: {ratio(c.booked,c.contacted)}<br/>Calls with confirmed need per answered call: {ratio(c.interactions.confirmedPainCalls,c.interactions.answeredCalls)}</p>
+    <p className="text-sm">Held qualified demos per contacted firm: {ratio(c.qualified,c.contacted)}<br/>Calls with confirmed need per answered call: {ratio(c.interactions.confirmedPainCalls,c.interactions.answeredCalls)}</p>
     <p className="text-sm text-muted-foreground">Research: ${(c.researchGrossCents/100).toFixed(2)} gross · ${(c.researchCashCents/100).toFixed(2)} cash under recorded provider funding. Search usage is shown separately above.</p>
    </article>)}</div>}
    <div><h3 className="font-medium">Time to observe results</h3><p className="text-sm text-muted-foreground">{view.maturity.map(b=>`${b.ageBand}: ${b.firms} firms`).join(' · ')}</p><p className="text-sm text-muted-foreground">Recent firms have had less time to respond. These counts do not establish which signal is better.</p></div>
