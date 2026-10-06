@@ -233,9 +233,11 @@ describe('the upgrade notice address', () => {
     const stack = readRepositoryFile('infra/modules/stack/main.tf');
     expect(name).toBe('FSS_DESKTOP_UPGRADE_URL');
     expect(root).toContain('  desktop_upgrade_url = local.desktop_upgrade_url\n');
-    expect(stack).toContain(
-      '  api_environment = var.desktop_upgrade_url == null ? {} : {\n    FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url\n  }\n',
+    const apiEnvironment = stack.split('api_environment =')[1]?.split('worker_environment =')[0];
+    expect(apiEnvironment).toMatch(
+      /var\.desktop_upgrade_url == null \? \{\} : \{\s*FSS_DESKTOP_UPGRADE_URL = var\.desktop_upgrade_url\s*\}/u,
     );
+    expect(stack.match(/FSS_DESKTOP_UPGRADE_URL\s*=/gu)).toHaveLength(1);
   });
 
   it('is in production the signed manifest the desktop reads, and passes the API’s own rule', () => {
