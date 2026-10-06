@@ -1,3 +1,4 @@
+import {linkedInSaveSettlementScript} from './linkedinSaveSettlement.ts';
 import {randomUUID} from 'node:crypto';
 import {linkedInPublishedDetailScript} from './linkedinPublishedDetail.ts';
 import {z} from 'zod';
@@ -20,6 +21,16 @@ export function createLinkedInBrowserPorts(port:Port){
  ...port,current,
  async account(){const a=await probeLinkedInIdentity(port.contents,current);return a?{platform:a.platform,externalId:a.externalAccountId,displayName:a.displayName}:null;},
  async openComposer(){await compose();},
+ async waitForSave(){
+  // Completion only permits receipt inspection. It never proves scheduling.
+  try{for(let i=0;i<30;i++){
+   if(!current())return false;
+   const result=z.strictObject({settled:z.boolean()}).parse(await execute(linkedInSaveSettlementScript()));
+   if(result.settled)return true;
+   await port.wait();
+  }}catch{return false;}
+  return false;
+ },
  async openScheduledList(){
   await compose();const acted=new Set<string>();
   for(let i=0;i<30;i++){

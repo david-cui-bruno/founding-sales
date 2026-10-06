@@ -10,7 +10,7 @@ import type {SocialAdapterContext} from '../src/main/social/deliveryRunner.ts';
 import type {ApprovedPost} from '../src/main/social/adapters.ts';
 const context:SocialAdapterContext={snapshot:{account:{id:'id',platform:'linkedin',externalId:'profile',revision:1,adapterVersion:'v1'},text:'Approved',images:[],publishAt:'2026-11-02T15:00:00.000Z',zone:'America/New_York'},fingerprint:'a'.repeat(64),displayName:'Founder'};
 const post:ApprovedPost={deliveryId:'d',postId:'p',revision:1,account:{platform:'linkedin',externalId:'profile',displayName:'Founder'},text:context.snapshot.text,images:[],publishAt:context.snapshot.publishAt,zone:context.snapshot.zone,fingerprint:context.fingerprint};
-function setup(){const port={current:()=>true,now:()=>Date.parse('2026-10-06T12:00:00Z'),wait:async()=>{},account:vi.fn(async()=>post.account),openComposer:vi.fn(async()=>{}),openScheduledList:vi.fn(async()=>{}),list:vi.fn(),detail:vi.fn(),contents:{getURL:()=> 'https://www.linkedin.com/sharing/compose',insertText:vi.fn(),executeJavaScriptInIsolatedWorld:vi.fn(async()=>({attempted:true}))}};return {port,adapter:createLinkedInTextAdapter(context,port)};}
+function setup(){const port={current:()=>true,now:()=>Date.parse('2026-10-06T12:00:00Z'),wait:async()=>{},account:vi.fn(async()=>post.account),waitForSave:vi.fn(async()=>true),openComposer:vi.fn(async()=>{}),openScheduledList:vi.fn(async()=>{}),list:vi.fn(),detail:vi.fn(),contents:{getURL:()=> 'https://www.linkedin.com/sharing/compose',insertText:vi.fn(),executeJavaScriptInIsolatedWorld:vi.fn(async()=>({attempted:true}))}};return {port,adapter:createLinkedInTextAdapter(context,port)};}
 it('requires staging and exact approval before one final submission attempt',async()=>{const {adapter,port}=setup();expect(await adapter.submit(post)).toMatchObject({kind:'not_submitted'});expect(await adapter.stage(post)).toEqual({ready:true});expect(await adapter.submit({...post,text:'Changed'})).toMatchObject({kind:'not_submitted'});expect(await adapter.submit(post)).toEqual({kind:'unknown'});expect(await adapter.submit(post)).toMatchObject({kind:'not_submitted'});expect(port.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);});
 it('recovers from the immutable snapshot without staging or submitting again',async()=>{const {adapter,port}=setup();vi.mocked(inspectLinkedInTextReceipt).mockResolvedValue({state:'scheduled',receiptId:'urn:li:share:123',permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:'profile',observedFingerprint:context.fingerprint,complete:true});expect(await adapter.inspect({receiptId:null,fingerprint:context.fingerprint})).toMatchObject({state:'scheduled'});expect(inspectLinkedInTextReceipt).toHaveBeenLastCalledWith(expect.objectContaining({text:'Approved',publishAt:post.publishAt}),null,expect.any(Object));expect(port.openComposer).not.toHaveBeenCalled();expect(port.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();});
 it('does not retry a click whose response was lost and refuses wrong fingerprints',async()=>{const {adapter,port}=setup();await adapter.stage(post);port.contents.executeJavaScriptInIsolatedWorld.mockRejectedValue(new Error('lost'));expect(await adapter.submit(post)).toEqual({kind:'unknown'});expect(await adapter.submit(post)).toMatchObject({kind:'not_submitted'});expect(port.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);expect(await adapter.inspect({receiptId:null,fingerprint:'wrong'})).toMatchObject({state:'unknown'});expect(port.openScheduledList).not.toHaveBeenCalled();});
@@ -55,4 +55,22 @@ it.each(['text','author','permalink','session','account'])('keeps publication un
  const adapter=createLinkedInTextAdapter(context,{...h.port,current:()=>active,published});
  expect(await adapter.inspect({receiptId:'urn:li:share:123',fingerprint:context.fingerprint})).toMatchObject({state:'unknown',complete:false});
  expect(h.port.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+});
+
+it('keeps inspection from navigating while the attempted save remains unsettled',async()=>{
+ const {adapter,port}=setup();port.waitForSave.mockResolvedValue(false);
+ await adapter.stage(post);await adapter.submit(post);
+ expect(await adapter.inspect({receiptId:null,fingerprint:context.fingerprint})).toMatchObject({state:'unknown'});
+ expect(port.openScheduledList).not.toHaveBeenCalled();
+ port.waitForSave.mockResolvedValue(true);
+ await adapter.inspect({receiptId:null,fingerprint:context.fingerprint});
+ expect(port.openScheduledList).toHaveBeenCalledTimes(1);
+ expect(port.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);
+});
+it('also waits after a lost click response and never repeats that click',async()=>{
+ const {adapter,port}=setup();port.contents.executeJavaScriptInIsolatedWorld.mockRejectedValue(new Error('lost'));
+ port.waitForSave.mockResolvedValue(false);await adapter.stage(post);await adapter.submit(post);
+ await adapter.inspect({receiptId:null,fingerprint:context.fingerprint});
+ expect(port.waitForSave).toHaveBeenCalled();expect(port.openScheduledList).not.toHaveBeenCalled();
+ expect(await adapter.submit(post)).toMatchObject({kind:'not_submitted'});
 });

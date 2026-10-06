@@ -2,11 +2,11 @@ import {linkedinComposerFixture} from './linkedinComposerFixture.ts';
 /** Entirely local synthetic platform; localStorage simulates persistence across
  * document/window reloads. Every HTTPS request is intercepted by the host probe.
  */
-export function linkedinFlowFixture(changed:boolean):string{
+export function linkedinFlowFixture(changed:boolean,delayed=false):string{
  return linkedinComposerFixture
  .replace('<dialog open data-testid="dialog"></dialog>', '<aside aria-label="Sidebar"><a href="https://www.linkedin.com/in/fixture/"><img alt="Fixture Founder"></a><a href="https://www.linkedin.com/in/fixture/"><div aria-label="Fixture Founder, Founder"><p>Fixture Founder</p></div></a></aside><dialog open data-testid="dialog"></dialog>')
  .replace('<button disabled>Schedule</button>', '<button id="send">Schedule</button>')
- .replace("root.querySelector('[aria-label=\"Media\"]').onclick=openMedia;", `root.querySelector('#send').onclick=()=>{localStorage.setItem('submits',String(Number(localStorage.getItem('submits')||0)+1));localStorage.setItem('receipt',JSON.stringify({text:${changed?"'Changed by platform'":'text'},schedule}));list();};root.querySelector('[aria-label="Media"]').onclick=openMedia;`)
+ .replace("root.querySelector('[aria-label=\"Media\"]').onclick=openMedia;", `root.querySelector('#send').onclick=()=>{localStorage.setItem('submits',String(Number(localStorage.getItem('submits')||0)+1));${delayed?"root.insertAdjacentHTML('beforeend','<progress></progress>');setTimeout(()=>{":''}localStorage.setItem('receipt',JSON.stringify({text:${changed?"'Changed by platform'":'text'},schedule}));list();${delayed?'},100);':''}};root.querySelector('[aria-label="Media"]').onclick=openMedia;`)
  .replace('<button id="confirm">Confirm</button>', '<a id="scheduled">Scheduled (0)</a><button id="confirm">Confirm</button>')
  .replace("root.querySelector('#confirm').onclick=", "root.querySelector('#scheduled').onclick=list;root.querySelector('#confirm').onclick=")
  .replace('composer();</script>', `

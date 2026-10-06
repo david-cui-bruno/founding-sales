@@ -10,7 +10,7 @@ void(async()=>{
  const partition=session.fromPartition(socialPartition(scope));const fault=process.env['FSS_SOCIAL_FAULT'];
  let publicationPhase=false;
  await partition.protocol.handle('https',request=>{
-  let html=linkedinFlowFixture(fault==='changed');
+  let html=linkedinFlowFixture(fault==='changed',fault==='delayed-save');
   if(publicationPhase){
    html=html.replace('<script>',"<script>localStorage.removeItem('receipt');");
    if(new URL(request.url).pathname==='/feed/update/urn:li:share:123/')html='<main aria-label="Feed detail update"><a aria-label="Go to boost post page" href="https://www.linkedin.com/ad-beta/boost/campaigns/new/details?content=urn%3Ali%3Ashare%3A123">Boost</a><div role="article" data-urn="urn:li:activity:456"><a class="update-components-actor__meta-link" href="https://www.linkedin.com/in/fixture/">Fixture Founder</a><div class="update-components-update-v2__commentary">Approved text</div></div></main>';

@@ -10,6 +10,8 @@ type StagePort=Parameters<typeof stageLinkedInText>[1];
 interface Port extends StagePort {
  /** Identity read must not navigate away from an existing staged composer. */
  account():Promise<AccountIdentity|null>;
+ /** Read-only settlement; never navigate while the attempted save is in flight. */
+ waitForSave():Promise<boolean>;
  openComposer():Promise<void>;openScheduledList():Promise<void>;
  list():Promise<unknown>;detail(receiptId:string):Promise<unknown>;
  published?(receiptId:string):Promise<unknown>;
@@ -44,6 +46,7 @@ export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):So
  async inspect(input){
   if(input.fingerprint!==context.fingerprint||snapshot.images.length||!port.current())return unknown();
   try{
+   if(attempted&&!await port.waitForSave())return unknown();
    if(!await same())return unknown();await port.openScheduledList();if(!port.current())return unknown();
    const scheduled=await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
    if(scheduled.state==='scheduled')return scheduled;

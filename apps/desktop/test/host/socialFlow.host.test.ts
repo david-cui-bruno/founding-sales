@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import {it,expect} from 'vitest';
 import {HOST_TESTS_ENABLED,DESKTOP_ROOT} from './support/hostGate.ts';
-it.skipIf(!HOST_TESTS_ENABLED).each(['none','lost','changed','published','time-menu'])('runs full hidden adapter submit/restart/cancel flow: %s',async(fault)=>{
+it.skipIf(!HOST_TESTS_ENABLED).each(['none','lost','changed','published','time-menu','delayed-save'])('runs full hidden adapter submit/restart/cancel flow: %s',async(fault)=>{
  const root=await mkdtemp(join(tmpdir(),'callie-social-submit-'));
  try{
   const script=join(root,'probe.mjs');
