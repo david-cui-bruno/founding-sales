@@ -18,3 +18,7 @@ it('does not touch an existing media draft or a signed-out session',async()=>{
 });
 
 it('refuses an image preview whose bytes differ from the approved derivative',async()=>{const p=setup();const original=p.contents.executeJavaScriptInIsolatedWorld.getMockImplementation()!;p.contents.executeJavaScriptInIsolatedWorld.mockImplementation(async(world,scripts)=>scripts[0]!.code.includes('crypto.subtle.digest')?{ok:true,view:{sha256:'b'.repeat(64),altText:'Test',bytes:100}}:original(world,scripts));expect(await stageLinkedInPost(post,p)).toEqual({ready:false,reason:'image_identity_unverified'});});
+it('waits for a newly navigated composer before staging without touching a pre-existing draft',async()=>{
+ const p=setup();p.contents.executeJavaScriptInIsolatedWorld.mockResolvedValueOnce({ok:false} as never);
+ expect(await stageLinkedInPost(post,p)).toEqual({ready:true});
+});

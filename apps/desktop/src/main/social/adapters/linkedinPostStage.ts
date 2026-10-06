@@ -15,7 +15,16 @@ export async function stageLinkedInPost(input:ApprovedPost,port:Ports):Promise<{
  async function execute(code:string){if(!current())throw new Error('session_changed');const result=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code}],false);if(!current())throw new Error('session_changed');return z.object({ok:z.literal(true),view:z.unknown().optional()}).parse(result);}
  try{
   if(post.account.platform!=='linkedin'||post.images.length>1)return {ready:false,reason:'format_not_verified'};
-  const initial=await execute(linkedInImageEditorScript({action:'read'}));
+  let initial:{ok:boolean;view?:unknown}|null=null;
+  for(let i=0;i<30;i++){
+   if(!current())throw new Error('session_changed');
+   const read=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInImageEditorScript({action:'read'})}],false);
+   if(!current())throw new Error('session_changed');
+   initial=z.object({ok:z.boolean(),view:z.unknown().optional()}).parse(read);
+   if(initial.ok)break;
+   await port.wait();
+  }
+  if(!initial?.ok)return {ready:false,reason:'composer_unavailable'};
   z.object({kind:z.literal('composer'),busy:z.literal(false),images:z.array(z.unknown()).length(0)}).parse(initial.view);
   const staged=await stageLinkedInText({...post,images:[]},port);if(!staged.ready)return staged;
   if(!post.images.length)return staged;
