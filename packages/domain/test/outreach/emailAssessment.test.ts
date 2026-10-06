@@ -41,3 +41,37 @@ it('selects call-first for explicit burden plus a callable route, and rejects st
  await db.session.query("UPDATE sourcing_candidates SET revision=revision+1 WHERE id=$1",[input.candidateId]);
  expect(await assessEmailCandidate(ctx(),input)).toEqual({ok:false,reason:'candidate_changed'});
 });
+it('admits an email-only candidate as a sourced office contact without a deal or sequence',async()=>{
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');
+ const input=await qualified('Office PM',{phone:'not supplied',need:'We manage residential homes.'});
+ const create={...input,expectedOwnerUserId:seeded.alpha.admin.userId,reviewed:true};
+ const result=await tx(()=>admitEmailCandidate(ctx(),create));expect(result).toMatchObject({ok:true,value:{identityKind:'role',alreadyAdmitted:false}});if(!result.ok)throw new Error(result.reason);
+ expect(await tx(()=>admitEmailCandidate(ctx(),create))).toMatchObject({ok:true,value:{firmId:result.value.firmId,contactId:result.value.contactId,alreadyAdmitted:true}});
+ expect((await db.session.query('SELECT full_name,title FROM contacts WHERE id=$1',[result.value.contactId])).rows[0]).toMatchObject({full_name:'Office',title:'Office mailbox'});
+ for(const table of ['opportunities','sequence_enrollments','phone_routes'])expect((await db.session.query(`SELECT id FROM ${table} WHERE firm_id=$1`,[result.value.firmId])).rows).toHaveLength(0);
+ const {readFirmSourcing}=await import('../../sourcing/attribution.ts');expect((await readFirmSourcing(ctx(),result.value.firmId))?.sources[0]).toMatchObject({hypothesis:'fit_only',acquisition:'cold_sourced',sourceAvailable:true});
+});
+it('does not admit unreviewed fit-only evidence and commits no partial CRM rows',async()=>{
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const input=await qualified('Unreviewed PM',{phone:'unknown',need:'We provide maintenance.'});
+ expect(await tx(()=>admitEmailCandidate(ctx(),{...input,expectedOwnerUserId:seeded.alpha.admin.userId,reviewed:false}))).toEqual({ok:false,reason:'qualification_requires_review'});
+ expect((await db.session.query("SELECT id FROM firms WHERE name='Unreviewed PM'")).rows).toHaveLength(0);
+});
+it('keeps email source history on firm merge, hides wrong-identity attribution, and deletes contact associations',async()=>{
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const {createFirm}=await import('../../crm/firms.ts');const {mergeFirms}=await import('../../crm/merges.ts');
+ const {recordingSuppressionJournal}=await import('../../suppression/journal.ts');const {recordSourcingFeedback}=await import('../../sourcing/feedback.ts');const {readFirmSourcing}=await import('../../sourcing/attribution.ts');
+ const {previewDeletion,commitDeletion}=await import('../../retention/deletion.ts');
+ const input=await qualified('Merge Email PM',{phone:'unknown'});const admitted=await tx(()=>admitEmailCandidate(ctx(),{...input,reviewed:true,expectedOwnerUserId:seeded.alpha.admin.userId}));if(!admitted.ok)throw new Error(admitted.reason);
+ const target=await tx(()=>createFirm(ctx(),{name:'Surviving email firm',assignedUserId:seeded.alpha.admin.userId}));if(!target.ok)throw new Error(target.reason);
+ expect((await tx(()=>mergeFirms(ctx(),{sourceFirmId:admitted.value.firmId,targetFirmId:target.value.id,journal:recordingSuppressionJournal()}))).ok).toBe(true);
+ expect((await readFirmSourcing(ctx(),target.value.id))?.sources[0]).toMatchObject({sourceAvailable:true});
+ expect((await tx(()=>recordSourcingFeedback(ctx(),{candidateId:input.candidateId,qualificationRunId:input.qualificationRunId,code:'wrong_firm'}))).ok).toBe(true);
+ expect((await readFirmSourcing(ctx(),target.value.id))?.sources[0]).toMatchObject({sourceAvailable:false});
+ const preview=await tx(()=>previewDeletion(ctx(),{targetKind:'contact',firmId:target.value.id,contactId:admitted.value.contactId}));if(!preview.ok)throw new Error(preview.reason);
+ const deleted=await tx(()=>commitDeletion(ctx(),{requestId:preview.value.requestId,previewHash:preview.value.previewHash,commandId:randomUUID(),journal:recordingSuppressionJournal()}));expect(deleted.ok).toBe(true);
+ expect((await db.session.query('SELECT * FROM outreach_email_sources WHERE workspace_id=$1 AND contact_id=$2',[seeded.alpha.workspaceId,admitted.value.contactId])).rows).toHaveLength(0);
+});
+it('serializes email admission without duplicate contacts or a second prospect at the same firm',async()=>{
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const input=await qualified('Concurrent Email PM',{phone:'unknown'});const command={...input,reviewed:true,expectedOwnerUserId:seeded.alpha.admin.userId};
+ const session=await db.appRuntimeSession();const second=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),session);
+ const results=await Promise.all([tx(()=>admitEmailCandidate(ctx(),command)),withTransaction(session,()=>admitEmailCandidate(second,command))]);expect(results.every(r=>r.ok)).toBe(true);expect(results.filter(r=>r.ok&&r.value.alreadyAdmitted)).toHaveLength(1);
+});

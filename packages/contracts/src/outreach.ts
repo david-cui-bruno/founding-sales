@@ -10,3 +10,6 @@ export const answerBlockSchema=z.strictObject({id:uuid,version:z.number().int().
 export type AnswerBlock=z.infer<typeof answerBlockSchema>;
 export const saveAnswerBlockSchema=z.strictObject({id:uuid.optional(),expectedVersion:z.number().int().nonnegative().optional(),kind:answerBlockKindSchema,text:z.string().trim().min(1).max(4000)}).refine(v=>v.id===undefined?v.expectedVersion===undefined:v.expectedVersion!==undefined,'Existing block needs expected version');
 export type SaveAnswerBlock=z.infer<typeof saveAnswerBlockSchema>;
+export const saveAnswerBlockCommandSchema=saveAnswerBlockSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const answerBlockApprovalCommandSchema=z.strictObject({id:uuid,version:z.number().int().positive(),commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const answerBlocksReadSchema=z.strictObject({afterId:uuid.optional()});

@@ -38,3 +38,7 @@ export async function readApprovedAnswerBlocks(ctx:RepositoryContext,refs:readon
  for(const ref of refs){const row=await read(ctx,ref.id,ref.version);if(!row)return {ok:false,reason:'not_found'};if(row.current_version!==ref.version)return {ok:false,reason:'block_changed'};if(row.retired_at)return {ok:false,reason:'block_retired'};if(!row.approved_at)return {ok:false,reason:'block_unapproved'};blocks.push(view(row));}
  return {ok:true,value:blocks};
 }
+export async function listAnswerBlocks(ctx:RepositoryContext,afterId?:string):Promise<AnswerBlock[]>{
+ if(!admin(ctx))return [];
+ return (await ctx.db.query<Row>(`SELECT v.*,b.current_version FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id AND v.version=b.current_version WHERE b.workspace_id=$1 AND ($2::uuid IS NULL OR b.id>$2) ORDER BY b.id LIMIT 50`,[ctx.scope.workspaceId,afterId??null])).rows.map(view);
+}

@@ -1,3 +1,4 @@
+import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
 import { SOURCING_CONSTRAINT_CASES } from './support/sourcingCases.ts';
 import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from './support/meetingAutoRecordingCases.ts';
 import { MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES } from './support/meetingFollowThroughCases.ts';
@@ -1380,6 +1381,7 @@ const cases: readonly Case[] = [
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...SOURCING_CONSTRAINT_CASES,
+  ...OUTREACH_CONSTRAINT_CASES,
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,

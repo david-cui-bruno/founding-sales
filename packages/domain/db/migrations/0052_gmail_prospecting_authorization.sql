@@ -56,3 +56,23 @@ CREATE TABLE outreach_answer_block_versions (
 GRANT SELECT,INSERT,UPDATE,DELETE ON outreach_answer_blocks TO app_runtime,migration;
 GRANT SELECT,INSERT,DELETE ON outreach_answer_block_versions TO app_runtime,migration;
 GRANT UPDATE(approved_by,approved_at,retired_at) ON outreach_answer_block_versions TO app_runtime,migration;
+CREATE TABLE outreach_email_sources (
+ workspace_id uuid NOT NULL,
+ candidate_id uuid NOT NULL,
+ run_id uuid NOT NULL,
+ firm_id uuid NOT NULL,
+ contact_id uuid NOT NULL,
+ route_id uuid NOT NULL,
+ observation_id uuid NOT NULL,
+ block_id text NOT NULL CHECK(length(block_id) BETWEEN 1 AND 80),
+ identity_kind text NOT NULL CHECK(identity_kind IN ('named','role')),
+ reviewed boolean NOT NULL,
+ association_review_required boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,candidate_id),
+ FOREIGN KEY(workspace_id,candidate_id,run_id) REFERENCES sourcing_qualification_runs(workspace_id,candidate_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(workspace_id,firm_id) REFERENCES firms(workspace_id,id),
+ FOREIGN KEY(workspace_id,contact_id) REFERENCES contacts(workspace_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(workspace_id,route_id) REFERENCES email_addresses(workspace_id,id) ON DELETE CASCADE
+);
+GRANT SELECT,INSERT,UPDATE,DELETE ON outreach_email_sources TO app_runtime,migration;

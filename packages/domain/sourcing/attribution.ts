@@ -26,10 +26,10 @@ export async function attachSourcingAttribution(ctx:RepositoryContext,input:Attr
  if(!['cold_sourced','warm_intro','manual','unknown'].includes(input.acquisition)||!input.hypothesis.match(/^[a-z0-9_.:-]{1,80}$/u)||!input.policyVersion.match(/^[a-z0-9_.:-]{1,80}$/u)||(input.queryId!==null&&(!input.queryId.length||input.queryId.length>100)))return deny('invalid_input');
  const w=ctx.scope.workspaceId;
  if(input.candidateId!==null||input.qualificationRunId!==null){
-  const linked=await ctx.db.query(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_admissions a
-   ON a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id
-   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND a.firm_id=$4
-   AND NOT a.association_review_required AND r.reason IS NULL`,[w,input.qualificationRunId,input.candidateId,input.firmId]);
+  const linked=await ctx.db.query(`SELECT r.id FROM sourcing_qualification_runs r
+   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND r.reason IS NULL AND (
+   EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id AND a.firm_id=$4 AND NOT a.association_review_required)
+   OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=r.workspace_id AND e.candidate_id=r.candidate_id AND e.run_id=r.id AND e.firm_id=$4 AND NOT e.association_review_required))`,[w,input.qualificationRunId,input.candidateId,input.firmId]);
   if(!linked.rows.length)return deny('source_mismatch');
  }else if(input.acquisition==='cold_sourced')return deny('source_required');
  const key=createHash('sha256').update(JSON.stringify([input.candidateId,input.qualificationRunId,input.queryId,input.hypothesis,input.policyVersion,input.acquisition])).digest('hex');
@@ -85,10 +85,11 @@ export async function readFirmSourcing(ctx:RepositoryContext,firmId:string){
  const firm=await readFirm(ctx,firmId);if(!firm||firm.status==='merged'||decideFirmRead(ctx,firm)!=='assigned_or_admin')return null;
  const w=ctx.scope.workspaceId;
  const sources=(await ctx.db.query<AttributionRow>(`SELECT a.*,CASE WHEN a.acquisition<>'cold_sourced' THEN true ELSE
-   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND r.reason IS NULL AND NOT COALESCE(c.qualification_blocked,true) AND NOT COALESCE(d.association_review_required,true) END AS source_available
+   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND r.reason IS NULL AND NOT COALESCE(c.qualification_blocked,true) AND (NOT COALESCE(d.association_review_required,true) OR NOT COALESCE(e.association_review_required,true)) END AS source_available
    FROM sourcing_attributions a LEFT JOIN sourcing_qualification_runs r ON r.workspace_id=a.workspace_id AND r.id=a.run_id
    LEFT JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
    LEFT JOIN sourcing_admissions d ON d.workspace_id=a.workspace_id AND d.candidate_id=a.candidate_id AND d.firm_id=a.firm_id
+   LEFT JOIN outreach_email_sources e ON e.workspace_id=a.workspace_id AND e.candidate_id=a.candidate_id AND e.run_id=a.run_id AND e.firm_id=a.firm_id
    WHERE a.workspace_id=$1 AND a.firm_id=$2 ORDER BY a.created_at,a.id`,[w,firmId])).rows;
  const first=(await ctx.db.query<{attribution_id:string;occurred_at:Date}>('SELECT attribution_id,occurred_at FROM sourcing_first_touches WHERE workspace_id=$1 AND firm_id=$2',[w,firmId])).rows[0];
  const mapped=sources.map(s=>({id:s.id,candidateId:s.candidate_id,qualificationRunId:s.run_id,queryId:s.query_id,hypothesis:s.source_available?s.hypothesis:'unknown',policyVersion:s.policy_version,acquisition:s.source_available?s.acquisition:'unknown',sourceAvailable:s.source_available}));

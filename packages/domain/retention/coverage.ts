@@ -126,6 +126,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   outreach_fence_authorizations: coverage(['retained'], 'Coded authorization binding retained with outbound reconciliation evidence; contains no message or recipient text.'),
   outreach_answer_blocks: coverage(['retained'], 'Workspace product-content version identity; no CRM person identity.'),
   outreach_answer_block_versions: coverage(['retained'], 'Explicitly approved reusable product/pricing content; not prospect conversation text.'),
+  outreach_email_sources: coverage(['deletion_removes'], 'Source association removed on contact or firm deletion; candidate deletion cascades.'),
   mailboxes: coverage(['departure_revokes'], 'Disconnected by departure; the row is what the firm’s messages hang off.'),
   mailbox_tokens: coverage(['departure_revokes'], 'The envelope-encrypted refresh token, deleted outright by departure.'),
   mailbox_watches: coverage(['departure_revokes'], 'Cancelled when the grant goes.'),

@@ -20,6 +20,7 @@ export async function recordSourcingFeedback(ctx:RepositoryContext,input:z.infer
  if(input.code==='wrong_firm'){
   await ctx.db.query('UPDATE sourcing_candidates SET qualification_blocked=true WHERE workspace_id=$1 AND id=$2',[w,input.candidateId]);
   await ctx.db.query("UPDATE sourcing_qualification_runs SET state='unavailable',reason='wrong_firm',verdict=NULL,opening_question=NULL WHERE workspace_id=$1 AND candidate_id=$2",[w,input.candidateId]);
+  await ctx.db.query('UPDATE outreach_email_sources SET association_review_required=true WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId]);
   await ctx.db.query('UPDATE sourcing_admissions SET association_review_required=true WHERE workspace_id=$1 AND candidate_id=$2',[w,input.candidateId]);
  }
  await recordCrmAuditEvent(ctx,{action:'sourcing.feedback_recorded',subjectKind:'sourcing_candidate',subjectId:input.candidateId,detail:{feedbackId:row.id,runId:input.qualificationRunId,code:input.code}});

@@ -18,3 +18,13 @@ it('defaults off, records only an admin declaration, and replays without creatin
  token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
  expect((await call({mailboxId},'/outreach/authorization')).status).toBe(404);
 });
+it('requires explicit reusable-fact approval and keeps command replay tied to the version',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const body={kind:'product',text:'Callie integrates with AppFolio.',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ const saved=await call(body,'/outreach/answer-blocks/save');expect(saved.status).toBe(200);
+ const result=(saved.body as {result:{id:string;version:number}}).result;
+ expect((await call({},'/outreach/answer-blocks')).body).toMatchObject({blocks:[{...result,approvedAt:null}]});
+ const approval={...result,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call(approval,'/outreach/answer-blocks/approve')).status).toBe(200);
+ expect((await call(approval,'/outreach/answer-blocks/approve')).body).toMatchObject({replayed:true,result});
+});
