@@ -1,4 +1,4 @@
-import {socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
+import {socialAssetViewSchema,socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
@@ -168,6 +168,20 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.thumbnail':async(input:OperationInput<'social.thumbnail'>)=>{
+      const generation=deps.recordings.identity.current(),current=()=>generation===deps.recordings.identity.current();
+      try{
+        const answer=await deps.api.read('/social/assets/read',v=>z.strictObject({asset:socialAssetViewSchema}).parse(v),{assetId:input.assetId});
+        if(!current()||!answer.ok)return {preview:null,reason:'image_unavailable'};
+        const image=answer.value.asset.objects.find(row=>row.version===input.version&&row.kind==='derivative'&&row.state==='ready');
+        if(!image)return {preview:null,reason:'image_unavailable'};
+        const location=await deps.api.read('/social/assets/download-url',v=>z.strictObject({url:z.string().url(),expiresAt:z.string().datetime()}).parse(v),input);
+        if(!current()||!location.ok)return {preview:null,reason:'image_unavailable'};
+        const {fetchSocialThumbnail}=await import('./social/imageThumbnail.ts');
+        const preview=await fetchSocialThumbnail(location.value,image);
+        return current()?{preview,reason:null}:{preview:null,reason:'image_unavailable'};
+      }catch{return {preview:null,reason:'image_unavailable'};}
+    },
     'social.assets':async(input:OperationInput<'social.assets'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/social/assets',v=>socialAssetLibrarySchema.parse(v),input);if(generation!==deps.recordings.identity.current())return {assets:null,reason:'not_found'};return answer.ok?{assets:answer.value.assets,reason:null}:{assets:null,reason:answer.reason};},
     'social.removeAsset':async(input:OperationInput<'social.removeAsset'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/social/assets/delete',{assetId:input.assetId},v=>z.unknown().parse(v),{commandId:input.commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'not_found'};return {accepted:answer.ok,reason:answer.ok?null:answer.reason};},
     'social.workspace':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},

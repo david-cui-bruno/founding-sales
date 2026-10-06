@@ -827,6 +827,7 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.thumbnail': {kind:'read',calls:[{method:'POST',path:'/social/assets/read'},{method:'POST',path:'/social/assets/download-url'}],input:z.strictObject({assetId:uuid,version:z.number().int().positive()}),output:z.strictObject({preview:z.string().max(700000).regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/u).nullable(),reason:z.string().nullable()}),transform:'Bounded raster preview; signed URLs stay in the main process'},
   'social.assets': {kind:'read',calls:[{method:'POST',path:'/social/assets'}],input:z.strictObject({afterId:uuid.optional()}),output:z.strictObject({assets:socialAssetLibrarySchema.shape.assets.nullable(),reason:z.string().nullable()}),transform:'Private asset metadata without storage credentials'},
   'social.removeAsset': {kind:'command',calls:[{method:'POST',path:'/social/assets/delete'}],input:z.strictObject({assetId:uuid,commandId:z.string().uuid()}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Owner-requested image removal'},
   'social.workspace': {kind:'read',calls:[{method:'POST',path:'/social'}],input:z.strictObject({}),output:z.strictObject({view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner social drafts and destination connections'},

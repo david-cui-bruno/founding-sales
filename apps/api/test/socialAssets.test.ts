@@ -29,11 +29,13 @@ it('the authenticated API does not trust browser completion metadata, and delete
  const call=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,socialMedia:media,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
  const body={sha256:'a'.repeat(64),bytes:100,mime:'image/png',origin:{kind:'upload',sourceUrl:null,usageNote:null},commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
  const r=await call('/social/assets/register',body);expect(r.status).toBe(200);const ids=(r.body as {result:{assetId:string;uploadId:string}}).result;
+ expect((await call('/social/assets/read',{assetId:ids.assetId})).body).toMatchObject({asset:{id:ids.assetId,state:'uploading'}});
  expect((await call('/social/assets/upload-url',ids)).status).toBe(200);
  expect((await call('/social/assets/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION,verified:{bytes:100,sha256:body.sha256,mime:'image/png'}})).status).toBe(400);expect(headCalls).toBe(0);
  expect((await call('/social/assets/complete',{...ids,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(409);expect(headCalls).toBe(1);
  expect((await call('/social/assets/delete',{assetId:ids.assetId,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION})).status).toBe(200);
  expect((await call('/social/assets/register',body)).body).toMatchObject({replayed:true});
  expect((await call('/social/assets/upload-url',ids)).status).toBe(404);
+ expect((await call('/social/assets/read',{assetId:ids.assetId})).status).toBe(404);
  }finally{await f.stop();}
 });

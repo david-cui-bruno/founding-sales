@@ -3,10 +3,10 @@ import {saveSocialPost,approveSocialPost,requestSocialCancellation,readSocialWor
 import {claimSocialDelivery,beginSocialSubmission,recordSocialObservation} from '@fss/domain/social/delivery.ts';
 import {z} from 'zod';
 import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,socialAssetDeleteCommandSchema} from '@fss/contracts';
-import {registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
+import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=['/social','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=['/social','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
@@ -25,6 +25,7 @@ export async function routeSocial(request:ApiRequest,options:RoutingOptions):Pro
  }
  if(request.path==='/social/delivery/observe')return runRouteCommand(deps,socialObservationCommandSchema,'social_delivery_observe',(c,input)=>recordSocialObservation(c,{...input,deviceId:principal.principal.deviceId}));
  if(request.path==='/social/assets'){const parsed=z.strictObject({afterId:uuid.optional()}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:{assets:await listSocialAssets(ctx,parsed.data.afterId)}};}
+ if(request.path==='/social/assets/read'){const parsed=z.strictObject({assetId:uuid}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};const asset=await readSocialAsset(ctx,parsed.data.assetId);return asset&&asset.state!=='deleted'?{status:200,body:{asset}}:{status:404,body:{error:'not_found'}};}
  if(request.path==='/social/assets/delete')return runRouteCommand(deps,socialAssetDeleteCommandSchema,'social_asset_delete',(c,input)=>deleteSocialAsset(c,input.assetId));
  const store=options.socialMedia;if(!store)return {status:503,body:{error:'social_media_not_configured'}};
  if(request.path==='/social/assets/register')return runRouteCommand(deps,socialAssetRegisterCommandSchema,'social_asset_register',(c,input)=>{const {commandId:_id,clientVersion:_client,...asset}=input;return registerSocialAsset(c,asset);});

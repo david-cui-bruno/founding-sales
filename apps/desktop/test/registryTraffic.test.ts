@@ -94,6 +94,7 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'social.thumbnail':{assetId:UUID,version:2},
   'social.assets':{},
   'social.removeAsset':{assetId:UUID,commandId:UUID},
   'social.workspace':{},
@@ -326,7 +327,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
-    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['workspace','mutate','assets','removeAsset'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])) as Host;})(),
+    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['workspace','mutate','assets','removeAsset','thumbnail'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])) as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);

@@ -19,11 +19,11 @@ const directives = new Map(
 );
 
 describe('the renderer’s CSP', () => {
-  it('keeps default-src none and the local-only script, style and image sources', () => {
+  it('keeps executable sources local and permits only local or inline image previews', () => {
     expect(directives.get('default-src')).toEqual(["'none'"]);
     expect(directives.get('script-src')).toEqual(["'self'"]);
     expect(directives.get('style-src')).toEqual(["'self'"]);
-    expect(directives.get('img-src')).toEqual(["'self'"]);
+    expect(directives.get('img-src')).toEqual(["'self'", 'data:']);
     expect(directives.get('base-uri')).toEqual(["'none'"]);
     expect(directives.get('form-action')).toEqual(["'none'"]);
   });
@@ -42,7 +42,8 @@ describe('the renderer’s CSP', () => {
   it('has no unsafe source, no wildcard, and nothing but these eight directives', () => {
     expect(policy).not.toMatch(/unsafe-/u);
     expect(policy).not.toContain('*');
-    expect(policy).not.toMatch(/\b(data|http):/u);
+    expect(policy).not.toMatch(/\bhttp:/u);
+    for (const [name, sources] of directives) if (name !== 'img-src') expect(sources).not.toContain('data:');
     // `blob:` is a media source and nothing else.
     for (const [name, sources] of directives) if (name !== 'media-src') expect(sources, name).not.toContain('blob:');
     expect([...directives.keys()].sort()).toEqual(

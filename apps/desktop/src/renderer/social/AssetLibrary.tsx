@@ -1,3 +1,4 @@
+import {SocialImage} from './SocialImage.tsx';
 import {useEffect, useRef, useState} from 'react';
 import type {SocialAssetView} from '@fss/contracts';
 import {operations} from '../app/bridges.ts';
@@ -36,7 +37,7 @@ export function AssetLibrary({ports=defaults,onSelect}:{ports?:AssetLibraryPorts
   {notice&&<p role="status" className="text-sm">{notice}</p>}
   {assets.length===0&&!notice&&<p className="py-8 text-sm text-muted-foreground">No images in your library yet.</p>}
   {assets.map(asset=>{const derivative=asset.objects.find(object=>object.kind==='derivative'&&object.version===asset.version&&object.state==='ready');return <article key={asset.id} className="space-y-3 rounded-xl border border-border p-4">
-   <p className="text-sm font-medium">{asset.origin.usageNote||'Untitled image'}</p>
+   <SocialImage assetId={asset.id} version={asset.version} alt={descriptions[asset.id]||asset.origin.usageNote||'Image preview'}/><p className="text-sm font-medium">{asset.origin.usageNote||'Untitled image'}</p>
    <p className="text-xs text-muted-foreground">{derivative?`${derivative.width} × ${derivative.height}`:'Image preparation pending'}</p>
    {asset.origin.sourceUrl&&<p className="break-all text-xs text-muted-foreground">Source: {asset.origin.sourceUrl}</p>}
    {onSelect&&<label className="block text-sm">Image description<Input aria-label="Image description" value={descriptions[asset.id]??''} onChange={event=>setDescriptions(value=>({...value,[asset.id]:event.target.value}))}/></label>}
