@@ -298,9 +298,12 @@ module "cluster" {
 
   # The upgrade notice's address is the API's alone (lane g86), and absent rather
   # than empty when unset, so the API's own rule decides what an unset one means.
-  api_environment = var.desktop_upgrade_url == null ? {} : {
-    FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
-  }
+  api_environment = merge(
+    { FSS_SOCIAL_ASSETS_BUCKET = module.social_assets.bucket_name },
+    var.desktop_upgrade_url == null ? {} : {
+      FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
+    }
+  )
 
   # The worker's alone. The operations task definition is built from the worker's
   # environment and ignores a variable it does not read.
