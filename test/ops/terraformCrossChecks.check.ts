@@ -224,6 +224,15 @@ describe('the code and the alarms share their thresholds', () => {
   });
 });
 
+it('wires image storage into the API independently of the optional upgrade URL', () => {
+  // Route tests inject a media store; the deployment must supply its bucket too.
+  const stack = readRepositoryFile('infra/modules/stack/main.tf');
+  const apiEnvironment = stack.split('api_environment =')[1]?.split('worker_environment =')[0];
+  expect(apiEnvironment).toMatch(
+    /merge\(\s*\{\s*FSS_SOCIAL_ASSETS_BUCKET\s*=\s*module\.social_assets\.bucket_name\s*\},/u,
+  );
+});
+
 describe('the upgrade notice address', () => {
   const name = API_VARIABLES.upgradeUrl;
   const root = readRepositoryFile('infra/roots/production/main.tf');
