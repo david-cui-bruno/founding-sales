@@ -37,3 +37,12 @@ it('drops a download completed after sign-out without staging or leaving files',
  expect(staged).toBe(false);expect(await readdir(root)).toEqual([]);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+it('creates the delivery directory on first launch, including for a text-only post',async()=>{
+ const parent=await mkdtemp(join(tmpdir(),'social-first-launch-')),root=join(parent,'social-delivery');
+ try{
+  expect(await withSocialImages([],{root,current:()=>true},async images=>images.length)).toBe(0);
+  expect((await stat(root)).mode&0o777).toBe(0o700);
+  expect(await readdir(root)).toEqual([]);
+ }finally{await rm(parent,{recursive:true,force:true});}
+});

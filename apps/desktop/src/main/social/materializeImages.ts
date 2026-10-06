@@ -1,4 +1,4 @@
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import sharp from 'sharp';
 import type {ApprovedPost} from './adapters.ts';
@@ -9,6 +9,7 @@ export async function withSocialImages<T>(images:Image[],port:{root:string;curre
  const check=()=>{if(!port.current())throw new Error('session_changed');};
  check();if(images.length>20)throw new Error('too_many_images');
  const snapshot=images.map(image=>({...image,location:{...image.location}}));
+ await mkdir(port.root,{recursive:true,mode:0o700});check();
  const directory=await mkdtemp(join(port.root,'delivery-'));
  try{
   const files:ApprovedPost['images']=[];
