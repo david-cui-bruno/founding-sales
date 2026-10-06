@@ -4,19 +4,26 @@ import {operations} from '../app/bridges.ts';
 import {Button} from '../ui/button.tsx';
 import {Input} from '../ui/input.tsx';
 export interface AssetLibraryPorts {
- read(): Promise<{assets:SocialAssetView[]|null;reason:string|null}>;
+ read(afterId?:string): Promise<{assets:SocialAssetView[]|null;reason:string|null}>;
  remove(input:{assetId:string;commandId:string}): Promise<{accepted:boolean;reason:string|null}>;
 }
 const defaults:AssetLibraryPorts = {
- read:async()=>{const api=operations();if(!api)throw new Error('offline');return api.read('social.assets',{});},
+ read:async afterId=>{const api=operations();if(!api)throw new Error('offline');return api.read('social.assets',afterId?{afterId}:{});},
  remove:async input=>{const api=operations();if(!api)throw new Error('offline');return api.command('social.removeAsset',input);},
 };
 export function AssetLibrary({ports=defaults,onSelect}:{ports?:AssetLibraryPorts;onSelect?:((image:{assetId:string;version:number;altText:string})=>void)|undefined}) {
  const [assets,setAssets]=useState<SocialAssetView[]>([]),[notice,setNotice]=useState<string|null>(null);
  const [busy,setBusy]=useState(false),[descriptions,setDescriptions]=useState<Record<string,string>>({});
+ const [cursor,setCursor]=useState<string|null>(null);
  const live=useRef(0),currentPorts=useRef(ports);currentPorts.current=ports;
  const pending=useRef<{assetId:string;commandId:string}|null>(null);
- useEffect(()=>{const generation=++live.current;void currentPorts.current.read().then(result=>{if(live.current!==generation)return;if(result.assets)setAssets(result.assets);else setNotice('Your image library could not be loaded.');}).catch(()=>{if(live.current===generation)setNotice('Your image library could not be loaded.');});return()=>{live.current=generation+1;};},[]);
+ useEffect(()=>{const generation=++live.current;void currentPorts.current.read().then(result=>{if(live.current!==generation)return;if(result.assets){setAssets(result.assets);setCursor(result.assets.length===50?result.assets.at(-1)!.id:null);}else setNotice('Your image library could not be loaded.');}).catch(()=>{if(live.current===generation)setNotice('Your image library could not be loaded.');});return()=>{live.current=generation+1;};},[]);
+ const more=async()=>{
+  if(!cursor||busy)return;const generation=live.current;setBusy(true);setNotice(null);
+  try{const result=await currentPorts.current.read(cursor);if(live.current!==generation)return;if(result.assets){const page=result.assets;setAssets(rows=>[...new Map([...rows,...page].map(row=>[row.id,row])).values()]);setCursor(page.length===50?page.at(-1)!.id:null);}else setNotice('More images could not be loaded. Try again.');}
+  catch{if(live.current===generation)setNotice('More images could not be loaded. Try again.');}
+  finally{if(live.current===generation)setBusy(false);}
+ };
  const remove=async(assetId:string)=>{
   if(busy)return;const generation=live.current;
   if(pending.current&&pending.current.assetId!==assetId)return;
@@ -36,5 +43,6 @@ export function AssetLibrary({ports=defaults,onSelect}:{ports?:AssetLibraryPorts
    <div className="flex gap-2">{onSelect&&<Button disabled={!derivative||!descriptions[asset.id]?.trim()||busy} onClick={()=>onSelect({assetId:asset.id,version:asset.version,altText:descriptions[asset.id]!.trim()})}>Use image</Button>}
    <Button variant="ghost" disabled={busy||(pending.current!==null&&pending.current.assetId!==asset.id)} onClick={()=>void remove(asset.id)}>Remove image</Button></div>
   </article>;})}
+ {cursor&&<Button variant="outline" disabled={busy} onClick={()=>void more()}>Load more images</Button>}
  </div>;
 }

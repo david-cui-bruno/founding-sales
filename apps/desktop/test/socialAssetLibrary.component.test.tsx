@@ -16,3 +16,10 @@ it('does not claim a failed deletion succeeded',async()=>{
  await waitFor(()=>expect(screen.getByText('Approved product screenshot')).toBeTruthy());fireEvent.click(screen.getByText('Remove image'));
  await waitFor(()=>expect(remove).toHaveBeenCalledTimes(1));expect(screen.getByText('Approved product screenshot')).toBeTruthy();expect(screen.getByRole('status').textContent).toContain('could not');
 });
+it('loads another page without losing the first page',async()=>{
+ const first=Array.from({length:50},(_,index)=>({...asset,id:`asset-${index}`,origin:{...asset.origin,usageNote:`Image ${index}`}}));
+ const read=vi.fn(async(afterId?:string)=>({assets:afterId?[{...asset,origin:{...asset.origin,usageNote:'Last image'}}]:first,reason:null}));
+ render(<AssetLibrary ports={{read,remove:vi.fn()}}/>);
+ await waitFor(()=>expect(screen.getByText('Load more images')).toBeTruthy());fireEvent.click(screen.getByText('Load more images'));
+ await waitFor(()=>expect(screen.getByText('Last image')).toBeTruthy());expect(screen.getByText('Image 0')).toBeTruthy();expect(read).toHaveBeenLastCalledWith('asset-49');expect(screen.queryByText('Load more images')).toBeNull();
+});
