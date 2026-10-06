@@ -5,7 +5,7 @@ export async function readSocialDeliveryQueue(ctx:RepositoryContext,deviceId:str
  const user=ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;if(!user)return {items:[]};
  const rows=(await ctx.db.query(`SELECT d.id AS "deliveryId",d.post_id AS "postId",d.revision,
  CASE WHEN d.submission_id IS NULL THEN 'submit' WHEN d.state='cancellation_pending' THEN 'cancel' ELSE 'inspect' END AS action,
- d.submission_id AS "submissionId",d.receipt_id AS "receiptId",a.fingerprint,a.snapshot
+ d.submission_id AS "submissionId",d.receipt_id AS "receiptId",d.media_binding AS "mediaBinding",a.fingerprint,a.snapshot
  FROM social_deliveries d
  JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id
  JOIN social_post_approvals a ON a.workspace_id=d.workspace_id AND a.id=d.approval_id

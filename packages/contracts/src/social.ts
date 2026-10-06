@@ -21,7 +21,10 @@ export type PostRevision=z.infer<typeof socialPostRevisionSchema>;
 export const socialPostSaveCommandSchema=saveSocialPostSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialPostActionCommandSchema=z.strictObject({postId:uuid,expectedRevision:z.number().int().positive(),commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialBeginCommandSchema=z.strictObject({claimId:uuid,approvalId:uuid,fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),commandId:commandIdSchema,clientVersion:semanticVersionSchema});
-export const socialInspectionSchema=z.strictObject({state:z.enum(['scheduled','published','cancelled','absent','unknown']),receiptId:z.string().min(1).max(500).nullable(),permalink:z.string().url().max(2048).nullable(),observedAt:z.string().datetime({offset:true}),accountExternalId:z.string().max(300).nullable(),observedFingerprint:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),complete:z.boolean()});
+/** Original submission's approved-byte to native-media mapping, never inferred on restart. */
+export const socialMediaBindingSchema=z.strictObject({receiptId:z.string().min(1).max(500),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),images:z.array(z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/u),platformId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/u)})).min(1).max(20)}).refine(v=>new Set(v.images.map(i=>i.platformId)).size===v.images.length,'Duplicate native media');
+export type SocialMediaBinding=z.infer<typeof socialMediaBindingSchema>;
+export const socialInspectionSchema=z.strictObject({state:z.enum(['scheduled','published','cancelled','absent','unknown']),receiptId:z.string().min(1).max(500).nullable(),permalink:z.string().url().max(2048).nullable(),observedAt:z.string().datetime({offset:true}),accountExternalId:z.string().max(300).nullable(),observedFingerprint:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),complete:z.boolean(),mediaBinding:socialMediaBindingSchema.nullable().optional()});
 export const socialObservationCommandSchema=z.strictObject({submissionId:uuid,observation:socialInspectionSchema,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
 export const socialAccountViewSchema=z.strictObject({id:uuid,platform:socialPlatformSchema,displayName:z.string(),externalId:z.string(),accountKind:z.enum(['profile','page']),state:z.enum(['connected','reconnect','unsupported','disconnected']),adapterVersion:z.string().nullable(),verifiedAt:z.string().nullable()});
 export const socialWorkspaceSchema=z.strictObject({accounts:z.array(socialAccountViewSchema),posts:z.array(socialPostRevisionSchema)});
@@ -76,6 +79,6 @@ export const socialApprovalSnapshotSchema=z.strictObject({
 });
 export const socialDeliveryQueueSchema=z.strictObject({items:z.array(z.strictObject({
  deliveryId:uuid,postId:uuid,revision:z.number().int().positive(),action:z.enum(['submit','inspect','cancel']),
- submissionId:uuid.nullable(),receiptId:z.string().nullable(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),snapshot:socialApprovalSnapshotSchema,
+ submissionId:uuid.nullable(),receiptId:z.string().nullable(),mediaBinding:socialMediaBindingSchema.nullable().optional(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),snapshot:socialApprovalSnapshotSchema,
 })).max(25)});
 export type SocialDeliveryQueue=z.infer<typeof socialDeliveryQueueSchema>;

@@ -9,3 +9,18 @@ it('refuses changed content, media, account and a mismatched requested receipt',
 it('refuses account/session changes after opening saved details',async()=>{const p=setup();let current=true;p.current=()=>current;p.detail.mockImplementation(async(id)=>{current=false;return {...await setup().detail(id)};});expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown'});});
 it('requires the saved schedule and timezone to agree, and rejects repeated DST times',async()=>{for(const change of [{scheduleLabel:'Posting at Tue, Oct 13, 1:00 PM'},{zone:'UTC'},{receiptId:'urn:li:share:456'},{images:[{}]}]){const p=setup();p.detail.mockResolvedValue({...await p.detail(row.receiptId),...change} as never);expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown'});}expect(await inspectLinkedInTextReceipt({...expected,publishAt:'2026-11-01T05:30:00Z'},null,setup())).toMatchObject({state:'unknown'});});
 it('keeps provider errors unknown',async()=>{const p=setup();p.detail.mockRejectedValue(new Error('Disconnected'));expect(await inspectLinkedInTextReceipt(expected,null,p)).toMatchObject({state:'unknown',complete:false});});
+
+it('recovers image receipts only against persisted native identity and verified stored alt',async()=>{
+ const {inspectLinkedInImageReceipt}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const images=[{sha256:'b'.repeat(64),altText:'Stored alt'}];
+ const binding={receiptId:row.receiptId,fingerprint:expected.fingerprint,images:[{sha256:'b'.repeat(64),platformId:'native-image'}]};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'https://media.licdn.com/dms/image/v2/native-image/feedshare-shrink_160/x',alt:''}]}],zone:'America/New_York'}),detail:vi.fn(async()=>({...await setup().detail(row.receiptId),images:[{platformId:'native-image',altText:'Stored alt'}],altTextVerified:true}))};
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'scheduled',mediaBinding:binding,complete:true});
+ expect(await inspectLinkedInImageReceipt({...expected,images},null,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),images:[{platformId:'replacement',altText:'Stored alt'}]});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),altTextVerified:false});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+ p.detail.mockResolvedValueOnce({...await p.detail(),images:[{platformId:'native-image',altText:'Different'}]});
+ expect(await inspectLinkedInImageReceipt({...expected,images},binding,p)).toMatchObject({state:'unknown'});
+});

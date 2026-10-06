@@ -1,9 +1,9 @@
 import {randomUUID} from 'node:crypto';
-import type {PostRevision} from '@fss/contracts';
+import {socialMediaBindingSchema,type SocialMediaBinding,type PostRevision} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSocialPost,readSocialPost,socialApprovalSnapshot,type SocialResult} from './posts.ts';
-export interface SocialInspection{state:'scheduled'|'published'|'cancelled'|'absent'|'unknown';receiptId:string|null;permalink:string|null;observedAt:string;accountExternalId:string|null;observedFingerprint:string|null;complete:boolean}
-type Delivery={id:string;post_id:string;revision:number;state:string;claim_id:string|null;device_id:string|null;claim_expires_at:Date|string|null;submission_id:string|null;approval_id:string;fingerprint:string;snapshot:{account:{externalId:string;platform:string};publishAt:string};observed_at:Date|string|null;inspection_deadline:Date|string|null;inspection_attempts:number};
+export interface SocialInspection{state:'scheduled'|'published'|'cancelled'|'absent'|'unknown';receiptId:string|null;permalink:string|null;observedAt:string;accountExternalId:string|null;observedFingerprint:string|null;complete:boolean;mediaBinding?:SocialMediaBinding|null|undefined}
+type Delivery={receipt_id:string|null;media_binding:SocialMediaBinding|null;id:string;post_id:string;revision:number;state:string;claim_id:string|null;device_id:string|null;claim_expires_at:Date|string|null;submission_id:string|null;approval_id:string;fingerprint:string;snapshot:{account:{externalId:string;platform:string};publishAt:string;images:{sha256:string}[]};observed_at:Date|string|null;inspection_deadline:Date|string|null;inspection_attempts:number};
 const owner=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
 async function deviceAllowed(ctx:RepositoryContext,id:string){return (await ctx.db.query("SELECT 1 FROM devices WHERE workspace_id=$1 AND id=$2 AND user_id=$3 AND status='active'",[ctx.scope.workspaceId,id,owner(ctx)])).rows.length===1;}
 async function row(ctx:RepositoryContext,where:'post_id'|'claim_id'|'submission_id',id:string):Promise<Delivery|null>{return (await ctx.db.query<Delivery>(`SELECT d.*,a.fingerprint,a.snapshot FROM social_deliveries d JOIN social_posts p ON p.workspace_id=d.workspace_id AND p.id=d.post_id JOIN social_post_approvals a ON a.workspace_id=d.workspace_id AND a.id=d.approval_id WHERE d.workspace_id=$1 AND d.${where}=$2 AND p.owner_user_id=$3 ORDER BY d.revision DESC LIMIT 1`,[ctx.scope.workspaceId,id,owner(ctx)])).rows[0]??null;}
@@ -33,6 +33,20 @@ export async function recordSocialObservation(ctx:RepositoryContext,input:{devic
  const o=input.observation,at=Date.parse(o.observedAt);if(!Number.isFinite(at)||at>Date.now()+300_000)return {ok:false,reason:'invalid_observation'};if(d.observed_at!==null&&at<new Date(d.observed_at).getTime())return {ok:false,reason:'stale_observation'};
  if(d.state==='published')return {ok:true,value:(await readSocialPost(ctx,d.post_id))!};
  const matched=o.accountExternalId===d.snapshot.account.externalId&&o.observedFingerprint===d.fingerprint&&o.complete;
+ // The first complete schedule establishes the mapping; later reads cannot replace it.
+ if(matched&&d.receipt_id!==null&&o.receiptId!==null&&o.receiptId!==d.receipt_id)return {ok:false,reason:'receipt_conflict'};
+ let binding:SocialMediaBinding|null=null;
+ if(o.mediaBinding!=null){
+  const parsed=socialMediaBindingSchema.safeParse(o.mediaBinding);
+  if(!parsed.success||!matched||parsed.data.receiptId!==o.receiptId||parsed.data.fingerprint!==d.fingerprint||parsed.data.images.length!==d.snapshot.images.length||parsed.data.images.some((image,index)=>image.sha256!==d.snapshot.images[index]?.sha256))return {ok:false,reason:'invalid_media_binding'};
+  binding=parsed.data;
+  if(d.media_binding!==null){
+   const old=socialMediaBindingSchema.safeParse(d.media_binding);
+   if(!old.success||JSON.stringify(old.data)!==JSON.stringify(binding))return {ok:false,reason:'media_binding_conflict'};
+  }else if(o.state!=='scheduled')return {ok:false,reason:'invalid_media_binding'};
+ }
+ if(matched&&d.snapshot.images.length>0&&['scheduled','published','cancelled','absent'].includes(o.state)&&!binding&&!d.media_binding)return {ok:false,reason:'media_binding_required'};
+ if(binding)await ctx.db.query('UPDATE social_deliveries SET media_binding=COALESCE(media_binding,$3::jsonb) WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,d.id,JSON.stringify(binding)]);
  let state:PostRevision['state']='unknown',reason:string|null='inspection_incomplete';
  if(matched){
   if(o.state==='published'){state='published';reason=null;}

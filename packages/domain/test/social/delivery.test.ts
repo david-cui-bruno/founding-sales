@@ -57,3 +57,28 @@ it('makes a future scheduled cancellation immediately due without refreshing its
  const deadline=async()=>(await db.session.query('SELECT inspection_deadline FROM social_deliveries WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,p.postId])).rows[0]?.['inspection_deadline'];const first=await deadline();await tx(()=>requestSocialCancellation(ctx(),{postId:p.postId,expectedRevision:1}));expect(await deadline()).toEqual(first);
  await db.session.query("UPDATE social_deliveries SET inspection_deadline=now()-interval '1 second' WHERE workspace_id=$1 AND post_id=$2",[seed.alpha.workspaceId,p.postId]);expect((await readSocialDeliveryQueue(ctx(),device)).items.some(x=>x.postId===p.postId)).toBe(false);
 });
+
+it('persists image identity for restart, rejects conflicting bindings, and preserves it on uncertain reads',async()=>{
+ const {readSocialDeliveryQueue}=await import('../../social/deliveryQueue.ts');
+ const p=await ready(),c=await tx(()=>claimSocialDelivery(ctx(),{deviceId:device,postId:p.postId,expectedRevision:1}));if(!c.ok)throw new Error(c.reason);
+ const b=await tx(()=>beginSocialSubmission(ctx(),{deviceId:device,...c.value}));if(!b.ok)throw new Error(b.reason);
+ // Seed an image snapshot to isolate observation checks from upload setup.
+ await db.session.query("UPDATE social_post_approvals SET snapshot=jsonb_set(snapshot,'{images}',$3::jsonb) WHERE workspace_id=$1 AND post_id=$2",[seed.alpha.workspaceId,p.postId,JSON.stringify([{assetId:randomUUID(),version:1,sha256:'b'.repeat(64),altText:'Image',mime:'image/png',width:100,height:100}])]);
+ const mediaBinding={receiptId:'urn:li:share:123',fingerprint:p.fingerprint,images:[{sha256:'b'.repeat(64),platformId:'native-image'}]};
+ const observation={state:'scheduled' as const,receiptId:mediaBinding.receiptId,permalink:null,observedAt:new Date().toISOString(),accountExternalId:'fixture',observedFingerprint:p.fingerprint,complete:true,mediaBinding};
+ const save=(o:typeof observation)=>tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:o}));
+ expect(await save({...observation,mediaBinding:{...mediaBinding,images:[{sha256:'c'.repeat(64),platformId:'native-image'}]}})).toMatchObject({ok:false,reason:'invalid_media_binding'});
+ expect(await save({...observation,complete:false})).toMatchObject({ok:false,reason:'invalid_media_binding'});
+ expect(await save({...observation,mediaBinding:{...mediaBinding,fingerprint:'c'.repeat(64)}})).toMatchObject({ok:false,reason:'invalid_media_binding'});
+ expect(await save({...observation,mediaBinding:{...mediaBinding,images:[...mediaBinding.images,...mediaBinding.images]}})).toMatchObject({ok:false,reason:'invalid_media_binding'});
+ expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:otherDevice,submissionId:b.value.submissionId,observation}))).toMatchObject({ok:false,reason:'wrong_device'});
+ const {mediaBinding:ignored,...missing}=observation;void ignored;
+ expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:missing}))).toMatchObject({ok:false,reason:'media_binding_required'});
+ expect(await save(observation)).toMatchObject({ok:true,value:{state:'scheduled'}});
+ expect(await save({...observation,mediaBinding:{...mediaBinding,images:[{sha256:'b'.repeat(64),platformId:'replacement'}]}})).toMatchObject({ok:false,reason:'media_binding_conflict'});
+ expect(await save({...observation,receiptId:'urn:li:share:999'})).toMatchObject({ok:false});
+ const {mediaBinding:unused,...withoutBinding}=observation;void unused;
+ expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:{...withoutBinding,state:'unknown',complete:false}}))).toMatchObject({ok:true});
+ await db.session.query('UPDATE social_deliveries SET next_inspection_at=now() WHERE workspace_id=$1 AND post_id=$2',[seed.alpha.workspaceId,p.postId]);
+ expect((await readSocialDeliveryQueue(ctx(),device)).items.find(x=>x.postId===p.postId)).toMatchObject({receiptId:mediaBinding.receiptId,mediaBinding});
+});

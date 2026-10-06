@@ -42,3 +42,18 @@ it('allows an observed composer-to-feed route change, but refuses an unrelated r
  url='https://www.linkedin.com/login';expect(await h.ports.waitForSave()).toBe(false);
  expect(h.raw.loadURL).not.toHaveBeenCalled();
 });
+it('reads a saved single image alt from its bound editor before reporting verified media',async()=>{
+ const h=setup();let opened=false,altOpened=false;
+ h.raw.contents.executeJavaScriptInIsolatedWorld.mockImplementation(async(_world,scripts)=>{
+  const code=scripts[0]!.code;
+  if(code.includes("key='__callieLinkedInSavedAlt'")){
+   if(code.includes('"action":"open",')){opened=true;return {ok:true};}
+   if(code.includes('"action":"openAlt",')){altOpened=true;return {ok:true};}
+   return {ok:true,view:{receiptId:'urn:li:share:123',platformId:'native-image',altText:'Saved alt'}};
+  }
+  if(code.includes('"action":"open",'))return {ok:true};
+  return {ok:true,view:{receiptId:'urn:li:share:123',postingName:'Founder',text:'Text',scheduleLabel:'Posting at Tue, Oct 13, 12:00 PM',zone:'America/New_York',images:[{platformId:'native-image',previewAlt:''}],altTextVerified:false}};
+ });
+ expect(await h.ports.detail('urn:li:share:123')).toMatchObject({images:[{platformId:'native-image',altText:'Saved alt'}],altTextVerified:true});
+ expect(opened&&altOpened).toBe(true);expect(h.raw.loadURL).not.toHaveBeenCalled();
+});

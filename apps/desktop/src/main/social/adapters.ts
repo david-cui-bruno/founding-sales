@@ -1,3 +1,4 @@
+import type {SocialMediaBinding} from '@fss/contracts';
 import type {SocialPlatform} from './runtime.ts';
 export interface AccountIdentity {platform:SocialPlatform;externalId:string;displayName:string}
 export interface ApprovedPost {
@@ -5,7 +6,7 @@ export interface ApprovedPost {
  images:{assetId:string;version:number;localPath:string;sha256:string;altText:string}[];
  publishAt:string;zone:string;fingerprint:string;
 }
-export interface InspectionResult {state:'scheduled'|'published'|'cancelled'|'absent'|'unknown';receiptId:string|null;permalink:string|null;observedAt:string;accountExternalId:string|null;observedFingerprint:string|null;complete:boolean}
+export interface InspectionResult {state:'scheduled'|'published'|'cancelled'|'absent'|'unknown';receiptId:string|null;permalink:string|null;observedAt:string;accountExternalId:string|null;observedFingerprint:string|null;complete:boolean;mediaBinding?:SocialMediaBinding|null|undefined}
 export type SubmissionResult={kind:'scheduled';receiptId:string}|{kind:'not_submitted';reason:string}|{kind:'unknown'};
 /** Implementations use fixed platform DOM actions. No model-authored selectors/code. */
 export interface SocialAdapter {

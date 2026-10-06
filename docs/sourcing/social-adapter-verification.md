@@ -176,3 +176,11 @@ The product saved-detail reader now recognizes the observed 1280px variant. Nati
 Cancellation rechecked the exact receipt/account/text/time and removed it once; complete absence was observed. Evidence: `/tmp/social-image-v2-submit.log`, `/tmp/social-image-v2-alt-final.log`, `/tmp/social-image-v2-cancel.log`. The previously failed attempt remains UNKNOWN and fenced against automatic resubmission. Image adapter activation, automatic media binding and actual publication acceptance remain outstanding.
 
 The final independent process confirmed the correct account and a complete empty scheduled queue (`/tmp/social-image-v2-empty.log`). Nine hidden Electron regression cases also pass across text delivery and image staging (`/tmp/social-saved-media-host.log`).
+
+### 6 Oct: persisted image recovery (local checks; not enabled)
+
+Schema 61 adds a nullable media binding to social deliveries. The observation command validates receipt, approval fingerprint, ordered derivative hashes and unique native media IDs. The first complete scheduled observation may establish that binding; conflicting later observations cannot replace it. Inconclusive observations retain it. The submitting device's recovery queue carries the binding without downloading the original image again.
+
+LinkedIn recovery now checks the native thumbnail ID against that binding, opens the exact saved receipt, reads its stored alt text through the bound image editor, and matches account, text, time and media. Missing mapping or mismatched evidence remains unknown. Image submission remains refused by the text adapter; original-submission mapping capture and image publication acceptance are still outstanding. This change was not deployed and did not schedule or publish anything.
+
+Validation: 54 domain/social and migration tests; 142 desktop LinkedIn/delivery tests; 10 hidden Electron tests; 7 API social tests; desktop, domain and API typechecks; focused lint and diff checks. Schema 61 still requires release rehearsal.

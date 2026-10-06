@@ -1,4 +1,5 @@
 import {linkedInSaveSettlementScript} from './linkedinSaveSettlement.ts';
+import {linkedInSavedAltScript} from './linkedinSavedAlt.ts';
 import {randomUUID} from 'node:crypto';
 import {linkedInPublishedDetailScript} from './linkedinPublishedDetail.ts';
 import {z} from 'zod';
@@ -16,6 +17,26 @@ type Port=Parameters<typeof stageLinkedInText>[1]&{loadURL(url:string):Promise<v
 export function createLinkedInBrowserPorts(port:Port){
  const current=()=>{try{const u=new URL(port.contents.getURL());return port.current()&&u.origin==='https://www.linkedin.com'&&!u.username&&!u.password&&['/feed/','/sharing/compose'].includes(u.pathname);}catch{return false;}};
  async function execute(code:string){if(!current())throw new Error('session_changed');const result=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code}],false);if(!current())throw new Error('session_changed');return result;}
+ async function savedAlt(raw:unknown,token:string){
+  const view=z.strictObject({receiptId:z.string(),postingName:z.string(),text:z.string(),scheduleLabel:z.string(),zone:z.string(),images:z.array(z.strictObject({platformId:z.string(),previewAlt:z.string()})),altTextVerified:z.literal(false)}).parse(raw);
+  if(view.images.length!==1)return view;
+  const input={token,receiptId:view.receiptId,postingName:view.postingName,text:view.text,scheduleLabel:view.scheduleLabel,zone:view.zone,platformId:view.images[0]!.platformId};
+  z.strictObject({ok:z.literal(true)}).parse(await execute(linkedInSavedAltScript({action:'open',...input})));
+  let opened=false;
+  for(let i=0;i<30;i++){
+   const result=z.strictObject({ok:z.boolean()}).parse(await execute(linkedInSavedAltScript({action:'openAlt',...input})));
+   if(result.ok){opened=true;break;}await port.wait();
+  }
+  if(!opened)throw new Error('saved_alt_unavailable');
+  for(let i=0;i<30;i++){
+   const result=z.object({ok:z.boolean(),view:z.unknown().optional()}).parse(await execute(linkedInSavedAltScript({action:'read',...input})));
+   if(result.ok){
+    const alt=z.strictObject({receiptId:z.literal(view.receiptId),platformId:z.literal(input.platformId),altText:z.string().max(1000)}).parse(result.view);
+    return {...view,images:[{platformId:alt.platformId,altText:alt.altText}],altTextVerified:true};
+   }await port.wait();
+  }
+  throw new Error('saved_alt_unavailable');
+ }
  async function compose(){if(!current())throw new Error('session_changed');await port.loadURL('https://www.linkedin.com/sharing/compose');if(!current())throw new Error('session_changed');}
  return {
  ...port,current,
@@ -67,7 +88,7 @@ export function createLinkedInBrowserPorts(port:Port){
   const token=randomUUID();z.object({ok:z.literal(true)}).parse(await execute(linkedInDetailNavigationScript({action:'open',receiptId,token})));
   for(let i=0;i<30;i++){
    const result=z.object({ok:z.boolean(),view:z.unknown().optional()}).parse(await execute(linkedInDetailNavigationScript({action:'read',receiptId,token})));
-   if(result.ok)return result.view;await port.wait();
+   if(result.ok)return savedAlt(result.view,token);await port.wait();
   }
   throw new Error('saved_detail_unavailable');
  }

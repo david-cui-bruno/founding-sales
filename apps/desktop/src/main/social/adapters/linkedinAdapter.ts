@@ -4,7 +4,7 @@ import type {AccountIdentity,ApprovedPost,InspectionResult,SocialAdapter} from '
 import type {SocialAdapterContext} from '../deliveryRunner.ts';
 import {stageLinkedInText} from './linkedinStage.ts';
 import {linkedInSubmitScript} from './linkedinSubmit.ts';
-import {inspectLinkedInTextReceipt} from './linkedinReceiptInspection.ts';
+import {inspectLinkedInTextReceipt,inspectLinkedInImageReceipt} from './linkedinReceiptInspection.ts';
 import {cancelLinkedInReceipt} from './linkedinCancel.ts';
 type StagePort=Parameters<typeof stageLinkedInText>[1];
 interface Port extends StagePort {
@@ -16,7 +16,7 @@ interface Port extends StagePort {
  list():Promise<unknown>;detail(receiptId:string):Promise<unknown>;
  published?(receiptId:string):Promise<unknown>;
 }
-/** Text-only adapter composition. Not a verified registration: native navigation
+/** Text-only submission with persisted-image recovery. Not a verified registration: native navigation
  * ports and the product-owned session still need platform acceptance.
  */
 export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):SocialAdapter{
@@ -44,10 +44,15 @@ export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):So
   }catch{return {kind:'unknown'};}
  },
  async inspect(input){
-  if(input.fingerprint!==context.fingerprint||snapshot.images.length||!port.current())return unknown();
+  if(input.fingerprint!==context.fingerprint||!port.current())return unknown();
   try{
    if(attempted&&!await port.waitForSave())return unknown();
    if(!await same())return unknown();await port.openScheduledList();if(!port.current())return unknown();
+   if(snapshot.images.length){
+    const binding=context.mediaBinding;
+    if(!binding||(input.receiptId!==null&&input.receiptId!==binding.receiptId))return unknown();
+    return inspectLinkedInImageReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:snapshot.images.map(i=>({sha256:i.sha256,altText:i.altText}))},binding,{...port,account:async()=>await same()?snapshot.account.externalId:null});
+   }
    const scheduled=await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
    if(scheduled.state==='scheduled')return scheduled;
    if(!port.published||!input.receiptId||!/^urn:li:share:\d+$/.test(input.receiptId)||Date.parse(snapshot.publishAt)>port.now()||!port.current())return unknown();
