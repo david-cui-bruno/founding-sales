@@ -13,7 +13,7 @@ export function linkedInSavedDetailScript():string{
   let url;try{url=new URL(image.getAttribute('src')??'');}catch{return {ok:false};}
   if(url.protocol!=='https:'||url.hostname!=='media.licdn.com'||url.username||url.password||url.port)return {ok:false};
   if(/^\\/dms\\/image\\/v2\\/[A-Za-z0-9_-]+\\/profile-displayphoto-scale_100_100\\//.test(url.pathname))continue;
-  const match=url.pathname.match(/^\\/dms\\/image\\/v2\\/([A-Za-z0-9_-]{1,200})\\/feedshare-image-high-res\\//);if(!match)return {ok:false};
+  const match=url.pathname.match(/^\\/dms\\/image\\/v2\\/([A-Za-z0-9_-]{1,200})\\/(?:feedshare-image-high-res|feedshare-shrink_1280)\\//);if(!match)return {ok:false};
   const alt=image.getAttribute('alt')??'';if(alt.length>1000)return {ok:false};images.push({platformId:match[1],previewAlt:alt});
  }
  if(images.length>20||new Set(images.map(i=>i.platformId)).size!==images.length)return {ok:false};
