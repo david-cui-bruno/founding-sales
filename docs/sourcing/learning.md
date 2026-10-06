@@ -1,0 +1,17 @@
+# Sourcing learning
+
+Implementation status: schema 51 and desktop/API code are under local validation; not yet released.
+
+Candidates → Results groups firms by the source frozen at their first outbound call. Warm introductions, cold sourcing, manual records and unknown origins are separate. Later research does not change the original cohort. Merging firms preserves interaction history but counts the surviving firm once. Deleted or invalidated sourcing evidence is unavailable, not silently replaced by a newer signal.
+
+The default cohort is first contacted in the last 30 days. The observation cutoff limits when calls, bookings, confirmed attendance and manual stage changes occurred. Reports use current accepted facts, including corrections: this is not a historical reconstruction of what the application displayed on that date. Age bands show how much time firms have had to respond.
+
+Answered/reached calls require an accepted conversation outcome; an unanswered attempt is not a rejection. Interest alone is not confirmed maintenance need. Firm-level pain can come from explicit sourcing feedback or a current demo qualification answer. A pain-confirming call must also have an accepted call evidence reference for that answer; a historical firm pain flag does not make every answered call a pain-confirming call. Missing denominators display unavailable.
+
+Demo qualification is independent of pipeline stage. It requires confirmed attendance plus three supported yes answers: buying participant, maintenance need and openness to paying. Answers begin unknown. The optional meeting panel needs no explanatory note. Evidence points to the accepted call/meeting item or debrief revision; direct confirmations name the authenticated command. Corrections and booking folds invalidate stale evidence. Saving never changes a deal or sends a message.
+
+Research costs are settled/estimated gross provider costs for the cohort's firm research and admitted candidate qualification runs. Cash uses the existing recorded provider funding mapping; it is not a new claim that every AWS purchase is covered. Search credits are shown once per dispatched request, separately from per-firm costs. Open reservations are not falsely reported as settled costs. Candidate coverage is all evidence available through the observation cutoff, separate from the contacted cohort.
+
+Targeting proposals are explicit admin decisions. Saving one changes nothing. Applying checks the base policy version and creates an immutable query-set version. Discovery captures that version and query location before network work. Approving while a request runs cannot relabel its results. Old attempts retain unknown policy version, alongside their original query text. Rank changes affect only the new-firm lane, not callbacks or promises. Quotas, stops, admission criteria, sending and deals are unchanged.
+
+Limitations: email interaction attribution is part of the outreach release. Live outcome verification remains pending an actual interaction recorded after the attribution release; fixture success is not evidence of conversion performance. The existing ten-call automation trial remains a separate decision. This feature does not turn automatic application on.

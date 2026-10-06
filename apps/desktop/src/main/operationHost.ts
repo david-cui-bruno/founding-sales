@@ -1,3 +1,4 @@
+import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
@@ -26,7 +27,7 @@ import {
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
 } from '@fss/contracts';
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   DIAL_IPC_CHANNELS,
   OPERATIONS,
@@ -164,6 +165,26 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'sourcing.learning': async (input:OperationInput<'sourcing.learning'>)=>{
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/learning',value=>learningReportSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.targeting': async (input:OperationInput<'sourcing.targeting'>)=>{
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/targeting',value=>targetingViewSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.proposeTargeting': async (input:OperationInput<'sourcing.proposeTargeting'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;const answer=await deps.api.command('/sourcing/targeting/save',body,value=>z.object({id:z.string().uuid(),revision:z.number().int().positive()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.applyTargeting': async (input:OperationInput<'sourcing.applyTargeting'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;const answer=await deps.api.command('/sourcing/targeting/apply',body,value=>z.object({policyVersion:z.string()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
     'sourcing.feedback': async (input:OperationInput<'sourcing.feedback'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/qualification/feedback',body,value=>sourcingFeedbackSavedSchema.parse(value),{commandId});

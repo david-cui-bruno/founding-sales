@@ -139,3 +139,12 @@ it('counts only independent supporting sources, not extra fetched pages or copie
  const cards=await listTodayCards(ctx(),{snapshotDate:await businessDateOf(ctx(),new Date().toISOString())});
  expect(cards.find(c=>c.firmId===admitted.value.firmId)?.sourceCount).toBe(1);
 });
+it('uses only an approved targeting order for the new-firm lane',async()=>{
+ const {listTodayCards,businessDateOf}=await import('../../today/snapshots.ts');const {saveTargetingProposal,applyTargetingProposal}=await import('../../sourcing/targetingProposals.ts');
+ const fit=await qualified('Policy Fit PM',{need:'We provide routine maintenance.'}),burden=await qualified('Policy Burden PM');
+ const f=await tx(()=>admitCandidate(ctx(),fit)),b=await tx(()=>admitCandidate(ctx(),burden));if(!f.ok||!b.ok)throw new Error('fixtures');
+ const snapshotDate=await businessDateOf(ctx(),new Date().toISOString()),ids=new Set([f.value.firmId,b.value.firmId]);
+ const order=async()=>(await listTodayCards(ctx(),{snapshotDate})).filter(c=>ids.has(c.firmId)).map(c=>c.firmId);
+ const proposal=await tx(()=>saveTargetingProposal(ctx(),{basePolicyVersion:'targeting-v1',queryChanges:[],rankOrder:['fit_only','operational_burden','help_request','investigation'],evidenceIds:[],rationale:'Try a reviewed fit-first order without relaxing admission.'}));if(!proposal.ok)throw new Error(proposal.reason);
+ expect(await order()).toEqual([b.value.firmId,f.value.firmId]);await tx(()=>applyTargetingProposal(ctx(),{id:proposal.value.id,expectedRevision:1}));expect(await order()).toEqual([f.value.firmId,b.value.firmId]);
+});

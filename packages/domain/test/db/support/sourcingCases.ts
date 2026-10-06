@@ -133,3 +133,22 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'meeting_qualification_revisions_pkey',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{command_id:'another'});}},
  {constraint:'meeting_qualification_revisions_workspace_id_command_id_key',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{revision:2});}},
 );
+async function targetingVersionRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const row={workspace_id:f.seeded.alpha.workspaceId,version:'constraint-v1',queries:'[{}]',rank_order:'["help_request","operational_burden","investigation","fit_only"]',...overrides};return f.session.query(`INSERT INTO sourcing_targeting_versions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+async function targetingProposalRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const row={workspace_id:f.seeded.alpha.workspaceId,id:absent,base_version:'constraint-v1',changes:'{}',created_by:member.user_id,...overrides};return f.session.query(`INSERT INTO sourcing_targeting_proposals(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+ ['sourcing_targeting_versions_workspace_id_fkey',{workspace_id:absent}],['sourcing_targeting_versions_version_check',{version:''}],['sourcing_targeting_versions_queries_check',{queries:'[]'}],['sourcing_targeting_versions_rank_order_check',{rank_order:'["help_request","help_request","help_request","help_request"]'}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>targetingVersionRow(f,overrides)})),
+ {constraint:'sourcing_targeting_versions_pkey',run:async(f:Fixture)=>{await targetingVersionRow(f);return targetingVersionRow(f);}},
+ ...([
+ ['sourcing_targeting_proposals_revision_check',{revision:0}],['sourcing_targeting_proposals_changes_check',{changes:'[]'}],['sourcing_targeting_proposals_workspace_id_base_version_fkey',{base_version:'missing'}],['sourcing_targeting_proposals_workspace_id_applied_version_fkey',{applied_version:'missing',applied_at:new Date()}],['sourcing_targeting_proposals_workspace_id_created_by_fkey',{created_by:absent}],['targeting_application_pair',{applied_at:new Date()}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>{await targetingVersionRow(f);return targetingProposalRow(f,overrides);}})),
+ {constraint:'sourcing_targeting_proposals_pkey',run:async(f:Fixture)=>{await targetingVersionRow(f);await targetingProposalRow(f);return targetingProposalRow(f);}},
+ {constraint:'discovery_targeting_version',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,targeting_version) VALUES($1,'missing')",[f.seeded.alpha.workspaceId])},
+ {constraint:'discovery_attempt_policy',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version) VALUES($1,'query','a query','missing')",[f.seeded.alpha.workspaceId])},
+);

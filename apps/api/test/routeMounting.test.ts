@@ -192,11 +192,15 @@ describe('what the API mounts', () => {
       '/sourcing/candidates/list',
       '/sourcing/candidates/review',
       '/sourcing/candidates/save',
+      '/sourcing/learning',
       '/sourcing/qualification/admit',
       '/sourcing/qualification/feedback',
       '/sourcing/qualification/firm',
       '/sourcing/qualification/read',
       '/sourcing/qualification/request',
+      '/sourcing/targeting',
+      '/sourcing/targeting/apply',
+      '/sourcing/targeting/save',
       '/suppressions',
       '/suppressions/correct',
       '/suppressions/record',
@@ -363,6 +367,7 @@ describe('what the API mounts', () => {
     const names = apiRouteModules(routing).map(module => module.name);
     expect(names).toEqual([
       'health',
+      'sourcing-learning',
       'sourcing',
       'auth',
       'devices',

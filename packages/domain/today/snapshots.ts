@@ -201,8 +201,10 @@ export async function listTodayCards(
     `SELECT ${CARD_COLUMNS},priority.rank AS source_rank,priority.sources AS source_count,priority.observed AS source_observed_at
        FROM today_snapshots s
        JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
+       LEFT JOIN sourcing_discovery_settings ds ON ds.workspace_id=s.workspace_id
+       LEFT JOIN sourcing_targeting_versions targeting ON targeting.workspace_id=ds.workspace_id AND targeting.version=ds.targeting_version
        LEFT JOIN LATERAL (
-         SELECT CASE r.verdict->>'rank' WHEN 'help_request' THEN 0 WHEN 'operational_burden' THEN 1 WHEN 'investigation' THEN 2 ELSE 3 END AS rank,
+         SELECT COALESCE((SELECT ordinality::int-1 FROM jsonb_array_elements_text(COALESCE(targeting.rank_order,'["help_request","operational_burden","investigation","fit_only"]'::jsonb)) WITH ORDINALITY tier(value,ordinality) WHERE tier.value=r.verdict->>'rank'),3) AS rank,
           LEAST(2,(SELECT LEAST(count(DISTINCT f->>'observationId'),count(DISTINCT lower(regexp_replace(trim(f->>'value'),'\\s+',' ','g'))))::int
             FROM jsonb_array_elements(r.facts) f WHERE r.verdict->'evidenceIds' ? (f->>'observationId') AND f->>'kind' IN ('help_request','operational_burden'))) AS sources,
           (SELECT max((o->>'retrievedAt')::timestamptz) FROM jsonb_array_elements(r.observations) o WHERE r.verdict->'evidenceIds' ? (o->>'id')) AS observed

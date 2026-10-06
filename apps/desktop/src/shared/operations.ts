@@ -1,3 +1,4 @@
+import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
 import {meetingQualificationViewSchema,saveMeetingQualificationSchema} from '@fss/contracts';
 import {firmQualificationReadSchema} from '@fss/contracts';
 import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
@@ -823,6 +824,10 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'sourcing.learning': {kind:'read',calls:[{method:'POST',path:'/sourcing/learning'}],input:learningInputSchema,output:z.object({view:learningReportSchema.nullable(),reason:z.string().nullable()}),transform:'Current accepted outcomes for first-contact cohorts'},
+  'sourcing.targeting': {kind:'read',calls:[{method:'POST',path:'/sourcing/targeting'}],input:z.strictObject({}),output:z.object({view:targetingViewSchema.nullable(),reason:z.string().nullable()}),transform:'Active search policy and pending approved changes'},
+  'sourcing.proposeTargeting': {kind:'command',calls:[{method:'POST',path:'/sourcing/targeting/save'}],input:targetingProposalSchema.safeExtend({commandId:uuid}),output:z.object({result:z.object({id:uuid,revision:z.number().int().positive()}).nullable(),reason:z.string().nullable()}),transform:'Save a targeting proposal without applying it'},
+  'sourcing.applyTargeting': {kind:'command',calls:[{method:'POST',path:'/sourcing/targeting/apply'}],input:targetingApplySchema.extend({commandId:uuid}),output:z.object({result:z.object({policyVersion:z.string()}).nullable(),reason:z.string().nullable()}),transform:'Explicit admin approval changes future discovery and new-lead ordering'},
   'sourcing.feedback': {
     kind:'command',calls:[{method:'POST',path:'/sourcing/qualification/feedback'}],
     input:sourcingFeedbackSchema.extend({commandId:uuid}),

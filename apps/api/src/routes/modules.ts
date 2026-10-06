@@ -1,3 +1,4 @@
+import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {MEETING_QUALIFICATION_PATHS,routeMeetingQualification} from './meetingQualification.ts';
 import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
 import { MEETING_AUTO_RECORDING_PATHS,routeMeetingAutoRecording } from './meetingAutoRecording.ts';
@@ -148,6 +149,7 @@ function healthModule(routing: RoutingOptions): RouteModule {
 export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[] {
   return [
     healthModule(routing),
+    moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
     // This workspace's Macs and the revocation (wave 3b). Exact paths, and beside

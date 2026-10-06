@@ -1,3 +1,4 @@
+-- changes: sourcing_discovery_settings, sourcing_discovery_attempts
 -- Additive learning references. No permission, enrollment, or stage changes.
 CREATE TABLE sourcing_attributions (
  workspace_id uuid NOT NULL,
@@ -72,3 +73,41 @@ CREATE TABLE meeting_qualification_revisions (
  CONSTRAINT meeting_qualification_command CHECK(command_id ~ '^[0-9a-zA-Z_:-]{1,128}$')
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON meeting_qualification_revisions TO app_runtime,migration;
+
+CREATE TABLE sourcing_targeting_versions (
+ workspace_id uuid NOT NULL REFERENCES workspaces(id),
+ version text NOT NULL CHECK(length(version) BETWEEN 1 AND 80),
+ queries jsonb NOT NULL CHECK(jsonb_typeof(queries)='array' AND jsonb_array_length(queries) BETWEEN 1 AND 30 AND octet_length(queries::text)<=32768),
+ rank_order jsonb NOT NULL CHECK(jsonb_typeof(rank_order)='array' AND jsonb_array_length(rank_order)=4 AND rank_order @> '["help_request","operational_burden","investigation","fit_only"]'::jsonb),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,version)
+);
+CREATE TABLE sourcing_targeting_proposals (
+ workspace_id uuid NOT NULL,
+ id uuid NOT NULL DEFAULT gen_random_uuid(),
+ base_version text NOT NULL,
+ revision integer NOT NULL DEFAULT 1 CHECK(revision>0),
+ changes jsonb NOT NULL CHECK(jsonb_typeof(changes)='object' AND octet_length(changes::text)<=49152),
+ applied_version text,
+ created_by uuid NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ applied_at timestamptz,
+ PRIMARY KEY(workspace_id,id),
+ FOREIGN KEY(workspace_id,base_version) REFERENCES sourcing_targeting_versions(workspace_id,version),
+ FOREIGN KEY(workspace_id,applied_version) REFERENCES sourcing_targeting_versions(workspace_id,version),
+ FOREIGN KEY(workspace_id,created_by) REFERENCES workspace_memberships(workspace_id,user_id),
+ CONSTRAINT targeting_application_pair CHECK((applied_version IS NULL)=(applied_at IS NULL))
+);
+ALTER TABLE sourcing_discovery_settings ADD COLUMN targeting_version text,
+ ADD CONSTRAINT discovery_targeting_version FOREIGN KEY(workspace_id,targeting_version) REFERENCES sourcing_targeting_versions(workspace_id,version);
+ALTER TABLE sourcing_discovery_attempts ADD COLUMN policy_version text,
+ ADD CONSTRAINT discovery_attempt_policy FOREIGN KEY(workspace_id,policy_version) REFERENCES sourcing_targeting_versions(workspace_id,version);
+-- Old attempts intentionally retain null: their query text is known, their policy version wasn't recorded.
+GRANT SELECT,INSERT ON sourcing_targeting_versions TO app_runtime;
+GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_targeting_versions TO migration;
+GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_targeting_proposals TO app_runtime,migration;
+
+-- Preserve the current search set for workspaces that exist at upgrade.
+INSERT INTO sourcing_targeting_versions(workspace_id,version,queries,rank_order)
+ SELECT id,'targeting-v1','[{"id": "dfw-simple-v3", "query": "Dallas Fort Worth residential property management", "locality": "DFW", "region": "TX"}, {"id": "providence-simple-v3", "query": "Providence Rhode Island property management", "locality": "Providence", "region": "RI"}, {"id": "boston-simple-v3", "query": "Boston residential property management", "locality": "Boston", "region": "MA"}, {"id": "arlington-simple-v3", "query": "Arlington Texas residential property management", "locality": "Arlington", "region": "TX"}, {"id": "plano-simple-v3", "query": "Plano Texas residential property management", "locality": "Plano", "region": "TX"}, {"id": "frisco-simple-v3", "query": "Frisco Texas residential property management", "locality": "Frisco", "region": "TX"}, {"id": "denton-simple-v3", "query": "Denton Texas residential property management", "locality": "Denton", "region": "TX"}, {"id": "warwick-simple-v3", "query": "Warwick Rhode Island property management", "locality": "Warwick", "region": "RI"}, {"id": "cranston-simple-v3", "query": "Cranston Rhode Island property management", "locality": "Cranston", "region": "RI"}, {"id": "cambridge-simple-v3", "query": "Cambridge Massachusetts residential property management", "locality": "Cambridge", "region": "MA"}, {"id": "somerville-simple-v3", "query": "Somerville Massachusetts residential property management", "locality": "Somerville", "region": "MA"}, {"id": "quincy-simple-v3", "query": "Quincy Massachusetts residential property management", "locality": "Quincy", "region": "MA"}]'::jsonb,'["help_request","operational_burden","investigation","fit_only"]'::jsonb FROM workspaces;
+UPDATE sourcing_discovery_settings SET targeting_version='targeting-v1';
