@@ -1,4 +1,5 @@
 import {app,BrowserWindow,session} from 'electron';
+import {linkedInDraftImageProofScript} from '../../../src/main/social/adapters/linkedinDraftImageProof.ts';
 import {stageLinkedInPost} from '../../../src/main/social/adapters/linkedinPostStage.ts';
 import {createElectronSocialRuntime} from '../../../src/main/social/electronRuntime.ts';
 import {socialPartition} from '../../../src/main/social/runtime.ts';
@@ -15,6 +16,7 @@ void(async()=>{
   const real=window as BrowserWindow;await real.loadURL('https://www.linkedin.com/sharing/compose');
   const stage=await stageLinkedInPost({deliveryId:'fixture',postId:'fixture',revision:1,account:{platform:'linkedin',externalId:'fixture',displayName:'Fixture Founder'},text:'Approved image post',images:[{assetId:'fixture',version:1,localPath:process.env['FSS_SOCIAL_IMAGE']!,sha256:process.env['FSS_SOCIAL_HASH']!,altText:'Synthetic image'}],publishAt:'2026-11-02T15:00:00Z',zone:'America/New_York',fingerprint:'fixture'},{root:process.env['FSS_SOCIAL_ROOT']!,contents:real.webContents,current:isCurrent,now:()=>Date.parse('2026-10-06T12:00:00Z'),wait:()=>new Promise(resolve=>setTimeout(resolve,20))});
   const preview=await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:'({text:document.querySelector("[contenteditable]").textContent,alt:document.querySelector("img")?.alt,loaded:document.querySelector("img")?.complete,dialogs:document.querySelectorAll("dialog[open]").length})'}]);
-  return {stage,preview,visible:real.isVisible(),focused:real.isFocused()};
+  const proof=await real.webContents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInDraftImageProofScript()}]);
+  return {stage,preview,proof,visible:real.isVisible(),focused:real.isFocused()};
  });console.log('SOCIAL_IMAGE_PROBE:'+JSON.stringify({result,shown,remaining:BrowserWindow.getAllWindows().length}));await partition.protocol.unhandle('https');app.quit();
 })().catch(error=>{console.error(error);app.exit(1);});

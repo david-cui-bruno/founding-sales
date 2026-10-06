@@ -146,3 +146,9 @@ No final Post or Schedule operation exists in this acceptance script. Closing th
 The draft preview uses a `blob:https://www.linkedin.com/...` URL, not a native saved-media identifier. This acceptance therefore establishes draft image/alt preparation only, not native receipt binding, saved-post alt persistence or publication. Image submission and adapter activation remain disabled. A future saved-image test requires separate exact-content scheduling approval and an implementation that does not invent native identity from the approved hash or draft blob URL.
 
 A final fresh-process read-only check also confirmed the correct account and a complete empty scheduled list (zero posts): `/tmp/social-image-final-list.log`.
+
+### 6 October: independent draft-image byte proof
+
+Single-image preparation now reads and hashes the actual composer blob, then compares that digest and alt text to the approved derivative. The closed reader accepts only one visible image from a same-origin LinkedIn blob URL; it excludes the previously observed avatar format, refuses remote/data/cross-origin sources, limits reads to 5 MiB with a five-second fetch timeout, and verifies the DOM node/source/alt remain unchanged after hashing. The proof cannot manufacture a native saved-media identifier and does not enable image submission.
+
+The LinkedIn suite passes 101 tests; four hidden Electron image cases pass, including actual blob hashing in the real browser runtime. New tests cover wrong source, ambiguous images, changed alt during read, empty/oversized bodies, and an approved-hash mismatch that refuses preparation. Desktop typecheck, focused lint and diffcheck pass. No live platform operation occurred in this step. Saved image receipt/alt persistence still requires an explicitly approved schedule-and-cancel test using the reviewed synthetic image.

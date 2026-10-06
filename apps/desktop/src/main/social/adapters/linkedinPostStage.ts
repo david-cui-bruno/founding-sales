@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {linkedInDraftImageProofScript} from './linkedinDraftImageProof.ts';
 import type {ApprovedPost} from '../adapters.ts';
 import {linkedInDomScript} from './linkedinDom.ts';
 import {linkedInImageEditorScript} from './linkedinImageEditor.ts';
@@ -30,6 +31,8 @@ export async function stageLinkedInPost(input:ApprovedPost,port:Ports):Promise<{
   if(!editorReady)return {ready:false,reason:'media_editor_unavailable'};
   const transferred=await stageLinkedInImages(post.images,port);if(!transferred.ready)return transferred;
   const finished=await finishLinkedInImage(post.images[0]!.altText,port);if(!finished.ready)return finished;
+  const proof=z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/),altText:z.string().max(1000),bytes:z.number().int().positive().max(5*1024*1024)}).parse((await execute(linkedInDraftImageProofScript())).view);
+  if(proof.sha256!==post.images[0]!.sha256||proof.altText!==post.images[0]!.altText)return {ready:false,reason:'image_identity_unverified'};
   const after=composerSchema.parse((await execute(linkedInDomScript({action:'read'}))).view);
   if(JSON.stringify(before)!==JSON.stringify(after))return {ready:false,reason:'staged_content_changed'};
   return current()&&Date.parse(post.publishAt)>port.now()?{ready:true}:{ready:false,reason:'session_or_schedule_changed'};
