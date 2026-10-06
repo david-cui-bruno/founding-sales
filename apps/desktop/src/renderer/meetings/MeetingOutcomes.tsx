@@ -101,7 +101,7 @@ export function MeetingOutcomes({ meetingId, ports = outcomesPorts, actionsEnabl
     finally { entry.busy = false; entry.loading = false; touch(); }
   };
   const draft = entry.draft, view = entry.view;
-  return <div className="min-w-0" data-testid="meeting-outcomes"><Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={() => { entry.open = !entry.open; touch(); }}>Notes & tasks</Button>
+  return <div id={`meeting-outcomes-${meetingId}`} className="min-w-0" data-testid="meeting-outcomes"><Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={() => { entry.open = !entry.open; touch(); }}>Notes & tasks</Button>
     {entry.open ? <section className="mt-2 space-y-5 rounded-lg border border-border bg-background p-4" aria-label="Meeting notes and tasks">
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{view?.state === 'stale' ? 'Sources changed. Existing tasks and your corrections are kept.' : view?.state === 'partial' ? 'Partial notes · review before relying on them.' : view?.state === 'pending' ? 'Analysis is queued.' : 'Meeting notes'}</span><Button size="sm" variant="quiet" disabled={entry.loading || entry.busy} onClick={() => { void load(); }}>Refresh notes</Button></div>
       {entry.unavailable ? <p role="status" className="text-sm text-muted-foreground">{entry.gone ? 'These notes are no longer available.' : 'Callie could not load the latest notes. Try Refresh notes.'}</p> : null}

@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  meeting_qualification_revisions: coverage(['deletion_removes'], 'Immutable qualification answers and source references cascade with meeting deletion.'),
   sourcing_attributions: coverage(['deletion_removes'], 'Source IDs and coded hypotheses; full-firm deletion removes them, candidate deletion makes the source unavailable.'),
   sourcing_interactions: coverage(['deletion_removes'], 'Interaction references and revisions; removed with their source firm or deleted contact interactions.'),
   sourcing_first_touches: coverage(['deletion_removes'], 'Frozen first-contact source; removed with its firm attribution, not replaced by a newer source.'),

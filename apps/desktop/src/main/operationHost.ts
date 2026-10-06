@@ -1,3 +1,4 @@
+import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
@@ -455,6 +456,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'meetings.editRecap': async (input:OperationInput<'meetings.editRecap'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/meetings/recap/edit',body,value=>meetingFollowThroughViewSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'meetings.qualification': async (input:OperationInput<'meetings.qualification'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read(`/meetings/qualification?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingQualificationViewSchema.parse(value));
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'meetings.saveQualification': async (input:OperationInput<'meetings.saveQualification'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/meetings/qualification/save',body,value=>meetingQualificationViewSchema.parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },

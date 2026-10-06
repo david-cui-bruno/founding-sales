@@ -1,3 +1,4 @@
+import {meetingQualificationViewSchema,saveMeetingQualificationSchema} from '@fss/contracts';
 import {firmQualificationReadSchema} from '@fss/contracts';
 import {sourcingFeedbackSchema,sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationReadSchema, qualificationViewSchema, qualificationRequestSchema, qualificationQueuedSchema, qualificationAdmissionSchema, qualificationAdmittedSchema } from '@fss/contracts';
@@ -1633,6 +1634,14 @@ export const OPERATIONS = {
     kind:'command',calls:[{method:'POST',path:'/meetings/recap/edit'}],
     input:z.discriminatedUnion('action',[meetingDraftEditSchema.options[0].extend({commandId:uuid}),meetingDraftEditSchema.options[1].extend({commandId:uuid}),meetingDraftEditSchema.options[2].extend({commandId:uuid}),meetingDraftEditSchema.options[3].extend({commandId:uuid})]),
     output:z.strictObject({view:meetingFollowThroughViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'durable edit hold and versioned save, discard or cancellation',
+  },
+  'meetings.qualification': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/qualification?meetingId={uuid}'}],input:z.strictObject({meetingId:uuid}),
+    output:z.strictObject({view:meetingQualificationViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'current commercial qualification, derived from accepted evidence and attendance',
+  },
+  'meetings.saveQualification': {
+    kind:'command',calls:[{method:'POST',path:'/meetings/qualification/save'}],input:saveMeetingQualificationSchema,
+    output:z.strictObject({view:meetingQualificationViewSchema.nullable(),reason:z.string().max(80).nullable()}),transform:'optional versioned qualification confirmation; no stage or outreach changes',
   },
   'meetings.outcomes': {
     kind: 'read', calls: [{ method: 'GET', path: '/meetings/outcomes?meetingId={uuid}' }], input: z.strictObject({ meetingId: uuid }),

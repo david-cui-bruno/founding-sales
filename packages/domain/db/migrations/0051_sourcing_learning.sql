@@ -46,3 +46,29 @@ CREATE TABLE sourcing_first_touches (
 );
 CREATE INDEX sourcing_interactions_by_source ON sourcing_interactions(workspace_id,attribution_id,occurred_at);
 GRANT SELECT,INSERT,UPDATE,DELETE ON sourcing_attributions,sourcing_interactions,sourcing_first_touches TO app_runtime,migration;
+
+CREATE TABLE meeting_qualification_revisions (
+ workspace_id uuid NOT NULL,
+ meeting_id uuid NOT NULL,
+ firm_id uuid NOT NULL,
+ revision integer NOT NULL,
+ buying_participant text NOT NULL,
+ maintenance_need text NOT NULL,
+ open_to_paying text NOT NULL,
+ evidence jsonb NOT NULL,
+ command_id text NOT NULL,
+ created_by_user_id uuid NOT NULL,
+ original_meeting_id uuid,
+ original_revision integer,
+ invalidated_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workspace_id,meeting_id,revision),
+ UNIQUE(workspace_id,command_id),
+ FOREIGN KEY(workspace_id,meeting_id,firm_id) REFERENCES meetings(workspace_id,id,firm_id) ON DELETE CASCADE ON UPDATE CASCADE,
+ FOREIGN KEY(workspace_id,created_by_user_id) REFERENCES workspace_memberships(workspace_id,user_id),
+ CONSTRAINT meeting_qualification_revision CHECK(revision>0),
+ CONSTRAINT meeting_qualification_answers CHECK(buying_participant IN ('yes','no','unknown') AND maintenance_need IN ('yes','no','unknown') AND open_to_paying IN ('yes','no','unknown')),
+ CONSTRAINT meeting_qualification_evidence CHECK(jsonb_typeof(evidence)='array' AND jsonb_array_length(evidence)<=3 AND octet_length(evidence::text)<=4096),
+ CONSTRAINT meeting_qualification_command CHECK(command_id ~ '^[0-9a-zA-Z_:-]{1,128}$')
+);
+GRANT SELECT,INSERT,UPDATE,DELETE ON meeting_qualification_revisions TO app_runtime,migration;

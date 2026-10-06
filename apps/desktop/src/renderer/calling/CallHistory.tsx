@@ -376,7 +376,7 @@ export function CallHistory({
 
   function sessionRow(call: CallSessionDto): JSX.Element {
     return (
-          <li key={call.sessionId} data-testid="call-history-row" className="group/row flex flex-col border-b border-border py-1.5 text-sm">
+          <li key={call.sessionId} id={`call-${call.sessionId}`} data-testid="call-history-row" className="group/row flex flex-col border-b border-border py-1.5 text-sm">
             <div className="flex items-center gap-3">
               <span className="flex-1 truncate">{when(call.startedAt ?? call.endedAt)}</span>
               {call.callLogId === null ? null : outcomeCell(call.callLogId, call.outcome ?? null)}

@@ -117,3 +117,19 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_first_touches_workspace_id_firm_id_fkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_first_touches',{firm_id:absent});}},
  {constraint:'sourcing_first_touches_workspace_id_attribution_id_fkey',run:async(f:Fixture)=>learningRow(f,'sourcing_first_touches')},
 );
+async function meetingQualificationRow(f:Fixture,overrides:Record<string,unknown>={}){
+ await f.session.query(`INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,'qualification-constraint','qualification-constraint','booked',now(),now(),now()) ON CONFLICT DO NOTHING`,[f.seeded.alpha.workspaceId,runId,f.crm.alpha.firmId]);
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const row={workspace_id:f.seeded.alpha.workspaceId,meeting_id:runId,firm_id:f.crm.alpha.firmId,revision:1,buying_participant:'unknown',maintenance_need:'unknown',open_to_paying:'unknown',evidence:'[]',command_id:'qualification-test',created_by_user_id:member.user_id,...overrides};
+ return f.session.query(`INSERT INTO meeting_qualification_revisions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+  ['meeting_qualification_revision',{revision:0}],['meeting_qualification_answers',{maintenance_need:'maybe'}],
+  ['meeting_qualification_evidence',{evidence:'{}'}],['meeting_qualification_command',{command_id:'not a command'}],
+  ['meeting_qualification_revisio_workspace_id_meeting_id_firm_fkey',{meeting_id:absent}],
+  ['meeting_qualification_revisio_workspace_id_created_by_user_fkey',{created_by_user_id:absent}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>meetingQualificationRow(f,overrides)})),
+ {constraint:'meeting_qualification_revisions_pkey',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{command_id:'another'});}},
+ {constraint:'meeting_qualification_revisions_workspace_id_command_id_key',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{revision:2});}},
+);
