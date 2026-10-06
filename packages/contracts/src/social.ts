@@ -58,3 +58,4 @@ export const socialDisconnectCommandSchema=z.strictObject({accountId:uuid,comman
  * versioned meeting transcript; public IDs name sourcing candidate revisions. */
 export const socialDraftRequestSchema=z.strictObject({sourceRefs:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive()})).min(1).max(10),factBlocks:z.array(z.strictObject({id:uuid,version:z.number().int().positive()})).max(20)});
 export type SocialDraftRequest=z.infer<typeof socialDraftRequestSchema>;
+export const socialDraftRequestCommandSchema=socialDraftRequestSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
