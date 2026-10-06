@@ -31,3 +31,11 @@ it('enables image approval only after the exact preview loads',async()=>{
  fireEvent.load(image);expect((screen.getByText('Approve & schedule') as HTMLButtonElement).disabled).toBe(false);
  }finally{vi.unstubAllGlobals();}
 });
+it('opens a generated variant directly in the editor without hiding it below the batch list',async()=>{
+ vi.stubGlobal('callieApi',{read:async()=>({view:{sources:[],facts:[],requests:[{id:account.id,state:'ready',sourceRefs:[{kind:'public',id:account.id,revision:1}],factBlocks:[],reason:null,createdAt:'2026-10-01T12:00:00Z',deadlineAt:'2026-10-01T12:30:00Z',concepts:[{theme:'after_hours',factRefs:[],variants:[{platform:'linkedin',text:'Review before posting.'},{platform:'facebook',text:'Another variant.'},{platform:'x',text:'Short variant.'}]}]}]},reason:null})});
+ try{const mutate=vi.fn();render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[]},reason:null}),mutate}}/></DraftsProvider>);
+ fireEvent.click(await screen.findByRole('button',{name:'Use LinkedIn draft'}));
+ expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('Review before posting.');expect((screen.getByLabelText('Publish time') as HTMLInputElement).value).toBe('');
+ expect(screen.queryByLabelText('Draft ideas')).toBeNull();expect(mutate).not.toHaveBeenCalled();
+ }finally{vi.unstubAllGlobals();}
+});

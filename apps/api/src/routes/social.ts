@@ -1,3 +1,4 @@
+import {readSocialDraftWorkspace,socialDraftView} from '@fss/domain/social/draftWorkspace.ts';
 import {socialDraftRequestCommandSchema} from '@fss/contracts';
 import {requestSocialDrafts,readSocialDraftRequest} from '@fss/domain/social/drafts.ts';
 import {socialConnectionCommandSchema,socialDisconnectCommandSchema} from '@fss/contracts';
@@ -10,17 +11,18 @@ import {uuid,socialAssetRegisterCommandSchema,socialAssetCompleteCommandSchema,s
 import {readSocialAsset,registerSocialAsset,completeSocialAsset,deleteSocialAsset,listSocialAssets,socialAssetObject} from '@fss/domain/social/assets.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOCIAL_PATHS=['/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
+export const SOCIAL_PATHS=['/social/drafts','/social/drafts/request','/social/drafts/read','/social','/social/accounts/connect','/social/accounts/disconnect','/social/posts/save','/social/posts/approve','/social/posts/cancel','/social/delivery/claim','/social/delivery/begin','/social/delivery/observe','/social/assets','/social/assets/read','/social/assets/register','/social/assets/complete','/social/assets/delete','/social/assets/upload-url','/social/assets/download-url'];
 export async function routeSocial(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOCIAL_PATHS.includes(request.path))return null;if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
  const principal=await requirePrincipal(auth,request);if(!principal.ok)return principal.result;const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const ctx=scoped.context,deps={auth,request,principal:principal.principal};
+ if(request.path==='/social/drafts'){if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};return {status:200,body:await readSocialDraftWorkspace(ctx)};}
  if(request.path==='/social/drafts/request')return runRouteCommand(deps,socialDraftRequestCommandSchema,'social_drafts_request',(c,input)=>{const {commandId:_id,clientVersion:_client,...selection}=input;return requestSocialDrafts(c,selection);});
  if(request.path==='/social/drafts/read'){
   const parsed=z.strictObject({requestId:uuid}).safeParse(request.body);if(!parsed.success)return {status:400,body:{error:'invalid_input'}};
   const row=await readSocialDraftRequest(ctx,parsed.data.requestId);if(!row)return {status:404,body:{error:'not_found'}};
-  return {status:200,body:{request:{id:row.id,state:row.state,sourceRefs:row.source_selection.sourceRefs,factBlocks:row.source_selection.factBlocks,concepts:row.concepts,reason:row.reason,createdAt:row.created_at.toISOString(),deadlineAt:row.deadline_at.toISOString()}}};
+  return {status:200,body:{request:socialDraftView(row)}};
  }
  if(request.path==='/social/accounts/connect')return runRouteCommand(deps,socialConnectionCommandSchema,'social_account_connect',(c,input)=>{const {commandId:_id,clientVersion:_client,...connection}=input;return saveSocialConnection(c,connection);});
  if(request.path==='/social/accounts/disconnect')return runRouteCommand(deps,socialDisconnectCommandSchema,'social_account_disconnect',disconnectSocialAccount);

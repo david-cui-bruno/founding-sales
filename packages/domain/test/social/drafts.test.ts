@@ -66,3 +66,13 @@ it('settles a lost calling reservation conservatively when its request expires',
  await withTransaction(db.session,()=>expireSocialDraftRequests(worker()));
  expect((await db.session.query('SELECT state,settled_cents FROM provider_reservations WHERE workspace_id=$1 AND subject_id=$2',[seed.alpha.workspaceId,a.value.requestId])).rows).toEqual([{state:'estimated',settled_cents:3}]);
 });
+it('lists only bounded current source choices, approved facts and the owners requests',async()=>{
+ const {readSocialDraftWorkspace}=await import('../../social/draftWorkspace.ts');
+ const request=await input();const a=await withTransaction(db.session,()=>requestSocialDrafts(ctx(),request));if(!a.ok)throw new Error(a.reason);
+ const view=await readSocialDraftWorkspace(ctx());
+ expect(view.sources.some(s=>s.id===request.sourceRefs[0]!.id)).toBe(true);expect(view.requests.some(r=>r.id===a.value.requestId)).toBe(true);
+ expect(JSON.stringify(view)).not.toContain('PRIVATE CUSTOMER');expect(JSON.stringify(view)).not.toContain('Oak Street');
+ expect((await readSocialDraftWorkspace(ctx(true))).sources).toEqual([]);
+ await db.session.query("UPDATE sourcing_candidates SET status='dismissed' WHERE workspace_id=$1 AND id=$2",[seed.alpha.workspaceId,request.sourceRefs[0]!.id]);
+ expect((await readSocialDraftWorkspace(ctx())).sources.some(s=>s.id===request.sourceRefs[0]!.id)).toBe(false);
+});

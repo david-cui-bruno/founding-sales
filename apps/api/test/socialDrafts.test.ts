@@ -13,6 +13,7 @@ it('creates a replayable owner-scoped request without accepting source text or a
  const result=await call('/social/drafts/request',input);expect(result.status).toBe(200);
  const requestId=(result.body as {result:{requestId:string}}).result.requestId;
  expect((await call('/social/drafts/request',input)).body).toMatchObject({replayed:true,result:{requestId}});
+ const workspace=await call('/social/drafts',{});expect(workspace.status).toBe(200);expect(workspace.body).toMatchObject({requests:[{id:requestId}],sources:[{id}]});
  const view=await call('/social/drafts/read',{requestId});expect(view.status).toBe(200);expect(view.body).toMatchObject({request:{id:requestId,state:'queued'}});expect(JSON.stringify(view.body)).not.toContain('PRIVATE CUSTOMER');
  expect((await call('/social/drafts/read',{requestId,ownerUserId:f.alpha.admin.userId})).status).toBe(400);
  token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
