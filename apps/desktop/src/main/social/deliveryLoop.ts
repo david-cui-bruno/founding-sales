@@ -49,7 +49,7 @@ export async function submitApprovedSocialPost(input:ApprovedPost,adapter:Social
  }
 }
 /** Restart recovery never invokes submit. Cancellation targets only a fully matched receipt. */
-export async function reconcileSocialPost(post:ApprovedPost,input:{submissionId:string;receiptId:string|null;cancel:boolean},adapter:SocialAdapter,port:Pick<DeliveryPorts,'current'|'now'|'observe'>):Promise<{state:InspectionResult['state']}>{
+export async function reconcileSocialPost(post:Pick<ApprovedPost,'account'|'fingerprint'>,input:{submissionId:string;receiptId:string|null;cancel:boolean},adapter:SocialAdapter,port:Pick<DeliveryPorts,'current'|'now'|'observe'>):Promise<{state:InspectionResult['state']}>{
  const unknown=():InspectionResult=>({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
  const matches=(o:InspectionResult)=>o.complete&&o.accountExternalId===post.account.externalId&&o.observedFingerprint===post.fingerprint&&(input.receiptId===null||o.receiptId===input.receiptId||o.state==='absent');
  let observation=unknown();
