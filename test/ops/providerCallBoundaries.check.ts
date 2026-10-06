@@ -52,6 +52,7 @@ interface Boundary {
  * is a one-line change here.
  */
 export const BOUNDARIES: readonly Boundary[] = [
+  {name:'social draft generation',site:'packages/domain/social/draftRun.ts',owner:'runSocialDraft',methods:{countInputTokens:1,generate:1}},
   {name:'routine reply interpretation',site:'packages/domain/outreach/replyRun.ts',owner:'runRoutineReply',methods:{countInputTokens:1,interpret:1}},
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
@@ -97,6 +98,10 @@ export interface Allowed {
   readonly reason: string;
 }
 export const ALLOWED_ELSEWHERE: readonly Allowed[] = [
+  {
+    file: 'apps/desktop/src/main/social/imageNormalize.ts', method: 'extract',
+    reason: 'Sharp extract crops local image pixels after format, pixel-count and crop-bounds validation. It performs no network or AI provider call; paid-provider gates do not apply.',
+  },
   {file:'apps/worker/src/sourcing/evaluateDiscovery.ts',method:'discover',reason:'Local evaluation owns a durable single-host pre-request debit; independently checked as the evaluation boundary.'},
   {file:'packages/domain/sourcing/discovery.ts',method:'discover',reason:'Production discovery owns a committed shared PostgreSQL dispatch fence; independently checked as the continuous discovery boundary.'},
   {

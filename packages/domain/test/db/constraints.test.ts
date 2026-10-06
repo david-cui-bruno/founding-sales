@@ -1,3 +1,4 @@
+import { SOCIAL_CONSTRAINT_CASES } from './support/socialCases.ts';
 import { OUTREACH_CONSTRAINT_CASES } from './support/outreachCases.ts';
 import { SOURCING_CONSTRAINT_CASES } from './support/sourcingCases.ts';
 import { MEETING_AUTO_RECORDING_CONSTRAINT_CASES } from './support/meetingAutoRecordingCases.ts';
@@ -1382,6 +1383,7 @@ const cases: readonly Case[] = [
   // migration at the same time never both edit the middle of this array.
   ...SOURCING_CONSTRAINT_CASES,
   ...OUTREACH_CONSTRAINT_CASES,
+  ...SOCIAL_CONSTRAINT_CASES,
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,

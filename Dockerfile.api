@@ -91,6 +91,7 @@ COPY packages/domain/dashboard packages/domain/dashboard
 # Lane J-facts: the funnel, reached from the dashboard's fourth source and from crm.
 COPY packages/domain/funnel packages/domain/funnel
 COPY packages/domain/research packages/domain/research
+COPY packages/domain/social packages/domain/social
 COPY packages/domain/sourcing packages/domain/sourcing
 COPY packages/domain/outreach packages/domain/outreach
 COPY packages/domain/retention packages/domain/retention
