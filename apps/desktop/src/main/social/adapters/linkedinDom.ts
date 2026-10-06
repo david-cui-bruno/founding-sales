@@ -26,7 +26,7 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
  const editor=one('[contenteditable="true"][role="textbox"][componentkey="ShareBox_textEditor"]');
  const date=one('input[data-testid="date-picker-input"]'),time=one('input[data-testid="time-picker-input"]');
  const normalizedDate=value=>{const parts=/^([0-9]{1,2})[/]([0-9]{1,2})[/]([0-9]{4})$/.exec(value??'');return parts?parts[1].padStart(2,'0')+'/'+parts[2].padStart(2,'0')+'/'+parts[3]:value;};
- const headers=all('[role="button"]').filter(e=>!['Post to Anyone','Comments: Anyone'].includes(text(e)));
+ const headers=all('[role="button"]').filter(e=>text(e)&&!['Post to Anyone','Comments: Anyone'].includes(text(e)));
  if(input.action==='read')return {ok:true,view:{zone:Intl.DateTimeFormat().resolvedOptions().timeZone,kind:editor?'composer':date&&time?'schedule':'unknown',postingName:headers.length===1?text(headers[0]):null,text:editor?text(editor):null,date:normalizedDate(date?.value)??null,time:time?.value??null,identities:all('[role="radio"]').map(e=>({name:text(e),selected:e.getAttribute('aria-checked')==='true'})),scheduleLabel:all('p,span,div').map(text).filter(t=>/^Posting at [^\\n]{1,100}$/.test(t)).sort((a,b)=>a.length-b.length)[0]??null}};
  if(input.action==='focusText'){if(!editor)return refuse('layout_changed');editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=window.getSelection();if(!selection)return refuse('editor_unavailable');selection.removeAllRanges();selection.addRange(range);return {ok:true};}
  if(input.action==='openIdentity'){const targets=headers.filter(e=>text(e)===input.name);return click(targets.length===1?targets[0]:null);}
