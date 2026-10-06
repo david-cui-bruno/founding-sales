@@ -36,3 +36,7 @@ The earlier inspection paragraphs describe the initial probes only. They do not 
 A read-only control inspection of an empty composer confirmed a `time-picker-clock-button` and a `time-picker-menu` linked by the time input's `aria-controls`. Options are `menuitemradio` elements with `time-picker-option`. No draft text, image, schedule or post was created during this inspection.
 
 Preparation now opens that menu and selects the exact requested option before confirming the date/time panel. It refuses missing or duplicate options and rechecks date/time/zone afterward. Fifteen focused tests and seven hidden Electron host tests passed. This fixes the known interaction gap in code; live acceptance of the full product-owned scheduling flow remains outstanding.
+
+### Composer media counting
+
+The preparation reader now counts images even when their alt text is empty; previously it filtered those images out. It excludes only the known profile-avatar URL shape and rejects unknown image sources. A hidden Electron regression adds an unexpected image without alt text and confirms staging refuses it. Four image-staging host cases pass; the full desktop suite passes 1,475 tests with 22 skipped. This does not resolve the saved-post alt persistence issue above.

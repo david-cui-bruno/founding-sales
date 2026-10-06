@@ -8,7 +8,7 @@ void(async()=>{
  const scope={workspaceId:'fixture',userId:'fixture',platform:'linkedin' as const,accountId:'fixture'};
  const partition=session.fromPartition(socialPartition(scope));
  const fault=process.env['FSS_SOCIAL_FAULT'];
- const fixture=fault==='alt'?linkedinComposerFixture.replace('alt=field.value;',"alt='Wrong alt';"):fault==='text'?linkedinComposerFixture.replace('media.remove();input.remove();composer();',"media.remove();input.remove();text='Changed text';composer();"):linkedinComposerFixture;
+ const fixture=fault==='alt'?linkedinComposerFixture.replace('alt=field.value;',"alt='Wrong alt';"):fault==='text'?linkedinComposerFixture.replace('media.remove();input.remove();composer();',"media.remove();input.remove();text='Changed text';composer();"):fault==='extra_image'?linkedinComposerFixture.replace('image.alt=alt;root.append(image);',"image.alt=alt;root.append(image);const extra=image.cloneNode();extra.alt='';root.append(extra);"):linkedinComposerFixture;
  await partition.protocol.handle('https',()=>new Response(fixture,{headers:{'content-type':'text/html'}}));
  let shown=0;app.on('browser-window-created',(_event,window)=>window.on('show',()=>shown++));
  const result=await createElectronSocialRuntime().withAccount(scope,async({window,isCurrent})=>{

@@ -9,7 +9,7 @@ import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import {it,expect} from 'vitest';
 import {HOST_TESTS_ENABLED,DESKTOP_ROOT} from './support/hostGate.ts';
-it.skipIf(!HOST_TESTS_ENABLED).each(['none','alt','text'])('checks combined image staging in hidden Electron: %s',async(fault)=>{
+it.skipIf(!HOST_TESTS_ENABLED).each(['none','alt','text','extra_image'])('checks combined image staging in hidden Electron: %s',async(fault)=>{
  const root=await mkdtemp(join(tmpdir(),'callie-social-probe-'));
  try{
   const script=join(root,'probe.mjs');const image=join(root,'image.png');const bytes=await sharp({create:{width:10,height:10,channels:3,background:'white'}}).png().toBuffer();await writeFile(image,bytes);
@@ -21,6 +21,6 @@ it.skipIf(!HOST_TESTS_ENABLED).each(['none','alt','text'])('checks combined imag
   const output=JSON.parse(line!.slice('SOCIAL_IMAGE_PROBE:'.length));
   expect(output).toMatchObject({result:{visible:false,focused:false},shown:0,remaining:0});
   if(fault==='none')expect(output.result).toMatchObject({stage:{ready:true},preview:{text:'Approved image post',alt:'Synthetic image',loaded:true,dialogs:1}});
-  else expect(output.result.stage).toEqual({ready:false,reason:fault==='alt'?'image_completion_unverified':'staged_content_changed'});
+  else expect(output.result.stage).toEqual({ready:false,reason:fault==='text'?'staged_content_changed':'image_completion_unverified'});
  }finally{await rm(root,{recursive:true,force:true});}
 },60_000);

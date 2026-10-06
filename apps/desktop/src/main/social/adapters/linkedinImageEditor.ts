@@ -7,7 +7,7 @@ const actionSchema=z.discriminatedUnion('action',[
 export function linkedInImageEditorScript(input:z.infer<typeof actionSchema>):string{
  const action=actionSchema.parse(input);
  return `(()=>{const action=${JSON.stringify(action)};
- const visible=e=>!e.hidden&&window.getComputedStyle(e).display!=='none';
+ const visible=e=>{for(let p=e;p;p=p.parentElement){const s=window.getComputedStyle(p);if(p.hidden||p.getAttribute('aria-hidden')==='true'||s.display==='none'||s.visibility==='hidden')return false;}return true;};
  const dialogs=Array.from(document.querySelectorAll('dialog[open][data-testid="dialog"]')).filter(visible);
  const editors=dialogs.filter(d=>Array.from(d.querySelectorAll('h2')).some(h=>h.textContent.trim()==='Editor'));
  const fail=()=>({ok:false});
@@ -17,7 +17,16 @@ export function linkedInImageEditorScript(input:z.infer<typeof actionSchema>):st
  if(!editor){
   if(action.action!=='read')return fail();
   const composer=one(dialogs.filter(d=>d.querySelector('[componentkey="ShareBox_textEditor"]')));if(!composer)return fail();
-  const images=Array.from(composer.querySelectorAll('img')).filter(e=>e.alt);
+  const images=[];
+  for(const image of Array.from(composer.querySelectorAll('img')).filter(visible)){
+   let url;try{url=new URL(image.getAttribute('src')??'');}catch{return fail();}
+   const native=url.protocol==='https:'&&url.hostname==='media.licdn.com'&&!url.username&&!url.password&&!url.port;
+   if(native&&/^\\/dms\\/image\\/v2\\/[A-Za-z0-9_-]+\\/profile-displayphoto-scale_100_100\\//.test(url.pathname))continue;
+   const draft=url.protocol==='blob:'&&url.origin==='https://www.linkedin.com';
+   const saved=native&&/^\\/dms\\/image\\/v2\\/[A-Za-z0-9_-]+\\/feedshare-image-high-res\\//.test(url.pathname);
+   if(!draft&&!saved)return fail();images.push(image);
+  }
+  if(images.length>20)return fail();
   const busy=!!composer.querySelector('[role="progressbar"],progress');
   return {ok:true,view:{kind:'composer',alt:null,single:false,busy,images:images.map(e=>({alt:e.alt,loaded:e.complete&&e.naturalWidth>0}))}};
  }
