@@ -16,6 +16,6 @@ it.skipIf(!HOST_TESTS_ENABLED)('loads a local composer in the real hidden Electr
   const env:NodeJS.ProcessEnv={...process.env,FSS_SOCIAL_PROBE_DATA:join(root,'data')};delete env['ELECTRON_RUN_AS_NODE'];
   const {stdout}=await promisify(execFile)(electron,[script],{env,timeout:45_000,maxBuffer:1024*1024});
   const line=stdout.split('\n').find(x=>x.startsWith('SOCIAL_PROBE:'));expect(line).toBeDefined();
-  expect(JSON.parse(line!.slice('SOCIAL_PROBE:'.length))).toEqual({result:{identity:{platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/fixture/',displayName:'Fixture Founder'},isolation:{node:'undefined',process:'undefined',bridge:'undefined',account:'fixture'},visible:false,focused:false,current:true,windows:1},shown:0,remaining:0});
+  expect(JSON.parse(line!.slice('SOCIAL_PROBE:'.length))).toEqual({result:{stage:{ready:true},identity:{platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/fixture/',displayName:'Fixture Founder'},isolation:{node:'undefined',process:'undefined',bridge:'undefined',account:'fixture'},visible:false,focused:false,current:true,windows:1},shown:0,remaining:0});
  }finally{await rm(root,{recursive:true,force:true});}
 },60_000);

@@ -1,0 +1,8 @@
+/** Synthetic fixture matching observed controls, never an external social request. */
+export const linkedinComposerFixture=`<!doctype html><html><body><dialog open data-testid="dialog"></dialog><script>
+const root=document.querySelector('dialog');let text='',schedule='';
+function composer(){root.innerHTML='<div role="button" id="identity">Fixture Founder</div><div role="button">Post to Anyone</div><div role="button">Comments: Anyone</div><div contenteditable="true" role="textbox" componentkey="ShareBox_textEditor"></div><div id="summary"></div><a aria-label="Scheduled">Scheduled</a><button disabled>Schedule</button>';
+const editor=root.querySelector('[contenteditable]');editor.textContent=text;editor.oninput=()=>{text=editor.innerText;};root.querySelector('#summary').textContent=schedule;
+root.querySelector('#identity').onclick=()=>{const old=root.querySelector('[role="radio"]');if(old)old.remove();else{const e=document.createElement('div');e.setAttribute('role','radio');e.setAttribute('aria-checked','true');e.textContent='Fixture Founder';root.append(e);}};
+root.querySelector('a').onclick=()=>{root.innerHTML='<input data-testid="date-picker-input"><input data-testid="time-picker-input"><button>Confirm</button>';root.querySelector('button').onclick=()=>{const date=root.querySelector('[data-testid="date-picker-input"]').value,time=root.querySelector('[data-testid="time-picker-input"]').value;const d=new Date(date+' '+time);const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{weekday:'short',month:'short',day:'numeric'}).formatToParts(d).map(p=>[p.type,p.value]));schedule='Posting at '+p.weekday+', '+p.month+' '+p.day+', '+time;composer();};};
+}composer();</script></body></html>`;
