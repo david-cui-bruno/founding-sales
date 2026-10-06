@@ -32,3 +32,25 @@ bad('outreach_email_sources', [['block_id_check',{block_id:''}],['identity_kind_
 OUTREACH_CONSTRAINT_CASES.push({constraint:'outreach_email_sources_pkey',run:async f=>{await sourceFixture(f);await source(f);return source(f);}});
 
 OUTREACH_CONSTRAINT_CASES.push({constraint:'gmail_prospecting_authorization_workspace_id_owner_user_id_fkey',run:f=>auth(f,{owner_user_id:missing})});
+
+const planId='77777777-4444-4444-8444-444444444444';
+const plan=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_plans',{workspace_id:f.seeded.alpha.workspaceId,id:planId,firm_id:f.crm.alpha.firmId,contact_id:f.crm.alpha.contactId,owner_user_id:f.seeded.alpha.salesperson.userId,mailbox_id:f.mail.alpha.mailboxId,candidate_id:id,qualification_run_id:runId,lane:'email_first',state:'stopped',...change});
+bad('outreach_plans',[
+ ['lane_check',{lane:'social'}],['state_check',{state:'sending'}],['revision_check',{revision:0}],
+ ['workspace_id_firm_id_fkey',{firm_id:missing}],['workspace_id_contact_id_firm_id_fkey',{contact_id:missing}],
+ ['workspace_id_owner_user_id_fkey',{owner_user_id:missing}],['workspace_id_mailbox_id_fkey',{mailbox_id:missing}],
+ ['workspace_id_candidate_id_qualification_run_fkey',{qualification_run_id:missing}],
+],plan,sourceFixture);
+OUTREACH_CONSTRAINT_CASES.push(
+ {constraint:'outreach_plans_pkey',run:async f=>{await sourceFixture(f);await plan(f);return plan(f);}},
+ {constraint:'outreach_plans_workspace_id_id_firm_id_key',run:async f=>{await sourceFixture(f);await plan(f);await f.session.query('ALTER TABLE outreach_plans DROP CONSTRAINT outreach_plans_pkey CASCADE');return plan(f);}},
+ {constraint:'outreach_plans_one_active_firm',run:async f=>{await sourceFixture(f);await plan(f,{state:'active'});return plan(f,{id:missing,state:'active'});}},
+ {constraint:'enrollment_one_authority',run:f=>f.session.query('UPDATE sequence_enrollments SET opportunity_id=NULL WHERE workspace_id=$1',[f.seeded.alpha.workspaceId])},
+ {constraint:'enrollment_outreach_firm',run:f=>f.session.query('UPDATE sequence_enrollments SET opportunity_id=NULL,outreach_plan_id=$2 WHERE workspace_id=$1',[f.seeded.alpha.workspaceId,missing])},
+ {constraint:'mail_match_one_authority',run:f=>f.session.query('UPDATE mail_message_matches SET opportunity_id=NULL WHERE workspace_id=$1',[f.seeded.alpha.workspaceId])},
+ {constraint:'mail_match_outreach_firm',run:f=>f.session.query('UPDATE mail_message_matches SET opportunity_id=NULL,outreach_plan_id=$2 WHERE workspace_id=$1',[f.seeded.alpha.workspaceId,missing])},
+ {constraint:'mail_message_matches_one_per_outreach',run:async f=>{await sourceFixture(f);await plan(f);const row={workspace_id:f.seeded.alpha.workspaceId,mail_message_id:f.mail.alpha.messageId,firm_id:f.crm.alpha.firmId,outreach_plan_id:planId,contact_id:f.crm.alpha.contactId,match_rule:'participant',ambiguous:false};await insert(f,'mail_message_matches',row);return insert(f,'mail_message_matches',row);}},
+);
+for(const [constraint,outreachPlanId] of [['reply_confirmation_one_authority',null],['reply_confirmation_outreach_firm',missing]] as const){
+ OUTREACH_CONSTRAINT_CASES.push({constraint,run:f=>insert(f,'mail_reply_confirmations',{workspace_id:f.seeded.alpha.workspaceId,mail_message_id:f.mail.alpha.messageId,firm_id:f.crm.alpha.firmId,opportunity_id:null,outreach_plan_id:outreachPlanId,disposition:'interested',suggested_by:'none',corrected:true,confirmed_by_user_id:f.seeded.alpha.admin.userId})});
+}

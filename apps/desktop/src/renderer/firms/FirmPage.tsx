@@ -581,13 +581,14 @@ export function HeldOutgoing({
               <RowActions>
                 {message.candidates.map(candidate => (
                   <Button
-                    key={candidate.opportunityId}
+                    key={candidate.opportunityId??candidate.outreachPlanId}
                     size="sm"
                     variant="outline"
                     data-testid="held-outgoing-choose"
                     disabled={!actionsEnabled || busy(`outgoing:${message.messageId}`)}
                     onClick={() => {
-                      onResolve({ messageId: message.messageId, opportunityId: candidate.opportunityId });
+                      if(candidate.opportunityId)onResolve({messageId:message.messageId,opportunityId:candidate.opportunityId});
+                      else if(candidate.outreachPlanId)onResolve({messageId:message.messageId,outreachPlanId:candidate.outreachPlanId});
                     }}
                   >
                     {candidate.firmName}

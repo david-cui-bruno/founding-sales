@@ -131,6 +131,7 @@ export function enrollmentAnswer(overrides: Partial<EnrollmentDto> = {}): Enroll
     id: SEQUENCE_IDS.enrollment,
     sequenceVersionId: SEQUENCE_IDS.version,
     opportunityId: SEQUENCE_IDS.opportunity,
+    outreachPlanId: null,
     firmId: SEQUENCE_IDS.firm,
     contactId: SEQUENCE_IDS.contact,
     assignedUserId: SEQUENCE_IDS.salesperson,

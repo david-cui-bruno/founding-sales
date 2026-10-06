@@ -1,3 +1,4 @@
+import type {NormalizedMetadata} from '../../mail/messages.ts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,beforeEach,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -74,4 +75,42 @@ it('serializes email admission without duplicate contacts or a second prospect a
  const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const input=await qualified('Concurrent Email PM',{phone:'unknown'});const command={...input,reviewed:true,expectedOwnerUserId:seeded.alpha.admin.userId};
  const session=await db.appRuntimeSession();const second=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),session);
  const results=await Promise.all([tx(()=>admitEmailCandidate(ctx(),command)),withTransaction(session,()=>admitEmailCandidate(second,command))]);expect(results.every(r=>r.ok)).toBe(true);expect(results.filter(r=>r.ok&&r.value.alreadyAdmitted)).toHaveLength(1);
+});
+it('enrolls a firm-owned plan without creating an opportunity, preserving its authority on reads',async()=>{
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const {createOutreachPlan}=await import('../../outreach/plans.ts');
+ const {enrollContact}=await import('../../sequences/enrollments.ts');const {readEnrollment}=await import('../../sequences/rows.ts');const {seedSequences}=await import('../sequences/support/sequenceFixtures.ts');const {setProspectingAuthorization}=await import('../../outreach/authorization.ts');
+ const input=await qualified('Firm Owned PM',{phone:'unknown'});const admitted=await tx(()=>admitEmailCandidate(ctx(),{...input,reviewed:true,expectedOwnerUserId:seeded.alpha.admin.userId}));if(!admitted.ok)throw new Error(admitted.reason);
+ const mailbox=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'owner@example.test','fixture-owner','connected') RETURNING id",[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rows[0]!.id;
+ await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
+ const plan=await tx(()=>createOutreachPlan(ctx(),{firmId:admitted.value.firmId,contactId:admitted.value.contactId,mailboxId:mailbox,lane:'email_first',qualificationRunId:input.qualificationRunId,expectedOwnerUserId:seeded.alpha.admin.userId}));expect(plan.ok).toBe(true);if(!plan.ok)throw new Error(plan.reason);
+ const sequences=await seedSequences(db.session,seeded);
+ const enrollment=await tx(()=>enrollContact(ctx(),{originKind:'prospecting',sequenceVersionId:sequences.alpha.publishedVersionId,subject:{kind:'outreach',outreachPlanId:plan.value.id},firmId:admitted.value.firmId,contactId:admitted.value.contactId}));expect(enrollment.ok).toBe(true);if(!enrollment.ok)throw new Error(enrollment.reason);
+ expect(await readEnrollment(ctx(),{enrollmentId:enrollment.value.enrollmentId})).toMatchObject({opportunityId:null,outreachPlanId:plan.value.id});
+ const {findMatchCandidates}=await import('../../mail/matching.ts');
+ const metadata:NormalizedMetadata={providerMessageId:'reply-1',providerThreadId:'thread-1',rfcMessageId:'reply@example.test',direction:'incoming',internalDate:new Date().toISOString(),headerFrom:'info@firmownedpm.example.test',headerTo:['owner@example.test'],headerCc:[],subject:'Re: Maintenance',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]};
+ const {recordMessage}=await import('../../mail/messages.ts');
+ const recorded=await tx(()=>recordMessage(ctx(),{mailboxId:mailbox,metadata}));
+ const matches=await findMatchCandidates(ctx(),{mailboxId:mailbox,messageId:recorded.message.id,metadata});
+ expect(matches).toMatchObject([{firmId:admitted.value.firmId,opportunityId:null,outreachPlanId:plan.value.id,rule:'participant'}]);
+ expect((await db.session.query('SELECT id FROM opportunities WHERE firm_id=$1',[admitted.value.firmId])).rows).toHaveLength(0);
+ const duplicate=await tx(()=>createOutreachPlan(ctx(),{firmId:admitted.value.firmId,contactId:admitted.value.contactId,mailboxId:mailbox,lane:'email_first',qualificationRunId:input.qualificationRunId,expectedOwnerUserId:seeded.alpha.admin.userId}));expect(duplicate.ok).toBe(false);
+ const {recordMatches}=await import('../../mail/matching.ts');
+ await tx(()=>recordMatches(ctx(),{messageId:recorded.message.id,candidates:matches}));
+ const {applyClassificationEffects,recordDeterministicClassification}=await import('../../mail/effects.ts');
+ const {recordingSuppressionJournal}=await import('../../suppression/journal.ts');const {recordingReplyPromoter}=await import('../../mail/replyLane.ts');
+ const classification={messageId:recorded.message.id,class:'uncertain' as const,suggestedDisposition:null,signals:[],requiresConfirmation:true};
+ await tx(async()=>{await recordDeterministicClassification(ctx(),{messageId:recorded.message.id,classification});await applyClassificationEffects(ctx(),{message:recorded.message,classification,candidates:matches,journal:recordingSuppressionJournal(),replyPromoter:recordingReplyPromoter()});});
+ const {readReplyCard}=await import('../../classification/cards.ts');
+ expect(await readReplyCard(ctx(),{messageId:recorded.message.id})).toMatchObject({firmId:admitted.value.firmId,opportunityId:null,outreachPlanId:plan.value.id,nextAction:'confirm_disposition',impact:{holds:[{opportunityId:null,reasonCode:'uncertain_reply'}]}});
+ expect((await db.session.query('SELECT state FROM outreach_plans WHERE id=$1',[plan.value.id])).rows[0]).toEqual({state:'reply_pending'});
+ const {confirmReplyDisposition}=await import('../../classification/confirmations.ts');
+ expect(await tx(()=>confirmReplyDisposition(ctx(),{messageId:recorded.message.id,disposition:'interested',grantFollowUp:false,journal:recordingSuppressionJournal()}))).toMatchObject({ok:true,value:{confirmation:{opportunityId:null,outreachPlanId:plan.value.id,consequences:expect.arrayContaining(['outreach_manual'])}}});
+ expect(await readReplyCard(ctx(),{messageId:recorded.message.id})).toMatchObject({impact:{controlMode:'manual'},nextAction:'nothing_to_do'});
+ const {createFirm}=await import('../../crm/firms.ts');const {mergeFirms}=await import('../../crm/merges.ts');
+ const target=await tx(()=>createFirm(ctx(),{name:'Surviving outreach firm',assignedUserId:seeded.alpha.admin.userId}));if(!target.ok)throw new Error(target.reason);
+ expect(await tx(()=>mergeFirms(ctx(),{sourceFirmId:admitted.value.firmId,targetFirmId:target.value.id,journal:recordingSuppressionJournal()}))).toMatchObject({ok:true});
+ expect((await db.session.query('SELECT firm_id,state FROM outreach_plans WHERE id=$1',[plan.value.id])).rows[0]).toEqual({firm_id:target.value.id,state:'stopped'});
+ expect(await readReplyCard(ctx(),{messageId:recorded.message.id})).toMatchObject({firmId:target.value.id,opportunityId:null});
+
+
 });

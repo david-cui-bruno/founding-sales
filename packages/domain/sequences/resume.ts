@@ -107,7 +107,7 @@ export async function holdsAffectingEnrollment(
   input: {
     readonly enrollmentId: string;
     readonly firmId: string;
-    readonly opportunityId: string;
+    readonly opportunityId: string | null;
     readonly ownerUserId: string;
     readonly since: string;
     readonly channel?: StepChannel | undefined;

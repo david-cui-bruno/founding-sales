@@ -202,6 +202,9 @@ export async function mergeFirms(
   // cascade while the opportunity is still the source's, so the opportunity key is
   // deferred until the opportunities below have moved too, and checked again there.
   await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey DEFERRED');
+  await context.db.query('SET CONSTRAINTS enrollment_outreach_firm,mail_match_outreach_firm,reply_confirmation_outreach_firm,sequence_enrollments_contact_fkey,sequence_enrollments_opportunity_fkey,step_executions_contact_fkey,step_executions_enrollment_fkey DEFERRED');
+  // Preserve both histories but require fresh review after identities are combined.
+  await context.db.query("UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=ANY($2::uuid[]) AND state NOT IN ('stopped','completed')",[context.scope.workspaceId,[source.id,target.id]]);
 
   // Contacts move first, and the routes, evidence, aliases and events that name a
   // contact follow through `ON UPDATE CASCADE` on the semantic composite key — which

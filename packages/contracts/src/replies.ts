@@ -48,6 +48,7 @@ const REPLY_SIGNAL_LAYERS = ['deterministic', 'model'] as const;
  */
 export const REPLY_CONFIRMATION_CONSEQUENCES = [
   'opportunity_manual',
+  'outreach_manual',
   'callback_committed',
   'handle_suppressed',
   'firm_suppressed',
@@ -69,7 +70,8 @@ export type ClassifierEffort = (typeof CLASSIFIER_EFFORTS)[number];
 
 const replyHoldDtoSchema = z.object({
   holdId: uuid,
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId: uuid.nullable().optional(),
   reasonCode: holdReasonCodeSchema,
   blockedActionKinds: z.array(blockedActionKindSchema),
   recoveryAction: holdRecoveryActionSchema.nullable(),
@@ -92,7 +94,8 @@ const replySignalDtoSchema = z.object({
 export type ReplySignalDto = z.infer<typeof replySignalDtoSchema>;
 
 const replyCandidateDtoSchema = z.object({
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId: uuid.nullable().optional(),
   firmId: uuid,
   /** Empty when the candidate firm could not be read; a firm name is at most 300 characters. */
   firmName: z.string().max(300),
@@ -104,7 +107,8 @@ const replyConfirmationDtoSchema = z.object({
   id: uuid,
   messageId: uuid,
   firmId: uuid,
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId: uuid.nullable().optional(),
   disposition: z.enum(REPLY_DISPOSITIONS),
   suggestedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
   suggestedBy: z.enum(REPLY_SUGGESTION_SOURCES),
@@ -133,7 +137,8 @@ export const replyCardDtoSchema = z.object({
   body: z.object({ text: z.string(), truncated: z.boolean() }).nullable(),
   firmId: uuid,
   firmName: z.string().min(1).max(300),
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId: uuid.nullable().optional(),
   contactId: uuid.nullable(),
   contactName: z.string().max(200).nullable(),
   contactTitle: z.string().max(200).nullable(),

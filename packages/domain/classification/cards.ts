@@ -49,7 +49,8 @@ import { readConfirmation, type ReplyConfirmationRow } from './confirmations.ts'
 
 export interface ReplyCardHoldDto {
   readonly holdId: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId?: string | null;
   readonly reasonCode: HoldReasonCode;
   readonly blockedActionKinds: readonly string[];
   readonly recoveryAction: string | null;
@@ -66,7 +67,8 @@ export interface ReplyCardSignalDto {
 }
 
 export interface ReplyCardCandidateDto {
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId?: string | null;
   readonly firmId: string;
   readonly firmName: string;
   readonly selected: boolean | null;
@@ -81,7 +83,8 @@ export interface ReplyCardDto {
   readonly body: { readonly text: string; readonly truncated: boolean } | null;
   readonly firmId: string;
   readonly firmName: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId?: string | null;
   readonly contactId: string | null;
   readonly contactName: string | null;
   readonly contactTitle: string | null;
@@ -112,6 +115,7 @@ export interface ReplyCardDto {
 interface HoldDbRow {
   readonly id: string;
   readonly scope_key: string;
+  readonly scope_kind: string;
   readonly reason_code: HoldReasonCode;
   readonly blocked_action_kinds: string[];
   readonly recovery_action: string | null;
@@ -125,7 +129,7 @@ async function holdsOfMessage(
   messageId: string,
 ): Promise<readonly ReplyCardHoldDto[]> {
   const { rows } = await context.db.query<HoldDbRow>(
-    `SELECT id, scope_key, reason_code, blocked_action_kinds, recovery_action, started_at
+    `SELECT id, scope_key, scope_kind, reason_code, blocked_action_kinds, recovery_action, started_at
        FROM active_holds
       WHERE workspace_id = $1
         AND released_at IS NULL
@@ -137,7 +141,7 @@ async function holdsOfMessage(
   const enrollments = await holdEnrollments(context, rows.map(row => row.id));
   return rows.map(row => ({
     holdId: row.id,
-    opportunityId: row.scope_key,
+    opportunityId: row.scope_kind==='opportunity'?row.scope_key:null,
     reasonCode: row.reason_code,
     blockedActionKinds: knownBlockedActionKinds(row.blocked_action_kinds),
     recoveryAction: row.recovery_action,
@@ -205,7 +209,8 @@ export async function readReplyCard(
   const firm = await readFirm(context, chosen.firmId);
   if (firm === null) return null;
   const visibility = decideFirmRead(context, firm);
-  const opportunity = await readOpportunity(context, chosen.opportunityId);
+  const opportunity = chosen.opportunityId===null?null:await readOpportunity(context, chosen.opportunityId);
+  const outreach=chosen.outreachPlanId==null?null:(await context.db.query<{state:string}>('SELECT state FROM outreach_plans WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,chosen.outreachPlanId])).rows[0];
   const contact = chosen.contactId === null ? null : await readContact(context, chosen.contactId);
 
   const classifications = await listClassifications(context, input.messageId);
@@ -218,6 +223,7 @@ export async function readReplyCard(
     const candidateFirm = match.firmId === firm.id ? firm : await readFirm(context, match.firmId);
     candidates.push({
       opportunityId: match.opportunityId,
+      outreachPlanId:match.outreachPlanId??null,
       firmId: match.firmId,
       firmName: candidateFirm?.name ?? '',
       selected: match.selected,
@@ -239,11 +245,12 @@ export async function readReplyCard(
     firmId: firm.id,
     firmName: firm.name,
     opportunityId: chosen.opportunityId,
+    outreachPlanId:chosen.outreachPlanId??null,
     contactId: chosen.contactId,
     contactName: readable ? (contact?.full_name ?? null) : null,
     contactTitle: readable ? (contact?.title ?? null) : null,
     impact: {
-      controlMode: opportunity?.control_mode ?? 'automated',
+      controlMode: opportunity?.control_mode ?? (outreach!==null&&outreach!==undefined&&['manual','reply_pending','booked'].includes(outreach.state)?'manual':'automated'),
       holds: await holdsOfMessage(context, input.messageId),
       ambiguous: matches.length > 1,
       candidates,

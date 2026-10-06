@@ -362,7 +362,7 @@ const enrollInput = z.strictObject({ sequenceVersionId: uuid, contactId: uuid })
 const takeOverInput = z.strictObject({ reason: z.string().min(1).max(2000) });
 
 /** One held outgoing message of the open Firm page, and the firm a person named (S1 review P1-C). */
-const resolveOutgoingInput = z.strictObject({ messageId: uuid, opportunityId: uuid });
+const resolveOutgoingInput = z.strictObject({ messageId: uuid, opportunityId: uuid.optional(),outreachPlanId:uuid.optional() }).refine(v=>(v.opportunityId===undefined)!==(v.outreachPlanId===undefined));
 
 const checkRouteInput = z.strictObject({ routeId: uuid, routeVersion: z.number().int().min(1) });
 
@@ -997,7 +997,7 @@ export const OPERATIONS = {
       { method: 'POST', path: '/replies' },
       { method: 'POST', path: '/replies/settings' },
     ],
-    input: z.strictObject({ messageId: uuid, opportunityId: uuid }),
+    input: z.strictObject({ messageId: uuid, opportunityId: uuid.optional(),outreachPlanId:uuid.optional() }).refine(v=>(v.opportunityId===undefined)!==(v.outreachPlanId===undefined)),
     output: replyStateSchema,
     transform: 'refuses a candidate that is not one of this card’s own before it asks the server',
   },

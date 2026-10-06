@@ -67,6 +67,10 @@ export async function decideStepPermission(
     return refuseSend('step_ineligible', 'opportunity_mismatch');
   }
   if (enrollment.assignedUserId !== mailbox.ownerUserId) return refuseSend('step_ineligible', 'reassignment');
+  if(enrollment.outreachPlanId!==null){
+    const plan=(await context.db.query<{mailbox_id:string}>('SELECT mailbox_id FROM outreach_plans WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,enrollment.outreachPlanId])).rows[0];
+    if(plan?.mailbox_id!==mailbox.id)return refuseSend('step_ineligible','outreach_mailbox_mismatch');
+  }
   // The fence and the enrollment must name the same **person**, and the fence's route
   // must be that person's own address (GPT-6 review of PR 332, P0-2). Every fence the
   // sequence engine prepares takes its contact from its enrollment and its route from

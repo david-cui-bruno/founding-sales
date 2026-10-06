@@ -61,6 +61,7 @@ export const SEQUENCE_REFUSAL_CODES = [
   'follow_up_not_permitted',
   'firm_unknown',
   'firm_zone_unknown',
+  'outreach_plan_unavailable',
   'opportunity_unknown',
   'opportunity_not_open',
   'opportunity_manual',
@@ -152,7 +153,8 @@ export interface SequenceRow {
 export interface EnrollmentRow {
   readonly id: string;
   readonly sequenceVersionId: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId: string | null;
   readonly firmId: string;
   readonly contactId: string;
   readonly assignedUserId: string;

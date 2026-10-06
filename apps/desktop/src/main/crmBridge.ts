@@ -675,13 +675,13 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'message_unknown';
         return await snapshot();
       }
-      if (!message.candidates.some(candidate => candidate.opportunityId === input.opportunityId)) {
+      if (!message.candidates.some(candidate => input.opportunityId!==undefined?candidate.opportunityId===input.opportunityId:input.outreachPlanId!==undefined&&candidate.outreachPlanId===input.outreachPlanId)) {
         notice = 'match_unknown';
         return await snapshot();
       }
       const answer = await deps.api.command(
         '/messages/resolve-ambiguity',
-        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
+        { messageId: input.messageId, ...(input.opportunityId===undefined?{}:{selectedOpportunityId:input.opportunityId}),...(input.outreachPlanId===undefined?{}:{selectedOutreachPlanId:input.outreachPlanId}), human: false },
         () => null,
       );
       notice = answer.ok ? 'outgoing_resolved' : answer.reason;

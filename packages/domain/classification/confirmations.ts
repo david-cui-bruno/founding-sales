@@ -62,7 +62,8 @@ export interface ReplyConfirmationRow {
   readonly id: string;
   readonly messageId: string;
   readonly firmId: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId: string | null;
   readonly disposition: ReplyDisposition;
   readonly suggestedDisposition: ReplyDisposition | null;
   readonly suggestedBy: 'deterministic' | 'model' | 'none';
@@ -78,7 +79,8 @@ interface ConfirmationDbRow {
   readonly id: string;
   readonly mail_message_id: string;
   readonly firm_id: string;
-  readonly opportunity_id: string;
+  readonly opportunity_id: string | null;
+  readonly outreach_plan_id: string | null;
   readonly disposition: ReplyDisposition;
   readonly suggested_disposition: ReplyDisposition | null;
   readonly suggested_by: 'deterministic' | 'model' | 'none';
@@ -91,7 +93,7 @@ interface ConfirmationDbRow {
   readonly [column: string]: unknown;
 }
 
-const CONFIRMATION_COLUMNS = `id, mail_message_id, firm_id, opportunity_id, disposition,
+const CONFIRMATION_COLUMNS = `id, mail_message_id, firm_id, opportunity_id, outreach_plan_id, disposition,
   suggested_disposition, suggested_by, corrected, confirmed_by_user_id, consequences, callback_id,
   note, created_at`;
 
@@ -101,6 +103,7 @@ function toConfirmation(row: ConfirmationDbRow): ReplyConfirmationRow {
     messageId: row.mail_message_id,
     firmId: row.firm_id,
     opportunityId: row.opportunity_id,
+    outreachPlanId: row.outreach_plan_id,
     disposition: row.disposition,
     suggestedDisposition: row.suggested_disposition,
     suggestedBy: row.suggested_by,
@@ -246,6 +249,7 @@ export async function confirmReplyDisposition(
 
   // 7.3: a confirmed human reply sets manual. Before anything irreversible, because
   // a manual opportunity is the state in which nothing automated can happen next.
+  if(chosen.opportunityId!==null){
   const manual = await setManualControlMode(context, {
     opportunityId: chosen.opportunityId,
     reason: `confirmed reply disposition: ${input.disposition}`,
@@ -255,6 +259,11 @@ export async function confirmReplyDisposition(
     return refuseClassification(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
   }
   consequences.push('opportunity_manual');
+  }else{
+    const updated=await context.db.query(`UPDATE outreach_plans SET state='reply_pending',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 RETURNING id`,[context.scope.workspaceId,chosen.outreachPlanId,chosen.firmId]);
+    if(updated.rowCount!==1)return refuseClassification('invalid_input');
+    consequences.push('outreach_manual');
+  }
 
   // 7.3, and Appendix A's "Confirm human reply" row: the same transaction that sets
   // manual "terminally stop[s] every active enrollment for the firm across contacts"
@@ -331,7 +340,7 @@ export async function confirmReplyDisposition(
     const created = await createCallback(context, {
       firmId: chosen.firmId,
       ...(chosen.contactId === null ? {} : { contactId: chosen.contactId }),
-      opportunityId: chosen.opportunityId,
+      ...(chosen.opportunityId===null?{}:{opportunityId:chosen.opportunityId}),
       assignedUserId: firm.assigned_user_id ?? actor.userId,
       localDate: callback.localDate,
       ...(callback.localTime === undefined ? {} : { localTime: callback.localTime }),
@@ -357,9 +366,9 @@ export async function confirmReplyDisposition(
   const corrected = suggested !== input.disposition;
   const { rows } = await context.db.query<ConfirmationDbRow>(
     `INSERT INTO mail_reply_confirmations
-       (workspace_id, mail_message_id, firm_id, opportunity_id, disposition, suggested_disposition,
+       (workspace_id, mail_message_id, firm_id, opportunity_id, outreach_plan_id, disposition, suggested_disposition,
         suggested_by, corrected, confirmed_by_user_id, consequences, callback_id, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text[], $11, $12)
+     VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10::text[], $11, $12)
      RETURNING ${CONFIRMATION_COLUMNS}`,
     [
       context.scope.workspaceId,
@@ -374,6 +383,7 @@ export async function confirmReplyDisposition(
       consequences,
       callbackId,
       input.note?.trim() === '' ? null : (input.note ?? null),
+      chosen.outreachPlanId??null,
     ],
   );
   const row = rows[0];

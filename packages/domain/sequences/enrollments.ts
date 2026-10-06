@@ -1,3 +1,4 @@
+import {sequenceSubjectSchema,type SequenceSubject} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
@@ -50,7 +51,8 @@ export interface EnrollContactInput {
   /** The permission a `follow_up` enrollment rests on. Required for it, refused otherwise. */
   readonly permissionId?: string | undefined;
   readonly sequenceVersionId: string;
-  readonly opportunityId: string;
+  readonly opportunityId?: string | undefined;
+  readonly subject?: SequenceSubject | undefined;
   readonly firmId: string;
   readonly contactId: string;
   /**
@@ -95,6 +97,10 @@ export async function enrollContact(
   // claim are never inside each other's window at all, and the deadlock the review
   // found between a claim waiting for a firm and a command waiting for the gate cannot
   // form (P1-4, `docs/greenfield/decisions/follow-up-eligibility-20260929.md`).
+  const subject=input.subject??(input.opportunityId?{kind:'opportunity' as const,opportunityId:input.opportunityId}:null);
+  if(!subject||!sequenceSubjectSchema.safeParse(subject).success||(input.subject!==undefined&&input.opportunityId!==undefined))return refuseSequence('invalid_input');
+  const opportunityId=subject.kind==='opportunity'?subject.opportunityId:null;
+  const outreachPlanId=subject.kind==='outreach'?subject.outreachPlanId:null;
   await lockSendGateForStopFact(context);
 
   const version = await readSequenceVersion(context, input.sequenceVersionId);
@@ -124,9 +130,14 @@ export async function enrollContact(
     return refuseSequence('not_assigned');
   }
 
+  if(outreachPlanId!==null){
+    const plan=(await context.db.query<{firm_id:string;contact_id:string;owner_user_id:string;state:string}>('SELECT firm_id,contact_id,owner_user_id,state FROM outreach_plans WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,outreachPlanId])).rows[0];
+    if(!plan||plan.firm_id!==input.firmId||plan.contact_id!==input.contactId||plan.owner_user_id!==assignedUserId||!['active','reply_pending','booked'].includes(plan.state))return refuseSequence('outreach_plan_unavailable');
+    if(plan.state!=='active'&&input.originKind!=='follow_up')return refuseSequence('outreach_plan_unavailable');
+  }else{
   const { rows: opportunities } = await context.db.query<{ status: string; firm_id: string }>(
     'SELECT status, firm_id FROM opportunities WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
-    [context.scope.workspaceId, input.opportunityId],
+    [context.scope.workspaceId, opportunityId],
   );
   const opportunity = opportunities[0];
   if (opportunity === undefined || opportunity.firm_id !== input.firmId) {
@@ -134,6 +145,7 @@ export async function enrollContact(
   }
   if (opportunity.status !== 'open') return refuseSequence('opportunity_not_open');
 
+  }
   const { rows: contacts } = await context.db.query<{ status: string }>(
     'SELECT status FROM contacts WHERE workspace_id = $1 AND id = $2 AND firm_id = $3 FOR UPDATE',
     [context.scope.workspaceId, input.contactId, input.firmId],
@@ -237,8 +249,8 @@ export async function enrollContact(
     `WITH enrolled AS (
        INSERT INTO sequence_enrollments
          (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-          started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $16, $17)
+          started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id, outreach_plan_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $16, $17, $18)
        RETURNING id
      ), executed AS (
        INSERT INTO step_executions
@@ -253,7 +265,7 @@ export async function enrollContact(
     [
       context.scope.workspaceId,
       input.sequenceVersionId,
-      input.opportunityId,
+      opportunityId,
       input.firmId,
       input.contactId,
       assignedUserId,
@@ -268,6 +280,7 @@ export async function enrollContact(
       due.ruleVersion,
       input.originKind,
       input.permissionId ?? null,
+      outreachPlanId,
     ],
   );
   const created = rows[0];

@@ -44,7 +44,8 @@ import { acceptMail, refuseMail, type MailMatchRule, type MailResult } from './t
 
 export interface MatchCandidate {
   readonly firmId: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
+  readonly outreachPlanId?: string | null;
   readonly contactId: string | null;
   readonly rule: MailMatchRule;
   /** True when the rule found a closed opportunity and this is the firm's open one. */
@@ -53,7 +54,8 @@ export interface MatchCandidate {
 
 interface CandidateRow {
   readonly firm_id: string;
-  readonly opportunity_id: string;
+  readonly opportunity_id: string | null;
+  readonly outreach_plan_id: string | null;
   readonly contact_id: string | null;
   readonly status: string;
   readonly [column: string]: unknown;
@@ -65,6 +67,9 @@ async function resolveToOpenOpportunity(
   row: CandidateRow,
   rule: MailMatchRule,
 ): Promise<MatchCandidate | null> {
+  if (row.outreach_plan_id !== null && row.outreach_plan_id !== undefined) {
+    return {firmId:row.firm_id,opportunityId:null,outreachPlanId:row.outreach_plan_id,contactId:row.contact_id,rule,viaClosedOpportunity:false};
+  }
   if (row.status === 'open') {
     return {
       firmId: row.firm_id,
@@ -95,10 +100,10 @@ async function byThread(
   input: { readonly mailboxId: string; readonly threadId: string; readonly excludeMessageId: string },
 ): Promise<readonly CandidateRow[]> {
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT DISTINCT x.firm_id, x.opportunity_id, x.contact_id, o.status
+    `SELECT DISTINCT x.firm_id, x.opportunity_id, x.outreach_plan_id, x.contact_id, o.status
        FROM mail_message_matches AS x
        JOIN mail_messages AS m ON m.workspace_id = x.workspace_id AND m.id = x.mail_message_id
-       JOIN opportunities AS o ON o.workspace_id = x.workspace_id AND o.id = x.opportunity_id
+       LEFT JOIN opportunities AS o ON o.workspace_id = x.workspace_id AND o.id = x.opportunity_id
       WHERE x.workspace_id = $1
         AND m.mailbox_id = $2
         AND m.provider_thread_id = $3
@@ -115,10 +120,10 @@ async function byMessageIdReference(
 ): Promise<readonly CandidateRow[]> {
   if (input.references.length === 0) return [];
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT DISTINCT x.firm_id, x.opportunity_id, x.contact_id, o.status
+    `SELECT DISTINCT x.firm_id, x.opportunity_id, x.outreach_plan_id, x.contact_id, o.status
        FROM mail_messages AS sent
        JOIN mail_message_matches AS x ON x.workspace_id = sent.workspace_id AND x.mail_message_id = sent.id
-       JOIN opportunities AS o ON o.workspace_id = x.workspace_id AND o.id = x.opportunity_id
+       LEFT JOIN opportunities AS o ON o.workspace_id = x.workspace_id AND o.id = x.opportunity_id
       WHERE sent.workspace_id = $1
         AND sent.mailbox_id = $2
         AND sent.direction = 'outgoing'
@@ -142,7 +147,7 @@ async function byParticipant(
 ): Promise<readonly CandidateRow[]> {
   if (addresses.length === 0) return [];
   const { rows } = await context.db.query<CandidateRow>(
-    `SELECT DISTINCT e.firm_id, o.id AS opportunity_id, e.contact_id, o.status
+    `SELECT DISTINCT e.firm_id, o.id AS opportunity_id, NULL::uuid AS outreach_plan_id, e.contact_id, o.status
        FROM email_addresses AS e
        JOIN opportunities AS o ON o.workspace_id = e.workspace_id AND o.firm_id = e.firm_id
       WHERE e.workspace_id = $1
@@ -152,16 +157,28 @@ async function byParticipant(
         AND NOT EXISTS (
           SELECT 1 FROM mailboxes AS b
            WHERE b.workspace_id = e.workspace_id AND b.email_address = e.address
-        )`,
+        )
+      UNION
+      SELECT DISTINCT e.firm_id, NULL::uuid AS opportunity_id, p.id AS outreach_plan_id, e.contact_id, p.state AS status
+        FROM email_addresses e
+        JOIN outreach_plans p ON p.workspace_id=e.workspace_id AND p.firm_id=e.firm_id AND p.contact_id=e.contact_id
+       WHERE e.workspace_id=$1 AND e.address=ANY($2::text[]) AND e.eligibility<>'retired'
+         AND NOT EXISTS(SELECT 1 FROM mailboxes b WHERE b.workspace_id=e.workspace_id AND b.email_address=e.address)`,
     [context.scope.workspaceId, [...addresses]],
   );
   return rows;
 }
 
+export function matchAuthorityKey(candidate: MatchCandidate): string {
+  const key=candidate.opportunityId??candidate.outreachPlanId;
+  if(key===undefined||key===null)throw new Error('mail_match_authority_missing');
+  return key;
+}
+
 function distinct(candidates: readonly MatchCandidate[]): readonly MatchCandidate[] {
   const byOpportunity = new Map<string, MatchCandidate>();
   for (const candidate of candidates) {
-    if (!byOpportunity.has(candidate.opportunityId)) byOpportunity.set(candidate.opportunityId, candidate);
+    if (!byOpportunity.has(matchAuthorityKey(candidate))) byOpportunity.set(matchAuthorityKey(candidate), candidate);
   }
   return [...byOpportunity.values()];
 }
@@ -278,8 +295,8 @@ export async function recordMatches(
   // The stored, unresolved matches count too (S1 review P1-A): a replay that finds one
   // candidate for a message whose first import found two is still the same unresolved
   // ambiguity, and a candidate new on the replay joins it held rather than unheld.
-  const { rows: unresolved } = await context.db.query<{ opportunity_id: string }>(
-    `SELECT opportunity_id FROM mail_message_matches
+  const { rows: unresolved } = await context.db.query<{ authority_id: string }>(
+    `SELECT COALESCE(opportunity_id,outreach_plan_id) AS authority_id FROM mail_message_matches
       WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
     [context.scope.workspaceId, input.messageId],
   );
@@ -290,15 +307,15 @@ export async function recordMatches(
   );
   const ambiguous =
     (resolvedAlready.rowCount ?? 0) === 0 &&
-    new Set([...unresolved.map(row => row.opportunity_id), ...input.candidates.map(candidate => candidate.opportunityId)])
+    new Set([...unresolved.map(row => row.authority_id), ...input.candidates.map(matchAuthorityKey)])
       .size > 1;
   const holdIds: string[] = [];
 
   for (const candidate of input.candidates) {
     const existing = await context.db.query<{ id: string; hold_id: string | null }>(
       `SELECT id, hold_id FROM mail_message_matches
-        WHERE workspace_id = $1 AND mail_message_id = $2 AND opportunity_id = $3`,
-      [context.scope.workspaceId, input.messageId, candidate.opportunityId],
+        WHERE workspace_id = $1 AND mail_message_id = $2 AND COALESCE(opportunity_id,outreach_plan_id) = $3`,
+      [context.scope.workspaceId, input.messageId, matchAuthorityKey(candidate)],
     );
     const found = existing.rows[0];
     if (found !== undefined) {
@@ -309,8 +326,8 @@ export async function recordMatches(
     let holdId: string | null = null;
     if (ambiguous) {
       holdId = await openHold(context, {
-        scopeKind: 'opportunity',
-        scopeKey: candidate.opportunityId,
+        scopeKind: candidate.opportunityId===null?'firm':'opportunity',
+        scopeKey: candidate.opportunityId??candidate.firmId,
         reasonCode: 'ambiguous_match',
         blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
         sourceEventKind: 'mail_message',
@@ -322,8 +339,8 @@ export async function recordMatches(
 
     await context.db.query(
       `INSERT INTO mail_message_matches (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id,
-                                         match_rule, ambiguous, hold_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                                         match_rule, ambiguous, hold_id, outreach_plan_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         context.scope.workspaceId,
         input.messageId,
@@ -333,6 +350,7 @@ export async function recordMatches(
         candidate.rule,
         ambiguous,
         holdId,
+        candidate.outreachPlanId??null,
       ],
     );
   }
@@ -405,14 +423,15 @@ export async function listMatches(
   const { rows } = await context.db.query<{
     id: string;
     firm_id: string;
-    opportunity_id: string;
+    opportunity_id: string | null;
+    outreach_plan_id: string | null;
     contact_id: string | null;
     match_rule: MailMatchRule;
     ambiguous: boolean;
     hold_id: string | null;
     selected: boolean | null;
   }>(
-    `SELECT id, firm_id, opportunity_id, contact_id, match_rule, ambiguous, hold_id, selected
+    `SELECT id, firm_id, opportunity_id, outreach_plan_id, contact_id, match_rule, ambiguous, hold_id, selected
        FROM mail_message_matches
       WHERE workspace_id = $1 AND mail_message_id = $2
       ORDER BY created_at, id`,
@@ -422,6 +441,7 @@ export async function listMatches(
     id: row.id,
     firmId: row.firm_id,
     opportunityId: row.opportunity_id,
+    outreachPlanId: row.outreach_plan_id,
     contactId: row.contact_id,
     rule: row.match_rule,
     ambiguous: row.ambiguous,
@@ -434,7 +454,7 @@ export async function listMatches(
 export interface HeldOutgoingMessageRow {
   readonly messageId: string;
   readonly internalDate: string;
-  readonly candidates: readonly { readonly opportunityId: string; readonly firmId: string; readonly firmName: string }[];
+  readonly candidates: readonly { readonly opportunityId: string|null; readonly outreachPlanId?:string|null; readonly firmId: string; readonly firmName: string }[];
 }
 
 /**
@@ -449,11 +469,12 @@ export async function listHeldOutgoingForFirm(
   const { rows } = await context.db.query<{
     message_id: string;
     internal_date: Date;
-    opportunity_id: string;
+    opportunity_id: string|null;
+    outreach_plan_id:string|null;
     firm_id: string;
     firm_name: string;
   }>(
-    `SELECT m.id AS message_id, m.internal_date, x.opportunity_id, x.firm_id, f.name AS firm_name
+    `SELECT m.id AS message_id, m.internal_date, x.opportunity_id, x.outreach_plan_id, x.firm_id, f.name AS firm_name
        FROM mail_messages AS m
        JOIN mail_message_matches AS x ON x.workspace_id = m.workspace_id AND x.mail_message_id = m.id
        JOIN firms AS f ON f.workspace_id = x.workspace_id AND f.id = x.firm_id
@@ -468,14 +489,15 @@ export async function listHeldOutgoingForFirm(
   const byMessage = new Map<string, { internalDate: string; candidates: HeldOutgoingMessageRow['candidates'][number][] }>();
   for (const row of rows) {
     const entry = byMessage.get(row.message_id) ?? { internalDate: row.internal_date.toISOString(), candidates: [] };
-    entry.candidates.push({ opportunityId: row.opportunity_id, firmId: row.firm_id, firmName: row.firm_name });
+    entry.candidates.push({ opportunityId: row.opportunity_id, outreachPlanId:row.outreach_plan_id, firmId: row.firm_id, firmName: row.firm_name });
     byMessage.set(row.message_id, entry);
   }
   return [...byMessage].map(([messageId, entry]) => ({ messageId, ...entry }));
 }
 
 export interface AmbiguityResolution {
-  readonly selectedOpportunityId: string;
+  readonly selectedOpportunityId: string | null;
+  readonly selectedOutreachPlanId?: string | null;
   readonly releasedHoldIds: readonly string[];
   readonly manualOpportunityId: string | null;
 }
@@ -505,10 +527,12 @@ export async function resolveAmbiguity(
   context: RepositoryContext,
   input: {
     readonly messageId: string;
-    readonly selectedOpportunityId: string;
+    readonly selectedOpportunityId?: string;
+    readonly selectedOutreachPlanId?: string;
     readonly human: boolean;
   },
 ): Promise<MailResult<AmbiguityResolution>> {
+  if((input.selectedOpportunityId===undefined)===(input.selectedOutreachPlanId===undefined))return refuseMail('invalid_input');
   const actor = context.scope.actor;
   // The send gate before the first row this command reads or writes (decision document
   // 6a): a human resolution sets manual mode below, whose event records the enrollments
@@ -528,7 +552,7 @@ export async function resolveAmbiguity(
   const candidates = await listMatches(context, input.messageId);
   if (candidates.length === 0) return refuseMail('match_unknown');
   if (candidates.some(candidate => candidate.selected !== null)) return refuseMail('already_resolved');
-  const selected = candidates.find(candidate => candidate.opportunityId === input.selectedOpportunityId);
+  const selected = candidates.find(candidate => input.selectedOpportunityId!==undefined?candidate.opportunityId===input.selectedOpportunityId:candidate.outreachPlanId===input.selectedOutreachPlanId);
   if (selected === undefined) return refuseMail('match_unknown');
 
   // Who may resolve, decided here, before any selection is written or any hold released
@@ -565,9 +589,9 @@ export async function resolveAmbiguity(
   // count says whether every candidate was still unresolved.
   const resolution = await context.db.query(
     `UPDATE mail_message_matches
-        SET selected = (opportunity_id = $3), resolved_at = $4, resolved_by_user_id = $5
+        SET selected = (id = $3), resolved_at = $4, resolved_by_user_id = $5
       WHERE workspace_id = $1 AND mail_message_id = $2 AND selected IS NULL`,
-    [context.scope.workspaceId, input.messageId, input.selectedOpportunityId, now, resolvedBy],
+    [context.scope.workspaceId, input.messageId, selected.id, now, resolvedBy],
   );
   if ((resolution.rowCount ?? 0) !== candidates.length) return refuseMail('already_resolved');
 
@@ -589,7 +613,8 @@ export async function resolveAmbiguity(
     });
     if (fenceId === null) await applyDirectSendEffects(context, { message, candidate: selected });
     return acceptMail({
-      selectedOpportunityId: input.selectedOpportunityId,
+      selectedOpportunityId: selected.opportunityId,
+      selectedOutreachPlanId: selected.outreachPlanId??null,
       releasedHoldIds: releasedOutgoing.map(hold => hold.id),
       manualOpportunityId: null,
     });
@@ -600,8 +625,8 @@ export async function resolveAmbiguity(
   // inside this transaction is the selected opportunity unheld, which is what Appendix
   // G 14's "only ambiguity holds release after resolution" is protecting.
   const keeper = await openHold(context, {
-    scopeKind: 'opportunity',
-    scopeKey: input.selectedOpportunityId,
+    scopeKind: selected.opportunityId===null?'firm':'opportunity',
+    scopeKey: selected.opportunityId??selected.firmId,
     reasonCode: 'uncertain_reply',
     blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
     sourceEventKind: 'mail_message_resolution',
@@ -625,18 +650,23 @@ export async function resolveAmbiguity(
   const releasedIds = released.map(hold => hold.id).filter(id => id !== selected.holdId);
 
   let manualOpportunityId: string | null = null;
-  if (input.human) {
+  if (input.human && selected.opportunityId!==null) {
     const outcome = await setManualControlMode(context, {
-      opportunityId: input.selectedOpportunityId,
+      opportunityId: selected.opportunityId,
       reason: 'confirmed human reply',
       origin: 'human_reply',
     });
     if (!outcome.ok) return refuseMail(outcome.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
-    manualOpportunityId = input.selectedOpportunityId;
+    manualOpportunityId = selected.opportunityId;
+  }
+
+  if(input.human && selected.outreachPlanId!=null){
+    await context.db.query("UPDATE outreach_plans SET state='manual',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,selected.outreachPlanId]);
   }
 
   return acceptMail({
-    selectedOpportunityId: input.selectedOpportunityId,
+    selectedOpportunityId: selected.opportunityId,
+      selectedOutreachPlanId: selected.outreachPlanId??null,
     releasedHoldIds: releasedIds,
     manualOpportunityId,
   });

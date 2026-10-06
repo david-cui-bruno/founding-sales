@@ -46,7 +46,8 @@ export async function routeMessages(request: ApiRequest, options: RoutingOptions
       async (context, body) =>
         await resolveAmbiguity(context, {
           messageId: body.messageId,
-          selectedOpportunityId: body.selectedOpportunityId,
+          ...(body.selectedOpportunityId===undefined?{}:{selectedOpportunityId:body.selectedOpportunityId}),
+          ...(body.selectedOutreachPlanId===undefined?{}:{selectedOutreachPlanId:body.selectedOutreachPlanId}),
           human: body.human,
         }),
     );

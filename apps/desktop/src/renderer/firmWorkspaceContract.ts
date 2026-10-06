@@ -202,7 +202,8 @@ export type CrmState = z.infer<typeof crmStateSchema>;
 /** Name the firm one held outgoing message belongs to (send-path v2, S1 review P1-C). */
 export interface ResolveOutgoingRequest {
   readonly messageId: string;
-  readonly opportunityId: string;
+  readonly opportunityId?: string;
+  readonly outreachPlanId?:string;
 }
 
 /** Enrol one contact of the open Firm page in one published version (lane g88). */

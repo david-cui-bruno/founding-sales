@@ -169,13 +169,13 @@ async function holdCandidate(
     readonly blocks?: readonly BlockedActionKind[] | undefined;
   },
 ): Promise<AppliedEffect> {
-  const targetKey = `${input.reasonCode}:${input.candidate.opportunityId}`;
+  const targetKey = `${input.reasonCode}:${input.candidate.opportunityId??input.candidate.outreachPlanId}`;
   if (await effectRecorded(context, { messageId: input.messageId, kind: 'hold_opened', targetKey })) {
     return { kind: 'hold_opened', targetKey, applied: false };
   }
   const holdId = await openHold(context, {
-    scopeKind: 'opportunity',
-    scopeKey: input.candidate.opportunityId,
+    scopeKind: input.candidate.opportunityId===null?'firm':'opportunity',
+    scopeKey: input.candidate.opportunityId??input.candidate.firmId,
     reasonCode: input.reasonCode,
     blockedActionKinds: input.blocks ?? REPLY_HOLD_BLOCKS,
     sourceEventKind: 'mail_message',
@@ -221,6 +221,9 @@ export async function applyClassificationEffects(
   // difference between them is who may release it, not whether one exists.
   if (classification.class === 'human' || classification.class === 'uncertain') {
     for (const candidate of candidates) {
+      if(candidate.outreachPlanId!=null){
+        await context.db.query("UPDATE outreach_plans SET state='reply_pending',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='active'",[context.scope.workspaceId,candidate.outreachPlanId]);
+      }
       await interruptMeetingPlansForFirm(context, { firmId: candidate.firmId, reason: 'reply_received', messageId: message.id, at: message.internalDate });
       const effect = await holdCandidate(context, {
         messageId: message.id,
@@ -242,7 +245,7 @@ export async function applyClassificationEffects(
     // matched to two firms is one bounce from Gmail's point of view (lane G15).
     let counted = false;
     for (const candidate of candidates) {
-      const targetKey = `route:${candidate.opportunityId}`;
+      const targetKey = `route:${candidate.opportunityId??candidate.outreachPlanId}`;
       if (!(await effectRecorded(context, { messageId: message.id, kind: 'route_invalidated', targetKey }))) {
         if (!counted) {
           await countRampSignal(context, message, 'bounce');

@@ -173,25 +173,25 @@ describe('the compatibility ceiling, through the real routes', () => {
 });
 
 describe('the policy this container ships (lane g78, minimum raised by W3-C2 and by lane M1)', () => {
-  it('is 1.0.36 and up on the 1.x line, with nothing listed', () => {
-    expect(CONTAINER_CLIENT_VERSIONS).toEqual({ minimum: '1.0.36', ceiling: '1.x', incompatible: [] });
+  it('is 1.0.47 and up on the 1.x line, with nothing listed', () => {
+    expect(CONTAINER_CLIENT_VERSIONS).toEqual({ minimum: '1.0.47', ceiling: '1.x', incompatible: [] });
   });
 
-  it('publishes a range a 1.0.x Mac parses, and refuses every build below 1.0.36', () => {
+  it('publishes a range a 1.0.x Mac parses, and refuses every build below 1.0.47', () => {
     const published = publishedClientVersions(CONTAINER_CLIENT_VERSIONS);
-    expect(published).toEqual({ minimum: '1.0.36', maximum: '1.999.999' });
+    expect(published).toEqual({ minimum: '1.0.47', maximum: '1.999.999' });
     // `clientVersionRangeSchema` is the strict schema every 1.0.x build was built with,
     // so an outdated Mac can still parse the notice that tells it to upgrade.
     expect(clientVersionRangeSchema.safeParse(published).success).toBe(true);
     // 1.0.35 reads an ended meeting as held and cannot confirm attendance (review M1R,
     // finding 3): it is told to update, as every older build is.
-    for (const retired of ['1.0.0', '1.0.1', '1.0.4', '1.0.5', '1.0.11', '1.0.13', '1.0.14', '1.0.30', '1.0.35']) {
+    for (const retired of ['1.0.0', '1.0.1', '1.0.4', '1.0.5', '1.0.11', '1.0.13', '1.0.14', '1.0.30', '1.0.35', '1.0.36', '1.0.46']) {
       expect(mayMutate(CONTAINER_CLIENT_VERSIONS, retired), retired).toBe(false);
     }
   });
 
-  it('admits 1.0.36 and later 1.x builds without another API deployment, and not 2.0.0', () => {
-    for (const later of ['1.0.36', '1.0.37', '1.1.0', '1.12.3']) {
+  it('admits 1.0.47 and later 1.x builds without another API deployment, and not 2.0.0', () => {
+    for (const later of ['1.0.47', '1.0.48', '1.1.0', '1.12.3']) {
       expect(mayMutate(CONTAINER_CLIENT_VERSIONS, later), later).toBe(true);
     }
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, '2.0.0')).toBe(false);

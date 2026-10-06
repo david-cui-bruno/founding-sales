@@ -20,11 +20,12 @@ export const resolveAmbiguityCommandSchema = z
   .object({
     ...MAIL_COMMAND_ENVELOPE,
     messageId: z.string().uuid(),
-    selectedOpportunityId: z.string().uuid(),
+    selectedOpportunityId: z.string().uuid().optional(),
+    selectedOutreachPlanId:z.string().uuid().optional(),
     /** True only when a person looked at the message and said it was human (12.4). */
     human: z.boolean(),
   })
-  .strict();
+  .strict().refine(value=>(value.selectedOpportunityId===undefined)!==(value.selectedOutreachPlanId===undefined));
 
 export const listMessagesRequestSchema = z
   .object({

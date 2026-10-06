@@ -136,14 +136,15 @@ export async function listSequenceVersions(
   return versions;
 }
 
-const ENROLLMENT_COLUMNS = `id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+const ENROLLMENT_COLUMNS = `id, sequence_version_id, opportunity_id, outreach_plan_id, firm_id, contact_id, assigned_user_id,
   state, started_at, ended_at, end_reason, firm_time_zone, holiday_calendar_version,
   origin_kind, permission_id`;
 
 interface EnrollmentDbRow {
   readonly id: string;
   readonly sequence_version_id: string;
-  readonly opportunity_id: string;
+  readonly opportunity_id: string | null;
+  readonly outreach_plan_id: string | null;
   readonly firm_id: string;
   readonly contact_id: string;
   readonly assigned_user_id: string;
@@ -164,6 +165,7 @@ export function toEnrollment(row: EnrollmentDbRow): EnrollmentRow {
     id: row.id,
     sequenceVersionId: row.sequence_version_id,
     opportunityId: row.opportunity_id,
+    outreachPlanId: row.outreach_plan_id,
     firmId: row.firm_id,
     contactId: row.contact_id,
     assignedUserId: row.assigned_user_id,

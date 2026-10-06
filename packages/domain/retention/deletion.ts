@@ -835,6 +835,8 @@ export async function commitDeletion(
     byContact,
   );
   stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
+  const outreach=await context.db.query(`UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id','$2')} AND state NOT IN ('completed','stopped')`,byContact);
+  stopped['outreach_plans']=outreach.rowCount??0;
 
   // Then migration 0025's permissions, and before the evidence they rest on: a
   // permission's foreign keys onto `call_logs` and `mail_messages` are what make that

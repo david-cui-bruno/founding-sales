@@ -49,7 +49,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 export interface OutboundEmailRequest {
   readonly enrollmentId: string;
   readonly stepExecutionId: string;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
   readonly firmId: string;
   readonly contactId: string;
   /** Whose mailbox sends: the firm's assigned salesperson (12.1). */

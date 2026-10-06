@@ -86,7 +86,7 @@ export interface FrozenEnvelope {
 
 export interface StepEligibilityInput {
   readonly execution: StepExecutionRow;
-  readonly opportunityId: string;
+  readonly opportunityId: string | null;
   readonly firmId: string;
   readonly contactId: string;
   readonly ownerUserId: string;
@@ -158,7 +158,7 @@ export function holdSource(): StepEligibilitySource {
       );
       const subject = {
         firmId: input.firmId,
-        opportunityId: input.opportunityId,
+        ...(input.opportunityId===null?{}:{opportunityId:input.opportunityId}),
         ownerUserId: input.ownerUserId,
         enrollmentId: input.execution.enrollmentId,
         ...(mailbox.rows[0] === undefined ? {} : { mailboxId: mailbox.rows[0].id }),
@@ -230,6 +230,18 @@ export function controlModeSource(): StepEligibilitySource {
   return {
     name: 'control-mode',
     evaluate: async (context, input) => {
+      if(input.opportunityId===null){
+        const plan=(await context.db.query<{state:string;origin_kind:string}>(`SELECT p.state,e.origin_kind FROM sequence_enrollments e
+          JOIN outreach_plans p ON p.workspace_id=e.workspace_id AND p.id=e.outreach_plan_id AND p.firm_id=e.firm_id AND p.contact_id=e.contact_id AND p.owner_user_id=e.assigned_user_id
+          JOIN sourcing_candidates c ON c.workspace_id=p.workspace_id AND c.id=p.candidate_id AND NOT c.qualification_blocked AND c.status<>'dismissed'
+          JOIN sourcing_qualification_runs r ON r.workspace_id=p.workspace_id AND r.id=p.qualification_run_id AND r.candidate_id=c.id AND r.candidate_revision=c.revision AND r.reason IS NULL
+          JOIN outreach_email_sources s ON s.workspace_id=p.workspace_id AND s.candidate_id=c.id AND s.run_id=r.id AND s.firm_id=p.firm_id AND s.contact_id=p.contact_id AND NOT s.association_review_required
+          JOIN firms f ON f.workspace_id=p.workspace_id AND f.id=p.firm_id AND f.status='active' AND f.assigned_user_id=p.owner_user_id
+          JOIN mailboxes m ON m.workspace_id=p.workspace_id AND m.id=p.mailbox_id AND m.owner_user_id=p.owner_user_id AND m.status='connected'
+          WHERE e.workspace_id=$1 AND e.id=$2 AND e.opportunity_id IS NULL AND p.firm_id=$3 AND p.contact_id=$4 AND p.owner_user_id=$5`,[context.scope.workspaceId,input.execution.enrollmentId,input.firmId,input.contactId,input.ownerUserId])).rows[0];
+        return plan&&(plan.state==='active'||(['reply_pending','booked'].includes(plan.state)&&plan.origin_kind==='follow_up'))?{ok:true}:{ok:false,reasonCode:'opportunity_manual'};
+      }
+
       const { rows } = await context.db.query<{
         control_mode: string;
         status: string;
