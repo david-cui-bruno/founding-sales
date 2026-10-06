@@ -2,7 +2,7 @@ import {z} from 'zod';
 const date=z.string().regex(/^\d{2}\/\d{2}\/\d{4}$/),time=z.string().regex(/^\d{1,2}:\d{2} (AM|PM)$/);
 const actionSchema=z.discriminatedUnion('action',[
  z.strictObject({action:z.literal('read')}),z.strictObject({action:z.literal('focusText')}),
- z.strictObject({action:z.literal('openSchedule')}),
+ z.strictObject({action:z.literal('openSchedule')}),z.strictObject({action:z.literal('openMedia')}),
  z.strictObject({action:z.literal('openIdentity'),name:z.string().min(1).max(200)}),
  z.strictObject({action:z.literal('fillSchedule'),date,time}),z.strictObject({action:z.literal('confirmSchedule'),date,time}),
 ]);
@@ -28,6 +28,7 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
  if(input.action==='read')return {ok:true,view:{zone:Intl.DateTimeFormat().resolvedOptions().timeZone,kind:editor?'composer':date&&time?'schedule':'unknown',postingName:headers.length===1?text(headers[0]):null,text:editor?text(editor):null,date:date?.value??null,time:time?.value??null,identities:all('[role="radio"]').map(e=>({name:text(e),selected:e.getAttribute('aria-checked')==='true'})),scheduleLabel:all('p,span,div').map(text).filter(t=>/^Posting at [^\\n]{1,100}$/.test(t)).sort((a,b)=>a.length-b.length)[0]??null}};
  if(input.action==='focusText'){if(!editor)return refuse('layout_changed');editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=window.getSelection();if(!selection)return refuse('editor_unavailable');selection.removeAllRanges();selection.addRange(range);return {ok:true};}
  if(input.action==='openIdentity'){const targets=headers.filter(e=>text(e)===input.name);return click(targets.length===1?targets[0]:null);}
+ if(input.action==='openMedia')return editor?click(one('button[aria-label="Media"]')):refuse('layout_changed');
  if(input.action==='openSchedule')return editor?click(one('a[aria-label="Scheduled"]')):refuse('layout_changed');
  if(!date||!time||editor)return refuse('layout_changed');
  if(input.action==='fillSchedule'){
