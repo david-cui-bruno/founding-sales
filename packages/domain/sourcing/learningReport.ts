@@ -20,7 +20,7 @@ export async function readSourcingLearning(ctx:RepositoryContext,input:{from:str
  for(const firm of firms){
   const source=await readFirmSourcing(ctx,firm.id);if(!source?.primary)continue;
   const primary=source.primary,key=JSON.stringify([primary.hypothesis,primary.policyVersion,primary.acquisition]);
-  let c=cohorts.get(key);if(!c){c={hypothesis:primary.hypothesis,policyVersion:primary.policyVersion,acquisition:primary.acquisition,firms:0,contacted:0,reached:0,confirmedPain:0,booked:0,held:0,qualified:0,won:0,unreached:0,unknownQualification:0,interactions:{answeredCalls:0,confirmedPainCalls:0},researchGrossCents:0,researchCashCents:0};cohorts.set(key,c);}
+  let c=cohorts.get(key);if(!c){c={hypothesis:primary.hypothesis,policyVersion:primary.policyVersion,acquisition:primary.acquisition,firms:0,contacted:0,reached:0,confirmedPain:0,booked:0,held:0,qualified:0,won:0,unreached:0,unknownQualification:0,email:{sent:0,genuineReplies:0,positiveReplies:0,bounces:0,deferrals:0},interactions:{answeredCalls:0,confirmedPainCalls:0},researchGrossCents:0,researchCashCents:0};cohorts.set(key,c);}
   c.firms++;c.contacted++;
   const candidateRevision=primary.candidateId?(await ctx.db.query<{revision:number}>('SELECT revision FROM sourcing_candidates WHERE workspace_id=$1 AND id=$2',[w,primary.candidateId])).rows[0]?.revision??null:null;
   report.firms.push({firmId:firm.id,firmName:firm.name,candidateId:primary.sourceAvailable?primary.candidateId:null,candidateRevision,hypothesis:c.hypothesis,policyVersion:c.policyVersion,acquisition:c.acquisition,firstContactedAt:firm.occurred_at.toISOString()});
@@ -28,7 +28,19 @@ export async function readSourcingLearning(ctx:RepositoryContext,input:{from:str
   // Include pre-feature logs, but sessions and their outcome logs are one call.
   const calls=(await ctx.db.query<{id:string;outcome:string|null}>(`SELECT s.id,l.outcome FROM call_sessions s LEFT JOIN call_logs l ON l.workspace_id=s.workspace_id AND l.id=s.call_log_id AND l.occurred_at<=$3 WHERE s.workspace_id=$1 AND s.firm_id=$2 AND s.consumed_at<=$3
    UNION ALL SELECT l.id,l.outcome FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$2 AND l.occurred_at<=$3 AND NOT EXISTS(SELECT 1 FROM call_sessions s WHERE s.workspace_id=l.workspace_id AND s.call_log_id=l.id)`,[w,firm.id,asOf])).rows;
-  const answered=new Set(calls.filter(call=>reachedOutcomes.has(call.outcome??'')).map(call=>call.id));c.interactions.answeredCalls+=answered.size;if(answered.size)c.reached++;else c.unreached++;
+  const answered=new Set(calls.filter(call=>reachedOutcomes.has(call.outcome??'')).map(call=>call.id));c.interactions.answeredCalls+=answered.size;const email=(await ctx.db.query<{sent:number;replies:number;positive:number;bounces:number;deferrals:number}>(`SELECT
+ (SELECT count(*)::int FROM outbound_messages f WHERE f.workspace_id=$1 AND f.firm_id=$2 AND f.state='sent' AND f.sent_at<=$3) AS sent,
+ count(DISTINCT m.id) FILTER(WHERE c.class='human' OR q.id IS NOT NULL)::int AS replies,
+ count(DISTINCT m.id) FILTER(WHERE q.disposition='interested')::int AS positive,
+ count(DISTINCT m.id) FILTER(WHERE c.class='bounce')::int AS bounces,
+ count(DISTINCT m.id) FILTER(WHERE q.disposition='follow_up_later')::int AS deferrals
+ FROM mail_messages m JOIN mail_message_matches x ON x.workspace_id=m.workspace_id AND x.mail_message_id=m.id
+ LEFT JOIN mail_message_classifications c ON c.workspace_id=m.workspace_id AND c.mail_message_id=m.id AND c.layer='deterministic'
+ LEFT JOIN mail_reply_confirmations q ON q.workspace_id=m.workspace_id AND q.mail_message_id=m.id AND q.firm_id=x.firm_id
+ WHERE m.workspace_id=$1 AND x.firm_id=$2 AND m.direction='incoming' AND NOT x.ambiguous AND m.internal_date<=$3
+ AND (SELECT count(DISTINCT y.firm_id) FROM mail_message_matches y WHERE y.workspace_id=m.workspace_id AND y.mail_message_id=m.id)=1`,[w,firm.id,asOf])).rows[0]!;
+  c.email!.sent+=email.sent;c.email!.genuineReplies+=email.replies;c.email!.positiveReplies+=email.positive;c.email!.bounces+=email.bounces;c.email!.deferrals+=email.deferrals;
+  if(answered.size||email.replies)c.reached++;else c.unreached++;
   const feedback=(await ctx.db.query<{code:string}>(`SELECT x.code FROM sourcing_feedback x JOIN sourcing_admissions a ON a.workspace_id=x.workspace_id AND a.candidate_id=x.candidate_id WHERE x.workspace_id=$1 AND a.firm_id=$2 AND NOT a.association_review_required AND x.created_at<=$3 ORDER BY x.created_at DESC,x.id DESC LIMIT 1`,[w,firm.id,asOf])).rows[0];
   let pain=feedback?.code==='real_pain',held=false,qualified=false,unknown=false;
   const painCalls=new Set<string>();

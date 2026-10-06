@@ -1,3 +1,4 @@
+import {outreachControlSchema,outreachCohortInputSchema,outreachCohortPreviewSchema,outreachMutationSchema} from '@fss/contracts';
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
 import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
 import {meetingQualificationViewSchema,saveMeetingQualificationSchema} from '@fss/contracts';
@@ -362,7 +363,7 @@ const enrollInput = z.strictObject({ sequenceVersionId: uuid, contactId: uuid })
 const takeOverInput = z.strictObject({ reason: z.string().min(1).max(2000) });
 
 /** One held outgoing message of the open Firm page, and the firm a person named (S1 review P1-C). */
-const resolveOutgoingInput = z.strictObject({ messageId: uuid, opportunityId: uuid });
+const resolveOutgoingInput = z.strictObject({ messageId: uuid, opportunityId: uuid.optional(),outreachPlanId:uuid.optional() }).refine(v=>(v.opportunityId===undefined)!==(v.outreachPlanId===undefined));
 
 const checkRouteInput = z.strictObject({ routeId: uuid, routeVersion: z.number().int().min(1) });
 
@@ -825,6 +826,9 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'outreach.control': {kind:'read',calls:[{method:'POST',path:'/outreach/control'}],input:z.strictObject({}),output:z.strictObject({view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender, facts, reply policy and review queue'},
+  'outreach.preview': {kind:'read',calls:[{method:'POST',path:'/outreach/cohort/preview'}],input:outreachCohortInputSchema,output:z.strictObject({view:outreachCohortPreviewSchema.nullable(),reason:z.string().nullable()}),transform:'Read-only selected cohort preview'},
+  'outreach.mutate': {kind:'command',calls:[{method:'POST',path:'/outreach/authorization/save'},{method:'POST',path:'/outreach/settings/save'},{method:'POST',path:'/outreach/answer-blocks/save'},{method:'POST',path:'/outreach/answer-blocks/approve'},{method:'POST',path:'/outreach/answer-blocks/retire'},{method:'POST',path:'/outreach/cohort/enable'},{method:'POST',path:'/outreach/reply/manual'},{method:'POST',path:'/outreach/control'}],input:outreachMutationSchema,output:z.strictObject({accepted:z.boolean(),view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Revision-bound explicit action; never changes the domain sending pause'},
   'sourcing.callNeed': {kind:'read',transform:'Current explicit confirmation on a recorded call',input:callNeedReadSchema,output:z.strictObject({view:callNeedViewSchema.nullable(),reason:z.string().nullable()}),calls:[{method:'POST',path:'/sourcing/call-need'}]},
   'sourcing.saveCallNeed': {kind:'command',transform:'Revision-bound confirmation; no deal or sending changes',input:callNeedSaveSchema,output:z.strictObject({result:z.strictObject({revision:z.number().int().positive()}).nullable(),reason:z.string().nullable()}),calls:[{method:'POST',path:'/sourcing/call-need/save'}]},
   'sourcing.learning': {kind:'read',calls:[{method:'POST',path:'/sourcing/learning'}],input:learningInputSchema,output:z.object({view:learningReportSchema.nullable(),reason:z.string().nullable()}),transform:'Current accepted outcomes for first-contact cohorts'},
@@ -997,7 +1001,7 @@ export const OPERATIONS = {
       { method: 'POST', path: '/replies' },
       { method: 'POST', path: '/replies/settings' },
     ],
-    input: z.strictObject({ messageId: uuid, opportunityId: uuid }),
+    input: z.strictObject({ messageId: uuid, opportunityId: uuid.optional(),outreachPlanId:uuid.optional() }).refine(v=>(v.opportunityId===undefined)!==(v.outreachPlanId===undefined)),
     output: replyStateSchema,
     transform: 'refuses a candidate that is not one of this card’s own before it asks the server',
   },

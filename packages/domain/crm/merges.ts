@@ -202,6 +202,9 @@ export async function mergeFirms(
   // cascade while the opportunity is still the source's, so the opportunity key is
   // deferred until the opportunities below have moved too, and checked again there.
   await context.db.query('SET CONSTRAINTS meetings_opportunity_fkey DEFERRED');
+  await context.db.query('SET CONSTRAINTS enrollment_outreach_firm,mail_match_outreach_firm,reply_confirmation_outreach_firm,sequence_enrollments_contact_fkey,sequence_enrollments_opportunity_fkey,step_executions_contact_fkey,step_executions_enrollment_fkey DEFERRED');
+  // Preserve both histories but require fresh review after identities are combined.
+  await context.db.query("UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=ANY($2::uuid[]) AND state NOT IN ('stopped','completed')",[context.scope.workspaceId,[source.id,target.id]]);
 
   // Contacts move first, and the routes, evidence, aliases and events that name a
   // contact follow through `ON UPDATE CASCADE` on the semantic composite key — which
@@ -217,6 +220,9 @@ export async function mergeFirms(
     WHERE a.workspace_id=$1 AND a.firm_id=$2`,[context.scope.workspaceId,source.id,target.id]);
 
   await move('email_addresses', ['contact_id', 'address']);
+  await context.db.query(`UPDATE outreach_email_sources a SET firm_id=$3,route_id=COALESCE(
+    (SELECT target.id FROM email_addresses old JOIN email_addresses target ON target.workspace_id=old.workspace_id AND target.firm_id=$3 AND target.address=old.address AND target.contact_id IS NOT DISTINCT FROM old.contact_id WHERE old.workspace_id=a.workspace_id AND old.id=a.route_id ORDER BY target.id LIMIT 1),a.route_id)
+    WHERE a.workspace_id=$1 AND a.firm_id=$2`,[context.scope.workspaceId,source.id,target.id]);
   await move(
     'evidence_items',
     ['contact_id', 'provider', 'content_hash'],

@@ -34,6 +34,7 @@ export const JOB_KINDS = [
   'route.validate',
   'sourcing.check',
   'sourcing.qualify',
+  'outreach.reply',
   'sourcing.monitor',
   'sourcing.discover',
   'research.firm',
@@ -113,6 +114,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // fetches nothing. See `packages/domain/research/runs.ts`.
   'sourcing.check': 'business_uniqueness',
   'sourcing.qualify': 'outbound_fence',
+  'outreach.reply': 'outbound_fence',
   'sourcing.discover': 'outbound_fence',
   'sourcing.monitor': 'business_uniqueness',
   'research.firm': 'business_uniqueness',
@@ -327,6 +329,7 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   // import of two hundred firms is two hundred of these.
   'sourcing.check': 'bulk',
   'sourcing.qualify': 'bulk',
+  'outreach.reply': 'urgent',
   'sourcing.monitor': 'bulk',
   'sourcing.discover': 'bulk',
   'research.firm': 'bulk',

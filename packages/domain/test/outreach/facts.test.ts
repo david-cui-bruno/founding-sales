@@ -1,0 +1,31 @@
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {saveAnswerBlock,approveAnswerBlock,readApprovedAnswerBlocks,retireAnswerBlock} from '../../outreach/facts.ts';
+let db:TestDatabase,seed:TwoWorkspaces;
+const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
+const tx=<T>(f:()=>Promise<T>)=>withTransaction(db.session,f);
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('requires explicit approval and immutable versions; editing invalidates approval for new renderings',async()=>{
+ const first=await tx(()=>saveAnswerBlock(ctx(),{kind:'product',text:'Callie integrates with AppFolio.'}));if(!first.ok)throw new Error(first.reason);
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:first.value.id,version:1}])).toEqual({ok:false,reason:'block_unapproved'});
+ expect((await tx(()=>approveAnswerBlock(ctx(),{id:first.value.id,version:1}))).ok).toBe(true);
+ const approved=await readApprovedAnswerBlocks(ctx(),[{id:first.value.id,version:1}]);expect(approved.ok).toBe(true);
+ expect(await tx(()=>saveAnswerBlock(ctx(),{id:first.value.id,expectedVersion:0,kind:'product',text:'Wrong update'}))).toEqual({ok:false,reason:'stale_version'});
+ const edit=await tx(()=>saveAnswerBlock(ctx(),{id:first.value.id,expectedVersion:1,kind:'product',text:'Callie integrates with AppFolio and helps coordinate maintenance.'}));expect(edit.ok).toBe(true);
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:first.value.id,version:1}])).toEqual({ok:false,reason:'block_changed'});
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:first.value.id,version:2}])).toEqual({ok:false,reason:'block_unapproved'});
+ const original=(await db.session.query<{text:string}>('SELECT text FROM outreach_answer_block_versions WHERE workspace_id=$1 AND block_id=$2 AND version=1',[seed.alpha.workspaceId,first.value.id])).rows[0];expect(original?.text).toBe('Callie integrates with AppFolio.');
+ expect((await tx(()=>approveAnswerBlock(ctx(),{id:first.value.id,version:2}))).ok).toBe(true);
+ expect((await tx(()=>retireAnswerBlock(ctx(),{id:first.value.id,version:2}))).ok).toBe(true);
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:first.value.id,version:2}])).toEqual({ok:false,reason:'block_retired'});
+});
+it('does not approve unsupported pricing or integration text without an admin action, and isolates workspaces',async()=>{
+ const one=await tx(()=>saveAnswerBlock(ctx(),{kind:'pricing',text:'A proposed discount, not approved.'}));if(!one.ok)throw new Error(one.reason);
+ const nonadmin=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.salesperson.userId,role:'salesperson'}),db.session);
+ expect(await tx(()=>approveAnswerBlock(nonadmin,{id:one.value.id,version:1}))).toEqual({ok:false,reason:'admin_required'});
+ const beta=repositoryContext(workspaceScope(seed.beta.workspaceId,{kind:'user',userId:seed.beta.admin.userId,role:'admin'}),db.session);
+ expect(await readApprovedAnswerBlocks(beta,[{id:one.value.id,version:1}])).toEqual({ok:false,reason:'not_found'});
+});

@@ -4,6 +4,7 @@ import {
   enrollableOriginKindSchema,
   enrollmentMigrateCommandSchema,
   semanticVersionSchema,
+  sequenceSubjectSchema,
   uuid,
 } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
@@ -57,12 +58,13 @@ const command = { commandId: commandIdSchema, clientVersion: semanticVersionSche
 const enrollSchema = z.strictObject({
   ...command,
   sequenceVersionId: uuid,
-  opportunityId: uuid,
+  opportunityId: uuid.optional(),
+  subject: sequenceSubjectSchema.optional(),
   firmId: uuid,
   contactId: uuid,
   originKind: enrollableOriginKindSchema,
   permissionId: uuid.optional(),
-});
+}).refine((value) => (value.opportunityId === undefined) !== (value.subject === undefined));
 
 const stopSchema = z.strictObject({
   ...command,
@@ -132,7 +134,8 @@ export async function routeEnrollments(
     return await runPolicyCommand(deps, enrollSchema, 'enroll_contact', async (context, body) =>
       await enrollContact(context, {
         sequenceVersionId: body.sequenceVersionId,
-        opportunityId: body.opportunityId,
+        ...(body.opportunityId === undefined ? {} : { opportunityId: body.opportunityId }),
+        ...(body.subject === undefined ? {} : { subject: body.subject }),
         firmId: body.firmId,
         contactId: body.contactId,
         originKind: body.originKind,

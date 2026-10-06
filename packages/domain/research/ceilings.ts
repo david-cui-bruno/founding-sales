@@ -152,6 +152,12 @@ export async function lockResearchBudget(context: RepositoryContext): Promise<vo
   ]);
 }
 
+/** Scheduler maintenance must skip busy credit work rather than block every due source. */
+export async function tryLockResearchBudget(context: RepositoryContext): Promise<boolean> {
+  const result = await context.db.query<{locked:boolean}>('SELECT pg_try_advisory_xact_lock($1::integer, $2::integer) AS locked', [BUDGET_LOCK_NAMESPACE,hashOfWorkspace(context.scope.workspaceId)]);
+  return result.rows[0]?.locked === true;
+}
+
 /** Price and clear exactly one reservation, or say why not. */
 export async function claimResearchClearance(
   context: RepositoryContext,

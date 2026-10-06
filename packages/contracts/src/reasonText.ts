@@ -99,6 +99,7 @@ export const HOLD_REASON_SENTENCES: Readonly<Record<HoldReasonCode, string>> = O
 // ---------------------------------------------------------------------------
 
 export const DIAL_REFUSAL_SENTENCES: Readonly<Record<DialRefusalCode, string>> = Object.freeze({
+  outreach_touch_unavailable: 'This firm’s outreach plan is waiting. Check its next scheduled touch before calling.',
   firm_suppressed: HOLD_REASON_SENTENCES.firm_suppressed,
   handle_suppressed: 'This number is suppressed, so Callie will not dial it. Try another number for the firm.',
   manual_suppression_review: HOLD_REASON_SENTENCES.manual_suppression_review,

@@ -167,7 +167,8 @@ export interface ConfirmReplyRequest {
  */
 export interface ResolveReplyRequest {
   readonly messageId: string;
-  readonly opportunityId: string;
+  readonly opportunityId?: string;
+  readonly outreachPlanId?: string;
 }
 
 

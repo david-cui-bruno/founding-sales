@@ -1,0 +1,38 @@
+import {randomUUID} from 'node:crypto';
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {dispatch} from '../src/server.ts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+let f:AuthFixture,token:string,mailboxId:string;
+const call=(body:unknown,path='/outreach/authorization/save')=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
+beforeAll(async()=>{f=await createAuthFixture();token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;mailboxId=(await f.db.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'owner@example.test','google-owner','connected') RETURNING id",[f.alpha.workspaceId,f.alpha.admin.userId])).rows[0]!.id;});
+afterAll(async()=>f.stop());
+it('defaults off, records only an admin declaration, and replays without creating a second revision',async()=>{
+ expect((await call({mailboxId},'/outreach/authorization')).body).toMatchObject({allowed:false,revision:null});
+ const body={mailboxId,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call(body)).body).toMatchObject({status:'accepted',result:{revision:1}});
+ expect((await call(body)).body).toMatchObject({replayed:true,result:{revision:1}});
+ expect((await call({mailboxId},'/outreach/authorization')).body).toMatchObject({allowed:true,revision:1});
+ token=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;
+ expect((await call({...body,commandId:randomUUID(),expectedRevision:1,enabled:false})).status).toBe(403);
+ token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
+ expect((await call({mailboxId},'/outreach/authorization')).status).toBe(404);
+});
+it('requires explicit reusable-fact approval and keeps command replay tied to the version',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const body={kind:'product',text:'Callie integrates with AppFolio.',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ const saved=await call(body,'/outreach/answer-blocks/save');expect(saved.status).toBe(200);
+ const result=(saved.body as {result:{id:string;version:number}}).result;
+ expect((await call({},'/outreach/answer-blocks')).body).toMatchObject({blocks:[{...result,approvedAt:null}]});
+ const approval={...result,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call(approval,'/outreach/answer-blocks/approve')).status).toBe(200);
+ expect((await call(approval,'/outreach/answer-blocks/approve')).body).toMatchObject({replayed:true,result});
+});
+it('reads disabled reply policy, saves with replay, and does not lift domain sending',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const view=await call({},'/outreach/control');expect(view.status).toBe(200);expect(view.body).toMatchObject({settings:{revision:0,enabled:false},senders:[{address:'owner@example.test',sendingEnabled:false}]});
+ const body={expectedRevision:0,enabled:false,sequenceVersionId:null,bookingUrl:'https://cal.com/callie/demo',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call(body,'/outreach/settings/save')).body).toMatchObject({status:'accepted',result:{revision:1}});
+ expect((await call(body,'/outreach/settings/save')).body).toMatchObject({replayed:true,result:{revision:1}});
+ expect((await call({},'/outreach/control')).body).toMatchObject({settings:{revision:1,enabled:false}});
+});

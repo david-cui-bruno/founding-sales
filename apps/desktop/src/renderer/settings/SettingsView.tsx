@@ -1,3 +1,4 @@
+import {OutreachSection} from '../outreach/OutreachSection.tsx';
 import { useEffect, useRef, type JSX } from 'react';
 import type { MailboxState } from '../../shared/contract.ts';
 import type { Generation } from '../app/generation.ts';
@@ -155,6 +156,7 @@ export function SettingsView({
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />
+              {isAdmin?<OutreachSection enabled={identity!==null && state?.mayMutate===true}/>:null}
               <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
             </>
           ) : tabForScreen(view.screen) === 'dashboard' ? (

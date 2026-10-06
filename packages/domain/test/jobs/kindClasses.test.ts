@@ -45,6 +45,7 @@ describe('job kind classes', () => {
       'outbound.close_send_day',
       'canary',
       // Call-to-booking: an abandoned session's reservation holds the day's budget.
+      'outreach.reply',
       'telephony.sweep',
     ]);
     expect(kindsOfClass('bulk')).toEqual([

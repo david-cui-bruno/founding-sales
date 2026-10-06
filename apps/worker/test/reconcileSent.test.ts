@@ -250,6 +250,13 @@ describe('fss admin mailbox reconcile-sent', () => {
 
   const tenMinutesBefore = (at: string): string => new Date(Date.parse(at) - 600_000).toISOString();
 
+  it('revokes cold-email authorization on the restored copy before reconciliation', async () => {
+    await world.database.session.query(`INSERT INTO gmail_prospecting_authorizations(workspace_id,mailbox_id,owner_user_id,provider_account_id,email_address,revision,enabled,basis,reported_by,enabled_at) SELECT workspace_id,id,owner_user_id,provider_account_id,email_address,1,true,'owner_reported_google_permission',$2,now() FROM mailboxes WHERE id=$1`,[world.alpha.mailboxId,world.alpha.workspace.admin.userId]);
+    const gmail=world.clientWith(world.alpha,{});
+    await mailboxReconcileSentCommand(invocation(gmail,'2026-09-24T15:50:00.000Z'));
+    expect((await world.database.session.query('SELECT enabled,revision FROM gmail_prospecting_authorizations WHERE mailbox_id=$1',[world.alpha.mailboxId])).rows[0]).toMatchObject({enabled:false,revision:2});
+  });
+
   it('puts a lost send back as a tombstone, finishes, and finds it present the second time', async () => {
     const at = '2026-09-24T16:00:00.000Z';
     const address = 'lost.send@northwind.example.test';

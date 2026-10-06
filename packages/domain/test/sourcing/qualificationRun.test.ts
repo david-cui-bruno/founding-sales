@@ -103,3 +103,12 @@ it('retains useful complete text after the first 32 blocks within existing parse
  await runQualification(ctx(),ids,{pageFetch:page,extraction:{...extractor(ids.runId),extract:async input=>{seen.push(...input.observations);return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};}}});
  expect(seen[0]?.blocks.some(b=>b.text.includes('Example PM'))).toBe(true);expect(seen[0]?.blocks.some(b=>b.text.includes('Navigation'))).toBe(false);expect(seen[0]?.truncated).toBe(false);
 });
+
+it('counts credit-funded interpretation and routine replies against the same research ceiling',async()=>{
+ const ids=await pending();let calls=0;
+ const {recordProviderCall}=await import('../../research/ledger.ts');
+ await tx(()=>recordProviderCall(ctx(),{providerKey:'aws_bedrock.outreach_reply',at:new Date().toISOString(),businessTimeZone:'America/New_York',costCents:1000}));
+ await runQualification(ctx(),ids,{pageFetch:pages,extraction:{...extractor(ids.runId),extract:async()=>{calls++;throw new Error('must not spend beyond credit ceiling');}}});
+ expect(calls).toBe(0);
+ expect(await readQualification(ctx(),ids)).toMatchObject({status:'unavailable',reason:'research_budget_or_hold'});
+});

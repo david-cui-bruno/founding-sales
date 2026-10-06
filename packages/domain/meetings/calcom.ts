@@ -1047,6 +1047,7 @@ export type BookedMeeting = Pick<MeetingRow, 'id' | 'firm_id' | 'booking_uid'>;
  */
 export async function applyBooked(context: RepositoryContext, meeting: BookedMeeting): Promise<void> {
   const firmId = meeting.firm_id ?? '';
+  await context.db.query("UPDATE outreach_plans SET state='booked',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$2 AND state IN ('active','reply_pending','manual')",[context.scope.workspaceId,firmId]);
   const obsolete = (await context.db.query<{ meeting_id: string }>(`SELECT p.meeting_id FROM meeting_follow_through p JOIN meetings old ON old.workspace_id=p.workspace_id AND old.id=p.meeting_id JOIN meetings newer ON newer.workspace_id=p.workspace_id AND newer.id=$3 WHERE p.workspace_id=$1 AND p.firm_id=$2 AND p.meeting_id<>$3 AND newer.starts_at>old.ends_at AND p.status NOT IN ('cancelled','completed') ORDER BY p.meeting_id`, [context.scope.workspaceId, firmId, meeting.id])).rows;
   for (const plan of obsolete) await invalidateMeetingFollowThrough(context, { meetingId: plan.meeting_id, reason: 'new_meeting', eventId: meeting.id });
   const opportunity = await readOpenOpportunity(context, firmId);

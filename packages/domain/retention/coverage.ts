@@ -52,6 +52,9 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  outreach_reply_deliveries: coverage(['retained'], 'Immutable draft hashes and delivery bindings only; source and permission gates refuse deleted or changed prospects.'),
+  outreach_settings: coverage(['operational'], 'Disabled-by-default reply settings; no prospect text.'),
+  outreach_reply_requests: coverage(['retained'], 'Coded decisions and immutable source hashes only; source deletion makes requests unavailable, plan deletion workflow stops dispatch.'),
   meeting_qualification_revisions: coverage(['deletion_removes'], 'Immutable qualification answers and source references cascade with meeting deletion.'),
   sourcing_targeting_versions: coverage(['operational'], 'Immutable public search policies, no contact data; used to interpret past dispatches.'),
   sourcing_targeting_proposals: coverage(['retained'], 'Admin-authored search changes and approval audit; no copied prospect evidence.'),
@@ -122,6 +125,13 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   today_snoozes: coverage(['deletion_removes'], 'A snoozed task naming the deleted firm and contact; derived work, removed with them.'),
 
   // ------------------------------------------------------------------ mail
+  gmail_prospecting_authorizations: coverage(['departure_revokes'], 'Mailbox-scoped authority; disconnected or departed identities cannot send. Restore explicitly revokes.'),
+  outreach_fence_authorizations: coverage(['retained'], 'Coded authorization binding retained with outbound reconciliation evidence; contains no message or recipient text.'),
+  outreach_answer_blocks: coverage(['retained'], 'Workspace product-content version identity; no CRM person identity.'),
+  outreach_answer_block_versions: coverage(['retained'], 'Explicitly approved reusable product/pricing content; not prospect conversation text.'),
+  outreach_touch_reservations: coverage(['retained'], 'Coded dispatch history retained for lifetime and daily limits; carries no message text or contact addresses.'),
+  outreach_plans: coverage(['retained','deletion_stops'], 'Retains authority IDs for stopped enrollment history; deletion stops the plan and redacts its contact through the existing contact row.'),
+  outreach_email_sources: coverage(['deletion_removes'], 'Source association removed on contact or firm deletion; candidate deletion cascades.'),
   mailboxes: coverage(['departure_revokes'], 'Disconnected by departure; the row is what the firm’s messages hang off.'),
   mailbox_tokens: coverage(['departure_revokes'], 'The envelope-encrypted refresh token, deleted outright by departure.'),
   mailbox_watches: coverage(['departure_revokes'], 'Cancelled when the grant goes.'),

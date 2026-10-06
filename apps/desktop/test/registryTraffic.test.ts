@@ -94,6 +94,9 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'outreach.control':{},
+  'outreach.preview':{mailboxId:UUID,candidateIds:[UUID],emailSequenceVersionId:null,callSequenceVersionId:null},
+  'outreach.mutate':{action:'authorization',mailboxId:UUID,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission',commandId:UUID},
   'sourcing.callNeed':{sessionId:UUID},
   'sourcing.saveCallNeed':{callLogId:UUID,expectedRevision:0,expectedSourceRevision:0,answer:'yes',commandId:UUID},
   'sourcing.learning':{from:'2026-10-01T00:00:00Z',to:'2026-10-06T00:00:00Z',asOf:'2026-10-06T00:00:00Z'},
@@ -319,6 +322,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
+    outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
       return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;

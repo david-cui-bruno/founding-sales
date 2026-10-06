@@ -140,16 +140,16 @@ function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly 
     <div data-testid="candidate-form" className="mt-3 flex flex-col gap-2">
       <h3 className="text-sm font-medium">Which conversation is this reply about?</h3>
       {card.ambiguity.map(candidate => (
-        <label key={candidate.opportunityId} data-testid="ambiguity-candidate" className="flex items-center gap-2 text-sm">
+        <label key={candidate.opportunityId??candidate.outreachPlanId} data-testid="ambiguity-candidate" className="flex items-center gap-2 text-sm">
           <input
             type="radio"
             name="candidate"
             data-testid="candidate-choice"
-            value={candidate.opportunityId}
+            value={candidate.opportunityId??candidate.outreachPlanId??''}
             disabled={!card.resolveEnabled || busy}
-            checked={picked === candidate.opportunityId}
+            checked={picked === (candidate.opportunityId??candidate.outreachPlanId)}
             onChange={() => {
-              setPicked(candidate.opportunityId);
+              setPicked(candidate.opportunityId??candidate.outreachPlanId??'');
             }}
             className="size-3.5 accent-[var(--primary)]"
           />
@@ -165,7 +165,9 @@ function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly 
           {...(busy ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (picked === '') return;
-            replies.resolve({ messageId: card.messageId, opportunityId: picked });
+            const candidate=card.ambiguity.find(c=>(c.opportunityId??c.outreachPlanId)===picked);
+            if(candidate?.opportunityId)replies.resolve({messageId:card.messageId,opportunityId:candidate.opportunityId});
+            else if(candidate?.outreachPlanId)replies.resolve({messageId:card.messageId,outreachPlanId:candidate.outreachPlanId});
           }}
         >
           This one

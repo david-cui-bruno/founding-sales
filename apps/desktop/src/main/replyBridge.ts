@@ -352,13 +352,13 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
         notice = 'message_unknown';
         return await snapshot();
       }
-      if (!card.impact.candidates.some(candidate => candidate.opportunityId === input.opportunityId)) {
+      if (!card.impact.candidates.some(candidate => input.opportunityId!==undefined?candidate.opportunityId===input.opportunityId:input.outreachPlanId!==undefined&&candidate.outreachPlanId===input.outreachPlanId)) {
         notice = 'match_unknown';
         return await snapshot();
       }
       const answer = await deps.api.command(
         '/messages/resolve-ambiguity',
-        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
+        { messageId: input.messageId, ...(input.opportunityId===undefined?{}:{selectedOpportunityId:input.opportunityId}),...(input.outreachPlanId===undefined?{}:{selectedOutreachPlanId:input.outreachPlanId}), human: false },
         () => null,
       );
       // As in `confirm`: the resolution stands, and nothing it would have drawn is put

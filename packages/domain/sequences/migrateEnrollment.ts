@@ -327,9 +327,9 @@ export async function migrateEnrollment(
     `INSERT INTO sequence_enrollments
        (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
         started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id,
-        migrated_from_enrollment_id)
+        migrated_from_enrollment_id, outreach_plan_id)
      SELECT workspace_id, $3, opportunity_id, firm_id, contact_id, assigned_user_id,
-            started_at, firm_time_zone, holiday_calendar_version, origin_kind, $4, id
+            started_at, firm_time_zone, holiday_calendar_version, origin_kind, $4, id, outreach_plan_id
        FROM sequence_enrollments
       WHERE workspace_id = $1 AND id = $2
      RETURNING id`,

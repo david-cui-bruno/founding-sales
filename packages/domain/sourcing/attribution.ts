@@ -26,16 +26,16 @@ export async function attachSourcingAttribution(ctx:RepositoryContext,input:Attr
  if(!['cold_sourced','warm_intro','manual','unknown'].includes(input.acquisition)||!input.hypothesis.match(/^[a-z0-9_.:-]{1,80}$/u)||!input.policyVersion.match(/^[a-z0-9_.:-]{1,80}$/u)||(input.queryId!==null&&(!input.queryId.length||input.queryId.length>100)))return deny('invalid_input');
  const w=ctx.scope.workspaceId;
  if(input.candidateId!==null||input.qualificationRunId!==null){
-  const linked=await ctx.db.query(`SELECT r.id FROM sourcing_qualification_runs r JOIN sourcing_admissions a
-   ON a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id
-   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND a.firm_id=$4
-   AND NOT a.association_review_required AND r.reason IS NULL`,[w,input.qualificationRunId,input.candidateId,input.firmId]);
+  const linked=await ctx.db.query(`SELECT r.id FROM sourcing_qualification_runs r
+   WHERE r.workspace_id=$1 AND r.id=$2 AND r.candidate_id=$3 AND r.reason IS NULL AND (
+   EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id AND a.firm_id=$4 AND NOT a.association_review_required)
+   OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=r.workspace_id AND e.candidate_id=r.candidate_id AND e.run_id=r.id AND e.firm_id=$4 AND NOT e.association_review_required))`,[w,input.qualificationRunId,input.candidateId,input.firmId]);
   if(!linked.rows.length)return deny('source_mismatch');
  }else if(input.acquisition==='cold_sourced')return deny('source_required');
  const key=createHash('sha256').update(JSON.stringify([input.candidateId,input.qualificationRunId,input.queryId,input.hypothesis,input.policyVersion,input.acquisition])).digest('hex');
  const row=(await ctx.db.query<{id:string}>(`INSERT INTO sourcing_attributions(workspace_id,firm_id,candidate_id,run_id,source_key,query_id,hypothesis,policy_version,acquisition)
   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(workspace_id,firm_id,source_key) DO UPDATE SET source_key=EXCLUDED.source_key RETURNING id`,[w,input.firmId,input.candidateId,input.qualificationRunId,key,input.queryId,input.hypothesis,input.policyVersion,input.acquisition])).rows[0]!;
- if(input.acquisition==='cold_sourced')await preserveLegacyFirstCall(ctx,input.firmId);
+ if(input.acquisition==='cold_sourced')await preserveLegacyFirstContact(ctx,input.firmId);
  return {ok:true,value:row};
 }
 
@@ -51,7 +51,16 @@ async function interactionSource(ctx:RepositoryContext,kind:InteractionKind,id:s
   ) SELECT x.*,(SELECT count(*)::int FROM audit_events a WHERE a.workspace_id=$1 AND a.subject_kind='call_log' AND a.subject_id=x.log_id::text AND a.action='call.outcome_corrected') AS revision FROM located x`,[w,id])).rows[0]??null;
  if(kind==='meeting')return (await ctx.db.query<InteractionSource>(`SELECT firm_id,id AS subject_id,notes_revision AS revision,created_at AS occurred_at,false AS outbound FROM meetings WHERE workspace_id=$1 AND id=$2 AND firm_id IS NOT NULL`,[w,id])).rows[0]??null;
  if(kind==='deal')return (await ctx.db.query<InteractionSource>(`SELECT o.firm_id,o.id AS subject_id,(SELECT count(*)::int FROM opportunity_stage_events e WHERE e.workspace_id=o.workspace_id AND e.opportunity_id=o.id) AS revision,o.updated_at AS occurred_at,false AS outbound FROM opportunities o WHERE o.workspace_id=$1 AND o.id=$2`,[w,id])).rows[0]??null;
- // Email attribution is added with the outreach release; an arbitrary UUID cannot manufacture contact.
+ if(kind==='email')return (await ctx.db.query<InteractionSource>(`SELECT f.firm_id,f.id AS subject_id,0 AS revision,f.sent_at AS occurred_at,true AS outbound
+  FROM outbound_messages f WHERE f.workspace_id=$1 AND f.id=$2 AND f.state='sent' AND f.sent_at IS NOT NULL
+  UNION ALL
+  SELECT x.firm_id,m.id,0,m.internal_date,false FROM mail_messages m JOIN mail_message_matches x ON x.workspace_id=m.workspace_id AND x.mail_message_id=m.id
+  WHERE m.workspace_id=$1 AND m.id=$2 AND m.direction='incoming' AND NOT x.ambiguous
+   AND (SELECT count(DISTINCT q.firm_id) FROM mail_message_matches q WHERE q.workspace_id=m.workspace_id AND q.mail_message_id=m.id)=1
+   AND (EXISTS(SELECT 1 FROM mail_message_classifications c WHERE c.workspace_id=m.workspace_id AND c.mail_message_id=m.id AND c.layer='deterministic' AND c.class='human')
+    OR EXISTS(SELECT 1 FROM mail_reply_confirmations c WHERE c.workspace_id=m.workspace_id AND c.mail_message_id=m.id AND c.firm_id=x.firm_id))
+  LIMIT 1`,[w,id])).rows[0]??null;
+ // Unsupported interaction kinds cannot manufacture contact.
  return null;
 }
 
@@ -74,7 +83,7 @@ export async function attributeInteraction(ctx:RepositoryContext,input:Interacti
 export async function attributeFirmInteraction(ctx:RepositoryContext,input:{firmId:string;kind:InteractionKind;subjectId:string;sourceRevision?:number}):Promise<void>{
  const firm=await loadFirmForUpdate(ctx,input.firmId);if(!firm||!decideFirmMutation(ctx,firm).permitted)return;
  const current=await interactionSource(ctx,input.kind,input.subjectId);if(!current||current.firm_id!==firm.id)return;
- await preserveLegacyFirstCall(ctx,firm.id,current.subject_id);
+ await preserveLegacyFirstContact(ctx,firm.id,current.subject_id);
  let id=(await ctx.db.query<{id:string}>(`SELECT attribution_id AS id FROM sourcing_interactions WHERE workspace_id=$1 AND kind=$2 AND subject_id=$3 ORDER BY source_revision LIMIT 1`,[ctx.scope.workspaceId,input.kind,current.subject_id])).rows[0]?.id;
  if(!id)id=(await ctx.db.query<{id:string}>("SELECT id FROM sourcing_attributions WHERE workspace_id=$1 AND firm_id=$2 AND date_trunc('milliseconds',created_at)<=$3 ORDER BY created_at DESC,id DESC LIMIT 1",[ctx.scope.workspaceId,firm.id,current.occurred_at])).rows[0]?.id;
  if(!id){const made=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:null,qualificationRunId:null,queryId:null,hypothesis:'unknown',policyVersion:'unknown',acquisition:'unknown'});if(!made.ok)throw new Error(`attribution_${made.reason}`);id=made.value.id;}
@@ -85,10 +94,11 @@ export async function readFirmSourcing(ctx:RepositoryContext,firmId:string){
  const firm=await readFirm(ctx,firmId);if(!firm||firm.status==='merged'||decideFirmRead(ctx,firm)!=='assigned_or_admin')return null;
  const w=ctx.scope.workspaceId;
  const sources=(await ctx.db.query<AttributionRow>(`SELECT a.*,CASE WHEN a.acquisition<>'cold_sourced' THEN true ELSE
-   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND r.reason IS NULL AND NOT COALESCE(c.qualification_blocked,true) AND NOT COALESCE(d.association_review_required,true) END AS source_available
+   a.candidate_id IS NOT NULL AND a.run_id IS NOT NULL AND r.reason IS NULL AND NOT COALESCE(c.qualification_blocked,true) AND (NOT COALESCE(d.association_review_required,true) OR NOT COALESCE(e.association_review_required,true)) END AS source_available
    FROM sourcing_attributions a LEFT JOIN sourcing_qualification_runs r ON r.workspace_id=a.workspace_id AND r.id=a.run_id
    LEFT JOIN sourcing_candidates c ON c.workspace_id=a.workspace_id AND c.id=a.candidate_id
    LEFT JOIN sourcing_admissions d ON d.workspace_id=a.workspace_id AND d.candidate_id=a.candidate_id AND d.firm_id=a.firm_id
+   LEFT JOIN outreach_email_sources e ON e.workspace_id=a.workspace_id AND e.candidate_id=a.candidate_id AND e.run_id=a.run_id AND e.firm_id=a.firm_id
    WHERE a.workspace_id=$1 AND a.firm_id=$2 ORDER BY a.created_at,a.id`,[w,firmId])).rows;
  const first=(await ctx.db.query<{attribution_id:string;occurred_at:Date}>('SELECT attribution_id,occurred_at FROM sourcing_first_touches WHERE workspace_id=$1 AND firm_id=$2',[w,firmId])).rows[0];
  const mapped=sources.map(s=>({id:s.id,candidateId:s.candidate_id,qualificationRunId:s.run_id,queryId:s.query_id,hypothesis:s.source_available?s.hypothesis:'unknown',policyVersion:s.policy_version,acquisition:s.source_available?s.acquisition:'unknown',sourceAvailable:s.source_available}));
@@ -109,13 +119,29 @@ export async function mergeSourcingAttribution(ctx:RepositoryContext,sourceId:st
 }
 
 /** Research attached later cannot turn an already-contacted firm into a newly sourced lead. */
-async function preserveLegacyFirstCall(ctx:RepositoryContext,firmId:string,currentSubjectId?:string):Promise<void>{
+async function preserveLegacyFirstContact(ctx:RepositoryContext,firmId:string,currentSubjectId?:string):Promise<void>{
  const w=ctx.scope.workspaceId;
  if((await ctx.db.query('SELECT 1 FROM sourcing_first_touches WHERE workspace_id=$1 AND firm_id=$2',[w,firmId])).rows.length)return;
- const old=(await ctx.db.query<{id:string}>(`SELECT id FROM (
-  SELECT id,consumed_at AS at FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2 AND consumed_at IS NOT NULL
-  UNION ALL SELECT l.id,l.occurred_at FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$2 AND l.direction='outbound'
+ const old=(await ctx.db.query<{id:string;kind:'call'|'email'}>(`SELECT id,kind FROM (
+  SELECT id,'call' AS kind,consumed_at AS at FROM call_sessions WHERE workspace_id=$1 AND firm_id=$2 AND consumed_at IS NOT NULL
+  UNION ALL SELECT l.id,'call',l.occurred_at FROM call_logs l WHERE l.workspace_id=$1 AND l.firm_id=$2 AND l.direction='outbound'
    AND NOT EXISTS(SELECT 1 FROM call_sessions s WHERE s.workspace_id=l.workspace_id AND s.call_log_id=l.id)
+  UNION ALL SELECT f.id,'email',f.sent_at FROM outbound_messages f WHERE f.workspace_id=$1 AND f.firm_id=$2 AND f.state='sent' AND f.sent_at IS NOT NULL
  ) x ORDER BY at,id LIMIT 1`,[w,firmId])).rows[0];
- if(old&&old.id!==currentSubjectId)await attributeFirmInteraction(ctx,{firmId,kind:'call',subjectId:old.id});
+ if(old&&old.id!==currentSubjectId)await attributeFirmInteraction(ctx,{firmId,kind:old.kind,subjectId:old.id});
+}
+
+/** Bounded recovery of committed provider outcomes; never calls a provider or sends mail. */
+export async function reconcileEmailAttribution(ctx:RepositoryContext):Promise<number>{
+ const pending=(await ctx.db.query<{id:string;firm_id:string}>(`SELECT id,firm_id FROM (
+  SELECT f.id,f.firm_id,f.sent_at AS at FROM outbound_messages f WHERE f.workspace_id=$1 AND f.state='sent' AND f.sent_at IS NOT NULL
+  UNION ALL
+  SELECT m.id,x.firm_id,m.internal_date FROM mail_messages m JOIN mail_message_matches x ON x.workspace_id=m.workspace_id AND x.mail_message_id=m.id
+  WHERE m.workspace_id=$1 AND m.direction='incoming' AND NOT x.ambiguous
+   AND (EXISTS(SELECT 1 FROM mail_message_classifications c WHERE c.workspace_id=m.workspace_id AND c.mail_message_id=m.id AND c.layer='deterministic' AND c.class='human') OR EXISTS(SELECT 1 FROM mail_reply_confirmations c WHERE c.workspace_id=m.workspace_id AND c.mail_message_id=m.id AND c.firm_id=x.firm_id))
+   AND (SELECT count(DISTINCT y.firm_id) FROM mail_message_matches y WHERE y.workspace_id=m.workspace_id AND y.mail_message_id=m.id)=1
+ ) p WHERE EXISTS(SELECT 1 FROM firms f WHERE f.workspace_id=$1 AND f.id=p.firm_id AND f.status<>'merged')
+ AND NOT EXISTS(SELECT 1 FROM sourcing_interactions i WHERE i.workspace_id=$1 AND i.kind='email' AND i.subject_id=p.id) ORDER BY at,id LIMIT 25`,[ctx.scope.workspaceId])).rows;
+ for(const row of pending)await attributeFirmInteraction(ctx,{firmId:row.firm_id,kind:'email',subjectId:row.id});
+ return pending.length;
 }

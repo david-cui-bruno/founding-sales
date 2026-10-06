@@ -87,7 +87,9 @@ import { createApiServer } from '../server.ts';
  * exists.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionPolicy = clientVersionPolicySchema.parse({
-  minimum: '1.0.36',
+  // Firm-owned outreach returns null opportunity IDs. Older desktops cannot decode it.
+  // Publish 1.0.47 before deploying schema 53; never invent a deal ID for compatibility.
+  minimum: '1.0.47',
   ceiling: '1.x',
   incompatible: [],
 });

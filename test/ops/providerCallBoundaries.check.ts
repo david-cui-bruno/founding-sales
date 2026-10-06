@@ -52,6 +52,7 @@ interface Boundary {
  * is a one-line change here.
  */
 export const BOUNDARIES: readonly Boundary[] = [
+  {name:'routine reply interpretation',site:'packages/domain/outreach/replyRun.ts',owner:'runRoutineReply',methods:{countInputTokens:1,interpret:1}},
   {name:'candidate qualification provider calls',site:'packages/domain/sourcing/qualificationRun.ts',owner:'runQualification',methods:{fetchPages:1,countInputTokens:1,extract:1}},
   {name:'continuous discovery search',site:'packages/domain/sourcing/discovery.ts',owner:'runDiscovery',methods:{discover:1}},
   {name:'discovery evaluation search',site:'apps/worker/src/sourcing/evaluateDiscovery.ts',owner:'evaluateDiscovery',methods:{discover:1}},

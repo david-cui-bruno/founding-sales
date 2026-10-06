@@ -83,6 +83,7 @@ const DIAL_HOLD_REFUSAL_CODES = [
  * `docs/decisions/g4-dial-refusal-codes.md`.
  */
 const DIAL_REQUEST_REFUSAL_CODES = [
+  'outreach_touch_unavailable',
   'firm_unknown',
   'not_assigned',
   'zone_unresolved',

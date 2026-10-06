@@ -14,7 +14,8 @@ import { instant, uuid } from './foundationRows.ts';
  * Ids, the instant and the candidate firms' names only: no address, subject or body.
  */
 export const heldOutgoingCandidateSchema = z.strictObject({
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId:uuid.nullable().optional(),
   firmId: uuid,
   firmName: z.string(),
 });

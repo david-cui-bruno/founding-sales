@@ -55,6 +55,18 @@ describe('the Gmail HTTP client', () => {
     constructor(readonly text: string) {}
   }
 
+  it('keeps a reply in its exact thread with one recipient and the original reference headers', async () => {
+    answer('/gmail/v1/users/me/messages/send',200,{id:'sent-reply',threadId:'original-thread'});
+    await client.sendMessage(access,{to:'prospect@example.test',from:'owner@example.test',subject:'Re: Maintenance',body:'Approved answer',rfcMessageId:'<reply@example.test>',threadId:'original-thread',inReplyTo:'<incoming@example.test>',references:['<first@example.test>','<incoming@example.test>']});
+    const payload=JSON.parse(requests.at(-1)!.body) as {raw:string;threadId:string};
+    expect(payload.threadId).toBe('original-thread');
+    const mime=Buffer.from(payload.raw,'base64url').toString('utf8');
+    expect(mime).toContain('In-Reply-To: <incoming@example.test>');
+    expect(mime).toContain('References: <first@example.test> <incoming@example.test>');
+    expect(mime).toContain('To: prospect@example.test');
+    expect(mime).not.toMatch(/^(?:Cc|Bcc):/m);
+  });
+
   beforeAll(async () => {
     server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const chunks: Buffer[] = [];

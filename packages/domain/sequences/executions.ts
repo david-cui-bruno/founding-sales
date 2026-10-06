@@ -1,3 +1,5 @@
+import {routineDraftForExecution,attachRoutineFence} from '../outreach/replyDelivery.ts';
+import {readOutreachCadence,outreachStepDue,lastOutreachTouch,outreachExecutionTiming} from '../outreach/timing.ts';
 import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
 import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -231,6 +233,23 @@ export async function runDueStepExecution(
   const settled = await settleFromFence(context, loaded, fence, input.now);
   if (settled !== null) return settled;
 
+  if(enrollment.outreachPlanId!==null&&enrollment.originKind==='prospecting'){
+    const version=await readSequenceVersion(context,enrollment.sequenceVersionId);
+    if(!version)return await holdExecution(context,loaded,'long_hold_review');
+    const timing=await outreachExecutionTiming(context,{planId:enrollment.outreachPlanId,channel:loaded.channel,channelOrdinal:version.steps.filter(s=>s.channel===loaded.channel&&s.ordinal<=loaded.ordinal).length,executionId:loaded.id,at:input.now});
+    if(timing.kind==='hold')return await holdExecution(context,loaded,'long_hold_review');
+    if(timing.kind==='wait'){
+      await context.db.query('UPDATE step_executions SET due_at=$3,not_before=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,loaded.id,timing.dueAt]);
+      return {kind:'not_due',stepExecutionId:loaded.id,notBefore:timing.dueAt};
+    }
+    if(timing.kind==='skip'){
+      // No provider handoff occurred (settleFromFence ran above). Keep an explicit
+      // system completion instead of pretending this was a phone attempt or email.
+      await completeStepExecution(context,{stepExecutionId:loaded.id,completionSource:'system',result:'not_applicable',completedAt:input.now});
+      return {kind:'completed',stepExecutionId:loaded.id,result:'skipped'};
+    }
+  }
+
   // From here nothing was ever handed to Gmail: the fence is absent, prepared or held.
   if (loaded.state !== 'dispatched' && Date.parse(loaded.notBefore) > Date.parse(input.now)) {
     return { kind: 'not_due', stepExecutionId: loaded.id, notBefore: loaded.notBefore };
@@ -248,7 +267,7 @@ export async function runDueStepExecution(
   }
   // A held step resumes through 4.3's path (wave 2, S4.1): its holds are asked again,
   // and the work shifts once by the union and runs, or stays held by what is still open.
-  if (execution.state === 'held') {
+  if (execution.state === 'held' && !(enrollment.outreachPlanId!==null&&enrollment.originKind==='prospecting')) {
     const resumed = await resumeHeldStep(context, execution, input.now);
     if (resumed.kind === 'stopped') return resumed.outcome;
     execution = resumed.execution;
@@ -260,6 +279,8 @@ export async function runDueStepExecution(
       const draft = await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
       if (!draft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [draft.reason] });
     }
+    const routine = await routineDraftForExecution(context, execution.id);
+    if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
     // The bytes were decided and frozen when the fence was prepared, and nothing was
     // attempted with them. Appendix B: "Prepared, and Gmail request provably not
     // started — retry same fence". The dispatch that follows the commit re-decides
@@ -452,7 +473,11 @@ async function runEmailStep(
   const meetingPlan = await meetingPlanForExecution(context, execution.id);
   const meetingDraft = meetingPlan === null ? null : await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
   if (meetingDraft !== null && !meetingDraft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [meetingDraft.reason] });
-  const rendered = meetingDraft?.ok === true
+  const routine = await routineDraftForExecution(context, execution.id);
+  if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
+  const rendered = routine?.ok === true
+    ? { rendered: true as const, subject: routine.value.subject, body: routine.value.body }
+    : meetingDraft?.ok === true
     ? { rendered: true as const, subject: meetingDraft.value.subject, body: meetingDraft.value.body }
     : renderTemplateVersion(template, await templateVariablesFor(context, { firmId: enrollment.firmId, contactId: enrollment.contactId }));
   if (!rendered.rendered) {
@@ -520,6 +545,7 @@ async function runEmailStep(
   };
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
+  if (routine?.ok === true) await attachRoutineFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
   if (meetingPlan !== null) await attachMeetingFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
 
   await context.db.query(
@@ -821,7 +847,10 @@ async function createSuccessor(
   const calendar = await calendarOfEnrollment(context, input.enrollment);
   const meetingDue = await meetingSuccessorDue(context, input.enrollment, next.ordinal, input.completedAt);
   if (meetingDue === null) return null;
-  const due = meetingDue ?? successorDue({
+  const frozenCadence=input.enrollment.outreachPlanId!==null&&input.enrollment.originKind==='prospecting'?await readOutreachCadence(context,input.enrollment.outreachPlanId):null;
+  const frozenDue=frozenCadence?outreachStepDue(frozenCadence,{channel:next.channel,channelOrdinal:version.steps.filter(s=>s.channel===next.channel&&s.ordinal<=next.ordinal).length,lastTouch:await lastOutreachTouch(context,input.enrollment.outreachPlanId!)}):null;
+  if(input.enrollment.outreachPlanId!==null&&input.enrollment.originKind==='prospecting'&&!frozenDue)return null;
+  const due = frozenDue ?? meetingDue ?? successorDue({
     previous: previous === undefined ? undefined : stepForCadence(previous),
     next: stepForCadence(next),
     startedAt: input.enrollment.startedAt,

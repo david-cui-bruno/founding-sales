@@ -203,6 +203,13 @@ export async function insertOrReviveMailbox(
   context: RepositoryContext,
   input: InsertMailboxInput,
 ): Promise<MailboxRow> {
+  // OAuth completion already holds the send gate. Switching away permanently revokes
+  // the previous authority, even if the owner later reconnects the original account.
+  await context.db.query(`UPDATE gmail_prospecting_authorizations a SET enabled=false,
+    revision=revision+1,revoked_at=now(),updated_at=now()
+    WHERE a.workspace_id=$1 AND a.owner_user_id=$2 AND a.enabled
+      AND (a.provider_account_id<>$3 OR a.email_address<>$4)`,
+    [context.scope.workspaceId,input.ownerUserId,input.providerAccountId,input.emailAddress.trim().toLowerCase()]);
   const { rows } = await context.db.query<MailboxDbRow>(
     `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, provider_account_id,
                             status, sync_state, baseline_from_at)

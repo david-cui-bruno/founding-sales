@@ -1,3 +1,5 @@
+import {reserveOutreachCall,settleOutreachAction} from '../outreach/touchReservations.ts';
+import {lockSendGateForDispatch} from '../policy/sendGate.ts';
 import type { DialRefusalCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
@@ -61,6 +63,8 @@ export async function authorizeDialCommand(
   context: RepositoryContext,
   input: AuthorizeDialCommandInput,
 ): Promise<DialResult<IssuedDialTicket>> {
+  await lockSendGateForDispatch(context);
+  await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.firmId]);
   // The replay check precedes the decision. A replay must not re-evaluate policy:
   // the answer to "may I dial" the second time is not an allow and not a refusal
   // about the firm, it is "you already asked".
@@ -76,6 +80,11 @@ export async function authorizeDialCommand(
 
   const issued = await insertTicket(context, decision.evidence, input);
   if (issued === null) return refuse('already_consumed');
+  const touch=await reserveOutreachCall(context,{firmId:issued.firmId,contactId:issued.contactId,ticketId:issued.ticketId,at});
+  if(!touch.ok){
+    await context.db.query('DELETE FROM dial_tickets WHERE workspace_id=$1 AND id=$2 AND consumed_at IS NULL',[context.scope.workspaceId,issued.ticketId]);
+    return refuse('outreach_touch_unavailable');
+  }
 
   await recordCrmAuditEvent(context, {
     action: 'dial.authorized',
@@ -213,6 +222,9 @@ export async function consumeDialTicket(
   context: RepositoryContext,
   input: { readonly ticketId: string; readonly deviceId: string; readonly at?: string | undefined },
 ): Promise<DialResult<ConsumedTicket>> {
+  await lockSendGateForDispatch(context);
+  const scope=(await context.db.query<{firm_id:string}>('SELECT firm_id FROM dial_tickets WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,input.ticketId])).rows[0];
+  if(scope)await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,scope.firm_id]);
   // Locked, so two Macs racing the same ticket serialize here: the second waits,
   // then reads it consumed.
   const { rows: found } = await context.db.query<ConsumableTicketRow>(
@@ -240,6 +252,8 @@ export async function consumeDialTicket(
   });
   if (!decision.allowed) return refuse(decision.reason);
 
+  const touch=await reserveOutreachCall(context,{firmId:ticket.firm_id,contactId:ticket.contact_id,ticketId:input.ticketId,at});
+  if(!touch.ok)return refuse('outreach_touch_unavailable');
   const { rows } = await context.db.query<{ id: string; e164: string; consumed_at: Date }>(
     `UPDATE dial_tickets
         SET consumed_at = now()
@@ -250,6 +264,7 @@ export async function consumeDialTicket(
   );
   const row = rows[0];
   if (row === undefined) return refuse('ticket_expired');
+  await settleOutreachAction(context,input.ticketId,'phone','accepted');
   // The number dialed is the route's number now, which the version check has just
   // proved is the number the ticket recorded.
   return accept({

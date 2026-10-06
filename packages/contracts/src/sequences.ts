@@ -218,7 +218,8 @@ export const templateSaveResultSchema = templateCommandResultSchema.extend({ iss
 export const enrollmentDtoSchema = z.object({
   id: uuid,
   sequenceVersionId: uuid,
-  opportunityId: uuid,
+  opportunityId: uuid.nullable(),
+  outreachPlanId: uuid.nullable().default(null),
   firmId: uuid,
   contactId: uuid,
   assignedUserId: uuid,

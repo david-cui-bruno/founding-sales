@@ -286,6 +286,10 @@ async function measure(
     // Migration 0025. Previewed as well as removed, because the preview is what a
     // person approves and "one permission to write to this person" is exactly the kind
     // of row somebody would want to see named before it goes.
+    outreach_reply_deliveries: await countOf(context,
+      `SELECT count(*) AS count FROM outreach_reply_deliveries d JOIN outreach_plans p ON p.workspace_id=d.workspace_id
+       JOIN outreach_reply_requests r ON r.workspace_id=d.workspace_id AND r.id=d.request_id AND r.plan_id=p.id
+       WHERE p.workspace_id=$1 AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact),
     follow_up_permissions: await countOf(
       context,
       `SELECT count(*) AS count FROM follow_up_permissions
@@ -835,6 +839,8 @@ export async function commitDeletion(
     byContact,
   );
   stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
+  const outreach=await context.db.query(`UPDATE outreach_plans SET state='stopped',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id','$2')} AND state NOT IN ('completed','stopped')`,byContact);
+  stopped['outreach_plans']=outreach.rowCount??0;
 
   // Then migration 0025's permissions, and before the evidence they rest on: a
   // permission's foreign keys onto `call_logs` and `mail_messages` are what make that
@@ -851,6 +857,12 @@ export async function commitDeletion(
         AND permission_id IS NOT NULL`,
     byContact,
   );
+  await remove('outreach_reply_deliveries',
+    `DELETE FROM outreach_reply_deliveries d USING outreach_reply_requests r,outreach_plans p
+     WHERE d.workspace_id=$1 AND r.workspace_id=d.workspace_id AND r.id=d.request_id
+     AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact);
+  await context.db.query(`UPDATE outreach_reply_requests r SET state='expired',decision=NULL,reason='deleted',revision=r.revision+1,updated_at=now()
+    FROM outreach_plans p WHERE r.workspace_id=$1 AND p.workspace_id=r.workspace_id AND p.id=r.plan_id AND p.firm_id=$3 AND ${contactPredicate('p.contact_id','$2')}`,byContact);
   await remove(
     'follow_up_permissions',
     `DELETE FROM follow_up_permissions
@@ -877,6 +889,7 @@ export async function commitDeletion(
       )`,
     byContact,
   );
+  await remove('outreach_email_sources',`DELETE FROM outreach_email_sources WHERE workspace_id=$1 AND firm_id=$3 AND ${contactPredicate('contact_id', '$2')}`,byContact);
   // Learning contains references only, but deleted interactions must stop contributing.
   await remove('sourcing_interactions', `DELETE FROM sourcing_interactions i WHERE i.workspace_id=$1 AND (
    (i.kind='call' AND (i.subject_id IN (SELECT id FROM call_sessions s WHERE s.workspace_id=$1 AND s.firm_id=$3 AND ${contactPredicate('s.contact_id', '$2')})

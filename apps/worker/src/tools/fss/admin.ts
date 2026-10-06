@@ -1,3 +1,4 @@
+import {revokeProspectingAfterRestore} from '@fss/domain/outreach/authorization.ts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
@@ -908,6 +909,11 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
   const read = await readInventory(invocation, known);
   if (!read.ok) return read.outcome;
   const inventory = read.addresses;
+  // Inventory validation proves this is the restored copy. Revoke before any
+  // external reconciliation; partial recovery must leave cold authority closed.
+  for(const workspaceId of await listWorkspaceIds(invocation.session)) {
+    await withTransaction(invocation.session,()=>revokeProspectingAfterRestore(repositoryContext(workspaceScope(workspaceId,RESTORE_ACTOR),invocation.session)));
+  }
 
   const holdUnattached = invocation.switches.has('--hold-unattached');
   const unresolved: Record<string, unknown>[] = [];
@@ -2238,7 +2244,7 @@ export async function sendPathPreviewCommand(invocation: AdminInvocation): Promi
           ],
           'email',
         );
-        const cold = coldOutreachDispatchRefusal(enrollment, { kind: mailboxKind });
+        const cold = await coldOutreachDispatchRefusal(context, fence.id, enrollment, { id:fence.mailboxId, kind: mailboxKind });
         const decided = await decideStepPermission(
           context,
           fence,

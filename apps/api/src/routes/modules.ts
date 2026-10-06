@@ -1,4 +1,5 @@
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
+import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
 import {MEETING_QUALIFICATION_PATHS,routeMeetingQualification} from './meetingQualification.ts';
 import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
 import { MEETING_AUTO_RECORDING_PATHS,routeMeetingAutoRecording } from './meetingAutoRecording.ts';
@@ -198,6 +199,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
     moduleOf('meeting-auto-recording', {paths:MEETING_AUTO_RECORDING_PATHS}, routeMeetingAutoRecording,routing),
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),
+    moduleOf('outreach',{paths:OUTREACH_PATHS},routeOutreach,routing),
     moduleOf('meeting-qualification',{paths:MEETING_QUALIFICATION_PATHS},routeMeetingQualification,routing),
     moduleOf('meeting-outcomes', { paths: MEETING_OUTCOMES_PATHS }, routeMeetingOutcomes, routing),
     moduleOf('meeting-transcription', { paths: MEETING_TRANSCRIPTION_PATHS }, routeMeetingTranscription, routing),

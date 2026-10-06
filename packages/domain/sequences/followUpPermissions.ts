@@ -1,3 +1,4 @@
+import {verifyRoutinePermission} from '../outreach/replyDelivery.ts';
 import {
   FOLLOW_UP_PERMISSION_WINDOW_DAYS,
   type CallOutcome,
@@ -330,13 +331,14 @@ export async function verifyFollowUpPermission(
   switch (permission.scope) {
     case 'single_email':
     case 'contextual_reply':
+    case 'routine_reply':
       // One message each, and the claim spends it (`consumeFollowUpPermission`).
       if (permission.consumedAt !== null) {
         return { ok: false, refusal: 'follow_up_scope_exhausted', detail: 'already_sent' };
       }
       // And for a single e-mail, the bytes are the agreed bytes.
       if (
-        permission.scope === 'single_email' &&
+        (permission.scope === 'single_email' || permission.scope === 'routine_reply') &&
         subject.templateVersionId !== undefined &&
         subject.templateVersionId !== null &&
         permission.templateVersionId !== subject.templateVersionId
@@ -353,7 +355,7 @@ export async function verifyFollowUpPermission(
           return { ok: false, refusal: 'follow_up_not_permitted', detail: 'not_an_email' };
         }
         if (
-          permission.scope === 'single_email' &&
+          (permission.scope === 'single_email' || permission.scope === 'routine_reply') &&
           (subject.nextStep.templateVersionId === null ||
             permission.templateVersionId !== subject.nextStep.templateVersionId)
         ) {
@@ -424,6 +426,7 @@ async function verifyEvidence(
   permission: FollowUpPermissionRow,
   subject: FollowUpSubject,
 ): Promise<string | null> {
+  if(permission.scope==='routine_reply')return await verifyRoutinePermission(context,permission,subject);
   if (permission.callLogId !== null) {
     const { rows } = await context.db.query<{
       firm_id: string;
@@ -863,7 +866,7 @@ export async function consumeFollowUpPermission(
   const consumed = await context.db.query(
     `UPDATE follow_up_permissions SET consumed_at = now(), consumed_reason = 'sent'
       WHERE workspace_id = $1 AND id = $2
-        AND scope IN ('single_email', 'contextual_reply')
+        AND scope IN ('single_email', 'contextual_reply','routine_reply')
         AND consumed_at IS NULL
         AND revoked_at IS NULL
         AND expires_at > clock_timestamp()`,
@@ -917,7 +920,7 @@ export async function consumeFulfilledByDirectSend(
       WHERE workspace_id = $1
         AND firm_id = $2
         AND contact_id = ANY ($3::uuid[])
-        AND scope IN ('single_email', 'contextual_reply')
+        AND scope IN ('single_email', 'contextual_reply','routine_reply')
         AND consumed_at IS NULL
         AND revoked_at IS NULL
         AND expires_at > clock_timestamp()

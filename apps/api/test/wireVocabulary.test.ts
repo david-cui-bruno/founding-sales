@@ -11,12 +11,12 @@ import * as wire from '@fss/contracts';
  */
 
 describe('the wire vocabularies the domain does not import', () => {
-  it('REPLY_CONFIRMATION_CONSEQUENCES is migration 0011’s CHECK', () => {
+  it('REPLY_CONFIRMATION_CONSEQUENCES is migration 0053’s CHECK', () => {
     const migration = readFileSync(
-      new URL('../../../packages/domain/db/migrations/0011_classification.sql', import.meta.url),
+      new URL('../../../packages/domain/db/migrations/0053_outreach_scope.sql', import.meta.url),
       'utf8',
     );
-    const check = /mail_reply_confirmations_consequences_known\s+CHECK \(consequences <@ ARRAY\[([^\]]+)\]/u.exec(migration);
+    const check = /mail_reply_confirmations_consequences_known\s+CHECK\s*\(consequences <@ ARRAY\[([^\]]+)\]/u.exec(migration);
     expect(check).not.toBeNull();
     const values = [...(check?.[1] ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
     expect([...wire.REPLY_CONFIRMATION_CONSEQUENCES]).toEqual(values);

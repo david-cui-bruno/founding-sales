@@ -288,6 +288,7 @@ export interface GmailSendRequest {
   /** The deterministic `<...>` header the Sent search will look for. */
   readonly rfcMessageId: string;
   /** Set on a reply so Gmail threads it. Absent on a first touch. */
+  readonly threadId?: string | undefined;
   readonly inReplyTo?: string | undefined;
   readonly references?: readonly string[] | undefined;
 }

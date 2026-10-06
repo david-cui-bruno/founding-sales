@@ -109,6 +109,8 @@ export async function createCallSession(
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('identity_not_owned');
 
+  await lockSendGateForStopFact(context);
+  await context.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[context.scope.workspaceId,input.firmId]);
   const now = input.at ?? (await databaseNow(context));
 
   // The cadence (slice C1): unanswered attempts, their spacing, and parking. Before
