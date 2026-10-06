@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {operations} from '../app/bridges.ts';
 /** Only a validated PNG data URL crosses IPC. Images are fetched when their card is visible. */
-export function SocialImage({assetId,version,alt}:{assetId:string;version:number;alt:string}) {
+export function SocialImage({assetId,version,alt,onReady}:{assetId:string;version:number;alt:string;onReady?:()=>void}) {
  const element=useRef<HTMLDivElement>(null),[preview,setPreview]=useState<{key:string;url:string}|null>(null);
  const key=`${assetId}:${version}`;
  useEffect(()=>{
@@ -12,5 +12,5 @@ export function SocialImage({assetId,version,alt}:{assetId:string;version:number
   if(observer&&node)observer.observe(node);else load();
   return()=>{current=false;observer?.disconnect();};
  },[assetId,version,key]);
- return <div ref={element} className="min-h-16">{preview?.key===key?<img className="max-h-64 max-w-full rounded-md object-contain" src={preview.url} alt={alt}/>:<p className="text-xs text-muted-foreground">Image preview unavailable</p>}</div>;
+ return <div ref={element} className="min-h-16">{preview?.key===key?<img className="max-h-64 max-w-full rounded-md object-contain" src={preview.url} alt={alt} onLoad={onReady}/>:<p className="text-xs text-muted-foreground">Image preview unavailable</p>}</div>;
 }

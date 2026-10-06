@@ -22,3 +22,10 @@ it('does not fetch non-S3 or expired signed URLs',async()=>{
  await expect(fetchSocialThumbnail({url:'https://127.0.0.1/private',expiresAt:'2099-01-01T00:00:00Z'},metadata)).rejects.toThrow('invalid_image_location');
  await expect(fetchSocialThumbnail({url:'https://bucket.s3.us-east-1.amazonaws.com/image',expiresAt:'2000-01-01T00:00:00Z'},metadata)).rejects.toThrow('invalid_image_location');
 });
+it('serializes thumbnail fetch and decoding to bound memory across visible cards',async()=>{
+ const {fetchSocialThumbnail}=await import('../src/main/social/imageThumbnail.ts');
+ const bytes=await sharp({create:{width:20,height:20,channels:3,background:'white'}}).png().toBuffer();
+ let active=0,peak=0;const send:typeof fetch=async()=>{active++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,10));active--;return new Response(new Uint8Array(bytes));};
+ const location={url:'https://bucket.s3.us-east-1.amazonaws.com/image',expiresAt:'2099-01-01T00:00:00Z'},metadata={bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+ await Promise.all([1,2,3].map(()=>fetchSocialThumbnail(location,metadata,send)));expect(peak).toBe(1);
+});

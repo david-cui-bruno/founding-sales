@@ -20,4 +20,14 @@ it('shows the exact destination and approved image versions before approval',asy
  render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[post]},reason:null}),mutate:vi.fn()}}/></DraftsProvider>);
  await waitFor(()=>expect(screen.getByText('David Cui · linkedin · profile')).toBeTruthy());
  expect(screen.getByText('Callie maintenance dashboard · image version 3')).toBeTruthy();
+ expect((screen.getByText('Approve & schedule') as HTMLButtonElement).disabled).toBe(true);
+});
+it('enables image approval only after the exact preview loads',async()=>{
+ vi.stubGlobal('callieApi',{read:async()=>({preview:'data:image/png;base64,iVBORw0KGgo=',reason:null})});
+ try{
+ const post={postId:'22222222-2222-4222-8222-222222222222',revision:2,accountId:account.id,text:'Image approval',images:[{assetId:'33333333-3333-4333-8333-333333333333',version:3,altText:'Reviewed dashboard'}],publishAt:'2099-10-10T12:00:00Z',zone:'America/New_York',state:'draft' as const,reason:null};
+ render(<DraftsProvider><SocialRoute ports={{read:async()=>({view:{accounts:[account],posts:[post]},reason:null}),mutate:vi.fn()}}/></DraftsProvider>);
+ const image=await screen.findByAltText('Reviewed dashboard');expect((screen.getByText('Approve & schedule') as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.load(image);expect((screen.getByText('Approve & schedule') as HTMLButtonElement).disabled).toBe(false);
+ }finally{vi.unstubAllGlobals();}
 });

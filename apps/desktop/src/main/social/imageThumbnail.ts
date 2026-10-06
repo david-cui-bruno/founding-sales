@@ -15,7 +15,16 @@ export async function socialImageThumbnail(bytes:Buffer,expectedSha256:string):P
  return `data:image/png;base64,${output.toString('base64')}`;
 }
 
-export async function fetchSocialThumbnail(location:{url:string;expiresAt:string},image:{sha256:string;bytes:number},send:typeof fetch=fetch):Promise<string> {
+let thumbnailTail:Promise<unknown>=Promise.resolve();
+let thumbnailPending=0;
+export function fetchSocialThumbnail(location:{url:string;expiresAt:string},image:{sha256:string;bytes:number},send:typeof fetch=fetch):Promise<string> {
+ if(thumbnailPending>=32)return Promise.reject(new Error('preview_busy'));
+ thumbnailPending++;
+ const task=thumbnailTail.then(()=>fetchThumbnail(location,image,send)).finally(()=>{thumbnailPending--;});
+ thumbnailTail=task.catch(()=>{});
+ return task;
+}
+async function fetchThumbnail(location:{url:string;expiresAt:string},image:{sha256:string;bytes:number},send:typeof fetch=fetch):Promise<string> {
  const url=new URL(location.url);
  const expiry=Date.parse(location.expiresAt);
  if(url.protocol!=='https:'||url.username||url.password||url.port||!/^[-a-z0-9.]+\.s3\.[a-z0-9-]+\.amazonaws\.com$/u.test(url.hostname)||!Number.isFinite(expiry)||expiry<=Date.now())throw new Error('invalid_image_location');
