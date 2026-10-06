@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import {
   CALL_CADENCE,
   CALL_OUTCOME_CORRECTED_ACTION,
@@ -894,6 +895,8 @@ export async function correctCallOutcome(
       liftChosen,
     },
   });
+
+  await attributeFirmInteraction(context,{firmId:log.firm_id,kind:'call',subjectId:log.id,sourceRevision:revision});
 
   // §3.8: one `call.proposal_corrected` row per distinct (analysisId, key) contradicted.
   if (input.reason !== undefined && sessionId !== null) {

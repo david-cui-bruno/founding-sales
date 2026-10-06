@@ -1,3 +1,4 @@
+import type {QualificationMemory} from './Qualification.tsx';
 import { useCallback, useEffect, useReducer } from 'react';
 import type { MeetingOutcomesView, SaveMeetingNotes, ChangeMeetingTask } from '@fss/contracts';
 import { useSessionEpoch } from '../app/drafts.tsx';
@@ -7,8 +8,8 @@ export interface OutcomeEntry {
   pending: (SaveMeetingNotes & { commandId: string }) | null;
 }
 export interface TaskMemory { command: (ChangeMeetingTask & { commandId: string }) | null; busy: boolean; message: string | null; editing: boolean; draft: Extract<ChangeMeetingTask, { action: 'edit' }> | null; }
-interface Memory { entries: Map<string, OutcomeEntry>; tasks: Map<string, TaskMemory>; }
-const fresh = (): Memory => ({ entries: new Map(), tasks: new Map() });
+interface Memory { qualifications: Map<string,QualificationMemory>; entries: Map<string, OutcomeEntry>; tasks: Map<string, TaskMemory>; }
+const fresh = (): Memory => ({ qualifications:new Map(), entries: new Map(), tasks: new Map() });
 let current: { epoch: object | null; memory: Memory } = { epoch: null, memory: fresh() };
 const listeners = new Set<() => void>();
 export function useOutcomesMemory() {

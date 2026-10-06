@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import { foldMeetingRecordingSetup } from './autoRecordingLifecycle.ts';
 import { invalidateMeetingFollowThrough } from './followThroughLifecycle.ts';
 import { lockTodayForFirmChange } from '../today/build.ts';
@@ -1087,6 +1088,7 @@ export async function applyBooked(context: RepositoryContext, meeting: BookedMee
       detail: { firmId, enrollmentsStopped: stopped.enrollmentsStopped, executionsCancelled: stopped.executionsCancelled },
     });
   }
+  await attributeFirmInteraction(context,{firmId,kind:'meeting',subjectId:meeting.id});
   await recordFunnelFact(context, {
     kind: 'meeting.booked',
     source: 'calendar',

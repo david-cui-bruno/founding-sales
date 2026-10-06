@@ -1,3 +1,4 @@
+import {attachSourcingAttribution} from './attribution.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION} from './qualificationStore.ts';
 import type {CandidateInput} from '@fss/contracts';
@@ -102,6 +103,9 @@ async function admit(ctx:RepositoryContext,input:AdmissionInput):Promise<Sourcin
  if(firm.time_zone===null){const resolved=await resolveZoneForFirm(ctx,{firmId:firm.id,recordedZone:zone});if(!resolved.ok)return refused(resolved.reason);}
  await ctx.db.query('INSERT INTO sourcing_admissions(workspace_id,candidate_id,run_id,firm_id,route_id) VALUES($1,$2,$3,$4,$5)',[w,input.candidateId,run.id,firm.id,route.value.id]);
  await ctx.db.query("UPDATE sourcing_qualification_runs SET state='admitted',verdict=$3::jsonb WHERE workspace_id=$1 AND id=$2",[w,run.id,JSON.stringify(verdict)]);
+ const query=(await ctx.db.query<{query_id:string}>(`SELECT a.query_id FROM sourcing_discovery_hits h JOIN sourcing_discovery_attempts a ON a.workspace_id=h.workspace_id AND a.id=h.attempt_id WHERE h.workspace_id=$1 AND h.candidate_id=$2 ORDER BY a.created_at,a.id LIMIT 1`,[w,input.candidateId])).rows[0];
+ const attribution=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:input.candidateId,qualificationRunId:run.id,queryId:query?.query_id??null,hypothesis:verdict.rank,policyVersion:run.policy_version,acquisition:'cold_sourced'});
+ if(!attribution.ok)throw new Error(`admission_attribution_${attribution.reason}`);
  await recordCrmAuditEvent(ctx,{action:'sourcing.candidate_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:run.id,mode:input.mode,decision:verdict.decision}});
  await refreshTodayForFirm(ctx,{firmId:firm.id});
  return {ok:true,value:{firmId:firm.id,routeId:route.value.id,alreadyAdmitted:false}};

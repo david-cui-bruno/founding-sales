@@ -94,6 +94,14 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'sourcing.callNeed':{sessionId:UUID},
+  'sourcing.saveCallNeed':{callLogId:UUID,expectedRevision:0,expectedSourceRevision:0,answer:'yes',commandId:UUID},
+  'sourcing.learning':{from:'2026-10-01T00:00:00Z',to:'2026-10-06T00:00:00Z',asOf:'2026-10-06T00:00:00Z'},
+  'sourcing.targeting':{},
+  'sourcing.proposeTargeting':{basePolicyVersion:'targeting-v1',queryChanges:[],rankOrder:['help_request','operational_burden','investigation','fit_only'],evidenceIds:[],rationale:'Review fixture',commandId:UUID},
+  'sourcing.applyTargeting':{id:UUID,expectedRevision:1,commandId:UUID},
+  'meetings.qualification':{meetingId:UUID},
+  'meetings.saveQualification':{meetingId:UUID,expectedRevision:0,buyingParticipant:'unknown',maintenanceNeed:'unknown',openToPaying:'unknown',evidence:[],commandId:UUID},
   'sourcing.feedback':{candidateId:UUID,qualificationRunId:UUID,code:'real_pain',commandId:UUID},
   'sourcing.firmQualification':{firmId:UUID},
   'sourcing.qualification':{candidateId:UUID},
@@ -313,7 +321,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
     replies: createReplyBridge({ api, session }) as unknown as Host,
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
-      return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
+      return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;
     })(),
     research: createResearchBridge({ api, session }) as unknown as Host,
     crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,
@@ -333,6 +341,8 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         retryRecordingSetup: async input => await handlers['meetings.retryRecordingSetup'](input as never),
         followThrough: async input => await handlers['meetings.followThrough'](input as never),
         editRecap: async input => await handlers['meetings.editRecap'](input as never),
+        qualification: async input => await handlers['meetings.qualification'](input as never),
+        saveQualification: async input => await handlers['meetings.saveQualification'](input as never),
         outcomes: async input => await handlers['meetings.outcomes'](input as never),
         saveNotes: async input => await handlers['meetings.saveNotes'](input as never),
         changeTask: async input => await handlers['meetings.changeTask'](input as never),

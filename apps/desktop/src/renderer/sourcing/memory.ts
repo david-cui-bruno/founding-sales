@@ -1,3 +1,4 @@
+import type {TargetingMemory} from './Targeting.tsx';
 import {useCallback,useEffect,useReducer,useState} from 'react';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 import {useSessionEpoch} from '../app/drafts.tsx';
@@ -5,12 +6,13 @@ export type Pending = {kind:'check';input:OperationInput<'sourcing.check'>}|{kin
 export type EvidencePending={kind:'qualify';input:OperationInput<'sourcing.qualify'>}|{kind:'admit';input:OperationInput<'sourcing.admit'>}|{kind:'feedback';input:OperationInput<'sourcing.feedback'>};
 export interface EvidenceMemory {open:boolean;busy:boolean;loading:boolean;view:OperationOutput<'sourcing.qualification'>['view'];message:string|null;pending:EvidencePending|null;generation:number}
 interface Memory {
+  tab:'candidates'|'results';targeting:TargetingMemory;
   evidence:Map<string,EvidenceMemory>;
   draft:Record<string,string>;adding:boolean;filter:OperationInput<'sourcing.list'>;
   view:OperationOutput<'sourcing.list'>['view'];loading:boolean;failed:boolean;generation:number;
   busy:boolean;pending:Pending|null;message:string|null;deleteId:string|null;listeners:Set<()=>void>;
 }
-const fresh=():Memory=>({evidence:new Map(),draft:{region:'TX',signal:'fit_only'},adding:false,filter:{status:'needs_review',offset:0},view:null,loading:false,failed:false,generation:0,busy:false,pending:null,message:null,deleteId:null,listeners:new Set()});
+const fresh=():Memory=>({tab:'candidates',targeting:{open:false,view:null,draft:null,pending:null,busy:false,message:null,generation:0},evidence:new Map(),draft:{region:'TX',signal:'fit_only'},adding:false,filter:{status:'needs_review',offset:0},view:null,loading:false,failed:false,generation:0,busy:false,pending:null,message:null,deleteId:null,listeners:new Set()});
 const sessions=new WeakMap<object,Memory>();
 export function useCandidateMemory() {
   const epoch=useSessionEpoch(),[fallback]=useState(fresh),[,bump]=useReducer((n:number)=>n+1,0);

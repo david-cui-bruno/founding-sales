@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
@@ -281,6 +282,7 @@ export async function moveOpportunityStage(
     });
   }
 
+  await attributeFirmInteraction(context,{firmId:updated.firm_id,kind:'deal',subjectId:updated.id});
   await recordCrmAuditEvent(context, {
     action: 'opportunity.stage_changed',
     subjectKind: 'opportunity',

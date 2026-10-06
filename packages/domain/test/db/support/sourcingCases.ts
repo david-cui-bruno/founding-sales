@@ -69,7 +69,7 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_qualification_runs_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
  {constraint:'sourcing_qualification_runs_workspace_id_candidate_id_finge_key',run:async(f:Fixture)=>{await insert(f);await runRow(f);return runRow(f,{id:absent});}},
  // The triple unique key overlaps the primary key; the primary key rejects duplicates first.
- {constraint:'sourcing_qualification_candidate_run',run:async(f:Fixture)=>{await f.session.query('ALTER TABLE sourcing_qualification_runs DROP CONSTRAINT sourcing_qualification_runs_pkey');await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
+ {constraint:'sourcing_qualification_candidate_run',run:async(f:Fixture)=>{await f.session.query('ALTER TABLE sourcing_attributions DROP CONSTRAINT sourcing_attributions_workspace_id_run_id_fkey');await f.session.query('ALTER TABLE sourcing_qualification_runs DROP CONSTRAINT sourcing_qualification_runs_pkey');await insert(f);await runRow(f);return runRow(f,{fingerprint:'d'.repeat(64)});}},
  {constraint:'sourcing_admissions_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);await admissionRow(f);return admissionRow(f);}},
  {constraint:'sourcing_admissions_workspace_id_candidate_id_fkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);return admissionRow(f,{candidate_id:absent});}},
  {constraint:'sourcing_admissions_candidate_run',run:async(f:Fixture)=>{await insert(f);await runRow(f);await insert(f,{id:absent,identity_key:'b'.repeat(64)});return admissionRow(f,{candidate_id:absent});}},
@@ -86,4 +86,82 @@ SOURCING_CONSTRAINT_CASES.push(
  {constraint:'sourcing_feedback_note',run:async(f:Fixture)=>{await insert(f);await runRow(f);return feedbackRow(f,{note:'x'.repeat(501)});}},
  {constraint:'sourcing_feedback_run',run:async(f:Fixture)=>feedbackRow(f)},
  {constraint:'sourcing_feedback_pkey',run:async(f:Fixture)=>{await insert(f);await runRow(f);await feedbackRow(f);return feedbackRow(f);}},
+);
+
+const attributionId='66666666-6666-4666-8666-666666666666';
+async function learningRow(f:Fixture,table:string,overrides:Record<string,unknown>={}){
+ const base:Record<string,Record<string,unknown>>={
+  sourcing_attributions:{workspace_id:f.seeded.alpha.workspaceId,id:attributionId,firm_id:f.crm.alpha.firmId,source_key:'test',hypothesis:'unknown',policy_version:'v1',acquisition:'unknown'},
+  sourcing_interactions:{workspace_id:f.seeded.alpha.workspaceId,id:absent,attribution_id:attributionId,kind:'call',subject_id:runId,source_revision:0,occurred_at:new Date()},
+  sourcing_first_touches:{workspace_id:f.seeded.alpha.workspaceId,firm_id:f.crm.alpha.firmId,attribution_id:attributionId,occurred_at:new Date()},
+ };
+ const row={...base[table],...overrides},keys=Object.keys(row);
+ return f.session.query(`INSERT INTO ${table}(${keys.join(',')}) VALUES(${keys.map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+  ['sourcing_attribution_acquisition',{acquisition:'invented'}],['sourcing_attribution_codes',{hypothesis:''}],
+  ['sourcing_attributions_workspace_id_firm_id_fkey',{firm_id:absent}],
+  ['sourcing_attributions_workspace_id_candidate_id_fkey',{candidate_id:absent}],
+  ['sourcing_attributions_workspace_id_run_id_fkey',{run_id:absent}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>learningRow(f,'sourcing_attributions',overrides)})),
+ {constraint:'sourcing_attributions_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_attributions',{source_key:'other'});}},
+ {constraint:'sourcing_attributions_workspace_id_firm_id_source_key_key',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_attributions',{id:absent});}},
+ ...([
+  ['sourcing_interaction_kind',{kind:'unknown'}],['sourcing_interaction_revision',{source_revision:-1}],
+  ['sourcing_interactions_workspace_id_attribution_id_fkey',{attribution_id:runId}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_interactions',overrides);}})),
+ {constraint:'sourcing_interactions_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_interactions');return learningRow(f,'sourcing_interactions',{source_revision:1});}},
+ {constraint:'sourcing_interactions_workspace_id_kind_subject_id_source_r_key',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_interactions');return learningRow(f,'sourcing_interactions',{id:runId});}},
+ {constraint:'sourcing_first_touches_pkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');await learningRow(f,'sourcing_first_touches');return learningRow(f,'sourcing_first_touches');}},
+ {constraint:'sourcing_first_touches_workspace_id_firm_id_fkey',run:async(f:Fixture)=>{await learningRow(f,'sourcing_attributions');return learningRow(f,'sourcing_first_touches',{firm_id:absent});}},
+ {constraint:'sourcing_first_touches_workspace_id_attribution_id_fkey',run:async(f:Fixture)=>learningRow(f,'sourcing_first_touches')},
+);
+async function meetingQualificationRow(f:Fixture,overrides:Record<string,unknown>={}){
+ await f.session.query(`INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,'qualification-constraint','qualification-constraint','booked',now(),now(),now()) ON CONFLICT DO NOTHING`,[f.seeded.alpha.workspaceId,runId,f.crm.alpha.firmId]);
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const row={workspace_id:f.seeded.alpha.workspaceId,meeting_id:runId,firm_id:f.crm.alpha.firmId,revision:1,buying_participant:'unknown',maintenance_need:'unknown',open_to_paying:'unknown',evidence:'[]',command_id:'qualification-test',created_by_user_id:member.user_id,...overrides};
+ return f.session.query(`INSERT INTO meeting_qualification_revisions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+  ['meeting_qualification_revision',{revision:0}],['meeting_qualification_answers',{maintenance_need:'maybe'}],
+  ['meeting_qualification_evidence',{evidence:'{}'}],['meeting_qualification_command',{command_id:'not a command'}],
+  ['meeting_qualification_revisio_workspace_id_meeting_id_firm_fkey',{meeting_id:absent}],
+  ['meeting_qualification_revisio_workspace_id_created_by_user_fkey',{created_by_user_id:absent}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>meetingQualificationRow(f,overrides)})),
+ {constraint:'meeting_qualification_revisions_pkey',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{command_id:'another'});}},
+ {constraint:'meeting_qualification_revisions_workspace_id_command_id_key',run:async(f:Fixture)=>{await meetingQualificationRow(f);return meetingQualificationRow(f,{revision:2});}},
+);
+async function targetingVersionRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const row={workspace_id:f.seeded.alpha.workspaceId,version:'constraint-v1',queries:'[{}]',rank_order:'["help_request","operational_burden","investigation","fit_only"]',...overrides};return f.session.query(`INSERT INTO sourcing_targeting_versions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+async function targetingProposalRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const row={workspace_id:f.seeded.alpha.workspaceId,id:absent,base_version:'constraint-v1',changes:'{}',created_by:member.user_id,...overrides};return f.session.query(`INSERT INTO sourcing_targeting_proposals(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([
+ ['sourcing_targeting_versions_workspace_id_fkey',{workspace_id:absent}],['sourcing_targeting_versions_version_check',{version:''}],['sourcing_targeting_versions_queries_check',{queries:'[]'}],['sourcing_targeting_versions_rank_order_check',{rank_order:'["help_request","help_request","help_request","help_request"]'}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>targetingVersionRow(f,overrides)})),
+ {constraint:'sourcing_targeting_versions_pkey',run:async(f:Fixture)=>{await targetingVersionRow(f);return targetingVersionRow(f);}},
+ ...([
+ ['sourcing_targeting_proposals_revision_check',{revision:0}],['sourcing_targeting_proposals_changes_check',{changes:'[]'}],['sourcing_targeting_proposals_workspace_id_base_version_fkey',{base_version:'missing'}],['sourcing_targeting_proposals_workspace_id_applied_version_fkey',{applied_version:'missing',applied_at:new Date()}],['sourcing_targeting_proposals_workspace_id_created_by_fkey',{created_by:absent}],['targeting_application_pair',{applied_at:new Date()}],
+ ] as [string,Record<string,unknown>][]).map(([constraint,overrides])=>({constraint,run:async(f:Fixture)=>{await targetingVersionRow(f);return targetingProposalRow(f,overrides);}})),
+ {constraint:'sourcing_targeting_proposals_pkey',run:async(f:Fixture)=>{await targetingVersionRow(f);await targetingProposalRow(f);return targetingProposalRow(f);}},
+ {constraint:'discovery_targeting_version',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_settings(workspace_id,targeting_version) VALUES($1,'missing')",[f.seeded.alpha.workspaceId])},
+ {constraint:'discovery_attempt_policy',run:async(f:Fixture)=>f.session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version) VALUES($1,'query','a query','missing')",[f.seeded.alpha.workspaceId])},
+);
+
+async function callNeedRow(f:Fixture,overrides:Record<string,unknown>={}){
+ const member=(await f.session.query<{user_id:string}>('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 LIMIT 1',[f.seeded.alpha.workspaceId])).rows[0]!;
+ const callId='99999999-1111-4111-8111-111111111111';
+ await f.session.query("INSERT INTO call_logs(workspace_id,id,firm_id,outcome,step_effect,actor_user_id,occurred_at) VALUES($1,$2,$3,'interested','none',$4,now()) ON CONFLICT DO NOTHING",[f.seeded.alpha.workspaceId,callId,f.crm.alpha.firmId,member.user_id]);
+ const row={workspace_id:f.seeded.alpha.workspaceId,call_log_id:callId,revision:1,source_revision:0,source_outcome:'interested',answer:'yes',command_id:'need-fixture',confirmed_by:member.user_id,...overrides};
+ return f.session.query(`INSERT INTO call_need_revisions(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+}
+SOURCING_CONSTRAINT_CASES.push(
+ ...([['revision_check',{revision:0}],['source_revision_check',{source_revision:-1}],['answer_check',{answer:'maybe'}],['command_id_check',{command_id:''}],['workspace_id_call_log_id_fkey',{call_log_id:absent}],['workspace_id_confirmed_by_fkey',{confirmed_by:absent}]] as const).map(([suffix,change])=>({constraint:`call_need_revisions_${suffix}`,run:async(f:Fixture)=>callNeedRow(f,change)})),
+ {constraint:'call_need_revisions_pkey',run:async(f:Fixture)=>{await callNeedRow(f);return callNeedRow(f,{command_id:'another'});}},
+ {constraint:'call_need_revisions_workspace_id_command_id_key',run:async(f:Fixture)=>{await callNeedRow(f);return callNeedRow(f,{revision:2});}},
 );

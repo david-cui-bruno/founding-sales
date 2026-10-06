@@ -34,7 +34,7 @@
 - Create `apps/desktop/src/renderer/sourcing/Learning.tsx` and `apps/desktop/src/renderer/meetings/Qualification.tsx`; extend `sourcing/Candidates.tsx` with a Results subview. No metrics strip on Today.
 - Add one `sourcing_learning` migration and constraint/upgrade fixtures. Store source attribution, qualification revisions and targeting proposals; do not copy the whole funnel.
 
-## Task L1: Versioned attribution and corrections
+## Task 1: L1 — Versioned attribution and corrections
 
 **Files/tests:** attribution module, A admission/feedback, merge/retention integration; `packages/domain/test/sourcing/attribution.test.ts`.
 
@@ -48,7 +48,7 @@ One firm may have multiple historical source observations; first outreach freeze
 - [ ] Make corrections append a superseding revision; current reports resolve the newest accepted revision. Add merge and deletion behavior in the same task; an orphaned source becomes unknown rather than inheriting another firm's signal. Historical evidence is not a live permission.
 - [ ] Run the new suite plus existing funnel/merge/retention tests, then commit `feat: attribute sales outcomes to sourced evidence`.
 
-## Task L2: Explicit commercial qualification without extra call forms
+## Task 2: L2 — Explicit commercial qualification without extra call forms
 
 **Files/tests:** meeting qualification module/contract/route, qualification panel; `packages/domain/test/meetings/qualification.test.ts`, `apps/desktop/test/meetingQualification.component.test.tsx`.
 
@@ -60,7 +60,7 @@ One firm may have multiple historical source observations; first outreach freeze
 - [ ] Place three short fields on meeting detail, with unknown as the initial value, source links and one Save action. Do not open a form after every call or require completion to close a meeting. Preserve edits across navigation; stale saves explain refresh without losing text. Manual notes count as user evidence, not transcript quotes.
 - [ ] Run focused suites plus attendance/outcome-correction tests; commit `feat: track qualified demos separately from attendance`.
 
-## Task L3: Useful reports and approved targeting changes
+## Task 3: L3 — Useful reports and approved targeting changes
 
 **Files/tests:** learningReport/targetingProposals modules, sourcingLearning contract/API, Learning view; `packages/domain/test/sourcing/learningReport.test.ts`, `packages/domain/test/sourcing/targetingProposals.test.ts`, `apps/desktop/test/sourcingLearning.component.test.tsx`.
 

@@ -1,3 +1,4 @@
+import {MeetingQualification} from './Qualification.tsx';
 import { MeetingAutoRecording } from './MeetingAutoRecording.tsx';
 import { MeetingFollowThrough } from './MeetingFollowThrough.tsx';
 import { MeetingOutcomes } from './MeetingOutcomes.tsx';
@@ -329,6 +330,7 @@ export function FirmMeetings({
                 <MeetingBrief meetingId={row.meetingId} read={ports.brief} />
               ) : null}
               <MeetingAutoRecording meetingId={row.meetingId} actionsEnabled={actionsEnabled} refreshKey={`${refreshKey}:${row.state}:${row.startsAt}:${String(successes)}`} />
+              <MeetingQualification meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               <MeetingOutcomes key={row.meetingId} meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               <MeetingFollowThrough meetingId={row.meetingId} actionsEnabled={actionsEnabled} />
               {note === undefined ? null : (

@@ -1,3 +1,4 @@
+import {CallNeed} from '../sourcing/CallNeed.tsx';
 import { type CallOutcome, type CallProposal, type CallProposalKey } from '@fss/contracts';
 import { Pencil } from 'lucide-react';
 import { useMemo, useRef, useState, type JSX } from 'react';
@@ -403,6 +404,7 @@ function Completed({
   return (
     <div data-testid="analysis-completed" className="flex flex-col gap-4">
       {analysis.current === null ? null : <Notes sessionId={sessionId} notes={analysis.current.notes} onSaved={onReload} />}
+      {logged ? <CallNeed sessionId={sessionId}/> : null}
 
       {rows.length === 0 && needReview.length === 0 ? null : (
         <Block data-testid="suggestions" className="py-0">

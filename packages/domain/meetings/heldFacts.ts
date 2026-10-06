@@ -1,3 +1,4 @@
+import {attributeFirmInteraction} from '../sourcing/attribution.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordFunnelFact, reinstateFunnelFact, withdrawFunnelFacts } from '../funnel/facts.ts';
 import type { MeetingRow } from './calcom.ts';
@@ -32,6 +33,7 @@ export async function recordHeldFact(
   meeting: Pick<MeetingRow, 'id' | 'booking_uid' | 'current_booking_uid' | 'firm_id' | 'starts_at' | 'attendance_source'>,
 ): Promise<void> {
   if (meeting.firm_id === null) return;
+  await attributeFirmInteraction(context,{firmId:meeting.firm_id,kind:'meeting',subjectId:meeting.id});
   const keys = await bookingUidsOf(context, meeting);
   const existing = await reinstateFunnelFact(context, { kind: 'meeting.held', dedupeKeys: keys, preferredKey: meeting.booking_uid });
   if (existing !== 'absent') return;

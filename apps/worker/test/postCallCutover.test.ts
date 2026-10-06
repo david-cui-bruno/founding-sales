@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { messagesCallAnalyzer } from '@fss/domain/calls/analysisAdapter.ts';
 import { editCallAnalysis } from '@fss/domain/calls/analysis.ts';
@@ -156,22 +157,46 @@ describe('A-7: legacy summary work through migration 0035, a pause and a resume'
     policy = await seedPolicy(session, seeded, crm);
     await setting('telephony_budget', { dailyCeilingCents: 10_000, maxMinutesPerCall: 30, unitPriceMicros: 14_000 });
     await setting('monthly_cash_ceiling_cents', { cents: 5000 });
-    // The calls below are placed through HEAD's own dial commands, and since migration 0037
-    // the dial authorisation reads `effective_suppressions.channel`. At schema 34 that
-    // column does not exist yet, so the view is given the value 0037 says every earlier
-    // stop has, `all`; 0037 replaces this view with its own when the migrations run below.
-    // Nothing else about schema 34 changes, and no stop is involved in this test.
-    await session.query(`CREATE OR REPLACE VIEW effective_suppressions AS
-      SELECT DISTINCT ON (e.workspace_id, e.scope, e.canonical_key)
-             e.workspace_id, e.scope, e.canonical_key, e.event_id, e.canonicalizer_version,
-             e.source, e.actor_user_id, e.recorded_at, 'all'::text AS channel
-        FROM suppression_events e
-       WHERE e.supersedes_event_id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM suppression_events s
-                          WHERE s.workspace_id = e.workspace_id AND s.supersedes_event_id = e.event_id)
-       ORDER BY e.workspace_id, e.scope, e.canonical_key, e.recorded_at, e.event_id`);
-    // At schema 34: production's shapes, written before the release.
-    for (const key of Object.keys(legacy) as (keyof typeof legacy)[]) legacy[key] = await placeTranscribedCall(session, { seeded, crm, policy }, UTTERANCES);
+    // Seed the actual schema-34 shapes, without invoking HEAD's dial commands.
+    // This keeps the upgrade fixture independent of tables added after the cutover.
+    for (const key of Object.keys(legacy) as (keyof typeof legacy)[]) {
+      const id = randomUUID();
+      const workspaceId = seeded.alpha.workspaceId;
+      const actor = seeded.alpha.salesperson;
+      const ticket = await session.query<{ id: string }>(
+        `INSERT INTO dial_tickets (workspace_id, command_id, firm_id, phone_route_id, route_version,
+          posture_id, posture_revision, calling_identity_id, actor_user_id, device_id, assigned_user_id,
+          e164, firm_time_zone, issued_at, expires_at, consumed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, $8, $10, 'America/New_York',
+           '2026-08-03T14:00:00Z', '2026-08-03T14:01:00Z', '2026-08-03T14:00:00Z') RETURNING id`,
+        [workspaceId, `legacy-${id}`, crm.alpha.firmId, policy.alpha.phoneRouteId, policy.alpha.phoneRouteVersion,
+          policy.alpha.postureId, policy.alpha.callingIdentityId, actor.userId, actor.deviceId, policy.alpha.e164],
+      );
+      const reservation = await session.query<{ id: string }>(
+        `INSERT INTO provider_reservations (workspace_id, provider_key, subject_kind, subject_id, attempt,
+          business_date, business_time_zone, cents, priced_unit, max_units, unit_price_micros,
+          state, settled_cents, settled_at)
+         VALUES ($1, 'twilio.voice', 'call_session', $2, 1, '2026-08-03', 'America/New_York',
+           42, 'minute', 30, 14000, 'settled', 1, now()) RETURNING id`, [workspaceId, id],
+      );
+      const recordingSid = `RE${randomBytes(16).toString('hex')}`;
+      await session.query(
+        `INSERT INTO call_sessions (id, workspace_id, ticket_id, firm_id, actor_user_id, reservation_id,
+          expires_at, consumed_at, twilio_call_sid, status, provider_status, started_at, answered_at, ended_at,
+          duration_seconds, recording_sid, recording_path, recording_duration_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6, '2026-08-03T14:01:00Z', '2026-08-03T14:00:00Z', $7,
+           'completed', 'completed', '2026-08-03T14:00:00Z', '2026-08-03T14:00:00Z', '2026-08-03T14:02:05Z',
+           125, $8, $9, 125)`,
+        [id, workspaceId, ticket.rows[0]?.id, crm.alpha.firmId, actor.userId, reservation.rows[0]?.id,
+          `CA${randomBytes(16).toString('hex')}`, recordingSid, `/2010-04-01/Accounts/AC${'a'.repeat(32)}/Recordings/${recordingSid}`],
+      );
+      await session.query(
+        `INSERT INTO call_transcripts (workspace_id, call_session_id, provider, model, language, duration_seconds, utterances)
+         VALUES ($1, $2, 'aws_transcribe', 'standard', 'en-US', 125, $3::jsonb)`,
+        [workspaceId, id, JSON.stringify(UTTERANCES)],
+      );
+      legacy[key] = id;
+    }
     all = Object.values(legacy);
     await legacyJob(legacy.held, 'done');
     await legacyJob(legacy.heldWithNotes, 'done');

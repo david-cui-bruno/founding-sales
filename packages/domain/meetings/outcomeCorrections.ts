@@ -1,3 +1,4 @@
+import {foldMeetingQualification} from './qualification.ts';
 import { foldMeetingFollowThrough } from './followThroughLifecycle.ts';
 import type { MeetingNoteItem, SaveMeetingNotes } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -43,6 +44,7 @@ export async function foldMeetingOutcomes(context: RepositoryContext, input: { s
   if (source === undefined || target === undefined || source.firm_id === null) return;
   if (target.firm_id !== source.firm_id) throw new Error('meeting_outcome_fold_firm_conflict');
   await foldMeetingFollowThrough(context, source.id, target.id);
+  await foldMeetingQualification(context,source.id,target.id);
   const sourceNotes = await readCurrentMeetingNotes(context, source.id), targetNotes = await readCurrentMeetingNotes(context, target.id);
   const offset = target.notes_revision;
   const debrief = [targetNotes.debrief, sourceNotes.debrief].filter(t => t.trim() !== '').join('\n\n');

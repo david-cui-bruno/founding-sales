@@ -1,3 +1,5 @@
+import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
+import {MEETING_QUALIFICATION_PATHS,routeMeetingQualification} from './meetingQualification.ts';
 import { SOURCING_PATHS, routeSourcing } from './sourcing.ts';
 import { MEETING_AUTO_RECORDING_PATHS,routeMeetingAutoRecording } from './meetingAutoRecording.ts';
 import { MEETING_FOLLOW_THROUGH_PATHS,routeMeetingFollowThrough } from './meetingFollowThrough.ts';
@@ -147,6 +149,7 @@ function healthModule(routing: RoutingOptions): RouteModule {
 export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[] {
   return [
     healthModule(routing),
+    moduleOf('sourcing-learning',{paths:SOURCING_LEARNING_PATHS},routeSourcingLearning,routing),
     moduleOf('sourcing', { paths: SOURCING_PATHS }, routeSourcing, routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
     // This workspace's Macs and the revocation (wave 3b). Exact paths, and beside
@@ -195,6 +198,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
     moduleOf('meeting-auto-recording', {paths:MEETING_AUTO_RECORDING_PATHS}, routeMeetingAutoRecording,routing),
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),
+    moduleOf('meeting-qualification',{paths:MEETING_QUALIFICATION_PATHS},routeMeetingQualification,routing),
     moduleOf('meeting-outcomes', { paths: MEETING_OUTCOMES_PATHS }, routeMeetingOutcomes, routing),
     moduleOf('meeting-transcription', { paths: MEETING_TRANSCRIPTION_PATHS }, routeMeetingTranscription, routing),
     moduleOf('meeting-recordings', { paths: MEETING_RECORDING_PATHS }, routeMeetingRecordings, routing),

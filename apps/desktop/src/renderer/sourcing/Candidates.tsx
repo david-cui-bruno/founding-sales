@@ -1,3 +1,4 @@
+import {Learning} from './Learning.tsx';
 import {navigate} from '../routes.ts';
 import {QualificationPanel} from './QualificationPanel.tsx';
 import {useCallback,useEffect,useRef,type JSX} from 'react';
@@ -62,7 +63,9 @@ export function Candidates({ports=defaultPorts,enabled=true}:{ports?:CandidatePo
   const changeFilter=(status:SourcingCandidate['status'],offset=0)=>{m.filter={status,offset};m.view=null;m.deleteId=null;void load();};
   const blocked=!enabled||m.busy||m.pending!==null;
   const field=(key:string,label:string,type='text',maxLength=500)=><label key={key} className="grid gap-1 text-sm">{label}<Input type={type} maxLength={maxLength} value={m.draft[key]??''} disabled={blocked} onChange={e=>{m.draft[key]=e.target.value;touch();}}/></label>;
-  return <section className="space-y-5" aria-label="Candidate review">
+  const tabs=<div className="flex gap-2" aria-label="Sourcing views"><Button variant={m.tab==='candidates'?'outline':'quiet'} onClick={()=>{m.tab='candidates';touch();}}>Candidates</Button><Button variant={m.tab==='results'?'outline':'quiet'} onClick={()=>{m.tab='results';touch();}}>Results</Button></div>;
+  if(m.tab==='results')return <section className="space-y-5">{tabs}<Learning enabled={enabled}/></section>;
+  return <section className="space-y-5" aria-label="Candidate review">{tabs}
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-medium">Candidate review</h2><p className="text-sm text-muted-foreground">Research prospects before adding them to your call queue. Keeping starts weekly source checks while research is enabled.</p></div><Button variant="outline" disabled={blocked} aria-expanded={m.adding} onClick={()=>{m.adding=!m.adding;touch();}}>Add candidate</Button></div>
     {m.view?.discovery?<p className="text-sm text-muted-foreground">Discovery {m.view.discovery.halted?'needs attention':m.view.discovery.enabled?'enabled':'paused'} · next scheduled {m.view.discovery.nextRunAt.slice(0,10)} · {m.view.discovery.dailyRemaining} searches left today, {m.view.discovery.monthlyRemaining} this month. Last result: {m.view.discovery.lastResult??'not run'}. Research holds and settings also apply.</p>:null}
     {m.view?.qualificationWaitReason?<p role="status" className="text-sm text-muted-foreground">{m.view.qualificationWaitReason==='daily_firm_ceiling'?'Waiting for research budget':m.view.qualificationWaitReason==='research_disabled'?'Qualification waits while research is paused.':'Qualification waits while research is on hold.'}</p>:null}

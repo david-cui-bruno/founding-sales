@@ -1,0 +1,21 @@
+import {randomUUID} from 'node:crypto';
+import {afterAll,beforeAll,expect,it} from 'vitest';
+import {dispatch} from '../src/server.ts';
+import {createAuthFixture,CURRENT_CLIENT_VERSION,type AuthFixture} from './support/authFixture.ts';
+import {issueSessionFor} from './support/sessionFixture.ts';
+import {seedFirm} from './support/crmSeed.ts';
+let f:AuthFixture,token:string,firmId:string,meetingId:string;
+const call=(path:string,body?:unknown)=>dispatch({method:body===undefined?'GET':'POST',path,query:new URLSearchParams({meetingId}),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://example.test/update'});
+beforeAll(async()=>{f=await createAuthFixture();token=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;firmId=await seedFirm(f,{name:'Qualification API',regionCode:'TX',assignedUserId:f.alpha.salesperson.userId});meetingId=randomUUID();await f.db.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,'qualification-api','qualification-api','booked',now(),now(),now())",[f.alpha.workspaceId,meetingId,firmId]);});
+afterAll(async()=>f.stop());
+it('saves optional qualification, replays one revision, and checks current assignment on replay',async()=>{
+ expect((await call('/meetings/qualification')).body).toMatchObject({revision:0,qualified:false});
+ const commandId=randomUUID();const body={meetingId,commandId,clientVersion:CURRENT_CLIENT_VERSION,expectedRevision:0,buyingParticipant:'yes',maintenanceNeed:'unknown',openToPaying:'unknown',evidence:[{field:'buyingParticipant',sourceKind:'user_confirmation',sourceId:commandId,sourceRevision:1}]};
+ expect((await call('/meetings/qualification/save',body)).body).toMatchObject({result:{revision:1,buyingParticipant:'yes',qualified:false}});
+ expect((await call('/meetings/qualification/save',body)).body).toMatchObject({replayed:true,result:{revision:1}});
+ const receipt=(await f.db.query('SELECT result FROM command_receipts WHERE command_id=$1',[commandId])).rows;expect(JSON.stringify(receipt)).not.toContain('buyingParticipant');
+ const second=randomUUID();expect((await call('/meetings/qualification/save',{...body,commandId:second,expectedRevision:1,evidence:[{...body.evidence[0],sourceId:second,sourceRevision:2}]})).status).toBe(200);
+ expect((await call('/meetings/qualification/save',body)).body).toMatchObject({reason:'qualification_changed'});
+ await f.db.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1',[firmId,f.alpha.admin.userId]);
+ expect((await call('/meetings/qualification')).status).toBe(404);expect((await call('/meetings/qualification/save',body)).status).toBe(404);
+});

@@ -26,6 +26,23 @@ export interface HeadSeed {
 
 export const HEAD_SEEDS: readonly HeadSeed[] = Object.freeze([
   {
+    name:'discovery approval versions preserve schedule, quotas and historical uncertainty (0051)',
+    fromVersions:[50],
+    seed:async session=>{
+      const row=(await session.query<{id:string}>('SELECT id FROM workspaces ORDER BY id LIMIT 1')).rows[0];if(!row)throw new Error('workspace fixture missing');
+      await session.query("INSERT INTO sourcing_discovery_settings(workspace_id,enabled,query_cursor,next_run_at) VALUES($1,false,7,'2026-10-10T12:00:00Z') ON CONFLICT(workspace_id) DO UPDATE SET enabled=false,query_cursor=7,next_run_at='2026-10-10T12:00:00Z'",[row.id]);
+      await session.query("INSERT INTO sourcing_discovery_attempts(workspace_id,day,query_id,query,state) VALUES($1,'2026-10-04','historical','Historical query','complete') ON CONFLICT DO NOTHING",[row.id]);
+      return row.id;
+    },
+    verify:async(session,id)=>{
+      const settings=(await session.query<{enabled:boolean;query_cursor:number;targeting_version:string;next_run_at:Date}>('SELECT enabled,query_cursor,targeting_version,next_run_at FROM sourcing_discovery_settings WHERE workspace_id=$1',[id])).rows[0];
+      if(!settings||settings.enabled||settings.query_cursor!==7||settings.next_run_at.toISOString()!=='2026-10-10T12:00:00.000Z'||settings.targeting_version!=='targeting-v1')return 'discovery schedule or approval changed during upgrade';
+      const version=(await session.query<{n:number}>('SELECT jsonb_array_length(queries) AS n FROM sourcing_targeting_versions WHERE workspace_id=$1 AND version=$2',[id,'targeting-v1'])).rows[0];if(version?.n!==12)return 'initial query policy was not preserved';
+      const attempt=(await session.query<{policy_version:string|null}>("SELECT policy_version FROM sourcing_discovery_attempts WHERE workspace_id=$1 AND query_id='historical'",[id])).rows[0];if(!attempt||attempt.policy_version!==null)return 'historical attempt acquired an invented policy';
+      return null;
+    },
+  },
+  {
     name:'existing discovery candidates and quota remain review-only (0050)',
     fromVersions:[49],
     seed:async session=>{

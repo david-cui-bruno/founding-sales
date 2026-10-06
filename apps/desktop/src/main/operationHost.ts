@@ -1,3 +1,6 @@
+import {callNeedViewSchema} from '@fss/contracts';
+import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
+import {meetingQualificationViewSchema} from '@fss/contracts';
 import {sourcingFeedbackSavedSchema} from '@fss/contracts';
 import { qualificationViewSchema, qualificationQueuedSchema, qualificationAdmittedSchema } from '@fss/contracts';
 import { candidateListSchema, candidateSavedSchema, candidateChangedSchema } from '@fss/contracts';
@@ -25,7 +28,7 @@ import {
   meetingMatchedSchema,
   unmatchedMeetingsResponseSchema,
 } from '@fss/contracts';
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   DIAL_IPC_CHANNELS,
   OPERATIONS,
@@ -163,6 +166,37 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'sourcing.callNeed': async(input:OperationInput<'sourcing.callNeed'>)=>{
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/call-need',value=>callNeedViewSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.saveCallNeed': async(input:OperationInput<'sourcing.saveCallNeed'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/sourcing/call-need/save',body,value=>z.object({revision:z.number().int().positive()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.learning': async (input:OperationInput<'sourcing.learning'>)=>{
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/learning',value=>learningReportSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.targeting': async (input:OperationInput<'sourcing.targeting'>)=>{
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/targeting',value=>targetingViewSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.proposeTargeting': async (input:OperationInput<'sourcing.proposeTargeting'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;const answer=await deps.api.command('/sourcing/targeting/save',body,value=>z.object({id:z.string().uuid(),revision:z.number().int().positive()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
+    'sourcing.applyTargeting': async (input:OperationInput<'sourcing.applyTargeting'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;const answer=await deps.api.command('/sourcing/targeting/apply',body,value=>z.object({policyVersion:z.string()}).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {result:null,reason:'not_found'};
+      return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
+    },
     'sourcing.feedback': async (input:OperationInput<'sourcing.feedback'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/sourcing/qualification/feedback',body,value=>sourcingFeedbackSavedSchema.parse(value),{commandId});
@@ -455,6 +489,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'meetings.editRecap': async (input:OperationInput<'meetings.editRecap'>) => {
       const generation=deps.recordings.identity.current(),{commandId,...body}=input;
       const answer=await deps.api.command('/meetings/recap/edit',body,value=>meetingFollowThroughViewSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'meetings.qualification': async (input:OperationInput<'meetings.qualification'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read(`/meetings/qualification?meetingId=${encodeURIComponent(input.meetingId)}`,value=>meetingQualificationViewSchema.parse(value));
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'meetings.saveQualification': async (input:OperationInput<'meetings.saveQualification'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...body}=input;
+      const answer=await deps.api.command('/meetings/qualification/save',body,value=>meetingQualificationViewSchema.parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
