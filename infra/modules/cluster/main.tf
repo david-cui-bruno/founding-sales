@@ -980,3 +980,16 @@ resource "aws_ecs_service" "worker" {
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-worker" })
 }
+
+resource "aws_iam_role_policy" "social_assets_api" {
+  count  = var.enable_social_assets ? 1 : 0
+  name   = "social-assets"
+  role   = aws_iam_role.api_task.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = ["${var.social_assets_bucket_arn}/*"] }] })
+}
+resource "aws_iam_role_policy" "social_assets_worker" {
+  count  = var.enable_social_assets ? 1 : 0
+  name   = "social-assets-cleanup"
+  role   = aws_iam_role.worker_task.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Action = ["s3:DeleteObject"], Resource = ["${var.social_assets_bucket_arn}/*"] }] })
+}

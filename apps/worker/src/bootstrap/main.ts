@@ -1,3 +1,4 @@
+import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
 import {outreachReplyHandler,outreachReplySource} from '../handlers/outreach.ts';
 import {routineReplyInterpretation} from '../outreach/replyInterpretation.ts';
 import {sourcingQualificationHandler,sourcingQualificationSource} from '../handlers/sourcingQualification.ts';
@@ -106,6 +107,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
+  readonly socialAssets?:SocialDeletionPort|null;
   readonly discovery?: DiscoverySearchProvider;
   readonly meetingAutoRecording?: Parameters<typeof meetingAutoRecordingJobHandler>[0] | undefined;
   readonly meetingAnalysis?: MeetingAnalyzeOptions | undefined;
@@ -208,6 +210,7 @@ export function registerHandlers(
     }),
   );
   registry.register(retentionBatchJobHandler());
+  registry.register(socialAssetsHandler(composition.socialAssets??null));
   // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
   // so like `retention.batch` the deployment has nothing to say about them: one drains
   // the terminal stops G3a, G4 and G8 left for whoever ran the worker, the other
@@ -496,6 +499,7 @@ export function workerDueWorkSources(
     terminalStopSource(),
     sendDayCloseSource(),
     retentionSource(),
+    socialAssetsSource(),
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
@@ -600,6 +604,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingTranscription = readMeetingTranscriptionComposition(environment, mediaAbort.signal);
   const composition: HandlerComposition = {
     ...composed,
+    socialAssets:await socialDeletionPort(environment),
     ...(environment['FSS_TAVILY_API_KEY']?{discovery:tavilySearch(environment['FSS_TAVILY_API_KEY'])}:{}),
     ...(zoomRecording.client!==null&&calRecording.ok&&calRecording.apiKey!==null?{meetingAutoRecording:{zoom:zoomRecording.client,calcom:calcomDemoClient({apiKey:calRecording.apiKey})}}:{}),
     ...(meetingAnalysis.options === null ? {} : { meetingAnalysis: meetingAnalysis.options }),

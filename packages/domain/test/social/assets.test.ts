@@ -1,0 +1,58 @@
+import {beforeAll,afterAll,it,expect} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {registerSocialAsset,completeSocialAsset,deleteSocialAsset,readSocialAsset,expireSocialUploads} from '../../social/assets.ts';
+let db:TestDatabase,seed:TwoWorkspaces;
+const ctx=(other=false)=>{const s=other?seed.beta:seed.alpha;return repositoryContext(workspaceScope(s.workspaceId,{kind:'user',userId:s.admin.userId,role:'admin'}),db.session);};
+const tx=<T>(f:()=>Promise<T>)=>withTransaction(db.session,f);
+const original={sha256:'a'.repeat(64),bytes:100,mime:'image/jpeg' as const,origin:{kind:'upload' as const,sourceUrl:null,usageNote:null}};
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('binds upload completion to its object checksum, bytes and workspace, and retries idempotently',async()=>{
+ const registered=await tx(()=>registerSocialAsset(ctx(),original));if(!registered.ok)throw new Error(registered.reason);
+ const {assetId,uploadId}=registered.value;
+ expect(await readSocialAsset(ctx(true),assetId)).toBeNull();
+ const input={assetId,uploadId,verified:{sha256:original.sha256,bytes:100,mime:original.mime}};
+ expect(await tx(()=>completeSocialAsset(ctx(true),input))).toEqual({ok:false,reason:'not_found'});
+ expect(await tx(()=>completeSocialAsset(ctx(),{...input,verified:{...input.verified,bytes:101}}))).toEqual({ok:false,reason:'object_mismatch'});
+ expect(await tx(()=>completeSocialAsset(ctx(),input))).toMatchObject({ok:true,value:{version:1}});
+ expect(await tx(()=>completeSocialAsset(ctx(),input))).toMatchObject({ok:true,value:{version:1}});
+ expect(await readSocialAsset(ctx(),assetId)).toMatchObject({id:assetId,state:'ready',version:1});
+});
+it('reserves space for pending originals and derivatives; expires abandoned uploads into durable deletion work',async()=>{
+ await db.session.query('INSERT INTO social_library_usage(workspace_id,bytes_reserved) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET bytes_reserved=$2',[seed.beta.workspaceId,1024**3-50]);
+ expect(await tx(()=>registerSocialAsset(ctx(true),original))).toEqual({ok:false,reason:'library_full'});
+ const r=await tx(()=>registerSocialAsset(ctx(),original));if(!r.ok)throw new Error(r.reason);
+ await db.session.query("UPDATE social_asset_objects SET expires_at=now()-interval '1 minute' WHERE workspace_id=$1 AND upload_id=$2",[seed.alpha.workspaceId,r.value.uploadId]);
+ expect(await tx(()=>completeSocialAsset(ctx(),{...r.value,verified:{sha256:original.sha256,bytes:100,mime:original.mime}}))).toEqual({ok:false,reason:'upload_expired'});
+ await tx(()=>expireSocialUploads(ctx()));
+ expect(await readSocialAsset(ctx(),r.value.assetId)).toMatchObject({state:'deleted'});
+ const jobs=await db.session.query('SELECT object_key FROM social_object_deletions WHERE workspace_id=$1 AND asset_id=$2',[seed.alpha.workspaceId,r.value.assetId]);expect(jobs.rows).toHaveLength(1);
+});
+it('versions derivatives independently of the unchanged original and deletion blocks all reads',async()=>{
+ const r=await tx(()=>registerSocialAsset(ctx(),original));if(!r.ok)throw new Error(r.reason);
+ await tx(()=>completeSocialAsset(ctx(),{...r.value,verified:{sha256:original.sha256,bytes:100,mime:original.mime}}));
+ const derivative={...original,assetId:r.value.assetId,expectedVersion:1,sha256:'b'.repeat(64),mime:'image/png' as const,bytes:80,width:40,height:20};
+ const d=await tx(()=>registerSocialAsset(ctx(),derivative));if(!d.ok)throw new Error(d.reason);
+ expect(await tx(()=>completeSocialAsset(ctx(),{...d.value,verified:{sha256:derivative.sha256,bytes:80,mime:'image/png'}}))).toMatchObject({ok:true,value:{version:2}});
+ expect(await tx(()=>registerSocialAsset(ctx(),derivative))).toEqual({ok:false,reason:'stale_version'});
+ const objects=await db.session.query('SELECT sha256 FROM social_asset_objects WHERE workspace_id=$1 AND asset_id=$2 ORDER BY version',[seed.alpha.workspaceId,r.value.assetId]);expect(objects.rows).toEqual([{sha256:'a'.repeat(64)},{sha256:'b'.repeat(64)}]);
+ expect(await tx(()=>deleteSocialAsset(ctx(true),r.value.assetId))).toEqual({ok:false,reason:'not_found'});
+ expect((await tx(()=>deleteSocialAsset(ctx(),r.value.assetId))).ok).toBe(true);
+ expect(await readSocialAsset(ctx(),r.value.assetId)).toMatchObject({state:'deleted'});
+ expect(await tx(()=>registerSocialAsset(ctx(),{...derivative,expectedVersion:2}))).toEqual({ok:false,reason:'asset_deleted'});
+ expect((await db.session.query('SELECT 1 FROM social_object_deletions WHERE workspace_id=$1 AND asset_id=$2',[seed.alpha.workspaceId,r.value.assetId])).rows).toHaveLength(2);
+});
+it('holds quota until physical deletion, waits out upload URLs, and releases it exactly once',async()=>{
+ const {recordSocialObjectDeletion,socialAssetObject}=await import('../../social/assets.ts');
+ const r=await tx(()=>registerSocialAsset(ctx(),original));if(!r.ok)throw new Error(r.reason);
+ const before=Number((await db.session.query<{n:string}>('SELECT bytes_reserved AS n FROM social_library_usage WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows[0]!.n);
+ await tx(()=>deleteSocialAsset(ctx(),r.value.assetId));
+ expect(await socialAssetObject(ctx(),r.value,'upload')).toBeNull();
+ expect((await db.session.query<{waiting:boolean}>('SELECT next_attempt_at>now()+interval \'9 minutes\' AS waiting FROM social_object_deletions WHERE workspace_id=$1 AND asset_id=$2',[seed.alpha.workspaceId,r.value.assetId])).rows[0]!.waiting).toBe(true);
+ await tx(()=>recordSocialObjectDeletion(ctx(),{assetId:r.value.assetId,version:1,success:false}));
+ const amount=async()=>Number((await db.session.query<{n:string}>('SELECT bytes_reserved AS n FROM social_library_usage WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows[0]!.n);
+ expect(await amount()).toBe(before);
+ await tx(()=>recordSocialObjectDeletion(ctx(),{assetId:r.value.assetId,version:1,success:true}));await tx(()=>recordSocialObjectDeletion(ctx(),{assetId:r.value.assetId,version:1,success:true}));expect(await amount()).toBe(before-100);
+});

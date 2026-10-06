@@ -1,3 +1,4 @@
+import {loadSocialMediaStore} from '../social/mediaStore.ts';
 import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
 import { loadMeetingAudioStore } from '../integrations/meetingAudio.ts';
 import { checkMeetingAudioContract } from '../integrations/meetingAudioContract.ts';
@@ -235,6 +236,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
           log,
         };
 
+  const socialBucket=environment['FSS_SOCIAL_ASSETS_BUCKET']?.trim();
+  const socialMedia=socialBucket ? await loadSocialMediaStore({bucket:socialBucket,region:environment['AWS_REGION']??'us-east-1'}):undefined;
   const callAudioBucket = environment[CALL_AUDIO_BUCKET_VARIABLE]?.trim() ?? '';
   const callAudioRegion = environment['AWS_REGION']?.trim() ?? '';
   const callAudio =
@@ -258,6 +261,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     suppressionJournal: deployment.suppressionJournal,
     // Slice C3a: the deletion workflow's best-effort delete in the call-audio bucket.
     ...(callAudio === undefined ? {} : { callAudio }),
+    ...(socialMedia === undefined ? {} : {socialMedia}),
     ...(meetingAudio === undefined ? {} : { meetingAudio }),
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
     // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.

@@ -1,3 +1,4 @@
+import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -111,6 +112,7 @@ export interface ApiOptions {
   readonly callAudio?: CallAudioRemover | undefined;
   /** Lane M4: a meeting recording's upload URL and HEAD. Absent: the upload routes are 404. */
   readonly meetingAudio?: MeetingAudioStore | undefined;
+  readonly socialMedia?: SocialMediaStore | undefined;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log; the safety metric filters read it. Absent in unit tests. */
@@ -166,6 +168,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
     ...(options.callAudio === undefined ? {} : { callAudio: options.callAudio }),
+    ...(options.socialMedia === undefined ? {} : {socialMedia:options.socialMedia}),
     ...(options.meetingAudio === undefined ? {} : { meetingAudio: options.meetingAudio }),
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
     ...(options.production === undefined ? {} : { production: options.production }),

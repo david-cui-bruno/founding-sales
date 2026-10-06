@@ -1,0 +1,21 @@
+import {it,expect,beforeAll,afterAll} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '@fss/domain/db/workspaceScope.ts';
+import {withTransaction} from '@fss/domain/db/queryable.ts';
+import {registerSocialAsset,deleteSocialAsset} from '@fss/domain/social/assets.ts';
+import {sweepSocialAssets} from '../src/social/cleanup.ts';
+let db:TestDatabase,seed:TwoWorkspaces;
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('retries failed private-object deletion without releasing quota or reviving the asset',async()=>{
+ const ctx=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
+ const r=await withTransaction(db.session,()=>registerSocialAsset(ctx,{sha256:'a'.repeat(64),bytes:20,mime:'image/png',origin:{kind:'upload',sourceUrl:null,usageNote:null}}));if(!r.ok)throw new Error(r.reason);
+ await withTransaction(db.session,()=>deleteSocialAsset(ctx,r.value.assetId));
+ await db.session.query('UPDATE social_object_deletions SET next_attempt_at=now()');let calls=0;
+ await withTransaction(db.session,()=>sweepSocialAssets(ctx,{delete:async()=>{calls++;throw new Error('fixture');}}));expect(calls).toBe(1);
+ expect((await db.session.query('SELECT bytes_reserved FROM social_library_usage')).rows).toEqual([{bytes_reserved:'20'}]);
+ await db.session.query('UPDATE social_object_deletions SET next_attempt_at=now()');
+ await withTransaction(db.session,()=>sweepSocialAssets(ctx,{delete:async()=>{calls++;}}));expect(calls).toBe(2);
+ expect((await db.session.query('SELECT bytes_reserved FROM social_library_usage')).rows).toEqual([{bytes_reserved:'0'}]);
+ await withTransaction(db.session,()=>sweepSocialAssets(ctx,{delete:async()=>{calls++;}}));expect(calls).toBe(2);
+});

@@ -1,3 +1,4 @@
+import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
@@ -78,6 +79,7 @@ export interface RoutingOptions {
    * `meetings/`. Absent where the bucket is not configured: the upload routes answer 404.
    */
   readonly meetingAudio?: MeetingAudioStore | undefined;
+  readonly socialMedia?: SocialMediaStore | undefined;
   /**
    * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
    *
