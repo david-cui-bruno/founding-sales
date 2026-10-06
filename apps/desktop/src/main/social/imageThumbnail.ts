@@ -25,6 +25,9 @@ export function fetchSocialThumbnail(location:{url:string;expiresAt:string},imag
  return task;
 }
 async function fetchThumbnail(location:{url:string;expiresAt:string},image:{sha256:string;bytes:number},send:typeof fetch=fetch):Promise<string> {
+ return socialImageThumbnail(await fetchSocialImageBytes(location,image,send),image.sha256);
+}
+export async function fetchSocialImageBytes(location:{url:string;expiresAt:string},image:{sha256:string;bytes:number},send:typeof fetch=fetch):Promise<Buffer> {
  const url=new URL(location.url);
  const expiry=Date.parse(location.expiresAt);
  if(url.protocol!=='https:'||url.username||url.password||url.port||!/^[-a-z0-9.]+\.s3\.[a-z0-9-]+\.amazonaws\.com$/u.test(url.hostname)||!Number.isFinite(expiry)||expiry<=Date.now())throw new Error('invalid_image_location');
@@ -36,5 +39,7 @@ async function fetchThumbnail(location:{url:string;expiresAt:string},image:{sha2
  try{while(true){const item=await reader.read();if(item.done)break;total+=item.value.byteLength;if(total>image.bytes)throw new Error('image_size_mismatch');chunks.push(item.value);}}
  finally{await reader.cancel().catch(()=>{});}
  if(total!==image.bytes)throw new Error('image_size_mismatch');
- return socialImageThumbnail(Buffer.concat(chunks),image.sha256);
+ const bytes=Buffer.concat(chunks);
+ if(!/^[a-f0-9]{64}$/u.test(image.sha256)||createHash('sha256').update(bytes).digest('hex')!==image.sha256)throw new Error('image_checksum_mismatch');
+ return bytes;
 }
