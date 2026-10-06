@@ -26,10 +26,10 @@ export function inspectLinkedInImageReceipt(raw:unknown,binding:unknown,port:Por
  const parsed=socialMediaBindingSchema.safeParse(binding);
  return inspectReceipt(raw,parsed.success?parsed.data.receiptId:null,port,parsed.success?parsed.data:null,true);
 }
-async function inspectReceipt(raw:unknown,receiptId:string|null,port:Port,binding:SocialMediaBinding|null,imageMode=false):Promise<InspectionResult>{
+async function inspectReceipt(raw:unknown,receiptId:string|null,port:Port,binding:SocialMediaBinding|null,imageMode=false,previewMode=false,baseline:readonly string[]=[]):Promise<InspectionResult>{
  const unknown=():InspectionResult=>({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
  try{
-  const expected=expectedSchema.parse(raw);if(!port.current()||(!imageMode&&expected.images.length)||(imageMode&&(!binding||expected.images.length!==1)))return unknown();
+  const expected=expectedSchema.parse(raw);if(!port.current()||(!imageMode&&!previewMode&&expected.images.length)||(imageMode&&(!binding||expected.images.length!==1))||(previewMode&&expected.images.length!==1))return unknown();
   if(receiptId!==null)receipt.parse(receiptId);
   if(await port.account()!==expected.accountExternalId||!port.current())return unknown();
   const list=listSchema.parse(await port.list());if(!port.current()||!list.complete||list.rows.length!==list.total)return unknown();
@@ -41,7 +41,7 @@ async function inspectReceipt(raw:unknown,receiptId:string|null,port:Port,bindin
   const time=`${f['hour']}:${f['minute']} ${f['dayPeriod']}`;
   const listLabel=`Posting ${f['weekday']}, ${f['month']} ${f['day']}, ${f['year']} at ${time}`;
   const detailLabel=`Posting at ${f['weekday']}, ${f['month']} ${f['day']}, ${time}`;
-  const candidates=list.rows.filter(r=>(receiptId===null||r.receiptId===receiptId)&&r.text===expected.text&&r.scheduleLabel===listLabel&&r.images.length===expected.images.length);
+  const candidates=list.rows.filter(r=>!baseline.includes(r.receiptId)&&(receiptId===null||r.receiptId===receiptId)&&r.text===expected.text&&r.scheduleLabel===listLabel&&r.images.length===expected.images.length);
   if(candidates.length!==1)return unknown();const candidate=candidates[0]!;
   if(imageMode){
    const previews=z.array(z.object({src:z.string()})).parse(candidate.images);
@@ -50,6 +50,10 @@ async function inspectReceipt(raw:unknown,receiptId:string|null,port:Port,bindin
   const detail=detailSchema.parse(await port.detail(candidate.receiptId));
   if(!port.current()||detail.receiptId!==candidate.receiptId||detail.postingName!==expected.postingName||detail.zone!==list.zone||detail.scheduleLabel!==detailLabel||detail.images.length!==expected.images.length||(imageMode&&!detail.altTextVerified))return unknown();
   if(await port.account()!==expected.accountExternalId||!port.current())return unknown();
+  if(previewMode){
+   if(detail.text!==expected.text||!detail.images.every(image=>z.object({loaded:z.literal(true)}).safeParse(image).success))return unknown();
+   return {state:'scheduled',receiptId:detail.receiptId,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:expected.accountExternalId,observedFingerprint:expected.fingerprint,complete:true};
+  }
   const match=matchLinkedInReceipt({receiptId:candidate.receiptId,accountExternalId:expected.accountExternalId,text:expected.text,publishAt:expected.publishAt,fingerprint:expected.fingerprint,images:expected.images},{receiptId:detail.receiptId,accountExternalId:expected.accountExternalId,text:detail.text,publishAt:expected.publishAt,detailComplete:true,images:detail.images},binding);
   if(!match)return unknown();
   return {state:'scheduled',receiptId:detail.receiptId,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:expected.accountExternalId,observedFingerprint:expected.fingerprint,complete:true,...(binding?{mediaBinding:binding}:{})};
@@ -71,4 +75,9 @@ export async function inspectLinkedInSubmittedImage(raw:unknown,capture:unknown,
   if(candidates.length!==1)return unknown();
   return inspectLinkedInImageReceipt(expected,{receiptId:candidates[0]!.receiptId,fingerprint:expected.fingerprint,images:[proof]},port);
  }catch{return unknown();}
+}
+
+/** Practical saved-image verification. Native receipt is durable; transformed image bytes are not compared. */
+export function inspectLinkedInPreviewReceipt(raw:unknown,receiptId:string|null,port:Port,baseline:readonly string[]=[]):Promise<InspectionResult>{
+ return inspectReceipt(raw,receiptId,port,null,false,true,baseline);
 }

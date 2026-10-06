@@ -82,3 +82,6 @@ export const socialDeliveryQueueSchema=z.strictObject({items:z.array(z.strictObj
  submissionId:uuid.nullable(),receiptId:z.string().nullable(),mediaBinding:socialMediaBindingSchema.nullable().optional(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/u),snapshot:socialApprovalSnapshotSchema,
 })).max(25)});
 export type SocialDeliveryQueue=z.infer<typeof socialDeliveryQueueSchema>;
+
+/** Version of the built-in native LinkedIn scheduler. Other destinations remain unavailable. */
+export const LINKEDIN_ADAPTER_VERSION='linkedin-native-v1';

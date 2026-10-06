@@ -1,11 +1,10 @@
 /** @vitest-environment jsdom */
 import {afterEach,expect,it,vi} from 'vitest';
-vi.mock('../src/main/social/adapters/linkedinMediaCapture.ts',()=>({linkedInMediaCaptureScript:()=>'(Promise.resolve(window.captureResult))'}));
 import {linkedInSubmitScript} from '../src/main/social/adapters/linkedinSubmit.ts';
 const input={token:'b6bacf0c-28b2-4290-8eaa-c8647020c3c8',postingName:'Founder',text:'Approved text',zone:Intl.DateTimeFormat().resolvedOptions().timeZone,scheduleLabel:'Posting at Tue, Oct 13, 12:00 PM',image:{sha256:'a'.repeat(64),altText:'Approved image'}};
 const state=window as unknown as Record<string,unknown>;
 function fixture(){state['captureResult']={ok:true};document.body.innerHTML='<dialog open data-testid="dialog"><div role="button">Founder</div><div role="button">Post to Anyone</div><div role="button">Comments: Anyone</div><div contenteditable="true" role="textbox" componentkey="ShareBox_textEditor">Approved text</div><img src="blob:https://www.linkedin.com/b0791b68-081f-4d5a-b559-b82eae4ca37f" alt="Approved image"><div>Posting at Tue, Oct 13, 12:00 PM</div><button>Schedule</button></dialog>';const image=document.querySelector('img')!;Object.defineProperties(image,{complete:{value:true},naturalWidth:{value:100}});const click=vi.fn();document.querySelector('button')!.onclick=click;return click;}
 async function run(){return new Function('document','window',`return ${linkedInSubmitScript(input)}`)(document,window);}
 afterEach(()=>{delete state['__callieLinkedInSubmission'];delete state['captureResult'];document.body.innerHTML='';});
-it('arms verified original-media capture before a single image submission click',async()=>{const click=fixture();expect(await run()).toEqual({attempted:true});expect(await run()).toEqual({attempted:false});expect(click).toHaveBeenCalledTimes(1);});
-it('refuses the final click if capture fails or the approved alt changes',async()=>{const click=fixture();state['captureResult']={ok:false};expect(await run()).toEqual({attempted:false});expect(click).not.toHaveBeenCalled();state['captureResult']={ok:true};document.querySelector('img')!.alt='Changed';expect(await run()).toEqual({attempted:false});expect(click).not.toHaveBeenCalled();});
+it('submits a loaded approved image once without native identity capture',async()=>{const click=fixture();expect(await run()).toEqual({attempted:true});expect(await run()).toEqual({attempted:false});expect(click).toHaveBeenCalledTimes(1);});
+it('refuses the final click if the approved alt changes',async()=>{const click=fixture();document.querySelector('img')!.alt='Changed';expect(await run()).toEqual({attempted:false});expect(click).not.toHaveBeenCalled();});

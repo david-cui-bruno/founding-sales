@@ -11,9 +11,9 @@ const ctx=(beta=false)=>{const s=beta?seed.beta:seed.alpha;return repositoryCont
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
 const connection=()=>({accountId:randomUUID(),platform:'linkedin' as const,externalId:`profile-${randomUUID()}`,displayName:'Fixture founder',accountKind:'profile' as const});
 beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
-it('records an observed identity without treating login as scheduling verification',async()=>{
- const input=connection();expect(await tx(()=>saveSocialConnection(ctx(),input))).toMatchObject({ok:true,value:{accountId:input.accountId,state:'unsupported'}});
- const a=(await readSocialWorkspace(ctx())).accounts.find(v=>v.id===input.accountId);expect(a).toMatchObject({state:'unsupported',adapterVersion:null,verifiedAt:null});
+it('enables the shipped LinkedIn scheduler for an observed identity',async()=>{
+ const input=connection();expect(await tx(()=>saveSocialConnection(ctx(),input))).toMatchObject({ok:true,value:{accountId:input.accountId,state:'connected'}});
+ const a=(await readSocialWorkspace(ctx())).accounts.find(v=>v.id===input.accountId);expect(a).toMatchObject({state:'connected',adapterVersion:'linkedin-native-v1',verifiedAt:expect.any(String)});
  expect(await tx(()=>saveSocialConnection(ctx(),{...input,externalId:'different-person'}))).toEqual({ok:false,reason:'account_identity_changed'});
 });
 it('does not conflate a duplicate identity with a new local cookie partition',async()=>{

@@ -38,7 +38,7 @@ export function createSocialAccountsBridge(deps:Deps){
     saved={accountId:input.accountId,payload:{accountId:input.accountId,platform:observed.platform,externalId:observed.externalAccountId,displayName:observed.displayName,accountKind:observed.accountKind}};
     pending.set(input.commandId,saved);
    }
-   const answer=await deps.api.command('/social/accounts/connect',saved.payload,v=>z.strictObject({accountId:z.string().uuid(),state:z.literal('unsupported')}).parse(v),{commandId:input.commandId});
+   const answer=await deps.api.command('/social/accounts/connect',saved.payload,v=>z.strictObject({accountId:z.string().uuid(),state:z.enum(['unsupported','connected'])}).parse(v),{commandId:input.commandId});
    if(!current())return result('session_changed');if(answer.ok)pending.delete(input.commandId);return result(answer.ok?null:answer.reason);
   }catch{return result(current()?'connection_unavailable':'session_changed');}finally{busy=false;}
  }

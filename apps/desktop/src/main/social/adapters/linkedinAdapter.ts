@@ -1,12 +1,11 @@
 import {stageLinkedInPost} from './linkedinPostStage.ts';
-import {linkedInMediaCaptureScript} from './linkedinMediaCapture.ts';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import type {AccountIdentity,ApprovedPost,InspectionResult,SocialAdapter} from '../adapters.ts';
 import type {SocialAdapterContext} from '../deliveryRunner.ts';
 import {stageLinkedInText} from './linkedinStage.ts';
 import {linkedInSubmitScript} from './linkedinSubmit.ts';
-import {inspectLinkedInTextReceipt,inspectLinkedInImageReceipt,inspectLinkedInSubmittedImage} from './linkedinReceiptInspection.ts';
+import {inspectLinkedInTextReceipt,inspectLinkedInPreviewReceipt} from './linkedinReceiptInspection.ts';
 import {cancelLinkedInReceipt} from './linkedinCancel.ts';
 type StagePort=Parameters<typeof stageLinkedInText>[1];
 interface Port extends StagePort {
@@ -16,18 +15,18 @@ interface Port extends StagePort {
  waitForSave():Promise<boolean>;
  openComposer():Promise<void>;openScheduledList():Promise<void>;
  list():Promise<unknown>;detail(receiptId:string):Promise<unknown>;
- published?(receiptId:string):Promise<unknown>;
+ published?(receiptId:string,imageCount?:number):Promise<unknown>;
 }
-/** Text-only submission with persisted-image recovery. Not a verified registration: native navigation
+/** Text-only submission. Not a verified registration: native navigation
  * ports and the product-owned session still need platform acceptance.
  */
 export function createLinkedInTextAdapter(raw:SocialAdapterContext,port:Port):SocialAdapter{return createAdapter(raw,port);}
-/** Unregistered single-image path; requires native provenance acceptance before activation. */
+/** Single-image path using saved content, schedule and loaded preview verification. */
 export function createLinkedInImageAdapter(raw:SocialAdapterContext,port:Port&{root:string}):SocialAdapter{return createAdapter(raw,port,port.root);}
 function createAdapter(raw:SocialAdapterContext,port:Port,imageRoot?:string):SocialAdapter{
  const context=structuredClone(raw),snapshot=context.snapshot;
  let staged=false,attempted=false;
- let baseline:string[]|null=null,submissionToken:string|null=null,capture:{sha256:string;platformId:string}|null=null;
+ let baseline:string[]|null=null,submissionToken:string|null=null;
  const unknown=():InspectionResult=>({state:'unknown',receiptId:null,permalink:null,observedAt:new Date(port.now()).toISOString(),accountExternalId:null,observedFingerprint:null,complete:false});
  const same=async()=>{const a=await port.account();return port.current()&&a?.platform==='linkedin'&&a.externalId===snapshot.account.externalId&&a.displayName===context.displayName;};
  const exact=(p:ApprovedPost)=>snapshot.account.platform==='linkedin'&&(imageRoot===undefined?snapshot.images.length===0&&p.images.length===0:snapshot.images.length===1&&p.images.length===1&&snapshot.images.every((image,i)=>image.assetId===p.images[i]!.assetId&&image.version===p.images[i]!.version&&image.sha256===p.images[i]!.sha256&&image.altText===p.images[i]!.altText))&&p.account.platform==='linkedin'&&p.account.externalId===snapshot.account.externalId&&p.account.displayName===context.displayName&&p.text===snapshot.text&&p.publishAt===snapshot.publishAt&&p.zone===snapshot.zone&&p.fingerprint===context.fingerprint;
@@ -60,28 +59,16 @@ function createAdapter(raw:SocialAdapterContext,port:Port,imageRoot?:string):Soc
   if(input.fingerprint!==context.fingerprint||!port.current())return unknown();
   try{
    if(attempted&&!await port.waitForSave())return unknown();
-   if(snapshot.images.length&&!context.mediaBinding&&!capture){
-    if(imageRoot===undefined||!attempted||!submissionToken||!baseline)return unknown();
-    const result=z.strictObject({ok:z.literal(true),view:z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/),platformId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)})}).parse(await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInMediaCaptureScript({action:'read',token:submissionToken,sha256:snapshot.images[0]!.sha256,altText:snapshot.images[0]!.altText})}],false));
-    if(!port.current())return unknown();capture=result.view;
-   }
    if(!await same())return unknown();await port.openScheduledList();if(!port.current())return unknown();
+   let scheduled:InspectionResult;
    if(snapshot.images.length){
     const expected={accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:snapshot.images.map(i=>({sha256:i.sha256,altText:i.altText}))};
-    if(!context.mediaBinding&&capture&&baseline){
-     const first=await inspectLinkedInSubmittedImage(expected,capture,baseline,{...port,account:async()=>await same()?snapshot.account.externalId:null});
-     if(input.receiptId!==null&&first.receiptId!==input.receiptId)return unknown();
-     if(first.complete&&first.mediaBinding)context.mediaBinding=first.mediaBinding;
-     return first;
-    }
-    const binding=context.mediaBinding;
-    if(!binding||(input.receiptId!==null&&input.receiptId!==binding.receiptId))return unknown();
-    return inspectLinkedInImageReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:snapshot.images.map(i=>({sha256:i.sha256,altText:i.altText}))},binding,{...port,account:async()=>await same()?snapshot.account.externalId:null});
+    scheduled=await inspectLinkedInPreviewReceipt(expected,input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null},attempted?baseline??[]:[]);
    }
-   const scheduled=await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
+   else scheduled=await inspectLinkedInTextReceipt({accountExternalId:snapshot.account.externalId,postingName:context.displayName,text:snapshot.text,publishAt:snapshot.publishAt,fingerprint:context.fingerprint,images:[]},input.receiptId,{...port,account:async()=>await same()?snapshot.account.externalId:null});
    if(scheduled.state==='scheduled')return scheduled;
    if(!port.published||!input.receiptId||!/^urn:li:share:\d+$/.test(input.receiptId)||Date.parse(snapshot.publishAt)>port.now()||!port.current())return unknown();
-   const result=z.strictObject({ok:z.literal(true),view:z.strictObject({shareId:z.string(),activityId:z.string().regex(/^urn:li:activity:\d+$/),authorExternalId:z.string(),text:z.string().max(10000),permalink:z.string(),publishedAt:z.null()})}).parse(await port.published(input.receiptId));
+   const result=z.strictObject({ok:z.literal(true),view:z.strictObject({shareId:z.string(),activityId:z.string().regex(/^urn:li:activity:\d+$/),authorExternalId:z.string(),text:z.string().max(10000),permalink:z.string(),publishedAt:z.null()})}).parse(await port.published(input.receiptId,snapshot.images.length));
    const v=result.view;
    if(!port.current()||v.shareId!==input.receiptId||v.authorExternalId!==snapshot.account.externalId||v.text!==snapshot.text||v.permalink!==`https://www.linkedin.com/feed/update/${v.activityId}/`||!await same())return unknown();
    return {state:'published',receiptId:input.receiptId,permalink:v.permalink,observedAt:new Date(port.now()).toISOString(),accountExternalId:snapshot.account.externalId,observedFingerprint:context.fingerprint,complete:true};

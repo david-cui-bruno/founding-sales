@@ -34,3 +34,16 @@ it('binds an initial receipt only to original captured media, excluding every ba
  expect(await inspectLinkedInSubmittedImage(raw,{...proof,sha256:'c'.repeat(64)},[],p)).toMatchObject({state:'unknown'});
  expect(await inspectLinkedInSubmittedImage(raw,{...proof,platformId:'different'},[],p)).toMatchObject({state:'unknown'});
 });
+
+it('accepts a loaded preview without native identity mapping and refuses old or changed posts',async()=>{
+ const {inspectLinkedInPreviewReceipt}=await import('../src/main/social/adapters/linkedinReceiptInspection.ts');
+ const raw={...expected,images:[{sha256:'b'.repeat(64),altText:'Image'}]};
+ const p={...setup(),list:async()=>({ok:true,total:1,complete:true,rows:[{...row,images:[{src:'preview'}]}],zone:'America/New_York'}),detail:vi.fn(async()=>({...await setup().detail(row.receiptId),images:[{loaded:true}]}))};
+ expect(await inspectLinkedInPreviewReceipt(raw,null,p,[])).toMatchObject({state:'scheduled',receiptId:row.receiptId,complete:true});
+ expect(await inspectLinkedInPreviewReceipt(raw,null,p,[row.receiptId])).toMatchObject({state:'unknown'});
+ expect(await inspectLinkedInPreviewReceipt(raw,'urn:li:share:999',p)).toMatchObject({state:'unknown'});
+ for(const change of [{images:[{loaded:false}]},{images:[]},{text:'Edited'}]){
+  p.detail.mockResolvedValueOnce({...await p.detail(),...change});
+  expect(await inspectLinkedInPreviewReceipt(raw,row.receiptId,p)).toMatchObject({state:'unknown'});
+ }
+});

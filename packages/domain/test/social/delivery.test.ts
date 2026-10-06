@@ -73,7 +73,7 @@ it('persists image identity for restart, rejects conflicting bindings, and prese
  expect(await save({...observation,mediaBinding:{...mediaBinding,images:[...mediaBinding.images,...mediaBinding.images]}})).toMatchObject({ok:false,reason:'invalid_media_binding'});
  expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:otherDevice,submissionId:b.value.submissionId,observation}))).toMatchObject({ok:false,reason:'wrong_device'});
  const {mediaBinding:ignored,...missing}=observation;void ignored;
- expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:missing}))).toMatchObject({ok:false,reason:'media_binding_required'});
+ expect(await tx(()=>recordSocialObservation(ctx(),{deviceId:device,submissionId:b.value.submissionId,observation:missing}))).toMatchObject({ok:true,value:{state:'scheduled'}});
  expect(await save(observation)).toMatchObject({ok:true,value:{state:'scheduled'}});
  expect(await save({...observation,mediaBinding:{...mediaBinding,images:[{sha256:'b'.repeat(64),platformId:'replacement'}]}})).toMatchObject({ok:false,reason:'media_binding_conflict'});
  expect(await save({...observation,receiptId:'urn:li:share:999'})).toMatchObject({ok:false});

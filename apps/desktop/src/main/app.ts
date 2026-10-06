@@ -1,11 +1,15 @@
+import {createSocialDeliveryRunner} from './social/deliveryRunner.ts';
+import {createSocialDeliveryPump} from './social/deliveryPump.ts';
+import {createLinkedInBrowserPorts} from './social/adapters/linkedinBrowserPorts.ts';
+import {createLinkedInTextAdapter,createLinkedInImageAdapter} from './social/adapters/linkedinAdapter.ts';
 import {createSocialAccountsBridge} from './social/accountsBridge.ts';
 import {createElectronSocialRuntime} from './social/electronRuntime.ts';
 import {probeLinkedInIdentity} from './social/identityProbe.ts';
 import {createSocialImageImport} from './social/imageImport.ts';
 import { join } from 'node:path';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, powerMonitor } from 'electron';
 import { z } from 'zod';
-import { uuid } from '@fss/contracts';
+import { uuid, LINKEDIN_ADAPTER_VERSION } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { BUNDLE_ORIGIN } from './bundleScheme.ts';
@@ -247,6 +251,21 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   });
 
   const socialRuntime=createElectronSocialRuntime();
+  const socialRoot=join(configuration.userDataDirectory,'social-delivery');
+  const socialRunner=createSocialDeliveryRunner({api,root:socialRoot,identity:()=>manager.signedInIdentity(),now:Date.now,adapters:{
+    linkedin:{version:LINKEDIN_ADAPTER_VERSION,open:(scope,run,context)=>socialRuntime.withAccount(scope,async({window,isCurrent})=>{
+      const native=window as BrowserWindow;
+      const ports=createLinkedInBrowserPorts({current:isCurrent,now:Date.now,wait:()=>new Promise(resolve=>setTimeout(resolve,500)),
+        contents:{getURL:()=>native.webContents.getURL(),insertText:text=>native.webContents.insertText(text),executeJavaScriptInIsolatedWorld:(world,scripts,gesture)=>native.webContents.executeJavaScriptInIsolatedWorld(world,scripts,gesture)},
+        loadURL:url=>native.loadURL(url)});
+      const adapter=context.snapshot.images.length?createLinkedInImageAdapter(context,{...ports,root:socialRoot}):createLinkedInTextAdapter(context,ports);
+      await run(adapter,isCurrent);
+    })}
+  }});
+  const socialPump=createSocialDeliveryPump(socialRunner);
+  socialPump.start();
+  powerMonitor.on('resume',()=>socialPump.wake());
+  app.once('before-quit',()=>{socialPump.stop();socialRuntime.signOut();});
   const socialAccounts=createSocialAccountsBridge({api,identity:async()=>manager.signedInIdentity(),generation:()=>manager.sessionGeneration(),clear:scope=>socialRuntime.disconnect(scope),open:async scope=>{
     const answer=await socialRuntime.connectAccount(scope,async ({window,isCurrent})=>{
       while(isCurrent()){
@@ -335,7 +354,9 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
    * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
+    socialPump.stop();
     socialRuntime.signOut();
+    socialPump.start();
     void resetBridges([
       bridges.today,
       bridges.replies,

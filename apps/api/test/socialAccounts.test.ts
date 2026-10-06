@@ -9,7 +9,7 @@ it('replays connection once and never accepts client-supplied scheduling verific
   const call=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
   const input={accountId:randomUUID(),platform:'linkedin',externalId:'fixture-profile',displayName:'Fixture founder',accountKind:'profile',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
   expect((await call('/social/accounts/connect',{...input,state:'connected',verifiedAt:new Date().toISOString()})).status).toBe(400);
-  expect((await call('/social/accounts/connect',input)).body).toMatchObject({result:{accountId:input.accountId,state:'unsupported'}});
+  expect((await call('/social/accounts/connect',input)).body).toMatchObject({result:{accountId:input.accountId,state:'connected'}});
   expect((await call('/social/accounts/connect',input)).body).toMatchObject({replayed:true});
   const disconnected={accountId:input.accountId,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
   token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;

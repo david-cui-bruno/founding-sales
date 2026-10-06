@@ -45,7 +45,6 @@ export async function recordSocialObservation(ctx:RepositoryContext,input:{devic
    if(!old.success||JSON.stringify(old.data)!==JSON.stringify(binding))return {ok:false,reason:'media_binding_conflict'};
   }else if(o.state!=='scheduled')return {ok:false,reason:'invalid_media_binding'};
  }
- if(matched&&d.snapshot.images.length>0&&['scheduled','published','cancelled','absent'].includes(o.state)&&!binding&&!d.media_binding)return {ok:false,reason:'media_binding_required'};
  if(binding)await ctx.db.query('UPDATE social_deliveries SET media_binding=COALESCE(media_binding,$3::jsonb) WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,d.id,JSON.stringify(binding)]);
  let state:PostRevision['state']='unknown',reason:string|null='inspection_incomplete';
  if(matched){

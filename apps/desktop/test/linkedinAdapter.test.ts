@@ -3,10 +3,10 @@ import {submitApprovedSocialPost} from '../src/main/social/deliveryLoop.ts';
 vi.mock('../src/main/social/adapters/linkedinCancel.ts',()=>({cancelLinkedInReceipt:vi.fn()}));
 import {cancelLinkedInReceipt} from '../src/main/social/adapters/linkedinCancel.ts';
 vi.mock('../src/main/social/adapters/linkedinStage.ts',()=>({stageLinkedInText:vi.fn(async()=>({ready:true}))}));
-vi.mock('../src/main/social/adapters/linkedinReceiptInspection.ts',()=>({inspectLinkedInTextReceipt:vi.fn(),inspectLinkedInImageReceipt:vi.fn(),inspectLinkedInSubmittedImage:vi.fn()}));
+vi.mock('../src/main/social/adapters/linkedinReceiptInspection.ts',()=>({inspectLinkedInTextReceipt:vi.fn(),inspectLinkedInPreviewReceipt:vi.fn()}));
 vi.mock('../src/main/social/adapters/linkedinPostStage.ts',()=>({stageLinkedInPost:vi.fn(async()=>({ready:true}))}));
 import {createLinkedInTextAdapter,createLinkedInImageAdapter} from '../src/main/social/adapters/linkedinAdapter.ts';
-import {inspectLinkedInTextReceipt,inspectLinkedInImageReceipt,inspectLinkedInSubmittedImage} from '../src/main/social/adapters/linkedinReceiptInspection.ts';
+import {inspectLinkedInTextReceipt,inspectLinkedInPreviewReceipt} from '../src/main/social/adapters/linkedinReceiptInspection.ts';
 import type {SocialAdapterContext} from '../src/main/social/deliveryRunner.ts';
 import type {ApprovedPost} from '../src/main/social/adapters.ts';
 const context:SocialAdapterContext={snapshot:{account:{id:'id',platform:'linkedin',externalId:'profile',revision:1,adapterVersion:'v1'},text:'Approved',images:[],publishAt:'2026-11-02T15:00:00.000Z',zone:'America/New_York'},fingerprint:'a'.repeat(64),displayName:'Founder'};
@@ -76,19 +76,18 @@ it('also waits after a lost click response and never repeats that click',async()
  expect(await adapter.submit(post)).toMatchObject({kind:'not_submitted'});
 });
 
-it('uses persisted image evidence for recovery but never permits an image submission through the text adapter',async()=>{
+it('uses saved preview evidence for recovery but never permits an image submission through the text adapter',async()=>{
  const h=setup(),mediaBinding={receiptId:'urn:li:share:123',fingerprint:context.fingerprint,images:[{sha256:'b'.repeat(64),platformId:'native-image'}]};
  const image={assetId:'id',version:1,sha256:'b'.repeat(64),altText:'Alt',mime:'image/png',width:100,height:100};
  const adapter=createLinkedInTextAdapter({...context,mediaBinding,snapshot:{...context.snapshot,images:[image]}},h.port);
- vi.mocked(inspectLinkedInImageReceipt).mockResolvedValue({state:'scheduled',receiptId:mediaBinding.receiptId,permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:'profile',observedFingerprint:context.fingerprint,complete:true,mediaBinding});
- expect(await adapter.inspect({receiptId:mediaBinding.receiptId,fingerprint:context.fingerprint})).toMatchObject({state:'scheduled',mediaBinding});
- expect(inspectLinkedInImageReceipt).toHaveBeenCalledWith(expect.objectContaining({images:[{sha256:image.sha256,altText:image.altText}]}),mediaBinding,expect.any(Object));
- expect(await adapter.inspect({receiptId:'urn:li:share:999',fingerprint:context.fingerprint})).toMatchObject({state:'unknown'});
+ vi.mocked(inspectLinkedInPreviewReceipt).mockResolvedValue({state:'scheduled',receiptId:mediaBinding.receiptId,permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:'profile',observedFingerprint:context.fingerprint,complete:true});
+ expect(await adapter.inspect({receiptId:mediaBinding.receiptId,fingerprint:context.fingerprint})).toMatchObject({state:'scheduled'});
+ expect(inspectLinkedInPreviewReceipt).toHaveBeenCalledWith(expect.objectContaining({images:[{sha256:image.sha256,altText:image.altText}]}),mediaBinding.receiptId,expect.any(Object),[]);
  expect(await adapter.stage({...post,images:[{...image,localPath:'/unused'}]})).toMatchObject({ready:false});
  expect(h.port.contents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
 });
 
-it('captures original image proof before navigating to its new saved receipt',async()=>{
+it('checks the saved receipt without a native media transition',async()=>{
  const h=setup();h.port.list.mockResolvedValue({ok:true,complete:true,total:0,rows:[]});
  const image={assetId:'id',version:1,sha256:'b'.repeat(64),altText:'Alt',mime:'image/png',width:100,height:100};
  const adapter=createLinkedInImageAdapter({...context,snapshot:{...context.snapshot,images:[image]}},{...h.port,root:'/private'});
@@ -96,19 +95,20 @@ it('captures original image proof before navigating to its new saved receipt',as
  expect(await adapter.stage(imagePost)).toMatchObject({ready:true});
  h.port.contents.executeJavaScriptInIsolatedWorld.mockResolvedValueOnce({attempted:true}).mockResolvedValueOnce({ok:true,view:{sha256:image.sha256,platformId:'native-image'}} as never);
  await adapter.submit(imagePost);
- vi.mocked(inspectLinkedInSubmittedImage).mockResolvedValue({state:'scheduled',receiptId:'urn:li:share:123',permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:'profile',observedFingerprint:context.fingerprint,complete:true,mediaBinding:{receiptId:'urn:li:share:123',fingerprint:context.fingerprint,images:[{sha256:image.sha256,platformId:'native-image'}]}});
+ vi.mocked(inspectLinkedInPreviewReceipt).mockResolvedValue({state:'scheduled',receiptId:'urn:li:share:123',permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:'profile',observedFingerprint:context.fingerprint,complete:true,mediaBinding:{receiptId:'urn:li:share:123',fingerprint:context.fingerprint,images:[{sha256:image.sha256,platformId:'native-image'}]}});
  expect(await adapter.inspect({receiptId:null,fingerprint:context.fingerprint})).toMatchObject({state:'scheduled'});
- expect(inspectLinkedInSubmittedImage).toHaveBeenCalledWith(expect.anything(),{sha256:image.sha256,platformId:'native-image'},[],expect.anything());
+ expect(inspectLinkedInPreviewReceipt).toHaveBeenCalledWith(expect.anything(),null,expect.anything(),[]);
  expect(await adapter.submit(imagePost)).toMatchObject({kind:'not_submitted'});
 });
-it('never infers image identity after a lost submission response or missing native transition',async()=>{
+it('keeps an ambiguous image save unknown without another click',async()=>{
  const h=setup();h.port.list.mockResolvedValue({ok:true,complete:true,total:0,rows:[]});
  const image={assetId:'id',version:1,sha256:'b'.repeat(64),altText:'Alt',mime:'image/png',width:100,height:100};
  const adapter=createLinkedInImageAdapter({...context,snapshot:{...context.snapshot,images:[image]}},{...h.port,root:'/private'}),imagePost={...post,images:[{...image,localPath:'/private/image.png'}]};
  await adapter.stage(imagePost);
  h.port.contents.executeJavaScriptInIsolatedWorld.mockRejectedValueOnce(new Error('lost')).mockResolvedValueOnce({ok:false} as never);
  expect(await adapter.submit(imagePost)).toMatchObject({kind:'unknown'});
+ vi.mocked(inspectLinkedInPreviewReceipt).mockResolvedValue({state:'unknown',receiptId:null,permalink:null,observedAt:'2026-10-06T12:00:00Z',accountExternalId:null,observedFingerprint:null,complete:false});
  expect(await adapter.inspect({receiptId:null,fingerprint:context.fingerprint})).toMatchObject({state:'unknown'});
- expect(h.port.openScheduledList).toHaveBeenCalledTimes(1);
+ expect(h.port.openScheduledList).toHaveBeenCalledTimes(2);
  expect(await adapter.submit(imagePost)).toMatchObject({kind:'not_submitted'});
 });
