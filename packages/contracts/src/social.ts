@@ -26,3 +26,27 @@ export const socialObservationCommandSchema=z.strictObject({submissionId:uuid,ob
 export const socialAccountViewSchema=z.strictObject({id:uuid,platform:socialPlatformSchema,displayName:z.string(),externalId:z.string(),accountKind:z.enum(['profile','page']),state:z.enum(['connected','reconnect','unsupported','disconnected']),adapterVersion:z.string().nullable(),verifiedAt:z.string().nullable()});
 export const socialWorkspaceSchema=z.strictObject({accounts:z.array(socialAccountViewSchema),posts:z.array(socialPostRevisionSchema)});
 export type SocialWorkspace=z.infer<typeof socialWorkspaceSchema>;
+export const socialPostMutationSchema=z.discriminatedUnion('action',[
+ saveSocialPostSchema.safeExtend({action:z.literal('save'),commandId:commandIdSchema}),
+ z.strictObject({action:z.literal('approve'),postId:uuid,expectedRevision:z.number().int().positive(),commandId:commandIdSchema}),
+ z.strictObject({action:z.literal('cancel'),postId:uuid,expectedRevision:z.number().int().positive(),commandId:commandIdSchema}),
+]);
+export type SocialPostMutation=z.infer<typeof socialPostMutationSchema>;
+
+export const socialAssetViewSchema = z.strictObject({
+ id: uuid,
+ state: z.enum(['uploading', 'ready', 'deleted']),
+ version: z.number().int().nonnegative(),
+ origin: socialAssetOriginSchema,
+ objects: z.array(z.strictObject({
+  version: z.number().int().nonnegative(),
+  kind: z.enum(['original', 'derivative']),
+  state: z.enum(['uploading', 'ready', 'deleted']),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  bytes: z.number().int().positive(),
+  mime: z.string().max(100),
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+ })),
+});
+export const socialAssetLibrarySchema = z.strictObject({assets: z.array(socialAssetViewSchema)});

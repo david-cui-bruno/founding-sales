@@ -94,6 +94,8 @@ const session = {
 
 /** One call of every operation, with an input its schema accepts. */
 const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze({
+  'social.workspace':{},
+  'social.mutate':{action:'approve',postId:UUID,expectedRevision:1,commandId:UUID},
   'outreach.control':{},
   'outreach.preview':{mailboxId:UUID,candidateIds:[UUID],emailSequenceVersionId:null,callSequenceVersionId:null},
   'outreach.mutate':{action:'authorization',mailboxId:UUID,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission',commandId:UUID},
@@ -322,6 +324,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
+    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['workspace','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])) as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);

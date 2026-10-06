@@ -204,7 +204,7 @@ export type DesktopState = z.infer<typeof desktopStateSchema>;
  * including the cold ones. They are two rows now (David, 29 September 2026). A firm's
  * page is still under Firms, wherever it was opened from.
  */
-export const ROUTE_NAMES = ['today', 'replies', 'pipeline', 'firms', 'sequences', 'settings'] as const;
+export const ROUTE_NAMES = ['today', 'replies', 'pipeline', 'firms', 'sequences', 'social', 'settings'] as const;
 export type RouteName = (typeof ROUTE_NAMES)[number];
 
 /** Settings is one view with three tabs, and the tab is part of the route. */
@@ -223,6 +223,7 @@ export const NAVIGATION_TARGETS = [
   'pipeline',
   'firms',
   'sequences',
+  'social',
   ...SETTINGS_TABS.map(tab => `settings/${tab}` as const),
 ] as const;
 export type NavigationTarget = (typeof NAVIGATION_TARGETS)[number];

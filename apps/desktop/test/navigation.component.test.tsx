@@ -55,14 +55,14 @@ describe('the sidebar', () => {
       .getAllByRole('button')
       .filter(node => node.dataset['testid']?.startsWith('nav-') === true)
       .map(node => node.textContent);
-    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5', 'Settings⌘,']);
+    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5', 'Social⌘6', 'Settings⌘,']);
     // Neither of the two that moved into Settings is a row here.
     expect(screen.queryByTestId('nav-dashboard')).toBeNull();
     expect(screen.queryByTestId('nav-admin')).toBeNull();
   });
 
   it('keeps the Dashboard out of the rows the shell builds from', () => {
-    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences']);
+    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'social']);
     expect(SETTINGS_ROW.route).toBe('settings');
   });
 

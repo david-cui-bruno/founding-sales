@@ -1,3 +1,4 @@
+import {socialWorkspaceSchema,socialPostMutationSchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortInputSchema,outreachCohortPreviewSchema,outreachMutationSchema} from '@fss/contracts';
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
 import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
@@ -826,6 +827,8 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.workspace': {kind:'read',calls:[{method:'POST',path:'/social'}],input:z.strictObject({}),output:z.strictObject({view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner social drafts and destination connections'},
+  'social.mutate': {kind:'command',calls:[{method:'POST',path:'/social/posts/save'},{method:'POST',path:'/social/posts/approve'},{method:'POST',path:'/social/posts/cancel'},{method:'POST',path:'/social'}],input:socialPostMutationSchema,output:z.strictObject({accepted:z.boolean(),view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Exact revision and explicit scheduling approval'},
   'outreach.control': {kind:'read',calls:[{method:'POST',path:'/outreach/control'}],input:z.strictObject({}),output:z.strictObject({view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender, facts, reply policy and review queue'},
   'outreach.preview': {kind:'read',calls:[{method:'POST',path:'/outreach/cohort/preview'}],input:outreachCohortInputSchema,output:z.strictObject({view:outreachCohortPreviewSchema.nullable(),reason:z.string().nullable()}),transform:'Read-only selected cohort preview'},
   'outreach.mutate': {kind:'command',calls:[{method:'POST',path:'/outreach/authorization/save'},{method:'POST',path:'/outreach/settings/save'},{method:'POST',path:'/outreach/answer-blocks/save'},{method:'POST',path:'/outreach/answer-blocks/approve'},{method:'POST',path:'/outreach/answer-blocks/retire'},{method:'POST',path:'/outreach/cohort/enable'},{method:'POST',path:'/outreach/reply/manual'},{method:'POST',path:'/outreach/control'}],input:outreachMutationSchema,output:z.strictObject({accepted:z.boolean(),view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Revision-bound explicit action; never changes the domain sending pause'},
