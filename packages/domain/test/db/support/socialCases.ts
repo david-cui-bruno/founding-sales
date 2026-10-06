@@ -40,7 +40,7 @@ const checks:Record<string,Record<string,Row>>={
  social_posts:{current_revision_check:{current_revision:0},workspace_id_fkey:{workspace_id:absent},owner_user_id_fkey:{owner_user_id:absent}},
  social_post_revisions:{revision_check:{revision:0},text_check:{text:''},state_check:{state:'bad'},workspace_id_post_id_fkey:{post_id:absent},workspace_id_account_id_fkey:{account_id:absent}},
  social_post_approvals:{fingerprint_check:{fingerprint:'bad'},approved_by_fkey:{approved_by:absent},workspace_id_post_id_revision_fkey:{revision:99}},
- social_deliveries:{state_check:{state:'bad'},inspection_attempts_check:{inspection_attempts:-1},workspace_id_post_id_revision_fkey:{revision:99},workspace_id_approval_id_fkey:{approval_id:absent}},
+ social_deliveries:{media_binding_check:{media_binding:'[]'},state_check:{state:'bad'},inspection_attempts_check:{inspection_attempts:-1},workspace_id_post_id_revision_fkey:{revision:99},workspace_id_approval_id_fkey:{approval_id:absent}},
  social_draft_requests:{source_selection_check:{source_selection:'[]'},source_hash_check:{source_hash:'bad'},state_check:{state:'bad'},paid_attempts_check:{paid_attempts:3},concepts_check:{concepts:'[]'},reason_check:{reason:'x'.repeat(201)},check:{deadline_at:'2026-10-06T13:00:00Z'},check1:{state:'ready'},weekly_revision_check:{weekly_revision:0},workspace_id_fkey:{workspace_id:absent},workspace_id_owner_user_id_fkey:{owner_user_id:absent}},
  social_weekly_settings:{revision_check:{revision:0},last_result_check:{last_result:'bad'},check:{enabled:true},workspace_id_owner_user_id_fkey:{owner_user_id:absent}},
 };
