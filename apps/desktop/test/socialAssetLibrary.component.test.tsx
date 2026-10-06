@@ -14,7 +14,7 @@ it('selects only the ready reviewed derivative with required alt text',async()=>
 it('does not claim a failed deletion succeeded',async()=>{
  const remove=vi.fn(async()=>({accepted:false,reason:'offline'}));render(<AssetLibrary ports={{read:async()=>({assets:[asset],reason:null}),remove}}/>);
  await waitFor(()=>expect(screen.getByText('Approved product screenshot')).toBeTruthy());fireEvent.click(screen.getByText('Remove image'));
- await waitFor(()=>expect(remove).toHaveBeenCalledTimes(1));expect(screen.getByText('Approved product screenshot')).toBeTruthy();expect(screen.getByRole('status').textContent).toContain('could not');
+ await waitFor(()=>expect(remove).toHaveBeenCalledTimes(1));expect(screen.getByText('Approved product screenshot')).toBeTruthy();expect(screen.getByText('The image could not be removed. Try again.')).toBeTruthy();
 });
 it('loads another page without losing the first page',async()=>{
  const first=Array.from({length:50},(_,index)=>({...asset,id:`asset-${index}`,origin:{...asset.origin,usageNote:`Image ${index}`}}));

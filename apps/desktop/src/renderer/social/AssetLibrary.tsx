@@ -1,3 +1,4 @@
+import {ImageEditor} from './ImageEditor.tsx';
 import {SocialImage} from './SocialImage.tsx';
 import {useEffect, useRef, useState} from 'react';
 import type {SocialAssetView} from '@fss/contracts';
@@ -34,6 +35,7 @@ export function AssetLibrary({ports=defaults,onSelect}:{ports?:AssetLibraryPorts
   finally{if(live.current===generation)setBusy(false);}
  };
  return <div className="space-y-4" aria-label="Image library">
+  <ImageEditor onSaved={()=>{const generation=live.current;void currentPorts.current.read().then(result=>{if(live.current!==generation)return;if(result.assets){setAssets(result.assets);setCursor(result.assets.length===50?result.assets.at(-1)!.id:null);setNotice(null);}else setNotice('Your image was saved. Reload the library to see it.');}).catch(()=>{if(live.current===generation)setNotice('Your image was saved. Reload the library to see it.');});}}/>
   {notice&&<p role="status" className="text-sm">{notice}</p>}
   {assets.length===0&&!notice&&<p className="py-8 text-sm text-muted-foreground">No images in your library yet.</p>}
   {assets.map(asset=>{const derivative=asset.objects.find(object=>object.kind==='derivative'&&object.version===asset.version&&object.state==='ready');return <article key={asset.id} className="space-y-3 rounded-xl border border-border p-4">

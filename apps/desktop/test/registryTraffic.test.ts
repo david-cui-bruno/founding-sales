@@ -1,3 +1,8 @@
+import {mkdtemp,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import sharp from 'sharp';
+import {createSocialImageImport} from '../src/main/social/imageImport.ts';
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createBriefImport } from '../src/main/briefImport.ts';
@@ -327,7 +332,15 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
-    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['workspace','mutate','assets','removeAsset','thumbnail'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])) as Host;})(),
+    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+      const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
+      try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
+        const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});
+        const chosen=await host.choose({kind:'upload',usageNote:null});if(!chosen.stage)throw new Error('image fixture not prepared');
+        if(action==='discardImage')await host.upload({id:chosen.stage.id});
+        return await operationHandlers({api,socialImages:host} as unknown as OperationHostDeps)[`social.${action}` as OperationName]({id:chosen.stage.id} as never);
+      }finally{await rm(directory,{recursive:true,force:true});}
+    }]))} as Host;})(),
     outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);

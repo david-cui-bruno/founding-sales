@@ -1,3 +1,4 @@
+import {socialImageImportViewSchema,socialImageChooseSchema,socialImageEditSchema} from './socialImages.ts';
 import {socialWorkspaceSchema,socialPostMutationSchema,socialAssetLibrarySchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortInputSchema,outreachCohortPreviewSchema,outreachMutationSchema} from '@fss/contracts';
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
@@ -827,6 +828,13 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.imageStage': {kind:'read',calls:[],input:z.strictObject({}),output:socialImageImportViewSchema,transform:'Owner-private local image preparation'},
+  'social.chooseImage': {kind:'command',calls:[],input:socialImageChooseSchema,output:socialImageImportViewSchema,transform:'Explicit native file picker; no renderer paths'},
+  'social.pasteImage': {kind:'command',calls:[],input:z.strictObject({usageNote:z.string().trim().max(1000).nullable()}),output:socialImageImportViewSchema,transform:'Explicit clipboard image selection; no clipboard text access'},
+  'social.imageFromUrl': {kind:'command',calls:[],input:z.strictObject({url:z.string().url().max(2048),usageNote:z.string().trim().max(1000).nullable()}),output:socialImageImportViewSchema,transform:'Explicit public image URL with bounded DNS-pinned download'},
+  'social.editImage': {kind:'command',calls:[],input:socialImageEditSchema,output:socialImageImportViewSchema,transform:'Preview immutable crop and opaque covers locally'},
+  'social.uploadImage': {kind:'command',calls:[{method:'POST',path:'/social/assets/read'},{method:'POST',path:'/social/assets/register'},{method:'POST',path:'/social/assets/upload-url'},{method:'POST',path:'/social/assets/complete'}],input:z.strictObject({id:uuid}),output:socialImageImportViewSchema,transform:'Resumable original and derivative upload with persisted command IDs'},
+  'social.discardImage': {kind:'command',calls:[{method:'POST',path:'/social/assets/register'},{method:'POST',path:'/social/assets/delete'}],input:z.strictObject({id:uuid}),output:socialImageImportViewSchema,transform:'Discard unsubmitted local image preparation'},
   'social.thumbnail': {kind:'read',calls:[{method:'POST',path:'/social/assets/read'},{method:'POST',path:'/social/assets/download-url'}],input:z.strictObject({assetId:uuid,version:z.number().int().positive()}),output:z.strictObject({preview:z.string().max(700000).regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/u).nullable(),reason:z.string().nullable()}),transform:'Bounded raster preview; signed URLs stay in the main process'},
   'social.assets': {kind:'read',calls:[{method:'POST',path:'/social/assets'}],input:z.strictObject({afterId:uuid.optional()}),output:z.strictObject({assets:socialAssetLibrarySchema.shape.assets.nullable(),reason:z.string().nullable()}),transform:'Private asset metadata without storage credentials'},
   'social.removeAsset': {kind:'command',calls:[{method:'POST',path:'/social/assets/delete'}],input:z.strictObject({assetId:uuid,commandId:z.string().uuid()}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Owner-requested image removal'},

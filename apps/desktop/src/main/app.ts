@@ -1,5 +1,6 @@
+import {createSocialImageImport} from './social/imageImport.ts';
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
@@ -243,6 +244,18 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   });
 
   const bridges = registerWindowBridges({
+    socialImages: createSocialImageImport({
+      directory: configuration.userDataDirectory, api,
+      readClipboard: async () => {
+        const items=await clipboard.read();
+        const item=items.find(value=>value.types.includes('image/png'));if(!item)return null;
+        const image=await item.getType('image/png');if(!('arrayBuffer' in image))return null;
+        if(image.size>20*1024*1024)throw new Error('image_too_large');return Buffer.from(await image.arrayBuffer());
+      },
+      identity: async () => manager.signedInIdentity(),
+      generation: () => manager.sessionGeneration(),
+      chooseFile: async () => dialog.showOpenDialog({title:'Choose an image for Callie',properties:['openFile'],filters:[{name:'Still images',extensions:['png','jpg','jpeg','webp','heic','heif']}]}),
+    }),
     today: {
       api,
       // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services

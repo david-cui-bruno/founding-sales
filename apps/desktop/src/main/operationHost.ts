@@ -1,3 +1,4 @@
+import type {SocialImageImport} from './social/imageImport.ts';
 import {socialAssetViewSchema,socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
@@ -75,6 +76,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  */
 
 export interface OperationHostDeps {
+  readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
   readonly today: TodayBridgeHost;
   readonly replies: ReplyBridgeHost;
@@ -168,6 +170,13 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.imageStage':async()=>deps.socialImages?deps.socialImages.state():{stage:null,reason:null,savedAssetId:null},
+    'social.chooseImage':async(input:OperationInput<'social.chooseImage'>)=>deps.socialImages?deps.socialImages.choose(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.pasteImage':async(input:OperationInput<'social.pasteImage'>)=>deps.socialImages?deps.socialImages.paste(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.imageFromUrl':async(input:OperationInput<'social.imageFromUrl'>)=>deps.socialImages?deps.socialImages.fromUrl(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.editImage':async(input:OperationInput<'social.editImage'>)=>deps.socialImages?deps.socialImages.edit(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.uploadImage':async(input:OperationInput<'social.uploadImage'>)=>deps.socialImages?deps.socialImages.upload(input):{stage:null,reason:'unavailable',savedAssetId:null},
+    'social.discardImage':async(input:OperationInput<'social.discardImage'>)=>deps.socialImages?deps.socialImages.discard(input):{stage:null,reason:'unavailable',savedAssetId:null},
     'social.thumbnail':async(input:OperationInput<'social.thumbnail'>)=>{
       const generation=deps.recordings.identity.current(),current=()=>generation===deps.recordings.identity.current();
       try{

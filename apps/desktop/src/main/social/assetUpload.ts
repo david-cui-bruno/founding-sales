@@ -1,6 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {registerSocialAssetSchema,uuid,type RegisterSocialAsset} from '@fss/contracts';
+import {registerSocialAssetSchema,socialAssetViewSchema,uuid,type RegisterSocialAsset} from '@fss/contracts';
 import type {AuthedClient} from '../authedClient.ts';
 export const socialUploadCheckpointSchema=z.strictObject({sha256:z.string().regex(/^[a-f0-9]{64}$/u),registrationCommandId:uuid,completionCommandId:uuid,assetId:uuid.nullable(),uploadId:uuid.nullable(),version:z.number().int().positive().nullable()});
 export type SocialUploadCheckpoint=z.infer<typeof socialUploadCheckpointSchema>;
@@ -36,7 +36,17 @@ export async function uploadSocialAssetVersion(deps:UploadPorts,input:RegisterSo
   if(checkpoint.version!==null)return {ok:true,assetId:checkpoint.assetId,version:checkpoint.version};
   const location=await deps.api.read('/social/assets/upload-url',v=>locationSchema.parse(v),{assetId:checkpoint.assetId,uploadId:checkpoint.uploadId});
   if(!deps.isCurrent())return {ok:false,reason:'session_changed'};
-  if(!location.ok)return {ok:false,reason:location.reason};
+  if(!location.ok){
+   // A completed object no longer receives PUT URLs. Recover a lost completion reply
+   // only from the exact ready object version and digest, never from asset state alone.
+   const existing=await deps.api.read('/social/assets/read',v=>z.strictObject({asset:socialAssetViewSchema}).parse(v),{assetId:checkpoint.assetId});
+   if(!deps.isCurrent())return {ok:false,reason:'session_changed'};
+   const version=input.assetId===undefined?1:input.expectedVersion!+1;
+   const object=existing.ok&&existing.value.asset.id===checkpoint.assetId&&existing.value.asset.state!=='deleted'?existing.value.asset.objects.find(o=>o.version===version&&o.state==='ready'&&o.kind===(input.assetId===undefined?'original':'derivative')&&o.sha256===input.sha256&&o.bytes===input.bytes&&o.mime===input.mime):undefined;
+   if(!object)return {ok:false,reason:location.reason};
+   checkpoint.version=object.version;await deps.save(checkpoint);
+   return deps.isCurrent()?{ok:true,assetId:checkpoint.assetId,version:checkpoint.version}:{ok:false,reason:'session_changed'};
+  }
   const result=await (deps.put??putImmutable)(location.value,bytes);
   if(!deps.isCurrent())return {ok:false,reason:'session_changed'};
   // A prior attempt may already own the immutable key. The API's checksum HEAD decides.
