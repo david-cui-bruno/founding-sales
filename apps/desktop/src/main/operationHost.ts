@@ -1,4 +1,4 @@
-import {socialWorkspaceSchema} from '@fss/contracts';
+import {socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
@@ -168,6 +168,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'social.assets':async(input:OperationInput<'social.assets'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/social/assets',v=>socialAssetLibrarySchema.parse(v),input);if(generation!==deps.recordings.identity.current())return {assets:null,reason:'not_found'};return answer.ok?{assets:answer.value.assets,reason:null}:{assets:null,reason:answer.reason};},
+    'social.removeAsset':async(input:OperationInput<'social.removeAsset'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/social/assets/delete',{assetId:input.assetId},v=>z.unknown().parse(v),{commandId:input.commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'not_found'};return {accepted:answer.ok,reason:answer.ok?null:answer.reason};},
     'social.workspace':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.mutate':async(input:OperationInput<'social.mutate'>)=>{const generation=deps.recordings.identity.current();const {action,commandId,...payload}=input;const paths={save:'/social/posts/save',approve:'/social/posts/approve',cancel:'/social/posts/cancel'} as const;const answer=await deps.api.command(paths[action],payload,v=>z.unknown().parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};if(!answer.ok)return {accepted:false,view:null,reason:answer.reason};const view=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};return {accepted:true,view:view.ok?view.value:null,reason:view.ok?null:'refresh_failed'};},
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{

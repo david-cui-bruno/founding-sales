@@ -1,4 +1,4 @@
-import {socialWorkspaceSchema,socialPostMutationSchema} from '@fss/contracts';
+import {socialWorkspaceSchema,socialPostMutationSchema,socialAssetLibrarySchema} from '@fss/contracts';
 import {outreachControlSchema,outreachCohortInputSchema,outreachCohortPreviewSchema,outreachMutationSchema} from '@fss/contracts';
 import {callNeedReadSchema,callNeedSaveSchema,callNeedViewSchema} from '@fss/contracts';
 import {learningInputSchema,learningReportSchema,targetingViewSchema,targetingProposalSchema,targetingApplySchema} from '@fss/contracts';
@@ -827,6 +827,8 @@ export const OPERATIONS = {
     transform: 'the API’s 404 becomes "no transcript" (nothing shown); any other refusal is its code',
   },
 
+  'social.assets': {kind:'read',calls:[{method:'POST',path:'/social/assets'}],input:z.strictObject({afterId:uuid.optional()}),output:z.strictObject({assets:socialAssetLibrarySchema.shape.assets.nullable(),reason:z.string().nullable()}),transform:'Private asset metadata without storage credentials'},
+  'social.removeAsset': {kind:'command',calls:[{method:'POST',path:'/social/assets/delete'}],input:z.strictObject({assetId:uuid,commandId:z.string().uuid()}),output:z.strictObject({accepted:z.boolean(),reason:z.string().nullable()}),transform:'Owner-requested image removal'},
   'social.workspace': {kind:'read',calls:[{method:'POST',path:'/social'}],input:z.strictObject({}),output:z.strictObject({view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner social drafts and destination connections'},
   'social.mutate': {kind:'command',calls:[{method:'POST',path:'/social/posts/save'},{method:'POST',path:'/social/posts/approve'},{method:'POST',path:'/social/posts/cancel'},{method:'POST',path:'/social'}],input:socialPostMutationSchema,output:z.strictObject({accepted:z.boolean(),view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Exact revision and explicit scheduling approval'},
   'outreach.control': {kind:'read',calls:[{method:'POST',path:'/outreach/control'}],input:z.strictObject({}),output:z.strictObject({view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender, facts, reply policy and review queue'},
