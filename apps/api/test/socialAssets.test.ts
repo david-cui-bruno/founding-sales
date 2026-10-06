@@ -39,3 +39,26 @@ it('the authenticated API does not trust browser completion metadata, and delete
  expect((await call('/social/assets/read',{assetId:ids.assetId})).status).toBe(404);
  }finally{await f.stop();}
 });
+
+it('the real S3 presigner binds upload bytes, checksum, identity and overwrite refusal without network access',async()=>{
+ const clientModule='@aws-sdk/client-s3',presignerModule='@aws-sdk/s3-request-presigner';
+ const sdk=await import(clientModule),presigner=await import(presignerModule);
+ const realSdk={...sdk,...presigner,S3Client:class extends sdk.S3Client{
+  constructor(options:Record<string,unknown>){super({...options,credentials:{accessKeyId:'fixture-access-key',secretAccessKey:'fixture-signing-value'}});}
+ }} as SocialMediaSdk;
+ const issuedAt='2026-10-06T12:00:00.000Z';
+ const store=await loadSocialMediaStore({bucket:'callie-fixture-social-assets',region:'us-east-1',sdk:realSdk,now:()=>new Date(issuedAt)});
+ const result=await store.presignPut({key:'workspace/asset/1/upload',sha256:'a'.repeat(64),bytes:20,mime:'image/png',uploadId:'fixture-upload',issuedAt});
+ const url=new URL(result.url);
+ expect(url.origin).toBe('https://callie-fixture-social-assets.s3.us-east-1.amazonaws.com');
+ expect(url.pathname).toBe('/workspace/asset/1/upload');
+ expect(url.searchParams.get('X-Amz-Expires')).toBe('600');
+ expect(url.searchParams.get('X-Amz-Date')).toBe('20261006T120000Z');
+ const signed=new Set(url.searchParams.get('X-Amz-SignedHeaders')?.split(';'));
+ for(const header of Object.keys(result.headers))expect(signed.has(header),header).toBe(true);
+ expect(url.searchParams.has('x-amz-checksum-sha256')).toBe(false);
+ expect(url.searchParams.has('x-amz-meta-callie-upload')).toBe(false);
+ expect(result.headers['if-none-match']).toBe('*');
+ const download=new URL((await store.presignGet('workspace/asset/1/upload')).url);
+ expect(download.searchParams.get('response-content-disposition')).toBe('attachment');
+});
