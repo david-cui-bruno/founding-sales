@@ -48,3 +48,18 @@ it.skipIf(process.platform!=='darwin')('converts a HEIC phone-image fixture with
  const original=await readFile(input);const result=await normalizeSocialImage({inputPath:input,outputPath:output,crop:null,redactions:[]});
  expect(result.width).toBe(40);expect(result.height).toBe(20);expect(await readFile(input)).toEqual(original);expect((await sharp(output).metadata()).exif).toBeUndefined();
 }));
+const orientationPixels=[[0,1,2,3,4,5],[2,1,0,5,4,3],[5,4,3,2,1,0],[3,4,5,0,1,2],[0,3,1,4,2,5],[3,0,4,1,5,2],[5,2,4,1,3,0],[2,5,1,4,0,3]];
+for(let orientation=1;orientation<=8;orientation++)it(`preserves the correct pixel positions for orientation ${orientation}`,async()=>run(async root=>{
+ const colors=[[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255]];
+ const input=join(root,'in.png'),output=join(root,'out.png');await sharp(Buffer.from(colors.flat()),{raw:{width:3,height:2,channels:3}}).png().withMetadata({orientation}).toFile(input);
+ await normalizeSocialImage({inputPath:input,outputPath:output,crop:null,redactions:[]});const pixels=await sharp(output).removeAlpha().raw().toBuffer();expect([...pixels]).toEqual(orientationPixels[orientation-1]!.flatMap(i=>colors[i]!));
+}));
+it('refuses animation and lossless output over its limit, and removes appended non-image bytes',async()=>run(async root=>{
+ const {randomBytes}=await import('node:crypto');const input=join(root,'in.png'),output=join(root,'out.png');
+ const one=await sharp({create:{width:4,height:4,channels:3,background:'#f00'}}).png().toBuffer();const two=await sharp({create:{width:4,height:4,channels:3,background:'#00f'}}).png().toBuffer();
+ await sharp([one,two],{join:{animated:true}}).webp().toFile(input);expect((await sharp(input).metadata()).pages).toBe(2);
+ await expect(normalizeSocialImage({inputPath:input,outputPath:output,crop:null,redactions:[]})).rejects.toThrow('animated_image_not_supported');
+ await sharp(randomBytes(1600*1600*3),{raw:{width:1600,height:1600,channels:3}}).png().toFile(input);
+ await expect(normalizeSocialImage({inputPath:input,outputPath:output,crop:null,redactions:[],lossless:true})).rejects.toThrow('image_needs_edit');
+ await writeFile(input,Buffer.concat([one,Buffer.from('<script>private marker</script>')]));await normalizeSocialImage({inputPath:input,outputPath:output,crop:null,redactions:[]});expect((await readFile(output)).includes(Buffer.from('private marker'))).toBe(false);
+}));

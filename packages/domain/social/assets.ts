@@ -4,7 +4,7 @@ import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 type Asset={id:string;owner_user_id:string;state:SocialAssetView['state'];current_version:number;origin:AssetOrigin};
-type ObjectRow={version:number;upload_id:string;object_key:string;kind:'original'|'derivative';state:'uploading'|'ready'|'deleted';sha256:string;bytes:number;mime:string;width:number|null;height:number|null;expired:boolean};
+type ObjectRow={version:number;upload_id:string;object_key:string;kind:'original'|'derivative';state:'uploading'|'ready'|'deleted';sha256:string;bytes:number;mime:string;width:number|null;height:number|null;expired:boolean;authorized_at:Date|string};
 const user=(ctx:RepositoryContext)=>ctx.scope.actor.kind==='user'?ctx.scope.actor.userId:null;
 async function lock(ctx:RepositoryContext){await ctx.db.query('INSERT INTO social_library_usage(workspace_id) VALUES($1) ON CONFLICT DO NOTHING',[ctx.scope.workspaceId]);return Number((await ctx.db.query<{bytes_reserved:string}>('SELECT bytes_reserved FROM social_library_usage WHERE workspace_id=$1 FOR UPDATE',[ctx.scope.workspaceId])).rows[0]!.bytes_reserved);}
 async function asset(ctx:RepositoryContext,id:string){return (await ctx.db.query<Asset>('SELECT * FROM social_assets WHERE workspace_id=$1 AND id=$2 AND owner_user_id=$3',[ctx.scope.workspaceId,id,user(ctx)])).rows[0]??null;}
@@ -42,7 +42,7 @@ export async function expireSocialUploads(ctx:RepositoryContext):Promise<number>
 /** Key authorization is repeated for every URL, including command replays. */
 export async function socialAssetObject(ctx:RepositoryContext,input:{assetId:string;uploadId?:string;version?:number},mode:'upload'|'download'):Promise<ObjectRow|null>{
  const a=await asset(ctx,input.assetId);if(!a||a.state==='deleted')return null;
- const o=(await ctx.db.query<ObjectRow>('SELECT *,expires_at<=now() AS expired FROM social_asset_objects WHERE workspace_id=$1 AND asset_id=$2 AND ($3::uuid IS NULL OR upload_id=$3) AND ($4::integer IS NULL OR version=$4)',[ctx.scope.workspaceId,input.assetId,input.uploadId??null,input.version??null])).rows;
+ const o=(await ctx.db.query<ObjectRow>('SELECT *,expires_at<=now() AS expired,clock_timestamp() AS authorized_at FROM social_asset_objects WHERE workspace_id=$1 AND asset_id=$2 AND ($3::uuid IS NULL OR upload_id=$3) AND ($4::integer IS NULL OR version=$4)',[ctx.scope.workspaceId,input.assetId,input.uploadId??null,input.version??null])).rows;
  if(o.length!==1)return null;const row=o[0]!;
  return mode==='upload'?row.state==='uploading'&&!row.expired?row:null:row.state==='ready'?row:null;
 }

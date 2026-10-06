@@ -5,11 +5,12 @@ it('signs only one immutable body for ten minutes and verifies checksum, type an
  class Command{constructor(readonly input:Record<string,unknown>){calls.push(input);}}
  const sdk:SocialMediaSdk={S3Client:class{async send(){return {ContentLength:20,ContentType:'image/png',ChecksumSHA256:Buffer.from('a'.repeat(64),'hex').toString('base64'),Metadata:{'callie-upload':'upload'}};}},PutObjectCommand:Command,HeadObjectCommand:Command,GetObjectCommand:Command,DeleteObjectCommand:Command,getSignedUrl:async(_c,command,options)=>{signed.push({command,options});return 'https://fixture.invalid/signed';}};
  const store=await loadSocialMediaStore({bucket:'social-private',region:'us-east-1',sdk});
- const input={key:'workspace/asset/1/upload',sha256:'a'.repeat(64),bytes:20,mime:'image/png',uploadId:'upload'};
+ const input={key:'workspace/asset/1/upload',sha256:'a'.repeat(64),bytes:20,mime:'image/png',uploadId:'upload',issuedAt:'2026-10-01T12:00:00.000Z'};
  const put=await store.presignPut(input);
  expect(put.headers).toMatchObject({'content-type':'image/png','content-length':'20','x-amz-meta-callie-upload':'upload','if-none-match':'*'});
  expect(calls[0]).toMatchObject({Bucket:'social-private',Key:input.key,IfNoneMatch:'*'});
- expect(signed[0]?.options).toMatchObject({expiresIn:600});
+ expect(signed[0]?.options).toMatchObject({expiresIn:600,signingDate:new Date(input.issuedAt)});
+ expect(put.expiresAt).toBe('2026-10-01T12:10:00.000Z');
  expect(await store.head(input.key)).toEqual({found:true,sha256:input.sha256,bytes:20,mime:'image/png',uploadId:'upload'});
  await store.presignGet(input.key);expect(signed[1]?.options).toMatchObject({expiresIn:600});
 });
