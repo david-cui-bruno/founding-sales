@@ -12,9 +12,9 @@ export async function cancelLinkedInReceipt(input:{receiptId:string;text:string;
  const current=()=>{try{const u=new URL(port.contents.getURL());return port.current()&&u.origin==='https://www.linkedin.com'&&['/feed/','/sharing/compose'].includes(u.pathname)&&!u.username&&!u.password;}catch{return false;}};
  async function execute(code:string){if(!current())throw new Error('session_changed');const result=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code}],false);if(!current())throw new Error('session_changed');return result;}
  async function account(){if(!current()||!await port.accountMatches()||!current())throw new Error('account_changed');}
- async function read(){return listSchema.parse(await execute(linkedInScheduledListScript()));}
+ async function read(){for(let i=0;i<30;i++){const result=await execute(linkedInScheduledListScript());if(!z.strictObject({ok:z.literal(false)}).safeParse(result).success)return listSchema.parse(result);await port.wait();await account();}throw new Error('list_unavailable');}
  try{
-  await account();const before=await read();const matching=before.rows.filter(row=>row.receiptId===target.receiptId);
+  await account();let before=await read();for(let i=0;i<30&&!before.complete&&!before.rows.some(row=>row.receiptId===target.receiptId);i++){await port.wait();await account();before=await read();}const matching=before.rows.filter(row=>row.receiptId===target.receiptId);
   if(matching.length===0)return {state:before.complete?'absent':'unknown'};
   if(matching.length!==1||matching[0]!.text!==target.text||matching[0]!.scheduleLabel!==target.scheduleLabel)return {state:'unknown'};
   for(const action of ['openMenu','deleteMenu','confirm'] as const){

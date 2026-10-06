@@ -22,3 +22,13 @@ it('selects only the exact time option in the menu controlled by the native inpu
  document.querySelector('#times')!.innerHTML+='<div role="menuitemradio" data-testid="time-picker-option">10:15 AM</div>';
  expect(run({action:'selectTime',time:'10:15 AM'} as never)).toMatchObject({ok:false});
 });
+it('normalizes unpadded native dates while preserving exact confirmation checks',()=>{
+ document.body.innerHTML='<dialog open data-testid="dialog"><input data-testid="date-picker-input" value="10/7/2026"><input data-testid="time-picker-input" value="12:00 PM"><button>Confirm</button></dialog>';let clicked=0;document.querySelector('button')!.onclick=()=>clicked++;
+ expect(run({action:'read'})).toMatchObject({view:{date:'10/07/2026'}});
+ expect(run({action:'confirmSchedule',date:'10/08/2026',time:'12:00 PM'})).toMatchObject({ok:false});expect(clicked).toBe(0);
+ expect(run({action:'confirmSchedule',date:'10/07/2026',time:'12:00 PM'})).toEqual({ok:true});expect(clicked).toBe(1);
+});
+it('does not toggle an already open input-associated time menu closed',()=>{
+ document.body.innerHTML='<dialog open data-testid="dialog"><input data-testid="date-picker-input"><input data-testid="time-picker-input" aria-expanded="true" aria-controls="times"><div id="times" data-testid="time-picker-menu" role="menu"></div><button data-testid="time-picker-clock-button" aria-label="Open time picker"></button></dialog>';let clicked=0;document.querySelector('button')!.onclick=()=>clicked++;
+ expect(run({action:'openTime'})).toEqual({ok:true});expect(clicked).toBe(0);
+});

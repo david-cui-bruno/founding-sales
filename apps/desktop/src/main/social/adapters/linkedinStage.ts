@@ -13,7 +13,7 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
  async function action(input:LinkedInDomAction){if(!current())throw new Error('session_changed');const answer=await port.contents.executeJavaScriptInIsolatedWorld(1001,[{code:linkedInDomScript(input)}],false);if(!current())throw new Error('session_changed');return answer;}
  async function read(){const a=z.object({ok:z.literal(true),view:viewSchema}).parse(await action({action:'read'}));return a.view;}
  async function act(input:LinkedInDomAction){z.object({ok:z.literal(true)}).parse(await action(input));}
- async function waitFor(kind:'composer'|'schedule'){for(let i=0;i<12;i++){const v=await read();if(v.kind===kind)return v;await port.wait();}throw new Error('layout_changed');}
+ async function waitFor(kind:'composer'|'schedule'){for(let i=0;i<12;i++){const answer=await action({action:'read'});if(!z.strictObject({ok:z.literal(false),reason:z.literal('layout_changed')}).safeParse(answer).success){const {view}=z.object({ok:z.literal(true),view:viewSchema}).parse(answer);if(view.kind===kind)return view;}await port.wait();}throw new Error('layout_changed');}
  try{
   if(post.account.platform!=='linkedin'||post.images.length)return refuse('format_not_verified');
   if(!Number.isFinite(Date.parse(post.publishAt))||Date.parse(post.publishAt)<=port.now())return refuse('schedule_missed');

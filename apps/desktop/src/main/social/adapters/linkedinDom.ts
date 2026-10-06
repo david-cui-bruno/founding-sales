@@ -25,14 +25,15 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
  const click=e=>{if(!e||e.disabled||e.getAttribute('aria-disabled')==='true')return refuse('control_not_found');e.click();return {ok:true};};
  const editor=one('[contenteditable="true"][role="textbox"][componentkey="ShareBox_textEditor"]');
  const date=one('input[data-testid="date-picker-input"]'),time=one('input[data-testid="time-picker-input"]');
+ const normalizedDate=value=>{const parts=/^([0-9]{1,2})[/]([0-9]{1,2})[/]([0-9]{4})$/.exec(value??'');return parts?parts[1].padStart(2,'0')+'/'+parts[2].padStart(2,'0')+'/'+parts[3]:value;};
  const headers=all('[role="button"]').filter(e=>!['Post to Anyone','Comments: Anyone'].includes(text(e)));
- if(input.action==='read')return {ok:true,view:{zone:Intl.DateTimeFormat().resolvedOptions().timeZone,kind:editor?'composer':date&&time?'schedule':'unknown',postingName:headers.length===1?text(headers[0]):null,text:editor?text(editor):null,date:date?.value??null,time:time?.value??null,identities:all('[role="radio"]').map(e=>({name:text(e),selected:e.getAttribute('aria-checked')==='true'})),scheduleLabel:all('p,span,div').map(text).filter(t=>/^Posting at [^\\n]{1,100}$/.test(t)).sort((a,b)=>a.length-b.length)[0]??null}};
+ if(input.action==='read')return {ok:true,view:{zone:Intl.DateTimeFormat().resolvedOptions().timeZone,kind:editor?'composer':date&&time?'schedule':'unknown',postingName:headers.length===1?text(headers[0]):null,text:editor?text(editor):null,date:normalizedDate(date?.value)??null,time:time?.value??null,identities:all('[role="radio"]').map(e=>({name:text(e),selected:e.getAttribute('aria-checked')==='true'})),scheduleLabel:all('p,span,div').map(text).filter(t=>/^Posting at [^\\n]{1,100}$/.test(t)).sort((a,b)=>a.length-b.length)[0]??null}};
  if(input.action==='focusText'){if(!editor)return refuse('layout_changed');editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=window.getSelection();if(!selection)return refuse('editor_unavailable');selection.removeAllRanges();selection.addRange(range);return {ok:true};}
  if(input.action==='openIdentity'){const targets=headers.filter(e=>text(e)===input.name);return click(targets.length===1?targets[0]:null);}
  if(input.action==='openMedia')return editor?click(one('button[aria-label="Media"]')):refuse('layout_changed');
  if(input.action==='openSchedule')return editor?click(one('a[aria-label="Scheduled"]')):refuse('layout_changed');
  if(!date||!time||editor)return refuse('layout_changed');
- if(input.action==='openTime')return click(one('button[data-testid="time-picker-clock-button"][aria-label="Open time picker"]'));
+ if(input.action==='openTime'){if(time.getAttribute('aria-expanded')==='true'){const id=time.getAttribute('aria-controls');const menus=all('[data-testid="time-picker-menu"][role="menu"]').filter(e=>e.id===id);return id&&menus.length===1?{ok:true}:refuse('time_menu_unavailable');}return click(one('button[data-testid="time-picker-clock-button"][aria-label="Open time picker"]'));}
  if(input.action==='selectTime'){
   const id=time.getAttribute('aria-controls');if(!id||time.getAttribute('aria-expanded')!=='true')return refuse('time_menu_unavailable');
   const menus=all('[data-testid="time-picker-menu"][role="menu"]').filter(e=>e.id===id);if(menus.length!==1)return refuse('time_menu_unavailable');
@@ -44,7 +45,7 @@ export function linkedInDomScript(raw:LinkedInDomAction):string{
   for(const [element,value] of [[date,input.date],[time,input.time]]){setter.call(element,value);element.dispatchEvent(new window.Event('input',{bubbles:true}));element.dispatchEvent(new window.Event('change',{bubbles:true}));element.blur();}return {ok:true};
  }
  if(input.action==='confirmSchedule'){
-  if(date.value!==input.date||time.value!==input.time)return refuse('schedule_mismatch');
+  if(normalizedDate(date.value)!==input.date||time.value!==input.time)return refuse('schedule_mismatch');
   const buttons=all('button').filter(e=>text(e)==='Confirm');return click(buttons.length===1?buttons[0]:null);
  }
  return refuse('unsupported_action');

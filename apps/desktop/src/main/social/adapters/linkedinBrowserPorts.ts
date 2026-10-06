@@ -26,7 +26,7 @@ export function createLinkedInBrowserPorts(port:Port){
    const result=z.object({ok:z.boolean(),kind:z.enum(['composer','schedule','list','unknown']).optional()}).parse(await execute(linkedInListNavigationScript('read')));
    if(result.ok&&result.kind==='list')return;
    if(result.ok&&(result.kind==='composer'||result.kind==='schedule')&&!acted.has(result.kind)){
-    acted.add(result.kind);const action=result.kind==='composer'?'openSchedule':'openList';z.object({ok:z.literal(true)}).parse(await execute(linkedInListNavigationScript(action)));
+    const action=result.kind==='composer'?'openSchedule':'openList';const navigation=z.strictObject({ok:z.boolean()}).parse(await execute(linkedInListNavigationScript(action)));if(navigation.ok)acted.add(result.kind);
    }
    await port.wait();
   }
@@ -51,7 +51,7 @@ export function createLinkedInBrowserPorts(port:Port){
    if(atTarget())await port.loadURL('https://www.linkedin.com/feed/');
   }
  },
- async list(){return execute(`(()=>{const result=${linkedInScheduledListScript()};return {...result,zone:Intl.DateTimeFormat().resolvedOptions().timeZone};})()`);},
+ async list(){for(let i=0;i<30;i++){const result=await execute(`(()=>{const result=${linkedInScheduledListScript()};return {...result,zone:Intl.DateTimeFormat().resolvedOptions().timeZone};})()`);if(z.object({ok:z.literal(true),complete:z.literal(true)}).safeParse(result).success)return result;await port.wait();}return {ok:false};},
  async detail(receiptId:string){
   const token=randomUUID();z.object({ok:z.literal(true)}).parse(await execute(linkedInDetailNavigationScript({action:'open',receiptId,token})));
   for(let i=0;i<30;i++){
