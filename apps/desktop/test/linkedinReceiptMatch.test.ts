@@ -1,0 +1,14 @@
+import {expect,it} from 'vitest';
+import {matchLinkedInReceipt,linkedInMediaId} from '../src/main/social/adapters/linkedinReceiptMatch.ts';
+const expected={receiptId:'urn:li:share:123',accountExternalId:'https://www.linkedin.com/in/founder/',text:'Approved text',publishAt:'2026-10-13T16:00:00.000Z',fingerprint:'a'.repeat(64),images:[{sha256:'b'.repeat(64),altText:'Approved image'}]};
+const evidence={receiptId:'urn:li:share:123',accountExternalId:expected.accountExternalId,text:'Approved text',publishAt:expected.publishAt,detailComplete:true,images:[{platformId:'D4E22AQGl8pspAlxImQ',altText:'Approved image'}]};
+const binding={receiptId:expected.receiptId,fingerprint:expected.fingerprint,images:[{sha256:'b'.repeat(64),platformId:'D4E22AQGl8pspAlxImQ'}]};
+it('requires independently captured media binding, not a matching-looking thumbnail',()=>{expect(matchLinkedInReceipt(expected,evidence,binding)).toBe(true);expect(matchLinkedInReceipt(expected,evidence,null)).toBe(false);expect(matchLinkedInReceipt(expected,{...evidence,detailComplete:false},binding)).toBe(false);expect(matchLinkedInReceipt(expected,{...evidence,images:[{platformId:'different',altText:'Approved image'}]},binding)).toBe(false);});
+it('refuses wrong account, instant, text, alt, stale fingerprint and duplicate media',()=>{for(const update of [{accountExternalId:'other'},{publishAt:'2026-10-13T17:00:00Z'},{text:'Changed'},{images:[{platformId:'D4E22AQGl8pspAlxImQ',altText:''}]}])expect(matchLinkedInReceipt(expected,{...evidence,...update},binding)).toBe(false);expect(matchLinkedInReceipt(expected,evidence,{...binding,fingerprint:'c'.repeat(64)})).toBe(false);expect(matchLinkedInReceipt({...expected,images:[...expected.images,...expected.images]},{...evidence,images:[...evidence.images,...evidence.images]},{...binding,images:[...binding.images,...binding.images]})).toBe(false);});
+it('recognizes observed LinkedIn media IDs across thumbnail transforms without accepting foreign URLs',()=>{expect(linkedInMediaId('https://media.licdn.com/dms/image/v2/D4E22AQGl8pspAlxImQ/feedshare-shrink_160/path?token=x')).toBe('D4E22AQGl8pspAlxImQ');expect(linkedInMediaId('https://media.licdn.com/dms/image/v2/D4E22AQGl8pspAlxImQ/feedshare-shrink_800/path')).toBe('D4E22AQGl8pspAlxImQ');for(const url of ['blob:https://www.linkedin.com/abc','https://media.licdn.com.evil.test/dms/image/v2/id/path','https://x@media.licdn.com/dms/image/v2/id/path'])expect(linkedInMediaId(url)).toBeNull();});
+it('accepts equivalent instants but rejects invalid evidence and unexpected attachments',()=>{
+ expect(matchLinkedInReceipt(expected,{...evidence,publishAt:'2026-10-13T12:00:00-04:00'},binding)).toBe(true);
+ expect(matchLinkedInReceipt(expected,{...evidence,publishAt:'not-a-time'},binding)).toBe(false);
+ expect(matchLinkedInReceipt({...expected,images:[]},{...evidence,images:[]},null)).toBe(true);
+ expect(matchLinkedInReceipt({...expected,images:[]},evidence,null)).toBe(false);
+});
