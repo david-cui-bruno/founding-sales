@@ -1,0 +1,9 @@
+/** @vitest-environment jsdom */
+import {afterEach,expect,it} from 'vitest';
+import {linkedInSavedDetailScript} from '../src/main/social/adapters/linkedinSavedDetail.ts';
+afterEach(()=>{document.body.innerHTML='';});
+function run(){return new Function('document','window',`return ${linkedInSavedDetailScript()}`)(document,window);}
+function fixture(){document.body.innerHTML='<dialog open data-testid="dialog"><div role="button">Founder</div><div role="button">Post to Anyone</div><div role="button">Comments: Anyone</div><div contenteditable="true" role="textbox" componentkey="ShareBox_textEditor">Approved text</div><img src="https://media.licdn.com/dms/image/v2/profile/profile-displayphoto-scale_100_100/x" alt=""><img src="https://media.licdn.com/dms/image/v2/D4E22AQFOb-d1RVmqRw/feedshare-image-high-res/x" alt=""><div>Posting at Tue, Oct 13, 12:00 PM</div><button>Back</button><button>Schedule</button></dialog>';}
+it('extracts saved native image identity without inventing missing alt text',()=>{fixture();expect(run()).toMatchObject({ok:true,view:{postingName:'Founder',text:'Approved text',scheduleLabel:'Posting at Tue, Oct 13, 12:00 PM',images:[{platformId:'D4E22AQFOb-d1RVmqRw',previewAlt:''}],altTextVerified:false}});});
+it('does not accept a draft blob or foreign-host image as a saved native identity',()=>{fixture();document.querySelectorAll('img')[1]!.src='blob:https://www.linkedin.com/local';expect(run()).toEqual({ok:false});fixture();document.querySelectorAll('img')[1]!.src='https://evil.test/dms/image/v2/id/feedshare-image-high-res/x';expect(run()).toEqual({ok:false});});
+it('refuses nested editor states and unknown extra images rather than undercounting',()=>{fixture();document.body.innerHTML+='<dialog open data-testid="dialog"><h2>Editor</h2></dialog>';expect(run()).toEqual({ok:false});fixture();document.querySelector('dialog')!.innerHTML+='<img src="https://media.licdn.com/unknown">';expect(run()).toEqual({ok:false});});

@@ -2,7 +2,7 @@
 
 ## Current status — 6 October 2026
 
-Social delivery is not released or enabled. No post or native schedule has been created.
+Social delivery is not released or enabled. Two explicitly approved disposable LinkedIn native schedules were created in the Codex browser and immediately cancelled. The last readback showed Scheduled (0); neither test was publicly published.
 
 The reusable runtime uses a hidden sandboxed Electron window, no Callie preload/Node integration, a hashed partition scoped to workspace/user/platform/account, denied popups/permissions/external navigation, and a bounded page load. Sign-out invalidates active work; explicit account disconnect clears that partition. Unit tests cover isolation, concurrency, cancellation and timeout. The actual Electron fixture probe is recorded separately from platform acceptance.
 
@@ -15,3 +15,18 @@ David subsequently opened the composer and clicked its clock himself. The result
 This verifies that native scheduling controls are available to this account, but not reliable automated interaction. It does not establish the supported date range, timezone interpretation, receipt, cancellation, image behavior, or acceptance of Callie's separate hidden Electron session. Codex's session is not copied into Callie. Runtime scheduling remains unsupported until those product-owned acceptance checks pass.
 
 Facebook Page and X account inspection and product-runtime acceptance remain pending. No paid scheduler or paid X fallback is selected.
+
+## Authorized schedule and saved-detail tests — 6 October
+
+Both tests used David Cui's personal profile, the synthetic Callie test image, the approved test text and alt text, and 13 October at noon Eastern. Each schedule was cancelled immediately after inspection. These were Codex-browser checks, not acceptance of the product-owned Electron adapter.
+
+- First receipt: `urn:li:share:7513234862275706880`. Native scheduled-list text/time matched; cancellation returned Scheduled (0).
+- Repeat receipt: `urn:li:share:7513240390708301825`. The saved edit view retained media ID `D4E22AQFOb-d1RVmqRw`, but its image alt attribute was empty. Opening Editor → Alternative text also showed an empty textarea. The pre-submission composer had shown the approved alt text. The cause is unresolved; this is not evidence that LinkedIn never supports saved alt text.
+- The repeat inspection did not edit the saved post. Discarded the edit view, deleted the exact scheduled row, verified Scheduled (0), and closed the test tab.
+- Local screenshots: `/tmp/callie-linkedin-saved-alt-missing.png` and `/tmp/callie-linkedin-repeat-cancelled.png`. These are diagnostic scratch artifacts, not durable repository evidence.
+
+The saved-detail reader now preserves native media IDs and missing preview alt text, with `altTextVerified: false`. It cannot certify a full image match. Original uploaded-byte-to-native-media binding and saved alt verification remain required before image delivery can be enabled. Tests cover refusing draft blob URLs, foreign images, nested editor dialogs and unknown extra images.
+
+A scheduling interaction also needs product acceptance: entering a time alone did not update the live summary until the visible time option was selected. Do not treat a local fixture's successful field assignment as proof of live staging.
+
+The earlier inspection paragraphs describe the initial probes only. They do not supersede these later test results. Facebook and X, final submission coordination, original media binding and the product-owned session's live acceptance remain unfinished.
