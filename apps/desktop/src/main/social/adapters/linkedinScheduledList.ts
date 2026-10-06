@@ -17,6 +17,9 @@ export function linkedInScheduledListScript():string{
   const images=Array.from(card.querySelectorAll('img')).map(e=>({src:e.getAttribute('src')??'',alt:e.getAttribute('alt')??''}));if(images.length>20||images.some(i=>i.src.length>4096||i.alt.length>1000))return {ok:false};
   rows.push({receiptId:match[1],text,scheduleLabel:labels[0],images});
  }
- if(rows.length>total)return {ok:false};return {ok:true,total,complete:rows.length===total,rows};
+ if(rows.length>total)return {ok:false};
+ const loading=Array.from(root.querySelectorAll('[role="progressbar"],progress')).some(visible);
+ const empty=Array.from(root.querySelectorAll('p,span,div')).some(e=>visible(e)&&e.textContent.trim()==='When you schedule a post, it automatically posts at the date and time you chose');
+ return {ok:true,total,complete:!loading&&rows.length===total&&(total>0||empty),rows};
  })()`;
 }
