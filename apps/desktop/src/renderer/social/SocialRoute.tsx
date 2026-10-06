@@ -1,3 +1,4 @@
+import {SocialAccounts} from './SocialAccounts.tsx';
 import {SocialDraftStudio} from './DraftStudio.tsx';
 import {SocialImage} from './SocialImage.tsx';
 import {AssetLibrary} from './AssetLibrary.tsx';
@@ -26,6 +27,7 @@ export function SocialRoute({ports=defaults}:{ports?:SocialPorts}){
   <header className="flex items-center justify-between"><div><h1 className="text-xl font-semibold tracking-tight">Social</h1><p className="mt-1 text-sm text-muted-foreground">Your voice, ready for the right moment.</p></div><Button disabled={m.busy||m.pending!==null||!m.view?.accounts.length} onClick={()=>edit()}>New post</Button></header>
   <div className="flex gap-5 border-b border-border" role="tablist">{(['Drafts','Calendar','Assets'] as const).map(tab=><button key={tab} role="tab" aria-selected={m.tab===tab} className="pb-3 text-sm aria-selected:border-b-2 aria-selected:border-foreground aria-selected:font-medium" onClick={()=>{m.tab=tab;touch();}}>{tab}</button>)}</div>
   {m.error&&<div role="status" className="rounded-md border border-border p-3 text-sm">{m.error}{m.pending&&<Button variant="outline" className="ml-3" disabled={m.busy} onClick={()=>void run(m.pending!)}>Retry same action</Button>}</div>}
+  <SocialAccounts accounts={m.view?.accounts??[]} onChanged={()=>{const g=live.current;void port.current.read().then(a=>{if(g===live.current&&a.view){m.view=a.view;touch();}}).catch(()=>{});}}/>
   {!m.view?.accounts.length&&<p className="text-sm text-muted-foreground">Connect a social account to choose where your drafts will go.</p>}
   {m.tab==='Drafts'&&!e&&<SocialDraftStudio disabled={m.busy||m.pending!==null||e!==null} onUse={variant=>{if(m.busy||m.pending||m.editor)return;const zone=Intl.DateTimeFormat().resolvedOptions().timeZone;m.editor={accountId:m.view?.accounts.find(a=>a.platform===variant.platform)?.id??'',text:variant.text,images:[],publishAt:null,zone,local:'',instant:''};touch();}}/>}
   {e&&m.tab!=='Assets'&&<div className="space-y-4 rounded-xl border border-border bg-card p-5">

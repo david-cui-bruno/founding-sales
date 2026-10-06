@@ -1,3 +1,6 @@
+import {createSocialAccountsBridge} from './social/accountsBridge.ts';
+import {createElectronSocialRuntime} from './social/electronRuntime.ts';
+import {probeLinkedInIdentity} from './social/identityProbe.ts';
 import {createSocialImageImport} from './social/imageImport.ts';
 import { join } from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
@@ -243,7 +246,20 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       }),
   });
 
+  const socialRuntime=createElectronSocialRuntime();
+  const socialAccounts=createSocialAccountsBridge({api,identity:async()=>manager.signedInIdentity(),generation:()=>manager.sessionGeneration(),clear:scope=>socialRuntime.disconnect(scope),open:async scope=>{
+    const answer=await socialRuntime.connectAccount(scope,async ({window,isCurrent})=>{
+      while(isCurrent()){
+        const observed=await probeLinkedInIdentity(window.webContents,isCurrent);
+        if(observed)return observed;
+        await new Promise<void>(resolve=>setTimeout(resolve,1000));
+      }
+      return null;
+    });
+    return answer&&'platform' in answer?answer:null;
+  }});
   const bridges = registerWindowBridges({
+    socialAccounts,
     socialImages: createSocialImageImport({
       directory: configuration.userDataDirectory, api,
       readClipboard: async () => {
@@ -319,6 +335,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
    * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
+    socialRuntime.signOut();
     void resetBridges([
       bridges.today,
       bridges.replies,

@@ -1,3 +1,4 @@
+import type {SocialAccountsBridge} from './social/accountsBridge.ts';
 import type {SocialImageImport} from './social/imageImport.ts';
 import { uuid } from '@fss/contracts';
 import { ipcMain } from 'electron';
@@ -69,6 +70,7 @@ export interface RecordingImportWiring {
 }
 
 export interface WindowBridgeDeps {
+  readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly today: TodayBridgeDeps;
   readonly replies: ReplyBridgeDeps;
@@ -136,7 +138,7 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
       openFolderDialog: wiring?.openFolderDialog ?? (async () => await Promise.resolve({ canceled: true, filePaths: [] })),
     }),
   );
-  registerOperations({ ...(deps.socialImages?{socialImages:deps.socialImages}:{}), api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings }, handleOnce);
+  registerOperations({ ...(deps.socialAccounts?{socialAccounts:deps.socialAccounts}:{}), ...(deps.socialImages?{socialImages:deps.socialImages}:{}), api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox, briefImport, recordings }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current

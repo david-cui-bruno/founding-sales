@@ -1,3 +1,4 @@
+import type {SocialAccountsBridge} from './social/accountsBridge.ts';
 import {socialWeeklySchema} from '@fss/contracts';
 import {socialDraftWorkspaceSchema} from '@fss/contracts';
 import type {SocialImageImport} from './social/imageImport.ts';
@@ -78,6 +79,7 @@ import type { TodayBridgeHost } from './todayBridge.ts';
  */
 
 export interface OperationHostDeps {
+  readonly socialAccounts?: SocialAccountsBridge;
   readonly socialImages?: SocialImageImport;
   readonly api: AuthedClient;
   readonly today: TodayBridgeHost;
@@ -195,6 +197,8 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'social.assets':async(input:OperationInput<'social.assets'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.read('/social/assets',v=>socialAssetLibrarySchema.parse(v),input);if(generation!==deps.recordings.identity.current())return {assets:null,reason:'not_found'};return answer.ok?{assets:answer.value.assets,reason:null}:{assets:null,reason:answer.reason};},
     'social.removeAsset':async(input:OperationInput<'social.removeAsset'>)=>{const generation=deps.recordings.identity.current();const answer=await deps.api.command('/social/assets/delete',{assetId:input.assetId},v=>z.unknown().parse(v),{commandId:input.commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,reason:'not_found'};return {accepted:answer.ok,reason:answer.ok?null:answer.reason};},
+    'social.connectAccount':async(input:OperationInput<'social.connectAccount'>)=>deps.socialAccounts?deps.socialAccounts.connect(input):{accepted:false,reason:'unavailable'},
+    'social.disconnectAccount':async(input:OperationInput<'social.disconnectAccount'>)=>deps.socialAccounts?deps.socialAccounts.disconnect(input):{accepted:false,reason:'unavailable'},
     'social.weekly':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/weekly',v=>socialWeeklySchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.saveWeekly':async(input:OperationInput<'social.saveWeekly'>)=>{const generation=deps.recordings.identity.current(),{commandId,...setting}=input;const answer=await deps.api.command('/social/weekly/save',setting,v=>socialWeeklySchema.parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.drafts':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social/drafts',v=>socialDraftWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},

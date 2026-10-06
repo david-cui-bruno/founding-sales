@@ -5,6 +5,8 @@ export interface SocialWindowOptions {show:false;width:number;height:number;webP
 interface Preventable {preventDefault():void}
 export interface SocialWindow {
  webContents:{
+  getURL():string;
+  executeJavaScriptInIsolatedWorld(worldId:number,scripts:{code:string}[],userGesture?:boolean):Promise<unknown>;
   on(event:string,listener:(event:Preventable,url:string)=>void):unknown;
   setWindowOpenHandler(handler:()=>{action:'deny'}):void;
   session:{setPermissionRequestHandler(handler:(_contents:unknown,_permission:string,callback:(allowed:boolean)=>void)=>void):void;setPermissionCheckHandler(handler:()=>false):void;on(event:string,listener:(event:Preventable)=>void):unknown;clearStorageData():Promise<void>};
