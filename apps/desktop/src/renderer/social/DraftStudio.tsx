@@ -1,3 +1,4 @@
+import {WeeklyDrafts} from './WeeklyDrafts.tsx';
 import {useCallback,useEffect,useReducer,useRef,useState} from 'react';
 import type {SocialDraftRequest,SocialDraftWorkspace} from '@fss/contracts';
 import {operations} from '../app/bridges.ts';
@@ -20,6 +21,7 @@ export function SocialDraftStudio({ports=defaults,onUse,disabled=false}:{ports?:
  const submit=async()=>{if(m.busy)return;const selection=m.pending??{commandId:crypto.randomUUID(),sourceRefs:(m.view?.sources??[]).filter(s=>m.sources.has(key(s))).map(({kind,id,revision})=>({kind,id,revision})),factBlocks:(m.view?.facts??[]).filter(f=>m.facts.has(`${f.id}:${f.version}`)).map(({id,version})=>({id,version}))};if(!selection.sourceRefs.length)return;const g=live.current;m.pending=selection;m.busy=true;m.error=null;render();try{const answer=await port.current.request(selection);if(g!==live.current)return;if(answer.requestId){m.pending=null;m.sources.clear();m.facts.clear();await refresh(g);}else{if(!['offline','unreadable_answer'].includes(answer.reason??''))m.pending=null;m.error=m.pending?'No definite answer. Retry the same request.':reason(answer.reason);}}catch{if(g===live.current)m.error='No definite answer. Retry the same request.';}finally{if(g===live.current){m.busy=false;render();}}};
  const toggle=(set:Set<string>,id:string)=>{if(set.has(id))set.delete(id);else set.add(id);render();};
  return <div className="space-y-5" aria-label="Draft ideas">
+  <WeeklyDrafts/>
   <details className="rounded-xl border border-border bg-card p-5" open><summary className="cursor-pointer text-sm font-medium">Draft from your work</summary><p className="my-3 text-sm text-muted-foreground">Choose up to ten sources. Only general maintenance themes go into generation. Nothing is scheduled.</p>
    <div className="max-h-60 space-y-2 overflow-auto">{m.view?.sources.map(s=><label key={key(s)} className="flex items-start gap-2 text-sm"><input type="checkbox" checked={m.sources.has(key(s))} disabled={m.busy||m.pending!==null||(!m.sources.has(key(s))&&m.sources.size>=10)} onChange={()=>toggle(m.sources,key(s))}/><span>{s.label} · {s.kind==='public'?'Research':s.kind==='meeting'?'Meeting':'Call'} · {new Date(s.observedAt).toLocaleDateString()}</span></label>)}</div>
    {m.view?.sources.length===0&&<p className="text-sm text-muted-foreground">No sources yet. Completed call transcripts, meeting transcripts, and public research appear here.</p>}

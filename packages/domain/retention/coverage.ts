@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  social_weekly_settings: coverage(['operational'], 'Owner opt-in and next weekly draft check; active membership required, no transcripts or publication permission.'),
   social_library_usage: coverage(['operational'], 'Workspace storage quota; released only after physical object deletion.'),
   social_assets: coverage(['retained'], 'Owner-authored library metadata; explicit asset deletion tombstones it and queues private object removal.'),
   social_asset_objects: coverage(['retained'], 'Version/hash tombstones remain; pending uploads expire after 24 hours and their objects enter the deletion queue.'),

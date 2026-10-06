@@ -5,7 +5,15 @@ export const socialDraftView=(row:SocialDraftRow):SocialDraftView=>({id:row.id,s
 /** Recent source metadata only; transcript bytes never reach the picker. */
 export async function readSocialDraftWorkspace(ctx:RepositoryContext):Promise<SocialDraftWorkspace>{
  const empty:SocialDraftWorkspace={sources:[],facts:[],requests:[]};if(ctx.scope.actor.kind!=='user')return empty;
- const w=ctx.scope.workspaceId,u=ctx.scope.actor.userId;
+ return readForOwner(ctx,ctx.scope.actor.userId);
+}
+export async function readSocialDraftWorkspaceForScheduler(ctx:RepositoryContext,ownerUserId:string):Promise<SocialDraftWorkspace>{
+ if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='scheduler')throw new Error('scheduler_required');
+ return readForOwner(ctx,ownerUserId);
+}
+async function readForOwner(ctx:RepositoryContext,u:string):Promise<SocialDraftWorkspace>{
+ const empty:SocialDraftWorkspace={sources:[],facts:[],requests:[]};
+ const w=ctx.scope.workspaceId;
  if(!(await ctx.db.query("SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND status='active'",[w,u])).rows.length)return empty;
  type Source={id:string;revision:number;label:string;observed_at:Date};
  const calls=(await ctx.db.query<Source>(`SELECT c.id,1 AS revision,f.name AS label,c.created_at AS observed_at FROM call_sessions c JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=c.firm_id WHERE c.workspace_id=$1 AND c.actor_user_id=$2 AND f.status='active' AND EXISTS(SELECT 1 FROM call_transcripts t WHERE t.workspace_id=c.workspace_id AND t.call_session_id=c.id) ORDER BY c.created_at DESC,c.id DESC LIMIT 20`,[w,u])).rows;

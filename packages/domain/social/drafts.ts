@@ -9,7 +9,7 @@ import {readSocialDraftSources} from './draftSources.ts';
 import type {SocialResult} from './posts.ts';
 export interface SocialDraftRow {
  [key:string]:unknown;
- id:string;owner_user_id:string;source_selection:SocialDraftRequest;source_hash:string;
+ id:string;owner_user_id:string;weekly_revision:number|null;source_selection:SocialDraftRequest;source_hash:string;
  prompt_version:string;model_name:string;state:'queued'|'calling'|'ready'|'review'|'expired';
  paid_attempts:number;concepts:SocialDraftConcept[]|null;reason:string|null;
  created_at:Date;deadline_at:Date;updated_at:Date;

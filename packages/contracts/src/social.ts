@@ -64,3 +64,7 @@ export const socialDraftViewSchema=z.strictObject({id:uuid,state:z.enum(['queued
 export const socialDraftWorkspaceSchema=z.strictObject({sources:z.array(z.strictObject({kind:z.enum(['call','meeting','public']),id:uuid,revision:z.number().int().positive(),label:z.string(),observedAt:z.string().datetime()})).max(60),facts:z.array(z.strictObject({id:uuid,version:z.number().int().positive(),text:z.string()})).max(20),requests:z.array(socialDraftViewSchema).max(20)});
 export type SocialDraftWorkspace=z.infer<typeof socialDraftWorkspaceSchema>;
 export type SocialDraftView=z.infer<typeof socialDraftViewSchema>;
+export const socialWeeklySchema=z.strictObject({enabled:z.boolean(),revision:z.number().int().nonnegative(),nextAt:z.string().datetime().nullable(),lastAt:z.string().datetime().nullable(),lastResult:z.enum(['queued','no_new_sources','sources_unavailable','requests_pending']).nullable()});
+export type SocialWeekly=z.infer<typeof socialWeeklySchema>;
+export const socialWeeklySaveSchema=z.strictObject({enabled:z.boolean(),expectedRevision:z.number().int().nonnegative()});
+export const socialWeeklyCommandSchema=socialWeeklySaveSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});

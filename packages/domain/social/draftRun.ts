@@ -1,3 +1,4 @@
+import {socialWeeklyRequestAllowed} from './weekly.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import {databaseNow} from '../policy/clock.ts';
@@ -23,6 +24,7 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  const read=async(lock=false)=>(await db.query<SocialDraftRow>(`SELECT * FROM social_draft_requests WHERE workspace_id=$1 AND id=$2${lock?' FOR UPDATE':''}`,[ctx.scope.workspaceId,id])).rows[0];
  const initial=await read();if(!initial||initial.state!=='queued')return;
  const review=async(reason:string)=>{await db.query("UPDATE social_draft_requests SET state='review',reason=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state IN ('queued','calling')",[ctx.scope.workspaceId,id,reason]);};
+ if(!await socialWeeklyRequestAllowed(ctx,initial.owner_user_id,initial.weekly_revision)){await review('weekly_setting_changed');return;}
  const source=await readSocialDraftSourcesForWorker(ctx,initial.owner_user_id,initial.source_selection);
  if(!source.ok||source.value.hash!==initial.source_hash){await review('source_changed_or_unavailable');return;}
  let tokens:number;try{tokens=await port.countInputTokens(source.value.input);}catch{await review('token_count_unavailable');return;}
@@ -32,6 +34,7 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
   await lockResearchBudget(ctx);
   const row=await read(true),at=await databaseNow(ctx);
   if(!row||row.state!=='queued'||row.paid_attempts>=SOCIAL_DRAFT_LIMITS.maxAttempts||row.deadline_at.getTime()<=Date.parse(at)||row.model_name!==SOCIAL_DRAFT_MODEL||row.prompt_version!==SOCIAL_DRAFT_PROMPT_VERSION)return null;
+  if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return null;}
   const settings=await readResearchSettings(ctx);
   if(!settings.enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return null;
   const current=await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
@@ -49,6 +52,7 @@ export async function runSocialDraft(ctx:RepositoryContext,id:string,port:Social
  await withTransaction(db,async()=>{await settleAttempt(ctx,{reservationId:claim.id,at:await databaseNow(ctx),outcome:outcome.costEstimated||!Number.isSafeInteger(outcome.costCents)||outcome.costCents<0?{kind:'estimated'}:{kind:'settled',cents:outcome.costCents}});});
  await withTransaction(db,async()=>{
   const row=await read(true);if(!row||row.state!=='calling')return;
+  if(!await socialWeeklyRequestAllowed(ctx,row.owner_user_id,row.weekly_revision)){await review('weekly_setting_changed');return;}
   const current=await readSocialDraftSourcesForWorker(ctx,row.owner_user_id,row.source_selection);
   if(!current.ok||current.value.hash!==row.source_hash){await review('source_changed_or_unavailable');return;}
   if(row.deadline_at.getTime()<=Date.parse(await databaseNow(ctx))){await db.query("UPDATE social_draft_requests SET state='expired',reason='deadline_expired',updated_at=now() WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,id]);return;}

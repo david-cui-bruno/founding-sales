@@ -16,9 +16,9 @@ export async function readSocialDraftSources(ctx:RepositoryContext,raw:SocialDra
  if(ctx.scope.actor.kind!=='user')return {ok:false,reason:'user_required'};
  return readForOwner(ctx,ctx.scope.actor.userId,raw);
 }
-/** Worker identity remains system; owner comes from the durable request, not a renderer. */
+/** Background identity remains system; owner comes from the durable request, not a renderer. */
 export async function readSocialDraftSourcesForWorker(ctx:RepositoryContext,ownerUserId:string,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{
- if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return {ok:false,reason:'worker_required'};
+ if(ctx.scope.actor.kind!=='system'||!['worker','scheduler'].includes(ctx.scope.actor.component))return {ok:false,reason:'worker_required'};
  return readForOwner(ctx,ownerUserId,raw);
 }
 async function readForOwner(ctx:RepositoryContext,user:string,raw:SocialDraftRequest):Promise<SocialResult<Prepared>>{

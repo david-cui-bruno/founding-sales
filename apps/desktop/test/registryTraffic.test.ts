@@ -104,6 +104,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'social.removeAsset':{assetId:UUID,commandId:UUID},
   'social.workspace':{},
   'social.drafts':{},
+  'social.weekly':{},
+  'social.saveWeekly':{enabled:true,expectedRevision:0,commandId:UUID},
   'social.requestDrafts':{sourceRefs:[{kind:'public',id:UUID,revision:1}],factBlocks:[],commandId:UUID},
   'social.mutate':{action:'approve',postId:UUID,expectedRevision:1,commandId:UUID},
   'outreach.control':{},
@@ -334,7 +336,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
-    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
+    social: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
       try{const image=join(directory,'source.png');await sharp({create:{width:4,height:4,channels:3,background:'red'}}).png().toFile(image);
         const host=createSocialImageImport({directory,api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,chooseFile:async()=>({canceled:false,filePaths:[image]})});

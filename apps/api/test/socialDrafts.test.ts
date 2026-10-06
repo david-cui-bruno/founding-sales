@@ -7,6 +7,10 @@ it('creates a replayable owner-scoped request without accepting source text or a
  const f=await createAuthFixture();try{
  let token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
  const call=(path:string,body:unknown)=>dispatch({method:'POST',path,query:new URLSearchParams(),headers:{authorization:`Bearer ${token}`},body},{session:f.db,auth:f.deps,supportedClientVersions:f.deps.config.supportedClientVersions,sendingEnabled:false,upgradeUrl:'https://fixture.invalid/update'});
+ expect((await call('/social/weekly',{})).body).toMatchObject({enabled:false,revision:0});
+ const weekly={enabled:true,expectedRevision:0,commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call('/social/weekly/save',weekly)).body).toMatchObject({result:{enabled:true,revision:1}});
+ expect((await call('/social/weekly/save',weekly)).body).toMatchObject({replayed:true});
  const id=randomUUID();await f.db.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[f.alpha.workspaceId,id,'d'.repeat(64),JSON.stringify({brief:'After-hours maintenance for PRIVATE CUSTOMER.'})]);
  const input={sourceRefs:[{kind:'public',id,revision:1}],factBlocks:[],commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
  expect((await call('/social/drafts/request',{...input,text:'invented content',approved:true})).status).toBe(400);

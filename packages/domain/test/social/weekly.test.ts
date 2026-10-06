@@ -1,0 +1,33 @@
+import {randomUUID} from 'node:crypto';
+import {beforeAll,afterAll,it,expect} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {readSocialWeekly,saveSocialWeekly,queueWeeklySocialDrafts} from '../../social/weekly.ts';
+let db:TestDatabase,seed:TwoWorkspaces;
+const user=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
+const scheduler=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'scheduler'}),db.session);
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);});afterAll(async()=>db.drop());
+it('defaults off, queues one batch after explicit enablement and does not backfill missed weeks',async()=>{
+ expect(await readSocialWeekly(user())).toMatchObject({enabled:false,revision:0,nextAt:null});
+ expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(0);
+ const id=randomUUID();await db.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[seed.alpha.workspaceId,id,'e'.repeat(64),JSON.stringify({firmName:'Example PM',brief:'After-hours maintenance support'})]);
+ expect((await withTransaction(db.session,()=>saveSocialWeekly(user(),{enabled:true,expectedRevision:0}))).ok).toBe(true);
+ expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(1);
+ expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(0);
+ expect((await db.session.query('SELECT state,weekly_revision FROM social_draft_requests WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows).toEqual([{state:'queued',weekly_revision:1}]);
+ await db.session.query("UPDATE social_weekly_settings SET next_at=now()-interval '30 days' WHERE workspace_id=$1",[seed.alpha.workspaceId]);
+ expect(await withTransaction(db.session,()=>queueWeeklySocialDrafts(scheduler()))).toBe(0);
+ expect((await readSocialWeekly(user())).lastResult).toBe('no_new_sources');
+ expect((await db.session.query('SELECT count(*)::integer AS n FROM social_draft_requests WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows[0]?.['n']).toBe(1);
+});
+it('rejects stale settings and disabling prevents an already queued weekly batch from dispatching',async()=>{
+ expect(await withTransaction(db.session,()=>saveSocialWeekly(user(),{enabled:false,expectedRevision:0}))).toEqual({ok:false,reason:'stale_revision'});
+ expect((await withTransaction(db.session,()=>saveSocialWeekly(user(),{enabled:false,expectedRevision:1}))).ok).toBe(true);
+ const {runSocialDraft}=await import('../../social/draftRun.ts');const id=(await db.session.query<{id:string}>('SELECT id FROM social_draft_requests WHERE workspace_id=$1',[seed.alpha.workspaceId])).rows[0]!.id;
+ let count=0;const worker=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'system',component:'worker'}),db.session);
+ await runSocialDraft(worker,id,{providerKey:'aws_bedrock.social_draft',countInputTokens:async()=>{count++;return 100;},generate:async()=>{count++;throw new Error('must not call');}});
+ expect(count).toBe(0);
+ expect((await db.session.query('SELECT state FROM social_draft_requests WHERE workspace_id=$1 AND id=$2',[seed.alpha.workspaceId,id])).rows[0]?.['state']).toBe('review');
+});
