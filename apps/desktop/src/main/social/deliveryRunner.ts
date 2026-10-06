@@ -5,10 +5,11 @@ import type {SocialPlatform,SocialScope} from './runtime.ts';
 import {withQueuedSocialPost} from './queuedPost.ts';
 import {createSocialDeliveryPorts} from './deliveryApi.ts';
 import {submitApprovedSocialPost,reconcileSocialPost} from './deliveryLoop.ts';
+export interface SocialAdapterContext {snapshot:SocialDeliveryQueue['items'][number]['snapshot'];fingerprint:string;displayName:string}
 /** Register only adapters that have passed native schedule/receipt/cancel acceptance. */
 export interface VerifiedSocialAdapter {
  version:string;
- open(scope:SocialScope,run:(adapter:SocialAdapter,current:()=>boolean)=>Promise<void>):Promise<unknown>;
+ open(scope:SocialScope,run:(adapter:SocialAdapter,current:()=>boolean)=>Promise<void>,context:SocialAdapterContext):Promise<unknown>;
 }
 interface Deps {api:AuthedClient;root:string;identity():Promise<{workspaceId:string;userId:string}|null>;now():number;adapters:Partial<Record<SocialPlatform,VerifiedSocialAdapter>>;send?:typeof fetch}
 export function createSocialDeliveryRunner(deps:Deps){
@@ -29,7 +30,7 @@ export function createSocialDeliveryRunner(deps:Deps){
     await registration.open(scope,async(adapter,browserCurrent)=>{
      const active=()=>current()&&browserCurrent();if(!active())return;
      await submitApprovedSocialPost(post,adapter,createSocialDeliveryPorts({api:deps.api,current:active,now:deps.now}));
-    });
+    },{snapshot:structuredClone(item.snapshot),fingerprint:item.fingerprint,displayName:post.account.displayName});
    });return;
   }
   if(!item.submissionId)return;
@@ -40,7 +41,7 @@ export function createSocialDeliveryRunner(deps:Deps){
   await registration.open(scope,async(adapter,browserCurrent)=>{
    const active=()=>current()&&browserCurrent();if(!active())return;
    await reconcileSocialPost({account:{platform:account.platform,externalId:account.externalId,displayName:account.displayName},fingerprint:item.fingerprint},{submissionId:item.submissionId!,receiptId:item.receiptId,cancel:item.action==='cancel'},adapter,createSocialDeliveryPorts({api:deps.api,current:active,now:deps.now}));
-  });
+  },{snapshot:structuredClone(item.snapshot),fingerprint:item.fingerprint,displayName:account.displayName});
  },
  };
 }

@@ -52,3 +52,9 @@ A hidden Electron fixture staged text and exercised exactly one click, refused a
 Text-only recovery now requires a complete scheduled list, a unique candidate and independent saved-detail readback. It compares account, text, date/time and timezone; partial lists, duplicate matches, missing rows and provider failures remain unknown. An empty scheduled list does not prove that an earlier submission failed: the post may already have published.
 
 Closed navigation binds a detail read to the exact clicked native receipt, with a one-use document-local token. It cannot assign a receipt to an independently opened composer. Sixteen focused tests, desktop typecheck and focused lint pass. Full live adapter/session wiring and product acceptance remain pending; images are still unsupported for delivery.
+
+### Text adapter composition and restart recovery
+
+A text-only adapter now composes staging, guarded submission, independent receipt inspection and cancellation. The delivery runner passes the original approval snapshot into both new attempts and restart recovery, so recovery does not depend on downloading retained media. A lost-click-response test verifies a native receipt without a second click. Cancellation re-verifies the target; an already-absent row remains unknown because publication could have occurred between reads.
+
+Twenty focused adapter/runner/delivery tests and the full desktop suite (1,495 passed, 23 skipped) pass. Typecheck and focused lint pass. This is local composition, not live delivery activation: product-owned account/navigation/list/detail ports and platform acceptance still remain. Images remain refused, and the final guard holds when browser and approved timezone differ.
