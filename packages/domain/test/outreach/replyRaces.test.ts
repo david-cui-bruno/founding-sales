@@ -1,57 +1,20 @@
-import {resolveZoneForFirm} from '../../crm/firms.ts';
+import {routineReplyFixture} from './routineFixture.ts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,it,expect} from 'vitest';
-import {createOutboundWorld,OPEN_INSTANT,type OutboundWorld} from '../outbound/support/outboundWorld.ts';
-import {seedFirm,pausingAtTokenRefresh} from '../outbound/support/dispatchFixtures.ts';
+import {createOutboundWorld,type OutboundWorld} from '../outbound/support/outboundWorld.ts';
+import {pausingAtTokenRefresh} from '../outbound/support/dispatchFixtures.ts';
 import {withTransaction} from '../../db/queryable.ts';
-import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {repositoryContext} from '../../db/workspaceScope.ts';
 import {setProspectingAuthorization} from '../../outreach/authorization.ts';
-import {saveAnswerBlock,approveAnswerBlock} from '../../outreach/facts.ts';
 import {recordMessage,storeMessageBody} from '../../mail/messages.ts';
-import {recordMatches} from '../../mail/matching.ts';
-import {readRoutineSource,requestRoutineReply} from '../../outreach/replyRequests.ts';
-import {prepareRoutineReply,routineDraftForExecution,attachRoutineFence} from '../../outreach/replyDelivery.ts';
-import {prepareOutboundMessage,readFence} from '../../outbound/fence.ts';
+import {readRoutineSource} from '../../outreach/replyRequests.ts';
+import {readFence} from '../../outbound/fence.ts';
 import {dispatchOutboundMessage} from '../../outbound/send.ts';
 import {decideSend} from '../../outbound/gate.ts';
 let world:OutboundWorld;
 beforeAll(async()=>{world=await createOutboundWorld();});
 afterAll(async()=>world.stop());
-async function fixture(){
- const db=world.database.session,w=world.alpha.workspace.workspaceId;
- const ctx=repositoryContext(workspaceScope(w,{kind:'user',userId:world.alpha.workspace.admin.userId,role:'admin'}),db);
- const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db,fn);
- const firm=await seedFirm(world,world.alpha,'routine-reply');
- await db.query('DELETE FROM opportunities WHERE id=$1',[firm.opportunityId]);
- await tx(()=>resolveZoneForFirm(ctx,{firmId:firm.firmId,recordedZone:'Etc/UTC'}));
- const current=(await db.query<{revision:number}>('SELECT revision FROM gmail_prospecting_authorizations WHERE workspace_id=$1 AND mailbox_id=$2',[w,world.alpha.mailboxId])).rows[0];
- await tx(()=>setProspectingAuthorization(ctx,{mailboxId:world.alpha.mailboxId,expectedRevision:current?.revision??0,enabled:true,basis:'owner_reported_google_permission'}));
- const candidate=randomUUID(),run=randomUUID(),plan=randomUUID();
- await db.query("INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,'{}','needs_review',1)",[w,candidate,randomUUID().replaceAll('-','').repeat(2)]);
- await db.query("INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name) VALUES($1,$2,$3,1,$4,'fixture','fixture','fixture')",[w,run,candidate,'e'.repeat(64)]);
- await db.query("INSERT INTO outreach_email_sources(workspace_id,candidate_id,run_id,firm_id,contact_id,route_id,observation_id,block_id,identity_kind,reviewed) VALUES($1,$2,$3,$4,$5,$6,$7,'contact','named',true)",[w,candidate,run,firm.firmId,firm.contactId,firm.routeId,randomUUID()]);
- await db.query("INSERT INTO outreach_plans(workspace_id,id,firm_id,contact_id,owner_user_id,mailbox_id,candidate_id,qualification_run_id,lane,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'email_first','reply_pending')",[w,plan,firm.firmId,firm.contactId,world.alpha.workspace.salesperson.userId,world.alpha.mailboxId,candidate,run]);
- const message=await tx(()=>recordMessage(ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:plan,rfcMessageId:`${plan}@example.test`,direction:'incoming',internalDate:new Date().toISOString(),headerFrom:firm.address,headerTo:[world.alpha.address],headerCc:[],subject:'Product question',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]}}));
- await tx(()=>recordMatches(ctx,{messageId:message.message.id,candidates:[{firmId:firm.firmId,contactId:firm.contactId,opportunityId:null,outreachPlanId:plan,rule:'participant',viaClosedOpportunity:false}]}));
- await tx(()=>storeMessageBody(ctx,{messageId:message.message.id,text:'Does it work with AppFolio?',truncated:false}));
- const block=await tx(()=>saveAnswerBlock(ctx,{kind:'product',text:'Callie integrates with AppFolio.'}));if(!block.ok)throw new Error(block.reason);
- await tx(()=>approveAnswerBlock(ctx,{id:block.value.id,version:1}));
- const sequence=(await db.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[w,plan,world.alpha.workspace.admin.userId])).rows[0]!.id;
- const version=(await db.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[w,sequence])).rows[0]!.id;
- await db.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,template_version_id) VALUES($1,$2,1,'email','elapsed',0,$3)",[w,version,world.alpha.templateVersionId]);
- await db.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[version,world.alpha.workspace.admin.userId]);
- await db.query('INSERT INTO outreach_settings(workspace_id,routine_replies_enabled,reply_sequence_version_id) VALUES($1,true,$2) ON CONFLICT(workspace_id) DO UPDATE SET routine_replies_enabled=true,reply_sequence_version_id=EXCLUDED.reply_sequence_version_id',[w,version]);
- const source=await readRoutineSource(ctx,{planId:plan,messageId:message.message.id});if(!source.ok)throw new Error(source.reason);
- const request=await tx(()=>requestRoutineReply(ctx,{planId:plan,messageId:message.message.id,threadRevision:source.value.hash}));if(!request.ok)throw new Error(request.reason);
- await db.query("UPDATE outreach_reply_requests SET state='ready',decision=$2::jsonb WHERE id=$1",[request.value.requestId,JSON.stringify({kind:'answer',blockRefs:[{id:block.value.id,version:1}],allQuestionsSupported:true,confidence:'high'})]);
- const delivery=await tx(()=>prepareRoutineReply(ctx,{requestId:request.value.requestId,expectedRevision:1}));if(!delivery.ok)throw new Error(delivery.reason);
- const draft=await routineDraftForExecution(ctx,delivery.value.executionId);if(!draft?.ok)throw new Error('draft missing');
- const e=(await db.query<{enrollment_id:string}>('SELECT enrollment_id FROM step_executions WHERE id=$1',[delivery.value.executionId])).rows[0]!.enrollment_id;
- await db.query('UPDATE step_executions SET not_before=$2 WHERE id=$1',[delivery.value.executionId,OPEN_INSTANT]);
- const prepared=await tx(()=>prepareOutboundMessage(ctx,{enrollmentId:e,stepExecutionId:delivery.value.executionId,firmId:firm.firmId,contactId:firm.contactId,ownerUserId:world.alpha.workspace.salesperson.userId,templateVersionId:world.alpha.templateVersionId,templateContentHash:world.alpha.templateContentHash,emailAddressId:firm.routeId,toAddress:firm.address,subject:draft.value.subject,body:draft.value.body,sendAt:OPEN_INSTANT,sourceZone:'UTC',businessDate:'2026-09-23'}));if(!prepared.ok)throw new Error(prepared.reason);
- await tx(()=>attachRoutineFence(ctx,{executionId:delivery.value.executionId,fenceId:prepared.value.outboundMessageId}));
- return {ctx,tx,firm,plan,block: block.value,requestId:request.value.requestId,messageId:message.message.id,fenceId:prepared.value.outboundMessageId};
-}
+const fixture=(beforePrepare?:Parameters<typeof routineReplyFixture>[1])=>routineReplyFixture(world,beforePrepare);
 it('dispatches a routine reply once with frozen threading, and replay cannot send twice',async()=>{
  const f=await fixture(),gmail=world.clientWith(world.alpha,{}),deps=world.sendDeps(world.alpha,{gmail});
  const verdict=await decideSend(f.ctx,(await readFence(f.ctx,f.fenceId))!,deps);expect(verdict.ok,JSON.stringify(verdict)).toBe(true);
@@ -127,4 +90,50 @@ it('attributes only accepted sends and confirmed human replies, replayed once',a
  await f.ctx.db.query("INSERT INTO mail_message_classifications(workspace_id,mail_message_id,layer,class,requires_confirmation,rules_version) VALUES($1,$2,'deterministic','human',false,'fixture')",[f.ctx.scope.workspaceId,f.messageId]);
  await attribute(f.messageId);await attribute(f.messageId);
  expect((await rows()).rows).toEqual([{subject_id:f.fenceId,outbound:true},{subject_id:f.messageId,outbound:false}]);
+});
+
+for(const targetKind of ['firm','contact'] as const)for(const sent of [false,true])it(`deletes ${targetKind} with a ${sent?'sent':'prepared'} routine delivery`,async()=>{
+ const f=await fixture();
+ if(sent)await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:f.fenceId});
+ const {previewDeletion,commitDeletion}=await import('../../retention/deletion.ts');
+ const {recordingSuppressionJournal}=await import('../../suppression/journal.ts');
+ const preview=await previewDeletion(f.ctx,{targetKind,firmId:f.firm.firmId,...(targetKind==='contact'?{contactId:f.firm.contactId}:{})});
+ expect(preview.ok).toBe(true);
+ const result=await commitDeletion(f.ctx,{requestId:preview.value!.requestId,previewHash:preview.value!.previewHash,commandId:randomUUID(),journal:recordingSuppressionJournal()});
+ expect(result.ok,JSON.stringify(result)).toBe(true);
+ expect((await f.ctx.db.query('SELECT * FROM outreach_reply_deliveries WHERE request_id=$1',[f.requestId])).rows).toHaveLength(0);
+});
+it('a confirmed reply cannot undo explicit conversation takeover',async()=>{
+ const f=await fixture();
+ const {handleRoutineManually}=await import('../../outreach/settings.ts');
+ const {confirmReplyDisposition}=await import('../../classification/confirmations.ts');
+ const {recordingSuppressionJournal}=await import('../../suppression/journal.ts');
+ await f.ctx.db.query("INSERT INTO mail_message_classifications(workspace_id,mail_message_id,layer,class,requires_confirmation,rules_version) VALUES($1,$2,'deterministic','human',true,'fixture')",[f.ctx.scope.workspaceId,f.messageId]);
+ const handled=await f.tx(()=>handleRoutineManually(f.ctx,{id:f.requestId,expectedRevision:1}));expect(handled.ok).toBe(true);
+ const result=await f.tx(()=>confirmReplyDisposition(f.ctx,{messageId:f.messageId,disposition:'interested',grantFollowUp:false,journal:recordingSuppressionJournal()}));
+ expect(result.ok,JSON.stringify(result)).toBe(true);
+ expect((await f.ctx.db.query('SELECT state FROM outreach_plans WHERE id=$1',[f.plan])).rows[0]).toEqual({state:'manual'});
+ expect((await readRoutineSource(f.ctx,{planId:f.plan,messageId:f.messageId})).ok).toBe(false);
+});
+
+it('a direct human answer on another thread invalidates the pending answer before permission exists',async()=>{
+ await expect(fixture(async({ctx,firm,plan,messageId})=>{
+  const {applyDirectSendEffects}=await import('../../mail/effects.ts');
+  const incoming=(await ctx.db.query<{internal_date:Date}>('SELECT internal_date FROM mail_messages WHERE id=$1',[messageId])).rows[0]!;
+  const outgoing=await withTransaction(ctx.db,()=>recordMessage(ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:randomUUID(),rfcMessageId:`${randomUUID()}@example.test`,direction:'outgoing',internalDate:new Date(incoming.internal_date.getTime()+1000).toISOString(),headerFrom:world.alpha.address,headerTo:[firm.address],headerCc:[],subject:'Here is the answer',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]}}));
+  await withTransaction(ctx.db,()=>applyDirectSendEffects(ctx,{message:outgoing.message,candidate:{firmId:firm.firmId,contactId:firm.contactId,opportunityId:null,outreachPlanId:plan,rule:'participant',viaClosedOpportunity:false}}));
+ })).rejects.toThrow('answered_manually');
+});
+it('reassigns an unclaimed prepared email after midnight but retains an uncertain dispatch',async()=>{
+ const f=await fixture();const {buildOutreachCadence}=await import('../../outreach/cadence.ts');const {claimProspectingTouch}=await import('../../outreach/touchReservations.ts');
+ const start='2026-10-05T14:00:00.000Z',cadence=buildOutreachCadence({lane:'email_first',startsAt:start,timeZone:'America/New_York'});
+ await f.ctx.db.query("UPDATE outreach_plans SET state='active',cadence=$2::jsonb,expires_at=$3 WHERE id=$1",[f.plan,JSON.stringify(cadence),cadence.expiresAt]);
+ const actionId=(await f.ctx.db.query<{step_execution_id:string}>('SELECT step_execution_id FROM outbound_messages WHERE id=$1',[f.fenceId])).rows[0]!.step_execution_id;
+ const input={planId:f.plan,expectedRevision:1,actionId,channel:'email' as const,expectedOrdinal:1,at:start};
+ const first=await f.tx(()=>claimProspectingTouch(f.ctx,input));expect(first.ok).toBe(true);
+ const next=await f.tx(()=>claimProspectingTouch(f.ctx,{...input,at:'2026-10-06T14:00:00.000Z'}));expect(next.ok,JSON.stringify(next)).toBe(true);
+ expect((await f.ctx.db.query('SELECT local_date::text FROM outreach_touch_reservations WHERE plan_id=$1',[f.plan])).rows).toEqual([{local_date:'2026-10-06'}]);
+ await f.ctx.db.query("UPDATE outbound_messages SET state='dispatching',attempt_token=$2,dispatch_started_at=$3 WHERE id=$1",[f.fenceId,randomUUID(),'2026-10-06T14:00:00.000Z']);
+ const unknown=await f.tx(()=>claimProspectingTouch(f.ctx,{...input,at:'2026-10-07T14:00:00.000Z'}));expect(unknown.ok).toBe(false);
+ expect((await f.ctx.db.query('SELECT state,local_date::text FROM outreach_touch_reservations WHERE plan_id=$1',[f.plan])).rows).toEqual([{state:'reserved',local_date:'2026-10-06'}]);
 });

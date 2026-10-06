@@ -24,4 +24,10 @@ The first completed corpus used seven Bedrock calls (7 cents gross rounded) and 
 
 ## Remaining release work
 
-Whole-branch independent review and any material repairs, final complete gate, cloud rehearsal, desktop publication, deployment and persisted production readback remain pending. Live prospect → email → reply → booking delivery remains pending while domain sending is paused; fixture/held-path tests do not claim live delivery. Social publishing and its account-specific acceptance tests are a separate remaining roadmap release.
+Independent review and the repair pass are complete; cloud rehearsal, desktop publication, deployment and persisted production readback remain pending. Live prospect → email → reply → booking delivery remains pending while domain sending is paused; fixture/held-path tests do not claim live delivery. Social publishing and its account-specific acceptance tests are a separate remaining roadmap release.
+
+## Independent review repairs
+
+The whole-branch review found seven material lifecycle defects. The repair pass adds real database regressions for deletion after preparation/delivery, direct answers on another thread before permission creation, explicit takeover followed by reply confirmation, a completed manual-call scheduler job when the next cadence slot arrives, an abandoned actual dial ticket, and a prepared email recovered after local midnight. It also checks two scheduler pages with 26 automatic replies before an older valid question. Each defect was reproduced before repair; focused repaired suites pass. The repaired complete gate passed: 7,247 tests passed and 16 pre-existing skips, with typecheck and lint clean. Cloud release remains pending.
+
+Refused reply sources are checkpointed with their inspected version and sent to review/no-reply rather than repeatedly occupying the same selection page. Correcting such a source does not silently authorize a reply. Manual-call wake identity follows the next computed cadence decision while keeping the outstanding task visible. Capacity is reclaimed only when an expired unconsumed ticket or an unclaimed prepared fence proves no external action occurred.

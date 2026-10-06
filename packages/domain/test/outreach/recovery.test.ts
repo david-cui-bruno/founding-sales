@@ -1,0 +1,57 @@
+import {randomUUID} from 'node:crypto';
+import {beforeAll,afterAll,beforeEach,it,expect} from 'vitest';
+import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
+import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
+import {seedCrm,type SeededCrm} from '../db/support/crmFixtures.ts';
+import {seedMail,type SeededMail} from '../db/support/mailFixtures.ts';
+import {seedPolicy,type SeededPolicy} from '../db/support/policyFixtures.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {buildOutreachCadence} from '../../outreach/cadence.ts';
+import {outreachExecutionTiming} from '../../outreach/timing.ts';
+import {authorizeDialCommand} from '../../dial/tickets.ts';
+import {listStepWakes} from '../../sequences/wake.ts';
+import {enqueueJob} from '../../jobs/jobStore.ts';
+import {enrollContact} from '../../sequences/enrollments.ts';
+import {runDueStepExecution} from '../../sequences/executions.ts';
+import {recordingSendHandoff} from '../../sequences/sendHandoff.ts';
+import {allowAllEligibility} from '../../sequences/eligibility.ts';
+let db:TestDatabase,seed:TwoWorkspaces,crm:SeededCrm,mail:SeededMail,policy:SeededPolicy;
+const at='2026-10-05T14:00:00.000Z';
+const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',role:'salesperson',userId:seed.alpha.salesperson.userId}),db.session);
+beforeAll(async()=>{db=await createTestDatabase();seed=await seedTwoWorkspaces(db.session);crm=await seedCrm(db.session,seed);mail=await seedMail(db.session,seed,crm);policy=await seedPolicy(db.session,seed,crm);});
+afterAll(async()=>db.drop());
+beforeEach(async()=>{await db.session.query('BEGIN');return async()=>{await db.session.query('ROLLBACK');};});
+async function plan(lane:'call_first'|'email_first'){
+ const w=seed.alpha.workspaceId,c=randomUUID(),r=randomUUID(),p=randomUUID(),cadence=buildOutreachCadence({lane,startsAt:at,timeZone:'America/New_York'});
+ await db.session.query("INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,'{}','needs_review',1)",[w,c,randomUUID().replaceAll('-','').repeat(2)]);
+ await db.session.query("INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name) VALUES($1,$2,$3,1,$4,'fixture','fixture','fixture')",[w,r,c,'e'.repeat(64)]);
+ await db.session.query("INSERT INTO outreach_plans(workspace_id,id,firm_id,contact_id,owner_user_id,mailbox_id,candidate_id,qualification_run_id,lane,cadence,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)",[w,p,crm.alpha.firmId,crm.alpha.contactId,seed.alpha.salesperson.userId,mail.alpha.mailboxId,c,r,lane,JSON.stringify(cadence),cadence.expiresAt]);
+ return {id:p,cadence};
+}
+it('expires a real unconsumed dial ticket before evaluating the next email',async()=>{
+ const p=await plan('call_first');
+ await db.session.query('UPDATE phone_routes SET contact_id=$2 WHERE id=$1',[policy.alpha.phoneRouteId,crm.alpha.contactId]);
+ const ticket=await authorizeDialCommand(ctx(),{firmId:crm.alpha.firmId,routeId:policy.alpha.phoneRouteId,callingIdentityId:policy.alpha.callingIdentityId,routeVersion:policy.alpha.phoneRouteVersion,deviceId:seed.alpha.salesperson.deviceId,commandId:randomUUID(),at});
+ expect(ticket.ok,JSON.stringify(ticket)).toBe(true);
+ const due=p.cadence.touches[1]!.dueAt;
+ expect(await outreachExecutionTiming(ctx(),{planId:p.id,channel:'email',channelOrdinal:1,executionId:randomUUID(),at:due})).toEqual({kind:'proceed'});
+ expect((await db.session.query('SELECT state FROM outreach_touch_reservations WHERE plan_id=$1',[p.id])).rows).toEqual([{state:'released'}]);
+});
+it('wakes an unchanged manual call again when the next cadence slot arrives',async()=>{
+ const p=await plan('call_first'),w=seed.alpha.workspaceId;
+ const s=(await db.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[w,randomUUID(),seed.alpha.salesperson.userId])).rows[0]!.id;
+ const v=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[w,s])).rows[0]!.id;
+ await db.session.query("INSERT INTO sequence_steps(workspace_id,sequence_version_id,ordinal,channel,delay_unit,delay_amount,on_no_answer) VALUES($1,$2,1,'call_task','elapsed',0,'retry_call')",[w,v]);
+ await db.session.query("UPDATE sequence_versions SET state='published',published_at=now(),published_by_user_id=$2 WHERE id=$1",[v,seed.alpha.salesperson.userId]);
+ const enrolled=await enrollContact(ctx(),{subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:v,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});expect(enrolled.ok,JSON.stringify(enrolled)).toBe(true);if(!enrolled.ok)throw new Error(enrolled.reason);
+ const id=enrolled.value.firstExecutionId;
+ await db.session.query('UPDATE step_executions SET due_at=$2,not_before=$2 WHERE id=$1',[id,at]);
+ const initial=(await listStepWakes(db.session,{now:at})).find(x=>x.stepExecutionId===id)!;
+ const first=await enqueueJob(db.session,{workspaceId:w,kind:'sequence.action',idempotencyKey:`step-execution:${id}:${initial.wake}`,payload:{stepExecutionId:id}});
+ const result=await runDueStepExecution(ctx(),{stepExecutionId:id,now:at,eligibility:allowAllEligibility(),sendHandoff:recordingSendHandoff()});expect(result.kind).toBe('awaiting_manual');
+ await db.session.query("UPDATE jobs SET state='done',completed_at=now() WHERE id=$1",[first.jobId]);
+ const later=(await listStepWakes(db.session,{now:p.cadence.touches[1]!.dueAt})).find(x=>x.stepExecutionId===id)!;
+ const second=await enqueueJob(db.session,{workspaceId:w,kind:'sequence.action',idempotencyKey:`step-execution:${id}:${later.wake}`,payload:{stepExecutionId:id}});
+ expect(second.inserted).toBe(true);
+ expect((await runDueStepExecution(ctx(),{stepExecutionId:id,now:p.cadence.touches[1]!.dueAt,eligibility:allowAllEligibility(),sendHandoff:recordingSendHandoff()})).kind).toBe('completed');
+});

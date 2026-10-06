@@ -1,3 +1,4 @@
+import {releaseAbandonedTouches} from './touchReservations.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {ResolvedDueInstant} from '../src/rules/businessDays.ts';
 import {addCalendarDays,localDate,localInstant,localParts,weekdayOfDate} from '../src/rules/localClock.ts';
@@ -31,6 +32,8 @@ export async function outreachExecutionTiming(ctx:RepositoryContext,input:{planI
  if(!plan||Date.parse(input.at)>Date.parse(plan.expiresAt))return {kind:'hold'};
  const touch=plan.touches.find(t=>t.channel===(input.channel==='call_task'?'phone':input.channel)&&t.channelOrdinal===input.channelOrdinal);
  if(!touch)return {kind:'hold'};
+ const firm=(await ctx.db.query<{firm_id:string}>('SELECT firm_id FROM outreach_plans WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,input.planId])).rows[0];
+ if(firm)await releaseAbandonedTouches(ctx,firm.firm_id,input.at);
  const rows=(await ctx.db.query<{ordinal:number;action_id:string;state:string;claimed_at:Date}>("SELECT ordinal,action_id,state,claimed_at FROM outreach_touch_reservations WHERE workspace_id=$1 AND plan_id=$2 AND state<>'released' ORDER BY claimed_at,id",[ctx.scope.workspaceId,input.planId])).rows;
  if(rows.some(r=>(r.state==='reserved'||r.state==='unknown')&&r.action_id!==input.executionId))return {kind:'hold'};
  if(rows.some(r=>r.action_id===input.executionId))return {kind:'proceed'};

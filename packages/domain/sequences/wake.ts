@@ -1,3 +1,4 @@
+import {nextProspectingTouch,type OutreachCadence} from '../outreach/cadence.ts';
 import type { Queryable } from '../db/queryable.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import type { StepChannel } from '@fss/contracts';
@@ -170,8 +171,12 @@ export async function listStepWakes(
     readonly recoveryGraceSeconds?: number | undefined;
   },
 ): Promise<readonly StepWake[]> {
-  const { rows } = await db.query<{ id: string; workspace_id: string; wake: string }>(
-    `SELECT e.id, e.workspace_id, ${WAKE_SQL} AS wake
+  const { rows } = await db.query<{ id: string; workspace_id: string; wake: string; cadence:OutreachCadence|null; touches:{ordinal:number;at:string}[]|null }>(
+    `SELECT e.id, e.workspace_id, ${WAKE_SQL} AS wake,
+      CASE WHEN n.origin_kind='prospecting' AND e.channel='call_task' THEN
+       (SELECT p.cadence FROM outreach_plans p WHERE p.workspace_id=n.workspace_id AND p.id=n.outreach_plan_id) END AS cadence,
+      (SELECT jsonb_agg(jsonb_build_object('ordinal',r.ordinal,'at',r.claimed_at) ORDER BY r.claimed_at,r.id)
+       FROM outreach_touch_reservations r WHERE r.workspace_id=n.workspace_id AND r.plan_id=n.outreach_plan_id AND r.state IN ('accepted','unknown')) AS touches
        FROM step_executions e
        JOIN sequence_enrollments n
          ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
@@ -210,5 +215,11 @@ export async function listStepWakes(
       Math.trunc(input.limit ?? STEP_WAKE_LIMIT),
     ],
   );
-  return rows.map(row => ({ workspaceId: row.workspace_id, stepExecutionId: row.id, wake: row.wake }));
+  return rows.map(row => {
+    // Manual calls have no row mutation. Time crossing the next frozen/shifted slot
+    // is itself a new decision, so it must have a distinct durable job identity.
+    const touches=row.touches??[];
+    const slot=row.cadence==null?null:Date.parse(input.now)>Date.parse(row.cadence.expiresAt)?'expired':nextProspectingTouch({plan:row.cadence,at:input.now,completedOrdinals:touches.map(t=>t.ordinal),lastTouchAt:touches.at(-1)?.at??null})?.touch.ordinal??'waiting';
+    return {workspaceId:row.workspace_id,stepExecutionId:row.id,wake:slot===null?row.wake:`${row.wake}:${slot}`};
+  });
 }

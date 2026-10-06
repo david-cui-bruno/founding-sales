@@ -18,3 +18,26 @@ it('does not accept truncated output, and treats missing usage as ambiguous spen
  const port=routineReplyInterpretation({kind:'bedrock',countTokens:async()=>1,create:async()=>({stop_reason:'max_tokens',content:[{type:'text',text:'partial'}]})});
  expect(await port.interpret(input)).toEqual({raw:'',costCents:0,costEstimated:true});
 });
+it('checkpoints more than one page of refused sources so an older valid question gets a job',async()=>{
+ const {createOutboundWorld}=await import('@fss/domain/test/outbound/support/outboundWorld.ts');
+ const {routineReplyFixture}=await import('@fss/domain/test/outreach/routineFixture.ts');
+ const {recordMessage,storeMessageBody}=await import('@fss/domain/mail/messages.ts');
+ const {recordMatches}=await import('@fss/domain/mail/matching.ts');
+ const {withTransaction}=await import('@fss/domain/db/queryable.ts');
+ const {outreachReplySource}=await import('../src/handlers/outreach.ts');
+ const {randomUUID}=await import('node:crypto');
+ const world=await createOutboundWorld();
+ try{
+  const f=await routineReplyFixture(world),db=f.ctx.db,w=f.ctx.scope.workspaceId;
+  await db.query('DELETE FROM outreach_reply_deliveries WHERE request_id=$1',[f.requestId]);
+  await db.query('DELETE FROM outreach_reply_requests WHERE id=$1',[f.requestId]);
+  for(let i=0;i<26;i++){
+   const m=await withTransaction(db,()=>recordMessage(f.ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:randomUUID(),rfcMessageId:`${randomUUID()}@example.test`,direction:'incoming',internalDate:new Date(Date.now()+1000+i).toISOString(),headerFrom:f.firm.address,headerTo:[world.alpha.address],headerCc:[],subject:'Automatic reply',referenceMessageIds:[],inReplyTo:null,autoSubmitted:'auto-replied',listId:null,labelIds:[],attachments:[]}}));
+   await withTransaction(db,async()=>{await recordMatches(f.ctx,{messageId:m.message.id,candidates:[{firmId:f.firm.firmId,contactId:f.firm.contactId,opportunityId:null,outreachPlanId:f.plan,rule:'participant',viaClosedOpportunity:false}]});await storeMessageBody(f.ctx,{messageId:m.message.id,text:'Automatic reply',truncated:false});});
+  }
+  const source=outreachReplySource();
+  for(let i=0;i<2;i++)await withTransaction(db,()=>source.find(db,new Date(Date.now()+3000+i).toISOString()));
+  expect((await db.query('SELECT state FROM outreach_reply_requests WHERE workspace_id=$1 AND original_message_id=$2',[w,f.messageId])).rows).toEqual([{state:'queued'}]);
+  expect((await db.query("SELECT count(*)::int AS n FROM outreach_reply_requests WHERE workspace_id=$1 AND state IN ('no_reply','review')",[w])).rows).toEqual([{n:26}]);
+ }finally{await world.stop();}
+});

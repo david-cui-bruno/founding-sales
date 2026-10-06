@@ -260,7 +260,7 @@ export async function confirmReplyDisposition(
   }
   consequences.push('opportunity_manual');
   }else{
-    const updated=await context.db.query(`UPDATE outreach_plans SET state='reply_pending',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 RETURNING id`,[context.scope.workspaceId,chosen.outreachPlanId,chosen.firmId]);
+    const updated=await context.db.query(`UPDATE outreach_plans SET state=CASE WHEN state IN ('stopped','completed') THEN state ELSE 'manual' END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND firm_id=$3 RETURNING id`,[context.scope.workspaceId,chosen.outreachPlanId,chosen.firmId]);
     if(updated.rowCount!==1)return refuseClassification('invalid_input');
     consequences.push('outreach_manual');
   }

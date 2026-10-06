@@ -18,15 +18,14 @@ export async function claimProspectingTouch(ctx:RepositoryContext,input:{planId:
  if(plan.state!=='active'||plan.revision!==input.expectedRevision)return {ok:false,reason:'plan_changed'};
  if(!plan.cadence||!plan.expires_at||Date.parse(input.at)>plan.expires_at.getTime())return {ok:false,reason:'plan_expired'};
  const date=localDate(input.at,plan.cadence.timeZone);
+ await releaseAbandonedTouches(ctx,plan.firm_id,input.at);
  const replay=(await ctx.db.query<{id:string;plan_id:string;state:string;local_date:string}>("SELECT id,plan_id,state,local_date::text FROM outreach_touch_reservations WHERE workspace_id=$1 AND channel=$2 AND action_id=$3",[ctx.scope.workspaceId,input.channel,input.actionId])).rows[0];
  if(replay&&replay.state!=='released')return replay.plan_id===plan.id&&replay.state!=='released'&&replay.local_date===date?{ok:true,value:{reservationId:replay.id,localDate:date}}:{ok:false,reason:'action_already_used'};
  // Original firm IDs remain on dispatch history after a merge. Include every merged
  // ancestor when checking capacity; a merge cannot mint a second daily/lifetime budget.
  // Expired, never-consumed call tickets prove no handoff happened. The firm lock
  // is also held by ticket consumption, so expiry cannot race a successful consume.
- await ctx.db.query(`UPDATE outreach_touch_reservations r SET state='released',settled_at=clock_timestamp()
- WHERE r.workspace_id=$1 AND r.firm_id=$2 AND r.channel='phone' AND r.state='reserved'
- AND EXISTS(SELECT 1 FROM dial_tickets t WHERE t.workspace_id=r.workspace_id AND t.id::text=r.action_id AND t.consumed_at IS NULL AND t.expires_at<=$3::timestamptz)`,[ctx.scope.workspaceId,plan.firm_id,input.at]);
+
  const rows=(await ctx.db.query<{plan_id:string;ordinal:number;channel:string;state:string;local_date:string;claimed_at:Date}>(`WITH RECURSIVE family AS (
  SELECT id FROM firms WHERE workspace_id=$1 AND id=$2
  UNION SELECT f.id FROM firms f JOIN family parent ON f.merged_into_firm_id=parent.id WHERE f.workspace_id=$1)
@@ -73,4 +72,22 @@ export async function reserveOutreachCall(ctx:RepositoryContext,input:{firmId:st
  if(!row)return {ok:true,value:{reservationId:null}};
  if(row.contact_id!==input.contactId)return {ok:false,reason:'outreach_contact_mismatch'};
  return await claimProspectingTouch(ctx,{planId:row.id,expectedRevision:row.revision,actionId:input.ticketId,channel:'phone',at:input.at});
+}
+
+/** Same gate and firm lock as ticket consumption: expiry is proof only before consumption. */
+export async function releaseAbandonedTouches(ctx:RepositoryContext,firmId:string,at:string):Promise<void>{
+ await lockSendGateForDispatch(ctx);
+ await ctx.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[ctx.scope.workspaceId,firmId]);
+ await ctx.db.query(`UPDATE outreach_touch_reservations r SET state='released',settled_at=clock_timestamp()
+ WHERE r.workspace_id=$1 AND r.firm_id=$2 AND r.channel='phone' AND r.state='reserved'
+ AND EXISTS(SELECT 1 FROM dial_tickets t WHERE t.workspace_id=r.workspace_id AND t.id::text=r.action_id AND t.consumed_at IS NULL AND t.expires_at<=$3::timestamptz)`,[ctx.scope.workspaceId,firmId,at]);
+ // A prepared/held fence with no dispatch marker proves the provider was never
+ // called. Reclaim only past-day capacity; accepted/unknown work stays reserved.
+ await ctx.db.query(`UPDATE outreach_touch_reservations r SET state='released',settled_at=clock_timestamp()
+ FROM outreach_plans p,outbound_messages f WHERE r.workspace_id=$1 AND r.firm_id=$2 AND r.channel='email' AND r.state='reserved'
+ AND p.workspace_id=r.workspace_id AND p.id=r.plan_id
+ AND r.local_date<($3::timestamptz AT TIME ZONE (p.cadence->>'timeZone'))::date
+ AND f.workspace_id=r.workspace_id AND f.step_execution_id::text=r.action_id
+ AND f.state IN ('prepared','held') AND f.dispatch_started_at IS NULL AND f.attempt_token IS NULL`,[ctx.scope.workspaceId,firmId,at]);
+
 }

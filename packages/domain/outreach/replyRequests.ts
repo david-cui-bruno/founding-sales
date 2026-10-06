@@ -19,6 +19,12 @@ export async function readRoutineSource(ctx:RepositoryContext,input:{planId:stri
  const actor=ctx.scope.actor;if(actor.kind==='user'&&actor.role!=='admin'&&actor.userId!==p.owner_user_id)return {ok:false,reason:'not_assigned'};
  const message=await readMessage(ctx,input.messageId),body=await readMessageBody(ctx,input.messageId);
  if(!message||message.mailboxId!==p.mailbox_id||message.direction!=='incoming'||!message.matched||message.metadataOnly||message.listId!==null||!message.rfcMessageId||!body||body.truncated)return {ok:false,reason:'message_unavailable'};
+ // A direct human answer can be on another thread and can precede request creation.
+ // The durable direct-send effect records verified recipients, not guessed addresses.
+ const fulfilled=(await ctx.db.query(`SELECT 1 FROM mail_message_effects e JOIN mail_messages m ON m.workspace_id=e.workspace_id AND m.id=e.mail_message_id
+ WHERE e.workspace_id=$1 AND m.mailbox_id=$2 AND e.effect_kind='direct_send_conversation'
+ AND e.detail->>'firmId'=$3 AND e.detail->'recipientContactIds' ? $4 AND m.internal_date>=$5::timestamptz LIMIT 1`,[ctx.scope.workspaceId,p.mailbox_id,p.firm_id,p.contact_id,message.internalDate])).rows[0];
+ if(fulfilled)return {ok:false,reason:'answered_manually'};
  const matches=(await ctx.db.query<{outreach_plan_id:string|null;contact_id:string|null;ambiguous:boolean}>('SELECT outreach_plan_id,contact_id,ambiguous FROM mail_message_matches WHERE workspace_id=$1 AND mail_message_id=$2',[ctx.scope.workspaceId,message.id])).rows;
  if(matches.length!==1||matches[0]?.outreach_plan_id!==input.planId||matches[0]?.contact_id!==p.contact_id||matches[0]?.ambiguous)return {ok:false,reason:'ambiguous_sender'};
  const route=(await ctx.db.query("SELECT id FROM email_addresses WHERE workspace_id=$1 AND contact_id=$2 AND address=$3 AND eligibility='usable' AND retired_at IS NULL",[ctx.scope.workspaceId,p.contact_id,message.headerFrom])).rows[0];
@@ -45,4 +51,20 @@ export async function requestRoutineReply(ctx:RepositoryContext,input:{planId:st
  const row=(await ctx.db.query<{id:string}>(`INSERT INTO outreach_reply_requests(workspace_id,plan_id,message_id,original_message_id,source_hash,prompt_version,model_name) VALUES($1,$2,$3,$3,$4,$5,$6) ON CONFLICT(workspace_id,original_message_id) DO NOTHING RETURNING id`,[ctx.scope.workspaceId,input.planId,input.messageId,source.value.hash,ROUTINE_REPLY_PROMPT_VERSION,ROUTINE_REPLY_MODEL])).rows[0];
  const existing=row??(await ctx.db.query<{id:string}>('SELECT id FROM outreach_reply_requests WHERE workspace_id=$1 AND original_message_id=$2',[ctx.scope.workspaceId,input.messageId])).rows[0];
  return existing?{ok:true,value:{requestId:existing.id}}:{ok:false,reason:'source_changed'};
+}
+/** Persist the inspected source version even when it cannot enter paid processing.
+ * Otherwise one page of automatic/unsupported mail can monopolize every scheduler pass.
+ * Corrections remain explicit review work; a refused source never silently gains approval.
+ */
+export async function checkpointRoutineRefusal(ctx:RepositoryContext,input:{planId:string;messageId:string}):Promise<void>{
+ await lockSendGateForStopFact(ctx);
+ const source=await readRoutineSource(ctx,input);if(source.ok)return;
+ const p=(await ctx.db.query<{revision:number;mailbox_id:string}>('SELECT revision,mailbox_id FROM outreach_plans WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,input.planId])).rows[0];
+ const message=await readMessage(ctx,input.messageId);if(!p||!message||message.mailboxId!==p.mailbox_id)return;
+ const matched=(await ctx.db.query('SELECT 1 FROM mail_message_matches WHERE workspace_id=$1 AND mail_message_id=$2 AND outreach_plan_id=$3',[ctx.scope.workspaceId,input.messageId,input.planId])).rows[0];if(!matched)return;
+ const body=await readMessageBody(ctx,input.messageId);
+ const hash=createHash('sha256').update(JSON.stringify({message,body,planRevision:p.revision,reason:source.reason,promptVersion:ROUTINE_REPLY_PROMPT_VERSION})).digest('hex');
+ const state=message.autoSubmitted!==null&&message.autoSubmitted!=='no'||source.reason==='answered_manually'?'no_reply':'review';
+ await ctx.db.query(`INSERT INTO outreach_reply_requests(workspace_id,plan_id,message_id,original_message_id,source_hash,prompt_version,model_name,state,reason,decision)
+ VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT(workspace_id,original_message_id) DO NOTHING`,[ctx.scope.workspaceId,input.planId,input.messageId,hash,ROUTINE_REPLY_PROMPT_VERSION,ROUTINE_REPLY_MODEL,state,source.reason,JSON.stringify({kind:state,reason:source.reason})]);
 }
