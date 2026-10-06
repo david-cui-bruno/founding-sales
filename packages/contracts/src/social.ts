@@ -50,3 +50,7 @@ export const socialAssetViewSchema = z.strictObject({
  })),
 });
 export const socialAssetLibrarySchema = z.strictObject({assets: z.array(socialAssetViewSchema)});
+export const socialConnectionSchema=z.strictObject({accountId:uuid,platform:socialPlatformSchema,externalId:z.string().trim().min(1).max(300),displayName:z.string().trim().min(1).max(200),accountKind:z.enum(['profile','page'])});
+export type SocialConnection=z.infer<typeof socialConnectionSchema>;
+export const socialConnectionCommandSchema=socialConnectionSchema.extend({commandId:commandIdSchema,clientVersion:semanticVersionSchema});
+export const socialDisconnectCommandSchema=z.strictObject({accountId:uuid,commandId:commandIdSchema,clientVersion:semanticVersionSchema});
