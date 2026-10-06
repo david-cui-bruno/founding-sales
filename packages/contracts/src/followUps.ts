@@ -42,6 +42,7 @@ export type FollowUpPermissionKind = (typeof FOLLOW_UP_PERMISSION_KINDS)[number]
 export const FOLLOW_UP_PERMISSION_SCOPES = [
   'single_email',
   'contextual_reply',
+  'routine_reply',
   'booking_communications',
   'agreed_sequence',
 ] as const;
@@ -62,6 +63,7 @@ export const FOLLOW_UP_PERMISSION_WINDOW_DAYS: Readonly<Record<FollowUpPermissio
   Object.freeze({
     single_email: 14,
     contextual_reply: 14,
+    routine_reply: 2,
     booking_communications: 30,
     agreed_sequence: null,
   });

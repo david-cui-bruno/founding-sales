@@ -224,6 +224,10 @@ export async function applyClassificationEffects(
       if(candidate.outreachPlanId!=null){
         await context.db.query("UPDATE outreach_plans SET state='reply_pending',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='active'",[context.scope.workspaceId,candidate.outreachPlanId]);
       }
+      if(candidate.outreachPlanId!=null){
+        const cold=(await context.db.query<{id:string}>("SELECT id FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND origin_kind IN ('prospecting','cold_legacy') AND ended_at IS NULL",[context.scope.workspaceId,candidate.firmId])).rows;
+        await stopEnrollments(context,{enrollmentIds:cold.map(row=>row.id),reason:'human_reply'});
+      }
       await interruptMeetingPlansForFirm(context, { firmId: candidate.firmId, reason: 'reply_received', messageId: message.id, at: message.internalDate });
       const effect = await holdCandidate(context, {
         messageId: message.id,

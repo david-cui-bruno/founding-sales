@@ -94,7 +94,7 @@ describe('the follow-up vocabularies in the database', () => {
       // e-mail, an immutable version for the agreed sequence, a step limit for
       // everything but the reserved booking scope.
       const versionId = scope === 'agreed_sequence' ? await publishedVersion() : null;
-      const templateId = scope === 'single_email' ? await approvedTemplate() : null;
+      const templateId = (scope === 'single_email' || scope === 'routine_reply') ? await approvedTemplate() : null;
       await database.session.query(
         `INSERT INTO follow_up_permissions
            (workspace_id, firm_id, contact_id, kind, scope, booking_reference, template_version_id,

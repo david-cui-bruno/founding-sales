@@ -1,3 +1,4 @@
+import {routineDraftForExecution,attachRoutineFence} from '../outreach/replyDelivery.ts';
 import {readOutreachCadence,outreachStepDue,lastOutreachTouch,outreachExecutionTiming} from '../outreach/timing.ts';
 import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
 import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
@@ -278,6 +279,8 @@ export async function runDueStepExecution(
       const draft = await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
       if (!draft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [draft.reason] });
     }
+    const routine = await routineDraftForExecution(context, execution.id);
+    if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
     // The bytes were decided and frozen when the fence was prepared, and nothing was
     // attempted with them. Appendix B: "Prepared, and Gmail request provably not
     // started — retry same fence". The dispatch that follows the commit re-decides
@@ -470,7 +473,11 @@ async function runEmailStep(
   const meetingPlan = await meetingPlanForExecution(context, execution.id);
   const meetingDraft = meetingPlan === null ? null : await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
   if (meetingDraft !== null && !meetingDraft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [meetingDraft.reason] });
-  const rendered = meetingDraft?.ok === true
+  const routine = await routineDraftForExecution(context, execution.id);
+  if (routine !== null && !routine.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [routine.reason] });
+  const rendered = routine?.ok === true
+    ? { rendered: true as const, subject: routine.value.subject, body: routine.value.body }
+    : meetingDraft?.ok === true
     ? { rendered: true as const, subject: meetingDraft.value.subject, body: meetingDraft.value.body }
     : renderTemplateVersion(template, await templateVariablesFor(context, { firmId: enrollment.firmId, contactId: enrollment.contactId }));
   if (!rendered.rendered) {
@@ -538,6 +545,7 @@ async function runEmailStep(
   };
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
+  if (routine?.ok === true) await attachRoutineFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
   if (meetingPlan !== null) await attachMeetingFence(context, { executionId: execution.id, fenceId: prepared.outboundMessageId });
 
   await context.db.query(

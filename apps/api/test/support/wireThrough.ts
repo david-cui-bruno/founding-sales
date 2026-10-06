@@ -17,14 +17,14 @@ import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main
  * **The version is the shipped one on both sides** (review of PR 305, P2-4). These checks
  * are about what the installed Mac and the deployed container say to each other, so the
  * client announces `DESKTOP_VERSION_UNDER_TEST` and the route is given
- * `CONTAINER_CLIENT_VERSIONS` — the container's own policy, minimum 1.0.36 — rather than
+ * `CONTAINER_CLIENT_VERSIONS` — the container's own policy, minimum 1.0.47 — rather than
  * the identity fixture's `1.2.0`-to-`1.4.x` one. A check that needs a version outside
  * that policy builds its own options and says why: `clientVersionCeiling.test.ts` is the
  * one that does, because the ceiling is what it is about.
  */
 
-/** The desktop build every window check reads as: the oldest the container admits, 1.0.36 (lane M1). */
-export const DESKTOP_VERSION_UNDER_TEST = '1.0.36';
+/** The desktop build every window check reads as: the oldest the container admits, 1.0.47 (lane M1). */
+export const DESKTOP_VERSION_UNDER_TEST = '1.0.47';
 
 /**
  * The route, under the container's policy rather than the fixture's.

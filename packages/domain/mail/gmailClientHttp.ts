@@ -648,7 +648,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
           '/gmail/v1/users/me/messages/send',
           {},
           'POST',
-          { raw: Buffer.from(mimeOf(request), 'utf8').toString('base64url') },
+          { raw: Buffer.from(mimeOf(request), 'utf8').toString('base64url'), ...(request.threadId === undefined ? {} : {threadId:request.threadId}) },
         );
       } catch (error) {
         // The request threw. That covers a timeout, a reset connection and a DNS

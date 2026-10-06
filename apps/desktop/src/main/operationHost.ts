@@ -1,3 +1,4 @@
+import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
@@ -166,6 +167,26 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.saveModel': async (input: Parameters<ReplyBridgeHost['saveModel']>[0]) =>
       await deps.replies.saveModel(input),
 
+    'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control',value=>outreachControlSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'outreach.preview': async(input:OperationInput<'outreach.preview'>)=>{
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/cohort/preview',value=>outreachCohortPreviewSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'outreach.mutate': async(input:OperationInput<'outreach.mutate'>)=>{
+      const generation=deps.recordings.identity.current(),{action,commandId,...body}=input;
+      const paths={authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
+      const answer=await deps.api.command(paths[action],body,value=>z.record(z.string(),z.unknown()).parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
+      if(!answer.ok)return {accepted:false,view:null,reason:answer.reason.slice(0,80)};
+      const read=await deps.api.read('/outreach/control',value=>outreachControlSchema.parse(value),{});
+      if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
+      return {accepted:true,view:read.ok?read.value:null,reason:read.ok?null:'refresh_failed'};
+    },
     'sourcing.callNeed': async(input:OperationInput<'sourcing.callNeed'>)=>{
       const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/call-need',value=>callNeedViewSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};

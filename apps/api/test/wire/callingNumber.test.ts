@@ -57,7 +57,7 @@ import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 const IDENTITY_ID = '66666666-6666-4666-8666-666666666666';
 /**
  * When the calling-number control first shipped. The build under test is
- * `DESKTOP_VERSION_UNDER_TEST` (1.0.36, the oldest admitted); this records the line the
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.47, the oldest admitted); this records the line the
  * minimum has to be at or above, which is what the last check in this file asserts.
  */
 const FIRST_VERSION_WITH_THE_CONTROL = '1.0.2';
@@ -152,13 +152,13 @@ describe('9.1: a salesperson gives Callie the number they call from (lane g60)',
   });
 
   it('is a build the deployed API accepts', () => {
-    // From the 0021 release the minimum is 1.0.14 (1.0.36 from 0039), so the question is not whether the
+    // From the 0021 release the minimum is 1.0.14 (1.0.47 from 0039), so the question is not whether the
     // build that first carried the calling-number control is admitted — it is not — but that the
     // minimum admitted build is at or above it and may mutate.
     expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
     // The installed 1.0.1 keeps working until it takes the update.
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.36');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.47');
   });
 
 });

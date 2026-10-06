@@ -1,3 +1,4 @@
+import {routineReplyThreading,recordRoutineDelivery} from '../outreach/replyDelivery.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {reserveOutreachEmail} from '../outreach/touchReservations.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
@@ -241,6 +242,7 @@ export async function dispatchOutboundMessage(
     subject: envelope.subject,
     body: envelope.body,
     rfcMessageId: envelope.providerMessageIdHeader,
+    ...(claimed.threading ?? {}),
   });
 
   if (sent.ok) {
@@ -259,6 +261,7 @@ export async function dispatchOutboundMessage(
     if (envelope.stepExecutionId !== null) await recordMeetingDelivery(context, {
       executionId: envelope.stepExecutionId, messageId: fence.id, sentAt: recorded.value.sentAt!,
     });
+    await recordRoutineDelivery(context, fence.id);
     return { outcome: 'sent', outboundMessageId: fence.id, providerMessageId: sent.messageId };
   }
 
@@ -316,6 +319,7 @@ function refusalOf(reason: string): SendRefusalCode {
 type ClaimOutcome =
   | {
       readonly kind: 'claimed';
+      readonly threading: Awaited<ReturnType<typeof routineReplyThreading>>;
       readonly plan: SendPlan;
       readonly claim: { readonly fence: OutboundFenceRow; readonly attemptToken: string };
     }
@@ -487,7 +491,7 @@ async function recheckAndClaim(
     // sampled minutes ago. **Zero affected rows aborts the claim**, so a revocation that
     // commits between the recheck and here, or an expiry that passes during a long
     // claim, stops the send instead of being overtaken by it.
-    if (permission !== null && (permission.scope === 'single_email' || permission.scope === 'contextual_reply')) {
+    if (permission !== null && (permission.scope === 'single_email' || permission.scope === 'contextual_reply' || permission.scope === 'routine_reply')) {
       if (!(await consumeFollowUpPermission(context, permission.id))) {
         await context.db.query('ROLLBACK');
         return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_scope_exhausted' };
@@ -506,8 +510,9 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_not_permitted:draft_changed' };
     }
+    const threading = await routineReplyThreading(context, fence.id);
     await context.db.query('COMMIT');
-    return { kind: 'claimed', plan, claim: claim.value };
+    return { kind: 'claimed', plan, claim: claim.value, threading };
   } catch (error) {
     await context.db.query('ROLLBACK');
     throw error;

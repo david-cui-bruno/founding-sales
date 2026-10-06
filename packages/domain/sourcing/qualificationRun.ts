@@ -7,7 +7,7 @@ import {databaseNow} from '../policy/clock.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {lockResearchBudget} from '../research/ceilings.ts';
-import {readSpend,workspaceBusinessZone} from '../research/ledger.ts';
+import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
 import {centsOf,isPricedModel} from '../research/pricing.ts';
 import {parsePageText} from '../research/pageText.ts';
@@ -85,7 +85,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   await lockResearchBudget(ctx);
   if(!await allowed(ctx,run.id))return null;
   const current=await readResearchSettings(ctx),at=await databaseNow(ctx),zone=await workspaceBusinessZone(ctx);
-  const spend=await readSpend(ctx,{at,businessTimeZone:zone});
+  const spend=await readCreditSpend(ctx,{at,businessTimeZone:zone});
   if(spend.todayCents+cents>current.dailyCostCeilingCents||spend.monthToDateCents+cents>current.monthlyCostCeilingCents)return null;
   const held=await reserveAttempt(ctx,{subjectKind:'sourcing_qualification',subjectId:run.id,attempt:1,providerKey:extraction.providerKey,at,businessTimeZone:zone,cents,modelName:run.model_name,maxInputTokens:tokens,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS});
   if(!await markCalling(ctx,held.id))return null;

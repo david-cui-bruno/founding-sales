@@ -69,3 +69,42 @@ OUTREACH_CONSTRAINT_CASES.push(
  {constraint:'outreach_touch_one_day',run:async f=>{await touchFixture(f);await touch(f);return touch(f,{id:missing,action_id:'second',ordinal:2});}},
  {constraint:'outreach_touch_one_ordinal',run:async f=>{await touchFixture(f);await touch(f);return touch(f,{id:missing,action_id:'second',local_date:'2026-10-06'});}},
 );
+const requestId='77777777-6666-4666-8666-666666666666';
+const reply=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_reply_requests',{workspace_id:f.seeded.alpha.workspaceId,id:requestId,plan_id:planId,message_id:f.mail.alpha.messageId,original_message_id:f.mail.alpha.messageId,source_hash:'a'.repeat(64),prompt_version:'fixture',model_name:'claude-haiku-4-5',...change});
+bad('outreach_reply_requests',[
+ ['source_hash_check',{source_hash:'bad'}],['state_check',{state:'sent'}],['revision_check',{revision:0}],['paid_attempts_check',{paid_attempts:3}],['reason_check',{reason:'x'.repeat(201)}],['workspace_id_plan_id_fkey',{plan_id:missing}],['workspace_id_message_id_fkey',{message_id:missing}],
+],reply,touchFixture);
+OUTREACH_CONSTRAINT_CASES.push(
+ {constraint:'outreach_reply_deadline',run:async f=>{await touchFixture(f);return reply(f,{deadline_at:'2000-01-01'});}},
+ {constraint:'outreach_reply_decision',run:async f=>{await touchFixture(f);return reply(f,{state:'ready'});}},
+ {constraint:'outreach_reply_requests_pkey',run:async f=>{await touchFixture(f);await reply(f);return reply(f);}},
+ {constraint:'outreach_reply_requests_workspace_id_original_message_id_key',run:async f=>{await touchFixture(f);await reply(f);return reply(f,{id:missing});}},
+ {constraint:'outreach_settings_pkey',run:async f=>{await insert(f,'outreach_settings',{workspace_id:f.seeded.alpha.workspaceId});return insert(f,'outreach_settings',{workspace_id:f.seeded.alpha.workspaceId});}},
+ {constraint:'outreach_settings_workspace_id_fkey',run:f=>insert(f,'outreach_settings',{workspace_id:missing})},
+ {constraint:'outreach_settings_revision_check',run:f=>insert(f,'outreach_settings',{workspace_id:f.seeded.alpha.workspaceId,revision:0})},
+);
+const deliveryPermission='77777777-8888-4888-8888-888888888888',deliveryVersion='77777777-9999-4999-8999-999999999999';
+async function deliveryFixture(f:Fixture){
+ await touchFixture(f);await reply(f);
+ const seq=(await f.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[f.seeded.alpha.workspaceId,'Reply constraint fixture',f.seeded.alpha.admin.userId])).rows[0]!.id;
+ await insert(f,'sequence_versions',{workspace_id:f.seeded.alpha.workspaceId,id:deliveryVersion,sequence_id:seq,version:1});
+ await deliveryPermissionRow(f);
+}
+const deliveryPermissionRow=(f:Fixture,permissionId=deliveryPermission)=>insert(f,'follow_up_permissions',{workspace_id:f.seeded.alpha.workspaceId,id:permissionId,firm_id:f.crm.alpha.firmId,contact_id:f.crm.alpha.contactId,kind:'request',scope:'routine_reply',mail_message_id:f.mail.alpha.messageId,template_version_id:f.outbound.alpha.templateVersionId,max_steps:1,granted_at:new Date(),expires_at:new Date(Date.now()+3600000),granted_by_user_id:f.seeded.alpha.admin.userId});
+const deliveryRow=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_reply_deliveries',{workspace_id:f.seeded.alpha.workspaceId,request_id:requestId,permission_id:deliveryPermission,sequence_version_id:deliveryVersion,template_version_id:f.outbound.alpha.templateVersionId,template_hash:'a'.repeat(64),draft_hash:'b'.repeat(64),thread_id:'thread',reply_to:'message@example.test',reference_ids:[],...change});
+bad('outreach_reply_deliveries',[
+ ['template_hash_check',{template_hash:'wrong'}],['draft_hash_check',{draft_hash:'wrong'}],['thread_id_check',{thread_id:''}],['reply_to_check',{reply_to:''}],
+ ['workspace_id_request_id_fkey',{request_id:missing}],['workspace_id_permission_id_fkey',{permission_id:missing}],['workspace_id_sequence_version_id_fkey',{sequence_version_id:missing}],['workspace_id_template_version_id_fkey',{template_version_id:missing}],['workspace_id_execution_id_fkey',{execution_id:missing}],['workspace_id_fence_id_fkey',{fence_id:missing}],
+],deliveryRow,deliveryFixture);
+OUTREACH_CONSTRAINT_CASES.push(
+ {constraint:'outreach_reply_deliveries_pkey',run:async f=>{await deliveryFixture(f);await deliveryRow(f);return deliveryRow(f);}},
+ {constraint:'outreach_reply_deliveries_workspace_id_permission_id_key',run:async f=>{await deliveryFixture(f);await deliveryRow(f);await reply(f,{id:missing,original_message_id:missing});return deliveryRow(f,{request_id:missing});}},
+ {constraint:'outreach_reply_sequence',run:f=>insert(f,'outreach_settings',{workspace_id:f.seeded.alpha.workspaceId,reply_sequence_version_id:missing})},
+ {constraint:'outreach_settings_booking_url_check',run:f=>insert(f,'outreach_settings',{workspace_id:f.seeded.alpha.workspaceId,booking_url:'http://example.test'})},
+);
+for(const column of ['execution_id','fence_id'])OUTREACH_CONSTRAINT_CASES.push({constraint:`outreach_reply_deliveries_workspace_id_${column}_key`,run:async f=>{
+ await deliveryFixture(f);
+ const value=column==='fence_id'?f.outbound.alpha.preparedFenceId:(await f.session.query<{step_execution_id:string}>('SELECT step_execution_id FROM outbound_messages WHERE workspace_id=$1 AND id=$2',[f.seeded.alpha.workspaceId,f.outbound.alpha.preparedFenceId])).rows[0]!.step_execution_id;
+ await deliveryRow(f,{[column]:value});await reply(f,{id:missing,original_message_id:missing});await deliveryPermissionRow(f,missing);
+ return deliveryRow(f,{request_id:missing,permission_id:missing,[column]:value});
+}});

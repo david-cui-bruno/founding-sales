@@ -52,6 +52,9 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  outreach_reply_deliveries: coverage(['retained'], 'Immutable draft hashes and delivery bindings only; source and permission gates refuse deleted or changed prospects.'),
+  outreach_settings: coverage(['operational'], 'Disabled-by-default reply settings; no prospect text.'),
+  outreach_reply_requests: coverage(['retained'], 'Coded decisions and immutable source hashes only; source deletion makes requests unavailable, plan deletion workflow stops dispatch.'),
   meeting_qualification_revisions: coverage(['deletion_removes'], 'Immutable qualification answers and source references cascade with meeting deletion.'),
   sourcing_targeting_versions: coverage(['operational'], 'Immutable public search policies, no contact data; used to interpret past dispatches.'),
   sourcing_targeting_proposals: coverage(['retained'], 'Admin-authored search changes and approval audit; no copied prospect evidence.'),

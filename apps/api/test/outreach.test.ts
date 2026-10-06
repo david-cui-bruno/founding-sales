@@ -28,3 +28,11 @@ it('requires explicit reusable-fact approval and keeps command replay tied to th
  expect((await call(approval,'/outreach/answer-blocks/approve')).status).toBe(200);
  expect((await call(approval,'/outreach/answer-blocks/approve')).body).toMatchObject({replayed:true,result});
 });
+it('reads disabled reply policy, saves with replay, and does not lift domain sending',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const view=await call({},'/outreach/control');expect(view.status).toBe(200);expect(view.body).toMatchObject({settings:{revision:0,enabled:false},senders:[{address:'owner@example.test',sendingEnabled:false}]});
+ const body={expectedRevision:0,enabled:false,sequenceVersionId:null,bookingUrl:'https://cal.com/callie/demo',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
+ expect((await call(body,'/outreach/settings/save')).body).toMatchObject({status:'accepted',result:{revision:1}});
+ expect((await call(body,'/outreach/settings/save')).body).toMatchObject({replayed:true,result:{revision:1}});
+ expect((await call({},'/outreach/control')).body).toMatchObject({settings:{revision:1,enabled:false}});
+});
