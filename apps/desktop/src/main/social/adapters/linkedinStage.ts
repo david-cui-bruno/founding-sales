@@ -18,7 +18,7 @@ export async function stageLinkedInText(post:ApprovedPost,port:StagePorts):Promi
   if(post.account.platform!=='linkedin'||post.images.length)return refuse('format_not_verified');
   if(!Number.isFinite(Date.parse(post.publishAt))||Date.parse(post.publishAt)<=port.now())return refuse('schedule_missed');
   if(!post.text||[...post.text].length>3000)return refuse('content_needs_edit');
-  let view=await waitFor('composer');if(view.postingName!==post.account.displayName)return refuse('account_identity_changed');
+  let view=await waitFor('composer');if(view.text?.trim())return refuse('existing_draft');if(view.postingName!==post.account.displayName)return refuse('account_identity_changed');
   await act({action:'openIdentity',name:post.account.displayName});view=await read();
   const matching=view.identities.filter(x=>x.name===post.account.displayName);
   if(matching.length!==1||!matching[0]!.selected)return refuse('account_identity_changed');
