@@ -46,3 +46,9 @@ The preparation reader now counts images even when their alt text is empty; prev
 The local final-click primitive checks account display name, exact text, timezone, schedule summary, absence of media/progress and a unique enabled Schedule button. A document-bound attempt marker prevents repeating the click even with a different token. Its result means only that a click was attempted; it cannot report a scheduled receipt. The delivery caller must already hold a durable server submission marker and validate account/session/schedule before invoking it.
 
 A hidden Electron fixture staged text and exercised exactly one click, refused a second token, made no external requests and closed cleanly. Twenty-three focused submission/delivery tests passed. The primitive is not wired into a live adapter; independent receipt verification and product-session acceptance are still required. Image submission remains refused.
+
+### Independent text receipt inspection
+
+Text-only recovery now requires a complete scheduled list, a unique candidate and independent saved-detail readback. It compares account, text, date/time and timezone; partial lists, duplicate matches, missing rows and provider failures remain unknown. An empty scheduled list does not prove that an earlier submission failed: the post may already have published.
+
+Closed navigation binds a detail read to the exact clicked native receipt, with a one-use document-local token. It cannot assign a receipt to an independently opened composer. Sixteen focused tests, desktop typecheck and focused lint pass. Full live adapter/session wiring and product acceptance remain pending; images are still unsupported for delivery.
