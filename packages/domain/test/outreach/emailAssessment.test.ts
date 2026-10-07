@@ -76,6 +76,49 @@ it('serializes email admission without duplicate contacts or a second prospect a
  const session=await db.appRuntimeSession();const second=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),session);
  const results=await Promise.all([tx(()=>admitEmailCandidate(ctx(),command)),withTransaction(session,()=>admitEmailCandidate(second,command))]);expect(results.every(r=>r.ok)).toBe(true);expect(results.filter(r=>r.ok&&r.value.alreadyAdmitted)).toHaveLength(1);
 });
+it('reuses an exact usable existing email only after review, preserving the contact and route',async()=>{
+ const {createFirm}=await import('../../crm/firms.ts');const {createContact}=await import('../../crm/contacts.ts');const {addEmailRoute}=await import('../../crm/routes.ts');const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');
+ const name='Existing Route PM',website='https://existingroutepm.example.test/';
+ const input=await qualified(name,{website});
+ const firm=await tx(()=>createFirm(ctx(),{name,website,locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));if(!firm.ok)throw new Error(firm.reason);
+ const contact=await tx(()=>createContact(ctx(),{firmId:firm.value.id,fullName:'Existing Person'}));if(!contact.ok)throw new Error(contact.reason);
+ const email=await tx(()=>addEmailRoute(ctx(),{firmId:firm.value.id,contactId:contact.value.id,address:'info@existingroutepm.example.test',source:'website',associationConfidence:1,technicalValidation:'passed'}));if(!email.ok)throw new Error(email.reason);
+ const command={...input,expectedOwnerUserId:seeded.alpha.admin.userId,reviewed:true};
+ expect(await assessEmailCandidate(ctx(),input)).toMatchObject({ok:true,value:{reviewRequired:true}});
+ expect(await tx(()=>admitEmailCandidate(ctx(),{...command,reviewed:false}))).toEqual({ok:false,reason:'qualification_requires_review'});
+ const old=(await db.session.query('SELECT * FROM email_addresses WHERE id=$1',[email.value.id])).rows[0];
+ const first=await tx(()=>admitEmailCandidate(ctx(),command));expect(first).toMatchObject({ok:true,value:{firmId:firm.value.id,contactId:contact.value.id,routeId:email.value.id,alreadyAdmitted:false}});
+ expect(await tx(()=>admitEmailCandidate(ctx(),command))).toMatchObject({ok:true,value:{routeId:email.value.id,alreadyAdmitted:true}});
+ expect((await db.session.query('SELECT full_name FROM contacts WHERE firm_id=$1',[firm.value.id])).rows).toEqual([{full_name:'Existing Person'}]);
+ expect((await db.session.query('SELECT * FROM email_addresses WHERE id=$1',[email.value.id])).rows[0]).toEqual(old);
+});
+
+it.each(['unverified','inactive','retired','duplicate','stopped'] as const)('refuses %s existing email without changing CRM records',async(kind)=>{
+ const {createFirm}=await import('../../crm/firms.ts');const {createContact,updateContact}=await import('../../crm/contacts.ts');const {addEmailRoute,retireRoute}=await import('../../crm/routes.ts');const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');
+ const name=`Existing ${kind} PM`,website=`https://${kind}existing.example.test/`,address=`info@${new URL(website).hostname}`;
+ const input=await qualified(name,{website});
+ const firm=await tx(()=>createFirm(ctx(),{name,website,locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));if(!firm.ok)throw new Error(firm.reason);
+ const contact=await tx(()=>createContact(ctx(),{firmId:firm.value.id,fullName:'Existing Person'}));if(!contact.ok)throw new Error(contact.reason);
+ const email=await tx(()=>addEmailRoute(ctx(),{firmId:firm.value.id,contactId:contact.value.id,address,source:'website',associationConfidence:1,technicalValidation:kind==='unverified'?'unknown':'passed'}));if(!email.ok)throw new Error(email.reason);
+ if(kind==='inactive')expect((await tx(()=>updateContact(ctx(),{contactId:contact.value.id,patch:{status:'inactive'}}))).ok).toBe(true);
+ if(kind==='retired')expect((await tx(()=>retireRoute(ctx(),{routeKind:'email',routeId:email.value.id,reason:'no longer valid'}))).ok).toBe(true);
+ if(kind==='duplicate'){
+  const other=await tx(()=>createContact(ctx(),{firmId:firm.value.id,fullName:'Another Contact'}));if(!other.ok)throw new Error(other.reason);
+  expect((await tx(()=>addEmailRoute(ctx(),{firmId:firm.value.id,contactId:other.value.id,address,source:'website',associationConfidence:1,technicalValidation:'passed'}))).ok).toBe(true);
+ }
+ if(kind==='stopped'){
+  const {recordSuppression}=await import('../../suppression/events.ts');
+  const {recordingSuppressionJournal}=await import('../../suppression/journal.ts');
+  await tx(()=>recordSuppression(ctx(),{scope:'handle',value:address,channel:'email',source:'prospect_opt_out',journal:recordingSuppressionJournal()}));
+ }
+ const before=(await db.session.query('SELECT * FROM email_addresses WHERE firm_id=$1 ORDER BY id',[firm.value.id])).rows;
+ const expected={ok:false,reason:kind==='stopped'?'email_or_firm_stopped':'existing_email_requires_review'};
+ expect(await assessEmailCandidate(ctx(),input)).toEqual(expected);
+ expect(await tx(()=>admitEmailCandidate(ctx(),{...input,expectedOwnerUserId:seeded.alpha.admin.userId,reviewed:true}))).toEqual(expected);
+ expect((await db.session.query('SELECT * FROM email_addresses WHERE firm_id=$1 ORDER BY id',[firm.value.id])).rows).toEqual(before);
+ expect((await db.session.query('SELECT * FROM outreach_email_sources WHERE candidate_id=$1',[input.candidateId])).rows).toHaveLength(0);
+});
+
 it('enrolls a firm-owned plan without creating an opportunity, preserving its authority on reads',async()=>{
  const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');const {createOutreachPlan}=await import('../../outreach/plans.ts');
  const {enrollContact}=await import('../../sequences/enrollments.ts');const {readEnrollment}=await import('../../sequences/rows.ts');const {seedSequences}=await import('../sequences/support/sequenceFixtures.ts');const {setProspectingAuthorization}=await import('../../outreach/authorization.ts');

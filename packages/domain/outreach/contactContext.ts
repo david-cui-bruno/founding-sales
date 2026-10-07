@@ -9,9 +9,20 @@ export function officeContactContext(source:SourceObservation,fact:Qualification
  if(!/(?:^|\/)contact(?:[-_/]|$)/iu.test(new URL(source.url).pathname))return null;
  const blocks=source.blocks,index=blocks.findIndex(b=>b.id===fact.blockId);
  if(index<0)return null;
- // Expanded context is for an unambiguous role-address line, not prose or a guessed person.
+ // Expanded context is for an unambiguous office-address line, not prose or a guessed person.
  if(!/^(?:e-?mail\s*:?\s*)?[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$/iu.test(blocks[index]!.text.trim()))return null;
  const location=new RegExp(`^${escape(fold(identity.locality))},?\\s+${escape(fold(identity.region))}(?:\\s+\\d{5}(?:-\\d{4})?)?$`,'u');
+ // Some office cards put street/city/phone before the email. Keep that
+ // alternative to five adjacent blocks, with exactly one matching location.
+ for(let start=Math.max(0,index-4);start<index;start++){
+  if(fold(blocks[start]!.text)!==fold(identity.name))continue;
+  const card=blocks.slice(start,index+1),middle=blocks.slice(start+1,index);
+  if(card.some(b=>b.text.length>160)||middle.filter(b=>location.test(fold(b.text))).length!==1)continue;
+  if(middle.some(b=>!location.test(fold(b.text))&&!/^(?:[+\d\s().-]{7,}|\d{1,6}\s+[\p{L}\d .,#'-]+)$/iu.test(b.text.trim())))continue;
+  const text=card.map(b=>b.text).join(' ');
+  if((text.match(/@/gu)??[]).length!==1||blocks[index+1]?.text.includes('@'))continue;
+  return text;
+ }
  for(let start=Math.max(0,index-3);start<index;start++){
   if(fold(blocks[start]!.text)!==fold(identity.name))continue;
   for(let end=index+1;end<=Math.min(blocks.length-1,index+4);end++){

@@ -1,3 +1,4 @@
+import {existingEmailRoute} from './existingEmail.ts';
 import {officeContactContext} from './contactContext.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -21,18 +22,19 @@ export function supportedBusinessEmail(input:{facts:readonly QualificationFact[]
  for(const f of input.facts.filter(v=>v.kind==='business_email')){
   const source=input.observations.find(s=>s.id===f.observationId);if(!source||!source.firstParty||source.truncated||host(source.url)!==domain)continue;
   const age=now-Date.parse(source.retrievedAt);if(age<0||age>7*86400000)continue;
-  let evidenceText=f.value;
+  let evidenceText=f.value,officeCard=false;
   const associated=(text:string)=>text.includes(fold(input.identity.name))&&text.includes(fold(input.identity.locality))&&new RegExp(`\\b${input.identity.region.toLowerCase()}\\b`,'u').test(text);
   if(!associated(fold(evidenceText))){
    const context=officeContactContext(source,f,input.identity);if(!context)continue;
-   evidenceText=context;
+   evidenceText=context;officeCard=true;
   }
   const text=fold(evidenceText);
   if(/\b(?:suggested|guess|example address|referral|vendor|web designer|powered by|on behalf of|try emailing)\b/u.test(text))continue;
   const addresses=[...f.value.matchAll(/\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu)].map(m=>m[0].toLowerCase());
   if(addresses.length!==1)continue;const address=addresses[0]!;const [local,emailDomain]=address.split('@');
   if(!emailDomain||consumer.has(emailDomain)||emailDomain!==domain)continue;
-  const role=/^(?:info|hello|office|contact|management|leasing|maintenance|support|admin|team)$/u.test(local??'');
+  // A published office card establishes a company contact, never a person's name.
+  const role=officeCard||/^(?:info|hello|office|contact|management|leasing|maintenance|support|admin|team)$/u.test(local??'');
   const person=/\bcontact\s+([A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?)\s+(?:at|email:?)/u.exec(f.value)?.[1];
   if(!role&&(!person||evidenceText!==f.value))continue;
   routes.set(address,{address,sourceObservationId:source.id,blockId:f.blockId,identityKind:role?'role':'named',displayName:role?'Office':person!});
@@ -66,6 +68,8 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:route.address},...(firm?[{scope:'firm' as const,canonicalKey:firm.id}]:[])],'email'))return {ok:false,reason:'email_or_firm_stopped'};
  if(firm&&(await ctx.db.query('SELECT id FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND ended_at IS NULL LIMIT 1',[w,firm.id])).rows.length)return {ok:false,reason:'firm_already_enrolled'};
  if((await ctx.db.query(`SELECT id FROM email_addresses WHERE workspace_id=$1 AND address=$2 AND firm_id<>COALESCE($3::uuid,'00000000-0000-0000-0000-000000000000') AND retired_at IS NULL`,[w,route.address,firm?.id??null])).rows.length)return {ok:false,reason:'email_association_ambiguous'};
+ const existing=firm?await existingEmailRoute(ctx,firm.id,route.address,input):{ok:true as const,value:null};
+ if(!existing.ok)return existing;
  const phone=supportedBusinessPhone(run.facts,identity);
- return {ok:true,value:{firmId:firm?.id??null,route,lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
+ return {ok:true,value:{firmId:firm?.id??null,route,lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
 }
