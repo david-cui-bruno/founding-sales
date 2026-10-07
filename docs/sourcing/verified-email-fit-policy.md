@@ -9,3 +9,9 @@ A phone and a public maintenance-pain claim are optional. An existing maintenanc
 `qualifyEmailCandidate` exposes the versioned verdict and supported route. Database assessment exposes `verifiedFit`; the existing manual-dependent admission path still requires its review flag. The next implementation must replace that dependency with an exact-version evaluated automatic policy, bind the active owner/mailbox and approved reusable sequence, and rank eligible prospects before admission. It must not represent automatic selection as a human review, use Key-specific claims for other firms, or bypass stops/validation/capacity/reply ownership.
 
 Tests cover fit without pain, maintenance-team/software context, explicit contrary evidence, stale sources, geography and first-party association, and confirm that the predicate alone does not activate admission. Live source-case evaluation and durable sending verification are still required before activating the autonomous path.
+
+## October 7 stored-source diagnostic
+
+Read-only review of six current production qualification runs matched the predicate: Key Properties and RentProv Realty passed firm/contact evidence; NHS, Nexus, Lyon and Zanno deferred for unsupported identity, contact or source evidence. The Key and RentProv contact pages show bounded company/address/email office cards. RentProv’s published Head of Maintenance is context, not an unmet-need claim. Key is already enrolled and must not be admitted again.
+
+This selected set has two source-reviewed eligible cases and no observed false eligible result. It is too small and selected to estimate population precision or ordinary discovery yield. It does not authorize activation by itself; admission-level ownership, stops, route validation, reusable copy, exact-version evaluation binding and durable sending checks remain required. Local report hash: `1eddab8e90ce6dbd57ca7e9a4258267493c347426c72a5e1ed3ae118b606e246`.
