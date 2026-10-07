@@ -51,7 +51,7 @@ it('deduplicates a candidate revision and refuses other workspaces and non-admin
   expect(await readQualification(context(),{candidateId})).toMatchObject({runId,status:'pending',candidateId,observations:[],facts:[]});
   const jobs=await database.session.query<{payload:unknown;max_attempts:number}>("SELECT payload,max_attempts FROM jobs WHERE kind='sourcing.qualify'");
   expect(jobs.rows).toHaveLength(1);
-  expect(jobs.rows[0]).toMatchObject({payload:{runId,candidateId,candidateRevision:1,promptVersion:'qualification-email-v2',policyVersion:'qualification-v1'},max_attempts:1});
+  expect(jobs.rows[0]).toMatchObject({payload:{runId,candidateId,candidateRevision:1,promptVersion:'qualification-contact-v3',policyVersion:'qualification-v1'},max_attempts:1});
   expect(JSON.stringify(jobs.rows)).not.toContain(candidate.evidence);
   expect((await database.session.query('SELECT id FROM firms')).rows).toHaveLength(0);
 });

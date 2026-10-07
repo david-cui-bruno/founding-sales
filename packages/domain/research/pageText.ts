@@ -70,14 +70,14 @@ export function mediaTypeOf(contentType: string): string {
  * `body` is the exact bytes the fetch read, so the caller's content hash and these
  * blocks describe the same thing.
  */
-export function parsePageText(body: Uint8Array, contentType: string, options: {omitNavigation?:boolean} = {}): PageText {
+export function parsePageText(body: Uint8Array, contentType: string, options: {omitNavigation?:boolean; includeArticles?:boolean} = {}): PageText {
   const empty: PageText = { blocks: [], text: '', truncated: false };
   if (body.byteLength > MAX_PAGE_BYTES) return { ...empty, truncated: true };
   const mime = mediaTypeOf(contentType);
   if (!MIME_PATTERN.test(mime)) return empty;
 
   const decoded = new TextDecoder('utf-8').decode(body).replaceAll(String.fromCharCode(0),'\uFFFD');
-  const candidates = mime === 'text/plain' ? decoded.split(/\r?\n/u) : htmlLines(decoded,options.omitNavigation===true);
+  const candidates = mime === 'text/plain' ? decoded.split(/\r?\n/u) : htmlLines(decoded,options.omitNavigation===true,options.includeArticles===true);
   return assemble(mime === 'text/plain' ? candidates : candidates.map(decodeMarkupEntities));
 }
 
@@ -165,8 +165,8 @@ function assemble(candidates: readonly string[]): PageText {
  * beyond the three inline declarations that plainly hide an element, and stops rather
  * than guessing at anything it cannot tokenize completely.
  */
-function htmlLines(source: string, omitNavigation=false): string[] {
-  const dropped=(name:string):boolean=>DROPPED_CONTAINERS.has(name)||(omitNavigation&&['nav','form'].includes(name));
+function htmlLines(source: string, omitNavigation=false, includeArticles=false): string[] {
+  const dropped=(name:string):boolean=>(DROPPED_CONTAINERS.has(name)&&!(includeArticles&&name==='article'))||(omitNavigation&&['nav','form'].includes(name));
   const lines: string[] = [];
   let pending = '';
   let position = 0;
