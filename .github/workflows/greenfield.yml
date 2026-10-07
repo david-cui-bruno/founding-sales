@@ -57,10 +57,16 @@ jobs:
             -c 'ALTER SYSTEM SET full_page_writes = off' \
             -c 'SELECT pg_reload_conf()'
       - name: Meeting media test tools
+        timeout-minutes: 4
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          set -euo pipefail
+          trap 'echo "::error::Meeting media tool setup failed; the test gate has not run"' ERR
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo timeout --kill-after=10s 90s apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq
+            sudo timeout --kill-after=10s 120s apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+          fi
           ffmpeg -version
+          ffprobe -version
       - name: Greenfield gate
         run: npm run gate:greenfield
 

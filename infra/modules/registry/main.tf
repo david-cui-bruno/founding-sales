@@ -36,6 +36,9 @@ resource "aws_ecr_lifecycle_policy" "this" {
 
   repository = each.value.name
 
+  # Tagged release images can still be referenced by operations, migrations or
+  # compatible rollback definitions after many app releases. Retain them until
+  # an explicit reference-aware cleanup; a count cap cannot establish safety.
   policy = jsonencode({
     rules = [
       {
@@ -46,16 +49,6 @@ resource "aws_ecr_lifecycle_policy" "this" {
           countType   = "sinceImagePushed"
           countUnit   = "days"
           countNumber = 7
-        }
-        action = { type = "expire" }
-      },
-      {
-        rulePriority = 2
-        description  = "Keep enough earlier compatible binaries for a forward rollback."
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 30
         }
         action = { type = "expire" }
       },

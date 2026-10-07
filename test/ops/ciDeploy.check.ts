@@ -453,6 +453,7 @@ interface World {
   readonly home: string;
   calls(): readonly StubCall[];
   state(): {
+    images: Record<string, Record<string, readonly string[]>>;
     services: Record<string, StubService>;
     taskDefinitions: Record<string, { taskDefinition: { status: string } }>;
     ranTask?: { containerOverrides: { name: string; command: string[] }[] };
@@ -1280,6 +1281,18 @@ function carriedRecord(change?: (record: Record<string, unknown>) => void): stri
 }
 
 describe('record puts the ci-gate release record before the rollout, on the operations task, and reads it back after', () => {
+  it('refuses a missing operations image before launching or changing anything', () => {
+    const stub = world();
+    const state = stub.state();
+    delete state.images['fss-prod-worker']?.[OLD.worker];
+    writeFileSync(join(stub.home, 'state.json'), JSON.stringify(state));
+    const run = runRecord(stub);
+    expect(run.code).toBe(1);
+    expect(run.output).toContain('no task launched');
+    expect(runTasks(stub)).toEqual([]);
+    expect(writes(stub)).toEqual([]);
+  });
+
   it('builds the record from the green gate run and puts it before the rollout, the way record.sh put does', () => {
     // Production still runs the previous digests: the record goes first, so no new worker
     // task starts without one.
@@ -2363,4 +2376,13 @@ describe('deploy.sh ci gates, download and canary', () => {
     expect(none.output).toContain('production published no CanaryCompletionAgeSeconds datapoint');
     expect(stub.calls().filter(call => call.args[0] === 'cloudwatch')).toHaveLength(2);
   });
+});
+
+ it('classifies root agent instructions as documentation and preserves protected executable paths', () => {
+  const result = classify(['AGENTS.md', 'CLAUDE.md', 'infra/scripts/deploy.sh', '.github/workflows/greenfield.yml', 'unrecognized.sh']);
+  expect(result['AGENTS.md']).toBe('');
+  expect(result['CLAUDE.md']).toBe('');
+  expect(result['infra/scripts/deploy.sh']).not.toBe('');
+  expect(result['.github/workflows/greenfield.yml']).not.toBe('');
+  expect(result['unrecognized.sh']).not.toBe('');
 });
