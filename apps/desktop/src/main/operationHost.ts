@@ -206,7 +206,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'social.workspace':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.mutate':async(input:OperationInput<'social.mutate'>)=>{const generation=deps.recordings.identity.current();const {action,commandId,...payload}=input;const paths={save:'/social/posts/save',approve:'/social/posts/approve',cancel:'/social/posts/cancel'} as const;const answer=await deps.api.command(paths[action],payload,v=>z.unknown().parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};if(!answer.ok)return {accepted:false,view:null,reason:answer.reason};const view=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};return {accepted:true,view:view.ok?view.value:null,reason:view.ok?null:'refresh_failed'};},
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
-      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control',value=>outreachControlSchema.parse(value),input);
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control/v2',value=>outreachControlSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
@@ -217,11 +217,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
     'outreach.mutate': async(input:OperationInput<'outreach.mutate'>)=>{
       const generation=deps.recordings.identity.current(),{action,commandId,...body}=input;
-      const paths={authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
+      const paths={email_admission:'/outreach/email-admission/save',authorization:'/outreach/authorization/save',policy:'/outreach/settings/save',fact_save:'/outreach/answer-blocks/save',fact_approve:'/outreach/answer-blocks/approve',fact_retire:'/outreach/answer-blocks/retire',cohort_enable:'/outreach/cohort/enable',reply_manual:'/outreach/reply/manual'} as const;
       const answer=await deps.api.command(paths[action],body,value=>z.record(z.string(),z.unknown()).parse(value),{commandId});
       if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
       if(!answer.ok)return {accepted:false,view:null,reason:answer.reason.slice(0,80)};
-      const read=await deps.api.read('/outreach/control',value=>outreachControlSchema.parse(value),{});
+      const read=await deps.api.read('/outreach/control/v2',value=>outreachControlSchema.parse(value),{});
       if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};
       return {accepted:true,view:read.ok?read.value:null,reason:read.ok?null:'refresh_failed'};
     },

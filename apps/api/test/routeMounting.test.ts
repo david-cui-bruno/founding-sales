@@ -155,6 +155,8 @@ describe('what the API mounts', () => {
       '/outreach/cohort/enable',
       '/outreach/cohort/preview',
       '/outreach/control',
+      '/outreach/control/v2',
+      '/outreach/email-admission/save',
       '/outreach/reply/manual',
       '/outreach/settings/save',
       '/pauses',

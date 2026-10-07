@@ -108,3 +108,19 @@ for(const column of ['execution_id','fence_id'])OUTREACH_CONSTRAINT_CASES.push({
  await deliveryRow(f,{[column]:value});await reply(f,{id:missing,original_message_id:missing});await deliveryPermissionRow(f,missing);
  return deliveryRow(f,{request_id:missing,permission_id:missing,[column]:value});
 }});
+
+const emailControlVersion='77777777-4444-4444-8444-444444444444';
+async function emailControlFixture(f:Fixture){
+ await insert(f,'sequences',{workspace_id:f.seeded.alpha.workspaceId,id:emailControlVersion,name:'Email control fixture',created_by_user_id:f.seeded.alpha.admin.userId});
+ await insert(f,'sequence_versions',{workspace_id:f.seeded.alpha.workspaceId,id:emailControlVersion,sequence_id:emailControlVersion,version:1});
+}
+const emailControl=(f:Fixture,change:Record<string,unknown>={})=>insert(f,'outreach_email_admission_settings',{workspace_id:f.seeded.alpha.workspaceId,revision:1,owner_user_id:f.seeded.alpha.salesperson.userId,mailbox_id:f.mail.alpha.mailboxId,sequence_version_id:emailControlVersion,mailbox_binding:'a'.repeat(64),sequence_binding:'b'.repeat(64),...change});
+bad('outreach_email_admission_settings',[
+ ['revision_check',{revision:0}],['enabled_check',{enabled:true}],['evaluation_check',{evaluation:JSON.stringify({report:'x'.repeat(4097)})}],['mailbox_binding_check',{mailbox_binding:'bad'}],['sequence_binding_check',{sequence_binding:'bad'}],['check',{owner_user_id:null}],['workspace_id_mailbox_id_fkey',{mailbox_id:missing}],
+],emailControl,emailControlFixture);
+OUTREACH_CONSTRAINT_CASES.push(
+ {constraint:'outreach_email_admission_settin_workspace_id_owner_user_id_fkey',run:async f=>{await emailControlFixture(f);return emailControl(f,{owner_user_id:missing});}},
+ {constraint:'outreach_email_admission_sett_workspace_id_sequence_versio_fkey',run:async f=>{await emailControlFixture(f);return emailControl(f,{sequence_version_id:missing});}},
+ {constraint:'outreach_email_admission_settings_workspace_id_fkey',run:f=>insert(f,'outreach_email_admission_settings',{workspace_id:missing,revision:1})},
+ {constraint:'outreach_email_admission_settings_pkey',run:async f=>{await emailControlFixture(f);await emailControl(f);return emailControl(f);}},
+);

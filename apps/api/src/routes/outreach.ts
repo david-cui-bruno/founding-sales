@@ -1,5 +1,6 @@
+import {saveEmailAdmissionControl} from '@fss/domain/outreach/emailControl.ts';
 import {z} from 'zod';
-import {routineSettingsCommandSchema,outreachCohortInputSchema,outreachCohortCommandSchema,routineManualCommandSchema} from '@fss/contracts';
+import {emailAdmissionCommandSchema,routineSettingsCommandSchema,outreachCohortInputSchema,outreachCohortCommandSchema,routineManualCommandSchema} from '@fss/contracts';
 import {readOutreachControl,saveRoutineSettings,handleRoutineManually} from '@fss/domain/outreach/settings.ts';
 import {previewOutreachCohort,enableOutreachCohort} from '@fss/domain/outreach/cohorts.ts';
 import {saveAnswerBlock,approveAnswerBlock,retireAnswerBlock,listAnswerBlocks} from '@fss/domain/outreach/facts.ts';
@@ -7,7 +8,7 @@ import {prospectingAuthorizationReadSchema,prospectingAuthorizationSaveSchema,sa
 import {authorizationForMailbox,setProspectingAuthorization} from '@fss/domain/outreach/authorization.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const OUTREACH_PATHS=['/outreach/control','/outreach/settings/save','/outreach/cohort/preview','/outreach/cohort/enable','/outreach/reply/manual','/outreach/authorization','/outreach/authorization/save','/outreach/answer-blocks','/outreach/answer-blocks/save','/outreach/answer-blocks/approve','/outreach/answer-blocks/retire'];
+export const OUTREACH_PATHS=['/outreach/email-admission/save','/outreach/control','/outreach/control/v2','/outreach/settings/save','/outreach/cohort/preview','/outreach/cohort/enable','/outreach/reply/manual','/outreach/authorization','/outreach/authorization/save','/outreach/answer-blocks','/outreach/answer-blocks/save','/outreach/answer-blocks/approve','/outreach/answer-blocks/retire'];
 export async function routeOutreach(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!OUTREACH_PATHS.includes(request.path))return null;
  if(request.method!=='POST')return {status:405,body:{error:'method_not_allowed'}};
@@ -16,10 +17,13 @@ export async function routeOutreach(request:ApiRequest,options:RoutingOptions):P
  const scoped=contextForPrincipal(auth,principal.principal);if(!scoped.ok)return scoped.result;
  const actor=scoped.context.scope.actor;
  if(actor.kind!=='user'||actor.role!=='admin')return {status:403,body:{error:'admin_required'}};
- if(request.path==='/outreach/control'){
+ if(request.path==='/outreach/control'||request.path==='/outreach/control/v2'){
   if(!z.strictObject({}).safeParse(request.body).success)return {status:400,body:{error:'invalid_input'}};
-  return {status:200,body:await readOutreachControl(scoped.context)};
+  const view=await readOutreachControl(scoped.context);
+  if(request.path==='/outreach/control'){const {emailAdmission:_email,...legacy}=view;return {status:200,body:legacy};}
+  return {status:200,body:view};
  }
+ if(request.path==='/outreach/email-admission/save')return runRouteCommand({auth,request,principal:principal.principal},emailAdmissionCommandSchema,'outreach_email_control_save',async(ctx,input)=>{const {commandId:_id,clientVersion:_version,...value}=input;return saveEmailAdmissionControl(ctx,value);});
  if(request.path==='/outreach/settings/save')return runRouteCommand({auth,request,principal:principal.principal},routineSettingsCommandSchema,'outreach_settings_save',async(ctx,input)=>{const {commandId:_id,clientVersion:_version,...value}=input;return saveRoutineSettings(ctx,value);});
  if(request.path==='/outreach/cohort/preview'){
   const input=outreachCohortInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};

@@ -1,3 +1,4 @@
+import {readEmailAdmissionControl} from './emailControl.ts';
 import {routineSettingsSaveSchema,type OutreachControl} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
@@ -43,7 +44,7 @@ export async function readOutreachControl(ctx:RepositoryContext):Promise<Outreac
  const sequences:OutreachControl['sequences']=[];for(const v of versions){const kind=await campaignKind(ctx,v.id);if(kind)sequences.push({id:v.id,label:`${v.name} · version ${v.version}`,kind});}
  const candidates=(await ctx.db.query<{id:string;revision:number;run_id:string;payload:{firmName:string;locality:string;region:string}}>(`SELECT c.id,c.revision,c.payload,r.id AS run_id FROM sourcing_candidates c JOIN LATERAL(SELECT id FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id AND q.candidate_revision=c.revision AND q.state IN ('eligible','review','admitted') AND q.reason IS NULL ORDER BY q.requested_at DESC,q.id DESC LIMIT 1) r ON true WHERE c.workspace_id=$1 AND NOT c.qualification_blocked AND c.status<>'dismissed' ORDER BY c.created_at DESC,c.id LIMIT 50`,[w])).rows.map(c=>({id:c.id,revision:c.revision,qualificationRunId:c.run_id,name:c.payload.firmName,location:`${c.payload.locality}, ${c.payload.region}`}));
  const replies=(await ctx.db.query<{id:string;revision:number;firm_id:string;name:string;state:string;reason:string|null;created_at:Date}>(`SELECT r.id,r.revision,p.firm_id,f.name,r.state,r.reason,r.created_at FROM outreach_reply_requests r JOIN outreach_plans p ON p.workspace_id=r.workspace_id AND p.id=r.plan_id JOIN firms f ON f.workspace_id=p.workspace_id AND f.id=p.firm_id WHERE r.workspace_id=$1 AND r.state IN ('ready','review','expired') ORDER BY r.created_at DESC,r.id LIMIT 25`,[w])).rows.map(r=>({id:r.id,revision:r.revision,firmId:r.firm_id,firmName:r.name,state:r.state,reason:r.reason,createdAt:r.created_at.toISOString()}));
- return {settings:await readRoutineSettings(ctx),blocks:await listAnswerBlocks(ctx),senders,sequences,candidates,replies};
+ return {emailAdmission:await readEmailAdmissionControl(ctx),settings:await readRoutineSettings(ctx),blocks:await listAnswerBlocks(ctx),senders,sequences,candidates,replies};
 }
 export async function handleRoutineManually(ctx:RepositoryContext,input:{id:string;expectedRevision:number}):Promise<Result<{revision:number}>>{
  if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')return {ok:false,reason:'admin_required'};

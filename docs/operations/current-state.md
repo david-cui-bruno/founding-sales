@@ -1,6 +1,6 @@
 # Current operating state
 
-Last verified: October 7, 2026, 21:18 UTC. This is a dated snapshot; read live state before any operational change. Historical checkpoints are evidence, not current authorization.
+Application last verified: October 7, 2026, 22:21 UTC; reusable campaign prepared October 7 at 22:24 UTC. This is a dated snapshot; read live state before any operational change. Historical checkpoints are evidence, not current authorization.
 
 ## Decisions and priorities
 
@@ -16,11 +16,11 @@ Read [the operating roadmap](../sourcing/roadmap-20261007.md). Preserve original
 
 ## Next work
 
-Implement disabled-by-default automatic email admission bound to evaluated policy/prompt, active owner/mailbox and approved reusable sequence; connect ranking and transactional safeguards. Existing email-fit predicate is not activation. Six selected source cases are diagnostic, not representative precision. Neutral reusable copy is prepared locally, not imported/approved/sent. Inactivity and incident recovery need further work.
+Implement disabled-by-default automatic email admission bound to evaluated policy/prompt, active owner/mailbox and approved reusable sequence; connect ranking and transactional safeguards. Existing email-fit predicate is not activation. Six selected source cases are diagnostic, not representative precision. Neutral reusable five-email copy is now imported, approved and published as sequence version `da30fb87-ae6f-44ee-b91f-989e9ff577ba`, with offsets 0/3/7/13/20 and no enrollments. Preparation used current production content functions and verified identical sending-state hashes before/after, preserving Shirley and all controls. The disabled control API/schema62 is implemented for #419 and is not deployed; automatic admission is still unavailable. Inactivity and incident recovery need further work.
 
 ## Evidence and refresh
 
-Local evidence: `.context/email-fit-release-verification.json`, `.context/email-fit-runtime-state.json`, `.context/email-fit-evaluation.json`, `.context/verified-fit-campaign-prepared.json`. These are local artifacts, not guaranteed in a fresh clone. GitHub release evidence is linked by run ID above. Keep credentials out of status files.
+Local evidence: `.context/email-fit-release-verification.json`, `.context/email-fit-runtime-state.json`, `.context/email-fit-evaluation.json`, `.context/verified-fit-preparation-receipt.json`, `.context/email-controls-production-status.json`. The reusable copy definition is committed as `docs/sourcing/verified-fit-campaign.json`. These are local artifacts, not guaranteed in a fresh clone. GitHub release evidence is linked by run ID above. Keep credentials out of status files.
 
 Run `python3 scripts/productionStatus.py --expected-commit <commit> --deploy-run <run-id> --out .context/production-status.json` with the existing AWS operator profile/region. It reads health, service rollout, task-image retention and workflow evidence; it does not attest mailbox controls, replace the normal release smoke/readback or change any state. For mailbox controls use the normal authorized product tools or a scoped read-only operations task; never reuse desktop credentials.
 
