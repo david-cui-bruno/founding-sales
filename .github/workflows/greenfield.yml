@@ -64,8 +64,9 @@ jobs:
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             # Scope this install to Ubuntu's signed HTTPS archives. The runner's
             # Azure mirror repeatedly stalled before the gate in October 2026.
-            media_sources="$(mktemp "${RUNNER_TEMP:-/tmp}/fss-media-sources.XXXXXX")"
-            trap 'rm -f "$media_sources"' EXIT
+            media_directory="$(mktemp -d "${RUNNER_TEMP:-/tmp}/fss-media-sources.XXXXXX")"
+            media_sources="$media_directory/ubuntu.sources"
+            trap 'rm -f "$media_sources"; rmdir "$media_directory"' EXIT
             cat > "$media_sources" <<'SOURCES'
           Types: deb
           URIs: https://archive.ubuntu.com/ubuntu
