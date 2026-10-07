@@ -442,8 +442,13 @@ it('selects only the newest qualification for the current candidate revision',as
  expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:0,admitted:[]});
 });
 it('waits for the next business-day allowance instead of exhausting capacity checks overnight',async()=>{
- await configureFutureActivation();await qualified('Reset Capacity Fit',{retrievedAt:'2026-10-07T22:00:00.000Z'});
+ await configureFutureActivation();await qualified('Reset Capacity Fit');
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
- const timed=repositoryContext(worker().scope,{query:async <Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>sql==='SELECT now() AS now'?{rows:[{now:new Date('2026-10-07T23:00:00.000Z')} as unknown as Row],rowCount:1}:db.session.query<Row>(sql,values)});
- expect(await runAutomaticEmailBatch(timed,2)).toMatchObject({deferred:[{reason:'mailbox_capacity_exhausted',retryAt:'2026-10-08T04:05:00.000Z'}]});
+ const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York'});
+ const tomorrow=new Date(`${day.format(new Date())}T12:00:00Z`);tomorrow.setUTCDate(tomorrow.getUTCDate()+1);
+ const report=await runAutomaticEmailBatch(worker(),2),wake=report.deferred[0]?.retryAt;
+ expect(report).toMatchObject({deferred:[{reason:'mailbox_capacity_exhausted'}]});
+ if(!wake)throw new Error('missing capacity wake');
+ expect(day.format(new Date(wake))).toBe(tomorrow.toISOString().slice(0,10));
+ expect(new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(wake))).toBe('00:05');
 });
