@@ -227,7 +227,7 @@ jobs:
               apps/* | packages/* | scripts/* | docs/* | test/* | tests/*) why='' ;;
               Dockerfile.api | Dockerfile.worker | Dockerfile.api.dockerignore | Dockerfile.worker.dockerignore) why='' ;;
               package.json | package-lock.json | certs/* | .github/dependabot.yml) why='' ;; # dependabot only opens update PRs
-              tsconfig*.json | eslint*.mjs | README.md) why='' ;;
+              tsconfig*.json | eslint*.mjs | README.md | AGENTS.md | CLAUDE.md) why='' ;;
               *) why='not an application path this deploy knows' ;;
             esac
             [ -z "$why" ] || printf '%s (%s)\n' "$path" "$why" >> "$work/protected"

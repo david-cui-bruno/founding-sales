@@ -1,0 +1,15 @@
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -15,0 +16,9 @@
++
++## Existing setup and settled choices
++
++Before starting the interview, read any existing `## Agent skills` block and `docs/agents/*.md`, and check choices already confirmed in the current conversation.
++
++- Reuse confirmed tracker, label vocabulary, domain layout and entry-file choices. Ask only for missing information or a change the user requested.
++- When the existing configuration matches those choices, verify its pointers and configured tracker labels, report completion, and stop without rewriting or repeating the interview.
++- For a first setup, collect unresolved choices in the section order below. Once they are resolved, present one complete draft and combine the final draft review with the entry-file choice if neither entry file exists.
++- Apply a draft already approved in this conversation without asking for approval again. Preserve surrounding content and user edits.
+@@ -34 +43 @@
+-Summarise what's present and what's missing. Then take the sections in order. One section, one answer, then the next.
++Summarise what's present and what's missing. Then take the sections in order. For unresolved choices, one section, one answer, then the next. Skip choices already confirmed in this conversation or recorded in an existing setup.

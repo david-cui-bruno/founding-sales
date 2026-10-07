@@ -57,10 +57,35 @@ jobs:
             -c 'ALTER SYSTEM SET full_page_writes = off' \
             -c 'SELECT pg_reload_conf()'
       - name: Meeting media test tools
+        timeout-minutes: 4
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          set -euo pipefail
+          trap 'echo "::error::Meeting media tool setup failed; the test gate has not run"' ERR
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            # Scope this install to Ubuntu's signed HTTPS archives. The runner's
+            # Azure mirror repeatedly stalled before the gate in October 2026.
+            media_directory="$(mktemp -d "${RUNNER_TEMP:-/tmp}/fss-media-sources.XXXXXX")"
+            media_sources="$media_directory/ubuntu.sources"
+            trap 'rm -f "$media_sources"; rmdir "$media_directory"' EXIT
+            cat > "$media_sources" <<'SOURCES'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SOURCES
+            media_apt_options=(-o "Dir::Etc::sourcelist=$media_sources" -o 'Dir::Etc::sourceparts=-')
+            sudo timeout --kill-after=10s 90s apt-get "${media_apt_options[@]}" -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq
+            sudo timeout --kill-after=10s 120s apt-get "${media_apt_options[@]}" -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+          fi
           ffmpeg -version
+          ffprobe -version
       - name: Greenfield gate
         run: npm run gate:greenfield
 

@@ -1,5 +1,7 @@
 # Outreach verification — 6 October 2026
 
+Historical verification record. For current release, pauses and authorization, read [current operating state](../operations/current-state.md).
+
 ## Release state
 
 Live readback on 6 October confirms production runs `61727744b3934f6bee328725b313348ad9b1a8bb` on schema 56, accepting desktop 1.0.47 or later. GitHub rehearsal run 37409891914 completed successfully. The previous unreleased/schema-51 status below was stale. This document is a running verification record, not authorization to lift sending. Publish compatible desktop 1.0.47 before deploying schema 56. No production prospect authorization, cohort, reply setting or sending switch was changed.

@@ -17,3 +17,15 @@ run "repositories_are_immutable_scanned_and_keep_their_images" {
     error_message = "Tags are immutable (a digest that passed the gate cannot be re-tagged to other bytes), every push is scanned, and a repository holding images refuses deletion."
   }
 }
+
+run "only_unreferenced_untagged_images_expire" {
+  command = plan
+  assert {
+    condition = alltrue([for policy in aws_ecr_lifecycle_policy.this :
+      alltrue([for rule in jsondecode(policy.policy).rules :
+        rule.selection.tagStatus == "untagged" && rule.selection.countType == "sinceImagePushed" && rule.selection.countNumber == 7
+      ])
+    ])
+    error_message = "Tagged operations, migration and rollback images must survive repeated app releases. Only untagged images expire after seven days."
+  }
+}

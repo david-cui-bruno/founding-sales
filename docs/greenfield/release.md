@@ -336,3 +336,13 @@ major waits for the coordinator's decision, and a desktop major is not merged un
 someone is ready to build and publish a desktop release. **Nothing auto-merges** — there
 is no auto-merge rule, no `dependabot merge` command in CI, and a red gate on a
 dependency pull request is a red gate like any other.
+
+## Operations image retention and availability
+
+Tagged release images are retained; only untagged images expire after seven days. A numerical cap cannot prove an older operations, migration or compatible rollback image is unused. Any future pruning must inventory current service and one-off task definitions and designated compatible rollback images before removing tags or manifests. Storage grows with retained releases; review usage without deleting referenced images.
+
+Before a CI release-record task starts, the deploy script verifies its exact operations digest exists in the production worker repository. A missing/unreadable image refuses the release with no task launched. Restore the exact manifest and layers from the durable rehearsal repository, verify the original digest and retain its immutable release tag. Do not substitute a new digest in an old release record or change task roles/definitions to bypass this check. Once restored, rerun the failed workflow job so its gate evidence is checked again.
+
+For compact read-only diagnostics, run `AWS_PROFILE=default python3 scripts/productionStatus.py --expected-commit <full-sha> --deploy-run <run-id> --out .context/production-status.json`. It checks public health, stable service counts, referenced image presence/tags and completed workflow smoke/readback jobs. It neither changes mailbox controls nor replaces the existing exact release-record readback and full smoke checks. Production cluster, origin and account are fixed to the repo's production environment; custom profiles can be supplied through the ordinary AWS environment. Consult `docs/operations/current-state.md` for the dated operating snapshot and unresolved evidence.
+
+Rehearsal registry policy repair uses `.github/workflows/registry-retention.yml` from reviewed main. It assumes the existing `rehearsal` OIDC role, verifies its identity, validates both targeted policy resources and refuses every other resource write before applying the exact saved plan. Default dispatch is plan-only; `apply=true` performs the repair. Local operator inability to assume the rehearsal role is expected; keep its existing trust policy.

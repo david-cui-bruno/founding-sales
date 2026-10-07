@@ -1761,6 +1761,21 @@ PY
   if [ "$database_host" = "-" ]; then database_host=''; fi
   rehearsal_log "the put runs $revision (${CI_PREFIX}-worker@$operations_digest, the image of the last apply); the record it stores names worker $WORKER_DIGEST"
 
+  # Refuse a dangling operations image before starting a task. Definition shape
+  # alone does not prove its old image survived registry retention.
+  release_aws "$CI_ENVIRONMENT" ecr describe-images --repository-name "${CI_PREFIX}-worker" \
+    --image-ids "imageDigest=$operations_digest" --output json >"$CI_WORK/operations-image.json" \
+    || deploy_fail "operations image $operations_digest is missing or unreadable in ${CI_PREFIX}-worker; no task launched. Restore the exact digest through the release runbook."
+  FSS_FILE="$CI_WORK/operations-image.json" FSS_DIGEST="$operations_digest" python3 - <<'PY_IMAGE' || exit 1
+import json, os, sys
+try:
+    details = json.load(open(os.environ["FSS_FILE"], encoding="utf-8"))["imageDetails"]
+    if len(details) != 1 or details[0].get("imageDigest") != os.environ["FSS_DIGEST"]:
+        raise ValueError("registry answered with another image")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    sys.exit("FAIL: operations image preflight refused: {}; no task launched".format(error))
+PY_IMAGE
+
   # 3. The put (lib.sh release_record_put). The network is the one the repository
   # variables name; the worker group's zero inbound rules are what the production root's
   # isolation test holds it to.

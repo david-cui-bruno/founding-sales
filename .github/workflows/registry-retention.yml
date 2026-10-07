@@ -1,0 +1,63 @@
+name: Repair rehearsal registry retention
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the validated registry-only retention plan
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: rehearsal-registry-retention
+  cancel-in-progress: false
+jobs:
+  retention:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: rehearsal
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Only the reviewed main configuration
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo '::error::Retention repair only runs from main'; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.15.8'
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: fss-rh-retention
+      - name: Verify the existing rehearsal identity
+        run: |
+          set -euo pipefail
+          infra/scripts/rehearsal.sh identity fss-rh-deploy
+      - name: Plan and validate only the two lifecycle policies
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/roots/rehearsal-registry init -reconfigure -input=false -backend-config=backend.hcl
+          terraform -chdir=infra/roots/rehearsal-registry plan -input=false -lock-timeout=30s -var=assume_deployment_role=false \
+            '-target=module.registry.aws_ecr_lifecycle_policy.this["api"]' \
+            '-target=module.registry.aws_ecr_lifecycle_policy.this["worker"]' -out="$RUNNER_TEMP/retention.tfplan"
+          terraform -chdir=infra/roots/rehearsal-registry show -json "$RUNNER_TEMP/retention.tfplan" \
+            | python3 infra/scripts/check-registry-plan.py fss-rh
+      - name: Apply the exact validated plan
+        if: inputs.apply
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/roots/rehearsal-registry apply -input=false "$RUNNER_TEMP/retention.tfplan"
+          for repository in fss-rh-api fss-rh-worker; do
+            aws ecr get-lifecycle-policy --repository-name "$repository" --query lifecyclePolicyText --output text \
+              | python3 -c 'import json,sys; p=json.load(sys.stdin); assert len(p["rules"])==1 and p["rules"][0]["selection"]=={"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7}; print("Verified untagged-only policy")'
+          done

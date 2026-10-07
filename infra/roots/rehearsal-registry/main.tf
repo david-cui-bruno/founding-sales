@@ -16,7 +16,8 @@
 # Everything else is the registry module's, which is production's: immutable
 # tags, scan on push, no force delete (a `terraform destroy` here fails on a
 # repository that is not empty, which is the correct answer), untagged layers
-# expired after seven days and thirty tagged images retained.
+# expired after seven days and tagged release images retained until explicit
+# reference-aware cleanup.
 
 module "registry" {
   source = "../../modules/registry"
