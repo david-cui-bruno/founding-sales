@@ -102,6 +102,32 @@ read from `readOutboundOutcome`.
 
 ### 6. The cap is computed, the counter is conditional, and the day has to be closed
 
+The October 7 operating policy adds exposure and pacing safeguards. A sending day
+qualifies for advancement only after using at least 80% of the current scheduled
+stage (4 sends at the starting allowance of 5), with no bounces, opt-outs, provider
+errors or unresolved provider attempts, and passing authentication/coverage checks.
+Lowering the admin cap does not reduce this exposure requirement. A sparse day closes
+without advancement; its verdict cannot be re-earned by a later retry. These are
+application policy choices, not provider-certified safe volumes or inbox placement
+proof. Missing Postmaster data remains unknown.
+
+Cold prospecting claims for the same mailbox are spaced by one hour divided by the
+current allowance, with a minimum of one minute: the starting allowance of five has
+12-minute spacing. The check runs inside the final claim transaction after locking
+the mailbox's ramp/send-day row, so competing claims observe the last committed
+attempt. All automated attempts, including ambiguous ones and prompt replies, count
+as activity when spacing the next cold send. Replies themselves retain their prompt
+sending path. A paced step is rescheduled with an audit shift and the original fence;
+no capacity is charged and no provider is called. Recipient windows are rechecked
+when it wakes, including if pacing pushes it past 11am.
+
+Late bounces, opt-outs and provider errors revoke graduation at most once per closed
+day. Existing sender holds, route invalidation, reconciliation and admin lowering
+remain the incident controls. This release does not override caps, install a warm-up
+network, establish a live reputation feed, or infer deliverability from message IDs.
+See [warm-up research](../sourcing/mailbox-warmup-research.md) and the
+[current operating roadmap](../sourcing/roadmap-20261007.md).
+
 12.7's ramp table is a function of one stored number — healthy sending days — so a
 schedule change governs every mailbox the moment it lands. `admin_daily_cap` only
 lowers and `raised_daily_cap` only raises, to at most 75, under a database ceiling of

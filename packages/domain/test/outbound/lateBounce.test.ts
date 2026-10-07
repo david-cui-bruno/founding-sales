@@ -128,7 +128,7 @@ describe('a bounce counted against a send day that has already closed', () => {
     expect((await readDay('beta', businessDate)).bounces).toBe(0);
   });
 
-  it('counts against a closed day without taking it back when the rate still passes', async () => {
+  it('revokes graduation after even one late bounce, despite the historical rate tolerance', async () => {
     const businessDate = await dateOffsetByDays(-12);
     await seedDay(businessDate, { automatedSent: 20, healthyDays: 6 });
 
@@ -136,10 +136,10 @@ describe('a bounce counted against a send day that has already closed', () => {
       mailboxId: world.alpha.mailboxId,
       businessDate,
     });
-    // One in twenty is exactly five per cent, and RAMP_MAX_BOUNCE_RATE is "more than".
-    expect(outcome).toEqual({ businessDate, late: true, ramp: 'unchanged', failure: null });
-    expect(await readDay('alpha', businessDate)).toEqual({ bounces: 1, healthy: true });
-    expect((await readRampRow('alpha')).healthy_sending_days).toBe(6);
+    // The rate-based delivery health rule remains separate from permission to grow.
+    expect(outcome).toEqual({ businessDate, late: true, ramp: 'reversed', failure: 'bounce_rate' });
+    expect(await readDay('alpha', businessDate)).toEqual({ bounces: 1, healthy: false });
+    expect((await readRampRow('alpha')).healthy_sending_days).toBe(5);
   });
 
   it('takes the day back exactly once when the late bounce crosses the threshold', async () => {

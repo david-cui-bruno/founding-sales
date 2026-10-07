@@ -1507,11 +1507,10 @@ describe('the import feeds the reputation ramp (12.7)', () => {
    *
    * The report names the send in its `References`, the fence holds the deterministic
    * Message-ID and the business date the cap counted the send against, and the two
-   * join. Twenty sends is `RAMP_RATE_FLOOR`, so the day is judged on its rate: one
-   * bounce is exactly five per cent, which `RAMP_MAX_BOUNCE_RATE` does not exceed, and
-   * two is ten, which it does.
+   * join. Any bounce revokes graduation, including one below the diagnostic rate
+   * threshold. Later reports must not subtract the same earned day again.
    */
-  it('attributes a late bounce to the send day that caused it, and takes the ramp back only when it crosses the threshold', async () => {
+  it('attributes a late bounce to the send day that caused it, and revokes graduation on the first bounce only', async () => {
     world = await createMailWorld();
     const w = world;
     await completeBaseline(w, w.alpha);
@@ -1617,18 +1616,16 @@ describe('the import feeds the reputation ramp (12.7)', () => {
     // Counted against the send, not against the morning it was read.
     expect((await day(w, workspaceId, w.alpha.mailboxId, yesterday))?.bounces).toBe(1);
     expect((await day(w, workspaceId, w.alpha.mailboxId, today))?.bounces).toBe(0);
-    // One in twenty is exactly five per cent, and five per cent is not more than five
-    // per cent: the day stands and the ramp keeps what it earned.
-    expect(await verdict(yesterday)).toBe(true);
-    expect((await ramp()).healthy_sending_days).toBe(6);
-    expect((await ramp()).last_health_failure).toBeNull();
+    // Graduation requires zero negative signals, even below the diagnostic threshold.
+    expect(await verdict(yesterday)).toBe(false);
+    expect((await ramp()).healthy_sending_days).toBe(5);
+    expect((await ramp()).last_health_failure).toBe('bounce_rate');
 
     await bounce('latebounce2', '1231', headers[1] ?? '');
 
     expect((await day(w, workspaceId, w.alpha.mailboxId, yesterday))?.bounces).toBe(2);
     expect((await day(w, workspaceId, w.alpha.mailboxId, today))?.bounces).toBe(0);
-    // Ten per cent. The day was never healthy, so the ramp gives back the day it
-    // counted on the strength of it.
+    // The second bounce updates the send-day evidence without revoking it twice.
     expect(await verdict(yesterday)).toBe(false);
     expect((await ramp()).healthy_sending_days).toBe(5);
     expect((await ramp()).last_health_failure).toBe('bounce_rate');

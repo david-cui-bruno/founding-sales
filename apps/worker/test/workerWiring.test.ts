@@ -490,7 +490,7 @@ describe('the worker drains what the lanes left', () => {
     const yesterday = await businessDate(gamma.workspaceId, -1);
     await database.session.query(
       `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
-       VALUES ($1, $2, $3::date, 3, 5)`,
+       VALUES ($1, $2, $3::date, 4, 5)`,
       [gamma.workspaceId, gamma.mailboxId, yesterday],
     );
 

@@ -1,5 +1,7 @@
 # Sales roadmap: planning decisions and research
 
+> Historical planning snapshot. For current priorities and authorization, see [October 7 operating roadmap](roadmap-20261007.md). The implementation-not-started statements below describe October 5, not current release status.
+
 Status: complete written build plan; implementation not started. David requested planning all five roadmap items, with questions one at a time and research into unresolved choices, before further implementation. The qualification/admission plan is now reconciled with the master plan and linked subsystem plans.
 
 The [consolidated five-part design](../superpowers/specs/2026-10-05-sales-roadmap-design.md) brings these decisions together. David reported account-specific Google permission and confirmed free native social scheduling; remaining checks concern implementation and actual lead yield. The follow-up discussion settled five emails over roughly 21 days for email-only firms, or four emails plus up to four calls over roughly 21 days for call-first firms, with one cold touch per firm/day and interruption on replies/bookings/stops.

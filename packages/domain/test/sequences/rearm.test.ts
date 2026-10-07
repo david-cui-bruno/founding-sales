@@ -438,3 +438,27 @@ describe('how long a held step waits before the scheduler asks again', () => {
     expect(waited).toBeGreaterThanOrEqual(DEFAULT_HOLD_RECHECK_MILLISECONDS - 1000);
   });
 });
+
+
+it('reschedules a paced dispatch without replacing its original fence or consuming an attempt', async () => {
+  const { emailExecutionId } = await enrollMonday();
+  const handoff = recordingSendHandoff();
+  const fenceId = await prepareEmail(handoff, emailExecutionId);
+  const retryAt = '2026-09-21T13:12:00.000Z';
+  handoff.answerDispatchWith({ ok: false, reason: 'scoped_pause', retryAt });
+  await dispatchPreparedStep(worker(), {
+    stepExecutionId: emailExecutionId, outboundMessageId: fenceId, sendHandoff: handoff, now: MONDAY_NINE,
+  });
+  const row = await executionRow(emailExecutionId);
+  expect(row.state).toBe('pending');
+  expect(row.due_at.toISOString()).toBe(retryAt);
+  expect(row.not_before.toISOString()).toBe(retryAt);
+  const shifted = await database.session.query('SELECT reason FROM step_execution_shifts WHERE step_execution_id=$1', [emailExecutionId]);
+  expect(shifted.rows).toEqual([{ reason: 'send_window' }]);
+  handoff.setOutcome(emailExecutionId, { state: 'prepared', outboundMessageId: fenceId, dispatchedAt: null, heldReason: null });
+  const resumed = await runDueStepExecution(worker(), {
+    stepExecutionId: emailExecutionId, now: retryAt, eligibility: allowAllEligibility(), sendHandoff: handoff,
+  });
+  expect(resumed).toMatchObject({ kind: 'handed_to_send', outboundMessageId: fenceId });
+  expect(handoff.prepared).toHaveLength(1);
+});
