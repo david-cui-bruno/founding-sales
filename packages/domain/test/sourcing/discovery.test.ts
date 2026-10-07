@@ -126,3 +126,26 @@ it('preserves raw directory hits without creating firms and cleans candidate tit
  expect((await db.session.query('SELECT payload FROM sourcing_candidates WHERE id=$1',[firmHit.candidate_id])).rows[0]).toMatchObject({payload:{firmName:'RentProv Realty'}});
  expect((await db.session.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[firmHit.candidate_id])).rows).toHaveLength(1);
 });
+
+it('looks beyond duplicate and directory hits but researches at most five new candidates per run',async()=>{
+ await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
+ await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=0,monthly_used=0');
+ await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now(),enabled=true');
+ const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
+ const hits=[
+  ...Array.from({length:5},(_,i)=>({url:`https://www.allpropertymanagement.com/area-${i}`,title:'Directory',snippet:'Directory'})),
+  ...Array.from({length:7},(_,i)=>({url:`https://yield-${i}.test/`,title:`Yield Realty ${i}`,snippet:'Residential management'})),
+ ];
+ const provider={providerKey:'tavily_basic',discover:async()=>({ok:true as const,credits:1,requestId:'yield',hits})};
+ await runDiscovery(ctx,provider);
+ const rows=async()=>(await db.session.query<{candidate_id:string|null}>("SELECT candidate_id FROM sourcing_discovery_hits WHERE workspace_id=$1 AND source_url LIKE 'https://yield-%'",[workspaceId])).rows;
+ expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(5);
+ expect(await rows()).toHaveLength(7);
+ expect((await db.session.query("SELECT count(*)::int AS count FROM sourcing_qualification_runs q JOIN sourcing_candidates c ON c.id=q.candidate_id WHERE c.workspace_id=$1 AND c.payload->>'website' LIKE 'https://yield-%'",[workspaceId])).rows[0]).toEqual({count:5});
+ // Previously seen, unprocessed hits remain available when the next day's search returns them.
+ await db.session.query('UPDATE sourcing_discovery_attempts SET day=day-1');
+ await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
+ await runDiscovery(ctx,provider);
+ expect((await rows()).filter(r=>r.candidate_id)).toHaveLength(7);
+ expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toEqual({daily_used:2});
+});

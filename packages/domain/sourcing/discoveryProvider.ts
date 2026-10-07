@@ -1,3 +1,6 @@
+/** One Basic search; research fan-out is capped independently from result retrieval. */
+export const DISCOVERY_RESULT_LIMIT=20;
+export const DISCOVERY_NEW_CANDIDATE_LIMIT=5;
 /** Search proposes URLs; none of these fields establishes a verified firm or need. */
 export interface DiscoveryHit {readonly url:string;readonly title:string;readonly snippet:string}
 export type DiscoverySearchResult =

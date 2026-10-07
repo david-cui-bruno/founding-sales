@@ -7,8 +7,10 @@ export function discoveryFirmName(title:string,url:string):string {
  return (branded.length===1?branded[0]!:original||new URL(url).hostname).slice(0,300);
 }
 
+export const DISCOVERY_DIRECTORY_DOMAINS=['allpropertymanagement.com','propertymanagement.com','propertymanagementlist.com'] as const;
+
 /** Exact host families only: an ordinary firm's similar name is not a directory. */
 export function isDiscoveryDirectory(url:string):boolean {
  const host=new URL(url).hostname.toLowerCase().replace(/\.$/u,'');
- return ['allpropertymanagement.com','propertymanagement.com','propertymanagementlist.com'].some(domain=>host===domain||host.endsWith('.'+domain));
+ return DISCOVERY_DIRECTORY_DOMAINS.some(domain=>host===domain||host.endsWith('.'+domain));
 }

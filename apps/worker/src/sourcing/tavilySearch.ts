@@ -1,10 +1,11 @@
 import {z} from 'zod';
-import type {DiscoverySearchProvider,DiscoveryHit} from '@fss/domain/sourcing/discoveryProvider.ts';
+import {DISCOVERY_DIRECTORY_DOMAINS} from '@fss/domain/sourcing/discoveryIdentity.ts';
+import {DISCOVERY_RESULT_LIMIT,type DiscoverySearchProvider,type DiscoveryHit} from '@fss/domain/sourcing/discoveryProvider.ts';
 import {isPublicResearchUrl,withoutFragment} from '@fss/domain/research/sourcePolicy.ts';
 import {boundedProviderRequest,type ProviderHttp} from '../providers/boundedHttp.ts';
 const responseSchema=z.object({
  request_id:z.string().min(1).max(200),
- results:z.array(z.object({url:z.string().max(2000),title:z.string().max(2000),content:z.string().max(20000).optional()})).max(5),
+ results:z.array(z.object({url:z.string().max(2000),title:z.string().max(2000),content:z.string().max(20000).optional()})).max(DISCOVERY_RESULT_LIMIT),
  usage:z.object({credits:z.literal(1)}),
 });
 /** Fixed Basic search, one request with explicit cost-affecting options. No retries. */
@@ -16,7 +17,7 @@ export function tavilySearch(apiKey:string,options:{http?:ProviderHttp}={}):Disc
   try {
    const reply=await boundedProviderRequest(http,'https://api.tavily.com/search',{
     method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
-    body:JSON.stringify({query,search_depth:'basic',topic:'general',max_results:5,auto_parameters:false,
+    body:JSON.stringify({query,search_depth:'basic',topic:'general',max_results:DISCOVERY_RESULT_LIMIT,exclude_domains:DISCOVERY_DIRECTORY_DOMAINS,auto_parameters:false,
      include_answer:false,include_raw_content:false,include_images:false,include_usage:true}),
    },new AbortController().signal,15000);
    if(reply.status===401||reply.status===403)return {ok:false,code:'auth_failed'};
