@@ -28,6 +28,11 @@ it('keeps failures charged and does not retry a dispatched request',async()=>{
  let calls=0;const provider={providerKey:'tavily_basic',discover:async()=>{calls++;throw new Error('network');}};
  await runDiscovery(ctx,provider);await runDiscovery(ctx,provider);expect(calls).toBe(1);
  expect((await db.session.query('SELECT daily_used FROM sourcing_search_account')).rows[0]).toMatchObject({daily_used:2});
+ await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');
+ await runDiscovery(ctx,provider);
+ expect(calls).toBe(1);
+ expect((await db.session.query('SELECT last_result FROM sourcing_discovery_settings WHERE workspace_id=$1',[workspaceId])).rows[0]).toEqual({last_result:'unavailable'});
+ expect((await db.session.query("SELECT detail FROM audit_events WHERE action='sourcing.discovery_failed' AND workspace_id=$1",[workspaceId])).rows).toEqual([{detail:{code:'unavailable',provider:'tavily_basic'}}]);
 });
 it('stops at the shared ceiling without sending, and an absent account fails closed',async()=>{
  await db.session.query('DELETE FROM sourcing_discovery_attempts');await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now()');

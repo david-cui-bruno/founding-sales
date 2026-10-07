@@ -95,6 +95,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Lane PBM: whether a CSV import's firms are in a workspace, five counts, READ ONLY.
   'import-match report': 'database',
   'discovery configure': 'database',
+  'discovery resume': 'database',
   'qualification configure': 'database',
   'qualification resolve-identity': 'database',
   // Lane M1: what the attendance correction (0039) will change, counts only, READ ONLY.
@@ -358,6 +359,12 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     valueFlags:['--workspace-id','--enabled','--owner-user-id','--evaluation-sha256','--reviewed-eligible','--false-eligible',...REPORTABLE],
     booleanFlags:[],requiredFlags:['--workspace-id','--enabled'],
     summary:'Configure qualified candidate admission after a recorded evaluation; audited ECS launcher required. Never changes sending or search quotas.',
+  },
+  {
+    path:['admin','discovery','resume'],
+    valueFlags:['--workspace-id','--observed-at','--provider-month-used','--provider-month-limit','--expected-month-used',...REPORTABLE],
+    booleanFlags:[],requiredFlags:['--workspace-id','--observed-at','--provider-month-used','--provider-month-limit','--expected-month-used'],
+    summary:'Resume halted discovery after a fresh provider usage check; preserves reserved credits and never retries old searches or changes sending.',
   },
   {
     path:['admin','discovery','configure'],

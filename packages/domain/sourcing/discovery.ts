@@ -7,6 +7,7 @@ import {listApplicableHolds} from '../policy/holds.ts';
 import {saveCandidate} from './candidates.ts';
 import type {DiscoverySearchProvider,DiscoverySearchResult} from './discoveryProvider.ts';
 import {sourcingUrlSchema} from '@fss/contracts';
+import {recordCrmAuditEvent} from '../crm/audit.ts';
 
 export {DISCOVERY_QUERIES} from './discoveryQueries.ts';
 import {ensureTargetingPolicy} from './targetingProposals.ts';
@@ -28,7 +29,8 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
   const pending=(await db.query<{expired:boolean}>("SELECT created_at<now()-interval '2 minutes' AS expired FROM sourcing_discovery_attempts WHERE state='dispatched' ORDER BY created_at LIMIT 1")).rows[0];
   if(pending){if(pending.expired)await db.query('UPDATE sourcing_search_account SET halted=true WHERE id=true');return null;}
   const budget=(await db.query<{halted:boolean;daily_used:number;monthly_used:number}>('SELECT halted,daily_used,monthly_used FROM sourcing_search_account WHERE id=true')).rows[0]!;
-  if(budget.halted||budget.daily_used>=20||budget.monthly_used>=600){await db.query("UPDATE sourcing_discovery_settings SET last_result=$2 WHERE workspace_id=$1",[ctx.scope.workspaceId,budget.halted?'usage_review_required':'quota_exhausted']);return null;}
+  if(budget.halted)return null; // Keep the original provider failure visible until reconciliation.
+  if(budget.daily_used>=20||budget.monthly_used>=600){await db.query("UPDATE sourcing_discovery_settings SET last_result='quota_exhausted' WHERE workspace_id=$1",[ctx.scope.workspaceId]);return null;}
   const policy=await ensureTargetingPolicy(ctx);
   const query=policy.queries[settings.query_cursor%policy.queries.length]!;
   const row=(await db.query<{id:string;day:Date}>(`INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,policy_version) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,day) DO NOTHING RETURNING id,day`,[ctx.scope.workspaceId,query.id,query.query,policy.version])).rows[0];
@@ -45,6 +47,7 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
  await withTransaction(db,async()=>{
   if(!answer.ok){
    await db.query('UPDATE sourcing_search_account SET halted=true WHERE id=true');
+   await recordCrmAuditEvent(ctx,{action:'sourcing.discovery_failed',subjectKind:'sourcing_discovery_attempt',subjectId:attempt.id,detail:{code:answer.code,provider:provider.providerKey}});
   }else{
    const observed=(await db.query<{day:string}>("SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD') AS day")).rows[0]!.day;
    for(const hit of answer.hits.slice(0,5)){
