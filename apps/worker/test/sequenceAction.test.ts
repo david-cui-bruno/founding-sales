@@ -231,7 +231,7 @@ describe('the sequence action as a job', () => {
     );
 
     const registry = new HandlerRegistry().register(
-      sequenceActionJobHandler({ sendHandoff: handoff, eligibility: allowAllEligibility() }),
+      sequenceActionJobHandler({ sendHandoff: handoff, eligibility: allowAllEligibility(), now: () => '2026-09-18T14:00:00Z' }),
     );
     const report = await runTwiceUnderStolenLease({
       session: database.session,
@@ -332,13 +332,13 @@ describe('the sequence action as a job', () => {
     await reopen();
     await database.session.query(
       `UPDATE step_executions
-          SET state = 'pending', hold_reason_code = NULL,
+          SET state = 'pending', hold_reason_code = NULL, not_before = due_at,
               completed_at = NULL, completion_source = NULL, result = NULL
         WHERE workspace_id = $1 AND id = $2`,
       [workspaceId, executionId],
     );
     const registry = new HandlerRegistry().register(
-      sequenceActionJobHandler({ eligibility: allowAllEligibility() }),
+      sequenceActionJobHandler({ eligibility: allowAllEligibility(), now: () => '2026-09-18T14:00:00Z' }),
     );
     const report = await runTwiceUnderStolenLease({
       session: database.session,

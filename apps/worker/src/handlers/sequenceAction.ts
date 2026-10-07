@@ -54,6 +54,8 @@ interface PreparedFence {
 }
 
 export interface SequenceActionHandlerOptions {
+  /** Test clock; production uses database time and dispatch independently rechecks it. */
+  readonly now?: (() => string) | undefined;
   readonly maxAttempts?: number;
   readonly leaseSeconds?: number;
   /** G7-2's adapter. Absent holds every due email step with `scoped_pause`. */
@@ -79,7 +81,7 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
         throw new Error('a sequence.action payload names the step execution it runs');
       }
       const { rows } = await input.session.query<{ now: Date }>('SELECT now() AS now');
-      const now = (rows[0]?.now ?? new Date()).toISOString();
+      const now = options.now?.() ?? (rows[0]?.now ?? new Date()).toISOString();
       const context = repositoryContext(
         workspaceScope(input.scope.workspaceId, { kind: 'system', component: 'worker' }),
         input.session,
