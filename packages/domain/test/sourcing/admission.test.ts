@@ -1,3 +1,4 @@
+import {correctCandidateName} from '../../sourcing/candidateCorrection.ts';
 import type {SourceObservation,QualificationFact,QualificationVerdict} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,beforeEach,it,expect} from 'vitest';
@@ -147,4 +148,10 @@ it('uses only an approved targeting order for the new-firm lane',async()=>{
  const order=async()=>(await listTodayCards(ctx(),{snapshotDate})).filter(c=>ids.has(c.firmId)).map(c=>c.firmId);
  const proposal=await tx(()=>saveTargetingProposal(ctx(),{basePolicyVersion:'targeting-v1',queryChanges:[],rankOrder:['fit_only','operational_burden','help_request','investigation'],evidenceIds:[],rationale:'Try a reviewed fit-first order without relaxing admission.'}));if(!proposal.ok)throw new Error(proposal.reason);
  expect(await order()).toEqual([b.value.firmId,f.value.firmId]);await tx(()=>applyTargetingProposal(ctx(),{id:proposal.value.id,expectedRevision:1}));expect(await order()).toEqual([f.value.firmId,b.value.firmId]);
+});
+
+it('refuses name correction once a candidate has entered the CRM',async()=>{
+ const input=await qualified('Already Admitted PM');
+ expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
+ expect(await tx(()=>correctCandidateName(ctx(),{id:input.candidateId,expectedRevision:1,firmName:'A Different PM',qualificationRunId:input.qualificationRunId,observationId:randomUUID(),blockId:'firm',reason:'Attempt to change an already admitted candidate.'}))).toMatchObject({reason:'candidate_already_admitted'});
 });

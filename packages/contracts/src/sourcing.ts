@@ -60,3 +60,11 @@ export const candidateReviewCommandSchema = candidateReviewInputSchema.extend(en
 export const candidateDeleteCommandSchema = candidateDeleteInputSchema.extend(envelope);
 
 export const candidateCheckCommandSchema = candidateDeleteInputSchema.extend(envelope);
+
+// A reviewed name correction preserves the candidate and discovery history.
+export const candidateCorrectNameInputSchema = z.strictObject({
+  id:uuid, expectedRevision:z.number().int().positive(), firmName:z.string().trim().min(2).max(300),
+  qualificationRunId:uuid, observationId:uuid, blockId:z.string().min(1).max(80),
+  reason:z.string().trim().min(10).max(500),
+});
+export const candidateCorrectNameCommandSchema=candidateCorrectNameInputSchema.extend(envelope);

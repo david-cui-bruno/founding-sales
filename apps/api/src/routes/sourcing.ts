@@ -1,3 +1,5 @@
+import {candidateCorrectNameCommandSchema} from '@fss/contracts';
+import {correctCandidateName} from '@fss/domain/sourcing/candidateCorrection.ts';
 import {firmQualificationReadSchema} from '@fss/contracts';
 import {readFirmQualification} from '@fss/domain/sourcing/qualificationStore.ts';
 import {sourcingFeedbackCommandSchema} from '@fss/contracts';
@@ -10,7 +12,7 @@ import {candidateCheckCommandSchema,candidateListInputSchema,candidateSaveComman
 import {saveCandidate,listCandidates,reviewCandidate,deleteCandidate} from '@fss/domain/sourcing/candidates.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_PATHS=['/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
+export const SOURCING_PATHS=['/sourcing/candidates/correct-name','/sourcing/qualification/firm','/sourcing/qualification/feedback','/sourcing/qualification/read','/sourcing/qualification/request','/sourcing/qualification/admit','/sourcing/candidates/check','/sourcing/candidates/list','/sourcing/candidates/save','/sourcing/candidates/review','/sourcing/candidates/delete'] as const;
 export async function routeSourcing(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null> {
   if(!(SOURCING_PATHS as readonly string[]).includes(request.path))return null;
   if(!options.auth)return {status:404,body:{error:'not_found'}};
@@ -40,6 +42,10 @@ export async function routeSourcing(request:ApiRequest,options:RoutingOptions):P
   if(request.path==='/sourcing/candidates/check')return await runRouteCommand(deps,candidateCheckCommandSchema,'sourcing.check',async(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;
     return await requestSourceCheck(context,input);
+  });
+  if(request.path==='/sourcing/candidates/correct-name')return await runRouteCommand(deps,candidateCorrectNameCommandSchema,'sourcing.correct_name',async(context,body)=>{
+    const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;
+    return await correctCandidateName(context,input);
   });
   if(request.path==='/sourcing/candidates/save')return await runRouteCommand(deps,candidateSaveCommandSchema,'sourcing.save',async(context,body)=>{
     const {commandId:_commandId,clientVersion:_clientVersion,...input}=body;

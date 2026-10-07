@@ -19,3 +19,27 @@ it('holds guessed, personal, referral, shared-branch, mismatched and stale addre
  const stale=evidence('Example PM Dallas TX office info@example.test');stale.observations[0]!.retrievedAt='2026-09-01T00:00:00.000Z';expect(supportedBusinessEmail(stale)).toBeNull();
  const bad=evidence('Example PM Dallas TX office info@example.test');bad.facts[0]!.value='Example PM Dallas TX office invented@example.test';expect(supportedBusinessEmail(bad)).toBeNull();
 });
+function officeCard(lines=['Example PM','(401) 223-2222','admin@example.test','Office Location','1290 Westminster St.','Dallas TX 02909']){
+ const input=evidence('admin@example.test');
+ input.observations[0]!.blocks=lines.map((text,i)=>({id:`b${i}`,text}));
+ input.facts[0]!.blockId=`b${lines.indexOf('admin@example.test')}`;
+ return input;
+}
+it('accepts a compact first-party office contact card with separate name, email and address blocks',()=>{
+ expect(supportedBusinessEmail(officeCard())).toMatchObject({address:'admin@example.test',identityKind:'role',blockId:'b2'});
+});
+it('does not stitch together separate firms, offices, vendor credits or long page sections',()=>{
+ const rejected=[
+ ['Example PM','Other PM','admin@example.test','Dallas TX'],
+ ['Example PM','Houston TX','admin@example.test','Dallas TX'],
+ ['Example PM','admin@example.test','Our vendor','Dallas TX'],
+ ['Example PM','admin@example.test','other@example.test','Dallas TX'],
+ ['Example PM','admin@example.test','Office Location','1290 Westminster St.','Suite 2','Phone','Dallas TX'],
+ ['Other PM','admin@example.test','Dallas TX'],
+ ];
+ for(const lines of rejected)expect(supportedBusinessEmail(officeCard(lines))).toBeNull();
+ const home=officeCard();home.observations[0]!.url='https://example.test/';expect(supportedBusinessEmail(home)).toBeNull();
+ const truncated=officeCard();truncated.observations[0]!.truncated=true;expect(supportedBusinessEmail(truncated)).toBeNull();
+ const stale=officeCard();stale.observations[0]!.retrievedAt='2026-09-01T00:00:00Z';expect(supportedBusinessEmail(stale)).toBeNull();
+ const wrong=officeCard();wrong.identity={...identity,locality:'Houston'};expect(supportedBusinessEmail(wrong)).toBeNull();
+});
