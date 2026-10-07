@@ -1,3 +1,4 @@
+import { prospectingRetryAt } from './pacing.ts';
 import {routineReplyThreading,recordRoutineDelivery} from '../outreach/replyDelivery.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {reserveOutreachEmail} from '../outreach/touchReservations.ts';
@@ -132,6 +133,7 @@ export interface SendReport {
   readonly refusal?: SendRefusalCode | undefined;
   readonly detail?: string | undefined;
   readonly providerMessageId?: string | undefined;
+  readonly retryAt?: string | undefined;
 }
 
 /**
@@ -215,6 +217,7 @@ export async function dispatchOutboundMessage(
       outboundMessageId: fence.id,
       ...(claimed.refusal === undefined ? {} : { refusal: claimed.refusal }),
       ...(claimed.detail === undefined ? {} : { detail: claimed.detail }),
+      ...(claimed.retryAt === undefined ? {} : { retryAt: claimed.retryAt }),
     };
   }
   if (claimed.kind === 'held') {
@@ -329,7 +332,7 @@ type ClaimOutcome =
       readonly reason: SendRefusalCode;
       readonly detail?: string | undefined;
     }
-  | { readonly kind: 'not_ready'; readonly refusal?: SendRefusalCode | undefined; readonly detail?: string | undefined };
+  | { readonly kind: 'not_ready'; readonly retryAt?: string | undefined; readonly refusal?: SendRefusalCode | undefined; readonly detail?: string | undefined };
 
 /**
  * Step 4: the recheck, the reservation and the claim, in one transaction under the
@@ -450,6 +453,23 @@ async function recheckAndClaim(
       await holdFence(context, { outboundMessageId: fence.id, reason: 'follow_up_not_permitted' });
       await context.db.query('COMMIT');
       return { kind: 'held', fence, reason: 'step_ineligible', detail: `follow_up_not_permitted:${meeting.reason}` };
+    }
+
+    const origin = await context.db.query<{ origin_kind: string }>(
+      `SELECT n.origin_kind FROM step_executions x JOIN sequence_enrollments n
+         ON n.workspace_id=x.workspace_id AND n.id=x.enrollment_id
+        WHERE x.workspace_id=$1 AND x.id=$2`,
+      [context.scope.workspaceId, fence.stepExecutionId],
+    );
+    if (origin.rows[0]?.origin_kind === 'prospecting') {
+      const retryAt = await prospectingRetryAt(context, {
+        mailboxId: plan.mailbox.id, cap: plan.cap,
+        now: deps.now?.().toISOString() ?? await databaseNow(context),
+      });
+      if (retryAt !== null) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'mailbox_pacing', retryAt };
+      }
     }
 
     // The reservation: a conditional UPDATE rather than a read-then-write, so two

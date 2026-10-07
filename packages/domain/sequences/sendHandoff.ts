@@ -152,7 +152,7 @@ export interface OutboundFenceOutcome {
 
 export type DispatchSendOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: SendHandoffRefusal };
+  | { readonly ok: false; readonly reason: SendHandoffRefusal; readonly retryAt?: string | undefined };
 
 export interface SendHandoff {
   prepare(context: RepositoryContext, request: OutboundEmailRequest): Promise<PrepareSendOutcome>;

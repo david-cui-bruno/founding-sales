@@ -51,6 +51,15 @@ it('passes both real Gmail gates for a newly prepared authorized fence',async()=
  const result=await dispatchOutboundMessage(world.systemContext(world.alpha.workspace.workspaceId),world.sendDeps(world.alpha,{gmail}),{outboundMessageId:id});
  expect(result.outcome,JSON.stringify(result)).toBe('sent');expect(gmail.sends).toHaveLength(1);
 });
+it('paces another authorized cold message at the final claim without a provider call or capacity charge',async()=>{
+ const id=await prepared('paced-authorized-prospect');const gmail=world.clientWith(world.alpha,{});
+ const before=(await world.database.session.query('SELECT sum(automated_sent)::int AS n FROM mailbox_send_days WHERE mailbox_id=$1',[world.alpha.mailboxId])).rows;
+ const result=await dispatchOutboundMessage(world.systemContext(world.alpha.workspace.workspaceId),world.sendDeps(world.alpha,{gmail}),{outboundMessageId:id});
+ expect(result).toMatchObject({outcome:'not_ready',refusal:'step_ineligible',detail:'mailbox_pacing'});
+ expect(result.retryAt).toBeDefined();expect(gmail.sends).toHaveLength(0);
+ expect((await world.database.session.query('SELECT dispatch_started_at,provider_message_id FROM outbound_messages WHERE id=$1',[id])).rows[0]).toEqual({dispatch_started_at:null,provider_message_id:null});
+ expect((await world.database.session.query('SELECT sum(automated_sent)::int AS n FROM mailbox_send_days WHERE mailbox_id=$1',[world.alpha.mailboxId])).rows).toEqual(before);
+});
 it('revocation during token refresh blocks a previously prepared send at the final gate',async()=>{
  const id=await prepared('revoked-prospect');const gmail=world.clientWith(world.alpha,{});
  const paused=pausingAtTokenRefresh(gmail,async()=>{expect((await save(3,false)).ok).toBe(true);});

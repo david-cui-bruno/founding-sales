@@ -261,9 +261,9 @@ export interface RampHealthSignals {
  *
  * The specification does not give numbers, so these are conservative and named: a
  * day with more than five per cent bounces or more than ten per cent opt-outs does
- * not advance the ramp. They are deliberately *not* thresholds for stopping — that
- * is a hold, and holds have their own reasons — only for whether the day counts
- * toward earning a larger cap tomorrow.
+ * fails the diagnostic health rule. These are not thresholds for stopping sends.
+ * Graduation uses the stricter `rampAdvancementFailure`: zero adverse signals and
+ * sufficient exposure. A basic health pass alone never earns a larger allowance.
  *
  * Small denominators are the trap. On a five-send day one bounce is twenty per cent,
  * which would stall every new mailbox on its first bad luck, so a day is only judged
@@ -281,7 +281,10 @@ export type RampHealthFailure =
   | 'provider_warning'
   | 'bounce_rate'
   | 'opt_out_rate'
-  | 'no_sends';
+  | 'no_sends'
+  | 'insufficient_volume'
+  | 'unsettled_sends'
+  | 'out_of_order_day';
 
 export function rampHealthFailure(signals: RampHealthSignals): RampHealthFailure | null {
   if (!signals.authenticationPasses) return 'authentication_failing';
@@ -298,6 +301,20 @@ export function rampHealthFailure(signals: RampHealthSignals): RampHealthFailure
   }
   if (signals.bounces / signals.automatedSent > RAMP_MAX_BOUNCE_RATE) return 'bounce_rate';
   if (signals.optOuts / signals.automatedSent > RAMP_MAX_OPT_OUT_RATE) return 'opt_out_rate';
+  return null;
+}
+
+/** Operating policy, not a provider certification: earn a day only after using
+ * at least 80% of this stage, with no adverse observed delivery/recipient signals.
+ * A lower admin cap does not accelerate graduation. Never fill unused capacity
+ * merely to earn a day. Missing reputation telemetry remains unknown.
+ */
+export function rampAdvancementFailure(signals: RampHealthSignals, stageCap: number): RampHealthFailure | null {
+  const failure = rampHealthFailure(signals);
+  if (failure !== null) return failure;
+  if (signals.bounces > 0) return 'bounce_rate';
+  if (signals.optOuts > 0) return 'opt_out_rate';
+  if (signals.automatedSent < Math.ceil(stageCap * 0.8)) return 'insufficient_volume';
   return null;
 }
 
@@ -332,8 +349,9 @@ export async function closeSendDay(
     opt_outs: number;
     provider_errors: number;
     closed_at: Date | null;
+    healthy: boolean | null;
   }>(
-    `SELECT automated_sent, bounces, opt_outs, provider_errors, closed_at
+    `SELECT automated_sent, bounces, opt_outs, provider_errors, closed_at, healthy
        FROM mailbox_send_days
       WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
       FOR UPDATE`,
@@ -342,13 +360,26 @@ export async function closeSendDay(
   const day = rows[0];
   if (day === undefined) return null;
 
-  const failure = rampHealthFailure({
+  const ramp = await ensureRamp(context, input.mailboxId);
+  // A closed verdict is final, except for late adverse signals. Never re-earn it
+  // because a later retry observes better mailbox conditions.
+  if (day.closed_at !== null) {
+    return { healthy: day.healthy === true, failure: null, healthySendingDays: ramp.healthySendingDays, advanced: false };
+  }
+  const unresolved = await context.db.query<{ unsettled: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM outbound_messages
+      WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date
+        AND dispatch_started_at IS NOT NULL AND state <> 'sent') AS unsettled`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  const failure = rampAdvancementFailure({
     ...input.signals,
     automatedSent: day.automated_sent,
     bounces: day.bounces,
     optOuts: day.opt_outs,
     providerErrors: day.provider_errors,
-  });
+  }, scheduledCap(ramp.healthySendingDays)) ?? (unresolved.rows[0]?.unsettled === true ? 'unsettled_sends' : null)
+    ?? (ramp.lastAdvancedOn !== null && input.businessDate <= ramp.lastAdvancedOn ? 'out_of_order_day' : null);
   const healthy = failure === null;
 
   if (day.closed_at === null) {
@@ -360,7 +391,6 @@ export async function closeSendDay(
     );
   }
 
-  const ramp = await ensureRamp(context, input.mailboxId);
   if (!healthy) {
     await context.db.query(
       `UPDATE mailbox_send_ramp SET last_health_failure = $3, updated_at = now()
@@ -644,12 +674,17 @@ export async function recordDaySignal(
 ): Promise<void> {
   const column =
     input.signal === 'bounce' ? 'bounces' : input.signal === 'opt_out' ? 'opt_outs' : 'provider_errors';
-  await context.db.query(
+  const { rows } = await context.db.query<{ healthy: boolean | null; closed_at: Date | null }>(
     `UPDATE mailbox_send_days
         SET ${column} = ${column} + 1, updated_at = now()
-      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
+      RETURNING healthy, closed_at`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate],
   );
+  if (rows[0]?.closed_at !== null && rows[0]?.healthy === true) {
+    const failure = input.signal === 'bounce' ? 'bounce_rate' : input.signal === 'opt_out' ? 'opt_out_rate' : 'provider_warning';
+    await revokeDayAdvancement(context, { ...input, failure });
+  }
 }
 
 /**
@@ -659,6 +694,27 @@ export async function recordDaySignal(
  * date, so the day never sent anything automated and there is nothing for a bounce to
  * be a proportion of (`rampHealthFailure` calls such a day `no_sends`).
  */
+/** The healthy flag is the once-only graduation marker, shared by every late
+ * adverse signal. Callers hold the day row in their transaction.
+ */
+async function revokeDayAdvancement(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly businessDate: string; readonly failure: RampHealthFailure },
+): Promise<boolean> {
+  const { rowCount } = await context.db.query(
+    `UPDATE mailbox_send_days SET healthy=false,updated_at=now()
+      WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date AND healthy`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  if ((rowCount ?? 0) === 0) return false;
+  await context.db.query(
+    `UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-1,0),
+       last_health_failure=$3,updated_at=now() WHERE workspace_id=$1 AND mailbox_id=$2`,
+    [context.scope.workspaceId, input.mailboxId, input.failure],
+  );
+  return true;
+}
+
 export interface BounceAgainstDay {
   readonly businessDate: string;
   /** True when the day had already been closed when the bounce arrived. */
@@ -672,9 +728,8 @@ export interface BounceAgainstDay {
  * Count one bounce against a send day, re-judging a day that has already closed
  * (12.7).
  *
- * `recordDaySignal` is a bare `UPDATE`, which is right while the day is open and is
- * silent once it is not, so a bounce arriving after its day has been closed would not
- * be counted against it. This closes that hole. A bounce is a
+ * A late bounce is attributed to the original sending day and revokes that day's
+ * graduation even when its historical diagnostic rate tolerated one bounce. A bounce is a
  * fact about the send that caused it, and the day the send happened on is the
  * denominator 12.7's threshold is a rate over, so a late report must be able to change
  * a verdict the close already reached.
@@ -734,27 +789,11 @@ export async function recordBounceAgainstDay(
     bounces: day.bounces,
     optOuts: day.opt_outs,
     providerErrors: day.provider_errors,
-  });
-  if (failure === null) {
-    return { businessDate: input.businessDate, late: true, ramp: 'unchanged', failure: null };
-  }
+  }) ?? 'bounce_rate';
 
-  const { rowCount } = await context.db.query(
-    `UPDATE mailbox_send_days SET healthy = false, updated_at = now()
-      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date AND healthy`,
-    [context.scope.workspaceId, input.mailboxId, input.businessDate],
-  );
-  if ((rowCount ?? 0) === 0) {
+  if (!(await revokeDayAdvancement(context, { ...input, failure }))) {
     return { businessDate: input.businessDate, late: true, ramp: 'unchanged', failure };
   }
-  await context.db.query(
-    `UPDATE mailbox_send_ramp
-        SET healthy_sending_days = greatest(healthy_sending_days - 1, 0),
-            last_health_failure = $3,
-            updated_at = now()
-      WHERE workspace_id = $1 AND mailbox_id = $2`,
-    [context.scope.workspaceId, input.mailboxId, failure],
-  );
   return { businessDate: input.businessDate, late: true, ramp: 'reversed', failure };
 }
 

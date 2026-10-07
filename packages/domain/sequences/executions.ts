@@ -1,3 +1,4 @@
+import { withTransaction } from '../db/queryable.ts';
 import {routineDraftForExecution,attachRoutineFence} from '../outreach/replyDelivery.ts';
 import {readOutreachCadence,outreachStepDue,lastOutreachTouch,outreachExecutionTiming} from '../outreach/timing.ts';
 import { meetingSuccessorDue } from '../meetings/followThroughSuccessor.ts';
@@ -585,6 +586,7 @@ async function runEmailStep(
 
 export type DispatchStepOutcome =
   | { readonly kind: 'sent'; readonly stepExecutionId: string }
+  | { readonly kind: 'scheduled'; readonly stepExecutionId: string; readonly sendAt: string }
   | { readonly kind: 'held'; readonly stepExecutionId: string; readonly reasonCode: HoldReasonCode }
   | { readonly kind: 'nothing_to_do' };
 
@@ -631,7 +633,28 @@ export async function dispatchPreparedStep(
       outboundMessageId: input.outboundMessageId,
       stepExecutionId: execution.id,
     });
-    if (!dispatched.ok) return await heldStep(context, execution, dispatched.reason);
+    if (!dispatched.ok) {
+      const retryAt = dispatched.retryAt;
+      if (retryAt !== undefined) {
+        // No provider claim occurred. Preserve the original fence, make the step
+        // schedulable again, and record why its earliest send moved forward.
+        const rescheduled = await withTransaction(context.db, async () => {
+          const current = await lockStepWithEnrollment(context, execution.id);
+          if (current.execution?.state !== 'dispatched' || current.enrollment?.endedAt !== null) return false;
+          await context.db.query(
+            `UPDATE step_executions SET state='pending', updated_at=now()
+              WHERE workspace_id=$1 AND id=$2 AND state='dispatched'`,
+            [context.scope.workspaceId, execution.id],
+          );
+          await rescheduleExecution(context, { execution: current.execution, toDueAt: retryAt, reason: 'send_window' });
+          return true;
+        });
+        return rescheduled
+          ? { kind: 'scheduled', stepExecutionId: execution.id, sendAt: retryAt }
+          : { kind: 'nothing_to_do' };
+      }
+      return await heldStep(context, execution, dispatched.reason);
+    }
     fence = await input.sendHandoff.readOutcome(context, execution.id);
   }
 

@@ -61,7 +61,7 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
       // off the fence a moment later, so they are not refusals here: reporting them
       // twice, once as a refusal and once as a state, is how the two sides come to
       // disagree. Only a refusal that names a reason is passed back.
-      if (report.refusal !== undefined) return { ok: false, reason: refusalFor(report.refusal, report.detail) };
+      if (report.refusal !== undefined) return { ok: false, reason: refusalFor(report.refusal, report.detail), retryAt: report.retryAt };
       return { ok: true };
     },
     readOutcome: async (context, stepExecutionId) => {
