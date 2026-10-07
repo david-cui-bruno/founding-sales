@@ -223,6 +223,7 @@ describe('what the API mounts', () => {
       '/sourcing/call-need',
       '/sourcing/call-need/save',
       '/sourcing/candidates/check',
+      '/sourcing/candidates/correct-name',
       '/sourcing/candidates/delete',
       '/sourcing/candidates/list',
       '/sourcing/candidates/review',
