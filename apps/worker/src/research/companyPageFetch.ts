@@ -683,15 +683,14 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               input.firmWebsite !== null && isSameResearchSite(input.firmWebsite, url),
           });
 
-          if (!discoveryDone && permission === 'firm_site') {
+          if (!discoveryDone && input.firmWebsite !== null && isSameResearchSite(input.firmWebsite, url)) {
             // Once, from the first page of the firm's own site that answered — which is
-            // the homepage, including a homepage that redirected somewhere first.
+            // an added first-party search result also qualifies; third-party links never do.
             discoveryDone = true;
             const navigation: string[] = [];
-            for (const candidate of discoverSameSiteUrls(input, {
-              from: url,
-              hrefs: anchorHrefs(response.body, contentType),
-            })) {
+            const published = [...discoverSameSiteUrls(input, {from: url, hrefs: anchorHrefs(response.body, contentType)})];
+            if (input.prioritizeContactPages) published.sort((a,b)=>Number(/contact/iu.test(new URL(b).pathname))-Number(/contact/iu.test(new URL(a).pathname)));
+            for (const candidate of published) {
               if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);
               navigation.push(candidate);

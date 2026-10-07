@@ -106,3 +106,23 @@ it('does not call a provider without a reconciled shared account',async()=>{
  let calls=0;await runDiscovery(repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session),{providerKey:'tavily_basic',discover:async()=>{calls++;throw new Error('must not call');}});
  expect(calls).toBe(0);expect((await db.session.query('SELECT last_result FROM sourcing_discovery_settings WHERE workspace_id=$1',[workspaceId])).rows[0]).toMatchObject({last_result:'account_not_configured'});
 });
+
+it('preserves raw directory hits without creating firms and cleans candidate titles before qualification',async()=>{
+ await db.session.query('INSERT INTO sourcing_search_account(id) VALUES(true) ON CONFLICT DO NOTHING');
+ await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');
+ await db.session.query('DELETE FROM research_settings');
+ await db.session.query('UPDATE sourcing_search_account SET halted=false,daily_used=0,monthly_used=0');
+ await db.session.query('UPDATE sourcing_discovery_settings SET next_run_at=now(),enabled=true');
+ const ctx=repositoryContext(workspaceScope(workspaceId,{kind:'system',component:'worker'}),db.session);
+ await runDiscovery(ctx,{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'identity-fixture',hits:[
+  {url:'https://www.allpropertymanagement.com/property-management/ri/providence',title:'Top Property Managers | APM',snippet:'Directory'},
+  {url:'https://rentprov-fixture.test/',title:'RentProv Realty - Rentals, Sales, and Property Management',snippet:'Residential management'},
+ ]})});
+ const hits=(await db.session.query<{source_url:string;candidate_id:string|null;native_result:unknown}>("SELECT source_url,candidate_id,native_result FROM sourcing_discovery_hits WHERE workspace_id=$1 ORDER BY source_url",[workspaceId])).rows;
+ expect(hits).toHaveLength(2);
+ expect(hits.find(h=>String(h.source_url).includes('allpropertymanagement'))?.candidate_id).toBeNull();
+ const firmHit=hits.find(h=>String(h.source_url).includes('rentprov-fixture'))!;
+ expect(firmHit.native_result).toMatchObject({title:'RentProv Realty - Rentals, Sales, and Property Management'});
+ expect((await db.session.query('SELECT payload FROM sourcing_candidates WHERE id=$1',[firmHit.candidate_id])).rows[0]).toMatchObject({payload:{firmName:'RentProv Realty'}});
+ expect((await db.session.query('SELECT id FROM sourcing_qualification_runs WHERE candidate_id=$1',[firmHit.candidate_id])).rows).toHaveLength(1);
+});

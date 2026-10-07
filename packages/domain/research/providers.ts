@@ -59,6 +59,8 @@ export type ProviderOutcome<T> =
 // ---------------------------------------------------------------------------
 
 export interface PageFetchRequest {
+  /** Qualification needs a contact route; prioritize published contact links within the same page cap. */
+  readonly prioritizeContactPages?: boolean;
   /**
    * The exact URLs that may be requested, in order. The caller builds them with
    * `researchUrlsForFirm`; the adapter must request nothing else, including after a

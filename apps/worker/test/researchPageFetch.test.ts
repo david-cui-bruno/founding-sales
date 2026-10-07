@@ -770,3 +770,24 @@ it('bounds a DNS lookup that never answers without opening a request',async()=>{
   expect(await pending).toMatchObject({ok:true,value:{pages:[]}});expect(request).not.toHaveBeenCalled();
  }finally{vi.useRealTimers();}
 });
+
+it('discovers contacts from a first-party search link and prioritizes them within the page cap',async()=>{
+ const h=harness({answers:{'example.test':['8.8.8.8']},responses:{
+  'https://example.test/robots.txt':ok(''),
+  'https://example.test/':ok('<a href="/services">Services</a><a href="https://other.test/contact">Other</a><a href="/contact-us">Contact</a>'),
+  'https://example.test/contact-us':ok('<p>Example PM, Dallas TX. admin@example.test</p>'),
+ }});
+ const answer=await h.provider.fetchPages({...request,urls:['https://example.test/'],links:['https://example.test/'],maxPagesPerFirm:2,prioritizeContactPages:true});
+ expect(answer.ok&&answer.value.pages.map(p=>p.url)).toEqual(['https://example.test/','https://example.test/contact-us']);
+ expect(h.sent.map(r=>r.url)).not.toContain('https://example.test/services');
+ expect(h.sent.every(r=>r.hostname==='example.test')).toBe(true);
+});
+it('does not discover navigation from an added third-party page',async()=>{
+ const h=harness({answers:{'other.test':['8.8.8.8']},responses:{
+  'https://other.test/robots.txt':ok(''),
+  'https://other.test/source':ok('<a href="https://example.test/contact-us">Contact</a>'),
+ }});
+ const answer=await h.provider.fetchPages({...request,urls:['https://other.test/source'],links:['https://other.test/source'],maxPagesPerFirm:3,prioritizeContactPages:true});
+ expect(answer.ok&&answer.value.pages.map(p=>p.url)).toEqual(['https://other.test/source']);
+ expect(h.sent.every(r=>r.hostname==='other.test')).toBe(true);
+});

@@ -45,10 +45,10 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(host(source)!==host(website)){await finish('official_site_unknown');return;}
  const settings=await readResearchSettings(ctx);
  try{
-  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null});
+  const fetched=await deps.pageFetch.fetchPages({urls:[...new Set([source,withoutFragment(website)])],firmWebsite:website,links:[source],prioritizeContactPages:true,maxPagesPerFirm:settings.maxPagesPerFirm,maxBytes:settings.maxPageBytes,shouldContinue:async()=>await allowed(ctx,run.id)!==null});
   if(!fetched.ok){await finish('source_unavailable');return;}
   observations=fetched.value.pages.slice(0,settings.maxPagesPerFirm).flatMap(page=>{
-   const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true});
+   const parsed=parsePageText(page.body,page.contentType,{omitNavigation:true,includeArticles:true});
    const blocks=parsed.blocks.filter(b=>b.text.length<=2000).slice(0,100);
    if(!blocks.length)return [];
    const publication=blocks.flatMap(block=>{
