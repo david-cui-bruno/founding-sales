@@ -29,3 +29,12 @@ it('keeps uncertain admission receipts across navigation and retries without dou
  fireEvent.click(screen.getByRole('button',{name:'Retry evidence action'}));
  await waitFor(()=>expect(p.admit).toHaveBeenCalledTimes(2));expect(vi.mocked(p.admit).mock.calls[0]).toEqual(vi.mocked(p.admit).mock.calls[1]);
 });
+
+it('labels team-growth investigation without inventing a coordination vacancy',async()=>{
+ const p=ports();p.read=vi.fn(async()=>({view:{...view,verdict:{...view.verdict!,rank:'investigation' as const,reasons:['team_growth_for_review']}},reason:null}));
+ render(<QualificationPanel candidateId={id} revision={2} ports={p}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Evidence and call readiness'}));
+ expect(await screen.findByText('Team growth worth investigating')).toBeTruthy();
+ expect(screen.queryByText('Coordination role worth investigating')).toBeNull();
+ expect(p.admit).not.toHaveBeenCalled();
+});

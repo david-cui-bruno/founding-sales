@@ -103,3 +103,37 @@ it('requires descriptive residential evidence rather than a property-management 
  source.firstParty=false;
  expect(qualifyCandidate(input).unknowns).toContain('residential_fit_unknown');
 });
+
+
+it.each([
+ 'We plan to grow our team as our portfolio expands.',
+ 'Our team is expanding to support our portfolio.',
+ 'Although currently a one-person operation, Marshall plans to grow his team as the business continues to expand.',
+])('raises explicit team growth for investigation, never automatic eligibility: %s',text=>{
+ const input=fixture(text,'growth');input.observations[0]!.publishedAt=null;input.observations[0]!.publishedAtBlockId=null;
+ expect(qualifyCandidate(input)).toMatchObject({decision:'review',rank:'investigation',reasons:['team_growth_for_review'],evidenceIds:[input.observations[0]!.id],unknowns:expect.arrayContaining(['maintenance_need_unconfirmed','growth_date_unknown'])});
+});
+it.each([
+ 'Meet our team: Carrie and Aracely.',
+ 'We are a one-person operation.',
+ 'Our portfolio has grown by 100 homes.',
+ 'We help clients grow. Our team is expanding.',
+ 'A customer says: our team is expanding.',
+ 'We do not plan to grow our team.',
+ 'If we plan to grow our team, we will look for help.',
+ 'Previously our team is expanding was our announcement.',
+ 'Our team is expanding was true last year; the expansion is resolved.',
+])('does not promote staffing inference or noncurrent/third-party growth: %s',text=>{
+ expect(qualifyCandidate(fixture(text,'growth'))).toMatchObject({decision:'review',rank:'fit_only'});
+});
+it('does not promote stale, future, truncated or off-site team growth',()=>{
+ for(const age of [90*86400000+1,-86400000]){
+  const input=fixture('We plan to grow our team.','growth'),source=input.observations[0]!;
+  source.publishedAt=new Date(Date.parse(now)-age).toISOString();source.blocks.find(b=>b.id==='date')!.text=`Published ${source.publishedAt.slice(0,10)}`;
+  expect(qualifyCandidate(input).rank).toBe('fit_only');
+ }
+ for(const patch of [{truncated:true},{firstParty:false},{url:'https://other.test/about'}]){
+  const input=fixture('We plan to grow our team.','growth');Object.assign(input.observations[0]!,patch);
+  expect(qualifyCandidate(input).rank).toBe('fit_only');
+ }
+});
