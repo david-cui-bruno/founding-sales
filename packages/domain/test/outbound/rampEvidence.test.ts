@@ -82,3 +82,20 @@ it('does not mark an out-of-order day as graduated or later revoke unearned prog
   const ramp = await world.database.session.query('SELECT healthy_sending_days FROM mailbox_send_ramp WHERE mailbox_id=$1', [world.alpha.mailboxId]);
   expect(ramp.rows).toEqual([{ healthy_sending_days: 1 }]);
 });
+
+it('atomically counts a late provider signal and revokes graduation outside a caller transaction', async () => {
+  await day('2026-09-06', 4);
+  expect(await close('2026-09-06')).toMatchObject({ advanced: true, healthySendingDays: 2 });
+  await world.database.session.query(`CREATE FUNCTION fail_ramp_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture_ramp_failure'; END $$;
+    CREATE TRIGGER fail_ramp_update BEFORE UPDATE ON mailbox_send_ramp FOR EACH ROW EXECUTE FUNCTION fail_ramp_update()`);
+  try {
+    await expect(recordDaySignal(context(), { mailboxId: world.alpha.mailboxId, businessDate: '2026-09-06', signal: 'provider_error' })).rejects.toThrow('fixture_ramp_failure');
+    const row = await world.database.session.query('SELECT healthy,provider_errors FROM mailbox_send_days WHERE mailbox_id=$1 AND business_date=$2::date', [world.alpha.mailboxId, '2026-09-06']);
+    expect(row.rows).toEqual([{ healthy: true, provider_errors: 0 }]);
+  } finally {
+    await world.database.session.query('DROP TRIGGER fail_ramp_update ON mailbox_send_ramp; DROP FUNCTION fail_ramp_update()');
+  }
+  await recordDaySignal(context(), { mailboxId: world.alpha.mailboxId, businessDate: '2026-09-06', signal: 'provider_error' });
+  const ramp = await world.database.session.query('SELECT healthy_sending_days,last_health_failure FROM mailbox_send_ramp WHERE mailbox_id=$1', [world.alpha.mailboxId]);
+  expect(ramp.rows).toEqual([{ healthy_sending_days: 1, last_health_failure: 'provider_warning' }]);
+});
