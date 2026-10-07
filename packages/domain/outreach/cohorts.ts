@@ -14,7 +14,7 @@ export async function previewOutreachCohort(ctx:RepositoryContext,input:Outreach
  const actor=ctx.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};
  if(!outreachCohortInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
  const control=await readOutreachControl(ctx),sender=control.senders.find(s=>s.id===input.mailboxId);
- if(!sender||sender.ownerUserId!==actor.userId||!sender.connected||!sender.authorized)return {ok:false,reason:'mailbox_not_authorized'};
+ if(!sender||sender.ownerUserId!==actor.userId||!sender.connected)return {ok:false,reason:'mailbox_not_authorized'};
  const rows:OutreachCohortPreview['rows']=[];
  for(const id of input.candidateIds){
   const c=control.candidates.find(c=>c.id===id);if(!c)return {ok:false,reason:'candidate_changed'};
@@ -34,12 +34,16 @@ export async function previewOutreachCohort(ctx:RepositoryContext,input:Outreach
 export async function enableOutreachCohort(ctx:RepositoryContext,input:unknown):Promise<Result<{enrollmentIds:string[]}>>{
  const parsed=outreachCohortEnableSchema.safeParse(input);if(!parsed.success)return {ok:false,reason:'invalid_input'};
  const {expectedHash,reviewed,...selection}=parsed.data;
+ const actor=ctx.scope.actor;if(actor.kind!=='user'||actor.role!=='admin')return {ok:false,reason:'admin_required'};
  await lockSendGateForStopFact(ctx);
+ const control=await readOutreachControl(ctx);
+ const sender=control.senders.find(s=>s.id===selection.mailboxId);
+ if(!sender?.authorized)return {ok:false,reason:'mailbox_not_authorized'};
  const preview=await previewOutreachCohort(ctx,selection);if(!preview.ok)return preview;
  if(preview.value.hash!==expectedHash)return {ok:false,reason:'preview_changed'};
  if(preview.value.rows.some(r=>r.reason!==null))return {ok:false,reason:'cohort_requires_review'};
  if(!reviewed&&preview.value.rows.some(r=>r.reviewRequired))return {ok:false,reason:'qualification_requires_review'};
- const actor=ctx.scope.actor;if(actor.kind!=='user')return {ok:false,reason:'admin_required'};
+
  await ctx.db.query('SAVEPOINT outreach_cohort');
  const decline=async(reason:string):Promise<Result<{enrollmentIds:string[]}>>=>{await ctx.db.query('ROLLBACK TO SAVEPOINT outreach_cohort');await ctx.db.query('RELEASE SAVEPOINT outreach_cohort');return {ok:false,reason};};
  try{

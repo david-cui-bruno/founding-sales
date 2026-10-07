@@ -43,3 +43,24 @@ it('does not stitch together separate firms, offices, vendor credits or long pag
  const stale=officeCard();stale.observations[0]!.retrievedAt='2026-09-01T00:00:00Z';expect(supportedBusinessEmail(stale)).toBeNull();
  const wrong=officeCard();wrong.identity={...identity,locality:'Houston'};expect(supportedBusinessEmail(wrong)).toBeNull();
 });
+
+// Captured Key Properties contact-card layout: location precedes a non-role handle.
+it('accepts an exact office card with location before email without guessing a person',()=>{
+ const input=officeCard(['Example PM','4229 Benbrook Hwy 377 South','Dallas TX 76116','817.263.7866','admin@example.test']);
+ input.facts[0]!.value='shirley@example.test';input.observations[0]!.blocks[4]!.text='shirley@example.test';
+ expect(supportedBusinessEmail(input)).toMatchObject({address:'shirley@example.test',identityKind:'role',displayName:'Office',blockId:'b4'});
+
+ const source=input.observations[0]!;
+ for(const url of ['https://other.test/contact','https://example.test/']){source.url=url;expect(supportedBusinessEmail(input)).toBeNull();}source.url='https://example.test/contact';
+ source.truncated=true;expect(supportedBusinessEmail(input)).toBeNull();source.truncated=false;
+ source.retrievedAt='2026-09-01T00:00:00Z';expect(supportedBusinessEmail(input)).toBeNull();source.retrievedAt=now;
+ source.blocks.push({id:'b5',text:'another@example.test'});expect(supportedBusinessEmail(input)).toBeNull();source.blocks.pop();
+ for(const bad of ['Houston TX 76116','Our vendor','Other PM']){
+  input.observations[0]!.blocks[2]!.text=bad;expect(supportedBusinessEmail(input)).toBeNull();
+ }
+});
+it('keeps a non-role handle unresolved outside a bounded office card or explicit named contact',()=>{
+ expect(supportedBusinessEmail(evidence('Example PM Dallas TX email shirley@example.test'))).toBeNull();
+ const input=officeCard(['Example PM','Dallas TX','Other office','admin@example.test']);
+ expect(supportedBusinessEmail(input)).toBeNull();
+});

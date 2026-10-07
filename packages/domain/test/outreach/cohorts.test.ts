@@ -34,7 +34,7 @@ it('previews without enrollment, refuses a changed preview, then activates only 
  const {seedSequences}=await import('../sequences/support/sequenceFixtures.ts');
  const sequences=await seedSequences(db.session,seeded);
  const mailbox=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status) VALUES($1,$2,'owner@example.test','fixture-owner','connected') RETURNING id",[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rows[0]!.id;
- await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
+
  async function sequence(channels:string[]){
   const seq=(await db.session.query<{id:string}>('INSERT INTO sequences(workspace_id,name,created_by_user_id) VALUES($1,$2,$3) RETURNING id',[seeded.alpha.workspaceId,randomUUID(),seeded.alpha.admin.userId])).rows[0]!.id;
   const version=(await db.session.query<{id:string}>('INSERT INTO sequence_versions(workspace_id,sequence_id,version) VALUES($1,$2,1) RETURNING id',[seeded.alpha.workspaceId,seq])).rows[0]!.id;
@@ -49,8 +49,17 @@ it('previews without enrollment, refuses a changed preview, then activates only 
   const preview=await previewOutreachCohort(ctx(),input);expect(preview.ok,JSON.stringify(preview)).toBe(true);if(!preview.ok)throw new Error(preview.reason);
   expect(preview.value.rows[0]).toMatchObject({lane,reason:null});
   expect((await db.session.query('SELECT id FROM sequence_enrollments')).rows).toHaveLength(before);
+  if(lane==='email_first'){
+   expect(await tx(()=>enableOutreachCohort(ctx(),{...input,expectedHash:preview.value.hash,reviewed:true}))).toEqual({ok:false,reason:'mailbox_not_authorized'});
+   expect((await db.session.query('SELECT id FROM sequence_enrollments')).rows).toHaveLength(before);
+   expect((await db.session.query('SELECT id FROM outreach_plans')).rows).toHaveLength(0);
+   await tx(()=>setProspectingAuthorization(ctx(),{mailboxId:mailbox,expectedRevision:0,enabled:true,basis:'owner_reported_google_permission'}));
+   expect(await tx(()=>enableOutreachCohort(ctx(),{...input,expectedHash:preview.value.hash,reviewed:true}))).toEqual({ok:false,reason:'preview_changed'});
+  }
+  const authorizedPreview=await previewOutreachCohort(ctx(),input);if(!authorizedPreview.ok)throw new Error(authorizedPreview.reason);
+
   expect(await tx(()=>enableOutreachCohort(ctx(),{...input,expectedHash:'0'.repeat(64),reviewed:true}))).toEqual({ok:false,reason:'preview_changed'});
-  const enabled=await tx(()=>enableOutreachCohort(ctx(),{...input,expectedHash:preview.value.hash,reviewed:true}));expect(enabled.ok,JSON.stringify(enabled)).toBe(true);
+  const enabled=await tx(()=>enableOutreachCohort(ctx(),{...input,expectedHash:authorizedPreview.value.hash,reviewed:true}));expect(enabled.ok,JSON.stringify(enabled)).toBe(true);
   expect((await db.session.query('SELECT id FROM sequence_enrollments')).rows).toHaveLength(before+1);
   const again=await previewOutreachCohort(ctx(),input);expect(again).toMatchObject({ok:true,value:{rows:[{reason:'firm_already_enrolled'}]}});
  }

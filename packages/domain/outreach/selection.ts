@@ -21,18 +21,19 @@ export function supportedBusinessEmail(input:{facts:readonly QualificationFact[]
  for(const f of input.facts.filter(v=>v.kind==='business_email')){
   const source=input.observations.find(s=>s.id===f.observationId);if(!source||!source.firstParty||source.truncated||host(source.url)!==domain)continue;
   const age=now-Date.parse(source.retrievedAt);if(age<0||age>7*86400000)continue;
-  let evidenceText=f.value;
+  let evidenceText=f.value,officeCard=false;
   const associated=(text:string)=>text.includes(fold(input.identity.name))&&text.includes(fold(input.identity.locality))&&new RegExp(`\\b${input.identity.region.toLowerCase()}\\b`,'u').test(text);
   if(!associated(fold(evidenceText))){
    const context=officeContactContext(source,f,input.identity);if(!context)continue;
-   evidenceText=context;
+   evidenceText=context;officeCard=true;
   }
   const text=fold(evidenceText);
   if(/\b(?:suggested|guess|example address|referral|vendor|web designer|powered by|on behalf of|try emailing)\b/u.test(text))continue;
   const addresses=[...f.value.matchAll(/\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu)].map(m=>m[0].toLowerCase());
   if(addresses.length!==1)continue;const address=addresses[0]!;const [local,emailDomain]=address.split('@');
   if(!emailDomain||consumer.has(emailDomain)||emailDomain!==domain)continue;
-  const role=/^(?:info|hello|office|contact|management|leasing|maintenance|support|admin|team)$/u.test(local??'');
+  // A published office card establishes a company contact, never a person's name.
+  const role=officeCard||/^(?:info|hello|office|contact|management|leasing|maintenance|support|admin|team)$/u.test(local??'');
   const person=/\bcontact\s+([A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?)\s+(?:at|email:?)/u.exec(f.value)?.[1];
   if(!role&&(!person||evidenceText!==f.value))continue;
   routes.set(address,{address,sourceObservationId:source.id,blockId:f.blockId,identityKind:role?'role':'named',displayName:role?'Office':person!});
