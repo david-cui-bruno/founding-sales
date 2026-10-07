@@ -37,12 +37,12 @@ import { COMPANY_PAGE_PROVIDER } from '@fss/domain/research/types.ts';
  * A firm's DNS answer is input somebody else controls. `https.request('https://host/')`
  * resolves the name inside the socket, so a check of the address *before* the request
  * would be checking a different lookup from the one that connects — the classic
- * DNS-rebinding window. So: resolve the name, require **every** answer to pass
+ * DNS-rebinding window. So: resolve IPv4 addresses, require **every** answer to pass
  * `isPublicResearchAddress`, and then connect to one of the checked addresses with
  * `servername` set for TLS and a `Host` header set for HTTP. The socket never resolves
  * the name at all, so there is no second lookup to disagree with the first.
  *
- * Every answer, not the one that is used: a name that resolves to a public address and
+ * Every IPv4 answer, not the one that is used: a name that resolves to a public address and
  * `169.254.169.254` is a name that will eventually give the second one to somebody.
  *
  * ## Redirects
@@ -132,9 +132,9 @@ export interface PageFetchDeps {
   readonly now?: (() => number) | undefined;
 }
 
-/** Every address a name resolves to, v4 and v6 alike, so a v6 answer is seen and refused. */
+/** Resolve the address family we support; a dual-stack site can still use IPv4. */
 async function systemLookup(hostname: string): Promise<readonly string[]> {
-  const answers = await dns.promises.lookup(hostname, { all: true, verbatim: true });
+  const answers = await dns.promises.lookup(hostname, { all: true, family: 4, verbatim: true });
   return answers.map(answer => answer.address);
 }
 
