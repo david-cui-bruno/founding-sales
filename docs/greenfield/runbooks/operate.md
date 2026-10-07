@@ -219,3 +219,25 @@ aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod-
 ```
 
 One page per alarm sits beside this one, named after the alarm key; `runbooks/README.md` says what they share. Read `## What must stay held` first: for most of these the blockage is the safety property, and clearing it is how a duplicate email or a prohibited call happens.
+
+## Recovering a halted discovery account
+
+Check Tavily's authenticated `GET /usage` from the worker network first. Record the
+observation time, account `plan_usage` and `plan_limit`; do not print its credential.
+Read the local `sourcing_search_account.monthly_used` and any outstanding
+`sourcing_discovery_attempts` before making a change. A healthy usage response proves
+current connectivity and allowance, not the cause of an older failed search.
+
+Use the audited ECS operations launcher to run `fss admin discovery resume` with
+`--workspace-id`, `--observed-at` (UTC ISO timestamp), `--provider-month-used`,
+`--provider-month-limit`, and `--expected-month-used` (the local counter just read).
+The observation must be within ten minutes and in the current UTC month. The command
+refuses unresolved dispatched attempts, changed counters, and exhausted daily,
+monthly or provider allowance. It never refunds reserved credits, retries a past
+search, enables a workspace, or changes email sending. Additional provider usage is
+charged conservatively to today's local allowance. An already-running account is a
+no-op. Ordinary scheduling picks up the next eligible daily search after recovery.
+
+New failures keep their original `last_result` and append a
+`sourcing.discovery_failed` audit event with a sanitized code and attempt ID.
+A legacy `usage_review_required` value alone cannot identify the original cause.
