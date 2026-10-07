@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import dns from 'node:dns';
 import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_REDIRECTS,
@@ -81,6 +82,51 @@ const request = {
   maxPagesPerFirm: 1,
   maxBytes: 1_000_000,
 };
+
+// Select the all-addresses overload used by the adapter for typed DNS fakes.
+const allAddressDns = dns.promises as {
+  lookup(hostname: string, options: dns.LookupAllOptions): Promise<dns.LookupAddress[]>;
+};
+
+describe('the system DNS lookup', () => {
+  it('fetches dual-stack sites through their checked IPv4 address', async () => {
+    const lookup = vi.spyOn(allAddressDns, 'lookup').mockImplementation(async (_hostname, options) => {
+      const ipv4 = { address: '93.184.216.34', family: 4 };
+      return typeof options === 'object' && options.family === 4
+        ? [ipv4]
+        : [{ address: '2606:4700:3037::6815:2d15', family: 6 }, ipv4];
+    });
+    const sent: RequestOptions[] = [];
+    try {
+      const provider = researchPageFetch({ request: async options => {
+        sent.push(options);
+        return options.url.endsWith('/robots.txt') ? robotsAllowing : ok(HOME);
+      } });
+      const outcome = await provider.fetchPages({ ...request, urls: [request.firmWebsite] });
+      expect(outcome.ok && outcome.value.pages).toHaveLength(1);
+      expect(lookup).toHaveBeenCalledWith('example.test', { all: true, family: 4, verbatim: true });
+      expect(sent).toHaveLength(2);
+      expect(sent.every(entry => entry.address === '93.184.216.34' && entry.hostname === 'example.test')).toBe(true);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it('still refuses mixed public and private IPv4 answers before opening a socket', async () => {
+    const lookup = vi.spyOn(allAddressDns, 'lookup').mockResolvedValue([
+      { address: '93.184.216.34', family: 4 },
+      { address: '169.254.169.254', family: 4 },
+    ]);
+    const send = vi.fn(async () => ok(HOME));
+    try {
+      const outcome = await researchPageFetch({ request: send }).fetchPages({ ...request, urls: [request.firmWebsite] });
+      expect(outcome.ok && outcome.value.skipped).toEqual({ address_not_public: 1 });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+});
 
 describe('the fetch is pinned to the address it checked', () => {
   it('reads the page and hashes the exact bytes, connecting to the checked address', async () => {
