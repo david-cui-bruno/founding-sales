@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { MAX_ANCHOR_HREFS } from './pageText.ts';
 
 /**
  * Which addresses research may connect to, and which URLs it may request.
@@ -130,7 +131,7 @@ export const RESEARCH_PAGE_PATHS: readonly string[] = Object.freeze([
  */
 export const DISCOVERED_PATH_PATTERN = /about|service|team|staff|contact|career|job|hiring|resident|tenant|maintenance|emergency|faq/iu;
 
-/** How many same-site links one homepage may contribute before the filter is applied. */
+/** Maximum discovered URLs; default runs also stop after this many same-site candidates. */
 export const MAX_DISCOVERED_CANDIDATES = 20;
 
 /** The largest `max_pages_per_firm` the settings CHECK admits. */
@@ -246,6 +247,8 @@ export interface PermittedUrlInput {
   readonly links?: readonly string[] | undefined;
   /** `research_settings.max_pages_per_firm`: how far down `RESEARCH_PAGE_PATHS` to read. */
   readonly maxPagesPerFirm: number;
+  /** Prefer published contact paths within the bounded navigation scan. */
+  readonly prioritizeContactPages?: boolean;
   /**
    * Same-site URLs found in the firm's own homepage (`discoverSameSiteUrls`).
    *
@@ -330,8 +333,10 @@ export function permittedRedirectTarget(
  * page), and no trailing slash — so `/services/` and `/services` are one URL rather
  * than two fetches of the same bytes.
  *
- * The cap is applied to the same-site candidates **before** the keyword filter, so a
+ * By default the cap applies to same-site candidates before the keyword filter, so a
  * page with a thousand links costs a bounded amount of work whatever they say.
+ * Contact-priority runs scan at most MAX_ANCHOR_HREFS raw links, then retain at
+ * most MAX_DISCOVERED_CANDIDATES relevant URLs, with contacts first.
  */
 export function discoverSameSiteUrls(
   input: PermittedUrlInput,
@@ -341,8 +346,8 @@ export function discoverSameSiteUrls(
   if (firmHost === null || isBlockedHost(firmHost)) return [];
 
   const candidates: string[] = [];
-  for (const href of found.hrefs) {
-    if (candidates.length >= MAX_DISCOVERED_CANDIDATES) break;
+  for (const href of found.hrefs.slice(0, MAX_ANCHOR_HREFS)) {
+    if (!input.prioritizeContactPages && candidates.length >= MAX_DISCOVERED_CANDIDATES) break;
     let url: URL;
     try {
       url = new URL(href, found.from);
@@ -360,13 +365,13 @@ export function discoverSameSiteUrls(
 
   // Keep published navigation even when it matches a guessed URL; the fetcher
   // promotes and deduplicates those URLs against its remaining queue.
-  return Object.freeze(
-    candidates.filter(url => {
-      const path = new URL(url).pathname;
-      if (path === '/') return false;
-      return DISCOVERED_PATH_PATTERN.test(path);
-    }),
-  );
+  const relevant = candidates.filter(url => {
+    const path = new URL(url).pathname;
+    if (path === '/') return false;
+    return DISCOVERED_PATH_PATTERN.test(path);
+  });
+  if (input.prioritizeContactPages) relevant.sort((a,b)=>Number(/contact/iu.test(new URL(b).pathname))-Number(/contact/iu.test(new URL(a).pathname)));
+  return Object.freeze(relevant.slice(0, MAX_DISCOVERED_CANDIDATES));
 }
 
 /**

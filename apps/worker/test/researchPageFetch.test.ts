@@ -791,3 +791,15 @@ it('does not discover navigation from an added third-party page',async()=>{
  expect(answer.ok&&answer.value.pages.map(p=>p.url)).toEqual(['https://other.test/source']);
  expect(h.sent.every(r=>r.hostname==='other.test')).toBe(true);
 });
+
+it('finds a published contact after twenty navigation links without spending more page fetches',async()=>{
+ const navigation=Array.from({length:25},(_,i)=>`<a href="/tenant-service-${i}">Service</a>`).join('');
+ const h=harness({answers:{'example.test':['8.8.8.8']},responses:{
+  'https://example.test/robots.txt':ok(''),
+  'https://example.test/':ok(navigation+'<a href="/contact-us">Contact</a>'),
+  'https://example.test/contact-us':ok('<p>Example PM Dallas TX admin@example.test</p>'),
+ }});
+ const answer=await h.provider.fetchPages({...request,urls:['https://example.test/'],maxPagesPerFirm:2,prioritizeContactPages:true});
+ expect(answer.ok&&answer.value.pages.map(p=>p.url)).toEqual(['https://example.test/','https://example.test/contact-us']);
+ expect(h.sent.map(r=>r.url)).toEqual(['https://example.test/robots.txt','https://example.test/','https://example.test/contact-us']);
+});

@@ -689,7 +689,6 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             discoveryDone = true;
             const navigation: string[] = [];
             const published = [...discoverSameSiteUrls(input, {from: url, hrefs: anchorHrefs(response.body, contentType)})];
-            if (input.prioritizeContactPages) published.sort((a,b)=>Number(/contact/iu.test(new URL(b).pathname))-Number(/contact/iu.test(new URL(a).pathname)));
             for (const candidate of published) {
               if (queue.slice(0,index+1).includes(candidate)) continue;
               discovered.push(candidate);

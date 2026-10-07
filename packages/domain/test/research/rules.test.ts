@@ -359,6 +359,18 @@ describe('the links a firm’s own homepage offers', () => {
     expect(discoverSameSiteUrls(firm, found('/about-us', ...hrefs))).toEqual(['https://example.test/about-us']);
   });
 
+  it('prioritizes contact links before the result cap while bounding the raw scan', () => {
+    const input={...firm,prioritizeContactPages:true};
+    const services=Array.from({length:25},(_,i)=>`/service-${i}`);
+    const result=discoverSameSiteUrls(input,found(...services,'https://other.test/contact','/contact-us'));
+    expect(result[0]).toBe('https://example.test/contact-us');
+    expect(result).toHaveLength(MAX_DISCOVERED_CANDIDATES);
+    expect(result.every(url=>new URL(url).hostname==='example.test')).toBe(true);
+    const beyond=Array.from({length:MAX_ANCHOR_HREFS},(_,i)=>`/section-${i}`);
+    expect(discoverSameSiteUrls(input,found(...beyond,'/contact-us'))).toEqual([]);
+    expect(discoverSameSiteUrls(input,found(...services,'mailto:contact@example.test','http://example.test/contact'))).not.toContain('https://example.test/contact');
+  });
+
   it('gives a firm with no website nothing to discover', () => {
     expect(discoverSameSiteUrls({ ...firm, firmWebsite: null }, found('/about-us'))).toEqual([]);
   });
