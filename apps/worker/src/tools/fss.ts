@@ -1,3 +1,4 @@
+import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
 import {qualificationConfigureCommand} from './fss/qualificationConfigure.ts';
 import {discoveryConfigureCommand} from './fss/discoveryConfigure.ts';
@@ -195,6 +196,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'pipeline stage-counts': pipelineStageCountsCommand,
   // Lane PBM: whether a CSV import's firms are in a workspace, as counts.
   'discovery configure': discoveryConfigureCommand,
+  'discovery resume': discoveryResumeCommand,
   'qualification configure': qualificationConfigureCommand,
   'qualification resolve-identity': qualificationResolveIdentityCommand,
   'import-match report': importMatchReportCommand,
@@ -251,7 +253,7 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
-  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'qualification configure' || name === 'qualification resolve-identity' || name.startsWith('release drain ')) {
+  if (name === 'holds release-restore' || name === 'discovery configure' || name === 'discovery resume' || name === 'qualification configure' || name === 'qualification resolve-identity' || name.startsWith('release drain ')) {
     const identity = await launchIdentity(environment);
     if ('refusal' in identity) return identity;
     return { ...base, launch: identity.launch };
