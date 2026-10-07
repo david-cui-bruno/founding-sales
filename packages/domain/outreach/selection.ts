@@ -42,10 +42,32 @@ export function supportedBusinessEmail(input:{facts:readonly QualificationFact[]
  return routes.size===1?[...routes.values()][0]!:null;
 }
 
+/** This email policy is evaluated separately from the call-first policy. An
+ * email-fit pass establishes contact eligibility, never an unmet maintenance need.
+ */
+export const EMAIL_FIT_POLICY_VERSION = 'outreach-email-fit-v1';
+export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>[0]) {
+ const phoneVerdict=qualifyCandidate(input);
+ const optional=new Set(['business_phone_unresolved','maintenance_need_unconfirmed','help_date_unknown','help_needs_revalidation','job_date_unknown','growth_date_unknown','event_needs_revalidation']);
+ const unknowns=phoneVerdict.unknowns.filter(reason=>!optional.has(reason));
+ const route=supportedBusinessEmail(input);
+ if(!route)unknowns.push('business_email_unresolved');
+ const uncertainRanking=phoneVerdict.unknowns.some(reason=>optional.has(reason)&&reason!=='business_phone_unresolved'&&reason!=='maintenance_need_unconfirmed');
+ return {
+  ...phoneVerdict,
+  decision: unknowns.length===0?'eligible' as const:'review' as const,
+  rank: uncertainRanking?'fit_only' as const:phoneVerdict.rank,
+  reasons: uncertainRanking?[]:phoneVerdict.reasons,
+  unknowns,
+  policyVersion: EMAIL_FIT_POLICY_VERSION,
+  route,
+ };
+}
+
 // Database assessment is repeated inside admission/plan creation under the shared
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
-export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean}
+export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
 export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string}):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};
  const w=ctx.scope.workspaceId;
@@ -56,6 +78,8 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(!['eligible','review','admitted'].includes(run.state)||run.reason)return {ok:false,reason:'evidence_unavailable'};
  const identity=candidateIdentity(candidate.payload,run.facts,run.observations),now=await databaseNow(ctx);
  const verdict=qualifyCandidate({identity,facts:run.facts,observations:run.observations,now});
+ const emailVerdict=qualifyEmailCandidate({identity,facts:run.facts,observations:run.observations,now});
+ if(emailVerdict.unknowns.includes('need_evidence_conflicts'))return {ok:false,reason:'need_evidence_conflicts'};
  const reviewable=new Set(['business_phone_unresolved','maintenance_need_unconfirmed','help_date_unknown','help_needs_revalidation','need_evidence_conflicts','job_date_unknown','growth_date_unknown','event_needs_revalidation']);
  const invalid=verdict.unknowns.find(r=>!reviewable.has(r));if(invalid)return {ok:false,reason:invalid};
  const route=supportedBusinessEmail({identity,facts:run.facts,observations:run.observations,now});if(!route)return {ok:false,reason:'business_email_unresolved'};
@@ -71,5 +95,5 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  const existing=firm?await existingEmailRoute(ctx,firm.id,route.address,input):{ok:true as const,value:null};
  if(!existing.ok)return existing;
  const phone=supportedBusinessPhone(run.facts,identity);
- return {ok:true,value:{firmId:firm?.id??null,route,lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
+ return {ok:true,value:{firmId:firm?.id??null,route,verifiedFit:emailVerdict.decision==='eligible',lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
 }

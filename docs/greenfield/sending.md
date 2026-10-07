@@ -122,7 +122,8 @@ no capacity is charged and no provider is called. Recipient windows are rechecke
 when it wakes, including if pacing pushes it past 11am.
 
 Late bounces, opt-outs and provider errors revoke graduation at most once per closed
-day. Existing sender holds, route invalidation, reconciliation and admin lowering
+day. Signal counting and graduation reversal commit atomically, including provider
+errors recorded outside a caller transaction. Existing sender holds, route invalidation, reconciliation and admin lowering
 remain the incident controls. This release does not override caps, install a warm-up
 network, establish a live reputation feed, or infer deliverability from message IDs.
 See [warm-up research](../sourcing/mailbox-warmup-research.md) and the

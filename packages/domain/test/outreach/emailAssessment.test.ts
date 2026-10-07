@@ -8,7 +8,10 @@ import {withTransaction} from '../../db/queryable.ts';
 import {saveCandidate} from '../../sourcing/candidates.ts';
 import {requestQualification,finishQualification} from '../../sourcing/qualificationStore.ts';
 import {evaluateQualification} from '../../sourcing/qualificationDecision.ts';
-import {assessEmailCandidate} from '../../outreach/selection.ts';
+import {assessEmailCandidate,qualifyEmailCandidate,EMAIL_FIT_POLICY_VERSION} from '../../outreach/selection.ts';
+import {candidateIdentity} from '../../sourcing/qualificationDecision.ts';
+import type {QualificationRunRow} from '../../sourcing/qualificationStore.ts';
+import type {CandidateInput} from '@fss/contracts';
 import {recordStatePosture} from '../../policy/postures.ts';
 import {POSTURE_STATEMENTS} from '../../src/rules/statePosture.ts';
 let db:TestDatabase;let seeded:TwoWorkspaces;
@@ -29,6 +32,33 @@ async function qualified(name:string,options:{locality?:string;website?:string;n
  await tx(()=>evaluateQualification(ctx(),{runId:request.value.runId}));
  return {candidateId:candidate.value.id,expectedRevision:1,qualificationRunId:request.value.runId,mode:'reviewed' as const};
 }
+
+async function emailFitInput(input:{candidateId:string;qualificationRunId:string}) {
+ const run=(await db.session.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE id=$1',[input.qualificationRunId])).rows[0]!;
+ const candidate=(await db.session.query<{payload:CandidateInput}>('SELECT payload FROM sourcing_candidates WHERE id=$1',[input.candidateId])).rows[0]!;
+ return {identity:candidateIdentity(candidate.payload,run.facts,run.observations),facts:run.facts,observations:run.observations,now:new Date().toISOString()};
+}
+it.each(['We provide maintenance service.','We have an in-house maintenance team and use AppFolio.'])('qualifies verified email fit without inventing pain: %s',async need=>{
+ const input=await qualified('Verified Email Fit',{phone:'unknown',need});
+ expect(qualifyEmailCandidate(await emailFitInput(input))).toMatchObject({decision:'eligible',rank:'fit_only',reasons:[],unknowns:[],policyVersion:EMAIL_FIT_POLICY_VERSION});
+ expect(await assessEmailCandidate(ctx(),input)).toMatchObject({ok:true,value:{verifiedFit:true,reviewRequired:true,lane:'email_first'}});
+ // The new policy does not silently activate the manual-dependent admission path.
+ const {admitEmailCandidate}=await import('../../outreach/emailAdmission.ts');
+ expect(await tx(()=>admitEmailCandidate(ctx(),{...input,expectedOwnerUserId:seeded.alpha.admin.userId,reviewed:false}))).toEqual({ok:false,reason:'qualification_requires_review'});
+});
+it('defers explicit contrary need evidence even with supported email fit',async()=>{
+ const input=await qualified('No Help Needed',{phone:'unknown',need:'We do not need maintenance help.'});
+ expect(qualifyEmailCandidate(await emailFitInput(input))).toMatchObject({decision:'review',unknowns:['need_evidence_conflicts']});
+ expect(await assessEmailCandidate(ctx(),input)).toEqual({ok:false,reason:'need_evidence_conflicts'});
+});
+it('retains freshness, geography and first-party association checks for email fit',async()=>{
+ const input=await qualified('Guarded Email Fit',{phone:'unknown',need:'We provide maintenance.'});
+ const evidence=await emailFitInput(input);
+ const stale={...evidence,now:new Date(Date.parse(evidence.now)+8*86400000).toISOString()};
+ expect(qualifyEmailCandidate(stale).unknowns).toContain('evidence_needs_refresh');
+ expect(qualifyEmailCandidate({...evidence,identity:{...evidence.identity,region:'CA'}}).unknowns).toContain('target_geography_unsupported');
+ expect(qualifyEmailCandidate({...evidence,observations:evidence.observations.map(o=>({...o,firstParty:false}))})).toMatchObject({decision:'review',route:null});
+});
 
 it('assesses sourced email without requiring a phone and preserves fit-only review',async()=>{
  const input=await qualified('Email PM',{phone:'not supplied',need:'We provide maintenance service.'});

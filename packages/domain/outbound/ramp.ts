@@ -674,17 +674,26 @@ export async function recordDaySignal(
 ): Promise<void> {
   const column =
     input.signal === 'bounce' ? 'bounces' : input.signal === 'opt_out' ? 'opt_outs' : 'provider_errors';
-  const { rows } = await context.db.query<{ healthy: boolean | null; closed_at: Date | null }>(
-    `UPDATE mailbox_send_days
-        SET ${column} = ${column} + 1, updated_at = now()
-      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
-      RETURNING healthy, closed_at`,
-    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  const failure = input.signal === 'bounce' ? 'bounce_rate' : input.signal === 'opt_out' ? 'opt_out_rate' : 'provider_warning';
+  // Dispatch records provider errors outside a caller transaction. One statement
+  // keeps the counter, once-only graduation marker and ramp correction atomic.
+  await context.db.query(
+    `WITH before AS MATERIALIZED (
+       SELECT healthy,closed_at FROM mailbox_send_days
+        WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date FOR UPDATE
+     ), changed AS (
+       UPDATE mailbox_send_days d SET ${column}=d.${column}+1,
+         healthy=CASE WHEN before.closed_at IS NOT NULL AND before.healthy IS TRUE THEN false ELSE before.healthy END,
+         updated_at=now()
+       FROM before WHERE d.workspace_id=$1 AND d.mailbox_id=$2 AND d.business_date=$3::date
+       RETURNING before.healthy AS was_healthy,before.closed_at
+     )
+     UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-1,0),
+       last_health_failure=$4,updated_at=now()
+      WHERE workspace_id=$1 AND mailbox_id=$2
+        AND EXISTS(SELECT 1 FROM changed WHERE was_healthy IS TRUE AND closed_at IS NOT NULL)`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate, failure],
   );
-  if (rows[0]?.closed_at !== null && rows[0]?.healthy === true) {
-    const failure = input.signal === 'bounce' ? 'bounce_rate' : input.signal === 'opt_out' ? 'opt_out_rate' : 'provider_warning';
-    await revokeDayAdvancement(context, { ...input, failure });
-  }
 }
 
 /**
