@@ -1,3 +1,4 @@
+import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
@@ -247,6 +248,7 @@ export function registerHandlers(
   // with no model has nothing at all to record.
   registry.register(socialDraftHandler(composition.classifier?.processEnabled?socialDraftModel(composition.classifier.transport):null));
   registry.register(outreachReplyHandler(composition.classifier?.processEnabled?routineReplyInterpretation(composition.classifier.transport):null));
+  registry.register(automaticEmailHandler());
   if(composition.discovery)registry.register(sourcingDiscoveryHandler(composition.discovery));
   if(composition.research){
     registry.register(sourcingQualificationHandler({pageFetch:composition.research.pageFetch,extraction:composition.classifier?.processEnabled?qualificationExtraction(composition.classifier.transport):null}));
@@ -510,6 +512,7 @@ export function workerDueWorkSources(
     researchSweepSource(),
     sourcingMonitorSource(options.sourcing === true && options.qualification!==true),
     sourcingQualificationSource(options.qualification===true),
+    automaticEmailSource(),
     sourcingDiscoverySource(options.discovery === true),
     telephonySweepSource(),
     // Slice M1. Registered always, so the list is the documented one; it materializes a

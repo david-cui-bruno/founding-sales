@@ -10,7 +10,7 @@ import { readAppliedSchemaVersion } from './migrationRunner.ts';
  * any other at startup (`checkSchemaRange`). A schema release changes this number and
  * nothing else here; `test/db/migrations.test.ts` holds it to the last migration.
  */
-export const REQUIRED_SCHEMA = 62;
+export const REQUIRED_SCHEMA = 63;
 
 export interface SchemaRange {
   readonly minimum: number;
