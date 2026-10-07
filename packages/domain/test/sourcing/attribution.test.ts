@@ -23,7 +23,7 @@ async function source(firmId:string,hypothesis='operational_burden'){
  const run=await tx(()=>requestQualification(ctx(),{candidateId:candidate.value.id,expectedRevision:1}));if(!run.ok)throw new Error(run.reason);
  const route=await tx(()=>addPhoneRoute(ctx(),{firmId,e164:'+12145550101',source:'website'}));if(!route.ok)throw new Error(route.reason);
  await db.session.query('INSERT INTO sourcing_admissions(workspace_id,candidate_id,run_id,firm_id,route_id) VALUES($1,$2,$3,$4,$5)',[seeded.alpha.workspaceId,candidate.value.id,run.value.runId,firmId,route.value.id]);
- const input={firmId,candidateId:candidate.value.id,qualificationRunId:run.value.runId,queryId:null,hypothesis,policyVersion:'qualification-v1',acquisition:'cold_sourced' as const};
+ const input={firmId,candidateId:candidate.value.id,qualificationRunId:run.value.runId,queryId:null,hypothesis,policyVersion:'qualification-v2',acquisition:'cold_sourced' as const};
  const result=await tx(()=>attachSourcingAttribution(ctx(),input));if(!result.ok)throw new Error(result.reason);return {...input,id:result.value.id};
 }
 async function call(firmId:string){return (await db.session.query<{id:string}>("INSERT INTO call_logs(workspace_id,firm_id,outcome,step_effect,occurred_at,actor_user_id) VALUES($1,$2,'no_answer','none',now(),$3) RETURNING id",[seeded.alpha.workspaceId,firmId,seeded.alpha.admin.userId])).rows[0]!.id;}

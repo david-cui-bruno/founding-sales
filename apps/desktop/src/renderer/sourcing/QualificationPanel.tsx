@@ -45,7 +45,7 @@ export function QualificationPanel({candidateId,revision,enabled=true,ports=defa
    {m.message?<p role="status">{m.message}</p>:null}
    {v?.reason?<p>{explain(v.reason)}</p>:null}{v?.admissionReason?<p>{explain(v.admissionReason)}</p>:null}
    {v&&current&&v.verdict?<>
-    <p>{v.verdict.rank==='help_request'?'Explicit maintenance help request':v.verdict.rank==='operational_burden'?'Published maintenance workload problem':v.verdict.rank==='investigation'?'Coordination role worth investigating':'Potential residential management fit'}</p>
+    <p>{v.verdict.rank==='help_request'?'Explicit maintenance help request':v.verdict.rank==='operational_burden'?'Published maintenance workload problem':v.verdict.rank==='investigation'?(v.verdict.reasons.includes('team_growth_for_review')?'Team growth worth investigating':'Coordination role worth investigating'):'Potential residential management fit'}</p>
     <p className="text-muted-foreground">{v.verdict.rank==='help_request'?'A dated help request supports timing.':'Timing unknown'}</p>
     {v.openingQuestion?<p>{v.openingQuestion}</p>:null}
     <details><summary className="cursor-pointer">Sources and unknowns</summary><div className="mt-3 space-y-3">

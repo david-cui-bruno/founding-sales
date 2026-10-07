@@ -79,8 +79,19 @@ export function qualifyCandidate(input:{facts:readonly QualificationFact[];obser
   if(source.publishedAt===null)unknowns.push(fact.kind==='growth'?'growth_date_unknown':'job_date_unknown');
   else if(now-Date.parse(source.publishedAt)<0||now-Date.parse(source.publishedAt)>90*day)unknowns.push('event_needs_revalidation');
  }
+ const teamGrowth=current.filter(f=>{
+  if(f.kind!=='growth')return false;
+  const text=f.value;
+  if(negated.test(text)||noncurrent.test(text)||attribution.test(text)||/\b(?:clients?|customers?|reviewers?|testimonials?|help(?:ing)? other|help(?:ing)? you)\b/iu.test(text))return false;
+  const firstPerson=/\bwe (?:plan|are planning|intend) to (?:grow|expand) our (?:team|staff)\b|\bour (?:team|staff) is (?:growing|expanding)\b/iu.test(text);
+  const soleOperator=/\b(?:currently|is|a) (?:a )?(?:one|single)[ -]person operation\b/iu.test(text)&&/\bplans? to (?:grow|expand) (?:his|her|their|its) (?:team|staff)\b/iu.test(text);
+  if(!firstPerson&&!soleOperator)return false;
+  const published=sourceFor(f).publishedAt;
+  return published===null||(now-Date.parse(published)>=0&&now-Date.parse(published)<=90*day);
+ });
  if(investigation)reasons.push('coordination_role_for_review');
- return result(investigation?'investigation':'fit_only');
+ if(teamGrowth.length){reasons.push('team_growth_for_review');for(const fact of teamGrowth)evidenceIds.add(fact.observationId);}
+ return result(investigation||teamGrowth.length?'investigation':'fit_only');
 }
 export interface RankedQualifiedLead {id:string;firmName:string;rank:QualificationVerdict['rank'];corroboratingSources:number;observedAt:string;namedContact:boolean}
 const ranks={help_request:0,operational_burden:1,investigation:2,fit_only:3};

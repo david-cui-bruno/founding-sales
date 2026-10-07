@@ -33,6 +33,10 @@ it('expires a real unconsumed dial ticket before evaluating the next email',asyn
  await db.session.query('UPDATE phone_routes SET contact_id=$2 WHERE id=$1',[policy.alpha.phoneRouteId,crm.alpha.contactId]);
  const ticket=await authorizeDialCommand(ctx(),{firmId:crm.alpha.firmId,routeId:policy.alpha.phoneRouteId,callingIdentityId:policy.alpha.callingIdentityId,routeVersion:policy.alpha.phoneRouteVersion,deviceId:seed.alpha.salesperson.deviceId,commandId:randomUUID(),at});
  expect(ticket.ok,JSON.stringify(ticket)).toBe(true);
+ if(!ticket.ok)throw new Error(ticket.reason);
+ // Issuance correctly uses the database clock in production. Align this fixture
+ // with its simulated cadence so the expiry assertion does not depend on today.
+ await db.session.query("UPDATE dial_tickets SET issued_at=$2::timestamptz,expires_at=$2::timestamptz+interval '60 seconds' WHERE id=$1",[ticket.value.ticketId,at]);
  const due=p.cadence.touches[1]!.dueAt;
  expect(await outreachExecutionTiming(ctx(),{planId:p.id,channel:'email',channelOrdinal:1,executionId:randomUUID(),at:due})).toEqual({kind:'proceed'});
  expect((await db.session.query('SELECT state FROM outreach_touch_reservations WHERE plan_id=$1',[p.id])).rows).toEqual([{state:'released'}]);
