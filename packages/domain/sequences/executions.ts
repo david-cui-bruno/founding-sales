@@ -7,6 +7,7 @@ import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
+import { dispatchHolidayCalendar } from '../outbound/stepPermission.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/templates.ts';
 import { composeBodyForWorkspace } from '../outbound/footer.ts';
 import { businessDateOf } from '../today/snapshots.ts';
@@ -233,13 +234,20 @@ export async function runDueStepExecution(
   const settled = await settleFromFence(context, loaded, fence, input.now);
   if (settled !== null) return settled;
 
+  // A prepared/held fence has not begun dispatch. Re-arm before applying a new
+  // window so a recovered `dispatched` step can be rescheduled and audited too.
+  if (loaded.state === 'dispatched' && enrollment.originKind === 'prospecting') {
+    await context.db.query("UPDATE step_executions SET state='pending',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND state='dispatched'", [context.scope.workspaceId, loaded.id]);
+    loaded = {...loaded, state:'pending'};
+  }
+
   if(enrollment.outreachPlanId!==null&&enrollment.originKind==='prospecting'){
     const version=await readSequenceVersion(context,enrollment.sequenceVersionId);
     if(!version)return await holdExecution(context,loaded,'long_hold_review');
     const timing=await outreachExecutionTiming(context,{planId:enrollment.outreachPlanId,channel:loaded.channel,channelOrdinal:version.steps.filter(s=>s.channel===loaded.channel&&s.ordinal<=loaded.ordinal).length,executionId:loaded.id,at:input.now});
     if(timing.kind==='hold')return await holdExecution(context,loaded,'long_hold_review');
     if(timing.kind==='wait'){
-      await context.db.query('UPDATE step_executions SET due_at=$3,not_before=$3,updated_at=now() WHERE workspace_id=$1 AND id=$2',[context.scope.workspaceId,loaded.id,timing.dueAt]);
+      await rescheduleExecution(context,{execution:loaded,toDueAt:timing.dueAt,reason:'send_window'});
       return {kind:'not_due',stepExecutionId:loaded.id,notBefore:timing.dueAt};
     }
     if(timing.kind==='skip'){
@@ -275,6 +283,17 @@ export async function runDueStepExecution(
 
   const fenceId = fence.outboundMessageId ?? null;
   if ((fence.state === 'prepared' || fence.state === 'held') && fenceId !== null) {
+    // Check the current instant as well as the due date before either a new preparation
+    // or a retry of an existing fence. Dispatch rechecks the same rule under the gate.
+    if (execution.channel === 'email' && enrollment.originKind === 'prospecting') {
+      const calendar = await dispatchHolidayCalendar(context, enrollment);
+      const earliest = new Date(Math.max(Date.parse(execution.dueAt), Date.parse(input.now))).toISOString();
+      const placement = placeEmailSend(earliest, enrollment.firmTimeZone, {calendar, prospecting:true});
+      if (!placement.inPlace) {
+        await rescheduleExecution(context, {execution, toDueAt:placement.sendAt, reason:'send_window'});
+        return {kind:'scheduled', stepExecutionId:execution.id, sendAt:placement.sendAt};
+      }
+    }
     if (await meetingPlanForExecution(context, execution.id) !== null) {
       const draft = await meetingDraftForExecution(context, { executionId: execution.id, at: input.now });
       if (!draft.ok) return await holdExecution(context, execution, 'follow_up_not_permitted', { detail: [draft.reason] });
@@ -446,7 +465,10 @@ async function runEmailStep(
 
   // 11.2 and Appendix G 32. A due instant already inside a window stays where it is;
   // anything else moves to the next window's morning, and the move is recorded.
-  const placement = placeEmailSend(execution.dueAt, enrollment.firmTimeZone, { calendar });
+  const placementDue = enrollment.originKind === 'prospecting'
+    ? new Date(Math.max(Date.parse(execution.dueAt), Date.parse(input.now))).toISOString()
+    : execution.dueAt;
+  const placement = placeEmailSend(placementDue, enrollment.firmTimeZone, { calendar, prospecting: enrollment.originKind === 'prospecting' });
   if (!placement.inPlace) {
     await rescheduleExecution(context, {
       execution,

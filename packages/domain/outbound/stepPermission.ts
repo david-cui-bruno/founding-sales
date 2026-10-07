@@ -257,6 +257,6 @@ export async function dispatchHolidayCalendar(
  * whether that instant is a place a send may be, so a fence held overnight on the eve
  * of a holiday does not go out on it.
  */
-export function insideSendingWindow(now: Date, zone: string, calendar: WorkspaceHolidayCalendar): boolean {
-  return placeEmailSend(now.toISOString(), zone, { calendar }).inPlace;
+export function insideSendingWindow(now: Date, zone: string, calendar: WorkspaceHolidayCalendar, prospecting = false): boolean {
+  return placeEmailSend(now.toISOString(), zone, { calendar, prospecting }).inPlace;
 }

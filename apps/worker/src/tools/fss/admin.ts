@@ -2120,7 +2120,7 @@ async function sourceConditions(
     route: fromOutcome(await emailRouteSource().evaluate(context, input)),
     mailboxCoverage: fromOutcome(await mailboxSource().evaluate(context, input)),
     templateApproval: fromOutcome(await templateApprovalSource().evaluate(context, input)),
-    sendingWindow: insideSendingWindow(now, zone, calendar) ? passed : failed(`outside_email_window:${zone}`),
+    sendingWindow: insideSendingWindow(now, zone, calendar, enrollment.originKind === 'prospecting') ? passed : failed(`outside_email_window:${zone}`),
     notYetDue: Date.parse(input.execution.notBefore) > now.getTime() ? failed('step_ineligible:not_yet_due') : passed,
   };
 }

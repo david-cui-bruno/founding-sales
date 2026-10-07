@@ -161,13 +161,13 @@ beforeEach(async () => {
 
 describe('scenario 32: DST resolves deterministically in the firm’s own zone', () => {
   /**
-   * The United States moves its clocks on a Sunday, so the 08:00 window never falls
-   * inside the gap itself. What DST does change is the *UTC instant* 08:00 lands on,
+   * The United States moves its clocks on a Sunday, so the 10:00 window never falls
+   * inside the gap itself. What DST does change is the *UTC instant* 10:00 lands on,
    * and that is what these two assert: the same local morning, an hour apart in UTC,
    * on either side of a transition. A rule that computed the offset once and reused
    * it would pass one of these and fail the other.
    */
-  it('places the Monday after the autumn fold at 08:00 EST, not EDT', async () => {
+  it('places the Monday after the autumn fold at 10:00 EST, not EDT', async () => {
     const enrollmentId = await enroll('alpha');
     // Sunday 1 November 2026 is the fold day; the next sending day is Monday the 2nd.
     await setDue('alpha', enrollmentId, '2026-11-01T14:00:00Z');
@@ -177,11 +177,11 @@ describe('scenario 32: DST resolves deterministically in the firm’s own zone',
       eligibility: allowAllEligibility(),
       sendHandoff: recordingSendHandoff(),
     });
-    // 08:00 America/New_York in EST is 13:00 UTC.
-    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-11-02T13:00:00.000Z');
+    // 10:00 America/New_York in EST is 15:00 UTC.
+    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-11-02T15:00:00.000Z');
   });
 
-  it('places the Monday after the spring gap at 08:00 EDT, not EST', async () => {
+  it('places the Monday after the spring gap at 10:00 EDT, not EST', async () => {
     const enrollmentId = await enroll('alpha');
     // Saturday 13 March 2027; the gap is Sunday the 14th and the next sending day is
     // Monday the 15th.
@@ -192,8 +192,8 @@ describe('scenario 32: DST resolves deterministically in the firm’s own zone',
       eligibility: allowAllEligibility(),
       sendHandoff: recordingSendHandoff(),
     });
-    // 08:00 America/New_York in EDT is 12:00 UTC.
-    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2027-03-15T12:00:00.000Z');
+    // 10:00 America/New_York in EDT is 14:00 UTC.
+    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2027-03-15T14:00:00.000Z');
   });
 
   it('records the move as a shift, and never moves work earlier', async () => {
@@ -215,7 +215,7 @@ describe('scenario 32: DST resolves deterministically in the firm’s own zone',
     // `original_due_at` is the instant the cadence produced, and it does not move.
     const executions = await listStepExecutions(worker(), { enrollmentId });
     expect(executions[0]?.originalDueAt).toBe('2026-11-01T14:00:00.000Z');
-    expect(executions[0]?.dueAt).toBe('2026-11-02T13:00:00.000Z');
+    expect(executions[0]?.dueAt).toBe('2026-11-02T15:00:00.000Z');
   });
 });
 
