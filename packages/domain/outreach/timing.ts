@@ -2,18 +2,18 @@ import {releaseAbandonedTouches} from './touchReservations.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import type {ResolvedDueInstant} from '../src/rules/businessDays.ts';
 import {addCalendarDays,localDate,localInstant,localParts,weekdayOfDate} from '../src/rules/localClock.ts';
-import {nextProspectingTouch,type OutreachCadence} from './cadence.ts';
+import {nextProspectingTouch,prospectingTouchDueAt,type OutreachCadence} from './cadence.ts';
 export function outreachStepDue(plan:OutreachCadence,input:{channel:string;channelOrdinal:number;lastTouch:{ordinal:number;at:string}|null}):ResolvedDueInstant|null {
  const channel=input.channel==='call_task'?'phone':input.channel;
  const touch=plan.touches.find(t=>t.channel===channel&&t.channelOrdinal===input.channelOrdinal);
  if(!touch)return null;
- let dueAt=touch.dueAt;
+ let dueAt=prospectingTouchDueAt(touch,plan.timeZone);
  const prior=input.lastTouch===null?undefined:plan.touches.find(t=>t.ordinal===input.lastTouch!.ordinal);
  if(prior&&input.lastTouch&&prior.ordinal<touch.ordinal){
   const gap=Math.max(1,Math.round((Date.parse(`${touch.localDate}T00:00:00Z`)-Date.parse(`${prior.localDate}T00:00:00Z`))/86400000));
   let date=addCalendarDays(localDate(input.lastTouch.at,plan.timeZone),gap);
   while([0,6].includes(weekdayOfDate(date)))date=addCalendarDays(date,1);
-  const clock=localParts(touch.dueAt,plan.timeZone);
+  const clock=localParts(prospectingTouchDueAt(touch,plan.timeZone),plan.timeZone);
   const floor=localInstant(date,{hour:clock.hour,minute:clock.minute},plan.timeZone);
   if(Date.parse(floor)>Date.parse(dueAt))dueAt=floor;
  }

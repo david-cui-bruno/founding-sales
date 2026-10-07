@@ -1,3 +1,6 @@
+import {runDueStepExecution} from '../../sequences/executions.ts';
+import {recordingSendHandoff} from '../../sequences/sendHandoff.ts';
+import {allowAllEligibility} from '../../sequences/eligibility.ts';
 import {makeStepExecution} from '../../db/testing/stepExecutions.ts';
 import {seedFirm,prepareFor,pausingAtTokenRefresh} from '../outbound/support/dispatchFixtures.ts';
 import {dispatchOutboundMessage} from '../../outbound/send.ts';
@@ -40,7 +43,7 @@ it('OAuth identity replacement invalidates authorization while a same-account to
 
 async function prepared(label:string){
  const firm=await seedFirm(world,world.alpha,label);
- const stepExecutionId=await makeStepExecution(world.database.session,{workspaceId:world.alpha.workspace.workspaceId,firmId:firm.firmId,opportunityId:firm.opportunityId,userId:world.alpha.workspace.salesperson.userId,templateVersionId:world.alpha.templateVersionId,originKind:'prospecting'});
+ const stepExecutionId=await makeStepExecution(world.database.session,{workspaceId:world.alpha.workspace.workspaceId,firmId:firm.firmId,opportunityId:firm.opportunityId,userId:world.alpha.workspace.salesperson.userId,templateVersionId:world.alpha.templateVersionId,originKind:'prospecting',zone:'Etc/UTC'});
  return prepareFor(world,world.alpha,firm,{stepExecutionId});
 }
 it('passes both real Gmail gates for a newly prepared authorized fence',async()=>{
@@ -52,10 +55,36 @@ it('revocation during token refresh blocks a previously prepared send at the fin
  const id=await prepared('revoked-prospect');const gmail=world.clientWith(world.alpha,{});
  const paused=pausingAtTokenRefresh(gmail,async()=>{expect((await save(3,false)).ok).toBe(true);});
  const result=await dispatchOutboundMessage(world.systemContext(world.alpha.workspace.workspaceId),world.sendDeps(world.alpha,{gmail:paused.client}),{outboundMessageId:id});
- expect(paused.refreshes()).toBe(1);expect(result.outcome).toBe('held');expect(gmail.sends).toHaveLength(0);
+ expect(paused.refreshes(),JSON.stringify(result)).toBe(1);expect(result.outcome).toBe('held');expect(gmail.sends).toHaveLength(0);
  expect((await save(4,true)).ok).toBe(true);
  const again=await dispatchOutboundMessage(world.systemContext(world.alpha.workspace.workspaceId),world.sendDeps(world.alpha,{gmail}),{outboundMessageId:id});
  expect(again.outcome).toBe('held');expect(gmail.sends).toHaveLength(0);
+});
+
+it('rechecks the recipient morning window at the final claim when token refresh crosses 11am',async()=>{
+ const id=await prepared('morning-window-race');const gmail=world.clientWith(world.alpha,{});
+ let now='2026-09-23T10:59:59.000Z';
+ const paused=pausingAtTokenRefresh(gmail,async()=>{now='2026-09-23T11:00:00.000Z';});
+ const result=await dispatchOutboundMessage(world.systemContext(world.alpha.workspace.workspaceId),world.sendDeps(world.alpha,{gmail:paused.client,now:()=>new Date(now)}),{outboundMessageId:id});
+ expect(paused.refreshes(),JSON.stringify(result)).toBe(1);expect(result.outcome).toBe('held');expect(result.refusal).toBe('outside_email_window');expect(gmail.sends).toHaveLength(0);
+ expect((await world.database.session.query('SELECT dispatch_started_at,provider_message_id FROM outbound_messages WHERE id=$1',[id])).rows[0]).toEqual({dispatch_started_at:null,provider_message_id:null});
+});
+
+it('reschedules held and crash-recovered prepared fences, then reuses the same message next morning',async()=>{
+ for(const state of ['held','dispatched'] as const){
+  const id=await prepared(`morning-retry-${state}`);
+  const row=(await world.database.session.query<{step_execution_id:string}>('SELECT step_execution_id FROM outbound_messages WHERE id=$1',[id])).rows[0]!;
+  await world.database.session.query("UPDATE step_executions SET state=$2,hold_reason_code=$3,due_at='2026-09-23T09:00:00Z',not_before='2026-09-23T09:00:00Z' WHERE id=$1",[row.step_execution_id,state,state==='held'?'scoped_pause':null]);
+  const handoff=recordingSendHandoff();handoff.setOutcome(row.step_execution_id,{state:state==='held'?'held':'prepared',outboundMessageId:id,dispatchedAt:null,heldReason:null});
+  const input={stepExecutionId:row.step_execution_id,eligibility:allowAllEligibility(),sendHandoff:handoff};
+  const first=await withTransaction(world.database.session,()=>runDueStepExecution(admin(),{...input,now:'2026-09-23T13:37:00Z'}));
+  expect(first).toMatchObject({kind:'scheduled',sendAt:'2026-09-24T10:00:00.000Z'});
+  const shift=(await world.database.session.query('SELECT reason,to_due_at FROM step_execution_shifts WHERE step_execution_id=$1',[row.step_execution_id])).rows;
+  expect(shift).toHaveLength(1);expect(shift[0]?.['reason']).toBe('send_window');
+  const next=await withTransaction(world.database.session,()=>runDueStepExecution(admin(),{...input,now:'2026-09-24T10:00:00Z'}));
+  expect(next).toMatchObject({kind:'handed_to_send',outboundMessageId:id});
+  expect(handoff.prepared).toHaveLength(0);expect(handoff.dispatched).toHaveLength(0);
+ }
 });
 
 it('switching away and back through OAuth permanently revokes the old authorization',async()=>{

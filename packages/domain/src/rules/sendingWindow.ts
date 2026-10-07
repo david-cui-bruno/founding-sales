@@ -14,6 +14,11 @@ import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from './busines
  * it to Tuesday; the rule is that a due instant inside a window sends where it is.
  */
 
+/** Cold prospecting, including sequence follow-ups, uses recipient-local mornings.
+ * Conversation replies retain EMAIL_WINDOW. Outside this window the next slot is 10am.
+ */
+export const PROSPECTING_EMAIL_WINDOW = Object.freeze({openMinute:9*60,preferredEndMinute:11*60,closeMinute:11*60,defaultHour:10});
+
 export const EMAIL_WINDOW = Object.freeze({
   /** Minutes from local midnight. */
   openMinute: 8 * 60,
@@ -41,6 +46,7 @@ export interface EmailSendPlacement {
 export interface PlaceEmailSendOptions {
   /** Holidays are not sending days either; a holiday-due email moves to the next business day. */
   readonly calendar?: WorkspaceHolidayCalendar;
+  readonly prospecting?: boolean;
 }
 
 function isSendingDay(date: string, weekday: number, calendar: WorkspaceHolidayCalendar): boolean {
@@ -62,14 +68,16 @@ export function placeEmailSend(
 ): EmailSendPlacement {
   const calendar = options.calendar ?? EMPTY_HOLIDAY_CALENDAR;
   const parts = localParts(dueAt, zone);
+  const window = options.prospecting ? PROSPECTING_EMAIL_WINDOW : EMAIL_WINDOW;
+  const nextHour = options.prospecting ? PROSPECTING_EMAIL_WINDOW.defaultHour : 8;
 
   const bandOf = (minuteOfDay: number): EmailWindowBand =>
-    minuteOfDay < EMAIL_WINDOW.preferredEndMinute ? 'morning' : 'overflow';
+    minuteOfDay < window.preferredEndMinute ? 'morning' : 'overflow';
 
   if (
     isSendingDay(parts.date, parts.weekday, calendar) &&
-    parts.minuteOfDay >= EMAIL_WINDOW.openMinute &&
-    parts.minuteOfDay < EMAIL_WINDOW.closeMinute
+    parts.minuteOfDay >= window.openMinute &&
+    parts.minuteOfDay < window.closeMinute
   ) {
     return {
       sendAt: new Date(Date.parse(dueAt)).toISOString(),
@@ -82,7 +90,7 @@ export function placeEmailSend(
 
   // Before the window on a sending day: this morning. Otherwise the next sending day.
   const openToday =
-    isSendingDay(parts.date, parts.weekday, calendar) && parts.minuteOfDay < EMAIL_WINDOW.openMinute;
+    isSendingDay(parts.date, parts.weekday, calendar) && parts.minuteOfDay < window.openMinute;
   let date = openToday ? parts.date : addCalendarDays(parts.date, 1);
   for (let step = 0; step < 400; step += 1) {
     const weekday = localParts(localInstant(date, { hour: 12, minute: 0 }, zone), zone).weekday;
@@ -91,7 +99,7 @@ export function placeEmailSend(
   }
 
   return {
-    sendAt: localInstant(date, { hour: 8, minute: 0 }, zone),
+    sendAt: localInstant(date, { hour: nextHour, minute: 0 }, zone),
     band: 'morning',
     inPlace: false,
     localDate: date,

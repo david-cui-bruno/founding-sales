@@ -48,6 +48,7 @@ const context = () => world.systemContext(workspaceId());
 /** Enqueue, claim and run one `sequence.action` job, the way the worker loop does. */
 async function runStep(executionId: string, attempt: string, gmail: GmailClient): Promise<string> {
   const handler = sequenceActionJobHandler({
+    now: () => DUE,
     sendHandoff: outboundSendHandoff({
       deps: world.sendDeps(world.alpha, { gmail, now: () => new Date(DUE) }),
     }),
@@ -92,6 +93,8 @@ describe('a prepared prospecting fence through the worker hand-off', () => {
       templateVersionId: world.alpha.templateVersionId,
       originKind: 'prospecting',
     });
+    // Align the fixture's due instant with both pinned handler and dispatch clocks.
+    await world.database.session.query('UPDATE step_executions SET due_at=$2,not_before=$2 WHERE id=$1',[executionId,DUE]);
     // A fence prepared as if before the rule: the eligibility source is never asked
     // about it again, only the claim is.
     await prepareFor(world, world.alpha, firm, { stepExecutionId: executionId });
@@ -110,9 +113,9 @@ describe('a prepared prospecting fence through the worker hand-off', () => {
     // the fix (`scoped_pause`), so the resumed dispatch has to write the right one itself
     // rather than leave the first attempt's in place.
     await world.database.session.query(
-      `UPDATE step_executions SET not_before = now() - interval '1 minute', hold_reason_code = 'scoped_pause'
+      `UPDATE step_executions SET not_before = $3::timestamptz - interval '1 minute', hold_reason_code = 'scoped_pause'
         WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), executionId],
+      [workspaceId(), executionId, DUE],
     );
     const again = world.clientWith(world.alpha, {});
     expect(await runStep(executionId, 'resumed', again)).toBe('completed');

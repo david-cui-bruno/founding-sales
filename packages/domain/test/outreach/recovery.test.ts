@@ -1,3 +1,4 @@
+import {seedSequences} from '../sequences/support/sequenceFixtures.ts';
 import {randomUUID} from 'node:crypto';
 import {beforeAll,afterAll,beforeEach,it,expect} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -58,4 +59,21 @@ it('wakes an unchanged manual call again when the next cadence slot arrives',asy
  const second=await enqueueJob(db.session,{workspaceId:w,kind:'sequence.action',idempotencyKey:`step-execution:${id}:${later.wake}`,payload:{stepExecutionId:id}});
  expect(second.inserted).toBe(true);
  expect((await runDueStepExecution(ctx(),{stepExecutionId:id,now:p.cadence.touches[1]!.dueAt,eligibility:allowAllEligibility(),sendHandoff:recordingSendHandoff()})).kind).toBe('completed');
+});
+
+it('moves a real outreach enrollment with an old afternoon cadence to morning and preserves its unsent fence',async()=>{
+ const p=await plan('email_first'),w=seed.alpha.workspaceId;
+ const legacy={...p.cadence,touches:p.cadence.touches.map(t=>({...t,dueAt:t.dueAt.replace('14:00:00','17:36:00')}))};
+ await db.session.query('UPDATE outreach_plans SET cadence=$2::jsonb WHERE id=$1',[p.id,JSON.stringify(legacy)]);
+ const sequences=await seedSequences(db.session,seed);
+ const enrolled=await enrollContact(ctx(),{subject:{kind:'outreach',outreachPlanId:p.id},originKind:'prospecting',sequenceVersionId:sequences.alpha.publishedVersionId,firmId:crm.alpha.firmId,contactId:crm.alpha.contactId});
+ expect(enrolled.ok,JSON.stringify(enrolled)).toBe(true);if(!enrolled.ok)throw new Error(enrolled.reason);
+ const id=enrolled.value.firstExecutionId,fenceId=randomUUID();
+ await db.session.query("UPDATE step_executions SET state='held',hold_reason_code='scoped_pause',due_at='2026-10-05T17:36:00Z',not_before='2026-10-05T18:36:00Z' WHERE id=$1",[id]);
+ const handoff=recordingSendHandoff();handoff.setOutcome(id,{state:'held',outboundMessageId:fenceId,dispatchedAt:null,heldReason:'automated_sending_disabled'});
+ const input={stepExecutionId:id,eligibility:allowAllEligibility(),sendHandoff:handoff};
+ expect(await runDueStepExecution(ctx(),{...input,now:'2026-10-05T18:37:00Z'})).toMatchObject({kind:'not_due',notBefore:'2026-10-06T14:00:00.000Z'});
+ expect(await runDueStepExecution(ctx(),{...input,now:'2026-10-06T14:00:00Z'})).toMatchObject({kind:'handed_to_send',outboundMessageId:fenceId});
+ expect(handoff.prepared).toHaveLength(0);
+ expect((await db.session.query('SELECT cadence,expires_at FROM outreach_plans WHERE workspace_id=$1 AND id=$2',[w,p.id])).rows[0]?.['cadence']).toEqual(legacy);
 });

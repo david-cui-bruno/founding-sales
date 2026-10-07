@@ -221,7 +221,7 @@ export async function decideSend(
   // holiday because it was prepared the evening before one (lane g77: the placement
   // rule itself, holidays included, asked about this instant).
   const calendar = await dispatchHolidayCalendar(context, permission.value.enrollment);
-  if (!insideSendingWindow(now, fence.sourceZone, calendar)) {
+  if (!insideSendingWindow(now, fence.sourceZone, calendar, permission.value.enrollment.originKind === 'prospecting')) {
     return refuseSend('outside_email_window', `${fence.sourceZone} ${localParts(now.toISOString(), fence.sourceZone).date}`);
   }
 

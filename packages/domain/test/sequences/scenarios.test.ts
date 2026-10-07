@@ -271,8 +271,8 @@ describe('scenario 32: the email window, Monday mornings, weekends and DST', () 
       sendHandoff: recordingSendHandoff(),
     });
     expect(placed.kind).toBe('scheduled');
-    // 08:00 New York on the same Monday, not the next day.
-    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-09-21T12:00:00.000Z');
+    // Cold prospecting defaults to 10:00 New York on the same Monday, not the next day.
+    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-09-21T14:00:00.000Z');
   });
 
   it('moves a Saturday-due email to Monday morning', async () => {
@@ -284,7 +284,7 @@ describe('scenario 32: the email window, Monday mornings, weekends and DST', () 
       eligibility: allowAllEligibility(),
       sendHandoff: recordingSendHandoff(),
     });
-    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-09-21T12:00:00.000Z');
+    expect(placed.kind === 'scheduled' ? placed.sendAt : '').toBe('2026-09-21T14:00:00.000Z');
   });
 });
 
