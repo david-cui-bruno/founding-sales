@@ -14,7 +14,7 @@ import { databaseNow } from '../policy/clock.ts';
 type Result<T> = {ok:true;value:T} | {ok:false;reason:string};
 interface Row { id:string;payload:CandidateInput;status:SourcingCandidate['status'];revision:number;created_at:Date;source_check:unknown;next_source_check_at:Date|null;check_job_state:string|null;[key:string]:unknown }
 const denied = (context:RepositoryContext):boolean => !decideAdminOnly(context).permitted;
-function identity(input:CandidateInput):string {
+export function candidateIdentityKey(input:CandidateInput):string {
   const url = new URL(input.website);
   const website = `${url.hostname.replace(/^www\./,'')}${url.pathname.replace(/\/+$/,'')}`;
   const fold = (value:string) => value.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
@@ -25,7 +25,7 @@ export async function saveCandidate(context:RepositoryContext,input:CandidateInp
   if(denied(context)) return {ok:false,reason:'admin_only'};
   const parsed=candidateInputSchema.safeParse(input);
   if(!parsed.success || parsed.data.observedOn > (await databaseNow(context)).slice(0,10)) return {ok:false,reason:'invalid_input'};
-  const key=identity(parsed.data);
+  const key=candidateIdentityKey(parsed.data);
   const inserted=await context.db.query<{id:string}>(
     `INSERT INTO sourcing_candidates(workspace_id,identity_key,payload) VALUES($1,$2,$3::jsonb)
      ON CONFLICT (workspace_id,identity_key) DO NOTHING RETURNING id`,

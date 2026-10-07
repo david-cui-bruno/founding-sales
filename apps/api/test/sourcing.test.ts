@@ -58,3 +58,10 @@ it('exposes revision-bound qualification and reviewed admission through authenti
  expect((await request('/sourcing/qualification/admit',admin,envelope({candidateId,expectedRevision:1,qualificationRunId:runId,mode:'reviewed'}))).body).toMatchObject({reason:'evidence_unavailable'});
  expect((await request('/sourcing/qualification/admit',admin,envelope({candidateId,expectedRevision:1,qualificationRunId:runId,mode:'automatic'}))).status).toBe(400);
 });
+it('exposes name correction only through authenticated admin commands',async()=>{
+ const body=envelope({id:randomUUID(),expectedRevision:1,firmName:'Correct PM',qualificationRunId:randomUUID(),observationId:randomUUID(),blockId:'name',reason:'Reviewed the official company name.'});
+ expect((await request('/sourcing/candidates/correct-name',null,body)).status).toBe(401);
+ expect((await request('/sourcing/candidates/correct-name',sales,body)).body).toMatchObject({reason:'admin_only'});
+ expect((await request('/sourcing/candidates/correct-name',admin,{...body,commandId:randomUUID()})).body).toMatchObject({reason:'not_found'});
+ expect((await request('/sourcing/candidates/correct-name',admin,{...body,reason:''})).status).toBe(400);
+});

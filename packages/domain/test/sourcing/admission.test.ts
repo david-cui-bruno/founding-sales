@@ -1,3 +1,4 @@
+import {correctCandidateName} from '../../sourcing/candidateCorrection.ts';
 import type {SourceObservation,QualificationFact,QualificationVerdict} from '@fss/contracts';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,beforeEach,it,expect} from 'vitest';
@@ -39,7 +40,7 @@ it('admits one firm-level route idempotently without creating deals, contacts or
  for(const table of ['contacts','opportunities','sequence_enrollments'])expect((await db.session.query(`SELECT id FROM ${table} WHERE workspace_id=$1 AND firm_id=$2`,[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(0);
  expect((await db.session.query('SELECT contact_id,e164 FROM phone_routes WHERE id=$1',[result.value.routeId])).rows[0]).toEqual({contact_id:null,e164:'+12145550100'});
 });
-async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v1',promptVersion:'qualification-contact-v3',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
+async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v1',promptVersion:'qualification-contact-v4',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
  const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});
 });
@@ -147,4 +148,10 @@ it('uses only an approved targeting order for the new-firm lane',async()=>{
  const order=async()=>(await listTodayCards(ctx(),{snapshotDate})).filter(c=>ids.has(c.firmId)).map(c=>c.firmId);
  const proposal=await tx(()=>saveTargetingProposal(ctx(),{basePolicyVersion:'targeting-v1',queryChanges:[],rankOrder:['fit_only','operational_burden','help_request','investigation'],evidenceIds:[],rationale:'Try a reviewed fit-first order without relaxing admission.'}));if(!proposal.ok)throw new Error(proposal.reason);
  expect(await order()).toEqual([b.value.firmId,f.value.firmId]);await tx(()=>applyTargetingProposal(ctx(),{id:proposal.value.id,expectedRevision:1}));expect(await order()).toEqual([f.value.firmId,b.value.firmId]);
+});
+
+it('refuses name correction once a candidate has entered the CRM',async()=>{
+ const input=await qualified('Already Admitted PM');
+ expect(await tx(()=>admitCandidate(ctx(),input))).toMatchObject({ok:true});
+ expect(await tx(()=>correctCandidateName(ctx(),{id:input.candidateId,expectedRevision:1,firmName:'A Different PM',qualificationRunId:input.qualificationRunId,observationId:randomUUID(),blockId:'firm',reason:'Attempt to change an already admitted candidate.'}))).toMatchObject({reason:'candidate_already_admitted'});
 });
