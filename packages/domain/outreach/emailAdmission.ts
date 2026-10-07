@@ -1,3 +1,4 @@
+import {existingEmailRoute} from './existingEmail.ts';
 import type {CandidateInput} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
@@ -39,17 +40,23 @@ async function admit(ctx:RepositoryContext,input:Input):Promise<Result>{
  if(!firm){const made=await createFirm(ctx,{name:candidate.payload.firmName,website:candidate.payload.website,locality:candidate.payload.locality,regionCode:candidate.payload.region,assignedUserId:input.expectedOwnerUserId});if(!made.ok)return made;firm=made.value;}
  if(firm.assigned_user_id!==input.expectedOwnerUserId||firm.status==='merged')return {ok:false,reason:'firm_changed'};
  const route=assessment.value.route;
- const prior=(await ctx.db.query<{id:string;contact_id:string|null;eligibility:string}>(`SELECT id,contact_id,eligibility FROM email_addresses WHERE workspace_id=$1 AND firm_id=$2 AND address=$3 AND retired_at IS NULL ORDER BY id FOR UPDATE`,[w,firm.id,route.address])).rows;
- if(prior.length)return {ok:false,reason:'existing_email_requires_review'};
- const contact=await createContact(ctx,{firmId:firm.id,fullName:route.displayName,title:route.identityKind==='role'?'Office mailbox':'Source-listed contact'});if(!contact.ok)return contact;
- const email=await addEmailRoute(ctx,{firmId:firm.id,contactId:contact.value.id,address:route.address,source:'website',retrievedAt:new Date(),associationConfidence:1});if(!email.ok)return email;
+ const prior=await existingEmailRoute(ctx,firm.id,route.address);if(!prior.ok)return prior;
+ let contactId:string,routeId:string;
+ if(prior.value){
+  if(!input.reviewed)return {ok:false,reason:'qualification_requires_review'};
+  contactId=prior.value.contactId;routeId=prior.value.id;
+ }else{
+  const contact=await createContact(ctx,{firmId:firm.id,fullName:route.displayName,title:route.identityKind==='role'?'Office mailbox':'Source-listed contact'});if(!contact.ok)return contact;
+  const email=await addEmailRoute(ctx,{firmId:firm.id,contactId:contact.value.id,address:route.address,source:'website',retrievedAt:new Date(),associationConfidence:1});if(!email.ok)return email;
+  contactId=contact.value.id;routeId=email.value.id;
+ }
  // No invented technical validation: the existing email validation gate still applies.
  if(firm.time_zone===null){const resolved=await resolveZoneForFirm(ctx,{firmId:firm.id,recordedZone:zone});if(!resolved.ok)return resolved;}
- await ctx.db.query(`INSERT INTO outreach_email_sources(workspace_id,candidate_id,run_id,firm_id,contact_id,route_id,observation_id,block_id,identity_kind,reviewed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[w,input.candidateId,input.qualificationRunId,firm.id,contact.value.id,email.value.id,route.sourceObservationId,route.blockId,route.identityKind,input.reviewed]);
+ await ctx.db.query(`INSERT INTO outreach_email_sources(workspace_id,candidate_id,run_id,firm_id,contact_id,route_id,observation_id,block_id,identity_kind,reviewed) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[w,input.candidateId,input.qualificationRunId,firm.id,contactId,routeId,route.sourceObservationId,route.blockId,route.identityKind,input.reviewed]);
  const policy=(await ctx.db.query<{policy_version:string}>('SELECT policy_version FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2',[w,input.qualificationRunId])).rows[0]!;
  const query=(await ctx.db.query<{query_id:string}>(`SELECT a.query_id FROM sourcing_discovery_hits h JOIN sourcing_discovery_attempts a ON a.workspace_id=h.workspace_id AND a.id=h.attempt_id WHERE h.workspace_id=$1 AND h.candidate_id=$2 ORDER BY a.created_at,a.id LIMIT 1`,[w,input.candidateId])).rows[0];
  const attribution=await attachSourcingAttribution(ctx,{firmId:firm.id,candidateId:input.candidateId,qualificationRunId:input.qualificationRunId,queryId:query?.query_id??null,hypothesis:assessment.value.rank,policyVersion:policy.policy_version,acquisition:'cold_sourced'});if(!attribution.ok)throw new Error(`email_admission_${attribution.reason}`);
- await recordCrmAuditEvent(ctx,{action:'outreach.email_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:input.qualificationRunId,contactId:contact.value.id,identityKind:route.identityKind,reviewed:input.reviewed}});
+ await recordCrmAuditEvent(ctx,{action:'outreach.email_admitted',subjectKind:'firm',subjectId:firm.id,detail:{candidateId:input.candidateId,runId:input.qualificationRunId,contactId:contactId,identityKind:route.identityKind,reviewed:input.reviewed,reusedRoute:prior.value!==null}});
  await refreshTodayForFirm(ctx,{firmId:firm.id});
- return {ok:true,value:{firmId:firm.id,contactId:contact.value.id,routeId:email.value.id,identityKind:route.identityKind,alreadyAdmitted:false}};
+ return {ok:true,value:{firmId:firm.id,contactId:contactId,routeId:routeId,identityKind:route.identityKind,alreadyAdmitted:false}};
 }

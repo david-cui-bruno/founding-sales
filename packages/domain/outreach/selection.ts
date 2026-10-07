@@ -1,3 +1,4 @@
+import {existingEmailRoute} from './existingEmail.ts';
 import {officeContactContext} from './contactContext.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
@@ -67,6 +68,8 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  if(await firstSuppressed(ctx,[{scope:'handle',canonicalKey:route.address},...(firm?[{scope:'firm' as const,canonicalKey:firm.id}]:[])],'email'))return {ok:false,reason:'email_or_firm_stopped'};
  if(firm&&(await ctx.db.query('SELECT id FROM sequence_enrollments WHERE workspace_id=$1 AND firm_id=$2 AND ended_at IS NULL LIMIT 1',[w,firm.id])).rows.length)return {ok:false,reason:'firm_already_enrolled'};
  if((await ctx.db.query(`SELECT id FROM email_addresses WHERE workspace_id=$1 AND address=$2 AND firm_id<>COALESCE($3::uuid,'00000000-0000-0000-0000-000000000000') AND retired_at IS NULL`,[w,route.address,firm?.id??null])).rows.length)return {ok:false,reason:'email_association_ambiguous'};
+ const existing=firm?await existingEmailRoute(ctx,firm.id,route.address,input):{ok:true as const,value:null};
+ if(!existing.ok)return existing;
  const phone=supportedBusinessPhone(run.facts,identity);
- return {ok:true,value:{firmId:firm?.id??null,route,lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
+ return {ok:true,value:{firmId:firm?.id??null,route,lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
 }
