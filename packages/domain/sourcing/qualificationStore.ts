@@ -15,7 +15,7 @@ import { workspaceBusinessZone } from '../research/ledger.ts';
 import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 
-export const QUALIFICATION_PROMPT_VERSION='qualification-contact-v4';
+export const QUALIFICATION_PROMPT_VERSION='qualification-residential-v5';
 export const QUALIFICATION_POLICY_VERSION='qualification-v1';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {

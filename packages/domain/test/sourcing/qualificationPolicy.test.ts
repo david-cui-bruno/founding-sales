@@ -83,3 +83,23 @@ it('keeps growth in review at the 90-day freshness boundary and jobs with unknow
 it('does not promote a maintenance-service breadcrumb as a coordination vacancy',()=>{
  expect(qualifyCandidate(fixture('You are here: Home / Full-Service Property Management / Maintenance Coordination','coordination_job')).rank).toBe('fit_only');
 });
+
+it('requires descriptive residential evidence rather than a property-management navigation label',()=>{
+ const input=fixture('We provide 24/7 maintenance support.','existing_support');
+ const source=input.observations[0]!;
+ const description='Example PM is a full service real estate brokerage based in Dallas, Texas specializing in residential leasing, sales, and property management.';
+ source.blocks.find(b=>b.id==='identity')!.text=description;
+ for(const fact of input.facts.filter(f=>f.blockId==='identity'))fact.value=description;
+ source.blocks.push({id:'menu',text:'Property Management'});
+ const residential=input.facts.find(f=>f.kind==='residential_management')!;
+ residential.blockId='menu';residential.value='Property Management';
+ expect(qualifyCandidate(input).unknowns).toContain('residential_fit_unknown');
+ // Extraction may cite the same descriptive block for identity and residential fit.
+ residential.blockId='identity';residential.value=description;
+ const verdict=qualifyCandidate(input);
+ expect(verdict.unknowns).not.toContain('residential_fit_unknown');
+ expect(verdict).toMatchObject({decision:'review',rank:'fit_only',unknowns:expect.arrayContaining(['maintenance_need_unconfirmed'])});
+ // Correct selection still cannot turn stale or third-party material into fit evidence.
+ source.firstParty=false;
+ expect(qualifyCandidate(input).unknowns).toContain('residential_fit_unknown');
+});
