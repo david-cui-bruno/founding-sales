@@ -67,7 +67,7 @@ export function qualifyEmailCandidate(input: Parameters<typeof qualifyCandidate>
 // Database assessment is repeated inside admission/plan creation under the shared
 // send/identity locks. It does not itself create a prospect or authorize contact.
 
-export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
+export interface EmailAssessment {firmId:string|null;route:EmailEvidenceRoute;lane:'call_first'|'email_first';rank:'help_request'|'operational_burden'|'investigation'|'fit_only';emailRank:'help_request'|'operational_burden'|'investigation'|'fit_only';reviewRequired:boolean;verifiedFit:boolean}
 export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidateId:string;qualificationRunId:string}):Promise<{ok:true;value:EmailAssessment}|{ok:false;reason:string}>{
  if(!decideAdminOnly(ctx).permitted)return {ok:false,reason:'admin_required'};
  const w=ctx.scope.workspaceId;
@@ -95,5 +95,5 @@ export async function assessEmailCandidate(ctx:RepositoryContext,input:{candidat
  const existing=firm?await existingEmailRoute(ctx,firm.id,route.address,input):{ok:true as const,value:null};
  if(!existing.ok)return existing;
  const phone=supportedBusinessPhone(run.facts,identity);
- return {ok:true,value:{firmId:firm?.id??null,route,verifiedFit:emailVerdict.decision==='eligible',lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
+ return {ok:true,value:{firmId:firm?.id??null,route,verifiedFit:emailVerdict.decision==='eligible',lane:phone&&['help_request','operational_burden'].includes(verdict.rank)?'call_first':'email_first',rank:verdict.rank,emailRank:emailVerdict.rank,reviewRequired:(existing.value!==null&&!existing.value.attributed)||verdict.unknowns.some(r=>r!=='business_phone_unresolved')}};
 }

@@ -68,7 +68,30 @@ export async function saveEmailAdmissionControl(ctx:RepositoryContext,input:unkn
  }
  const revision=old.revision+1;
  await ctx.db.query(`INSERT INTO outreach_email_admission_settings(workspace_id,revision,owner_user_id,mailbox_id,sequence_version_id,mailbox_binding,sequence_binding,evaluation) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
- ON CONFLICT(workspace_id) DO UPDATE SET revision=EXCLUDED.revision,owner_user_id=EXCLUDED.owner_user_id,mailbox_id=EXCLUDED.mailbox_id,sequence_version_id=EXCLUDED.sequence_version_id,mailbox_binding=EXCLUDED.mailbox_binding,sequence_binding=EXCLUDED.sequence_binding,evaluation=EXCLUDED.evaluation,updated_at=now()`,[ctx.scope.workspaceId,revision,v.ownerUserId,v.mailboxId,v.sequenceVersionId,current?.ok?current.mailboxBinding:null,current?.ok?current.sequenceBinding:null,v.evaluation?JSON.stringify(v.evaluation):null]);
+ ON CONFLICT(workspace_id) DO UPDATE SET enabled=false,revision=EXCLUDED.revision,owner_user_id=EXCLUDED.owner_user_id,mailbox_id=EXCLUDED.mailbox_id,sequence_version_id=EXCLUDED.sequence_version_id,mailbox_binding=EXCLUDED.mailbox_binding,sequence_binding=EXCLUDED.sequence_binding,evaluation=EXCLUDED.evaluation,updated_at=now()`,[ctx.scope.workspaceId,revision,v.ownerUserId,v.mailboxId,v.sequenceVersionId,current?.ok?current.mailboxBinding:null,current?.ok?current.sequenceBinding:null,v.evaluation?JSON.stringify(v.evaluation):null]);
  await recordCrmAuditEvent(ctx,{action:'outreach.email_control_saved',subjectKind:'workspace',subjectId:ctx.scope.workspaceId,detail:{revision,enabled:false,ownerUserId:v.ownerUserId,mailboxId:v.mailboxId,sequenceVersionId:v.sequenceVersionId,evaluationSha256:v.evaluation?.reportSha256??null}});
  return {ok:true,value:{revision}};
+}
+
+/** Worker-only live binding check. Caller holds the workspace send gate. This
+ * checks stored authority; it never creates or enables it. */
+export async function automaticEmailConfiguration(ctx:RepositoryContext,expectedRevision:number){
+ if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return {ok:false as const,reason:'automatic_email_capability_required'};
+ const row=(await ctx.db.query<ControlRow & {enabled:boolean}>('SELECT * FROM outreach_email_admission_settings WHERE workspace_id=$1 FOR UPDATE',[ctx.scope.workspaceId])).rows[0];
+ if(!row?.enabled)return {ok:false as const,reason:'automatic_email_disabled'};
+ if(row.revision!==expectedRevision)return {ok:false as const,reason:'control_changed'};
+ if(!row.owner_user_id||!row.mailbox_id||!row.sequence_version_id)return {ok:false as const,reason:'configuration_required'};
+ await ctx.db.query('SELECT user_id FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[ctx.scope.workspaceId,row.owner_user_id]);
+ await ctx.db.query('SELECT id FROM mailboxes WHERE workspace_id=$1 AND id=$2 FOR SHARE',[ctx.scope.workspaceId,row.mailbox_id]);
+ // Retirement takes sequence then version locks. Hold shared locks in that order
+ // so evaluated content cannot retire between the binding check and enrollment.
+ await ctx.db.query(`SELECT s.id FROM sequences s JOIN sequence_versions v ON v.workspace_id=s.workspace_id AND v.sequence_id=s.id WHERE v.workspace_id=$1 AND v.id=$2 FOR SHARE OF s`,[ctx.scope.workspaceId,row.sequence_version_id]);
+ await ctx.db.query('SELECT id FROM sequence_versions WHERE workspace_id=$1 AND id=$2 FOR SHARE',[ctx.scope.workspaceId,row.sequence_version_id]);
+ await ctx.db.query(`SELECT t.id FROM template_versions t WHERE t.workspace_id=$1 AND t.id IN (SELECT template_version_id FROM sequence_steps WHERE workspace_id=$1 AND sequence_version_id=$2) ORDER BY t.id FOR SHARE`,[ctx.scope.workspaceId,row.sequence_version_id]);
+ const current=await bindings(ctx,{ownerUserId:row.owner_user_id,mailboxId:row.mailbox_id,sequenceVersionId:row.sequence_version_id});
+ if(!current.ok)return current;
+ if(current.mailboxBinding!==row.mailbox_binding)return {ok:false as const,reason:'mailbox_binding_changed'};
+ if(current.sequenceBinding!==row.sequence_binding)return {ok:false as const,reason:'sequence_binding_changed'};
+ if(!evaluationMatches(row.evaluation,current.configurationSha256))return {ok:false as const,reason:'evaluation_mismatch'};
+ return {ok:true as const,value:{ownerUserId:row.owner_user_id,mailboxId:row.mailbox_id,sequenceVersionId:row.sequence_version_id,revision:row.revision,evaluationSha256:emailAdmissionEvaluationSchema.parse(row.evaluation).reportSha256}};
 }
