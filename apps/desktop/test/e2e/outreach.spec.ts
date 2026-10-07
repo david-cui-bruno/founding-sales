@@ -4,7 +4,7 @@ import {adminState} from './support/adminFixtures.ts';
 import type {OutreachControl} from '@fss/contracts';
 test('outreach controls preserve a draft across real route navigation',async({page})=>{
  const id='11111111-1111-4111-8111-111111111111';
- const view:OutreachControl={settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'owner@example.test',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
+ const view:OutreachControl={emailAdmission:{revision:0,enabled:false,ownerUserId:null,mailboxId:null,sequenceVersionId:null,evaluation:null,configurationSha256:null,ready:false,reasons:['configuration_required']},settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'owner@example.test',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
  const app=await startAppServer({admin:adminState(),operations:{'outreach.control':()=>({view,reason:null})}});
  try{
   await page.goto(app.url('#admin'));

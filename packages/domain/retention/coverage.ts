@@ -64,6 +64,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   social_deliveries: coverage(['retained'], 'Native scheduling receipts and cancellation state; local deletion cannot recall an external schedule.'),
   social_draft_requests: coverage(['retained'], 'Source references/hashes and anonymized draft suggestions, never copied transcripts; deleted or changed sources block generation and result acceptance.'),
   outreach_reply_deliveries: coverage(['retained'], 'Immutable draft hashes and delivery bindings only; source and permission gates refuse deleted or changed prospects.'),
+  outreach_email_admission_settings: coverage(['operational'], 'Disabled email capability bindings and evaluation hashes only; no prospect text or credentials.'),
   outreach_settings: coverage(['operational'], 'Disabled-by-default reply settings; no prospect text.'),
   outreach_reply_requests: coverage(['retained'], 'Coded decisions and immutable source hashes only; source deletion makes requests unavailable, plan deletion workflow stops dispatch.'),
   meeting_qualification_revisions: coverage(['deletion_removes'], 'Immutable qualification answers and source references cascade with meeting deletion.'),

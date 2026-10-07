@@ -1,0 +1,79 @@
+{
+  "status": "approved_copy_definition",
+  "basis": "Adapted from approved Key B: same founder story, product claims, asks and five-touch offsets; firm-specific portfolio and software observations removed. No sender or enrollment changes.",
+  "policyVersion": "outreach-email-fit-v1",
+  "offsetDays": [
+    0,
+    3,
+    7,
+    13,
+    20
+  ],
+  "templates": [
+    {
+      "email": 1,
+      "template": {
+        "name": "Verified residential fit \u00b7 maintenance coordination \u00b7 email 1",
+        "subject": "Help with maintenance coordination at {firm_name}",
+        "body": "Hi,\n\nI saw {firm_name} manages residential properties.\n\nI built Callie after watching maintenance calls interrupt my mom\u2019s family trips and wake her up at night. It\u2019s an AI maintenance coordinator that handles tenant requests, coordinates vendors, follows up and confirms the work is done.\n\nWould a 20-minute walkthrough be useful to see whether it could help your team?",
+        "footerSignOff": "Best,\nDavid",
+        "requiredVariables": [
+          "firm_name"
+        ],
+        "approve": false
+      }
+    },
+    {
+      "email": 2,
+      "template": {
+        "name": "Verified residential fit \u00b7 maintenance coordination \u00b7 email 2",
+        "subject": "Help with maintenance coordination at {firm_name}",
+        "body": "Hi,\n\nAnswering a maintenance call is only the start. There\u2019s still a vendor to coordinate with, a tenant waiting for an update, and work to follow through on.\n\nCallie handles that coordination through completion\u2014not just the initial conversation.\n\nYou can try a call with it at https://usecallie.com.",
+        "footerSignOff": "Best,\nDavid",
+        "requiredVariables": [
+          "firm_name"
+        ],
+        "approve": false
+      }
+    },
+    {
+      "email": 3,
+      "template": {
+        "name": "Verified residential fit \u00b7 maintenance coordination \u00b7 email 3",
+        "subject": "Help with maintenance coordination at {firm_name}",
+        "body": "Hi,\n\nOne thing I wanted when building Callie was help with the follow-up while keeping the property manager involved in decisions.\n\nYou can keep manager approvals where you want them, with Callie handling tenant and vendor communication around those decisions.\n\nWould it be useful to walk through how that would fit your maintenance process?",
+        "footerSignOff": "Best,\nDavid",
+        "requiredVariables": [
+          "firm_name"
+        ],
+        "approve": false
+      }
+    },
+    {
+      "email": 4,
+      "template": {
+        "name": "Verified residential fit \u00b7 maintenance coordination \u00b7 email 4",
+        "subject": "Help with maintenance coordination at {firm_name}",
+        "body": "Hi,\n\nCallie communicates with tenants and vendors over phone, text and email.\n\nI\u2019d be happy to show you how a maintenance request moves through that workflow.\n\nWould you have 20 minutes next week?",
+        "footerSignOff": "Best,\nDavid",
+        "requiredVariables": [
+          "firm_name"
+        ],
+        "approve": false
+      }
+    },
+    {
+      "email": 5,
+      "template": {
+        "name": "Verified residential fit \u00b7 maintenance coordination \u00b7 email 5",
+        "subject": "Help with maintenance coordination at {firm_name}",
+        "body": "Hi,\n\nI\u2019ll leave this here for now.\n\nIf help with maintenance coordination becomes a priority at {firm_name}, I\u2019d be happy to show you what Callie handles and learn where your team could use support.",
+        "footerSignOff": "Best,\nDavid",
+        "requiredVariables": [
+          "firm_name"
+        ],
+        "approve": false
+      }
+    }
+  ]
+}
