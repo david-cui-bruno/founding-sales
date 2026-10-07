@@ -6,7 +6,7 @@ it('uses one Basic request with no agentic fan-out and preserves native provenan
  expect(await search.discover({query:'Dallas property manager maintenance'})).toMatchObject({ok:true,credits:1,requestId:'native-123',hits:[{url:result.results[0]!.url,snippet:'Call the owner.'}]});
  expect(http).toHaveBeenCalledTimes(1);const [url,init]=http.mock.calls[0]! as unknown as [string,RequestInit];
  expect(url).toBe('https://api.tavily.com/search');expect(init.redirect).toBe('error');
- expect(JSON.parse(init.body as string)).toMatchObject({search_depth:'basic',auto_parameters:false,include_answer:false,include_raw_content:false,include_usage:true,max_results:5});
+ expect(JSON.parse(init.body as string)).toMatchObject({search_depth:'basic',auto_parameters:false,include_answer:false,include_raw_content:false,include_usage:true,max_results:20,exclude_domains:['allpropertymanagement.com','propertymanagement.com','propertymanagementlist.com']});
 });
 it('deduplicates URLs, rejects nonpublic URLs and never turns snippets into verified facts',async()=>{
  const http=vi.fn(async()=>Response.json({...result,results:[...result.results,{...result.results[0],url:result.results[0]!.url+'#a'},{url:'http://127.0.0.1',title:'bad',content:'bad'},{url:'https://example.test/private?token=abc',title:'query',content:'x'}]}));
@@ -32,4 +32,11 @@ it('refuses invalid queries before requesting and requires native result metadat
  const http=vi.fn(async()=>Response.json({results:[{title:'No URL'}],usage:{credits:1}}));const provider=tavilySearch('test-key',{http});
  expect(await provider.discover({query:''})).toMatchObject({ok:false,code:'invalid_query'});expect(http).not.toHaveBeenCalled();
  expect(await provider.discover({query:'PM'})).toMatchObject({ok:false,code:'invalid_response'});
+});
+
+it('accepts twenty results for one credit and refuses a response beyond the requested bound',async()=>{
+ const rows=Array.from({length:20},(_,i)=>({url:`https://firm-${i}.test/`,title:`Firm ${i}`,content:'Residential management'}));
+ const response=await tavilySearch('test-key',{http:async()=>Response.json({...result,results:rows})}).discover({query:'PM'});
+ expect(response.ok&&response.hits).toHaveLength(20);
+ expect(await tavilySearch('test-key',{http:async()=>Response.json({...result,results:[...rows,{...rows[0],url:'https://overflow.test/'}]})}).discover({query:'PM'})).toMatchObject({ok:false,code:'invalid_response'});
 });

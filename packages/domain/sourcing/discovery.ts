@@ -6,7 +6,7 @@ import {decideAdminOnly} from '../crm/authorization.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
 import {saveCandidate} from './candidates.ts';
-import type {DiscoverySearchProvider,DiscoverySearchResult} from './discoveryProvider.ts';
+import {DISCOVERY_RESULT_LIMIT,DISCOVERY_NEW_CANDIDATE_LIMIT,type DiscoverySearchProvider,type DiscoverySearchResult} from './discoveryProvider.ts';
 import {sourcingUrlSchema} from '@fss/contracts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 
@@ -51,18 +51,25 @@ export async function runDiscovery(ctx:RepositoryContext,provider:DiscoverySearc
    await recordCrmAuditEvent(ctx,{action:'sourcing.discovery_failed',subjectKind:'sourcing_discovery_attempt',subjectId:attempt.id,detail:{code:answer.code,provider:provider.providerKey}});
   }else{
    const observed=(await db.query<{day:string}>("SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD') AS day")).rows[0]!.day;
-   for(const hit of answer.hits.slice(0,5)){
+   let created=0;
+   for(const hit of answer.hits.slice(0,DISCOVERY_RESULT_LIMIT)){
     if(!sourcingUrlSchema.safeParse(hit.url).success)continue;
     const inserted=await db.query('INSERT INTO sourcing_discovery_hits(workspace_id,source_url,attempt_id,native_result) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING RETURNING source_url',[ctx.scope.workspaceId,hit.url,attempt.id,JSON.stringify(hit)]);
-    if(inserted.rows.length===0)continue;
+    if(inserted.rows.length===0){
+     const prior=(await db.query<{candidate_id:string|null}>('SELECT candidate_id FROM sourcing_discovery_hits WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url])).rows[0];
+     if(prior?.candidate_id)continue;
+    }
     // Preserve the raw hit for review, but do not turn known directories into firms.
     if(isDiscoveryDirectory(hit.url))continue;
     const existing=(await db.query<{id:string}>("SELECT id FROM sourcing_candidates WHERE workspace_id=$1 AND (payload->>'sourceUrl'=$2 OR payload->>'website'=$2) LIMIT 1",[ctx.scope.workspaceId,hit.url])).rows[0];
     if(existing){await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,existing.id]);continue;}
+    // Retain excess raw hits; a later result can revisit one not yet made into a candidate.
+    if(created>=DISCOVERY_NEW_CANDIDATE_LIMIT)continue;
     const host=new URL(hit.url).hostname.replace(/^www\./,'');
     const known=(await db.query("SELECT id FROM firms WHERE workspace_id=$1 AND regexp_replace(lower(split_part(website,'/',3)),'^www\\.','')=$2 LIMIT 1",[ctx.scope.workspaceId,host])).rows.length>0;
     const saved=await saveCandidate(ctx,{firmName:discoveryFirmName(hit.title,hit.url),website:hit.url,locality:attempt.query.locality,region:attempt.query.region,signal:'fit_only',evidence:hit.snippet.trim().slice(0,2000)||'Search returned no excerpt; source verification required.',sourceUrl:hit.url,observedOn:observed,preparedBy:'Tavily Basic search · not verified',discoveryKnownDomain:known,discoveryQuery:attempt.query.query});
     if(!saved.ok)throw new Error('discovery_candidate_invalid');
+    created++;
     await requestQualification(ctx,{candidateId:saved.value.id,expectedRevision:1});
     await db.query('UPDATE sourcing_discovery_hits SET candidate_id=$3 WHERE workspace_id=$1 AND source_url=$2',[ctx.scope.workspaceId,hit.url,saved.value.id]);
    }
