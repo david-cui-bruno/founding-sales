@@ -512,8 +512,8 @@ export async function setAdminCap(
       [context.scope.workspaceId, input.mailboxId],
     );
     if (rows[0] === undefined) return { ok: false, reason: 'mailbox_unknown' };
-    await ensureRamp(context, input.mailboxId);
   }
+  await ensureRamp(context, input.mailboxId);
 
   const locked = await context.db.query<RampDbRow>(
     `SELECT ${RAMP_COLUMNS} FROM mailbox_send_ramp WHERE workspace_id = $1 AND mailbox_id = $2 FOR UPDATE`,
@@ -922,6 +922,7 @@ export async function readSendDayHealth(
     actionKind: 'email_send',
     ownerUserId: coverage.ownerUserId,
     mailboxId,
+    channel: 'email',
   });
 
   return {
@@ -940,7 +941,7 @@ export async function readSenderReadiness(context: RepositoryContext, mailboxId:
   if(coverageFailure) reasons.push(coverageFailure.reason);
   const domain=await readPrimarySendingDomain(context);
   if(!domain || !authenticationPasses(domain) || !domain.automatedSendingEnabled) reasons.push('authentication_failing');
-  if(coverage) for(const hold of await listApplicableHolds(context,{actionKind:'email_send',ownerUserId:coverage.ownerUserId,mailboxId})) reasons.push(hold.reasonCode);
+  if(coverage) for(const hold of await listApplicableHolds(context,{actionKind:'email_send',ownerUserId:coverage.ownerUserId,mailboxId,channel:'email'})) reasons.push(hold.reasonCode);
   const unsettled=(await context.db.query<{unsettled:boolean}>(`SELECT EXISTS(SELECT 1 FROM outbound_messages
     WHERE workspace_id=$1 AND mailbox_id=$2 AND (state IN ('dispatching','reconciling') OR (state='unknown_terminal' AND admin_resolution IS NULL))) AS unsettled`,[context.scope.workspaceId,mailboxId])).rows[0]?.unsettled;
   if(unsettled) reasons.push('unresolved_submission');

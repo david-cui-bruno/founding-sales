@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { recordSuppression } from '../../suppression/events.ts';
+import { openHold, releaseHold } from '../../policy/holds.ts';
 import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
 import { beginReconciling, claimForDispatch, recordReconciledSent } from '../../outbound/fence.ts';
 import { applyDirectSendEffects } from '../../mail/effects.ts';
 import { readMessage } from '../../mail/messages.ts';
 import { withTransaction } from '../../db/queryable.ts';
-import { closeSendDay, openSendDay, readRampStanding, recordDaySignal, setAdminCap } from '../../outbound/ramp.ts';
+import { closeSendDay, openSendDay, readRampStanding, readSendDayHealth, recordDaySignal, setAdminCap } from '../../outbound/ramp.ts';
 import { recoveryStageCap } from '../../outbound/recovery.ts';
 import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
@@ -64,6 +65,20 @@ it('reports transient coverage loss and recovers readiness only after fresh cove
   expect(await readRampStanding(context(), world.alpha.mailboxId)).toMatchObject({ effectiveCap: 5, readiness: { ready: true, reasons: [] } });
 });
 
+it('reports an email channel hold and refuses recovery credit while the held day is closed', async () => {
+  const holdId = await openHold(context(), { scopeKind: 'channel', scopeKey: 'email', reasonCode: 'scoped_pause', blockedActionKinds: ['email_send'], sourceEventKind: 'administrative_pause', recoveryAction: 'release_pause' });
+  try {
+    expect(await readRampStanding(context(), world.alpha.mailboxId)).toMatchObject({ readiness: { ready: false, reasons: ['scoped_pause'] }, recovery: { qualifyingDays: 4 } });
+    await exposure('2026-10-12', 4);
+    const signals = await readSendDayHealth(context(), world.alpha.mailboxId);
+    expect(signals).toMatchObject({ authenticationPasses: true, coverageHealthy: false, providerWarning: false });
+    expect(await withTransaction(world.database.session, () => closeSendDay(context(), { mailboxId: world.alpha.mailboxId, businessDate: '2026-10-12', signals: signals! }))).toMatchObject({ advanced: false, failure: 'coverage_unhealthy', healthySendingDays: 40 });
+    expect(await readRampStanding(context(), world.alpha.mailboxId)).toMatchObject({ recovery: { qualifyingDays: 4 } });
+  } finally { await releaseHold(context(), holdId); }
+  expect(await readRampStanding(context(), world.alpha.mailboxId)).toMatchObject({ readiness: { ready: true, reasons: [] } });
+  expect(await readSendDayHealth(context(), world.alpha.mailboxId)).toMatchObject({ coverageHealthy: true });
+});
+
 it('holds a recovered mailbox with unsettled provider evidence and sends only after established reconciliation', async () => {
   const uncertainFirm = await seedFirm(world, world.alpha, 'uncertain-recovery');
   const uncertain = await prepareFor(world, world.alpha, uncertainFirm);
@@ -83,6 +98,18 @@ it('reports a saved lower cap as the actual recovery allowance and retains it on
   const save = (lowerTo: number|null) => withTransaction(world.database.session, () => setAdminCap(context(), { mailboxId: world.alpha.mailboxId, adminUserId: world.alpha.workspace.admin.userId, lowerTo }));
   expect(await save(3)).toMatchObject({ ok: true, effectiveCap: 3 });
   expect(await save(null)).toMatchObject({ ok: true, effectiveCap: 5 });
+});
+
+it('assesses inactivity when a cap save is the first entry after an established mailbox gap', async () => {
+  const fresh = await createOutboundWorld();
+  try {
+    const box = fresh.alpha;
+    const ctx = fresh.systemContext(box.workspace.workspaceId);
+    await fresh.database.session.query("UPDATE mailboxes SET created_at=clock_timestamp()-interval '15 days' WHERE id=$1", [box.mailboxId]);
+    const saved = await withTransaction(fresh.database.session, () => setAdminCap(ctx, { mailboxId: box.mailboxId, adminUserId: box.workspace.admin.userId, lowerTo: 40 }));
+    expect(saved).toMatchObject({ ok: true, effectiveCap: 5, ramp: { healthySendingDays: 40, adminDailyCap: 40, recovery: { active: true, stageCap: 5, qualifyingDays: 0 } } });
+    expect(await readRampStanding(ctx, box.mailboxId)).toMatchObject({ effectiveCap: 5, recovery: { active: true, qualifyingDays: 0 } });
+  } finally { await fresh.stop(); }
 });
 
 it('finishes recovery at an earned initial stage, resumes the earned ramp, and reopens on a late revoked recovery day', async () => {
