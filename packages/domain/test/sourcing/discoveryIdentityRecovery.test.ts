@@ -1,3 +1,5 @@
+import recordedBrg from './support/438-brg-geography.json';
+import {qualificationFactSchema} from '@fss/contracts';
 import {afterAll,beforeAll,beforeEach,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {seedTwoWorkspaces} from '../db/support/fixtures.ts';
@@ -165,4 +167,56 @@ it('sees a research hold committed while identity recovery waits for the send ga
   await db.session.query('COMMIT');await attempt;
  }finally{await db.session.query('ROLLBACK');}
  expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,firmName:original.candidate.firmName,revision:1}]}});
+});
+
+// Replay normalized recorded pages and the actual failed model selections through
+// the public runner. No model or page network calls; this is not yield evidence.
+it('recovers the recorded BRG office locality missed by extraction and requires fresh revision evidence',async()=>{
+ const payload=recordedBrg.candidate;
+ await runDiscovery(ctx(),{providerKey:'tavily_basic',discover:async()=>({ok:true,credits:1,requestId:'recorded-brg',hits:[{url:payload.website,title:payload.firmName,snippet:payload.evidence}]})});
+ const listed=await listCandidates(ctx(),{status:'needs_review',offset:0});if(!listed.ok)throw Error(listed.reason);
+ const candidate=listed.value.candidates[0]!;const initial=await readQualification(ctx(),{candidateId:candidate.id});if(!initial)throw Error('missing run');
+ const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:recordedBrg.observations.map(source=>({url:source.url,contentHash:'a'.repeat(64),contentType:'text/html',firstParty:source.firstParty,retrievedAt:new Date().toISOString(),body:new TextEncoder().encode(source.blocks.map(b=>`<p>${b.text}</p>`).join('')+(source.truncated?'<p>Excluded overflow block</p>':''))})),skipped:{}}})};
+ const recordedExtraction:QualificationExtractionProvider={providerKey:'aws_bedrock.sourcing_qualification',countInputTokens:async()=>300,extract:async input=>({ok:true,costCents:1,value:{facts:recordedBrg.facts.map(f=>{
+  const old=recordedBrg.observations.find(source=>source.id===f.observationId)!;
+  const source=input.observations.find(source=>source.url===old.url)!;
+  const block=source.blocks.find(block=>block.id===f.blockId&&block.text===f.value)!;
+  return qualificationFactSchema.parse({...f,observationId:source.id,blockId:block.id});
+ }),openingQuestion:null}})};
+ await runQualification(ctx(),{runId:initial.runId},{pageFetch,extraction:recordedExtraction});
+ expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:candidate.id,revision:2,firmName:'Boston Residential Group, LLC'}]}});
+ const next=await readQualification(ctx(),{candidateId:candidate.id});
+ expect(next).toMatchObject({status:'pending',candidateRevision:2,history:[{runId:initial.runId,facts:expect.arrayContaining([
+  expect.objectContaining({kind:'service_area',value:recordedBrg.facts.find(f=>f.kind==='service_area')!.value}),
+  expect.objectContaining({kind:'service_area',value:'Boston, MA 02115',blockId:'b21'})
+ ])}]});
+ await runQualification(ctx(),{runId:next!.runId},{pageFetch,extraction:recordedExtraction});
+ const {assessEmailCandidate}=await import('../../outreach/selection.ts');
+ expect(await assessEmailCandidate(ctx(),{candidateId:candidate.id,qualificationRunId:next!.runId})).toMatchObject({ok:true,value:{verifiedFit:true,route:{address:'info@bostonresidentialgroup.com'}}});
+});
+
+it('does not add office geography when the same legal company publishes two usable office cards',async()=>{
+ const original=await discovered();
+ const second=card.slice(0,8).map(text=>text==='221 Main Avenue'?'222 Main Avenue':text==='Boston, MA 02115'?'Boston, MA 02116':text);
+ const ambiguous:PageFetchProvider={...pages,fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url:'https://example.test/contact',contentHash:'a'.repeat(64),contentType:'text/html',firstParty:true,retrievedAt:new Date().toISOString(),body:new TextEncoder().encode([...card,...second].map(t=>`<p>${t}</p>`).join(''))}],skipped:{}}})};
+ await runQualification(ctx(),{runId:original.runId},{pageFetch:ambiguous,extraction:{...extraction,extract:async input=>{
+  const source=input.observations[0]!,descriptionBlock=source.blocks.find(b=>b.text===description)!,email=source.blocks.find(b=>b.text==='info@example.test')!;
+  return {ok:true,costCents:1,value:{facts:[{kind:'residential_management',observationId:source.id,blockId:descriptionBlock.id,value:descriptionBlock.text},{kind:'business_email',observationId:source.id,blockId:email.id,value:email.text}],openingQuestion:null}};
+ }}});
+ expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,revision:1,firmName:original.candidate.firmName}]}});
+});
+
+it.each(['stale','truncated','third_party','cross_host','unassociated_city','missing_region'])('refuses supplemental office geography from %s evidence',async defect=>{
+ const original=await discovered();
+ let text=card.slice(0,8).concat(`${name} manages residential apartments.`);
+ if(defect==='unassociated_city')text=text.filter(value=>value!=='Boston, MA 02115').concat('Cities mentioned by unrelated customers: Boston, MA');
+ if(defect==='missing_region')text=text.map(value=>value==='Boston, MA 02115'?'Boston':value);
+ if(defect==='truncated')text=text.concat(Array.from({length:120},(_,i)=>`Overflow ${i}`));
+ const pageFetch:PageFetchProvider={providerKey:'company_page',fetchPages:async()=>({ok:true,costCents:0,value:{pages:[{url:defect==='cross_host'?'https://other.test/contact':'https://example.test/contact',contentHash:'a'.repeat(64),contentType:'text/html',firstParty:defect!=='third_party',retrievedAt:new Date(Date.now()-(defect==='stale'?8*86400000:0)).toISOString(),body:new TextEncoder().encode(text.map(t=>`<p>${t}</p>`).join(''))}],skipped:{}}})};
+ await runQualification(ctx(),{runId:original.runId},{pageFetch,extraction:{...extraction,extract:async input=>{
+  const source=input.observations[0];if(!source)return {ok:true,costCents:1,value:{facts:[],openingQuestion:null}};
+  const residential=source.blocks.find(b=>b.text===`${name} manages residential apartments.`)!,email=source.blocks.find(b=>b.text==='info@example.test')!;
+  return {ok:true,costCents:1,value:{facts:[{kind:'residential_management',observationId:source.id,blockId:residential.id,value:residential.text},{kind:'business_email',observationId:source.id,blockId:email.id,value:email.text}],openingQuestion:null}};
+ }}});
+ expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,revision:1,firmName:original.candidate.firmName}]}});
 });

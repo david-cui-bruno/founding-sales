@@ -1,0 +1,1127 @@
+{
+  "provenance": {
+    "kind": "frozen_actual_production_observations_and_selections",
+    "runId": "5477f005-f602-44b5-bc68-1cd280a679e8",
+    "capturedAt": "2026-10-08T14:22:37.600Z",
+    "note": "Normalized text blocks, not raw HTML or fresh/stochastic extraction. Original observations retain October 8 timestamps. Public runner fixture stamps simulated retrieval time for deterministic freshness."
+  },
+  "candidate": {
+    "region": "MA",
+    "signal": "fit_only",
+    "website": "https://www.bostonresidentialgroup.com/",
+    "evidence": "Boston Residential Group manages a diverse portfolio of apartment and condominium developments with uncompromising reliability and exacting standards. Our attention to detail and team of experts results in higher than average occupancy rates and tenant turnover rates that are half the industry standard.Learn More\n\n### Consulting Services [...] Boston Residential Group helps property owners design, launch, position, market, and manage projects on a fee basis. We provide these services for ground-up development and the repositioning of existing assets, and our experienced team is committed to providing superior returns for property owners.Learn More\n\nView All ServicesAbout Us\n\nPhoto of BRG's Olmstead Place property    \n\n##### Olmsted Place\n\n Jamaica Plain, MA\n\nPhoto of BRG's 360 Newbury Street property    \n\n##### 360 Newbury Street [...] Boston Residential Group develops distinctive properties in partnership with institutional investors. From landmark condominium conversions in Back Bay to transformative workforce housing in Dudley Square, our market insight translates into enduring real estate assets and superior financial returns.Learn More\n\n### Boston Property Management",
+    "firmName": "Boston Real Estate Development - Property Management - BRG",
+    "locality": "Boston",
+    "sourceUrl": "https://www.bostonresidentialgroup.com/",
+    "observedOn": "2026-10-08",
+    "preparedBy": "Tavily Basic search \u00b7 not verified",
+    "discoveryQuery": "Boston residential property management",
+    "discoveryKnownDomain": false
+  },
+  "observations": [
+    {
+      "id": "3b1744de-7e77-4a79-a07d-09c231d5882b",
+      "url": "https://www.bostonresidentialgroup.com/",
+      "retrievedAt": "2026-10-08T14:21:34.573Z",
+      "firstParty": true,
+      "truncated": true,
+      "blocks": [
+        {
+          "id": "b1",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b2",
+          "text": "Setting the Standard for Urban Development"
+        },
+        {
+          "id": "b3",
+          "text": "Our projects give customers an immediate and compelling connection to the city"
+        },
+        {
+          "id": "b4",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b5",
+          "text": "Rock Solid Returns"
+        },
+        {
+          "id": "b6",
+          "text": "Our market insights and crisp execution skills result in rock solid returns to investors"
+        },
+        {
+          "id": "b7",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b8",
+          "text": "Style and Innovation for All"
+        },
+        {
+          "id": "b9",
+          "text": "We create design details for every property that make it stand out in the market"
+        },
+        {
+          "id": "b10",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b11",
+          "text": "Setting the Standard for Urban Development"
+        },
+        {
+          "id": "b12",
+          "text": "Our projects give customers an immediate and compelling connection to the city"
+        },
+        {
+          "id": "b13",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b14",
+          "text": "Rock Solid Returns"
+        },
+        {
+          "id": "b15",
+          "text": "Our market insights and crisp execution skills result in rock solid returns to investors"
+        },
+        {
+          "id": "b16",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b17",
+          "text": "Style and Innovation for All"
+        },
+        {
+          "id": "b18",
+          "text": "We create design details for every property that make it stand out in the market"
+        },
+        {
+          "id": "b19",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b20",
+          "text": "Setting the Standard for Urban Development"
+        },
+        {
+          "id": "b21",
+          "text": "Our projects give customers an immediate and compelling connection to the city"
+        },
+        {
+          "id": "b22",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b23",
+          "text": "Rock Solid Returns"
+        },
+        {
+          "id": "b24",
+          "text": "Our market insights and crisp execution skills result in rock solid returns to investors"
+        },
+        {
+          "id": "b25",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b26",
+          "text": "Style and Innovation for All"
+        },
+        {
+          "id": "b27",
+          "text": "We create design details for every property that make it stand out in the market"
+        },
+        {
+          "id": "b28",
+          "text": "Learn MoreView Properties"
+        },
+        {
+          "id": "b29",
+          "text": "/ 9 / 9"
+        },
+        {
+          "id": "b30",
+          "text": "Boston Residential Group is at the Forefront of Boston Real Estate Development"
+        },
+        {
+          "id": "b31",
+          "text": "A proven leader in urban real estate development in Boston, property management, consulting and more."
+        },
+        {
+          "id": "b32",
+          "text": "Boston Residential Group has been redefining the art of urban living since 2003. From Newbury Street to the Navy Yard, our projects give customers an immediate and compelling connection to the city. Creating residences and amenities that blend seamlessly into the neighborhood, we are at the forefront of urban development."
+        },
+        {
+          "id": "b33",
+          "text": "Boston Real Estate Development"
+        },
+        {
+          "id": "b34",
+          "text": "Boston Residential Group develops distinctive properties in partnership with institutional investors. From landmark condominium conversions in Back Bay to transformative workforce housing in Dudley Square, our market insight translates into enduring real estate assets and superior financial returns.Learn More"
+        },
+        {
+          "id": "b35",
+          "text": "Boston Property Management"
+        },
+        {
+          "id": "b36",
+          "text": "Boston Residential Group manages a diverse portfolio of apartment and condominium developments with uncompromising reliability and exacting standards. Our attention to detail and team of experts results in higher than average occupancy rates and tenant turnover rates that are half the industry standard.Learn More"
+        },
+        {
+          "id": "b37",
+          "text": "Consulting Services"
+        },
+        {
+          "id": "b38",
+          "text": "Boston Residential Group helps property owners design, launch, position, market, and manage projects on a fee basis. We provide these services for ground-up development and the repositioning of existing assets, and our experienced team is committed to providing superior returns for property owners.Learn More"
+        },
+        {
+          "id": "b39",
+          "text": "View All ServicesAbout Us"
+        },
+        {
+          "id": "b40",
+          "text": "Olmsted Place"
+        },
+        {
+          "id": "b41",
+          "text": "Jamaica Plain, MA"
+        },
+        {
+          "id": "b42",
+          "text": "360 Newbury Street"
+        },
+        {
+          "id": "b43",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b44",
+          "text": "319 A Street"
+        },
+        {
+          "id": "b45",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b46",
+          "text": "Church Park Apartments"
+        },
+        {
+          "id": "b47",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b48",
+          "text": "285 Columbus Lofts"
+        },
+        {
+          "id": "b49",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b50",
+          "text": "1008 Massachusetts Avenue"
+        },
+        {
+          "id": "b51",
+          "text": "Cambridge, MA"
+        },
+        {
+          "id": "b52",
+          "text": "Stonegate at Weston Condominiums"
+        },
+        {
+          "id": "b53",
+          "text": "Weston, MA"
+        },
+        {
+          "id": "b54",
+          "text": "Linden Square Apartments"
+        },
+        {
+          "id": "b55",
+          "text": "Wellesley, MA"
+        },
+        {
+          "id": "b56",
+          "text": "Battle Green Apartments"
+        },
+        {
+          "id": "b57",
+          "text": "Lexington, MA"
+        },
+        {
+          "id": "b58",
+          "text": "55 India Street"
+        },
+        {
+          "id": "b59",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b60",
+          "text": "1280 Massachusetts Avenue"
+        },
+        {
+          "id": "b61",
+          "text": "Cambridge, MA"
+        },
+        {
+          "id": "b62",
+          "text": "381 Congress Street"
+        },
+        {
+          "id": "b63",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b64",
+          "text": "353 Harvard Street Apartments"
+        },
+        {
+          "id": "b65",
+          "text": "Cambridge, MA"
+        },
+        {
+          "id": "b66",
+          "text": "Navy Yard 33"
+        },
+        {
+          "id": "b67",
+          "text": "Charlestown, MA"
+        },
+        {
+          "id": "b68",
+          "text": "Coming Soon"
+        },
+        {
+          "id": "b69",
+          "text": "Boston, MA"
+        },
+        {
+          "id": "b70",
+          "text": "View MoreAbout Us"
+        },
+        {
+          "id": "b71",
+          "text": "What Our Partners and Customers Say"
+        },
+        {
+          "id": "b72",
+          "text": "Boston Residential Group develops a beautiful product that gets unique value premiums in the Boston multifamily market. They are the best player in their niche."
+        },
+        {
+          "id": "b73",
+          "text": "Multinational Broker Partner"
+        },
+        {
+          "id": "b74",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b75",
+          "text": "5"
+        },
+        {
+          "id": "b76",
+          "text": "2017-12-29T19:36:13-05:00"
+        },
+        {
+          "id": "b77",
+          "text": "Multinational Broker Partner"
+        },
+        {
+          "id": "b78",
+          "text": "Boston Residential Group develops a beautiful product that gets unique value premiums in the Boston multifamily market. They are the best player in their niche."
+        },
+        {
+          "id": "b79",
+          "text": "https://www.bostonresidentialgroup.com/testimonials/multinational-broker-partner/"
+        },
+        {
+          "id": "b80",
+          "text": "We are truly pleased to own a home in a BRG property. It\u2019s like living in a piece of art that also has great function for our family and increases in value over time."
+        },
+        {
+          "id": "b81",
+          "text": "Condominium Unit Owner"
+        },
+        {
+          "id": "b82",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b83",
+          "text": "5"
+        },
+        {
+          "id": "b84",
+          "text": "2017-12-29T19:40:31-05:00"
+        },
+        {
+          "id": "b85",
+          "text": "Condominium Unit Owner"
+        },
+        {
+          "id": "b86",
+          "text": "We are truly pleased to own a home in a BRG property. It\u2019s like living in a piece of art that also has great function for our family and increases in value over time."
+        },
+        {
+          "id": "b87",
+          "text": "https://www.bostonresidentialgroup.com/testimonials/condominium-unit-owner/"
+        },
+        {
+          "id": "b88",
+          "text": "We have consistently exceeded our financial expectations in our joint venture developments with BRG. They pick their projects carefully and execute to a win no matter what the challenges may be."
+        },
+        {
+          "id": "b89",
+          "text": "Multinational Financial Equity Partner"
+        },
+        {
+          "id": "b90",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b91",
+          "text": "5"
+        },
+        {
+          "id": "b92",
+          "text": "2018-04-02T10:33:23-04:00"
+        },
+        {
+          "id": "b93",
+          "text": "Multinational Financial Equity Partner"
+        },
+        {
+          "id": "b94",
+          "text": "We have consistently exceeded our financial expectations in our joint venture developments with BRG. They pick their projects carefully and execute to a win no matter what the challenges may be."
+        },
+        {
+          "id": "b95",
+          "text": "https://www.bostonresidentialgroup.com/testimonials/multinational-financial-equity-partner/"
+        },
+        {
+          "id": "b96",
+          "text": "We love living in our apartment. The finishes are way better than the alternatives, and the amenities, retail and service BRG provides makes us feel special."
+        },
+        {
+          "id": "b97",
+          "text": "Apartment Renter"
+        },
+        {
+          "id": "b98",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b99",
+          "text": "5"
+        },
+        {
+          "id": "b100",
+          "text": "2018-04-02T10:34:25-04:00"
+        }
+      ]
+    },
+    {
+      "id": "5785dd4b-f9a0-4945-9458-59be9f9488a4",
+      "url": "https://www.bostonresidentialgroup.com/contact-us/",
+      "retrievedAt": "2026-10-08T14:21:34.839Z",
+      "firstParty": true,
+      "truncated": false,
+      "blocks": [
+        {
+          "id": "b1",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b2",
+          "text": "Contact Us"
+        },
+        {
+          "id": "b3",
+          "text": "Work With Boston Residential Group"
+        },
+        {
+          "id": "b4",
+          "text": "Connect with one of our real estate development experts about your project today."
+        },
+        {
+          "id": "b5",
+          "text": "Our market insight and crisp execution skills enable us to deliver rock solid returns to investors. Boston Residential Group owns and manages over 2,000 apartments and condominiums representing $1.0B in real estate assets. Our seasoned team works tirelessly to add value to our projects and is committed to providing superior returns to our investors. Partner with Boston Residential Group today to develop memorable properties with rock solid returns."
+        },
+        {
+          "id": "b6",
+          "text": "Boston Headquarters"
+        },
+        {
+          "id": "b7",
+          "text": "Address"
+        },
+        {
+          "id": "b8",
+          "text": "Boston Residential Group, LLC"
+        },
+        {
+          "id": "b9",
+          "text": "501 Boylston Street, 9th Floor"
+        },
+        {
+          "id": "b10",
+          "text": "Boston, MA 02116"
+        },
+        {
+          "id": "b11",
+          "text": "Contact Information"
+        },
+        {
+          "id": "b12",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b13",
+          "text": "Please use our contact form"
+        },
+        {
+          "id": "b14",
+          "text": "Investor Contact Information"
+        },
+        {
+          "id": "b15",
+          "text": "For investors looking to collaborate on projects that redefine urban living, please click here to contact Boston Residential Group."
+        },
+        {
+          "id": "b16",
+          "text": "Boston Headquarters"
+        },
+        {
+          "id": "b17",
+          "text": "Address"
+        },
+        {
+          "id": "b18",
+          "text": "Boston Residential Group, LLC"
+        },
+        {
+          "id": "b19",
+          "text": "221 Massachusetts Avenue"
+        },
+        {
+          "id": "b20",
+          "text": "Suite 402"
+        },
+        {
+          "id": "b21",
+          "text": "Boston, MA 02115"
+        },
+        {
+          "id": "b22",
+          "text": "Contact Information"
+        },
+        {
+          "id": "b23",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b24",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b25",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b26",
+          "text": "Contact Us"
+        },
+        {
+          "id": "b27",
+          "text": "Learn More About a Future Investment with Boston Residential Group"
+        },
+        {
+          "id": "b28",
+          "text": "Learn More"
+        },
+        {
+          "id": "b29",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b30",
+          "text": "501 Boylston Street, 9th Floor"
+        },
+        {
+          "id": "b31",
+          "text": "Boston, MA 02116"
+        },
+        {
+          "id": "b32",
+          "text": "p: (617) 424-0775"
+        },
+        {
+          "id": "b33",
+          "text": "e: Contact Us"
+        },
+        {
+          "id": "b34",
+          "text": "Services"
+        },
+        {
+          "id": "b35",
+          "text": "Service Overview"
+        },
+        {
+          "id": "b36",
+          "text": "Real Estate Development"
+        },
+        {
+          "id": "b37",
+          "text": "Property Management"
+        },
+        {
+          "id": "b38",
+          "text": "Consulting Services"
+        },
+        {
+          "id": "b39",
+          "text": "Invest With Us"
+        },
+        {
+          "id": "b40",
+          "text": "Company"
+        },
+        {
+          "id": "b41",
+          "text": "About Us"
+        },
+        {
+          "id": "b42",
+          "text": "Curtis R. Kemeny"
+        },
+        {
+          "id": "b43",
+          "text": "Properties"
+        },
+        {
+          "id": "b44",
+          "text": "Press"
+        },
+        {
+          "id": "b45",
+          "text": "Contact Us"
+        },
+        {
+          "id": "b46",
+          "text": "\u00a9 2026 Boston Residential Group. All Rights Reserved. | Locations Served"
+        },
+        {
+          "id": "b47",
+          "text": "Boston Video & Digital Marketing by Hide & Seek Media"
+        },
+        {
+          "id": "b48",
+          "text": "CLOSE"
+        }
+      ]
+    },
+    {
+      "id": "e5792e88-fb7a-49a0-8b2c-c0c1a8fb2756",
+      "url": "https://www.bostonresidentialgroup.com/about/",
+      "retrievedAt": "2026-10-08T14:21:35.064Z",
+      "firstParty": true,
+      "truncated": false,
+      "blocks": [
+        {
+          "id": "b1",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b2",
+          "text": "About Us"
+        },
+        {
+          "id": "b3",
+          "text": "About Boston Residential Group"
+        },
+        {
+          "id": "b4",
+          "text": "We have been a leader in urban real estate development, property management, consulting and more since 2003."
+        },
+        {
+          "id": "b5",
+          "text": "Setting the Standard for Urban Development"
+        },
+        {
+          "id": "b6",
+          "text": "Boston Residential Group has been redefining the art of urban living since 2003. From Newbury Street to the Navy Yard, our projects give customers an immediate and compelling connection to the city. Creating residences and amenities that blend seamlessly into the neighborhood, Boston Residential Group is at the forefront of urban development."
+        },
+        {
+          "id": "b7",
+          "text": "Boston Residential Group develops distinctive properties in partnership with institutional investors. From landmark condominium conversions in Boston\u2019s Back Bay to transformative workforce housing in Dudley Square, our market insight translates into enduring real estate assets and superior financial returns."
+        },
+        {
+          "id": "b8",
+          "text": "Boston Residential Group\u2019s carefully selected collaborators include industry leading architects, interior designers, construction managers, and engineering firms. Our teams work together to develop each project\u2019s unique vision and deliver it to the market."
+        },
+        {
+          "id": "b9",
+          "text": "Style and Innovation for All"
+        },
+        {
+          "id": "b10",
+          "text": "Led by Curtis R. Kemeny, our team blends extensive local market knowledge with innovative design vision. Whether bringing 40 units to Fort Point or 200 to Jamaica Plain, we infuse every property with design details that make it stand out in the market. From the carefully selected hardware in 360 Newbury to the exposed beams at 381 Congress to the park-side pool at Olmsted Place, we create uniquely beautiful properties."
+        },
+        {
+          "id": "b11",
+          "text": "Boston Residential Group manages a diverse portfolio of apartment and condominium developments with uncompromising reliability and exacting standards. Our attention to detail and team of experts results in higher than average occupancy rates and tenant turnover rates that are half the industry standard."
+        },
+        {
+          "id": "b12",
+          "text": "Rock Solid Returns for Investors"
+        },
+        {
+          "id": "b13",
+          "text": "Boston Residential Group partners with large, publicly-traded financial institutions to develop properties that redefine urban living. Our market insight and crisp execution skills have helped us deliver a long track record of rock-solid returns for our investors. Boston Residential Group been involved with the development and management of over 2,000 units representing $1.0B in real estate assets. Our seasoned team works tirelessly to add value to our projects and is committed to providing superior returns to our investors."
+        },
+        {
+          "id": "b14",
+          "text": "The Carlyle Group"
+        },
+        {
+          "id": "b15",
+          "text": "Morgan Stanley Real Estate Fund"
+        },
+        {
+          "id": "b16",
+          "text": "Simon Property Group"
+        },
+        {
+          "id": "b17",
+          "text": "Merchants and Traders Bank"
+        },
+        {
+          "id": "b18",
+          "text": "Lehman Brothers"
+        },
+        {
+          "id": "b19",
+          "text": "GMAC Commercial Mortgage"
+        },
+        {
+          "id": "b20",
+          "text": "ING Clarion"
+        },
+        {
+          "id": "b21",
+          "text": "Brookfield Real Estate"
+        },
+        {
+          "id": "b22",
+          "text": "Freddie Mac"
+        },
+        {
+          "id": "b23",
+          "text": "PNC Bank"
+        },
+        {
+          "id": "b24",
+          "text": "Cambridge Trust Bank"
+        },
+        {
+          "id": "b25",
+          "text": "Boston Private Bank"
+        },
+        {
+          "id": "b26",
+          "text": "Mercantile Trust Bank"
+        },
+        {
+          "id": "b27",
+          "text": "And More"
+        },
+        {
+          "id": "b28",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b29",
+          "text": "501 Boylston Street, 9th Floor"
+        },
+        {
+          "id": "b30",
+          "text": "Boston, MA 02116"
+        },
+        {
+          "id": "b31",
+          "text": "p: (617) 424-0775"
+        },
+        {
+          "id": "b32",
+          "text": "e: Contact Us"
+        },
+        {
+          "id": "b33",
+          "text": "Services"
+        },
+        {
+          "id": "b34",
+          "text": "Service Overview"
+        },
+        {
+          "id": "b35",
+          "text": "Real Estate Development"
+        },
+        {
+          "id": "b36",
+          "text": "Property Management"
+        },
+        {
+          "id": "b37",
+          "text": "Consulting Services"
+        },
+        {
+          "id": "b38",
+          "text": "Invest With Us"
+        },
+        {
+          "id": "b39",
+          "text": "Company"
+        },
+        {
+          "id": "b40",
+          "text": "About Us"
+        },
+        {
+          "id": "b41",
+          "text": "Curtis R. Kemeny"
+        },
+        {
+          "id": "b42",
+          "text": "Properties"
+        },
+        {
+          "id": "b43",
+          "text": "Press"
+        },
+        {
+          "id": "b44",
+          "text": "Contact Us"
+        },
+        {
+          "id": "b45",
+          "text": "\u00a9 2026 Boston Residential Group. All Rights Reserved. | Locations Served"
+        },
+        {
+          "id": "b46",
+          "text": "Boston Video & Digital Marketing by Hide & Seek Media"
+        }
+      ]
+    },
+    {
+      "id": "7cc060a4-2515-47bc-b10d-edd70f50d42c",
+      "url": "https://www.bostonresidentialgroup.com/leadership-team/",
+      "retrievedAt": "2026-10-08T14:21:35.291Z",
+      "firstParty": true,
+      "truncated": false,
+      "blocks": [
+        {
+          "id": "b1",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b2",
+          "text": "Leadership Team"
+        },
+        {
+          "id": "b3",
+          "text": "Our Leadership"
+        },
+        {
+          "id": "b4",
+          "text": "We have been a leader in urban real estate development, property management, consulting and more since 2003."
+        },
+        {
+          "id": "b5",
+          "text": "Boston Residential Group has been redefining the art of urban living since 2003. From Newbury Street to the Navy Yard, our projects give customers an immediate and compelling connection to the city. Creating residences and amenities that blend seamlessly into the neighborhood, Boston Residential Group is at the forefront of urban development."
+        },
+        {
+          "id": "b6",
+          "text": "Additional photos for press use"
+        },
+        {
+          "id": "b7",
+          "text": "Curtis R. Kemeny"
+        },
+        {
+          "id": "b8",
+          "text": "CEO and President of Boston Residential Group"
+        },
+        {
+          "id": "b9",
+          "text": "Founded in 2003 by Curtis R. Kemeny, Boston Residential Group has been involved with the development and management of over 2,000 units valued at $1.0B. Boston Residential Group\u2019s seasoned team includes experts in real estate finance, development, construction and management. Mr. Kemeny serves as President and CEO. He received a BA from Dartmouth College in 1984 and an MBA from Harvard Business School in 1989."
+        },
+        {
+          "id": "b10",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b11",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b12",
+          "text": "Email Curtis"
+        },
+        {
+          "id": "b13",
+          "text": "Our Full Team"
+        },
+        {
+          "id": "b14",
+          "text": "Ed Sarno"
+        },
+        {
+          "id": "b15",
+          "text": "Chief Financial Officer"
+        },
+        {
+          "id": "b16",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b17",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b18",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b19",
+          "text": "Bill Smith"
+        },
+        {
+          "id": "b20",
+          "text": "Property Management"
+        },
+        {
+          "id": "b21",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b22",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b23",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b24",
+          "text": "Genia Demetriades"
+        },
+        {
+          "id": "b25",
+          "text": "Acquisitions"
+        },
+        {
+          "id": "b26",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b27",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b28",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b29",
+          "text": "Mike Maslauskas"
+        },
+        {
+          "id": "b30",
+          "text": "Controller"
+        },
+        {
+          "id": "b31",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b32",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b33",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b34",
+          "text": "Tim O\u2019Brien"
+        },
+        {
+          "id": "b35",
+          "text": "Property Management"
+        },
+        {
+          "id": "b36",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b37",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b38",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b39",
+          "text": "Nicole Mineo"
+        },
+        {
+          "id": "b40",
+          "text": "Leasing & Marketing"
+        },
+        {
+          "id": "b41",
+          "text": "(617) 424-0775"
+        },
+        {
+          "id": "b42",
+          "text": "(617) 424-0771"
+        },
+        {
+          "id": "b43",
+          "text": "info@bostonresidentialgroup.com"
+        },
+        {
+          "id": "b44",
+          "text": "Boston Residential Group"
+        },
+        {
+          "id": "b45",
+          "text": "501 Boylston Street, 9th Floor"
+        },
+        {
+          "id": "b46",
+          "text": "Boston, MA 02116"
+        },
+        {
+          "id": "b47",
+          "text": "p: (617) 424-0775"
+        },
+        {
+          "id": "b48",
+          "text": "e: Contact Us"
+        },
+        {
+          "id": "b49",
+          "text": "Services"
+        },
+        {
+          "id": "b50",
+          "text": "Service Overview"
+        },
+        {
+          "id": "b51",
+          "text": "Real Estate Development"
+        },
+        {
+          "id": "b52",
+          "text": "Property Management"
+        },
+        {
+          "id": "b53",
+          "text": "Consulting Services"
+        },
+        {
+          "id": "b54",
+          "text": "Invest With Us"
+        },
+        {
+          "id": "b55",
+          "text": "Company"
+        },
+        {
+          "id": "b56",
+          "text": "About Us"
+        },
+        {
+          "id": "b57",
+          "text": "Curtis R. Kemeny"
+        },
+        {
+          "id": "b58",
+          "text": "Properties"
+        },
+        {
+          "id": "b59",
+          "text": "Press"
+        },
+        {
+          "id": "b60",
+          "text": "Contact Us"
+        },
+        {
+          "id": "b61",
+          "text": "\u00a9 2026 Boston Residential Group. All Rights Reserved. | Locations Served"
+        },
+        {
+          "id": "b62",
+          "text": "Boston Video & Digital Marketing by Hide & Seek Media"
+        }
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "kind": "firm_identity",
+      "value": "We have been a leader in urban real estate development, property management, consulting and more since 2003.",
+      "blockId": "b4",
+      "observationId": "e5792e88-fb7a-49a0-8b2c-c0c1a8fb2756"
+    },
+    {
+      "kind": "residential_management",
+      "value": "Boston Residential Group manages a diverse portfolio of apartment and condominium developments with uncompromising reliability and exacting standards. Our attention to detail and team of experts results in higher than average occupancy rates and tenant turnover rates that are half the industry standard.",
+      "blockId": "b11",
+      "observationId": "e5792e88-fb7a-49a0-8b2c-c0c1a8fb2756"
+    },
+    {
+      "kind": "service_area",
+      "value": "Boston Residential Group has been redefining the art of urban living since 2003. From Newbury Street to the Navy Yard, our projects give customers an immediate and compelling connection to the city. Creating residences and amenities that blend seamlessly into the neighborhood, Boston Residential Group is at the forefront of urban development.",
+      "blockId": "b6",
+      "observationId": "e5792e88-fb7a-49a0-8b2c-c0c1a8fb2756"
+    },
+    {
+      "kind": "business_phone",
+      "value": "(617) 424-0775",
+      "blockId": "b23",
+      "observationId": "5785dd4b-f9a0-4945-9458-59be9f9488a4"
+    },
+    {
+      "kind": "business_email",
+      "value": "info@bostonresidentialgroup.com",
+      "blockId": "b25",
+      "observationId": "5785dd4b-f9a0-4945-9458-59be9f9488a4"
+    },
+    {
+      "kind": "existing_support",
+      "value": "Boston Residential Group manages a diverse portfolio of apartment and condominium developments with uncompromising reliability and exacting standards. Our attention to detail and team of experts results in higher than average occupancy rates and tenant turnover rates that are half the industry standard.",
+      "blockId": "b11",
+      "observationId": "e5792e88-fb7a-49a0-8b2c-c0c1a8fb2756"
+    },
+    {
+      "kind": "firm_identity",
+      "value": "Boston Residential Group, LLC",
+      "blockId": "b18",
+      "observationId": "5785dd4b-f9a0-4945-9458-59be9f9488a4"
+    }
+  ]
+}

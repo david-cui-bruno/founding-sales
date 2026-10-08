@@ -16,7 +16,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-growth-v6';
-export const QUALIFICATION_POLICY_VERSION='qualification-v3';
+export const QUALIFICATION_POLICY_VERSION='qualification-v4';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;
@@ -79,11 +79,12 @@ export async function readQualification(context:RepositoryContext,input:{candida
 }
 
 /** Persist only locally validated source references; this never grants eligibility. */
-export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null}):Promise<SourcingResult<{runId:string}>> {
+export async function finishQualification(context:RepositoryContext,input:{runId:string;observations:unknown[];facts:unknown[];reason:string|null;openingQuestion?:string|null;supplementedEvidence?:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]}):Promise<SourcingResult<{runId:string}>> {
   if(!decideAdminOnly(context).permitted)return refused('admin_only');
   const evidence=qualificationEvidenceSchema.safeParse({observations:input.observations,facts:input.facts});
   if(!evidence.success || Buffer.byteLength(JSON.stringify(input.observations),'utf8')>100_000 || Buffer.byteLength(JSON.stringify(input.facts),'utf8')>50_000 ||
     (input.reason!==null && (input.reason.length===0 || input.reason.length>120)) || (input.openingQuestion?.length??0)>240)return refused('invalid_evidence');
+  if((input.supplementedEvidence?.length??0)>2||input.supplementedEvidence?.some(citation=>!['firm_identity','service_area'].includes(citation.kind)||!evidence.data.facts.some(f=>f.kind===citation.kind&&f.observationId===citation.observationId&&f.blockId===citation.blockId)))return refused('invalid_evidence');
   const workspaceId=context.scope.workspaceId;
   const identity=(await context.db.query<{candidate_id:string}>('SELECT candidate_id FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2',[workspaceId,input.runId])).rows[0];
   if(!identity)return refused('not_found');
@@ -103,7 +104,7 @@ export async function finishQualification(context:RepositoryContext,input:{runId
   await context.db.query(`UPDATE sourcing_qualification_runs SET state=$3,reason=$4,observations=$5::jsonb,facts=$6::jsonb,
     opening_question=$7,finished_at=now() WHERE workspace_id=$1 AND id=$2`,
     [workspaceId,run.id,input.reason?'unavailable':'review',input.reason,JSON.stringify(evidence.data.observations),JSON.stringify(evidence.data.facts),input.openingQuestion??null]);
-  await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review'}});
+  await recordCrmAuditEvent(context,{action:'sourcing.qualification_recorded',subjectKind:'sourcing_candidate',subjectId:candidate.id,detail:{runId:run.id,state:input.reason?'unavailable':'review',policyVersion:run.policy_version,...(input.supplementedEvidence?.length?{evidenceRecovery:{rule:'supported-office-card-v1',citations:input.supplementedEvidence}}:{})}});
   return {ok:true,value:{runId:run.id}};
 }
 

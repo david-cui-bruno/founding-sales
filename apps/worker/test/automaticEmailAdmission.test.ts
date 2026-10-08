@@ -291,6 +291,33 @@ it('runs no automatic batch while activation is disabled',async()=>{
  expect(await runAutomaticEmailBatch(worker(),0)).toMatchObject({reason:'automatic_email_disabled',admitted:[]});
  expect(await listFirmsForActor(worker())).toEqual(before);
 });
+async function copyRetainedCandidates(original:{candidateId:string;qualificationRunId:string},count:number){
+ // Fixture copies are distinct retained candidates with current completed evidence.
+ await db.session.query(`WITH copies AS (
+  INSERT INTO sourcing_candidates(workspace_id,identity_key,payload,status,revision)
+  SELECT workspace_id,lpad(n::text,64,'0'),payload,status,revision FROM sourcing_candidates CROSS JOIN generate_series(1,$3::integer) n WHERE id=$1
+  RETURNING workspace_id,id
+ ) INSERT INTO sourcing_qualification_runs(workspace_id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name,state,reason,observations,facts,verdict,finished_at)
+ SELECT copies.workspace_id,copies.id,r.candidate_revision,r.fingerprint,r.prompt_version,r.policy_version,r.model_name,r.state,r.reason,r.observations,r.facts,r.verdict,r.finished_at
+ FROM copies CROSS JOIN sourcing_qualification_runs r WHERE r.id=$2`,[original.candidateId,original.qualificationRunId,count]);
+}
+it('checks at most twenty-five ranked prospects and leaves the rest for the next batch',async()=>{
+ await configureFutureActivation();const original=await qualified('Bounded Held Office');
+ await copyRetainedCandidates(original,25);
+ const {createFirm}=await import('@fss/domain/crm/firms.ts');const {openHold}=await import('@fss/domain/policy/holds.ts');
+ const firm=await tx(()=>createFirm(admin(),{name:'Bounded Held Office',website:'https://boundedheldoffice.example.test/',locality:'Dallas',regionCode:'TX',assignedUserId:seeded.alpha.admin.userId}));if(!firm.ok)throw new Error(firm.reason);
+ await tx(()=>openHold(admin(),{scopeKind:'firm',scopeKey:firm.value.id,reasonCode:'uncertain_reply',blockedActionKinds:['email_send'],sourceEventKind:'fixture'}));
+ const first=await runAutomaticEmailBatch(worker(),2);
+ expect(first.checked).toBe(25);expect(first.deferred).toHaveLength(25);expect(first.admitted).toEqual([]);
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({checked:1,admitted:[]});
+ expect(await listEnrollments(worker())).toEqual([]);
+});
+it('refuses an overflowing candidate pool without admitting any visible prospect',async()=>{
+ await configureFutureActivation();const original=await qualified('Overflow Office');
+ await copyRetainedCandidates(original,500);
+ expect(await runAutomaticEmailBatch(worker(),2)).toEqual({checked:0,deferred:[],admitted:[],reason:'candidate_pool_limit'});
+ expect(await listEnrollments(worker())).toEqual([]);
+});
 it('ranks email fit before spending the last slot, including call-review prospects',async()=>{
  await configureFutureActivation();
  await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=1,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);

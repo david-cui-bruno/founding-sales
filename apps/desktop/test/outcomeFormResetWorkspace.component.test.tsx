@@ -157,6 +157,31 @@ beforeEach(() => {
 });
 
 describe('X1F rule 1: the call is resolved when the form opens, and the request names it', () => {
+  it('keeps typed outcomes with their firm and call across A-to-B-to-A navigation', async () => {
+    const w = world(initial(S1));
+    fireEvent.click(screen.getByTestId('firm-outcome'));
+    fireEvent.change(screen.getByTestId('outcome-note'), { target: { value: 'Elm Fork call notes.' } });
+    const otherFirmId = '44444444-4444-4444-8444-444444444444';
+    const other = initial(S2);
+    const otherState: TodayState = {
+      ...other,
+      cards: [...other.cards, { ...other.cards[0]!, firmId: otherFirmId, firmName: 'Cedar Hollow Test Homes' }],
+      expanded: { ...other.expanded!, firmId: otherFirmId, firmName: 'Cedar Hollow Test Homes' },
+      lastCall: { ...other.lastCall!, firmId: otherFirmId },
+    };
+    await w.setState(otherState);
+    expect(screen.queryByTestId('outcome-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('firm-outcome'));
+    expect((screen.getByTestId('outcome-note') as HTMLTextAreaElement).value).toBe('');
+    fireEvent.change(screen.getByTestId('outcome-note'), { target: { value: 'Cedar Hollow call notes.' } });
+
+    await w.setState(initial(S1));
+    fireEvent.click(screen.getByTestId('firm-outcome'));
+    expect((screen.getByTestId('outcome-note') as HTMLTextAreaElement).value).toBe('Elm Fork call notes.');
+    record('no_answer');
+    expect(w.sent[0]).toMatchObject({ firmId: A, callSessionId: S1, note: 'Elm Fork call notes.' });
+  });
+
   it('names the last call’s session, number and person', async () => {
     const w = world(initial(S1));
     fireEvent.click(screen.getByTestId('firm-outcome'));
