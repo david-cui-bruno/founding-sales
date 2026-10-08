@@ -1,19 +1,21 @@
 import { useCallback,useEffect,useRef,type JSX } from 'react';
-import { meetingDraftEditSchema,type MeetingDraftEdit,type MeetingFollowThroughView } from '@fss/contracts';
+import { meetingDraftEditSchema,type MeetingDraftEdit,type MeetingFollowThroughViewV2 } from '@fss/contracts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { noDefiniteAnswer } from '../today/afterCallModel.ts';
 import { useFollowThroughMemory } from './followThroughMemory.ts';
 export interface FollowThroughPorts {
-  read(meetingId:string):Promise<{view:MeetingFollowThroughView|null;reason:string|null}>;
-  edit(input:MeetingDraftEdit&{commandId:string}):Promise<{view:MeetingFollowThroughView|null;reason:string|null}>;
+  read(meetingId:string):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
+  edit(input:MeetingDraftEdit&{commandId:string}):Promise<{view:MeetingFollowThroughViewV2|null;reason:string|null}>;
 }
 const defaultPorts:FollowThroughPorts={
   read:async meetingId=>await globalThis.callieApi?.read('meetings.followThrough',{meetingId})??{view:null,reason:'unavailable'},
   edit:async input=>await globalThis.callieApi?.command('meetings.editRecap',input)??{view:null,reason:'offline'},
 };
 const reasons:Record<string,string>={
+  approval_changed:'The plan or shared facts changed. Refresh and review before approving.',approval_required:'Review this exact recap and the bounded follow-up plan, then approve once. Changed claims or commitments need another approval.',
+  facts_block_changed:'An approved shared fact changed. Update this recap and review the plan.',facts_block_retired:'A shared fact was retired. Remove or replace that claim before approving.',facts_block_unapproved:'A shared claim needs approval in Facts.',content_changed:'The approved message changed. Review and approve the exact current plan.',facts_changed:'This plan uses different shared facts. Review and approve again.',
   nudge_obsolete:'This follow-up is too late for the original plan. Review the conversation before arranging another follow-up.',
   recap_stale:'This meeting was more than two business days ago. Review and save the recap before sending.',
   source_changed:'Meeting notes changed. Check Notes & tasks before updating this draft.',
@@ -45,7 +47,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
     const view=entry.view,draft=view?.currentDraft;if(entry.busy||!actionsEnabled||view?.planId==null||draft==null)return;
     if(entry.pending===null){
       const base={planId:view.planId,expectedPlanVersion:view.version,expectedDraftVersion:draft.version};
-      const parsed=meetingDraftEditSchema.safeParse(action==='save'&&entry.form!==null?{...entry.form,action}:{...base,action});
+      const parsed=meetingDraftEditSchema.safeParse(action==='save'&&entry.form!==null?{...entry.form,action}:action==='approve'?{...base,action,expectedApprovalHash:view.approvalHash}:{...base,action});
       if(!parsed.success){entry.message='Enter a subject and a plain-text message of up to 4,000 characters.';touch();return;}
       entry.pending={...parsed.data,commandId:crypto.randomUUID()};
     }
@@ -57,7 +59,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         if(pending.action==='begin_edit'&&answer.view.currentDraft!==null){
           const current=answer.view.currentDraft;
           entry.form={planId:answer.view.planId!,expectedPlanVersion:answer.view.version,expectedDraftVersion:current.version,subject:entry.form?.subject??current.subject,body:entry.form?.body??current.body};entry.editingUi=true;
-        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='save'?'Recap saved.':pending.action==='cancel'?'Follow-up cancelled.':null;}
+        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='approve'?'Recap and follow-up plan approved.':pending.action==='save'?'Recap saved.':pending.action==='cancel'?'Follow-up cancelled.':null;}
       } else if(noDefiniteAnswer(answer.reason))entry.message='The answer was lost. Retry uses the same request.';
       else if(answer.reason==='not_found'){entry.view=null;entry.form=null;entry.pending=null;entry.editingUi=false;entry.gone=true;entry.unavailable=true;}
       else {entry.pending=null;entry.message=['draft_changed','source_changed'].includes(answer.reason??'')?'The meeting or draft changed. Your draft is kept. Refresh to compare.':'This action could not finish. Your draft is kept.';}
@@ -75,6 +77,9 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
       {view===null?entry.loading?<p className="text-sm text-muted-foreground">Reading follow-up…</p>:null:<>
         <p className="text-sm text-muted-foreground">{terminal?view.status==='cancelled'?'Follow-up cancelled':'Follow-up complete':draft?.state==='submitted'?'Delivery in progress':draft?.state==='sent'?'Recap sent':view.sendingPaused?'Sending paused':draft?.state==='editing'?'Paused while you edit':view.blockers.length>0?'Needs your review':draft==null?'No recap prepared yet':`Ready after ${new Date(draft.notBefore).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`}</p>
         {[...new Set(view.blockers.filter(r=>!['sending_paused','editing'].includes(r)).map(r=>reasons[r]??'Review this follow-up before sending.'))].map(text=><p key={text} className="text-sm text-muted-foreground">{text}</p>)}
+        {view.facts?.length?<div aria-label="Shared facts used" className="space-y-2 text-sm"><h5>Shared facts used</h5>{view.facts.map(f=><p key={f.id}>{f.text} <span className="text-muted-foreground">Version {f.version}</span></p>)}</div>:null}
+        {view.plannedMessages?.filter(m=>m.ordinal>1).map(m=><details key={m.ordinal} className="text-sm"><summary>Follow-up {m.ordinal-1}</summary><p>{m.subject}</p><p className="whitespace-pre-wrap">{m.body}</p></details>)}
+        {view.approvalRequired&&draft!=null&&!terminal&&!immutable&&!entry.editingUi?<div className="space-y-2"><p className="text-sm">Approve this recap and up to three messages under the existing cadence. Replies, bookings and stops interrupt the plan. Approval does not resume paused sending.</p><Button size="sm" disabled={disabled||view.approvalHash==null} onClick={()=>{void command('approve');}}>Approve recap and plan</Button></div>:null}
         {draft==null?<p className="text-sm text-muted-foreground">Add sufficient notes in Notes & tasks and choose an approved recap sequence in Calling & calendar. Callie prepares the draft when those are ready.</p>:entry.editingUi&&form!==null?<div className="space-y-3">
           <label className="block space-y-1 text-sm"><span>Subject</span><Input aria-label="Recap subject" maxLength={998} value={form.subject} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,subject:e.target.value};touch();}}/></label>
           <label className="block space-y-1 text-sm"><span>Message</span><Textarea aria-label="Recap message" rows={8} maxLength={4000} value={form.body} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,body:e.target.value};touch();}}/></label>

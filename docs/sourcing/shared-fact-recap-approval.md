@@ -1,0 +1,13 @@
+# Shared-fact recap approval
+
+Source implementation for #456 extends the existing meeting recap, immutable approved sequence/templates, bounded follow-through and outbound fence. It does not release the backend or desktop, enable routine replies, create an appointment, add a recipient, increase a cap or resume sending.
+
+New plans require **Approve recap and plan**. Approval binds the current meeting source, recap bytes, immutable sequence/template hashes, exact rendered later-message bytes and used shared fact versions. The displayed approval hash binds this preview too: facts or template variables changing without a plan revision refuse a stale click. Saving changed content removes approval; unchanged later nudges do not need repeated approval. The existing 30-minute edit window, maximum three messages, established cadence, ownership, current conversation/booking/stops, permission, lower-cap and uncertain-submission checks still govern each dispatch.
+
+Shared facts bind by exact claim/link bytes in the current message and future approved templates. Matching current approved versions are stored explicitly; matching historical stale, retired or unapproved versions refuse preparation/approval/dispatch. Template approval remains an independent prerequisite. Paraphrased unsupported claims are not silently promoted to shared facts; a human must review the exact content/commitment and correct its source or template where existing validation refuses it. No pricing is invented.
+
+Schema69 labels existing plans `legacy_template` without fabricating a human approval or adding fact authority. Their established exact template authority remains; changed content becomes a new human-reviewed plan. Drafts, receipts, submitted/sent fences and durable history remain. Unknown submission is reconciled through the existing provider boundary, never replaced or resent to manufacture an outcome.
+
+The original strict HTTP read/edit DTO remains the default. New desktop callers negotiate `version=2` on the existing read and edit paths to receive approval/fact/plan preview metadata. Old clients still see honest `needs_review` status for unapproved new plans and cannot silently grant new approval.
+
+Verification uses public domain/worker/API/desktop interfaces, real PostgreSQL and controlled provider adapters. It covers initial refusal, exact approval, changed copy, changed/retired facts, zero provider submissions for a retired claim, legacy authority, unchanged bounded nudges, manual replies, stops, uncertain submission, no duplicate nudges and strict v1/v2 projection. These receipts do not establish live sending, provider permission, backend rollout or signed desktop acceptance.

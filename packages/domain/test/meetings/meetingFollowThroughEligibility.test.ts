@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { MeetingNoteItem } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
-import { prepareMeetingRecap, readMeetingFollowThrough } from '../../meetings/followThrough.ts';
+import { editMeetingRecap,prepareMeetingRecap, readMeetingFollowThrough } from '../../meetings/followThrough.ts';
 import { enrollMeetingFollowThrough, resolveMeetingFollowThroughScope, verifyMeetingFollowThrough } from '../../meetings/followThroughEligibility.ts';
 import { grantFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
@@ -23,7 +23,8 @@ describe('meeting-backed follow-through authority', () => {
     const result = await tx(() => prepareMeetingRecap(f.context, { ...current, at }));
     if (!result.ok || result.value.planId === null) throw new Error(`fixture plan: ${JSON.stringify(result)}`);
     await f.db.session.query('UPDATE meeting_follow_through SET pause_observed_at=NULL WHERE id=$1', [result.value.planId]);
-    return { ...current, opportunityId, at, planId: result.value.planId, version: result.value.version, draftVersion: result.value.currentDraft!.version };
+    const approved=await tx(()=>editMeetingRecap(f.context,{planId:result.value.planId!,expectedPlanVersion:result.value.version,expectedDraftVersion:result.value.currentDraft!.version,action:'approve',expectedApprovalHash:result.value.approvalHash!},at));if(!approved.ok)throw new Error(approved.reason);
+    return { ...current, opportunityId, at, planId: result.value.planId, version: approved.value.version, draftVersion: result.value.currentDraft!.version };
   }
   it('limits a routine attended demo to its one recipient, three messages and 30 days from completion', async () => {
     const r = await f.ready(), result = await scope(r);

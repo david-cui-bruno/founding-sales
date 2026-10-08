@@ -1,3 +1,4 @@
+import {meetingFollowThroughViewSchema,meetingFollowThroughViewV2Schema} from '@fss/contracts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { templateContentHash } from '@fss/domain/src/rules/templates.ts';
@@ -19,6 +20,10 @@ describe('meeting follow-through API', () => {
   it('reads an empty plan without inventing a sendable recap',async()=>{
     expect((await call('/meetings/follow-through')).body).toMatchObject({planId:null,currentDraft:null,sendingPaused:true});
   });
+  it('negotiates extended metadata without breaking strict legacy readers',async()=>{
+    const old=await call('/meetings/follow-through');expect(meetingFollowThroughViewSchema.safeParse(old.body).success).toBe(true);expect(old.body).not.toHaveProperty('approvalRequired');
+    const current=await call('/meetings/follow-through',undefined,new URLSearchParams({meetingId,version:'2'}));expect(meetingFollowThroughViewV2Schema.safeParse(current.body).success).toBe(true);expect(current.body).toHaveProperty('approvalRequired',false);
+  });
   it('guards editing by version, keeps receipts free of content and reauthorizes replay',async()=>{
     const workspace=f.alpha.workspaceId,context=repositoryContext(workspaceScope(workspace,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
     const source=(await readMeetingOutcomes(context,{meetingId}))!.sourceHash,templateId=randomUUID(),templateVersionId=randomUUID();
@@ -28,11 +33,13 @@ describe('meeting follow-through API', () => {
     await f.db.query(`INSERT INTO meeting_follow_through_drafts(workspace_id,plan_id,version,subject,body,rendered_hash,template_version_id,template_content_hash,source_hash,created_at,not_before) VALUES($1,$2,1,$3,$4,$5,$6,$7,$8,now(),now()+interval '30 minutes')`,[workspace,planId,subject,body,'a'.repeat(64),templateVersionId,templateContentHash({templateId,version:1,subject,body}),source]);
     const begin={planId,expectedPlanVersion:1,expectedDraftVersion:1,action:'begin_edit',commandId:randomUUID(),clientVersion:CURRENT_CLIENT_VERSION};
     const begun=await call('/meetings/recap/edit',begin); expect(begun.status).toBe(200); expect(begun.body).toMatchObject({result:{currentDraft:{state:'editing'}}});
+    expect(meetingFollowThroughViewSchema.safeParse((begun.body as {result:unknown}).result).success).toBe(true);
     const version=(begun.body as {result:{version:number}}).result.version;
     expect((await call('/meetings/recap/edit',{...begin,action:'save',subject,body:'A stale edit',commandId:randomUUID()})).status).toBe(409);
     const save={...begin,expectedPlanVersion:version,action:'save',subject,body:'Revised private recap.\n\nDavid',commandId:randomUUID()};
     expect((await call('/meetings/recap/edit',save)).body).toMatchObject({result:{currentDraft:{version:2,body:save.body}}});
     expect((await call('/meetings/recap/edit',save)).body).toMatchObject({replayed:true,result:{currentDraft:{version:2}}});
+    const v2=await call('/meetings/recap/edit',save,new URLSearchParams({version:'2'}));expect(v2.body).toMatchObject({replayed:true,result:{approvalRequired:true}});expect(meetingFollowThroughViewV2Schema.safeParse((v2.body as {result:unknown}).result).success).toBe(true);
     expect(JSON.stringify((await f.db.query('SELECT result FROM command_receipts WHERE command_id=$1',[save.commandId])).rows)).not.toContain('private recap');
     await f.db.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1',[firmId,f.alpha.admin.userId]);
     expect((await call('/meetings/recap/edit',save)).status).toBe(404);

@@ -9,7 +9,7 @@ import { saveMeetingNotes } from '../../../meetings/notes.ts';
 import { assembleMeetingAnalysisInput } from '../../../meetings/analysisInput.ts';
 import { materializeMeetingAnalysis } from '../../../meetings/analysisRequests.ts';
 import { validateMeetingAnalysisAnswer } from '../../../meetings/analysisModel.ts';
-import { prepareMeetingRecap } from '../../../meetings/followThrough.ts';
+import { prepareMeetingRecap,editMeetingRecap } from '../../../meetings/followThrough.ts';
 import { enrollMeetingFollowThrough } from '../../../meetings/followThroughEligibility.ts';
 import { readFenceByStepExecution, readOutboundOutcome, prepareOutboundMessage } from '../../../outbound/fence.ts';
 import type { SendHandoff } from '../../../sequences/sendHandoff.ts';
@@ -51,7 +51,9 @@ export async function preparedMeetingFixture(options: { steps?: number; material
   if (options.paused) await db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[workspace]);
   const prepared = await withTransaction(db, () => prepareMeetingRecap(admin, { meetingId, expectedSourceHash: input.value.sourceHash, at: new Date(now.getTime() - 40 * 60_000).toISOString() }));
   if (!prepared.ok || prepared.value.currentDraft === null) throw new Error(`prepare: ${JSON.stringify(prepared)}`);
-  return { world, db, workspace, context, admin, ...firm, meetingId, at, before, planId: prepared.value.planId!, version: prepared.value.version, templateVersionId, draft: prepared.value.currentDraft };
+  const approved=await withTransaction(db,()=>editMeetingRecap(admin,{planId:prepared.value.planId!,expectedPlanVersion:prepared.value.version,expectedDraftVersion:prepared.value.currentDraft!.version,action:'approve',expectedApprovalHash:prepared.value.approvalHash!},prepared.value.currentDraft!.createdAt));
+  if(!approved.ok)throw new Error(`approval: ${approved.reason}`);
+  return { world, db, workspace, context, admin, ...firm, meetingId, at, before, planId: prepared.value.planId!, version: approved.value.version, templateVersionId, draft: prepared.value.currentDraft };
 }
 export async function meetingDispatchFixture(options: { steps?: number; material?: string } = {}) {
   const f = await preparedMeetingFixture(options);

@@ -40,6 +40,9 @@ describe('meeting follow-through recovery and task identity', () => {
     const begun = await withTransaction(f.db, () => editMeetingRecap(f.admin, { planId: f.planId, expectedPlanVersion: view.version, expectedDraftVersion: view.currentDraft!.version, action: 'begin_edit' }, at));
     if (!begun.ok) throw new Error(begun.reason); view = begun.value;
     expect(await withTransaction(f.db, () => editMeetingRecap(f.admin, { planId: f.planId, expectedPlanVersion: view.version, expectedDraftVersion: view.currentDraft!.version, action: 'save', subject: 'Following up on our meeting', body: 'Here are the details we discussed.\n\nSigned off' }, at))).toMatchObject({ ok: true });
+    view=(await readMeetingFollowThrough(f.admin,{meetingId:f.meetingId}))!;
+    expect(view.approvalRequired).toBe(true);
+    expect(await withTransaction(f.db,()=>editMeetingRecap(f.admin,{planId:f.planId,expectedPlanVersion:view.version,expectedDraftVersion:view.currentDraft!.version,action:'approve',expectedApprovalHash:view.approvalHash!},at))).toMatchObject({ok:true});
     await withTransaction(f.db, () => runMeetingFollowThrough(f.context, { meetingId: f.meetingId, at }));
     expect(await readMeetingFollowThrough(f.admin, { meetingId: f.meetingId })).toMatchObject({ blockers: [], currentDraft: { version: 2, subject: 'Following up on our meeting', notBefore: new Date(Date.parse(at) + 30 * 60_000).toISOString() } });
   });

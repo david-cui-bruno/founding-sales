@@ -54,6 +54,9 @@ describe('recaps use the real provider boundary', () => {
     const saved = await withTransaction(f.db, () => editMeetingRecap(f.admin, { planId: f.planId, expectedPlanVersion: view.version, expectedDraftVersion: view.currentDraft!.version, action: 'save', subject: 'Corrected next steps', body: 'Thanks. Here are the corrected details.\n\nSigned off' }, f.at));
     expect(saved.ok).toBe(true);
     expect(await verifyMeetingFence(f.context, { fenceId: fence.id, at: f.at })).toMatchObject({ ok: false });
+    expect(await meetingDraftForExecution(f.context,{executionId:f.executionId,at:f.at})).toMatchObject({ok:false,reason:'approval_required'});
+    if(!saved.ok)throw new Error(saved.reason);
+    expect(await withTransaction(f.db,()=>editMeetingRecap(f.admin,{planId:f.planId,expectedPlanVersion:saved.value.version,expectedDraftVersion:saved.value.currentDraft!.version,action:'approve',expectedApprovalHash:saved.value.approvalHash!},f.at))).toMatchObject({ok:true});
     const later = new Date(Date.parse(f.at) + 31 * 60_000).toISOString();
     expect(await meetingDraftForExecution(f.context, { executionId: f.executionId, at: later })).toMatchObject({ ok: true, value: { subject: 'Corrected next steps', draftVersion: 2 } });
     expect(await verifyMeetingFence(f.context, { fenceId: fence.id, at: later })).toMatchObject({ ok: true });
