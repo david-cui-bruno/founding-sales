@@ -1,0 +1,5081 @@
+{
+  "asOf": "2026-10-08T00:45:00.000Z",
+  "cases": [
+    {
+      "id": "nhs-identity",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "1eb99981-2b7c-413c-9ab8-40c9529228ad",
+        "runId": "dd9d0d7d-1114-4390-a549-70b6b11eff50",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "The selected identity says NHS, not the candidate NHS Properties; residential and office association remain unsupported."
+      },
+      "candidate": {
+        "region": "TX",
+        "signal": "fit_only",
+        "website": "https://www.nhsproperties.com/",
+        "evidence": "First-party NHS Properties site publishes carrie@nhsproperties.com and a Fort Worth office address, and describes property management. Existing CRM firm has a longer name; identity association must be resolved before admission. Maintenance need and full team size remain unknown.",
+        "firmName": "NHS Properties",
+        "locality": "Fort Worth",
+        "sourceUrl": "https://www.nhsproperties.com/about-us",
+        "observedOn": "2026-10-07",
+        "preparedBy": "First-party contact recovery; manual source, requires qualification and recipient review",
+        "discoveryKnownDomain": true
+      },
+      "observations": [
+        {
+          "id": "f2fcbacd-8491-4b59-8937-f5ea5f70a912",
+          "url": "https://www.nhsproperties.com/about-us",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "817-714-1152"
+            },
+            {
+              "id": "b2",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b3",
+              "text": "Pay Rent"
+            },
+            {
+              "id": "b4",
+              "text": "ABOUT US"
+            },
+            {
+              "id": "b5",
+              "text": "ABOUT US"
+            },
+            {
+              "id": "b6",
+              "text": "SEARCH PROPERTIES"
+            },
+            {
+              "id": "b7",
+              "text": "NHS is a full-service property management company that specializes in turn-key investment property transactions, leasing, and real estate sales."
+            },
+            {
+              "id": "b8",
+              "text": "Our company has over 40 years of combined property management experience in a wide variety of listings. Our property managers are real estate professionals licensed by the Texas Real Estate Commissions. Our company values unquestioned integrity, superior customer service, and commitment to others."
+            },
+            {
+              "id": "b9",
+              "text": "Carrie Hatfield &ndash; Texas Broker and Property Manager"
+            },
+            {
+              "id": "b10",
+              "text": "With over 31 years of experience in property management, Carrie is the heartbeat of NHS. Her loyalty to her clients and dedication to make every customer have an enjoyable experience displays the core components of the company. As a certified Sellers Representative Specialist as well as a Pricing Strategy Advisor, Carrie is extremely knowledgeable and goes the extra mile to make sure her customers are taken care of. With her expertise in all levels of property management, from Leasing Agent to Asset Manager, and her skill in Real Estate sales, Carrie can achieve any goal you have in mind."
+            },
+            {
+              "id": "b11",
+              "text": "Aracely Gutierrez &ndash; Texas Realtor and Assistant Manager"
+            },
+            {
+              "id": "b12",
+              "text": "Aracely, a member of the NHS team for almost 13 years, is an incredible blessing to the company. Aracely handles all of the accounting aspects of NHS as well as serves as a leasing agent. A few years ago, Aracely found her passion for real estate and became a Licensed Realtor. She specializes in leasing single-family homes but can provide exemplary service for any and all of your property management or real estate needs."
+            },
+            {
+              "id": "b13",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b14",
+              "text": "Phone : (817) 782-9811"
+            },
+            {
+              "id": "b15",
+              "text": "Fax : (844) 861-9663 Toll free"
+            },
+            {
+              "id": "b16",
+              "text": "Email : carrie@nhsproperties.com"
+            },
+            {
+              "id": "b17",
+              "text": "Address : 1953 Golden Heights Rd. #404 Fort Worth TX 76177"
+            },
+            {
+              "id": "b18",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b19",
+              "text": "(817) 782-9811"
+            },
+            {
+              "id": "b20",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b21",
+              "text": "1953 Golden Heights Rd. #404"
+            },
+            {
+              "id": "b22",
+              "text": "Fort Worth, Texas 76177"
+            },
+            {
+              "id": "b23",
+              "text": "8am to 3 pm Monday - Friday"
+            },
+            {
+              "id": "b24",
+              "text": "STAY CONNECTED"
+            },
+            {
+              "id": "b25",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b26",
+              "text": "Log In"
+            },
+            {
+              "id": "b27",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b28",
+              "text": "Log In"
+            },
+            {
+              "id": "b29",
+              "text": "ASSOCIATIONS & AFFILIATIONS"
+            },
+            {
+              "id": "b30",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b31",
+              "text": "&copy; 2023 All Rights Reserved."
+            },
+            {
+              "id": "b32",
+              "text": "NHS Properties"
+            },
+            {
+              "id": "b33",
+              "text": "Share by:"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "4b21f5f06310487663d470ee1043c7c13cc9c661cfc70dc2ea3a26e3b3496f71",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:25.172Z",
+          "relevantTextHash": "6b1991f23cce481b9b2794a2c9c55559903c5d668b6fde19212b7255d34cd406",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "ec2ffb4a-08c1-419a-9027-6b053c747b66",
+          "url": "https://www.nhsproperties.com/contact-us",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "817-714-1152"
+            },
+            {
+              "id": "b2",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b3",
+              "text": "Pay Rent"
+            },
+            {
+              "id": "b4",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b5",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b6",
+              "text": "SEARCH PROPERTIES"
+            },
+            {
+              "id": "b7",
+              "text": "If you would like to know more about our real estate or property management services or if you have questions about a specific property we have listed, please don&rsquo;t hesitate to contact us. Use our online form or call our offices today!"
+            },
+            {
+              "id": "b8",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b9",
+              "text": "Phone : (817) 782-9811"
+            },
+            {
+              "id": "b10",
+              "text": "Fax : (844) 861-9663 Toll free"
+            },
+            {
+              "id": "b11",
+              "text": "Email : carrie@nhsproperties.com"
+            },
+            {
+              "id": "b12",
+              "text": "Address : 1953 Golden Heights Rd. Suite 404 Fort Worth, TX 76177"
+            },
+            {
+              "id": "b13",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b14",
+              "text": "(817) 782-9811"
+            },
+            {
+              "id": "b15",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b16",
+              "text": "1953 Golden Heights Rd. #404"
+            },
+            {
+              "id": "b17",
+              "text": "Fort Worth, Texas 76177"
+            },
+            {
+              "id": "b18",
+              "text": "8am to 3 pm Monday - Friday"
+            },
+            {
+              "id": "b19",
+              "text": "STAY CONNECTED"
+            },
+            {
+              "id": "b20",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b21",
+              "text": "Log In"
+            },
+            {
+              "id": "b22",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b23",
+              "text": "Log In"
+            },
+            {
+              "id": "b24",
+              "text": "ASSOCIATIONS & AFFILIATIONS"
+            },
+            {
+              "id": "b25",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b26",
+              "text": "&copy; 2023 All Rights Reserved."
+            },
+            {
+              "id": "b27",
+              "text": "NHS Properties"
+            },
+            {
+              "id": "b28",
+              "text": "Share by:"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "1de6acaf957eb3d0639c4410ed5a52f9300ee45eeb14176324ea44da00d9371c",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:25.211Z",
+          "relevantTextHash": "9bf34bb08d57bad2809b9758c81fb0cd18ab0fa7169ec97bebb0861e31ed6a99",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "40eda4f8-5d5f-411a-9cab-5825d897a900",
+          "url": "https://www.nhsproperties.com/tenant",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "817-714-1152"
+            },
+            {
+              "id": "b2",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b3",
+              "text": "Pay Rent"
+            },
+            {
+              "id": "b4",
+              "text": "Overview"
+            },
+            {
+              "id": "b5",
+              "text": "TENANTS"
+            },
+            {
+              "id": "b6",
+              "text": "SEARCH PROPERTIES"
+            },
+            {
+              "id": "b7",
+              "text": "At NHS, our first priority is providing reliable, personal, and prompt service to you! We are dedicated to ensuring your comfort and satisfaction and we pride ourselves on exceeding your expectations."
+            },
+            {
+              "id": "b8",
+              "text": "The NHS team stays on top of all properties allowing for maintenance issues to be handled extremely quickly. No matter what the problem is, we are always ready to help. We also provide a convenient online option for rent payment as well as service requests. We even work alongside Experian so our renters can build their credit throughout their contract!"
+            },
+            {
+              "id": "b9",
+              "text": "We serve the entirety of Tarrant County with a focus on the Alliance Corridor. This includes but is not limited to:"
+            },
+            {
+              "id": "b10",
+              "text": "Fort Worth"
+            },
+            {
+              "id": "b11",
+              "text": "Keller"
+            },
+            {
+              "id": "b12",
+              "text": "Haslet"
+            },
+            {
+              "id": "b13",
+              "text": "Saginaw"
+            },
+            {
+              "id": "b14",
+              "text": "Crowley"
+            },
+            {
+              "id": "b15",
+              "text": "Azle"
+            },
+            {
+              "id": "b16",
+              "text": "Thanks for choosing NHS Properties for your next home. Please feel free to contact us with your questions or concerns."
+            },
+            {
+              "id": "b17",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b18",
+              "text": "Phone : (817) 782-9811"
+            },
+            {
+              "id": "b19",
+              "text": "Fax : (844) 861-9663 Toll free"
+            },
+            {
+              "id": "b20",
+              "text": "Email : carrie@nhsproperties.com"
+            },
+            {
+              "id": "b21",
+              "text": "Address : 1953 Golden Heights Rd. #404 Fort Worth, TX 76177"
+            },
+            {
+              "id": "b22",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b23",
+              "text": "(817) 782-9811"
+            },
+            {
+              "id": "b24",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b25",
+              "text": "1953 Golden Heights Rd. #404"
+            },
+            {
+              "id": "b26",
+              "text": "Fort Worth, Texas 76177"
+            },
+            {
+              "id": "b27",
+              "text": "8am to 3 pm Monday - Friday"
+            },
+            {
+              "id": "b28",
+              "text": "STAY CONNECTED"
+            },
+            {
+              "id": "b29",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b30",
+              "text": "Log In"
+            },
+            {
+              "id": "b31",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b32",
+              "text": "Log In"
+            },
+            {
+              "id": "b33",
+              "text": "ASSOCIATIONS & AFFILIATIONS"
+            },
+            {
+              "id": "b34",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b35",
+              "text": "&copy; 2023 All Rights Reserved."
+            },
+            {
+              "id": "b36",
+              "text": "NHS Properties"
+            },
+            {
+              "id": "b37",
+              "text": "Share by:"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "bbf52da45acc810b3ca6ff4556970e363e4f152928aefe9d16ba6339062780af",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:25.224Z",
+          "relevantTextHash": "03c04e0ea99a7a9b2c185c0d2f8d993fb818a9e7ee706a1ae3622ce533e2dd69",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "2f50d324-1370-496a-84dc-54cbb52cfc89",
+          "url": "https://www.nhsproperties.com/tenant-portal",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "817-714-1152"
+            },
+            {
+              "id": "b2",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b3",
+              "text": "Pay Rent"
+            },
+            {
+              "id": "b4",
+              "text": "Tenant Portal"
+            },
+            {
+              "id": "b5",
+              "text": "TENANT PORTAL"
+            },
+            {
+              "id": "b6",
+              "text": "SEARCH PROPERTIES"
+            },
+            {
+              "id": "b7",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b8",
+              "text": "Pay rent, submit maintenance requests, and view your account from anywhere."
+            },
+            {
+              "id": "b9",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b10",
+              "text": "Log In"
+            },
+            {
+              "id": "b11",
+              "text": "YOUR ONLINE PORTAL"
+            },
+            {
+              "id": "b12",
+              "text": "Your account at your fingertips. Anytime, anywhere."
+            },
+            {
+              "id": "b13",
+              "text": "PAY RENT"
+            },
+            {
+              "id": "b14",
+              "text": "Securely pay rent online from anywhere. Set up automatic payments so you always pay on time."
+            },
+            {
+              "id": "b15",
+              "text": "SUBMIT MAINTENANCE REQUESTS"
+            },
+            {
+              "id": "b16",
+              "text": "Quickly submit maintenance requests that go directly to our maintenance queue."
+            },
+            {
+              "id": "b17",
+              "text": "SEAMLESS COMMUNICATION"
+            },
+            {
+              "id": "b18",
+              "text": "Send communications to us at anytime."
+            },
+            {
+              "id": "b19",
+              "text": "RENTERS INSURANCE"
+            },
+            {
+              "id": "b20",
+              "text": "Easily submit proof of insurance coverage or purchase a policy, right from your portal."
+            },
+            {
+              "id": "b21",
+              "text": "YOUR PORTAL, YOUR WAY"
+            },
+            {
+              "id": "b22",
+              "text": "Get access to your portal anytime, anywhere. Pay rent, submit maintenance requests, and view your current account settings"
+            },
+            {
+              "id": "b23",
+              "text": "...all from the palm of your hand."
+            },
+            {
+              "id": "b24",
+              "text": "Download the Online Portal App"
+            },
+            {
+              "id": "b25",
+              "text": "CONTACT US"
+            },
+            {
+              "id": "b26",
+              "text": "(817) 782-9811"
+            },
+            {
+              "id": "b27",
+              "text": "carrie@nhsproperties.com"
+            },
+            {
+              "id": "b28",
+              "text": "1953 Golden Heights Rd. #404"
+            },
+            {
+              "id": "b29",
+              "text": "Fort Worth, Texas 76177"
+            },
+            {
+              "id": "b30",
+              "text": "8am to 3 pm Monday - Friday"
+            },
+            {
+              "id": "b31",
+              "text": "STAY CONNECTED"
+            },
+            {
+              "id": "b32",
+              "text": "Online Portal"
+            },
+            {
+              "id": "b33",
+              "text": "Log In"
+            },
+            {
+              "id": "b34",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b35",
+              "text": "Log In"
+            },
+            {
+              "id": "b36",
+              "text": "ASSOCIATIONS & AFFILIATIONS"
+            },
+            {
+              "id": "b37",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b38",
+              "text": "&copy; 2023 All Rights Reserved."
+            },
+            {
+              "id": "b39",
+              "text": "NHS Properties"
+            },
+            {
+              "id": "b40",
+              "text": "Share by:"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "94b70f0e7f4877f364b0a394d7ba5f7b5732b4aa1dfc2ab073ea6d65310b91ca",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:25.236Z",
+          "relevantTextHash": "42d9cee2810c7a18d97dbafcd1c972323d06f8e3367abda47040b98839d80ae8",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "NHS is a full-service property management company that specializes in turn-key investment property transactions, leasing, and real estate sales.",
+          "blockId": "b7",
+          "observationId": "f2fcbacd-8491-4b59-8937-f5ea5f70a912"
+        },
+        {
+          "kind": "residential_management",
+          "value": "NHS is a full-service property management company that specializes in turn-key investment property transactions, leasing, and real estate sales.",
+          "blockId": "b7",
+          "observationId": "f2fcbacd-8491-4b59-8937-f5ea5f70a912"
+        },
+        {
+          "kind": "service_area",
+          "value": "We serve the entirety of Tarrant County with a focus on the Alliance Corridor. This includes but is not limited to:",
+          "blockId": "b9",
+          "observationId": "40eda4f8-5d5f-411a-9cab-5825d897a900"
+        },
+        {
+          "kind": "service_area",
+          "value": "Fort Worth",
+          "blockId": "b10",
+          "observationId": "40eda4f8-5d5f-411a-9cab-5825d897a900"
+        },
+        {
+          "kind": "business_phone",
+          "value": "Phone : (817) 782-9811",
+          "blockId": "b14",
+          "observationId": "f2fcbacd-8491-4b59-8937-f5ea5f70a912"
+        },
+        {
+          "kind": "business_email",
+          "value": "Email : carrie@nhsproperties.com",
+          "blockId": "b16",
+          "observationId": "f2fcbacd-8491-4b59-8937-f5ea5f70a912"
+        }
+      ],
+      "expectedAdmission": false,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    },
+    {
+      "id": "nexus-title",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "9d27b836-f636-4d87-b6f6-5bc5f9abdcd6",
+        "runId": "6679d442-ff89-4dab-b827-9ffc7057f876",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "The search-title candidate is not a resolved firm identity; there is no selected business email. Staff are context."
+      },
+      "candidate": {
+        "region": "RI",
+        "signal": "fit_only",
+        "website": "https://www.nexri.com/",
+        "evidence": "The Nexus Property Management\u00ae franchise located in downtown Pawtucket, RI has been locally owned and operated since 2013.  Living up to its reputation as the Property Management Authority\u00ae\ufe0f, Nexus services over 700 rental units in Rhode Island and Southeastern Massachusetts, all within a 30 minute drive of the state capital.  Providence is the largest and most populous city in the state and like its neighboring industrial cities in Southern New England, it is bursting with real estate [...] offers property management in Rhode Island & Southeastern Massachusetts. We are a locally owned and operated property management & realty investment company that manages all types of rental property, from single family homes or condos to entire apartment buildings. Our services include Tenant Placement, Rent Collection, Maintenance, Tenant Communication, Online Payments, Marketing and 24 hour service. Nexus also offers investment advice, property analysis, and profit forecasts for those looking [...] with real estate investment opportunities.  From Woonsocket in the north, to Cranston and Warwick further south, Nexus provides unrivaled property management throughout Rhode Island for single family homes, condos, and entire apartment buildings.",
+        "firmName": "Nexus\u2122 | Rhode Island Property Management",
+        "locality": "Providence",
+        "sourceUrl": "https://www.nexri.com/",
+        "observedOn": "2026-10-07",
+        "preparedBy": "Tavily Basic search \u00b7 not verified",
+        "discoveryQuery": "Providence Rhode Island property management",
+        "discoveryKnownDomain": false
+      },
+      "observations": [
+        {
+          "id": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e",
+          "url": "https://www.nexri.com/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "The Property Management Authority\u00ae"
+            },
+            {
+              "id": "b3",
+              "text": "24/7 Response Line : 401-288-1117"
+            },
+            {
+              "id": "b4",
+              "text": "Leasing"
+            },
+            {
+              "id": "b5",
+              "text": "Syndicated Advertising"
+            },
+            {
+              "id": "b6",
+              "text": "Video Walkthroughs"
+            },
+            {
+              "id": "b7",
+              "text": "Tenant Screening"
+            },
+            {
+              "id": "b8",
+              "text": "Reduced Vacancy Rates"
+            },
+            {
+              "id": "b9",
+              "text": "Tenancy Protection"
+            },
+            {
+              "id": "b10",
+              "text": "Learn More"
+            },
+            {
+              "id": "b11",
+              "text": "Management"
+            },
+            {
+              "id": "b12",
+              "text": "Rent Collection"
+            },
+            {
+              "id": "b13",
+              "text": "Documented Communications"
+            },
+            {
+              "id": "b14",
+              "text": "Financial Reporting"
+            },
+            {
+              "id": "b15",
+              "text": "Conflict Resolution"
+            },
+            {
+              "id": "b16",
+              "text": "Evictions"
+            },
+            {
+              "id": "b17",
+              "text": "Learn More"
+            },
+            {
+              "id": "b18",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b19",
+              "text": "24/7 Response"
+            },
+            {
+              "id": "b20",
+              "text": "Work Order Tracking"
+            },
+            {
+              "id": "b21",
+              "text": "Skilled Staff"
+            },
+            {
+              "id": "b22",
+              "text": "Inspections"
+            },
+            {
+              "id": "b23",
+              "text": "Cost Savings"
+            },
+            {
+              "id": "b24",
+              "text": "Learn More"
+            },
+            {
+              "id": "b25",
+              "text": "Efficiency"
+            },
+            {
+              "id": "b26",
+              "text": "Online Portals"
+            },
+            {
+              "id": "b27",
+              "text": "Epayments"
+            },
+            {
+              "id": "b28",
+              "text": "Cloud Storage"
+            },
+            {
+              "id": "b29",
+              "text": "Real Time Communication"
+            },
+            {
+              "id": "b30",
+              "text": "Email Alerts"
+            },
+            {
+              "id": "b31",
+              "text": "Learn More"
+            },
+            {
+              "id": "b32",
+              "text": "Other Nexus Offices"
+            },
+            {
+              "id": "b33",
+              "text": "Nexus Office Locator"
+            },
+            {
+              "id": "b34",
+              "text": "Fall River - Massachusetts"
+            },
+            {
+              "id": "b35",
+              "text": "Worcester - Massachusetts"
+            },
+            {
+              "id": "b36",
+              "text": "Natick - Massachusetts"
+            },
+            {
+              "id": "b37",
+              "text": "Hamden - Connecticut"
+            },
+            {
+              "id": "b38",
+              "text": "Tempe - Arizona"
+            },
+            {
+              "id": "b39",
+              "text": "Property Management For RI"
+            },
+            {
+              "id": "b40",
+              "text": "Property Management"
+            },
+            {
+              "id": "b41",
+              "text": "Nexus Property Management\u00ae"
+            },
+            {
+              "id": "b42",
+              "text": "offers property management in Rhode Island & Southeastern Massachusetts. We are a locally owned and operated property management & realty investment company that manages all types of rental property, from single family homes or condos to entire apartment buildings. Our services include Tenant Placement, Rent Collection, Maintenance, Tenant Communication, Online Payments, Marketing and 24 hour service. Nexus also offers investment advice, property analysis, and profit forecasts for those looking to invest in real estate or owners looking to add to their portfolio. Our mission is to provide a good value and a great place to live for our tenants, while creating exceptionally performing assets and increased equity for our clients. This is how Nexus Property Management\u00ae is Connecting You To Better Living\u00ae."
+            },
+            {
+              "id": "b43",
+              "text": "About Us"
+            },
+            {
+              "id": "b44",
+              "text": "Services"
+            },
+            {
+              "id": "b45",
+              "text": "Apts & Homes For Rent"
+            },
+            {
+              "id": "b46",
+              "text": "Search Rentals"
+            },
+            {
+              "id": "b47",
+              "text": "Your Property, MANAGED.\u00ae"
+            },
+            {
+              "id": "b48",
+              "text": "Services"
+            },
+            {
+              "id": "b49",
+              "text": "Real Estate Investors & Property Owners Contact Us Today!"
+            },
+            {
+              "id": "b50",
+              "text": "Blognews"
+            },
+            {
+              "id": "b51",
+              "text": "Blognews"
+            },
+            {
+              "id": "b52",
+              "text": "Rhode Island Business Spotlight - Episode #1 - Mike Leshinsky of Leshinsky Finance"
+            },
+            {
+              "id": "b53",
+              "text": "Read more about Rhode Island Business Spotlight - Episode #1 - Mike Leshinsky of Leshinsky Finance"
+            },
+            {
+              "id": "b54",
+              "text": "Rhode Island Business Spotlight - Episode #1 - Mike Leshinsky of Leshinsky Finance"
+            },
+            {
+              "id": "b55",
+              "text": "Subscribe to"
+            },
+            {
+              "id": "b56",
+              "text": "The Nexus Property Management\u00ae franchise located in downtown Pawtucket, RI has been locally owned and operated since 2013. Living up to its reputation as the Property Management Authority\u00ae\ufe0f, Nexus services over 700 rental units in Rhode Island and Southeastern Massachusetts, all within a 30 minute drive of the state capital. Providence is the largest and most populous city in the state and like its neighboring industrial cities in Southern New England, it is bursting with real estate investment opportunities. From Woonsocket in the north, to Cranston and Warwick further south, Nexus provides unrivaled property management throughout Rhode Island for single family homes, condos, and entire apartment buildings."
+            },
+            {
+              "id": "b57",
+              "text": "If you know your Rhode Island geography, you\u2019ve likely noted that Nexus specializes in servicing urban centers along the Blackstone River and Narragansett Bay. It is our goal to be part of the revitalization of these once thriving business and commerce centers (check out our home office in downtown Pawtucket). There was a time when areas like East Providence were the gateway between the industrial Northeast to the rest of the world. Today, what\u2019s left across the region is infrastructure that is ripe for residential investment and improvement. While other property managers may prefer to focus on wealthier suburbs with primarily single family homes, Nexus is dedicated to finding often overlooked opportunities for growth within multi-family units in rebounding cities like Central Falls and Pawtucket. Although these areas may seem intimidating to the untrained novice or some of our corner-cutting competitors, with Nexus Property Management\u00ae in your corner, these are opportunities for win-win relationships where your portfolio grows along with the quality of living for our tenants."
+            },
+            {
+              "id": "b58",
+              "text": "By embracing technology, we simplify rent collection, fill vacant units faster than others, and make communication as easy as can be. With an in-house maintenance department we add value to your property for much less than industry averages. We pride ourselves on our professionalism, transparency, and efficiency and you\u2019ll see evidence of this throughout our website and customer reviews. We are dedicated to serving our clients 365 days a year, 24 hours a day."
+            },
+            {
+              "id": "b59",
+              "text": "Our team also manages rental properties in nearby Attleboro and North Attleboro, Massachusetts. Other Mass. locations nearby are now managed by Nexus Property Management\u2019s Fall River Franchise Office and our Worcester Franchise Office."
+            },
+            {
+              "id": "b60",
+              "text": "At Nexus, our goal is not just to collect the rent and act as a substitute, like most property management companies, but instead we pride ourselves on our ability to add value to owners\u2019 assets. This leads to longer tenant tenures and ultimately more profit and less headaches for our clients. Nexus also provides property analysis, profit forecasts, and buyer\u2019s agency through our Nvest\u00ae program for those investors looking to add to their portfolios."
+            },
+            {
+              "id": "b61",
+              "text": "Nexus Property Management\u00ae is dedicated to connecting our owners and tenants alike to better living. Contact us for more information and take note of our transparency and stellar local reputation. With our professional guidance, Nexus clients and the tenants we place for them will learn firsthand why Nexus Property Management\u00ae is the fastest growing property manager in Rhode Island and Southeastern Massachusetts."
+            },
+            {
+              "id": "b62",
+              "text": "Services"
+            },
+            {
+              "id": "b63",
+              "text": "Pricing"
+            },
+            {
+              "id": "b64",
+              "text": "Rent4U\u00ae"
+            },
+            {
+              "id": "b65",
+              "text": "Nvest\u00ae"
+            },
+            {
+              "id": "b66",
+              "text": "Contact"
+            },
+            {
+              "id": "b67",
+              "text": "Latest Blog Posts"
+            },
+            {
+              "id": "b68",
+              "text": "BEST WAYS TO ASSESS A PROSPECTIVE PROPERTY MANAGER: Landlord Tip #1"
+            },
+            {
+              "id": "b69",
+              "text": "HOW DO I PRESENT MY EMOTIONAL SUPPORT ANIMAL TO A PROSPECTIVE LANDLORD??? Tenant Applicant Tip #2"
+            },
+            {
+              "id": "b70",
+              "text": "PROPERTY MANAGEMENT 101: Should I Require My Tenants To Pay Water and Sewer Bills?"
+            },
+            {
+              "id": "b71",
+              "text": "Social Media"
+            },
+            {
+              "id": "b72",
+              "text": "Like us on Facebook"
+            },
+            {
+              "id": "b73",
+              "text": "Follow us on Twitter"
+            },
+            {
+              "id": "b74",
+              "text": "YouTube Channel"
+            },
+            {
+              "id": "b75",
+              "text": "LinkedIn"
+            },
+            {
+              "id": "b76",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b77",
+              "text": "Nexus Property Management"
+            },
+            {
+              "id": "b78",
+              "text": "49 North Union St"
+            },
+            {
+              "id": "b79",
+              "text": "Pawtucket RI 02860"
+            },
+            {
+              "id": "b80",
+              "text": "Copyright \u00a9 2012-"
+            },
+            {
+              "id": "b81",
+              "text": "Nexus Property Management\u00ae Franchise. All rights reserved. Each office is independently owned and operated."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "8e9922c292d6d57d65bd2d9bec45d8b7d8149e8d6958c17b695c6b55a0b33601",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:26.316Z",
+          "relevantTextHash": "a4c66c3282feb48b7375fc8c09796a511c11a069a1f5c1ad66f90f21209f1d8e",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "277f9e77-17d2-420b-9a29-ca75c9e3af0c",
+          "url": "https://www.nexri.com/contact-nexus-professional-property-management",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "Your Property, MANAGED.\u00ae"
+            },
+            {
+              "id": "b3",
+              "text": "24/7 Response Line : 401-288-1117"
+            },
+            {
+              "id": "b4",
+              "text": "Contact Nexus for Professional Property Management\u00ae Rhode Island Franchise"
+            },
+            {
+              "id": "b5",
+              "text": "Contact Address:"
+            },
+            {
+              "id": "b6",
+              "text": "Nexus Property Management"
+            },
+            {
+              "id": "b7",
+              "text": "Pawtucket RI Office"
+            },
+            {
+              "id": "b8",
+              "text": "49 North Union St Pawtucket RI 02860"
+            },
+            {
+              "id": "b9",
+              "text": "Services"
+            },
+            {
+              "id": "b10",
+              "text": "Pricing"
+            },
+            {
+              "id": "b11",
+              "text": "Rent4U\u00ae"
+            },
+            {
+              "id": "b12",
+              "text": "Reviews"
+            },
+            {
+              "id": "b13",
+              "text": "Nvest\u00ae"
+            },
+            {
+              "id": "b14",
+              "text": "Nexus Feedback"
+            },
+            {
+              "id": "b15",
+              "text": "I've been renting with Nexus for the past year and have had good experience with them. They answer their portal with urgency and have GREAT maintenance workers. I've dropped my phone in a wall, got locked in on New Years Eve, and had other minor requests. I look forward to the next year"
+            },
+            {
+              "id": "b16",
+              "text": "21 Mar 2020"
+            },
+            {
+              "id": "b17",
+              "text": "Donavin Andrews"
+            },
+            {
+              "id": "b18",
+              "text": "I love Nexus!! Tom and the rest of the Nexus crew are really great! When I put in a service order or request maintenance they call and come by the same day! Even on the weekends. I never have to worry as long as I\u2019m living in a Nexus property. You guys rock!!"
+            },
+            {
+              "id": "b19",
+              "text": "10 Jun 2019"
+            },
+            {
+              "id": "b20",
+              "text": "Valerie Ann"
+            },
+            {
+              "id": "b21",
+              "text": "Tom M was very efficient and quick. Great turn around time! So glad he was the tech that day as I\u2019d call on him again!"
+            },
+            {
+              "id": "b22",
+              "text": "10 Feb 2022"
+            },
+            {
+              "id": "b23",
+              "text": "Amanda Savage"
+            },
+            {
+              "id": "b24",
+              "text": "Latest Blog Posts"
+            },
+            {
+              "id": "b25",
+              "text": "BEST WAYS TO ASSESS A PROSPECTIVE PROPERTY MANAGER: Landlord Tip #1"
+            },
+            {
+              "id": "b26",
+              "text": "HOW DO I PRESENT MY EMOTIONAL SUPPORT ANIMAL TO A PROSPECTIVE LANDLORD??? Tenant Applicant Tip #2"
+            },
+            {
+              "id": "b27",
+              "text": "PROPERTY MANAGEMENT 101: Should I Require My Tenants To Pay Water and Sewer Bills?"
+            },
+            {
+              "id": "b28",
+              "text": "Social Media"
+            },
+            {
+              "id": "b29",
+              "text": "Like us on Facebook"
+            },
+            {
+              "id": "b30",
+              "text": "Follow us on Twitter"
+            },
+            {
+              "id": "b31",
+              "text": "YouTube Channel"
+            },
+            {
+              "id": "b32",
+              "text": "LinkedIn"
+            },
+            {
+              "id": "b33",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b34",
+              "text": "Nexus Property Management"
+            },
+            {
+              "id": "b35",
+              "text": "49 North Union St"
+            },
+            {
+              "id": "b36",
+              "text": "Pawtucket RI 02860"
+            },
+            {
+              "id": "b37",
+              "text": "Copyright \u00a9 2012-"
+            },
+            {
+              "id": "b38",
+              "text": "Nexus Property Management\u00ae Franchise. All rights reserved. Each office is independently owned and operated."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "6b69fd4351d139cb4e2d37b8ba21e186710e8a853ceb8c026cb8cae7965d64e3",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:26.608Z",
+          "relevantTextHash": "4285a599e5e20c55be38746c337416a6bdb31c6de20769caeef930f4123541d1",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "d9d80035-afff-4a39-ba4b-64594cdf2d3b",
+          "url": "https://www.nexri.com/aboutus",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "The Property Management Authority\u00ae"
+            },
+            {
+              "id": "b3",
+              "text": "24/7 Response Line : 401-288-1117"
+            },
+            {
+              "id": "b4",
+              "text": "Property Management For Rhode Island & Southeastern Massachusetts"
+            },
+            {
+              "id": "b5",
+              "text": "After decades of real estate management and investing, we decided to offer our expertise and services to other property owners in Rhode Island & Southeastern Massachusetts and have since franchised nationwide! Nexus Property Management\u00ae brings years of experience. With practices and procedures perfected over time we are able to increase equity for our clients while simultaneously providing great service to our tenants. This efficiency allows us to provide a better experience for tenants and owners than many companies who don\u2019t invest themselves. Most real estate companies are primarily brokerages and focus on sales, with property management often being a small side business for them if they even offer it. Because we are property owners ourselves and our business is exclusively focused on property management, we bring an eye for detail with a foresight to handle potential problems and issues, many times before they arise. Property management is our business. This is why you will get great management and peace of mind from contracting our services. We are the company that will give your properties the attention they deserve and \"Connect You To Better Living\u00ae\"."
+            },
+            {
+              "id": "b6",
+              "text": "Nexus Property Management\u00ae can greatly benefit any property owner, but you may especially want to consider hiring Nexus Property Management\u00ae if any of the following things are true."
+            },
+            {
+              "id": "b7",
+              "text": "You live further than a few minutes away from your rental property"
+            },
+            {
+              "id": "b8",
+              "text": "You are not, or don't want to become a home maintenance guru"
+            },
+            {
+              "id": "b9",
+              "text": "You would rather spend your free time on things other than tasks related to your rental property"
+            },
+            {
+              "id": "b10",
+              "text": "You dislike phone calls at 2am about a broken pipe and can not be available 24/7 in case of emergency"
+            },
+            {
+              "id": "b11",
+              "text": "You don\u2019t have a good working knowledge of landlord-tenant law"
+            },
+            {
+              "id": "b12",
+              "text": "You do not want to deal with tenant conflicts or nonpaying tenants"
+            },
+            {
+              "id": "b13",
+              "text": "Services"
+            },
+            {
+              "id": "b14",
+              "text": "Pricing"
+            },
+            {
+              "id": "b15",
+              "text": "Rent4U\u00ae"
+            },
+            {
+              "id": "b16",
+              "text": "Nvest\u00ae"
+            },
+            {
+              "id": "b17",
+              "text": "Contact"
+            },
+            {
+              "id": "b18",
+              "text": "Nexus Feedback"
+            },
+            {
+              "id": "b19",
+              "text": "Excellent property management service organization. The owners are hardworking and responsive. Happy to recommend them."
+            },
+            {
+              "id": "b20",
+              "text": "31 Oct 2020"
+            },
+            {
+              "id": "b21",
+              "text": "Duane Boucher"
+            },
+            {
+              "id": "b22",
+              "text": "Tom M. was quick to come and help me take care of some issues I had. He had great attitude and was easy to talk to, definitely recommend him and use him again!"
+            },
+            {
+              "id": "b23",
+              "text": "11 Feb 2022"
+            },
+            {
+              "id": "b24",
+              "text": "haleigh savage"
+            },
+            {
+              "id": "b25",
+              "text": "Seth very professional and does very good work. He's always on time and responds to emergencies in a timely manner"
+            },
+            {
+              "id": "b26",
+              "text": "25 Feb 2021"
+            },
+            {
+              "id": "b27",
+              "text": "Jp Gay"
+            },
+            {
+              "id": "b28",
+              "text": "Real Estate Investors & Property Owners Contact Us Today!"
+            },
+            {
+              "id": "b29",
+              "text": "Latest Blog Posts"
+            },
+            {
+              "id": "b30",
+              "text": "BEST WAYS TO ASSESS A PROSPECTIVE PROPERTY MANAGER: Landlord Tip #1"
+            },
+            {
+              "id": "b31",
+              "text": "HOW DO I PRESENT MY EMOTIONAL SUPPORT ANIMAL TO A PROSPECTIVE LANDLORD??? Tenant Applicant Tip #2"
+            },
+            {
+              "id": "b32",
+              "text": "PROPERTY MANAGEMENT 101: Should I Require My Tenants To Pay Water and Sewer Bills?"
+            },
+            {
+              "id": "b33",
+              "text": "Social Media"
+            },
+            {
+              "id": "b34",
+              "text": "Like us on Facebook"
+            },
+            {
+              "id": "b35",
+              "text": "Follow us on Twitter"
+            },
+            {
+              "id": "b36",
+              "text": "YouTube Channel"
+            },
+            {
+              "id": "b37",
+              "text": "LinkedIn"
+            },
+            {
+              "id": "b38",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b39",
+              "text": "Nexus Property Management"
+            },
+            {
+              "id": "b40",
+              "text": "49 North Union St"
+            },
+            {
+              "id": "b41",
+              "text": "Pawtucket RI 02860"
+            },
+            {
+              "id": "b42",
+              "text": "Copyright \u00a9 2012-"
+            },
+            {
+              "id": "b43",
+              "text": "Nexus Property Management\u00ae Franchise. All rights reserved. Each office is independently owned and operated."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "40f51dd0f4a534f56e63566e763b718377964c3ec16acd6a63148dc3c0e042f2",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:26.860Z",
+          "relevantTextHash": "bdec5e02b1b6282ff4ea78420d4cad4c10f93031287be1548f5b849770c24f57",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "0f5a8b76-bdfe-42a7-9713-97c754fa632b",
+          "url": "https://www.nexri.com/services",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "Your Property, MANAGED.\u00ae"
+            },
+            {
+              "id": "b3",
+              "text": "24/7 Response Line : 401-288-1117"
+            },
+            {
+              "id": "b4",
+              "text": "Nexus Property Management\u00ae Services offered in Rhode Island"
+            },
+            {
+              "id": "b5",
+              "text": "Advertising and Marketing Vacancies"
+            },
+            {
+              "id": "b6",
+              "text": "Pre-occupancy inspections and documentation of property condition"
+            },
+            {
+              "id": "b7",
+              "text": "Photograph properties"
+            },
+            {
+              "id": "b8",
+              "text": "Video Walkthrough syndicated & published to Nexus YouTube channel"
+            },
+            {
+              "id": "b9",
+              "text": "Create ads to be published on many rental sites & in print when requested."
+            },
+            {
+              "id": "b10",
+              "text": "Handle all responses & inquiries 24/7"
+            },
+            {
+              "id": "b11",
+              "text": "Use a pre-showing screening questionnaire to insure qualified tenants"
+            },
+            {
+              "id": "b12",
+              "text": "Show units to potential tenants & process applications"
+            },
+            {
+              "id": "b13",
+              "text": "Comprehensive Tenant Screening Including Credit, Background, & Eviction"
+            },
+            {
+              "id": "b14",
+              "text": "Leasing"
+            },
+            {
+              "id": "b15",
+              "text": "Create a lease specific to each property"
+            },
+            {
+              "id": "b16",
+              "text": "Provide access to all leases for owners & tenants through the online portal."
+            },
+            {
+              "id": "b17",
+              "text": "Automatically generate lease renewals & alerts for current tenants."
+            },
+            {
+              "id": "b18",
+              "text": "Collections"
+            },
+            {
+              "id": "b19",
+              "text": "Collect all rents"
+            },
+            {
+              "id": "b20",
+              "text": "Offer online payments for tenants & direct deposit for owners."
+            },
+            {
+              "id": "b21",
+              "text": "Send out late notices"
+            },
+            {
+              "id": "b22",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b23",
+              "text": "Around the clock (24/7/365) live answered hotline! (We have no voicemail!)"
+            },
+            {
+              "id": "b24",
+              "text": "Full-time Maintenance Technicians & Rent Ready Specialists on staff!"
+            },
+            {
+              "id": "b25",
+              "text": "Coordinating with outside vendors (when applicable) for any maintenance items."
+            },
+            {
+              "id": "b26",
+              "text": "Efficiency Through Technology"
+            },
+            {
+              "id": "b27",
+              "text": "Owner portal- real time reports, view payment history & be able to communicate with our management team."
+            },
+            {
+              "id": "b28",
+              "text": "Tenant portal- online maintenance requests, receive notices and documents. Pay rent & see account history"
+            },
+            {
+              "id": "b29",
+              "text": "Complete financial & historical reporting, online document storage, real time balances and alerts."
+            },
+            {
+              "id": "b30",
+              "text": "Evictions"
+            },
+            {
+              "id": "b31",
+              "text": "Distribute late notices."
+            },
+            {
+              "id": "b32",
+              "text": "Creation of 5 day demand letter"
+            },
+            {
+              "id": "b33",
+              "text": "Court paperwork & appearances."
+            },
+            {
+              "id": "b34",
+              "text": "Access to our network attorneys."
+            },
+            {
+              "id": "b35",
+              "text": "We understand the stress and expenses an eviction can create this is why we offer free tenant placement after any eviction, to help get your property back on track."
+            },
+            {
+              "id": "b36",
+              "text": "FAQ"
+            },
+            {
+              "id": "b37",
+              "text": "Pricing"
+            },
+            {
+              "id": "b38",
+              "text": "Rent4U\u00ae"
+            },
+            {
+              "id": "b39",
+              "text": "Nvest\u00ae"
+            },
+            {
+              "id": "b40",
+              "text": "Contact"
+            },
+            {
+              "id": "b41",
+              "text": "Nexus Feedback"
+            },
+            {
+              "id": "b42",
+              "text": "My comment is regarding a particular Service Tech Tom Morris, if you need someone who is reliable, dependable, pleasant, and gets the job done, then this is your person. Tom has the expertise and the years in the business to set the bar of excellence."
+            },
+            {
+              "id": "b43",
+              "text": "25 Oct 2019"
+            },
+            {
+              "id": "b44",
+              "text": "Sherrill Caito"
+            },
+            {
+              "id": "b45",
+              "text": "John came right away and was very nice! I highly recommend Nexus"
+            },
+            {
+              "id": "b46",
+              "text": "20 Jan 2020"
+            },
+            {
+              "id": "b47",
+              "text": "Shakira Marie"
+            },
+            {
+              "id": "b48",
+              "text": "Nexus Property Management\u2122 Have top notch professional and friendly staff, especially their General Manager and Vice President of Franchise Sales Gregory J. Rice. I\u2019ve had the honor and opportunity of meeting Greg in person during one of the company\u2019s evening social networking events. He is enthusiastic, energetic and sincere. Any questions I\u2019ve had he has been extremely knowledgeable regarding the real estate business, including tips and suggestions for upcoming homeowners, realtors, landlords and investors. I recommend Nexus Property Management for anyone needing their properties to be managed as they have all the necessary tools needed including on their website for anyone needing further education as a landlord."
+            },
+            {
+              "id": "b49",
+              "text": "16 Jun 2020"
+            },
+            {
+              "id": "b50",
+              "text": "Octavian Goncalves"
+            },
+            {
+              "id": "b51",
+              "text": "Real Estate Investors & Property Owners Contact Us Today!"
+            },
+            {
+              "id": "b52",
+              "text": "Latest Blog Posts"
+            },
+            {
+              "id": "b53",
+              "text": "BEST WAYS TO ASSESS A PROSPECTIVE PROPERTY MANAGER: Landlord Tip #1"
+            },
+            {
+              "id": "b54",
+              "text": "HOW DO I PRESENT MY EMOTIONAL SUPPORT ANIMAL TO A PROSPECTIVE LANDLORD??? Tenant Applicant Tip #2"
+            },
+            {
+              "id": "b55",
+              "text": "PROPERTY MANAGEMENT 101: Should I Require My Tenants To Pay Water and Sewer Bills?"
+            },
+            {
+              "id": "b56",
+              "text": "Social Media"
+            },
+            {
+              "id": "b57",
+              "text": "Like us on Facebook"
+            },
+            {
+              "id": "b58",
+              "text": "Follow us on Twitter"
+            },
+            {
+              "id": "b59",
+              "text": "YouTube Channel"
+            },
+            {
+              "id": "b60",
+              "text": "LinkedIn"
+            },
+            {
+              "id": "b61",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b62",
+              "text": "Nexus Property Management"
+            },
+            {
+              "id": "b63",
+              "text": "49 North Union St"
+            },
+            {
+              "id": "b64",
+              "text": "Pawtucket RI 02860"
+            },
+            {
+              "id": "b65",
+              "text": "Copyright \u00a9 2012-"
+            },
+            {
+              "id": "b66",
+              "text": "Nexus Property Management\u00ae Franchise. All rights reserved. Each office is independently owned and operated."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "9509f80ea19beef292cd6154c0c57e4bf74486efa4fd074541c29defc5184456",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:27.059Z",
+          "relevantTextHash": "c38086cbfa7320429804b5616f1dd6cf3465c1c1ac78e212f679a23a1f03be16",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "offers property management in Rhode Island & Southeastern Massachusetts. We are a locally owned and operated property management & realty investment company that manages all types of rental property, from single family homes or condos to entire apartment buildings. Our services include Tenant Placement, Rent Collection, Maintenance, Tenant Communication, Online Payments, Marketing and 24 hour service. Nexus also offers investment advice, property analysis, and profit forecasts for those looking to invest in real estate or owners looking to add to their portfolio. Our mission is to provide a good value and a great place to live for our tenants, while creating exceptionally performing assets and increased equity for our clients. This is how Nexus Property Management\u00ae is Connecting You To Better Living\u00ae.",
+          "blockId": "b42",
+          "observationId": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e"
+        },
+        {
+          "kind": "residential_management",
+          "value": "offers property management in Rhode Island & Southeastern Massachusetts. We are a locally owned and operated property management & realty investment company that manages all types of rental property, from single family homes or condos to entire apartment buildings. Our services include Tenant Placement, Rent Collection, Maintenance, Tenant Communication, Online Payments, Marketing and 24 hour service. Nexus also offers investment advice, property analysis, and profit forecasts for those looking to invest in real estate or owners looking to add to their portfolio. Our mission is to provide a good value and a great place to live for our tenants, while creating exceptionally performing assets and increased equity for our clients. This is how Nexus Property Management\u00ae is Connecting You To Better Living\u00ae.",
+          "blockId": "b42",
+          "observationId": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e"
+        },
+        {
+          "kind": "service_area",
+          "value": "offers property management in Rhode Island & Southeastern Massachusetts. We are a locally owned and operated property management & realty investment company that manages all types of rental property, from single family homes or condos to entire apartment buildings. Our services include Tenant Placement, Rent Collection, Maintenance, Tenant Communication, Online Payments, Marketing and 24 hour service. Nexus also offers investment advice, property analysis, and profit forecasts for those looking to invest in real estate or owners looking to add to their portfolio. Our mission is to provide a good value and a great place to live for our tenants, while creating exceptionally performing assets and increased equity for our clients. This is how Nexus Property Management\u00ae is Connecting You To Better Living\u00ae.",
+          "blockId": "b42",
+          "observationId": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e"
+        },
+        {
+          "kind": "service_area",
+          "value": "The Nexus Property Management\u00ae franchise located in downtown Pawtucket, RI has been locally owned and operated since 2013. Living up to its reputation as the Property Management Authority\u00ae\ufe0f, Nexus services over 700 rental units in Rhode Island and Southeastern Massachusetts, all within a 30 minute drive of the state capital. Providence is the largest and most populous city in the state and like its neighboring industrial cities in Southern New England, it is bursting with real estate investment opportunities. From Woonsocket in the north, to Cranston and Warwick further south, Nexus provides unrivaled property management throughout Rhode Island for single family homes, condos, and entire apartment buildings.",
+          "blockId": "b56",
+          "observationId": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e"
+        },
+        {
+          "kind": "business_phone",
+          "value": "24/7 Response Line : 401-288-1117",
+          "blockId": "b3",
+          "observationId": "cf85bb59-da98-49e7-b5da-f2a6236fbb3e"
+        },
+        {
+          "kind": "existing_support",
+          "value": "Full-time Maintenance Technicians & Rent Ready Specialists on staff!",
+          "blockId": "b24",
+          "observationId": "0f5a8b76-bdfe-42a7-9713-97c754fa632b"
+        }
+      ],
+      "expectedAdmission": false,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    },
+    {
+      "id": "key-fit",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "b91336ef-9858-4104-af3e-435f7f94885a",
+        "runId": "d88faaaa-23ad-4bce-83ed-80c73dcd1f6f",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "Residential tenant paragraph, matching company heading and compact Fort Worth office card support fit and published office email; no pain claim. Production Key already enrolled; this is isolated replay."
+      },
+      "candidate": {
+        "region": "TX",
+        "signal": "fit_only",
+        "website": "https://www.keyretx.com/",
+        "evidence": "First-party homepage states Key Properties manages over 300 residential and multi family properties. Contact page publishes shirley@keyretx.com at the Fort Worth office. Unmet maintenance need and contact role remain unconfirmed.",
+        "firmName": "Key Properties",
+        "locality": "Fort Worth",
+        "sourceUrl": "https://www.keyretx.com/contact",
+        "observedOn": "2026-10-07",
+        "preparedBy": "First-party contact recovery; manual source, requires qualification and recipient review",
+        "discoveryKnownDomain": true
+      },
+      "observations": [
+        {
+          "id": "b46e4a83-5b84-4c0d-8790-6a6b1f608d9e",
+          "url": "https://www.keyretx.com/contact",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip Navigation"
+            },
+            {
+              "id": "b2",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b3",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b4",
+              "text": "Tenant Portal"
+            },
+            {
+              "id": "b5",
+              "text": "MENU"
+            },
+            {
+              "id": "b6",
+              "text": "Youtube"
+            },
+            {
+              "id": "b7",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b8",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b9",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b10",
+              "text": "Home"
+            },
+            {
+              "id": "b11",
+              "text": "Services"
+            },
+            {
+              "id": "b12",
+              "text": "Property Management"
+            },
+            {
+              "id": "b13",
+              "text": "Buyers"
+            },
+            {
+              "id": "b14",
+              "text": "Sellers"
+            },
+            {
+              "id": "b15",
+              "text": "Investors"
+            },
+            {
+              "id": "b16",
+              "text": "Properties"
+            },
+            {
+              "id": "b17",
+              "text": "For Lease"
+            },
+            {
+              "id": "b18",
+              "text": "For Sale"
+            },
+            {
+              "id": "b19",
+              "text": "Owners"
+            },
+            {
+              "id": "b20",
+              "text": "Owner Resources"
+            },
+            {
+              "id": "b21",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b22",
+              "text": "Tenants"
+            },
+            {
+              "id": "b23",
+              "text": "Tenant Resources"
+            },
+            {
+              "id": "b24",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b25",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b26",
+              "text": "Agents"
+            },
+            {
+              "id": "b27",
+              "text": "Buyers"
+            },
+            {
+              "id": "b28",
+              "text": "Sellers"
+            },
+            {
+              "id": "b29",
+              "text": "About"
+            },
+            {
+              "id": "b30",
+              "text": "Our Company"
+            },
+            {
+              "id": "b31",
+              "text": "Testimonials"
+            },
+            {
+              "id": "b32",
+              "text": "Contact"
+            },
+            {
+              "id": "b33",
+              "text": "Youtube"
+            },
+            {
+              "id": "b34",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b35",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b36",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b37",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b38",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b39",
+              "text": "shirley@keyretx.com"
+            },
+            {
+              "id": "b40",
+              "text": "Office Hours:"
+            },
+            {
+              "id": "b41",
+              "text": "Monday:"
+            },
+            {
+              "id": "b42",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b43",
+              "text": "Tuesday:"
+            },
+            {
+              "id": "b44",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b45",
+              "text": "Wednesday:"
+            },
+            {
+              "id": "b46",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b47",
+              "text": "Thursday:"
+            },
+            {
+              "id": "b48",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b49",
+              "text": "Friday:"
+            },
+            {
+              "id": "b50",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b51",
+              "text": "Saturday:"
+            },
+            {
+              "id": "b52",
+              "text": "By Appointment Only"
+            },
+            {
+              "id": "b53",
+              "text": "Sunday:"
+            },
+            {
+              "id": "b54",
+              "text": "By Appointment Only"
+            },
+            {
+              "id": "b55",
+              "text": "Drop Us a Line!"
+            },
+            {
+              "id": "b56",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b57",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b58",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b59",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b60",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b61",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b62",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b63",
+              "text": "817.263.7866 shirley@keyretx.com social sharing Fort Worth Property Management Property Management Fort Worth Property Management, Fort Worth investment services, Fort Worth Real Estate portfolio management, Fort Worth Houses and Homes for Rent"
+            },
+            {
+              "id": "b64",
+              "text": "\u00a9 2026 Key Properties. All Rights Reserved."
+            },
+            {
+              "id": "b65",
+              "text": "Website by PMW"
+            },
+            {
+              "id": "b66",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b67",
+              "text": "Privacy Policy"
+            },
+            {
+              "id": "b68",
+              "text": "Contact"
+            },
+            {
+              "id": "b69",
+              "text": "Texas Real Estate Commission Consumer Protection Notice"
+            },
+            {
+              "id": "b70",
+              "text": "Texas Real Estate Commission Information About Brokerage Services"
+            },
+            {
+              "id": "b71",
+              "text": "Key Properties is committed to ensuring that its website is accessible to people with disabilities. All the pages on our website will meet W3C WAI's Web Content Accessibility Guidelines 2.0, Level A conformance. Any issues should be reported to shirley@keyretx.com. Website Accessibility Policy"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "eb976bb6889ed2a29b476bcd9cd3bb610acf437193bb6ff608f1189fa29103d5",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:25.738Z",
+          "relevantTextHash": "25f942c6f9b495992aaf764313d3a0e3a6c63ff1bdb6e1b536193bc70c20dcf5",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "22c2588c-4e7e-4255-945b-0c751d0d33e1",
+          "url": "https://www.keyretx.com/owner-faq",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip Navigation"
+            },
+            {
+              "id": "b2",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b3",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b4",
+              "text": "Tenant Portal"
+            },
+            {
+              "id": "b5",
+              "text": "MENU"
+            },
+            {
+              "id": "b6",
+              "text": "Youtube"
+            },
+            {
+              "id": "b7",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b8",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b9",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b10",
+              "text": "Home"
+            },
+            {
+              "id": "b11",
+              "text": "Services"
+            },
+            {
+              "id": "b12",
+              "text": "Property Management"
+            },
+            {
+              "id": "b13",
+              "text": "Buyers"
+            },
+            {
+              "id": "b14",
+              "text": "Sellers"
+            },
+            {
+              "id": "b15",
+              "text": "Investors"
+            },
+            {
+              "id": "b16",
+              "text": "Properties"
+            },
+            {
+              "id": "b17",
+              "text": "For Lease"
+            },
+            {
+              "id": "b18",
+              "text": "For Sale"
+            },
+            {
+              "id": "b19",
+              "text": "Owners"
+            },
+            {
+              "id": "b20",
+              "text": "Owner Resources"
+            },
+            {
+              "id": "b21",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b22",
+              "text": "Tenants"
+            },
+            {
+              "id": "b23",
+              "text": "Tenant Resources"
+            },
+            {
+              "id": "b24",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b25",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b26",
+              "text": "Agents"
+            },
+            {
+              "id": "b27",
+              "text": "Buyers"
+            },
+            {
+              "id": "b28",
+              "text": "Sellers"
+            },
+            {
+              "id": "b29",
+              "text": "About"
+            },
+            {
+              "id": "b30",
+              "text": "Our Company"
+            },
+            {
+              "id": "b31",
+              "text": "Testimonials"
+            },
+            {
+              "id": "b32",
+              "text": "Contact"
+            },
+            {
+              "id": "b33",
+              "text": "Youtube"
+            },
+            {
+              "id": "b34",
+              "text": "Owner FAQs"
+            },
+            {
+              "id": "b35",
+              "text": "Answers to your frequently asked questions"
+            },
+            {
+              "id": "b36",
+              "text": "Am I required to make my property available to Section 8?"
+            },
+            {
+              "id": "b37",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b38",
+              "text": "Are you licensed?"
+            },
+            {
+              "id": "b39",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b40",
+              "text": "Can I reach you after hours?"
+            },
+            {
+              "id": "b41",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b42",
+              "text": "Can you put the money directly into my account?"
+            },
+            {
+              "id": "b43",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b44",
+              "text": "Do I get to see the lease or sign it?"
+            },
+            {
+              "id": "b45",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b46",
+              "text": "Do you sell real estate too?"
+            },
+            {
+              "id": "b47",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b48",
+              "text": "How and when do I get my checks?"
+            },
+            {
+              "id": "b49",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b50",
+              "text": "How is rent collection handled?"
+            },
+            {
+              "id": "b51",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b52",
+              "text": "How long of a lease do you sign?"
+            },
+            {
+              "id": "b53",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b54",
+              "text": "How much security deposit do you charge the tenant?"
+            },
+            {
+              "id": "b55",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b56",
+              "text": "How soon can you start managing my property?"
+            },
+            {
+              "id": "b57",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b58",
+              "text": "What type of properties do you manage?"
+            },
+            {
+              "id": "b59",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b60",
+              "text": "What type of reports do I get and how often?"
+            },
+            {
+              "id": "b61",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b62",
+              "text": "Who holds the tenant security deposit?"
+            },
+            {
+              "id": "b63",
+              "text": "Lorem ipsum dolor sit amet consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b64",
+              "text": "Property"
+            },
+            {
+              "id": "b65",
+              "text": "Management"
+            },
+            {
+              "id": "b66",
+              "text": "Search"
+            },
+            {
+              "id": "b67",
+              "text": "For Rent"
+            },
+            {
+              "id": "b68",
+              "text": "Free Rental"
+            },
+            {
+              "id": "b69",
+              "text": "Analysis"
+            },
+            {
+              "id": "b70",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b71",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b72",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b73",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b74",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b75",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b76",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b77",
+              "text": "817.263.7866 shirley@keyretx.com social sharing Fort Worth Property Management Property Management Fort Worth Property Management, Fort Worth investment services, Fort Worth Real Estate portfolio management, Fort Worth Houses and Homes for Rent"
+            },
+            {
+              "id": "b78",
+              "text": "\u00a9 2026 Key Properties. All Rights Reserved."
+            },
+            {
+              "id": "b79",
+              "text": "Website by PMW"
+            },
+            {
+              "id": "b80",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b81",
+              "text": "Privacy Policy"
+            },
+            {
+              "id": "b82",
+              "text": "Contact"
+            },
+            {
+              "id": "b83",
+              "text": "Texas Real Estate Commission Consumer Protection Notice"
+            },
+            {
+              "id": "b84",
+              "text": "Texas Real Estate Commission Information About Brokerage Services"
+            },
+            {
+              "id": "b85",
+              "text": "Key Properties is committed to ensuring that its website is accessible to people with disabilities. All the pages on our website will meet W3C WAI's Web Content Accessibility Guidelines 2.0, Level A conformance. Any issues should be reported to shirley@keyretx.com. Website Accessibility Policy"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "d8c77262eae004b4b799f68258d94647c60378287f259f6ba7e0dae63abb9031",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:26.269Z",
+          "relevantTextHash": "3a2931f9b577165335b0f48af9368e6b0ca37cb9b2f6998faa5a608a870c9486",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "bc890a1f-3112-4e95-acf4-8d1f0eccbb42",
+          "url": "https://www.keyretx.com/tenants",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip Navigation"
+            },
+            {
+              "id": "b2",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b3",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b4",
+              "text": "Tenant Portal"
+            },
+            {
+              "id": "b5",
+              "text": "MENU"
+            },
+            {
+              "id": "b6",
+              "text": "Youtube"
+            },
+            {
+              "id": "b7",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b8",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b9",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b10",
+              "text": "Home"
+            },
+            {
+              "id": "b11",
+              "text": "Services"
+            },
+            {
+              "id": "b12",
+              "text": "Property Management"
+            },
+            {
+              "id": "b13",
+              "text": "Buyers"
+            },
+            {
+              "id": "b14",
+              "text": "Sellers"
+            },
+            {
+              "id": "b15",
+              "text": "Investors"
+            },
+            {
+              "id": "b16",
+              "text": "Properties"
+            },
+            {
+              "id": "b17",
+              "text": "For Lease"
+            },
+            {
+              "id": "b18",
+              "text": "For Sale"
+            },
+            {
+              "id": "b19",
+              "text": "Owners"
+            },
+            {
+              "id": "b20",
+              "text": "Owner Resources"
+            },
+            {
+              "id": "b21",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b22",
+              "text": "Tenants"
+            },
+            {
+              "id": "b23",
+              "text": "Tenant Resources"
+            },
+            {
+              "id": "b24",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b25",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b26",
+              "text": "Agents"
+            },
+            {
+              "id": "b27",
+              "text": "Buyers"
+            },
+            {
+              "id": "b28",
+              "text": "Sellers"
+            },
+            {
+              "id": "b29",
+              "text": "About"
+            },
+            {
+              "id": "b30",
+              "text": "Our Company"
+            },
+            {
+              "id": "b31",
+              "text": "Testimonials"
+            },
+            {
+              "id": "b32",
+              "text": "Contact"
+            },
+            {
+              "id": "b33",
+              "text": "Youtube"
+            },
+            {
+              "id": "b34",
+              "text": "Tenant Resources"
+            },
+            {
+              "id": "b35",
+              "text": "Prospective Tenants"
+            },
+            {
+              "id": "b36",
+              "text": "Find Your Perfect Home"
+            },
+            {
+              "id": "b37",
+              "text": "Finding a suitable rental home in the Fort Worth area is often time-consuming. With Key Properties, you can narrow your search and find the right location for your next home. We manage a wide range of properties. Our properties cover all different types of neighborhoods and locations. Our data system makes it easy for you to find what you\u2019re looking for."
+            },
+            {
+              "id": "b38",
+              "text": "When you rent a residential proprty from us, you can count on having reliable management that responds to questions and concerns promptly. Whether you have a question about rent payments or need to submit a maintenance request, our team will provide you with the assistance you need."
+            },
+            {
+              "id": "b39",
+              "text": "View Properties"
+            },
+            {
+              "id": "b40",
+              "text": "Resources"
+            },
+            {
+              "id": "b41",
+              "text": "Qualifying Criteria"
+            },
+            {
+              "id": "b42",
+              "text": "Pet Screening"
+            },
+            {
+              "id": "b43",
+              "text": "Apply Online"
+            },
+            {
+              "id": "b44",
+              "text": "Zero Deposit"
+            },
+            {
+              "id": "b45",
+              "text": "Current Tenants"
+            },
+            {
+              "id": "b46",
+              "text": "Resources to Make Your Stay Comfortable"
+            },
+            {
+              "id": "b47",
+              "text": "For our current residents we have a complete set of tools and procedures to make your stay with us more comfortable and rewarding. Use our website to submit any maintenance requests, pay your rent, or just to drop us a line. We love to hear from our residents."
+            },
+            {
+              "id": "b48",
+              "text": "Resident Portal"
+            },
+            {
+              "id": "b49",
+              "text": "Links and Resources"
+            },
+            {
+              "id": "b50",
+              "text": "Pay Online"
+            },
+            {
+              "id": "b51",
+              "text": "Maintenance Request"
+            },
+            {
+              "id": "b52",
+              "text": "Contact Us via Email or Text"
+            },
+            {
+              "id": "b53",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b54",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b55",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b56",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b57",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b58",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b59",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b60",
+              "text": "817.263.7866 shirley@keyretx.com social sharing Fort Worth Property Management Property Management Fort Worth Property Management, Fort Worth investment services, Fort Worth Real Estate portfolio management, Fort Worth Houses and Homes for Rent"
+            },
+            {
+              "id": "b61",
+              "text": "\u00a9 2026 Key Properties. All Rights Reserved."
+            },
+            {
+              "id": "b62",
+              "text": "Website by PMW"
+            },
+            {
+              "id": "b63",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b64",
+              "text": "Privacy Policy"
+            },
+            {
+              "id": "b65",
+              "text": "Contact"
+            },
+            {
+              "id": "b66",
+              "text": "Texas Real Estate Commission Consumer Protection Notice"
+            },
+            {
+              "id": "b67",
+              "text": "Texas Real Estate Commission Information About Brokerage Services"
+            },
+            {
+              "id": "b68",
+              "text": "Key Properties is committed to ensuring that its website is accessible to people with disabilities. All the pages on our website will meet W3C WAI's Web Content Accessibility Guidelines 2.0, Level A conformance. Any issues should be reported to shirley@keyretx.com. Website Accessibility Policy"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "282f4e9569308c2810220192a95287a26983a83bcdf0153589ed2fdb05f48f5c",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:26.546Z",
+          "relevantTextHash": "976e971d520866d8ce619e04c5081843c1f38f4e12f5e4eda27bc140940aa6c4",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "21db5178-f1ab-44b4-94e7-a54a82ef8246",
+          "url": "https://www.keyretx.com/tenant-faq",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip Navigation"
+            },
+            {
+              "id": "b2",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b3",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b4",
+              "text": "Tenant Portal"
+            },
+            {
+              "id": "b5",
+              "text": "MENU"
+            },
+            {
+              "id": "b6",
+              "text": "Youtube"
+            },
+            {
+              "id": "b7",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b8",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b9",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b10",
+              "text": "Home"
+            },
+            {
+              "id": "b11",
+              "text": "Services"
+            },
+            {
+              "id": "b12",
+              "text": "Property Management"
+            },
+            {
+              "id": "b13",
+              "text": "Buyers"
+            },
+            {
+              "id": "b14",
+              "text": "Sellers"
+            },
+            {
+              "id": "b15",
+              "text": "Investors"
+            },
+            {
+              "id": "b16",
+              "text": "Properties"
+            },
+            {
+              "id": "b17",
+              "text": "For Lease"
+            },
+            {
+              "id": "b18",
+              "text": "For Sale"
+            },
+            {
+              "id": "b19",
+              "text": "Owners"
+            },
+            {
+              "id": "b20",
+              "text": "Owner Resources"
+            },
+            {
+              "id": "b21",
+              "text": "Owner Portal"
+            },
+            {
+              "id": "b22",
+              "text": "Tenants"
+            },
+            {
+              "id": "b23",
+              "text": "Tenant Resources"
+            },
+            {
+              "id": "b24",
+              "text": "Maintenance"
+            },
+            {
+              "id": "b25",
+              "text": "Tenant Login"
+            },
+            {
+              "id": "b26",
+              "text": "Agents"
+            },
+            {
+              "id": "b27",
+              "text": "Buyers"
+            },
+            {
+              "id": "b28",
+              "text": "Sellers"
+            },
+            {
+              "id": "b29",
+              "text": "About"
+            },
+            {
+              "id": "b30",
+              "text": "Our Company"
+            },
+            {
+              "id": "b31",
+              "text": "Testimonials"
+            },
+            {
+              "id": "b32",
+              "text": "Contact"
+            },
+            {
+              "id": "b33",
+              "text": "Youtube"
+            },
+            {
+              "id": "b34",
+              "text": "Tenant FAQs"
+            },
+            {
+              "id": "b35",
+              "text": "Answers to your frequently asked questions"
+            },
+            {
+              "id": "b36",
+              "text": "Can you hold a place before I apply?"
+            },
+            {
+              "id": "b37",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b38",
+              "text": "Do I pay first month\u2019s rent and last month\u2019s rent with my security deposit?"
+            },
+            {
+              "id": "b39",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b40",
+              "text": "How old do you have to be to apply?"
+            },
+            {
+              "id": "b41",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b42",
+              "text": "Is the deposit refundable?"
+            },
+            {
+              "id": "b43",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b44",
+              "text": "Who needs a cosigner?"
+            },
+            {
+              "id": "b45",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b46",
+              "text": "You have a property I want to rent. How do I apply?"
+            },
+            {
+              "id": "b47",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b48",
+              "text": "How do I pay rent?"
+            },
+            {
+              "id": "b49",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b50",
+              "text": "I want to get a pet. What do I do?"
+            },
+            {
+              "id": "b51",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b52",
+              "text": "I want to move out, but my roommate wants to stay. What do I do?"
+            },
+            {
+              "id": "b53",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b54",
+              "text": "My lease expiration is coming and I want to move out. What do I do?"
+            },
+            {
+              "id": "b55",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b56",
+              "text": "Who is responsible for paying for repairs & maintenance requests?"
+            },
+            {
+              "id": "b57",
+              "text": "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+            },
+            {
+              "id": "b58",
+              "text": "Property"
+            },
+            {
+              "id": "b59",
+              "text": "Management"
+            },
+            {
+              "id": "b60",
+              "text": "Search"
+            },
+            {
+              "id": "b61",
+              "text": "For Rent"
+            },
+            {
+              "id": "b62",
+              "text": "Free Rental"
+            },
+            {
+              "id": "b63",
+              "text": "Analysis"
+            },
+            {
+              "id": "b64",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b65",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b66",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b67",
+              "text": "817.263.7866"
+            },
+            {
+              "id": "b68",
+              "text": "Key Properties"
+            },
+            {
+              "id": "b69",
+              "text": "4229 Benbrook Hwy 377 South"
+            },
+            {
+              "id": "b70",
+              "text": "Fort Worth, TX 76116"
+            },
+            {
+              "id": "b71",
+              "text": "817.263.7866 shirley@keyretx.com social sharing Fort Worth Property Management Property Management Fort Worth Property Management, Fort Worth investment services, Fort Worth Real Estate portfolio management, Fort Worth Houses and Homes for Rent"
+            },
+            {
+              "id": "b72",
+              "text": "\u00a9 2026 Key Properties. All Rights Reserved."
+            },
+            {
+              "id": "b73",
+              "text": "Website by PMW"
+            },
+            {
+              "id": "b74",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b75",
+              "text": "Privacy Policy"
+            },
+            {
+              "id": "b76",
+              "text": "Contact"
+            },
+            {
+              "id": "b77",
+              "text": "Texas Real Estate Commission Consumer Protection Notice"
+            },
+            {
+              "id": "b78",
+              "text": "Texas Real Estate Commission Information About Brokerage Services"
+            },
+            {
+              "id": "b79",
+              "text": "Key Properties is committed to ensuring that its website is accessible to people with disabilities. All the pages on our website will meet W3C WAI's Web Content Accessibility Guidelines 2.0, Level A conformance. Any issues should be reported to shirley@keyretx.com. Website Accessibility Policy"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "f14c146652fd121a2fb2978129fc6d696496e010515f1b4264399018fcd67458",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:08:26.921Z",
+          "relevantTextHash": "480bba398680fd844366fa8b63bc7c623d66bc95bda8c62a807ce516fa1bec65",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "Key Properties",
+          "blockId": "b35",
+          "observationId": "b46e4a83-5b84-4c0d-8790-6a6b1f608d9e"
+        },
+        {
+          "kind": "residential_management",
+          "value": "When you rent a residential proprty from us, you can count on having reliable management that responds to questions and concerns promptly. Whether you have a question about rent payments or need to submit a maintenance request, our team will provide you with the assistance you need.",
+          "blockId": "b38",
+          "observationId": "bc890a1f-3112-4e95-acf4-8d1f0eccbb42"
+        },
+        {
+          "kind": "service_area",
+          "value": "Fort Worth, TX 76116",
+          "blockId": "b37",
+          "observationId": "b46e4a83-5b84-4c0d-8790-6a6b1f608d9e"
+        },
+        {
+          "kind": "business_phone",
+          "value": "817.263.7866",
+          "blockId": "b38",
+          "observationId": "b46e4a83-5b84-4c0d-8790-6a6b1f608d9e"
+        },
+        {
+          "kind": "business_email",
+          "value": "shirley@keyretx.com",
+          "blockId": "b39",
+          "observationId": "b46e4a83-5b84-4c0d-8790-6a6b1f608d9e"
+        }
+      ],
+      "expectedAdmission": true,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    },
+    {
+      "id": "rentprov-team-context",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "dd73d48c-ccb6-4cb9-9cf6-daa63d6e2d6b",
+        "runId": "92fe1b46-9e8f-4870-8a25-20164136ac9b",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "First-party descriptive residential-management paragraph and Providence office card support fit. Head of Maintenance is context, not a rejection or pain claim."
+      },
+      "candidate": {
+        "region": "RI",
+        "signal": "fit_only",
+        "website": "https://www.rentprovrealty.com/",
+        "evidence": "RentProv Realty is a full service real estate brokerage based in Providence, Rhode Island specializing in residential leasing, sales, and property management. Although widely recognized for our expertise in property rentals, we have an experienced sales team that is ready to provide you with the personalized service you deserve. What sets us apart from the rest is a unique devotion, candor, and passion for our clients that is rarely seen in today\u2019s fast paced real estate industry. [...] Login (401) 223-2222\n\n# Rentals, Sales & Property Management\n\nSearch Rentals\n\n### Make aPayment\n\nSubmit Now Submit Deposit\n\n### ApplyOnline\n\nApply Now Apply Online\n\n### List YourProperty\n\nClick Here List Your Property\n\n215 Power St Floor 2 $1,600/mo. 215 Power St Floor 2 Providence, RI 02906 Beds: 1   Baths: 1 Listed by: Brendan Feeley View Listing\n\n125-127 Whitford Ave, # 1 $2,100/mo. 125-127 Whitford Ave, # 1 Providence, RI 02908 Beds: 2   Baths: 1 Listed by: Brandon Machado View Listing [...] ### LEAVE US A REVIEW!\n\nHave you enjoyed your experince with us! Click below to let us know!\n\nReview Us Here\n\n#### Stay Connected\n\n#### RentProv Realty\n\nPlease feel free to call us directly at the contact information listed to the right or simply click the box below and tell us a little about your real estate needs. An associate will review your inquiry and be in touch as soon as possible!\n\nContact Us\n\n#### RentProv Realty\n\n1290 Westminster St.  \n Providence RI 02909\n\n(401) 223-2222",
+        "firmName": "RentProv Realty",
+        "locality": "Providence",
+        "sourceUrl": "https://www.rentprovrealty.com/",
+        "observedOn": "2026-10-07",
+        "preparedBy": "Tavily Basic search \u00b7 not verified",
+        "discoveryQuery": "Providence Rhode Island property management",
+        "discoveryKnownDomain": false
+      },
+      "observations": [
+        {
+          "id": "cb67b537-31fd-4810-8f74-d983723914b5",
+          "url": "https://www.rentprovrealty.com/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Login (401) 223-2222"
+            },
+            {
+              "id": "b2",
+              "text": "Rentals, Sales &"
+            },
+            {
+              "id": "b3",
+              "text": "Property Management"
+            },
+            {
+              "id": "b4",
+              "text": "Search Rentals"
+            },
+            {
+              "id": "b5",
+              "text": "Make aPayment"
+            },
+            {
+              "id": "b6",
+              "text": "Submit Now Submit Deposit"
+            },
+            {
+              "id": "b7",
+              "text": "ApplyOnline"
+            },
+            {
+              "id": "b8",
+              "text": "Apply Now Apply Online"
+            },
+            {
+              "id": "b9",
+              "text": "List YourProperty"
+            },
+            {
+              "id": "b10",
+              "text": "Click Here List Your Property"
+            },
+            {
+              "id": "b11",
+              "text": "$1,600/mo. 215 Power St Floor 2 Providence, RI 02906 Beds: 1 Baths: 1 Listed by: Brendan Feeley View Listing"
+            },
+            {
+              "id": "b12",
+              "text": "$2,100/mo. 125-127 Whitford Ave, # 1 Providence, RI 02908 Beds: 2 Baths: 1 Listed by: Brandon Machado View Listing"
+            },
+            {
+              "id": "b13",
+              "text": "$1,300/mo. 25 Merrick St, # 3 Pawtucket, RI 02860 Beds: 1 Baths: 1 Listed by: Brendan Feeley View Listing"
+            },
+            {
+              "id": "b14",
+              "text": "View All Rentals"
+            },
+            {
+              "id": "b15",
+              "text": "Real Estate Sales"
+            },
+            {
+              "id": "b16",
+              "text": "Property Rentals"
+            },
+            {
+              "id": "b17",
+              "text": "Off-Campus Housing"
+            },
+            {
+              "id": "b18",
+              "text": "OurServices"
+            },
+            {
+              "id": "b19",
+              "text": "Property Management"
+            },
+            {
+              "id": "b20",
+              "text": "Investment Property"
+            },
+            {
+              "id": "b21",
+              "text": "Other Helpful Links"
+            },
+            {
+              "id": "b22",
+              "text": "ClientTestimonials"
+            },
+            {
+              "id": "b23",
+              "text": "View All"
+            },
+            {
+              "id": "b24",
+              "text": "\"I worked with Ryan to find an apartment in the Providence area. Ryan was super helpful in finding my fiance and I an apartment that met our needs. Ryan... continued\""
+            },
+            {
+              "id": "b25",
+              "text": "- Adrian D."
+            },
+            {
+              "id": "b26",
+              "text": "\"I\u2019ve been in touch with Shannon for about a year and a half now and she has helped me find two good apartments. She is an awesome and super helpful... continued\""
+            },
+            {
+              "id": "b27",
+              "text": "- Taivon R."
+            },
+            {
+              "id": "b28",
+              "text": "Providence, Rhode Island Welcome Home"
+            },
+            {
+              "id": "b29",
+              "text": "RentProv Realty is a full service real estate brokerage based in Providence, Rhode Island specializing in residential leasing, sales, and property management. Although widely recognized for our expertise in property rentals, we have an experienced sales team that is ready to provide you with the personalized service you deserve. What sets us apart from the rest is a unique devotion, candor, and passion for our clients that is rarely seen in today\u2019s fast paced real estate industry."
+            },
+            {
+              "id": "b30",
+              "text": "Continue Reading"
+            },
+            {
+              "id": "b31",
+              "text": "LEAVE US A REVIEW!"
+            },
+            {
+              "id": "b32",
+              "text": "Have you enjoyed your experince with us! Click below to let us know!"
+            },
+            {
+              "id": "b33",
+              "text": "Review Us Here"
+            },
+            {
+              "id": "b34",
+              "text": "Stay Connected"
+            },
+            {
+              "id": "b35",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b36",
+              "text": "Please feel free to call us directly at the contact information listed to the right or simply click the box below and tell us a little about your real estate needs. An associate will review your inquiry and be in touch as soon as possible!"
+            },
+            {
+              "id": "b37",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b38",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b39",
+              "text": "1290 Westminster St."
+            },
+            {
+              "id": "b40",
+              "text": "Providence RI 02909"
+            },
+            {
+              "id": "b41",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b42",
+              "text": "sitemap \u2022 admin \u2022 &copy;2026 All Rights Reserved \u2022 Real Estate Website Design by IDXCentral.com"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "d4dc7ff57565be56c5a9c472f58999630c1291a7d6d38e54894d29b03a8543b2",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:05.586Z",
+          "relevantTextHash": "a9d9006fc5087910f4f2bf7e2208978a8df123c21898a9289cd485ceb94b8ec6",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "82d51be0-074f-47c5-a7c4-edf85091dd79",
+          "url": "https://www.rentprovrealty.com/contact/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Login (401) 223-2222"
+            },
+            {
+              "id": "b2",
+              "text": "Contact"
+            },
+            {
+              "id": "b3",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b4",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b5",
+              "text": "admin@rentprovrealty.com"
+            },
+            {
+              "id": "b6",
+              "text": "Office Location"
+            },
+            {
+              "id": "b7",
+              "text": "1290 Westminster St."
+            },
+            {
+              "id": "b8",
+              "text": "Providence RI 02909"
+            },
+            {
+              "id": "b9",
+              "text": "New ListingNotifications"
+            },
+            {
+              "id": "b10",
+              "text": "Interested in buying a house?"
+            },
+            {
+              "id": "b11",
+              "text": "Get ahead of the game by signing up"
+            },
+            {
+              "id": "b12",
+              "text": "to have new listings emailed to you as"
+            },
+            {
+              "id": "b13",
+              "text": "soon as they hit the market"
+            },
+            {
+              "id": "b14",
+              "text": "Sign Up"
+            },
+            {
+              "id": "b15",
+              "text": "What's YourHome Worth?"
+            },
+            {
+              "id": "b16",
+              "text": "Find Out"
+            },
+            {
+              "id": "b17",
+              "text": "Client Testimonials"
+            },
+            {
+              "id": "b18",
+              "text": "\"Gregory Degnan was our agent who helped us find an apartment in Providence. He was very thorough and attentive to the most minor detail in all of... continued\""
+            },
+            {
+              "id": "b19",
+              "text": "- Suzanne R."
+            },
+            {
+              "id": "b20",
+              "text": "View All"
+            },
+            {
+              "id": "b21",
+              "text": "LEAVE US A REVIEW!"
+            },
+            {
+              "id": "b22",
+              "text": "Have you enjoyed your experince with us! Click below to let us know!"
+            },
+            {
+              "id": "b23",
+              "text": "Review Us Here"
+            },
+            {
+              "id": "b24",
+              "text": "Stay Connected"
+            },
+            {
+              "id": "b25",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b26",
+              "text": "Please feel free to call us directly at the contact information listed to the right or simply click the box below and tell us a little about your real estate needs. An associate will review your inquiry and be in touch as soon as possible!"
+            },
+            {
+              "id": "b27",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b28",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b29",
+              "text": "1290 Westminster St."
+            },
+            {
+              "id": "b30",
+              "text": "Providence RI 02909"
+            },
+            {
+              "id": "b31",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b32",
+              "text": "sitemap \u2022 admin \u2022 &copy;2026 All Rights Reserved \u2022 Real Estate Website Design by IDXCentral.com"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "0b1c52cc2769983dba60e6d2d18bf8d42c6298b22f81d5c8fab9b501887fbf99",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:06.781Z",
+          "relevantTextHash": "8ac5a07d049553ef31a5cc1ea5004fc4aa283882e654b0a68d016f46be125acd",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "96104f48-5d0d-4394-a944-6e952b602f4f",
+          "url": "https://www.rentprovrealty.com/our-team/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Login (401) 223-2222"
+            },
+            {
+              "id": "b2",
+              "text": "Home > Our Team"
+            },
+            {
+              "id": "b3",
+              "text": "Our Team"
+            },
+            {
+              "id": "b4",
+              "text": "Brian Weinstein"
+            },
+            {
+              "id": "b5",
+              "text": "Managing Partner"
+            },
+            {
+              "id": "b6",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b7",
+              "text": "View Profile"
+            },
+            {
+              "id": "b8",
+              "text": "Email Brian"
+            },
+            {
+              "id": "b9",
+              "text": "Jeffrey Weinstein"
+            },
+            {
+              "id": "b10",
+              "text": "Principal Broker/Partner"
+            },
+            {
+              "id": "b11",
+              "text": "(401) 255-7925"
+            },
+            {
+              "id": "b12",
+              "text": "View Profile"
+            },
+            {
+              "id": "b13",
+              "text": "Email Jeffrey"
+            },
+            {
+              "id": "b14",
+              "text": "Shannon E Weinstein"
+            },
+            {
+              "id": "b15",
+              "text": "Associate Broker/Partner"
+            },
+            {
+              "id": "b16",
+              "text": "(401) 301-3819"
+            },
+            {
+              "id": "b17",
+              "text": "View Profile"
+            },
+            {
+              "id": "b18",
+              "text": "Email Shannon"
+            },
+            {
+              "id": "b19",
+              "text": "Hunter Stone"
+            },
+            {
+              "id": "b20",
+              "text": "Accountant"
+            },
+            {
+              "id": "b21",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b22",
+              "text": "View Profile"
+            },
+            {
+              "id": "b23",
+              "text": "Email Hunter"
+            },
+            {
+              "id": "b24",
+              "text": "Ryan Lemay"
+            },
+            {
+              "id": "b25",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b26",
+              "text": "(401) 472-4030"
+            },
+            {
+              "id": "b27",
+              "text": "View Profile"
+            },
+            {
+              "id": "b28",
+              "text": "Email Ryan"
+            },
+            {
+              "id": "b29",
+              "text": "Brendan Feeley"
+            },
+            {
+              "id": "b30",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b31",
+              "text": "(401) 217-9963"
+            },
+            {
+              "id": "b32",
+              "text": "View Profile"
+            },
+            {
+              "id": "b33",
+              "text": "Email Brendan"
+            },
+            {
+              "id": "b34",
+              "text": "Jasmaris Espinal"
+            },
+            {
+              "id": "b35",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b36",
+              "text": "(401) 919-2631"
+            },
+            {
+              "id": "b37",
+              "text": "View Profile"
+            },
+            {
+              "id": "b38",
+              "text": "Email Jasmaris"
+            },
+            {
+              "id": "b39",
+              "text": "Brandon Machado"
+            },
+            {
+              "id": "b40",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b41",
+              "text": "(401) 219-8963"
+            },
+            {
+              "id": "b42",
+              "text": "View Profile"
+            },
+            {
+              "id": "b43",
+              "text": "Email Brandon"
+            },
+            {
+              "id": "b44",
+              "text": "Rafaelina Gomez"
+            },
+            {
+              "id": "b45",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b46",
+              "text": "(978) 835-9685"
+            },
+            {
+              "id": "b47",
+              "text": "View Profile"
+            },
+            {
+              "id": "b48",
+              "text": "Email Rafaelina"
+            },
+            {
+              "id": "b49",
+              "text": "John Baffoni"
+            },
+            {
+              "id": "b50",
+              "text": "REALTOR\u00ae"
+            },
+            {
+              "id": "b51",
+              "text": "(401) 829-6044"
+            },
+            {
+              "id": "b52",
+              "text": "View Profile"
+            },
+            {
+              "id": "b53",
+              "text": "Email John"
+            },
+            {
+              "id": "b54",
+              "text": "Ricardo Jorge"
+            },
+            {
+              "id": "b55",
+              "text": "Head of Maintenance"
+            },
+            {
+              "id": "b56",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b57",
+              "text": "View Profile"
+            },
+            {
+              "id": "b58",
+              "text": "Carlos Jorge"
+            },
+            {
+              "id": "b59",
+              "text": "Maintenance Technician"
+            },
+            {
+              "id": "b60",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b61",
+              "text": "View Profile"
+            },
+            {
+              "id": "b62",
+              "text": "Roberto Jorge"
+            },
+            {
+              "id": "b63",
+              "text": "Maintenance Technician"
+            },
+            {
+              "id": "b64",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b65",
+              "text": "View Profile"
+            },
+            {
+              "id": "b66",
+              "text": "Shane Hayes"
+            },
+            {
+              "id": "b67",
+              "text": "Maintenance Technician"
+            },
+            {
+              "id": "b68",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b69",
+              "text": "View Profile"
+            },
+            {
+              "id": "b70",
+              "text": "New ListingNotifications"
+            },
+            {
+              "id": "b71",
+              "text": "Interested in buying a house?"
+            },
+            {
+              "id": "b72",
+              "text": "Get ahead of the game by signing up"
+            },
+            {
+              "id": "b73",
+              "text": "to have new listings emailed to you as"
+            },
+            {
+              "id": "b74",
+              "text": "soon as they hit the market"
+            },
+            {
+              "id": "b75",
+              "text": "Sign Up"
+            },
+            {
+              "id": "b76",
+              "text": "What's YourHome Worth?"
+            },
+            {
+              "id": "b77",
+              "text": "Find Out"
+            },
+            {
+              "id": "b78",
+              "text": "Client Testimonials"
+            },
+            {
+              "id": "b79",
+              "text": "\"I recently worked with Brendan at RentProv Realty to lease an apartment and he was able to get me into a great place with 7 days of turnaround time! On... continued\""
+            },
+            {
+              "id": "b80",
+              "text": "- Kaylee Mathews"
+            },
+            {
+              "id": "b81",
+              "text": "View All"
+            },
+            {
+              "id": "b82",
+              "text": "LEAVE US A REVIEW!"
+            },
+            {
+              "id": "b83",
+              "text": "Have you enjoyed your experince with us! Click below to let us know!"
+            },
+            {
+              "id": "b84",
+              "text": "Review Us Here"
+            },
+            {
+              "id": "b85",
+              "text": "Stay Connected"
+            },
+            {
+              "id": "b86",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b87",
+              "text": "Please feel free to call us directly at the contact information listed to the right or simply click the box below and tell us a little about your real estate needs. An associate will review your inquiry and be in touch as soon as possible!"
+            },
+            {
+              "id": "b88",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b89",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b90",
+              "text": "1290 Westminster St."
+            },
+            {
+              "id": "b91",
+              "text": "Providence RI 02909"
+            },
+            {
+              "id": "b92",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b93",
+              "text": "sitemap \u2022 admin \u2022 &copy;2026 All Rights Reserved \u2022 Real Estate Website Design by IDXCentral.com"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "83019468a2318c1b253f0a5740a4b0d25d4b1719ddac335185a6b3a50216fffa",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:07.713Z",
+          "relevantTextHash": "038401b0ebc6d24d46fadcb166361bf3792edd77efca1ef50a14f903be9bf056",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "9f890bf4-c02d-48db-8ff5-31f58d0fbda8",
+          "url": "https://www.rentprovrealty.com/join-our-team/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Login (401) 223-2222"
+            },
+            {
+              "id": "b2",
+              "text": "Join Our Team"
+            },
+            {
+              "id": "b3",
+              "text": "If you are interested in joining the RentProv team please submit your resume below and we will reach out to schedule an interview."
+            },
+            {
+              "id": "b4",
+              "text": "Rental Agents:"
+            },
+            {
+              "id": "b5",
+              "text": "If you are a licensed real estate agent or are willing to become licensed, we may have an opportunity for you. Our rental agents are an outgoing group of experienced licensees who are eager to meet our clients expectations by providing top notch service to renters and landlords alike. Working on our leasing team is the perfect way to earn immediate income while mastering the real estate business. We invest in our rental agents by providing extensive training and logistical support. Many of our rental/sales agents have parlayed their initial training into impressive careers in the business. We will give you all the tools and knowledge needed to succeed. Experience is not required. All you need is a willingness to get licensed, work hard, and learn."
+            },
+            {
+              "id": "b6",
+              "text": "Sales Agents:"
+            },
+            {
+              "id": "b7",
+              "text": "If you are a sales agent or are interested in joining our sales team applying here is the first step! We provide our sales agents with the resources you need to remain cutting edge including a personalized mobile app for you and your clients, a full time administrative staff at your service, upscale office space in prime retail location, full time front desk with two receptionists, two conference rooms which are available to you 24/7, and much more! We offer competitive commission splits and will help pay for your advertising expenses. We do not charge desk fees or administrative fees."
+            },
+            {
+              "id": "b8",
+              "text": "New ListingNotifications"
+            },
+            {
+              "id": "b9",
+              "text": "Interested in buying a house?"
+            },
+            {
+              "id": "b10",
+              "text": "Get ahead of the game by signing up"
+            },
+            {
+              "id": "b11",
+              "text": "to have new listings emailed to you as"
+            },
+            {
+              "id": "b12",
+              "text": "soon as they hit the market"
+            },
+            {
+              "id": "b13",
+              "text": "Sign Up"
+            },
+            {
+              "id": "b14",
+              "text": "What's YourHome Worth?"
+            },
+            {
+              "id": "b15",
+              "text": "Find Out"
+            },
+            {
+              "id": "b16",
+              "text": "Client Testimonials"
+            },
+            {
+              "id": "b17",
+              "text": "\"Jeff was very friendly and helpful. He showed me an apartment that was within my budget but the place was a little mediocre and I wanted something a little... continued\""
+            },
+            {
+              "id": "b18",
+              "text": "- Wendy P."
+            },
+            {
+              "id": "b19",
+              "text": "View All"
+            },
+            {
+              "id": "b20",
+              "text": "LEAVE US A REVIEW!"
+            },
+            {
+              "id": "b21",
+              "text": "Have you enjoyed your experince with us! Click below to let us know!"
+            },
+            {
+              "id": "b22",
+              "text": "Review Us Here"
+            },
+            {
+              "id": "b23",
+              "text": "Stay Connected"
+            },
+            {
+              "id": "b24",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b25",
+              "text": "Please feel free to call us directly at the contact information listed to the right or simply click the box below and tell us a little about your real estate needs. An associate will review your inquiry and be in touch as soon as possible!"
+            },
+            {
+              "id": "b26",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b27",
+              "text": "RentProv Realty"
+            },
+            {
+              "id": "b28",
+              "text": "1290 Westminster St."
+            },
+            {
+              "id": "b29",
+              "text": "Providence RI 02909"
+            },
+            {
+              "id": "b30",
+              "text": "(401) 223-2222"
+            },
+            {
+              "id": "b31",
+              "text": "sitemap \u2022 admin \u2022 &copy;2026 All Rights Reserved \u2022 Real Estate Website Design by IDXCentral.com"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "62b5444a4a17e6dd32728568f8fc99349990b478f2016b9a8846b0fbd0ca001b",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:09.364Z",
+          "relevantTextHash": "b94aca363886d8c13a932a9cfd00a1217b64ac9fd1000e9da668e5869bb147c7",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "RentProv Realty is a full service real estate brokerage based in Providence, Rhode Island specializing in residential leasing, sales, and property management. Although widely recognized for our expertise in property rentals, we have an experienced sales team that is ready to provide you with the personalized service you deserve. What sets us apart from the rest is a unique devotion, candor, and passion for our clients that is rarely seen in today\u2019s fast paced real estate industry.",
+          "blockId": "b29",
+          "observationId": "cb67b537-31fd-4810-8f74-d983723914b5"
+        },
+        {
+          "kind": "residential_management",
+          "value": "RentProv Realty is a full service real estate brokerage based in Providence, Rhode Island specializing in residential leasing, sales, and property management. Although widely recognized for our expertise in property rentals, we have an experienced sales team that is ready to provide you with the personalized service you deserve. What sets us apart from the rest is a unique devotion, candor, and passion for our clients that is rarely seen in today\u2019s fast paced real estate industry.",
+          "blockId": "b29",
+          "observationId": "cb67b537-31fd-4810-8f74-d983723914b5"
+        },
+        {
+          "kind": "service_area",
+          "value": "Providence RI 02909",
+          "blockId": "b40",
+          "observationId": "cb67b537-31fd-4810-8f74-d983723914b5"
+        },
+        {
+          "kind": "business_phone",
+          "value": "(401) 223-2222",
+          "blockId": "b4",
+          "observationId": "82d51be0-074f-47c5-a7c4-edf85091dd79"
+        },
+        {
+          "kind": "business_email",
+          "value": "admin@rentprovrealty.com",
+          "blockId": "b5",
+          "observationId": "82d51be0-074f-47c5-a7c4-edf85091dd79"
+        },
+        {
+          "kind": "existing_support",
+          "value": "Head of Maintenance",
+          "blockId": "b55",
+          "observationId": "96104f48-5d0d-4394-a944-6e952b602f4f"
+        }
+      ],
+      "expectedAdmission": true,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    },
+    {
+      "id": "lyon-incomplete-title",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "e71b8514-a1e3-4a88-bc8f-f6ddc713169f",
+        "runId": "297d33f9-672f-4e35-a5c3-1d68154b71bb",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "Search-title identity mismatch and truncated supporting residential page; selected business_email is a street address, not an email."
+      },
+      "candidate": {
+        "region": "RI",
+        "signal": "fit_only",
+        "website": "https://lyonpropertygroup.com/areas-we-serve/providence-ri",
+        "evidence": "Our team of experienced professionals is dedicated to providing top-notch property management solutions for rental property owners in Providence and the surrounding areas. Lyon Property Group has been in the RI property management business for over 20 years, serving clients throughout Rhode Island and Southeastern Massachusetts. Our headquarters are conveniently located in North Attleboro, MA, allowing us to easily access and manage rental properties in Providence and the surrounding areas. We [...] Lyon Property Group\n\n# Property Management In Providence, RI\n\nTurn your rental home over to the local residential specialists\n\nView Pricing\n\nContact Us\n\nFacebook     Instagram\n\nA collage featuring a row of suburban houses under a cloudy sky, the Lyon Property Group gold lion logo, and three professionally dressed people discussing property management in Rhode Island and Eastern Connecticut around a laptop.\n\nLyon Property Group\n\nProvidence Property\u2028Management Company [...] For property owners and investors, professional support can make a major difference in maximizing returns and maintaining asset value. Our full-service property management solutions in Providence are designed to handle everything from tenant relations to day-to-day operations.",
+        "firmName": "Property Management Company Providence, RI | Lyon Property Group",
+        "locality": "Providence",
+        "sourceUrl": "https://lyonpropertygroup.com/areas-we-serve/providence-ri",
+        "observedOn": "2026-10-07",
+        "preparedBy": "Tavily Basic search \u00b7 not verified",
+        "discoveryQuery": "Providence Rhode Island property management",
+        "discoveryKnownDomain": false
+      },
+      "observations": [
+        {
+          "id": "2687b77c-0944-4868-ae62-0f3e3c5a458a",
+          "url": "https://lyonpropertygroup.com/areas-we-serve/providence-ri/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b2",
+              "text": "Facebook"
+            },
+            {
+              "id": "b3",
+              "text": "Instagram"
+            },
+            {
+              "id": "b4",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b5",
+              "text": "Property Management In Providence, RI"
+            },
+            {
+              "id": "b6",
+              "text": "Turn your rental home over to the local residential specialists"
+            },
+            {
+              "id": "b7",
+              "text": "View Pricing"
+            },
+            {
+              "id": "b8",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b9",
+              "text": "Facebook"
+            },
+            {
+              "id": "b10",
+              "text": "Instagram"
+            },
+            {
+              "id": "b11",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b12",
+              "text": "Providence Property Management Company"
+            },
+            {
+              "id": "b13",
+              "text": "Let Us Manage Your Providence, RI Rental Property"
+            },
+            {
+              "id": "b14",
+              "text": "Are you a rental property owner in Providence, Rhode Island? Are you tired of dealing with day-to-day management tasks and repair issues? If so, Lyon Property Group can help!"
+            },
+            {
+              "id": "b15",
+              "text": "Our team of experienced professionals is dedicated to providing top-notch property management solutions for rental property owners in Providence and the surrounding areas. Lyon Property Group has been in the RI property management business for over 20 years, serving clients throughout Rhode Island and Southeastern Massachusetts. Our headquarters are conveniently located in North Attleboro, MA, allowing us to easily access and manage rental properties in Providence and the surrounding areas. We specialize in managing various kinds of rentals, including single-family homes, multi-family units, and commercial properties. Our team at Lyon Property Group understands the unique challenges and hard work of owning rental properties in Providence. From navigating local regulations to handling requests, we have the knowledge and expertise to ensure your real estate investment is well-maintained and profitable. We are committed to providing our clients with personalized service and communication, ensuring you are always informed and involved in managing your investment."
+            },
+            {
+              "id": "b16",
+              "text": "Contact Lyon Property Group today if you\u2019re ready to take the stress out of rental property ownership! Let us handle the day-to-day management tasks and ensure the long-term success of your real estate investment."
+            },
+            {
+              "id": "b17",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b18",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b19",
+              "text": "Our Property Management Services"
+            },
+            {
+              "id": "b20",
+              "text": "Lyon Property Group offers comprehensive property management services to help landlords navigate the complexities of property ownership. Our team of professionals is dedicated to making this easier and more profitable, with a wide range of customizable services designed to meet your unique needs."
+            },
+            {
+              "id": "b21",
+              "text": "Below are our top services for property owners:"
+            },
+            {
+              "id": "b22",
+              "text": "Tenant Screening"
+            },
+            {
+              "id": "b23",
+              "text": "At Lyon Property Group, we understand that finding reliable and responsible tenants is the key to successful rental properties. That\u2019s why our property managers offer all our owners thorough tenant screening services. Our screening process includes a comprehensive background check, credit check, and rental history verification to ensure that each potential tenant meets our high standards. We also conduct in-person interviews to understand their character and personality. By carefully selecting renters, we can help reduce the risk of late rent payments, property damage, and other issues that can arise with problematic renters."
+            },
+            {
+              "id": "b24",
+              "text": "Get Started"
+            },
+            {
+              "id": "b25",
+              "text": "Rent Collection"
+            },
+            {
+              "id": "b26",
+              "text": "Marketing properties is essential for attracting potential tenants and keeping rentals occupied. At Lyon, we use a variety of marketing channels to promote your property, including online listings, social media, and local advertising. We take professional photos of your rental and highlight its unique features and amenities to make it stand out. With our marketing expertise, we can help you find high-quality renters quickly and efficiently."
+            },
+            {
+              "id": "b27",
+              "text": "Get Started"
+            },
+            {
+              "id": "b28",
+              "text": "Tenant Screening"
+            },
+            {
+              "id": "b29",
+              "text": "A solid lease agreement is critical for protecting your property and setting clear expectations. At Lyon, we provide comprehensive leasing agreements covering all aspects of tenancy, from rent payments to repair responsibilities. Our property managers work with you to customize the lease agreement to meet their needs and ensure all legal requirements are met. Our property management team handles all aspects of the leasing process for our clients, from preparing the documents to reviewing them with renters and overseeing signings."
+            },
+            {
+              "id": "b30",
+              "text": "Get Started"
+            },
+            {
+              "id": "b31",
+              "text": "Rent Collection with Online Payments"
+            },
+            {
+              "id": "b32",
+              "text": "Collecting rent can be a time-consuming and challenging task for landlords. When you work with a property manager from Lyon Property Group, they will collect rent for you, ensuring that payments are received on time and in full. We also offer online payment options, making it easy for tenants to pay their rent and reducing the risk of late or missed payments."
+            },
+            {
+              "id": "b33",
+              "text": "Get Started"
+            },
+            {
+              "id": "b34",
+              "text": "Tenant Screening"
+            },
+            {
+              "id": "b35",
+              "text": "Maintenance and repairs are a part of owning a rental property, but they can be a hassle for landlords. At Lyon Property Group, we handle all property maintenance and repairs, from routine to emergency. We work with a network of trusted contractors to ensure that repairs are done quickly and correctly. Our goal is to keep your property in excellent condition and reduce the risk of costly repairs down the line."
+            },
+            {
+              "id": "b36",
+              "text": "Get Started"
+            },
+            {
+              "id": "b37",
+              "text": "Move-In Inspections"
+            },
+            {
+              "id": "b38",
+              "text": "To ensure that your property is well-maintained throughout the tenancy, your property manager conduct a thorough move-in inspection with each new tenant. We carefully document the property\u2019s condition and note any existing damage or issues. This inspection helps us establish a baseline for the property\u2019s condition and ensure that any future damage is the tenant\u2019s responsibility."
+            },
+            {
+              "id": "b39",
+              "text": "Get Started"
+            },
+            {
+              "id": "b40",
+              "text": "Regular Property Inspections"
+            },
+            {
+              "id": "b41",
+              "text": "Regular property inspections are essential for identifying maintenance issues or safety concerns before they become significant problems. At Lyon Property Group, we conduct routine inspections of our client\u2019s rental properties to ensure everything is in good condition. We promptly address any maintenance issues and work with owners to schedule necessary repairs. During these inspections, we thoroughly examine the property\u2019s interior and exterior, including appliances, plumbing, electrical systems, HVAC, roofing, and structural components. Our inspections are conducted by experienced professionals trained to identify potential issues before they become major problems. If we identify any maintenance or safety concerns during the inspection, we address them promptly and work with you to schedule any necessary repairs. We have a network of trusted contractors who can handle everything from routine maintenance to emergency situations. Our goal is to keep your property in excellent condition and ensure the safety and satisfaction of your tenants."
+            },
+            {
+              "id": "b42",
+              "text": "Get Started"
+            },
+            {
+              "id": "b43",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b44",
+              "text": "About Providence, RI"
+            },
+            {
+              "id": "b45",
+              "text": "Providence, Rhode Island, is a vibrant and historic city in New England\u2019s heart. As the capital city of Rhode Island, Providence boasts a rich cultural heritage and a thriving arts and entertainment scene. From world-class restaurants and museums to beautiful parks and waterfront attractions, there\u2019s something for everyone in Providence."
+            },
+            {
+              "id": "b46",
+              "text": "For property owners and investors, professional support can make a major difference in maximizing returns and maintaining asset value. Our full-service property management solutions in Providence are designed to handle everything from tenant relations to day-to-day operations."
+            },
+            {
+              "id": "b47",
+              "text": "Providence is also a great place to live or invest in real estate. The city has a diverse mix of neighborhoods, each with unique character and charm. From historic Brown University and the East Side to the eclectic Federal Hill and the trendy West End, there\u2019s a neighborhood in Providence for everyone."
+            },
+            {
+              "id": "b48",
+              "text": "Before investing, many owners benefit from a detailed rental analysis to understand potential income and market performance in the area."
+            },
+            {
+              "id": "b49",
+              "text": "If you own larger residential buildings, our specialized multifamily management services can help streamline operations and improve long-term profitability."
+            },
+            {
+              "id": "b50",
+              "text": "Providence has something to offer whether you\u2019re a first-time homebuyer or an experienced real estate investor. With its vibrant cultural scene, beautiful parks and waterfront attractions, and diverse neighborhoods, it\u2019s easy to see why so many people call Providence home."
+            },
+            {
+              "id": "b51",
+              "text": "For landlords preparing a unit for the market, strategic upgrades can significantly increase rental value and reduce vacancy time. Learn more about our renovation services here."
+            },
+            {
+              "id": "b52",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b53",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b54",
+              "text": "Areas We Serve"
+            },
+            {
+              "id": "b55",
+              "text": "Massachusetts"
+            },
+            {
+              "id": "b56",
+              "text": "Attleboro"
+            },
+            {
+              "id": "b57",
+              "text": "North Attleboro"
+            },
+            {
+              "id": "b58",
+              "text": "Foxborough"
+            },
+            {
+              "id": "b59",
+              "text": "New Bedford"
+            },
+            {
+              "id": "b60",
+              "text": "Rhode Island"
+            },
+            {
+              "id": "b61",
+              "text": "Providence"
+            },
+            {
+              "id": "b62",
+              "text": "East Side \u2013 Providence"
+            },
+            {
+              "id": "b63",
+              "text": "North Providence"
+            },
+            {
+              "id": "b64",
+              "text": "Cranston"
+            },
+            {
+              "id": "b65",
+              "text": "Pawtucket"
+            },
+            {
+              "id": "b66",
+              "text": "Woonsocket"
+            },
+            {
+              "id": "b67",
+              "text": "Cumberland"
+            },
+            {
+              "id": "b68",
+              "text": "Johnston"
+            },
+            {
+              "id": "b69",
+              "text": "Lincoln"
+            },
+            {
+              "id": "b70",
+              "text": "Smithfield"
+            },
+            {
+              "id": "b71",
+              "text": "North Smithfield"
+            },
+            {
+              "id": "b72",
+              "text": "East Greenwich"
+            },
+            {
+              "id": "b73",
+              "text": "Burrillville"
+            },
+            {
+              "id": "b74",
+              "text": "Scituate"
+            },
+            {
+              "id": "b75",
+              "text": "Glocester"
+            },
+            {
+              "id": "b76",
+              "text": "West Warwick"
+            },
+            {
+              "id": "b77",
+              "text": "Coventry"
+            },
+            {
+              "id": "b78",
+              "text": "West Greenwich"
+            },
+            {
+              "id": "b79",
+              "text": "Kent County"
+            },
+            {
+              "id": "b80",
+              "text": "Connecticut"
+            },
+            {
+              "id": "b81",
+              "text": "Griswold"
+            },
+            {
+              "id": "b82",
+              "text": "Plainfield"
+            },
+            {
+              "id": "b83",
+              "text": "Mystic"
+            },
+            {
+              "id": "b84",
+              "text": "Putnam"
+            },
+            {
+              "id": "b85",
+              "text": "Voluntown"
+            },
+            {
+              "id": "b86",
+              "text": "Killingly"
+            },
+            {
+              "id": "b87",
+              "text": "Thompson"
+            },
+            {
+              "id": "b88",
+              "text": "Woodstock"
+            },
+            {
+              "id": "b89",
+              "text": "New London"
+            },
+            {
+              "id": "b90",
+              "text": "Stonington"
+            },
+            {
+              "id": "b91",
+              "text": "Groton"
+            },
+            {
+              "id": "b92",
+              "text": "Norwich"
+            },
+            {
+              "id": "b93",
+              "text": "Ledyard"
+            },
+            {
+              "id": "b94",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b95",
+              "text": "Want to learn more?"
+            },
+            {
+              "id": "b96",
+              "text": "Get in touch with our team to schedule a free rental analysis."
+            },
+            {
+              "id": "b97",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b98",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b99",
+              "text": "65 Jefferson Blvd, Warwick, RI 02888"
+            },
+            {
+              "id": "b100",
+              "text": "Facebook"
+            }
+          ],
+          "truncated": true,
+          "firstParty": true,
+          "contentHash": "736b6b5aa11a7b790c7d24b76d6f0bcb2b71ddc4013135879e531ea5358ddc1f",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:26.398Z",
+          "relevantTextHash": "9a854b485fd47b6c9a8eb2bf0e788a47a387d1fe869b87326e88432914b53f43",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "3eceae83-3795-4392-913a-89bdbb9f7613",
+          "url": "https://lyonpropertygroup.com/contact/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b2",
+              "text": "Facebook"
+            },
+            {
+              "id": "b3",
+              "text": "Instagram"
+            },
+            {
+              "id": "b4",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b5",
+              "text": "Contact Our Team"
+            },
+            {
+              "id": "b6",
+              "text": "We would love to speak with you."
+            },
+            {
+              "id": "b7",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b8",
+              "text": "Looking for Property Management Services?"
+            },
+            {
+              "id": "b9",
+              "text": "Fill out the form below to get started."
+            },
+            {
+              "id": "b10",
+              "text": "Existing Residents"
+            },
+            {
+              "id": "b11",
+              "text": "If you currently live in a property we manage, use the tenants portal to pay rent, request repairs, and more."
+            },
+            {
+              "id": "b12",
+              "text": "Current Owners"
+            },
+            {
+              "id": "b13",
+              "text": "Sign into the owners portal to take a look at your latest statements and account information."
+            },
+            {
+              "id": "b14",
+              "text": "Applicants"
+            },
+            {
+              "id": "b15",
+              "text": "Looking for Rhode Island or Southern Massachusetts rental homes? View our vacancies now."
+            },
+            {
+              "id": "b16",
+              "text": "Our Phone"
+            },
+            {
+              "id": "b17",
+              "text": "(401) 281-8658"
+            },
+            {
+              "id": "b18",
+              "text": "Our Office"
+            },
+            {
+              "id": "b19",
+              "text": "65 Jefferson Blvd,"
+            },
+            {
+              "id": "b20",
+              "text": "Warwick, RI 02888"
+            },
+            {
+              "id": "b21",
+              "text": "Follow Us"
+            },
+            {
+              "id": "b22",
+              "text": "Facebook"
+            },
+            {
+              "id": "b23",
+              "text": "Instagram"
+            },
+            {
+              "id": "b24",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b25",
+              "text": "65 Jefferson Blvd, Warwick, RI 02888"
+            },
+            {
+              "id": "b26",
+              "text": "Facebook"
+            },
+            {
+              "id": "b27",
+              "text": "Instagram"
+            },
+            {
+              "id": "b28",
+              "text": "Services"
+            },
+            {
+              "id": "b29",
+              "text": "Owners"
+            },
+            {
+              "id": "b30",
+              "text": "Residents"
+            },
+            {
+              "id": "b31",
+              "text": "Applicants"
+            },
+            {
+              "id": "b32",
+              "text": "Areas We Serve"
+            },
+            {
+              "id": "b33",
+              "text": "About Us"
+            },
+            {
+              "id": "b34",
+              "text": "Quick Links"
+            },
+            {
+              "id": "b35",
+              "text": "Owners Portal"
+            },
+            {
+              "id": "b36",
+              "text": "Residents Portal"
+            },
+            {
+              "id": "b37",
+              "text": "Rental Search"
+            },
+            {
+              "id": "b38",
+              "text": "Copyright \u00a9"
+            },
+            {
+              "id": "b39",
+              "text": "Lyon Property Group | All Rights Reserved. | Terms and Conditions | Privacy Policy"
+            },
+            {
+              "id": "b40",
+              "text": "Powered by Digital marketing agency for Property Management Companies"
+            },
+            {
+              "id": "b41",
+              "text": "Call Us Now!"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "3246827436681d1fe061dce41cc62a80b937e8607b3ace5b5476443c4e59092b",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:26.836Z",
+          "relevantTextHash": "e9bbc0762895730733a96d711b3c756ee576f059f987d9b8c5451324d16f679c",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "c9b6f12c-5fbf-433b-b457-eeb6904a37e7",
+          "url": "https://lyonpropertygroup.com/resident-portal/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b2",
+              "text": "Facebook"
+            },
+            {
+              "id": "b3",
+              "text": "Instagram"
+            },
+            {
+              "id": "b4",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b5",
+              "text": "Resident Portal"
+            },
+            {
+              "id": "b6",
+              "text": "Need to pay rent or request repairs?"
+            },
+            {
+              "id": "b7",
+              "text": "Access to the portal"
+            },
+            {
+              "id": "b8",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b9",
+              "text": "A Market-Savvy Approach"
+            },
+            {
+              "id": "b10",
+              "text": "At Lyon Property Group, we understand that investing in rental properties isn\u2019t just about acquiring real estate\u2014it\u2019s about making smart decisions that yield sustainable returns. Here\u2019s how we help you do just that:"
+            },
+            {
+              "id": "b11",
+              "text": "Log In Now"
+            },
+            {
+              "id": "b12",
+              "text": "It's easy to interact with our management team. Sign in to get started."
+            },
+            {
+              "id": "b13",
+              "text": "Get In Touch"
+            },
+            {
+              "id": "b14",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b15",
+              "text": "65 Jefferson Blvd, Warwick, RI 02888"
+            },
+            {
+              "id": "b16",
+              "text": "Facebook"
+            },
+            {
+              "id": "b17",
+              "text": "Instagram"
+            },
+            {
+              "id": "b18",
+              "text": "Services"
+            },
+            {
+              "id": "b19",
+              "text": "Owners"
+            },
+            {
+              "id": "b20",
+              "text": "Residents"
+            },
+            {
+              "id": "b21",
+              "text": "Applicants"
+            },
+            {
+              "id": "b22",
+              "text": "Areas We Serve"
+            },
+            {
+              "id": "b23",
+              "text": "About Us"
+            },
+            {
+              "id": "b24",
+              "text": "Quick Links"
+            },
+            {
+              "id": "b25",
+              "text": "Owners Portal"
+            },
+            {
+              "id": "b26",
+              "text": "Residents Portal"
+            },
+            {
+              "id": "b27",
+              "text": "Rental Search"
+            },
+            {
+              "id": "b28",
+              "text": "Copyright \u00a9"
+            },
+            {
+              "id": "b29",
+              "text": "Lyon Property Group | All Rights Reserved. | Terms and Conditions | Privacy Policy"
+            },
+            {
+              "id": "b30",
+              "text": "Powered by Digital marketing agency for Property Management Companies"
+            },
+            {
+              "id": "b31",
+              "text": "Call Us Now!"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "6ea73d3b739b9b2e7b4dcac357f120b04402aceb663ea1b43fb30b9090aa4475",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:27.260Z",
+          "relevantTextHash": "c3f65d9b3558712f7a724cc9d85230b8ae11dd292f6e183a92eae45167b6695b",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "10e56087-2002-4f89-8d3d-f0bb13b9c7bc",
+          "url": "https://lyonpropertygroup.com/services/multi-family-management/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b2",
+              "text": "Facebook"
+            },
+            {
+              "id": "b3",
+              "text": "Instagram"
+            },
+            {
+              "id": "b4",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b5",
+              "text": "Rhode Island Multi-Family Property Management Company"
+            },
+            {
+              "id": "b6",
+              "text": "Let Us Manage Your Rhode Island Multi-Family Property"
+            },
+            {
+              "id": "b7",
+              "text": "Do you own a multi-family rental property in Rhode Island or Eastern CT and are looking for a management team to maximize your investment returns? Lyon Property Group specializes in multi-family property management, ensuring your properties are expertly cared for and consistently profitable. With years of proven experience, we offer a tailored approach to maximize occupancy rates, streamline maintenance, and deliver exceptional tenant experiences. Our company thrives on creating strong client relationships, maintaining top-tier property conditions, and maximizing returns for our clients through proactive and innovative management strategies. Whether you\u2019re seeking consistent rent collection, tenant screening, or hands-on property maintenance, Lyon Property Group\u2019s commitment to efficiency and professionalism makes us the best partner to manage and elevate your investment success."
+            },
+            {
+              "id": "b8",
+              "text": "View Pricing"
+            },
+            {
+              "id": "b9",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b10",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b11",
+              "text": "Our Multi- Family Rental Management Services"
+            },
+            {
+              "id": "b12",
+              "text": "Our Multi-Family Rental Management Services are designed to maximize your property\u2019s value, minimize your stress, and deliver exceptional experiences for both you and your tenants."
+            },
+            {
+              "id": "b13",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b14",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b15",
+              "text": "Marketing of Your Rental Property"
+            },
+            {
+              "id": "b16",
+              "text": "Effective marketing is crucial to reducing vacancy times and ensuring maximum profitability for your multi-family rental property. At Lyon Property Group, we take a strategic approach to marketing your rental units, employing proven strategies to reach a broad yet targeted pool of prospective tenants. Our marketing services include creating high-quality property listings with professional photos, engaging descriptions, and optimized content that highlights your property\u2019s best features."
+            },
+            {
+              "id": "b17",
+              "text": "We use a mix of online rental platforms, social media, local advertising channels, and SEO-driven marketing strategies to ensure maximum exposure. Additionally, we provide scheduled open house events and virtual tours to attract quality renters quickly, minimizing downtime and maximizing your return on investment."
+            },
+            {
+              "id": "b18",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b19",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b20",
+              "text": "Tenant Screening Process"
+            },
+            {
+              "id": "b21",
+              "text": "Choosing the right tenants is the most important part of successful multi-family property management. Lyon Property Group employs a thorough tenant screening process to ensure that you get reliable, long-term residents who respect your property and make timely payments. Our comprehensive approach includes background checks, employment and income verification, rental history reviews, and credit assessments. We adhere to all fair housing laws, maintaining a balanced and lawful process that protects you as a property owner. By focusing on tenant quality, we reduce the risks associated with late payments, lease violations, and property damage, offering you peace of mind and predictable rental income. When you partner with Lyon Property Group, you can trust that your property is in responsible hands."
+            },
+            {
+              "id": "b22",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b23",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b24",
+              "text": "Rent Collection"
+            },
+            {
+              "id": "b25",
+              "text": "Efficient rent collection is key to the success of any rental property. Our team at Lyon Property Group takes a proactive approach to collecting rent, ensuring that your cash flow remains steady and predictable. We offer tenants multiple payment options, including online portals that make paying rent easy and accessible."
+            },
+            {
+              "id": "b26",
+              "text": "Automated payment reminders help prevent late payments, while our streamlined follow-up process ensures timely collections. In cases where rent remains unpaid, our experienced team enforces lease terms consistently and takes all necessary steps, including late fee assessments and legal procedures when necessary. This efficient and tenant-friendly system minimizes missed payments and maximizes your revenue."
+            },
+            {
+              "id": "b27",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b28",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b29",
+              "text": "Property Repairs & Maintenance"
+            },
+            {
+              "id": "b30",
+              "text": "Property upkeep and repairs are essential for preserving your investment\u2019s value and keeping tenants happy. Lyon Property Group offers a full-service repair and maintenance program to keep your multi-family properties in excellent condition."
+            },
+            {
+              "id": "b31",
+              "text": "Our experienced maintenance team handles routine tasks like plumbing, electrical, HVAC, and landscaping, as well as more urgent repairs through our 24/7 emergency maintenance services. We partner with trusted local vendors, ensuring prompt service and cost-effective repairs. Preventive maintenance schedules are implemented to identify potential issues before they become costly problems. Our commitment to quality repairs and consistent maintenance not only prolongs the life of your property but also fosters tenant satisfaction and retention."
+            },
+            {
+              "id": "b32",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b33",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b34",
+              "text": "Detailed Financial Reporting"
+            },
+            {
+              "id": "b35",
+              "text": "Understanding the financial health of your rental property is crucial to making informed business decisions. Lyon Property Group provides detailed financial reporting that keeps you informed every step of the way. Our reports include income statements, expense reports, rent roll summaries, and maintenance cost breakdowns. These easy-to-read reports are accessible through our online owner portal, giving you a transparent view of your property\u2019s performance and profitability at any time. Our team works closely with you to answer questions, provide insights, and ensure your investment goals are being met. Whether you need monthly reports, annual statements, or custom financial analytics, we are committed to delivering clarity and confidence when it comes to your property\u2019s financial health."
+            },
+            {
+              "id": "b36",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b37",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b38",
+              "text": "About Us"
+            },
+            {
+              "id": "b39",
+              "text": "Lyon Property Group stands out as a premier partner for property owners across Rhode Island and Southern Massachusetts, offering a personalized approach to managing multi-family rental properties. With years of experience and a dedication to excellence, our team has built a reputation for delivering results-driven solutions tailored to maximize property value and enhance tenant satisfaction. What makes us truly special is our commitment to treating every property as if it were our own\u2014bringing a level of care, attention to detail, and innovative strategies that consistently exceed expectations. Property investors choose Lyon Property Group because we prioritize their success through proactive and transparent management practices. Our expert team focuses on boosting occupancy rates, reducing turnover, and enhancing your property\u2019s appeal through targeted marketing, rigorous tenant screening, and high-quality maintenance services."
+            },
+            {
+              "id": "b40",
+              "text": "With us, you gain access to cutting-edge technology, an experienced maintenance team, and comprehensive financial reporting that provides a crystal-clear view of your property\u2019s performance. Unlike many other firms, we blend our local market expertise with a client-first approach, building lasting relationships based on trust, responsiveness, and results. For investors seeking peace of mind and the assurance that their multi-family assets are in capable hands, Lyon Property Group is the partner to choose. We not only protect and enhance your investment but also create thriving communities that attract quality tenants and yield consistent profits. Your success is our mission, and we bring the skills and passion necessary to help you achieve it."
+            },
+            {
+              "id": "b41",
+              "text": "Lyon Property Group"
+            },
+            {
+              "id": "b42",
+              "text": "Want to learn more?"
+            },
+            {
+              "id": "b43",
+              "text": "Get in touch with our team to schedule a free rental analysis."
+            },
+            {
+              "id": "b44",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b45",
+              "text": "Call Today: (401) 281-8658"
+            },
+            {
+              "id": "b46",
+              "text": "65 Jefferson Blvd, Warwick, RI 02888"
+            },
+            {
+              "id": "b47",
+              "text": "Facebook"
+            },
+            {
+              "id": "b48",
+              "text": "Instagram"
+            },
+            {
+              "id": "b49",
+              "text": "Services"
+            },
+            {
+              "id": "b50",
+              "text": "Owners"
+            },
+            {
+              "id": "b51",
+              "text": "Residents"
+            },
+            {
+              "id": "b52",
+              "text": "Applicants"
+            },
+            {
+              "id": "b53",
+              "text": "Areas We Serve"
+            },
+            {
+              "id": "b54",
+              "text": "About Us"
+            },
+            {
+              "id": "b55",
+              "text": "Quick Links"
+            },
+            {
+              "id": "b56",
+              "text": "Owners Portal"
+            },
+            {
+              "id": "b57",
+              "text": "Residents Portal"
+            },
+            {
+              "id": "b58",
+              "text": "Rental Search"
+            },
+            {
+              "id": "b59",
+              "text": "Copyright \u00a9"
+            },
+            {
+              "id": "b60",
+              "text": "Lyon Property Group | All Rights Reserved. | Terms and Conditions | Privacy Policy"
+            },
+            {
+              "id": "b61",
+              "text": "Powered by Digital marketing agency for Property Management Companies"
+            },
+            {
+              "id": "b62",
+              "text": "Call Us Now!"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "e08b705765f3a3894cbca9db651f29b2d89b3ef288affa6da6907067677cc5a5",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T16:07:27.645Z",
+          "relevantTextHash": "5b86a4479ce54c03df0c842c1bbd5ef8da7cf7d55c1110079a3da02260580dab",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "Lyon Property Group",
+          "blockId": "b4",
+          "observationId": "2687b77c-0944-4868-ae62-0f3e3c5a458a"
+        },
+        {
+          "kind": "residential_management",
+          "value": "Our team of experienced professionals is dedicated to providing top-notch property management solutions for rental property owners in Providence and the surrounding areas. Lyon Property Group has been in the RI property management business for over 20 years, serving clients throughout Rhode Island and Southeastern Massachusetts. Our headquarters are conveniently located in North Attleboro, MA, allowing us to easily access and manage rental properties in Providence and the surrounding areas. We specialize in managing various kinds of rentals, including single-family homes, multi-family units, and commercial properties. Our team at Lyon Property Group understands the unique challenges and hard work of owning rental properties in Providence. From navigating local regulations to handling requests, we have the knowledge and expertise to ensure your real estate investment is well-maintained and profitable. We are committed to providing our clients with personalized service and communication, ensuring you are always informed and involved in managing your investment.",
+          "blockId": "b15",
+          "observationId": "2687b77c-0944-4868-ae62-0f3e3c5a458a"
+        },
+        {
+          "kind": "service_area",
+          "value": "Providence",
+          "blockId": "b61",
+          "observationId": "2687b77c-0944-4868-ae62-0f3e3c5a458a"
+        },
+        {
+          "kind": "business_phone",
+          "value": "Call Today: (401) 281-8658",
+          "blockId": "b98",
+          "observationId": "2687b77c-0944-4868-ae62-0f3e3c5a458a"
+        },
+        {
+          "kind": "business_email",
+          "value": "65 Jefferson Blvd, Warwick, RI 02888",
+          "blockId": "b99",
+          "observationId": "2687b77c-0944-4868-ae62-0f3e3c5a458a"
+        }
+      ],
+      "expectedAdmission": false,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    },
+    {
+      "id": "zanno-incomplete",
+      "provenance": {
+        "kind": "recorded_first_party_extraction",
+        "candidateId": "e8e64db9-e8ce-4c2f-8c99-40c60ba2a577",
+        "runId": "d1b975db-86da-4fde-b81d-0bce6a86c8ea",
+        "promptVersion": "qualification-email-v2",
+        "reviewNote": "Retained short page has no matched canonical firm name, residential statement, target city/state or business email."
+      },
+      "candidate": {
+        "region": "RI",
+        "signal": "fit_only",
+        "website": "https://www.zannopm.com/",
+        "evidence": "# Rhode Island Property Management\n\n, Perfected.\n\n## We Eliminate the Stress of Property Ownership in Providence, Kent, Washington, Newport and Bristol Counties.\n\nBanner 1\n\nProvidence property manager\n\n### I\u2019m an owner looking for a property manager.\n\n Explore More Information\n Services We Provide\n View Our Pricing\n\nProvidence homes for rent\n\n### I\u2019m a prospective tenant interested in finding a rental.\n\n Search Available Rentals\n FAQs & Resources\n Apply for a Rental\n\nTenant Portal [...] If you own rentals in Rhode Island, you already understand the pressures that come with being a landlord. From finding the right renter for your property to handling ongoing responsibilities like maintenance coordination, monthly billing, and emergency response services, there are no shortages of responsibilities on your plate. [...] Working with a professional Providence property management partner is a simple way to keep your portfolio's needs in check. At Zanno Property Management, we go the extra mile to ensure our clients stay profitable. Learn more about our property management packages to get started or schedule a free consultation with a member of our team today: 401-244-5062.\n\nContact Us\n\nHome Welcome Banner\n\n## As Your Providence Property Manager, We Take Care of Everything.\n\nMarketing\n\n#### Marketing",
+        "firmName": "Providence Property Management, Providence Property Managers, Providence Property Management Company | Zanno Property Management",
+        "locality": "Providence",
+        "sourceUrl": "https://www.zannopm.com/",
+        "observedOn": "2026-10-07",
+        "preparedBy": "Tavily Basic search \u00b7 not verified",
+        "discoveryQuery": "Providence Rhode Island property management",
+        "discoveryKnownDomain": false
+      },
+      "observations": [
+        {
+          "id": "6be22d67-75d9-4da9-b26d-1509e012217a",
+          "url": "https://www.zannopm.com/",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b3",
+              "text": "Contractors"
+            },
+            {
+              "id": "b4",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b5",
+              "text": "Resident Login"
+            },
+            {
+              "id": "b6",
+              "text": "Rhode Island Property Management"
+            },
+            {
+              "id": "b7",
+              "text": ", Perfected."
+            },
+            {
+              "id": "b8",
+              "text": "We Eliminate the Stress of Property Ownership in Providence, Kent, Washington, Newport and Bristol Counties."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "b8d6de4707a459b53cfa532112323436870454ce4fff4ef361a6e6b64a691740",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-07T02:24:54.830Z",
+          "relevantTextHash": "84785641dd1d85b958e962b4e599281b04952be3e25626a9ae6f2681b1b5637d",
+          "publishedAtBlockId": null
+        }
+      ],
+      "facts": [
+        {
+          "kind": "firm_identity",
+          "value": "Rhode Island Property Management",
+          "blockId": "b6",
+          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+        },
+        {
+          "kind": "business_phone",
+          "value": "401-244-5062",
+          "blockId": "b2",
+          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+        },
+        {
+          "kind": "service_area",
+          "value": "We Eliminate the Stress of Property Ownership in Providence, Kent, Washington, Newport and Bristol Counties.",
+          "blockId": "b8",
+          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+        }
+      ],
+      "expectedAdmission": false,
+      "expectedRank": "fit_only",
+      "expectedEvidenceAccepted": true
+    }
+  ],
+  "originalPredicateReportSha256": "1eddab8e90ce6dbd57ca7e9a4258267493c347426c72a5e1ed3ae118b606e246",
+  "originalPredicateImplementationCommit": "d4e7efbf3812188d588d8d2fe1a43711b5aced59",
+  "recordedPromptSourceSha256": "3d09972ea2fac74568cd7d5bc88b25745541fdd04f27762688eed7820d24536c"
+}

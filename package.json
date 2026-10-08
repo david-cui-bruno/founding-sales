@@ -24,7 +24,8 @@
     "package:desktop": "npm run package --workspace apps/desktop --",
     "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
     "gate:greenfield": "npm run typecheck:greenfield && npm run lint && npm run test:greenfield && npm run test:ops",
-    "verify:secrets": "node scripts/verifySecrets.mjs"
+    "verify:secrets": "node scripts/verifySecrets.mjs",
+    "evaluate:email-admission": "node scripts/evaluateEmailAdmission.mjs"
   },
   "keywords": [],
   "author": {

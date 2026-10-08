@@ -1,4 +1,8 @@
-import {beforeEach,afterEach,it,expect,vi} from 'vitest';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {emailEvaluationCases,emailEvaluationAsOf} from './support/emailEvaluationCases.ts';
+import {beforeEach,afterEach,afterAll,it,expect,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {createTestDatabase,type TestDatabase} from '@fss/domain/db/testing/testDatabase.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '@fss/domain/test/db/support/fixtures.ts';
@@ -20,7 +24,7 @@ let db:TestDatabase;let seeded:TwoWorkspaces;let mailboxId:string;let sequenceId
 const admin=()=>repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.admin.userId,role:'admin'}),db.session);
 const tx=<T>(fn:()=>Promise<T>)=>withTransaction(db.session,fn);
 async function configureFutureActivation(){
- vi.stubEnv('FSS_BUILD_COMMIT','a'.repeat(40));
+ vi.stubEnv('FSS_BUILD_COMMIT',process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40));
  const sequences=await seedSequences(db.session,seeded);
  mailboxId=(await db.session.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address,provider_account_id,status,sync_state,coverage_watermark_at,history_id,history_id_updated_at,baseline_completed_at,baseline_from_at) VALUES($1,$2,'owner@example.test','owner-fixture','connected','ready',clock_timestamp(),'123',clock_timestamp(),clock_timestamp(),clock_timestamp()-interval '1 day') RETURNING id",[seeded.alpha.workspaceId,seeded.alpha.admin.userId])).rows[0]!.id;
  await db.session.query('INSERT INTO mailbox_send_ramp(workspace_id,mailbox_id) VALUES($1,$2)',[seeded.alpha.workspaceId,mailboxId]);
@@ -33,7 +37,7 @@ async function configureFutureActivation(){
  const config={enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,expectedRevision:0}))).toMatchObject({ok:true});
  const control=await readEmailAdmissionControl(admin());
- const evaluation={policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',implementationCommit:'a'.repeat(40),configurationSha256:control.configurationSha256,reportSha256:'b'.repeat(64),reviewedEligible:20,falseEligible:0};
+ const evaluation={policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:'b'.repeat(64),reviewedEligible:20,falseEligible:0};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,evaluation,expectedRevision:1}))).toMatchObject({ok:true});
  // Simulate a later, explicitly gated activation ONLY in this disposable database.
  // The shipped migration and all application activation controls remain disabled.
@@ -542,4 +546,45 @@ it('counts held qualification only after confirmed attendance and withdraws it w
  expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:1});
  await tx(()=>setMeetingAttendance(admin(),{meetingId,attendance:'unconfirmed'}));
  expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:0});
+});
+
+const evaluationResults:{id:string;expectedAdmission:boolean;actualAdmission:boolean;admissionReason:string;evidenceAccepted:boolean;actualRank:string|null}[]=[];
+afterAll(()=>{const directory=process.env['FSS_EMAIL_EVALUATION_DIRECTORY'];if(directory)writeFileSync(join(directory,'case-results.json'),JSON.stringify(evaluationResults,null,2)+'\n',{flag:'wx'});});
+
+// Reviewed labels enter at the agreed worker/database seam. No live adapter is present.
+it.each(emailEvaluationCases)('evaluates labeled email admission: $id',async c=>{
+ await configureFutureActivation();
+ const clocked=<T extends ReturnType<typeof admin>>(ctx:T)=>repositoryContext(ctx.scope,{query:async <Row extends QueryResultRowLike>(sql:string,values?:readonly unknown[])=>sql==='SELECT now() AS now'?{rows:[{now:new Date(emailEvaluationAsOf)} as unknown as Row],rowCount:1}:ctx.db.query<Row>(sql,values)});
+ const sourceAdmin=clocked(admin());
+ const candidate=await tx(()=>saveCandidate(sourceAdmin,c.candidate));if(!candidate.ok)throw new Error(candidate.reason);
+ const request=await tx(()=>requestQualification(sourceAdmin,{candidateId:candidate.value.id,expectedRevision:1},{enqueue:false}));if(!request.ok)throw new Error(request.reason);
+ const finished=await tx(()=>finishQualification(sourceAdmin,{runId:request.value.runId,reason:null,observations:c.observations,facts:c.facts}));
+ expect(finished.ok,JSON.stringify(finished)).toBe(c.expectedEvidenceAccepted);
+ if(finished.ok)expect(await tx(()=>evaluateQualification(sourceAdmin,{runId:request.value.runId}))).toMatchObject({ok:true});
+ const timed=clocked(repositoryContext(worker().scope,await db.appRuntimeSession()));
+ const result=await admitAutomaticEmailProspect(timed,{candidateId:candidate.value.id,qualificationRunId:request.value.runId,expectedRevision:1,expectedControlRevision:2});
+ const {readFirmSourcing}=await import('@fss/domain/sourcing/attribution.ts');
+ const attribution=result.ok?await readFirmSourcing(worker(),result.value.firmId):null;
+ evaluationResults.push({id:c.id,expectedAdmission:c.expectedAdmission,actualAdmission:result.ok,admissionReason:result.ok?'enrolled':result.reason,evidenceAccepted:finished.ok,actualRank:attribution?.sources[0]?.hypothesis??null});
+ expect(result.ok,JSON.stringify({case:c.id,result})).toBe(c.expectedAdmission);
+ const enrollments=await listEnrollments(worker());
+ expect(enrollments).toHaveLength(c.expectedAdmission?1:0);
+ if(result.ok){
+  expect(attribution).toMatchObject({sources:[{hypothesis:c.expectedRank}]});
+  expect(await listStepExecutions(worker(),{enrollmentId:result.value.enrollmentId})).toMatchObject([{attemptCount:0}]);
+ }
+});
+
+it('accepts a bound diagnostic report through normal disabled controls and still refuses activation',async()=>{
+ await configureFutureActivation();
+ const path=process.env['FSS_EMAIL_EVALUATION_REPORT'];
+ const report=path?JSON.parse(readFileSync(path,'utf8')):{implementationCommit:process.env['FSS_BUILD_COMMIT'],policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',reviewedEligible:2,falseEligible:0};
+ const reportSha256=createHash('sha256').update(path?readFileSync(path):JSON.stringify(report)).digest('hex');
+ const control=await readEmailAdmissionControl(admin());
+ const input={expectedRevision:2,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:{policyVersion:report.policyVersion,promptVersion:report.promptVersion,implementationCommit:report.implementationCommit,configurationSha256:control.configurationSha256,reportSha256,reviewedEligible:report.reviewedEligible,falseEligible:report.falseEligible}};
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),input))).toEqual({ok:true,value:{revision:3}});
+ const saved=await readEmailAdmissionControl(admin());
+ expect(saved).toMatchObject({enabled:false,ready:false,evaluation:input.evaluation,reasons:['activation_not_available']});
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),{...input,expectedRevision:3,enabled:true}))).toEqual({ok:false,reason:'activation_not_available'});
+ if(path)writeFileSync(join(process.env['FSS_EMAIL_CONTROL_RECEIPT_DIRECTORY']!,'disabled-control-receipt.json'),JSON.stringify({scope:'disposable_database_only',input,saved,activationAccepted:false},null,2)+'\n',{flag:'wx'});
 });
