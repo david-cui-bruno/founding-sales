@@ -9,6 +9,11 @@ import { claimNotification, readActionableNotifications, observeNotification, ac
 import { repositoryContext } from '../../db/workspaceScope.ts';
 import { readTodayActions } from '../../today/actions.ts';
 import { reassignFirm } from '../../crm/firms.ts';
+import { insertOrReviveMailbox, markMailboxDisconnected } from '../../mail/mailboxes.ts';
+import { previewDeletion, commitDeletion } from '../../retention/deletion.ts';
+import { commitDeparture } from '../../retention/departure.ts';
+import { runRetentionBatch } from '../../retention/runs.ts';
+import { openHold, releaseHold } from '../../policy/holds.ts';
 
 let world: ClassifierWorld | null = null;
 afterEach(async () => { await world?.stop(); world = null; });
@@ -82,5 +87,42 @@ describe('actionable notifications', () => {
     expect(await acknowledgeNotification(world.context(), { attemptId, deviceId, now })).toBeNull();
     expect((await readActionableNotifications(world.context(), { deviceId, now })).items).toEqual([]);
     expect((await readActionableNotifications(world.context(), { deviceId, now })).recoveries).toMatchObject([{ current: false, receipt: { status: 'acknowledged' } }]);
+  });
+  it('offers a current owned admin mailbox problem and keeps healthy, intentional and inaccessible work quiet', async () => {
+    world = await createClassifierWorld({ cases: [] });
+    const now = '2026-09-14T03:00:00.000Z';
+    const mailbox = await insertOrReviveMailbox(world.systemContext(), { ownerUserId: world.mail.seeded.alpha.admin.userId, emailAddress: 'admin@example.test', providerAccountId: 'admin-notify', baselineFromAt: '2026-08-01T00:00:00.000Z' });
+    expect(await readNotificationCandidates(world.adminContext(), { now })).toEqual([]);
+    await markMailboxDisconnected(world.systemContext(), { mailboxId: mailbox.id, status: 'revoked', reason: 'grant revoked' });
+    expect(await readNotificationCandidates(world.adminContext(), { now })).toMatchObject([{ phase: 'attention', reason: 'mailbox_disconnected', target: { kind: 'settings', mailboxId: mailbox.id } }]);
+    expect(await readNotificationCandidates(world.context(), { now })).toEqual([]);
+    await insertOrReviveMailbox(world.systemContext(), { ownerUserId: world.mail.seeded.alpha.admin.userId, emailAddress: 'admin@example.test', providerAccountId: 'admin-notify', baselineFromAt: '2026-08-01T00:00:00.000Z' });
+    await markMailboxDisconnected(world.systemContext(), { mailboxId: mailbox.id, status: 'disconnected', reason: 'owner_requested' });
+    expect(await readNotificationCandidates(world.adminContext(), { now })).toEqual([]);
+  });
+  it('retains body-free deduplication through expiry, deletion and restore holds while departure revokes delivery authority', async () => {
+    world = await createClassifierWorld({ cases: REPLY_CORPUS.filter(c => c.id === 'terse-human-reply') });
+    const now = '2026-09-14T03:00:00.000Z', deviceId = world.mail.seeded.alpha.salesperson.deviceId;
+    const candidate = (await readNotificationCandidates(world.context(), { now }))[0]!;
+    const claimed = await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now });
+    if (claimed?.receipt == null) throw new Error('claim absent');
+    await observeNotification(world.context(), { attemptId: claimed.receipt.attemptId, deviceId, observation: 'unknown', now });
+    const hold = await openHold(world.systemContext(), { scopeKind: 'workspace', reasonCode: 'restore_in_progress', blockedActionKinds: ['email_send'], sourceEventKind: 'notification.restore.test' });
+    await releaseHold(world.systemContext(), hold, 'restore_in_progress');
+    expect(await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now })).toBeNull();
+    expect((await readActionableNotifications(world.context(), { deviceId, now })).items[0]?.receipt).toMatchObject({ attemptId: claimed.receipt.attemptId, status: 'unknown' });
+    await withTransaction(world.mail.database.session, async () => await runRetentionBatch(world!.systemContext(), { dataKind: 'raw_mime', now: '2026-11-09T03:00:00.000Z' }));
+    expect((await readActionableNotifications(world.context(), { deviceId, now })).items[0]?.receipt?.attemptId).toBe(claimed.receipt.attemptId);
+    const preview = await previewDeletion(world.adminContext(), { targetKind: 'firm', firmId: world.mail.crm.alpha.firmId });
+    if (!preview.ok) throw new Error('deletion preview refused');
+    expect(await withTransaction(world.mail.database.session, async () => await commitDeletion(world!.adminContext(), { requestId: preview.value.requestId, previewHash: preview.value.previewHash, commandId: 'notification-delete', journal: world!.mail.journal }))).toMatchObject({ ok: true });
+    const after = await readActionableNotifications(world.context(), { deviceId, now });
+    expect(after.items).toEqual([]);
+    expect(after.recoveries).toMatchObject([{ current: false, receipt: { attemptId: claimed.receipt.attemptId, status: 'unknown' } }]);
+    expect(JSON.stringify(after)).not.toContain('Northwind');
+    expect(JSON.stringify(after)).not.toContain('body');
+    expect(await withTransaction(world.mail.database.session, async () => await commitDeparture(world!.adminContext(), { userId: world!.mail.seeded.alpha.salesperson.userId, commandId: 'notification-departure' }))).toMatchObject({ ok: true });
+    expect(await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now })).toBeNull();
+    await expect(readActionableNotifications(world.context(), { deviceId, now })).rejects.toThrow('notification_device_unavailable');
   });
 });
