@@ -863,6 +863,9 @@ export const OPERATIONS = {
   'notifications.runtime':{kind:'read',calls:[],input:z.strictObject({}),output:notificationRuntimeStatusSchema,transform:'This running desktop native notification availability'},
   'replyComposer.context': {kind:'read',calls:[{method:'POST',path:'/replies/composer/context'}],input:replyDraftContextInputSchema,output:replyDraftContextResultSchema,transform:'Current owner-scoped conversation and approved fact versions for a human draft'},
   'replyComposer.generate': {kind:'command',calls:[{method:'POST',path:'/replies/composer/generate'}],input:replyDraftGenerateInputSchema.omit({clientVersion:true}),output:replyDraftGenerateResultSchema,transform:'Source-bound human draft generation without a send path'},
+  'replyComposer.preview': {kind:'read',calls:[{method:'POST',path:'/replies/composer/preview'}],input:humanReplyPreviewInputSchema,output:humanReplyPreviewResultSchema,transform:'Exact current final body and envelope for human review'},
+  'replyComposer.sendStatus': {kind:'read',calls:[{method:'POST',path:'/replies/composer/send-status'}],input:humanReplySendReadInputSchema,output:humanReplySendResultSchema,transform:'Current durable original human send outcome'},
+  'replyComposer.send': {kind:'command',calls:[{method:'POST',path:'/replies/composer/send'}],input:humanReplySendInputSchema.omit({clientVersion:true}),output:humanReplySendResultSchema,transform:'One exact explicit human approval through the protected outbound fence'},
   'outreach.control': {kind:'read',calls:[{method:'POST',path:'/outreach/control/v2'}],input:z.strictObject({}),output:z.strictObject({view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender, facts, reply policy and review queue'},
   'outreach.senderStandingV2':{kind:'read',calls:[{method:'POST',path:'/outreach/senders/standing/v2'}],input:z.strictObject({}),output:z.strictObject({view:outreachSenderStandingV2ResponseSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender allowance, incident deadlines and required review'},
   'outreach.senderStanding': {kind:'read',calls:[{method:'POST',path:'/outreach/senders/standing'}],input:z.strictObject({}),output:z.strictObject({view:outreachSenderStandingResponseSchema.nullable(),reason:z.string().nullable()}),transform:'Current earned allowance, inactivity recovery and mailbox checks'},
@@ -1925,3 +1928,4 @@ declare global {
   var callieImport: ImportBridge | undefined;
 }
 import {replyDraftContextInputSchema,replyDraftContextResultSchema,replyDraftGenerateInputSchema,replyDraftGenerateResultSchema} from '@fss/contracts';
+import {humanReplyPreviewInputSchema,humanReplyPreviewResultSchema,humanReplySendInputSchema,humanReplySendReadInputSchema,humanReplySendResultSchema} from '@fss/contracts';

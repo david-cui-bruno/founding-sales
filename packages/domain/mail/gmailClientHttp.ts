@@ -784,6 +784,7 @@ export function mimeOf(request: GmailSendRequest): string {
     'Content-Type: text/plain; charset="utf-8"',
     'Content-Transfer-Encoding: 8bit',
   ];
+  if(request.cc?.length)headers.push(`Cc: ${request.cc.map(clean).join(', ')}`);
   if (request.inReplyTo !== undefined) headers.push(`In-Reply-To: ${clean(request.inReplyTo)}`);
   if (request.references !== undefined && request.references.length > 0) {
     headers.push(`References: ${request.references.map(clean).join(' ')}`);

@@ -52,6 +52,7 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  human_reply_send_intents: coverage(['retained'], 'Exact human approval metadata and original outbound identity, with no duplicate body store. Retained with the outbound fence through prospect deletion/departure/restore; current source, ownership, session, short approval expiry and all sending gates forbid replay. Outbound removal cascades this metadata.'),
   actionable_notification_attempts: coverage(['operational','retained'], 'Body-free user/device/source delivery and acknowledgement markers are retained for event deduplication through prospect deletion, departure and whole-database restore. Current ownership and source reads gate every new alert and context; a retained attempt never authorizes a replay.'),
   mailbox_provider_incidents: coverage(['operational','retained'], 'Coded mailbox safety history and hold identities; retained after prospect deletion/departure and with the whole database restore. Deadlines do not authorize fresh external action.'),
   social_weekly_settings: coverage(['operational'], 'Owner opt-in and next weekly draft check; active membership required, no transcripts or publication permission.'),

@@ -17,6 +17,9 @@ import { useReplies } from './useReplies.ts';
 const composerPorts:ReplyComposerPorts={
  context:async input=>{const api=operations();return api?await api.read('replyComposer.context',input):{ok:false,reason:'unavailable'};},
  prepareSuggestion:async input=>{const api=operations();return api?await api.command('replyComposer.generate',input):{ok:false,reason:'unavailable'};},
+ preview:async input=>{const api=operations();return api?await api.read('replyComposer.preview',input):{ok:false,reason:'unavailable'};},
+ sendStatus:async input=>{const api=operations();return api?await api.read('replyComposer.sendStatus',input):{ok:false,reason:'unavailable'};},
+ send:async input=>{const api=operations();return api?await api.command('replyComposer.send',input):{ok:false,reason:'unavailable'};},
 };
 export function RepliesRoute({ column: _column, messageId }: { readonly column: RefObject<HTMLElement | null>; readonly messageId?: string }): JSX.Element | null {
   const replies = useReplies(messageId);

@@ -1,4 +1,6 @@
 import { prospectingRetryAt } from './pacing.ts';
+import {consumeHumanReplyApproval,humanReplyEnvelope,refuseHumanReplyApproval,humanReplyApprovalIsLive} from '../replies/sendAuthority.ts';
+import {recordHumanReplyDelivery} from '../replies/delivery.ts';
 import {providerIncidentRefusal,readProviderBinding,recordProviderIncident} from './providerIncidents.ts';
 import {routineReplyThreading,recordRoutineDelivery} from '../outreach/replyDelivery.ts';
 import {databaseNow} from '../policy/clock.ts';
@@ -158,6 +160,7 @@ export async function dispatchOutboundMessage(
     return { outcome: 'fence_unknown', outboundMessageId: input.outboundMessageId };
   }
   if (initial.state === 'sent' || initial.state === 'unknown_terminal') {
+    if(initial.state==='sent')await recordHumanReplyDelivery(context,initial.id);
     return { outcome: 'already_terminal', outboundMessageId: initial.id };
   }
   if (initial.state === 'dispatching' || initial.state === 'reconciling') {
@@ -167,6 +170,7 @@ export async function dispatchOutboundMessage(
   }
 
   let fence: OutboundFenceRow = initial;
+  if(fence.originKind==='draft'&&!await humanReplyApprovalIsLive(context,fence.id,deps.humanReplyRevision))return {outcome:'not_ready',outboundMessageId:fence.id,detail:'human_reply:fresh_approval_required'};
   if (fence.state === 'held') {
     // A held fence never reached Gmail, so re-preparing it is safe. Whether it may
     // now go out is the gate's decision, made below on the released fence.
@@ -229,7 +233,7 @@ export async function dispatchOutboundMessage(
     // The fence went `held` inside the claiming transaction, with the decision. The
     // step's hold is opened now, outside it: `openHold` takes the send gate exclusive,
     // and asking for that while holding it shared is how two claims deadlock.
-    await openStepHold(context, claimed.fence, claimed.reason);
+    await openStepHold(context, claimed.fence, claimed.reason,deps.humanReplyRevision);
     return {
       outcome: 'held',
       outboundMessageId: fence.id,
@@ -272,6 +276,7 @@ export async function dispatchOutboundMessage(
       executionId: envelope.stepExecutionId, messageId: fence.id, sentAt: recorded.value.sentAt!,
     });
     await recordRoutineDelivery(context, fence.id);
+    await recordHumanReplyDelivery(context, fence.id);
     return { outcome: 'sent', outboundMessageId: fence.id, providerMessageId: sent.messageId };
   }
 
@@ -335,7 +340,7 @@ function refusalOf(reason: string): SendRefusalCode {
 type ClaimOutcome =
   | {
       readonly kind: 'claimed';
-      readonly threading: Awaited<ReturnType<typeof routineReplyThreading>>;
+      readonly threading: Awaited<ReturnType<typeof routineReplyThreading>>|Awaited<ReturnType<typeof humanReplyEnvelope>>;
       readonly plan: SendPlan;
       readonly claim: { readonly fence: OutboundFenceRow; readonly attemptToken: string };
     }
@@ -374,6 +379,9 @@ async function recheckAndClaim(
     if (fence === null || fence.state !== 'prepared') {
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: fence === null ? 'fence_unknown' : 'fence_not_ready', detail: fence?.state };
+    }
+    if(fence.originKind==='draft'&&!await humanReplyApprovalIsLive(context,fence.id,deps.humanReplyRevision)){
+      await context.db.query('ROLLBACK');return {kind:'not_ready',refusal:'step_ineligible',detail:'human_reply:fresh_approval_required'};
     }
 
     // The recheck. `precheck` is the answer from before the token refresh, and it is
@@ -547,7 +555,11 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_not_permitted:draft_changed' };
     }
-    const threading = await routineReplyThreading(context, fence.id);
+    if(fence.originKind==='draft'&&!await consumeHumanReplyApproval(context,fence.id)){
+      await context.db.query('ROLLBACK');
+      return {kind:'not_ready',refusal:'step_ineligible',detail:'human_reply:fresh_approval_required'};
+    }
+    const threading = fence.originKind==='draft'?await humanReplyEnvelope(context,fence.id):await routineReplyThreading(context, fence.id);
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value, threading };
   } catch (error) {
@@ -596,7 +608,7 @@ async function hold(
     reason,
     ...(deps.actor === undefined ? {} : { actor: deps.actor }),
   });
-  await openStepHold(context, fence, reason);
+  await openStepHold(context, fence, reason,deps.humanReplyRevision);
   const retryAt=reason==='rate_limited'?(await providerIncidentRefusal(context,fence.mailboxId,deps.now?.()??new Date()))?.retryAt:undefined;
   return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }),...(retryAt===undefined?{}:{retryAt}) };
 }
@@ -606,7 +618,12 @@ async function openStepHold(
   context: RepositoryContext,
   fence: OutboundFenceRow,
   reason: SendRefusalCode,
+  expectedHumanRevision?:number,
 ): Promise<void> {
+  if(fence.originKind==='draft'){
+    await refuseHumanReplyApproval(context,fence.id,reason,expectedHumanRevision);
+    return;
+  }
   const holdReason = holdReasonForRefusal(reason);
   if (holdReason !== null) {
     await openHold(context, {

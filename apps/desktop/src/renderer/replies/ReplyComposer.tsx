@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import type {ReplyDraftContextInput,ReplyDraftContext,ReplyDraftGenerateInput,ReplyGeneratedDraft,ReplyComposerResult} from '../../../../../packages/contracts/src/replyComposer.ts';
+import type {HumanReplyPreviewInput,HumanReplyPreview,HumanReplySendInput,HumanReplySendStatus} from '../../../../../packages/contracts/src/replyComposer.ts';
 import {replyDraftContextInputSchema} from '../../../../../packages/contracts/src/replyComposer.ts';
 import {useSessionEpoch} from '../app/drafts.tsx';
 import {useKept} from './kept.ts';
@@ -8,6 +9,9 @@ import {Button} from '../ui/button.tsx';
 export interface ReplyComposerPorts {
  context(input:ReplyDraftContextInput):Promise<ReplyComposerResult<ReplyDraftContext>>;
  prepareSuggestion(input:Omit<ReplyDraftGenerateInput,'clientVersion'>):Promise<ReplyComposerResult<ReplyGeneratedDraft>>;
+ preview?(input:HumanReplyPreviewInput):Promise<ReplyComposerResult<HumanReplyPreview>>;
+ send?(input:Omit<HumanReplySendInput,'clientVersion'>):Promise<ReplyComposerResult<HumanReplySendStatus>>;
+ sendStatus?(input:{messageId:string}):Promise<ReplyComposerResult<HumanReplySendStatus>>;
 }
 function selection(messageId:string,envelope:string,refs:string):ReplyDraftContextInput{
  try{const parsed=replyDraftContextInputSchema.safeParse({messageId,...(envelope?{envelope:JSON.parse(envelope)}:{}),...(refs?{factRefs:JSON.parse(refs)}:{})});return parsed.success?parsed.data:{messageId};}catch{return {messageId};}
@@ -36,6 +40,14 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
  const [attempt,setAttempt]=useKept(`human-composer:m:${messageId}:attempt`,'');
  const [savedEnvelope,setSavedEnvelope]=useKept(`human-composer:m:${messageId}:envelope`,'');
  const [savedRefs,setSavedRefs]=useKept(`human-composer:m:${messageId}:refs`,'');
+ const [sendAttempt,setSendAttempt]=useKept(`human-composer:m:${messageId}:send-command`,'');
+ const [sendUnknown,setSendUnknown]=useKept(`human-composer:m:${messageId}:send-unknown`,'');
+ const [preview,setPreview]=useState<HumanReplyPreview|null>(null);
+ const [sendStatus,setSendStatus]=useState<HumanReplySendStatus|null>(null);
+ const [sendReadReady,setSendReadReady]=useState(false);
+ const [sending,setSending]=useState(false);
+ const sendLock=useRef(false),sendLife=useRef(0);
+ const sendUnknownSetter=useRef(setSendUnknown);sendUnknownSetter.current=setSendUnknown;
  const [context,setContext]=useState<ReplyDraftContext|null>(null);
  const [notice,setNotice]=useState<string|null>(null);
  const [suggestion,setSuggestion]=useState<ReplyGeneratedDraft|null>(null);
@@ -61,6 +73,18 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
   setContext(null);setSuggestion(null);setGenerating(false);void refresh();
   return invalidate;
  },[refresh,epoch,invalidate]);
+ const checkSend=useCallback(async()=>{
+  if(!ports.sendStatus||!enabled)return;
+  const mine=sendLife.current;
+  try{
+   const result=await ports.sendStatus({messageId});if(mine!==sendLife.current)return;
+   if(result.ok){setSendStatus(result.value);setSendReadReady(true);sendUnknownSetter.current('');}
+   else if(result.reason==='no_send_attempt'){setSendStatus(null);setSendReadReady(true);sendUnknownSetter.current('');}
+   else {setSendReadReady(false);setNotice(result.reason);}
+  }catch{if(mine===sendLife.current)setSendReadReady(false);}
+ },[ports,enabled,messageId]);
+ useEffect(()=>{const lifetime=sendLife;lifetime.current++;setPreview(null);setSendStatus(null);setSendReadReady(false);sendLock.current=false;setSending(false);void checkSend();return ()=>{lifetime.current++;};},[checkSend,epoch]);
+ useEffect(()=>{if(!sendStatus||!['queued','dispatching','reconciling'].includes(sendStatus.state))return;const timer=setInterval(()=>void checkSend(),3000);return ()=>clearInterval(timer);},[sendStatus,checkSend]);
  const fingerprint=JSON.stringify({text,sourceRevision:base,envelope:savedEnvelope,refs:savedRefs});
  const stale=base!==''?(context===null||base!==context.sourceRevision):text.trim().length>0;
  const bind=(current:ReplyDraftContext)=>{setBase(current.sourceRevision);setSavedEnvelope(JSON.stringify(current.envelope));setSavedRefs(JSON.stringify(current.facts.map(f=>({id:f.id,version:f.version}))));setReviewed('');};
@@ -69,7 +93,26 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
   if(!context||stale||!text.trim())return;
   const before=context.sourceRevision,typed=text,envelope=savedEnvelope,refs=savedRefs;
   const current=await refresh();
-  if(current?.sourceRevision===before&&latest.current.text===typed&&latest.current.base===before&&latest.current.savedEnvelope===envelope&&latest.current.savedRefs===refs)setReviewed(JSON.stringify({text:typed,sourceRevision:before,envelope,refs}));
+  if(current?.sourceRevision!==before)return;
+  const mine=read.current;
+  let final:HumanReplyPreview|null=null;
+  if(ports.preview){
+   try{const result=await ports.preview({messageId,text:typed,factRefs:current.facts.map(f=>({id:f.id,version:f.version})),envelope:current.envelope});if(mine!==read.current)return;if(!result.ok){setNotice(result.reason);return;}if(result.value.sourceRevision!==before){setNotice('source_changed');return;}final=result.value;}catch{if(mine===read.current)setNotice('context_unavailable');return;}
+  }
+  if(latest.current.text===typed&&latest.current.base===before&&latest.current.savedEnvelope===envelope&&latest.current.savedRefs===refs){setPreview(final);setReviewed(JSON.stringify({text:typed,sourceRevision:before,envelope,refs}));}
+ };
+ const sendExact=async()=>{
+  if(!ports.send||!preview||!context||sendLock.current||!enabled||stale||reviewed!==fingerprint||!sendReadReady||sendUnknown||sendStatus&&sendStatus.state!=='held')return;
+  sendLock.current=true;setSending(true);const mine=sendLife.current;
+  let commandId:string=crypto.randomUUID();try{const previous=JSON.parse(sendAttempt) as {revision?:string;commandId?:string};if(sendStatus?.state!=='held'&&previous.revision===preview.draftRevision&&previous.commandId)commandId=previous.commandId;}catch{/* First explicit approval. */}
+  setSendAttempt(JSON.stringify({revision:preview.draftRevision,commandId}));
+  try{
+   const result=await ports.send({commandId,messageId,text,sourceRevision:preview.sourceRevision,draftRevision:preview.draftRevision,factRefs:context.facts.map(f=>({id:f.id,version:f.version})),envelope:preview.envelope});if(mine!==sendLife.current)return;
+   setReviewed('');setPreview(null);
+   if(result.ok){setSendStatus(result.value);setSendUnknown('');if(result.value.state==='held')setSendAttempt('');}
+   else {setSendUnknown('pending');setSendReadReady(false);setNotice(result.reason);}
+  }catch{if(mine===sendLife.current){setSendUnknown('pending');setSendReadReady(false);setReviewed('');setPreview(null);}}
+  finally{if(mine===sendLife.current){sendLock.current=false;setSending(false);}}
  };
  const prepare=async()=>{
   if(!context||stale||generating)return;
@@ -85,12 +128,12 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
  };
  return <section aria-label="Reply composer" className="space-y-3 rounded-md border border-border p-3">
   <h3 className="font-medium">Prepare a reply</h3>
-  <p className="text-sm text-muted-foreground">Drafts stay in this signed-in session while you navigate. Review every claim and commitment. Pricing remains undefined until separately approved. This editor does not send.</p>
+  <p className="text-sm text-muted-foreground">Drafts stay in this signed-in session while you navigate. Review every claim and commitment. Pricing remains undefined until separately approved. Only an explicit Send click requests delivery.</p>
   {context?<div className="space-y-1 text-sm">
    <p>From: {context.authorAddress}</p><p>To: {context.envelope.to.join(', ')}</p><p>CC: {context.envelope.cc.join(', ')||'None selected'}</p><p>Subject: {context.subject}</p>
    <p>Received To: {context.observedTo.join(', ')||'Unavailable'}</p><p>Received CC: {context.observedCc.join(', ')||'None recorded'}</p>
    <p>Reply-To address metadata is unavailable. The draft uses the verified sender route; verify routing before any future send.</p>
-   <p>CC dispatch is a separate feature. These are draft choices only.</p>
+   <p>{ports.send?'Only the verified To and CC recipients shown here can receive this reply.':'CC dispatch is a separate feature. These are draft choices only.'}</p>
    {context.recipientOptions.map(option=><label key={option.address} className="grid gap-1">{option.address} recipient<select className="rounded-md border border-input bg-background p-2" value={context.envelope.to.includes(option.address)?'to':context.envelope.cc.includes(option.address)?'cc':'exclude'} disabled={pending||generating} onChange={event=>{
     const envelope={to:context.envelope.to.filter(address=>address!==option.address),cc:context.envelope.cc.filter(address=>address!==option.address)};
     if(event.target.value==='to')envelope.to.push(option.address);if(event.target.value==='cc')envelope.cc.push(option.address);
@@ -117,6 +160,8 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
    {stale&&context?<Button size="sm" variant="quiet" disabled={pending} onClick={adopt}>Use current context</Button>:null}
    <Button size="sm" disabled={!enabled||pending||!context||stale||!text.trim()} onClick={()=>void reviewExact()}>Review exact draft</Button>
    <Button size="sm" disabled={!enabled||pending||generating||!context||stale} onClick={()=>void prepare()}>Prepare suggestion</Button>
+   {ports.send?<Button size="sm" disabled={!enabled||sending||pending||stale||!preview||reviewed!==fingerprint||!sendReadReady||Boolean(sendUnknown)||Boolean(sendStatus&&sendStatus.state!=='held')} onClick={()=>void sendExact()}>Send reviewed reply</Button>:null}
+   {ports.sendStatus?<Button size="sm" variant="quiet" disabled={!enabled||sending} onClick={()=>void checkSend()}>Check send status</Button>:null}
   </div>
   {suggestion?<section aria-label="Reply suggestion" className="space-y-2 rounded-md border border-border p-3">
    <p className="whitespace-pre-wrap text-sm">{suggestion.text}</p>
@@ -125,6 +170,9 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
   </section>:null}
   {notice&&context?<p role="status">{refusalCopy(notice)} Your draft is retained.</p>:null}
   {reviewed===fingerprint&&!stale?<p role="status">Reviewed exact draft. Editing it requires another review.</p>:null}
+  {preview&&reviewed===fingerprint&&!stale?<section aria-label="Exact send preview"><p>Subject: {preview.subject}</p><p>To: {preview.envelope.to.join(', ')}</p><p>CC: {preview.envelope.cc.join(', ')||'None'}</p><p className="whitespace-pre-wrap">{preview.body}</p></section>:null}
+  {sendUnknown?<p role="alert">The send request has no confirmed result. Check the original attempt before any further action.</p>:null}
+  {sendStatus?<p role="status">{sendStatus.state==='sent'?'Sent. Delivery was confirmed by the mail provider.':sendStatus.state==='reconciling'?'Delivery is uncertain. Callie is checking the original attempt and will not submit a replacement.':sendStatus.state==='unknown_terminal'?'Delivery remains unknown. The original attempt requires administrator review; it cannot be resent.':sendStatus.state==='dispatching'?'The original reply is being submitted. Check its status before taking another action.':sendStatus.state==='queued'?'Your explicit reply request is queued for the normal sending checks. It has not been confirmed sent.':'This reply was held before submission. Refresh context and review the exact draft before a fresh Send click.'}</p>:null}
   <p className="text-xs text-muted-foreground">Review confirms your judgment about this exact draft, including unsupported claims and commitments. It does not approve shared facts or authorize sending.</p>
  </section>;
 }

@@ -29,7 +29,7 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const recipientOptions=routes.filter(r=>!own.some(identity=>identity.address===r.address)&&routes.filter(other=>other.address===r.address).length===1).map(r=>({address:r.address,contactId:r.contact_id}));
  const sender=recipientOptions.filter(r=>r.address===message.headerFrom&&r.contactId===target.contactId);
  if(sender.length!==1||recipientOptions.length>20)return {ok:false,reason:'sender_unverified'};
- const envelope=input.envelope??{to:[sender[0]!.address],cc:[]};
+ const envelope={to:[...(input.envelope?.to??[sender[0]!.address])],cc:[...(input.envelope?.cc??[])]};
  const recipients=[...envelope.to,...envelope.cc];
  if(new Set(recipients).size!==recipients.length||recipients.some(address=>!recipientOptions.some(r=>r.address===address))||!envelope.to.includes(sender[0]!.address))return {ok:false,reason:'recipient_unverified'};
  if(await firstSuppressed(ctx,[{scope:'firm',canonicalKey:firm.id},...recipients.map(address=>({scope:'handle' as const,canonicalKey:address}))],'email'))return {ok:false,reason:'conversation_stopped'};

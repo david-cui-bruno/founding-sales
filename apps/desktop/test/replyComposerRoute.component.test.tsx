@@ -14,5 +14,5 @@ it('offers the source-bound human editor inside the open reply panel and typing 
  fireEvent.change(draft,{target:{value:'A human answer.'}});
  expect(read).toHaveBeenCalledWith('replyComposer.context',{messageId:MESSAGE_ID});
  expect(command).not.toHaveBeenCalled();
- expect(screen.queryByRole('button',{name:/^send/i})).toBeNull();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
 });

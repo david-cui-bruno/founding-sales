@@ -280,8 +280,9 @@ export interface GmailClient {
 }
 
 export interface GmailSendRequest {
-  /** Canonical, lower-cased. One recipient: FSS never sends to a list. */
+  /** Canonical address; only an explicit human reply can supply a verified To envelope. */
   readonly to: string;
+  readonly cc?: readonly string[] | undefined;
   readonly from: string;
   readonly subject: string;
   /** Plain text. FSS sends no HTML part and no tracking pixel (12.7). */

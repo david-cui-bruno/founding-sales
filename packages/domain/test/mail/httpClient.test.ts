@@ -67,6 +67,14 @@ describe('the Gmail HTTP client', () => {
     expect(mime).not.toMatch(/^(?:Cc|Bcc):/m);
   });
 
+  it('puts explicitly verified CC recipients in the MIME envelope without a hidden recipient header',async()=>{
+    answer('/gmail/v1/users/me/messages/send',200,{id:'sent-human',threadId:'original-thread'});
+    await client.sendMessage(access,{to:'prospect@example.test, teammate@example.test',cc:['colleague@example.test'],from:'owner@example.test',subject:'Maintenance',body:'Reviewed human answer',rfcMessageId:'<human@example.test>',threadId:'original-thread',inReplyTo:'<incoming@example.test>',references:['<incoming@example.test>']});
+    const payload=JSON.parse(requests.at(-1)!.body) as {raw:string;threadId:string};
+    const mime=Buffer.from(payload.raw,'base64url').toString('utf8');
+    expect(payload.threadId).toBe('original-thread');expect(mime).toContain('To: prospect@example.test, teammate@example.test');expect(mime).toContain('Cc: colleague@example.test');expect(mime).not.toMatch(/^Bcc:/mu);
+  });
+
   beforeAll(async () => {
     server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const chunks: Buffer[] = [];

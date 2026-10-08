@@ -238,6 +238,24 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       if(generation!==deps.recordings.identity.current())return {ok:false,reason:'not_found'};
       return answer.ok?answer.value:{ok:false,reason:answer.reason};
     },
+    'replyComposer.preview':async(input:OperationInput<'replyComposer.preview'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/replies/composer/preview',value=>humanReplyPreviewResultSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {ok:false,reason:'session_changed'};
+      return answer.ok?answer.value:{ok:false,reason:answer.reason};
+    },
+    'replyComposer.sendStatus':async(input:OperationInput<'replyComposer.sendStatus'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/replies/composer/send-status',value=>humanReplySendResultSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {ok:false,reason:'session_changed'};
+      return answer.ok?answer.value:{ok:false,reason:answer.reason};
+    },
+    'replyComposer.send':async(input:OperationInput<'replyComposer.send'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...payload}=input;
+      const answer=await deps.api.command('/replies/composer/send',payload,value=>humanReplySendResultSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {ok:false,reason:'session_changed'};
+      return answer.ok?answer.value:{ok:false,reason:answer.reason};
+    },
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
       const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control/v2',value=>outreachControlSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
@@ -762,3 +780,4 @@ export function operationCoverage(handlers: Readonly<Record<string, Handler>>): 
 
 export { DIAL_IPC_CHANNELS, OPERATION_IPC_CHANNELS };
 import {replyDraftContextResultSchema,replyDraftGenerateResultSchema} from '@fss/contracts';
+import {humanReplyPreviewResultSchema,humanReplySendResultSchema} from '@fss/contracts';

@@ -14,6 +14,19 @@ import {
 } from './types.ts';
 import type { OutboundState } from '@fss/contracts';
 
+/** Human callers supply already reviewed final bytes. Dispatch still revalidates authority. */
+export async function prepareHumanReplyFence(context:RepositoryContext,input:{draftId:string;mailboxId:string;firmId:string;contactId:string;opportunityId:string|null;address:string;routeId:string;routeVersion:number;subject:string;body:string;sourceZone:string}):Promise<SendResult<PreparedFence>>{
+ const issue=sendBodyIssue(input.body);
+ if(issue!==null||hasOptOutLink(input.subject))return refuseSend('footer_not_composed',issue??'optout_link');
+ const id=(await context.db.query<{id:string}>('SELECT gen_random_uuid() AS id')).rows[0]!.id;
+ const domain=(await context.db.query<{domain:string}>('SELECT domain FROM sending_domains WHERE workspace_id=$1 AND is_primary',[context.scope.workspaceId])).rows[0]?.domain;
+ if(!domain)return refuseSend('sending_domain_unknown');
+ await context.db.query(`INSERT INTO outbound_messages(id,workspace_id,mailbox_id,origin_kind,draft_id,firm_id,contact_id,opportunity_id,recipient_address,recipient_route_id,recipient_route_version,subject,body,rendered_hash,provider_message_id_header,send_at,source_zone,placement_rule_version)
+ VALUES($1,$2,$3,'draft',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp(),$15,'human-reply.1')`,[id,context.scope.workspaceId,input.mailboxId,input.draftId,input.firmId,input.contactId,input.opportunityId,input.address,input.routeId,input.routeVersion,input.subject,input.body,renderedHash(input.subject,input.body),deterministicMessageId(id,domain),input.sourceZone]);
+ await appendEvent(context,{outboundMessageId:id,fromState:null,toState:'prepared',actor:describeActor(context),detail:{origin:'human_reply'}});
+ return acceptSend({outboundMessageId:id,created:true});
+}
+
 /**
  * The outbound fence (specification 12.5, Appendix B).
  *

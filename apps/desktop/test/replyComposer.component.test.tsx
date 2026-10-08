@@ -10,6 +10,28 @@ const ref={id,version:1};
 const context:ReplyDraftContext={messageId:id,sourceRevision:'a'.repeat(64),firmId:id,contactId:id,authorUserId:id,mailboxId:id,mailboxOwnerUserId:id,authorAddress:'owner@example.test',authorizationRevision:1,subject:'Question',senderAddress:'prospect@example.test',providerThreadId:'thread-one',inReplyTo:'question@example.test',references:['question@example.test'],observedTo:['owner@example.test'],observedCc:[],replyToMetadata:'unavailable',envelope:{to:['prospect@example.test'],cc:[]},recipientOptions:[{address:'prospect@example.test',contactId:id}],messageText:'What does Callie do?',priorContext:[],bookings:[],facts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}],availableFacts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}]};
 const ports=():ReplyComposerPorts=>({context:vi.fn<ReplyComposerPorts['context']>(async()=>({ok:true,value:context})),prepareSuggestion:vi.fn<ReplyComposerPorts['prepareSuggestion']>(async()=>({ok:false,reason:'generation_unavailable'}))});
 
+it('shows final bytes before enabling one explicit send and keeps uncertainty on the original attempt through navigation',async()=>{
+ const p=ports(),sent={messageId:id,outboundMessageId:id,state:'reconciling' as const,providerMessageId:null,sentAt:null,reason:null};
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Re: Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ const send=vi.fn(async()=>({ok:true as const,value:sent}));p.send=send;
+ p.sendStatus=vi.fn(async()=>send.mock.calls.length?{ok:true as const,value:sent}:{ok:false as const,reason:'no_send_attempt'});
+ const tree=(open:boolean)=><DraftsProvider>{open?<ReplyComposer messageId={id} ports={p}/>:<p>Today</p>}</DraftsProvider>;
+ const view=render(tree(true));await screen.findByText('question@example.test');
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'My exact human answer.'}});
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ expect(await screen.findByText(/Fixture postal address/)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ expect(await screen.findByText(/Delivery is uncertain/)).toBeTruthy();
+ expect(p.send).toHaveBeenCalledTimes(1);
+ expect(p.send).toHaveBeenCalledWith(expect.objectContaining({text:'My exact human answer.',draftRevision:'b'.repeat(64),envelope:context.envelope}));
+ view.rerender(tree(false));view.rerender(tree(true));
+ expect(await screen.findByText(/Delivery is uncertain/)).toBeTruthy();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(p.send).toHaveBeenCalledTimes(1);
+});
+
 it('retains human text across navigation and shows current recipient/thread/fact context without a send control',async()=>{
  const p=ports();
  const tree=(open:boolean)=><DraftsProvider>{open?<ReplyComposer messageId={id} ports={p}/>:<p>Today</p>}</DraftsProvider>;

@@ -522,7 +522,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       // date is the wall clock, which is what Gmail stamps; its headers are the ones
       // FSS wrote and a metadata read with the allowlist would return.
       const messageId = recordedSentMessageId(request.rfcMessageId);
-      const threadId = recordedSentThreadId(request.rfcMessageId);
+      const threadId = request.threadId??recordedSentThreadId(request.rfcMessageId);
       sentStore.set(messageId, {
         id: messageId,
         threadId,
@@ -531,6 +531,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
         headers: {
           From: request.from,
           To: request.to,
+          ...(request.cc?.length?{Cc:request.cc.join(', ')}:{}),
           Subject: request.subject,
           'Message-ID': request.rfcMessageId,
         },
