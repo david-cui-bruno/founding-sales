@@ -8,7 +8,7 @@ import {
   recordDeterministicClassification,
 } from './effects.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import { headerValue, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
+import { headerValue, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig,type GmailIncidentMetadata } from './gmailClient.ts';
 import type { MailLog } from './log.ts';
 import { directSendTargetOf, findMatchCandidates, recordMatchesForImport } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
@@ -34,8 +34,10 @@ import { GmailClientError } from './gmailClient.ts';
  * with the fulfilled follow-up still claimable until the retry. So the loop stops at N
  * and reports how many leading ids it finished (`processedMessages`) and which read
  * failed (`readFailure`). `mail.sync` moves its cursor only to just before N, the job
- * commits 1 to N-1, and N is read again on the next run; `mail.recover` throws on it
- * and keeps its whole-job retry (its position is the recorded rows, so nothing is lost).
+ * commits 1 to N-1, and N remains unread. Both sync and recovery persist the coded
+ * incident with this prefix. A verified transient deadline permits a fresh read;
+ * unknown evidence stays held. Recovery uses the recorded rows as its position and
+ * never claims complete coverage from the interrupted batch.
  *
  * **An RFC Message-ID collision never raises** (C2B-A1): `recordMessage` returns a proven
  * duplicate as the recorded message, whose effects are not run again, and records any
@@ -99,6 +101,7 @@ export interface MessagePipelineReport {
 }
 
 export interface PipelineReadFailure {
+  readonly incident?: GmailIncidentMetadata | undefined;
   readonly providerMessageId: string;
   readonly read: 'metadata' | 'body';
   /** Bounded, and never the client's message text: a code and a status, nothing else. */
@@ -123,7 +126,7 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   readFailure: null,
 });
 
-type GmailRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly detail: string };
+type GmailRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly detail: string;readonly incident?:GmailIncidentMetadata|undefined };
 
 /** A Gmail read, with a throw turned into a value the loop can stop on. */
 async function gmailRead<T>(read: () => Promise<T>): Promise<GmailRead<T>> {
@@ -131,7 +134,7 @@ async function gmailRead<T>(read: () => Promise<T>): Promise<GmailRead<T>> {
     return { ok: true, value: await read() };
   } catch (error) {
     if (error instanceof GmailClientError) {
-      return { ok: false, detail: error.status === undefined ? error.code : `${error.code} ${String(error.status)}` };
+      return { ok: false, detail: error.status === undefined ? error.code : `${error.code} ${String(error.status)}`,...(error.incident===undefined?{}:{incident:error.incident}) };
     }
     return { ok: false, detail: 'unexpected' };
   }
@@ -141,7 +144,7 @@ const MESSAGE_SAVEPOINT = 'mail_pipeline_message';
 
 /** The duplicate-proof read failed; the message stops the batch as a failed metadata read. */
 class ProofReadFailed extends Error {
-  constructor(readonly detail: string) {
+  constructor(readonly detail: string,readonly incident?:GmailIncidentMetadata) {
     super('the duplicate-proof metadata read failed');
   }
 }
@@ -194,7 +197,7 @@ export async function processMessageIds(
       deps.gmail.getMetadata(input.access, providerMessageId, METADATA_HEADERS),
     );
     if (!metadataRead.ok) {
-      readFailure = { providerMessageId, read: 'metadata', detail: metadataRead.detail };
+      readFailure = { providerMessageId, read: 'metadata', detail: metadataRead.detail,...(metadataRead.incident===undefined?{}:{incident:metadataRead.incident}) };
       break;
     }
     const metadata = metadataRead.value;
@@ -225,7 +228,7 @@ export async function processMessageIds(
     };
     const nested = await openMessageSavepoint(context);
     const step = await (async (): Promise<
-      'done' | { readonly ok: false; readonly read: 'metadata' | 'body'; readonly detail: string }
+      'done' | { readonly ok: false; readonly read: 'metadata' | 'body'; readonly detail: string;readonly incident?:GmailIncidentMetadata|undefined }
     > => {
       messagesSeen += 1;
 
@@ -245,7 +248,7 @@ export async function processMessageIds(
             const other = await gmailRead(() =>
               deps.gmail.getMetadata(input.access, existing.providerMessageId, METADATA_HEADERS),
             );
-            if (!other.ok) throw new ProofReadFailed(other.detail);
+            if (!other.ok) throw new ProofReadFailed(other.detail,other.incident);
             const mine = headerValue(metadata.headers, 'Date')?.trim();
             const theirs = other.value === null ? undefined : headerValue(other.value.headers, 'Date')?.trim();
             return mine !== undefined && mine !== '' && mine === theirs;
@@ -253,7 +256,7 @@ export async function processMessageIds(
           ...(deps.log === undefined ? {} : { log: deps.log }),
         });
       } catch (error) {
-        if (error instanceof ProofReadFailed) return { ok: false, read: 'metadata', detail: error.detail };
+        if (error instanceof ProofReadFailed) return { ok: false, read: 'metadata', detail: error.detail,...(error.incident===undefined?{}:{incident:error.incident}) };
         throw error;
       }
       if (stored.inserted) messagesRecorded += 1;
@@ -351,7 +354,7 @@ export async function processMessageIds(
 
       // Step 3: now, and only now, a body.
       const bodyRead = await gmailRead(() => deps.gmail.getBody(input.access, providerMessageId));
-      if (!bodyRead.ok) return { ok: false, read: 'body', detail: bodyRead.detail };
+      if (!bodyRead.ok) return { ok: false, read: 'body', detail: bodyRead.detail,...(bodyRead.incident===undefined?{}:{incident:bodyRead.incident}) };
       const body = bodyRead.value;
       if (body !== null) {
         bodiesFetched += 1;
@@ -407,7 +410,7 @@ export async function processMessageIds(
         rfcIdConflicts,
         newestInternalDate,
       } = before);
-      readFailure = { providerMessageId, read: step.read, detail: step.detail };
+      readFailure = { providerMessageId, read: step.read, detail: step.detail,...(step.incident===undefined?{}:{incident:step.incident}) };
       break;
     }
     if (nested) await context.db.query(`RELEASE SAVEPOINT ${MESSAGE_SAVEPOINT}`);

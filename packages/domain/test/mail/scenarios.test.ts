@@ -13,6 +13,7 @@ import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts
 import { runMailRecovery } from '../../mail/recover.ts';
 import { staticSecretProvider } from '../../mail/secretProvider.ts';
 import { runMailSync } from '../../mail/sync.ts';
+import {readProviderIncidents} from '../../outbound/providerIncidents.ts';
 import { hoursToSoonestWatchExpiry, listWatchesDue, readCurrentWatch, renewWatch } from '../../mail/watch.ts';
 import { receivePushNotification } from '../../mail/webhook.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
@@ -1028,7 +1029,7 @@ describe('coverage, recovery and the grant', () => {
     },
   });
 
-  it('S1 round-8: a recovery a failed read interrupts rolls back whole and is retried from where it was', async () => {
+  it('a recovery commits its completed prefix and holds an unclassified failed read without claiming coverage', async () => {
     world = await createMailWorld({
       alphaMessages: [
         fixtureMessage({ id: 'rec-stop-1', historyId: '1081', from: 'sales.alpha@example.test', to: PROSPECT, labelIds: ['SENT'] }),
@@ -1044,7 +1045,8 @@ describe('coverage, recovery and the grant', () => {
     const deps = { ...w.syncDeps(w.alpha), pageSize: 3, maxMessages: 3 };
     const session = w.database.session as Parameters<typeof withTransaction>[0];
 
-    // The recovery keeps its whole-job retry: the read failure throws and nothing commits.
+    // The prefix and coded incident commit; an unclassified failure cannot become
+    // healthy merely because a later uncontrolled retry happens to succeed.
     await expect(
       withTransaction(
         session,
@@ -1055,8 +1057,9 @@ describe('coverage, recovery and the grant', () => {
             { mailboxId: w.alpha.mailboxId, generation: 1 },
           ),
       ),
-    ).rejects.toThrow(/metadata read failed during recovery/u);
-    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([0, 0]);
+    ).resolves.toMatchObject({outcome:'incident_held',coverageProved:false,processedMessages:1});
+    expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
+    expect(await readProviderIncidents(context,w.alpha.mailboxId)).toMatchObject([{classification:'unknown',state:'action_required'}]);
     const { rows: recovery } = await w.database.session.query<{ pages_completed: number; completed: boolean }>(
       `SELECT pages_completed, completed_at IS NOT NULL AS completed FROM mailbox_recoveries
         WHERE workspace_id = $1 AND mailbox_id = $2 AND generation = 1`,
@@ -1069,10 +1072,10 @@ describe('coverage, recovery and the grant', () => {
       session,
       async () => await runMailRecovery(context, deps, { mailboxId: w.alpha.mailboxId, generation: 1 }),
     );
-    expect(second.outcome).toBe('completed');
+    expect(second.outcome).toBe('incident_held');
     expect(await storedAndMarked(w, 'rec-stop-1')).toEqual([1, 1]);
-    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([1, 0]);
-    expect(await storedAndMarked(w, 'rec-stop-3')).toEqual([1, 0]);
+    expect(await storedAndMarked(w, 'rec-stop-2')).toEqual([0, 0]);
+    expect(await storedAndMarked(w, 'rec-stop-3')).toEqual([0, 0]);
   });
 
   it('S1 round-8: the sync reads past a message Gmail answers 410 or 404 for, and moves its cursor', async () => {
@@ -1166,9 +1169,10 @@ describe('coverage, recovery and the grant', () => {
       session,
       async () => await runMailSync(context, base, { mailboxId: w.alpha.mailboxId }),
     );
-    expect(second.outcome).toBe('synced');
-    expect(second.bodiesFetched).toBe(1);
-    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([1, 0]);
+    expect(second.outcome).toBe('read_stopped');
+    expect(second.bodiesFetched).toBe(0);
+    expect(await storedAndMarked(w, 'body-stop-2')).toEqual([0, 0]);
+    expect(await readProviderIncidents(context,w.alpha.mailboxId)).toMatchObject([{classification:'unknown',state:'action_required'}]);
   });
 
   it('Appendix G 4: a revoked grant marks the mailbox and holds every automated step kind', async () => {

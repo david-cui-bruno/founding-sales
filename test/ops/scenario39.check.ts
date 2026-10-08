@@ -264,6 +264,7 @@ echo "unexpected: $*" >&2; exit 9`;
     readonly leftovers?: string;
     /** The create step writes this file in the root; a teardown from a fresh checkout has none. */
     readonly tfvars?: boolean;
+    readonly availabilityZones?: readonly string[];
     readonly identity?: string;
     /**
      * Call it as the workflow does: from `infra/roots/rehearsal`, told neither the root
@@ -278,7 +279,10 @@ echo "unexpected: $*" >&2; exit 9`;
       ? {}
       : { FSS_REHEARSAL_ROOT: stubs, FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET, FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE };
     if (options.tfvars ?? true) {
-      writeFileSync(join(stubs, 'run.auto.tfvars.json'), JSON.stringify({ name_prefix: 'fss-rh-nothing', assume_deployment_role: false }));
+      writeFileSync(join(stubs, 'run.auto.tfvars.json'), JSON.stringify({
+        name_prefix: 'fss-rh-nothing', assume_deployment_role: false,
+        availability_zones: options.availabilityZones ?? ['us-east-1a', 'us-east-1b'],
+      }));
     }
     const result = run(
       SCRIPT,
@@ -323,6 +327,28 @@ echo "unexpected: $*" >&2; exit 9`;
     const now = teardown({ aws: NOTHING_EXISTS, terraform: STATE_HOLDS_THE_BUCKET });
     expect(now.code, now.output).toBe(0);
     expect(now.output).toContain('destroy: destroy -auto-approve -input=false -var=assume_deployment_role=false -var=name_prefix=fss-rh-nothing');
+    expect(readFileSync(join(now.reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
+  });
+
+  it('destroys with the saved capacity pair instead of rederiving the default topology', () => {
+    const now = teardown({
+      aws: NOTHING_EXISTS,
+      availabilityZones: ['us-east-1a', 'us-east-1d'],
+      terraform: `if [ "$1" = state ]; then
+  echo module.stack.aws_s3_bucket.journal
+elif [ "$1" = destroy ]; then
+  python3 - "$chdir/run.auto.tfvars.json" <<'PY'
+import json, pathlib, sys
+variables = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print("destroyed_pair=" + ",".join(variables["availability_zones"]))
+PY
+fi`,
+    });
+    expect(now.code, now.output).toBe(0);
+    expect(now.output).toContain('destroyed_pair=us-east-1a,us-east-1d');
+    expect(now.calls.filter(call => call.startsWith('terraform destroy'))).toEqual([
+      'terraform destroy -auto-approve -input=false -var=assume_deployment_role=false -var=name_prefix=fss-rh-nothing',
+    ]);
     expect(readFileSync(join(now.reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
   });
 

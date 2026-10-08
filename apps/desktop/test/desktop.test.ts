@@ -938,6 +938,7 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       'callie:devices',
       'callie:device-revoke',
       'callie:navigate',
+      'callie:navigate-action',
       // 1.0.12: main to page, and it opens nothing either — it says the session the
       // page was drawing for is over.
       'callie:session-changed',

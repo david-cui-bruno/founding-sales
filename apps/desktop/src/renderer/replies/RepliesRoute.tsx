@@ -1,3 +1,5 @@
+import {ReplyComposer,type ReplyComposerPorts} from './ReplyComposer.tsx';
+import {operations} from '../app/bridges.ts';
 import type { JSX, RefObject } from 'react';
 import { RepliesView } from './RepliesView.tsx';
 import { useReplies } from './useReplies.ts';
@@ -12,7 +14,11 @@ import { useReplies } from './useReplies.ts';
  * be remembered to release the hold. What waits now is the card whose button was pressed:
  * `replies.busy(messageId)` in `RepliesView`, released by the same call that took it.
  */
+const composerPorts:ReplyComposerPorts={
+ context:async input=>{const api=operations();return api?await api.read('replyComposer.context',input):{ok:false,reason:'unavailable'};},
+ prepareSuggestion:async input=>{const api=operations();return api?await api.command('replyComposer.generate',input):{ok:false,reason:'unavailable'};},
+};
 export function RepliesRoute({ column: _column, messageId }: { readonly column: RefObject<HTMLElement | null>; readonly messageId?: string }): JSX.Element | null {
   const replies = useReplies(messageId);
-  return <RepliesView replies={replies} />;
+  return <RepliesView replies={replies} composer={(id,enabled)=><ReplyComposer key={id} messageId={id} ports={composerPorts} enabled={enabled}/>}/>;
 }

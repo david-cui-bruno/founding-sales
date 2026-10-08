@@ -70,8 +70,13 @@ export async function readTodayActions(context: RepositoryContext, input: { now:
 
 /** Revalidate the exact current target. Opening never completes an unanswered action. */
 export async function openTodayAction(context: RepositoryContext, input: { actionId: string; target: TodayActionTarget; now: string }): Promise<{ version: 1; target: TodayActionTarget | null }> {
-  const current = (await readTodayActions(context, { now: input.now })).actions.find(action => action.actionId === input.actionId);
-  return { version: 1, target: current !== undefined && isDeepStrictEqual(current.target, input.target) ? current.target : null };
+  return { version: 1, target: currentTodayTarget((await readTodayActions(context, { now: input.now })).actions, input) };
+}
+
+/** Match exact authority within one already-read projection; it grants no later action. */
+export function currentTodayTarget(actions: readonly TodayAction[], input: { actionId: string; target: TodayActionTarget }): TodayActionTarget | null {
+  const current = actions.find(action => action.actionId === input.actionId);
+  return current !== undefined && isDeepStrictEqual(current.target, input.target) ? current.target : null;
 }
 
 function priority(action: TodayAction): number { return action.kind === 'reply' ? action.state === 'overdue' ? 0 : 1 : action.kind === 'call' ? 2 : 3; }

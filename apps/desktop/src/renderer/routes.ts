@@ -23,6 +23,7 @@
  */
 
 import { SETTINGS_TABS, routeNameOf, type RouteName, type SettingsTab } from '../shared/contract.ts';
+import type {TodayActionTarget} from '@fss/contracts';
 
 export { NAVIGATION_TARGETS, ROUTE_NAMES, SETTINGS_TABS, navigationTargetOf, routeNameOf } from '../shared/contract.ts';
 export type { NavigationTarget, RouteName, SettingsTab } from '../shared/contract.ts';
@@ -48,6 +49,11 @@ export type Route =
     };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+export function routeForAction(target:TodayActionTarget):Route{
+  if(target.kind==='reply')return {name:'replies',messageId:target.messageId};
+  if(target.kind==='meeting')return {name:'firm',firmId:target.firmId,meetingId:target.meetingId};
+  return {name:'settings',tab:target.tab,section:target.section,mailboxId:target.mailboxId};
+}
 
 /** The tab that holds what an old `admin/<section>` link used to open. */
 function tabForSection(section: AdminSection): SettingsTab {

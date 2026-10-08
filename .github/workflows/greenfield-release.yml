@@ -64,6 +64,14 @@ on:
         required: false
         type: string
         default: ''
+      availability_zones:
+        description: 'Rehearsal-only subnet pair. Use a/d when AWS reports RDS capacity there; use the same pair for an orphan teardown.'
+        required: false
+        type: choice
+        default: 'us-east-1a,us-east-1b'
+        options:
+          - 'us-east-1a,us-east-1b'
+          - 'us-east-1a,us-east-1d'
 
 permissions:
   contents: read
@@ -239,6 +247,8 @@ jobs:
 
       - name: Write the variables this run plans, applies and tears down with
         working-directory: infra/roots/rehearsal
+        env:
+          FSS_REHEARSAL_AVAILABILITY_ZONES: ${{ inputs.availability_zones || 'us-east-1a,us-east-1b' }}
         run: |
           set -euo pipefail
           prefix='${{ steps.prefix.outputs.prefix }}'
@@ -263,10 +273,14 @@ jobs:
           python3 - > run.auto.tfvars.json <<'PY'
           import json, os
           env = os.environ
+          pair = env.get("FSS_REHEARSAL_AVAILABILITY_ZONES", "us-east-1a,us-east-1b")
+          if pair not in ("us-east-1a,us-east-1b", "us-east-1a,us-east-1d"):
+              raise SystemExit("Rehearsal availability_zones must be us-east-1a,us-east-1b or us-east-1a,us-east-1d")
           print(json.dumps({
               "assume_deployment_role": False,
               "bootstrap": True,
               "name_prefix": env["PREFIX"],
+              "availability_zones": pair.split(","),
               "api_image": env["API_IMAGE"],
               "worker_image": env["WORKER_IMAGE"],
               "certificate_arn": env["CERTIFICATE_ARN"],
@@ -375,7 +389,7 @@ jobs:
 
           summary = pathlib.Path(sys.argv[1]).read_text()
           variables = json.loads(pathlib.Path(sys.argv[2]).read_text())
-          public = {"name_prefix", "bootstrap", "assume_deployment_role", "api_schema_range", "worker_schema_range"}
+          public = {"name_prefix", "bootstrap", "assume_deployment_role", "api_schema_range", "worker_schema_range", "availability_zones"}
           secret_backed = ("api_image", "worker_image", "certificate_arn", "api_hostname")
 
           absent = [name for name in secret_backed if name not in variables]

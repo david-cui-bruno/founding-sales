@@ -1,4 +1,5 @@
 import { prospectingRetryAt } from './pacing.ts';
+import {providerIncidentRefusal,readProviderBinding,recordProviderIncident} from './providerIncidents.ts';
 import {routineReplyThreading,recordRoutineDelivery} from '../outreach/replyDelivery.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {reserveOutreachEmail} from '../outreach/touchReservations.ts';
@@ -151,6 +152,7 @@ export async function dispatchOutboundMessage(
   deps: OutboundSendDeps,
   input: { readonly outboundMessageId: string },
 ): Promise<SendReport> {
+  await assertOutsideTransaction(context);
   const initial = await readFence(context, input.outboundMessageId);
   if (initial === null) {
     return { outcome: 'fence_unknown', outboundMessageId: input.outboundMessageId };
@@ -204,10 +206,13 @@ export async function dispatchOutboundMessage(
   // nothing counted, because nothing has been.
   const access = await accessForMailbox(
     context,
-    { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher },
+    { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher,now:deps.now },
     precheck.value.mailbox.id,
   );
-  if (!access.ok) return await hold(context, deps, fence, 'grant_revoked', access.reason);
+  if (!access.ok){
+   if(access.reason==='provider_incident'){const refusal=await providerIncidentRefusal(context,fence.mailboxId,deps.now?.()??new Date());return {outcome:'held',outboundMessageId:fence.id,refusal:refusal?.reason??'provider_refusal',detail:refusal?.detail,...(refusal?.retryAt?{retryAt:refusal.retryAt}:{})};}
+   return await hold(context, deps, fence, 'grant_revoked', access.reason);
+  }
 
   // -------------------------------------------------- 4. recheck and claim, atomically
   const claimed = await recheckAndClaim(context, deps, fence.id, precheck.value);
@@ -230,6 +235,7 @@ export async function dispatchOutboundMessage(
       outboundMessageId: fence.id,
       refusal: claimed.reason,
       ...(claimed.detail === undefined ? {} : { detail: claimed.detail }),
+      ...(claimed.retryAt === undefined ? {} : { retryAt: claimed.retryAt }),
     };
   }
   const { plan, claim } = claimed;
@@ -237,6 +243,7 @@ export async function dispatchOutboundMessage(
   // fence may still be re-rendered (migration 0010's trigger freezes the envelope only
   // once the token exists), and what the recheck approved is what the claim locked.
   const envelope = claim.fence;
+  const binding=await readProviderBinding(context,plan.mailbox.id);
 
   // ------------------------------------------------------------- the one call
   const sent = await deps.gmail.sendMessage(access.access, {
@@ -272,6 +279,11 @@ export async function dispatchOutboundMessage(
   // A `refused` outcome is included, because by the time we learn of it the fence is
   // already `dispatching` and `dispatching` never returns to `prepared`.
   const detail = sent.outcome === 'refused' ? `refused:${sent.reason}` : sent.detail;
+  if(sent.outcome==='refused'&&sent.reason!=='recipient_rejected'&&binding){
+    await recordProviderIncident(context,{mailboxId:plan.mailbox.id,sourceKind:'provider_send',sourceId:fence.id,
+      classification:sent.classification??(sent.reason==='rate_limited'?'transient':sent.reason==='grant_revoked'?'authentication':'unknown'),
+      reason:sent.incidentReason??sent.reason,retryAt:sent.retryAt,binding,now:deps.now?.()??new Date()});
+  }
   // 12.7: "The ramp advances only with ... no provider rate-limit or reputation
   // warning". This is the only place in FSS that hears from the provider at all, so
   // it is where the day learns it. Counted whether Gmail refused or went quiet: the
@@ -302,6 +314,7 @@ export async function dispatchOutboundMessage(
     outcome: 'reconciling',
     outboundMessageId: fence.id,
     ...(sent.outcome === 'refused' ? { refusal: refusalOf(sent.reason) } : {}),
+    ...(sent.outcome === 'refused'&&typeof sent.retryAt==='string' ? {retryAt:sent.retryAt}:{}),
     detail,
   };
 }
@@ -331,6 +344,7 @@ type ClaimOutcome =
       readonly fence: OutboundFenceRow;
       readonly reason: SendRefusalCode;
       readonly detail?: string | undefined;
+      readonly retryAt?: string | undefined;
     }
   | { readonly kind: 'not_ready'; readonly retryAt?: string | undefined; readonly refusal?: SendRefusalCode | undefined; readonly detail?: string | undefined };
 
@@ -377,8 +391,11 @@ async function recheckAndClaim(
         reason: gate.reason,
         ...(deps.actor === undefined ? {} : { actor: deps.actor }),
       });
+      const retryAt = gate.reason === 'rate_limited'
+        ? (await providerIncidentRefusal(context, fence.mailboxId, deps.now?.() ?? new Date()))?.retryAt
+        : undefined;
       await context.db.query('COMMIT');
-      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
+      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail, retryAt };
     }
     const plan = gate.value;
     // An agreed-sequence e-mail to somebody the salesperson wrote to by hand within the
@@ -580,7 +597,8 @@ async function hold(
     ...(deps.actor === undefined ? {} : { actor: deps.actor }),
   });
   await openStepHold(context, fence, reason);
-  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }) };
+  const retryAt=reason==='rate_limited'?(await providerIncidentRefusal(context,fence.mailboxId,deps.now?.()??new Date()))?.retryAt:undefined;
+  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }),...(retryAt===undefined?{}:{retryAt}) };
 }
 
 /** The `active_holds` row a refusal opens, when it opens one (`holdReasonForRefusal`). */

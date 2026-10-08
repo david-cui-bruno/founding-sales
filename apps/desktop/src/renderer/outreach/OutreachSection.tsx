@@ -1,6 +1,7 @@
+import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {QualificationPanel} from '../sourcing/QualificationPanel.tsx';
 import {useCallback,useEffect,useReducer,useRef,useState} from 'react';
-import type {OutreachControl,OutreachCohortPreview,OutreachMutation,OutreachSenderStandingResponse} from '@fss/contracts';
+import type {OutreachControl,OutreachCohortPreview,OutreachMutation,OutreachSenderStandingResponse,OutreachSenderStandingV2Response,ProviderIncidentView} from '@fss/contracts';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 import {operations} from '../app/bridges.ts';
 import {useSessionEpoch} from '../app/drafts.tsx';
@@ -12,19 +13,31 @@ import {Section} from '../settings/Group.tsx';
 import {ApprovedFactsEditor,type FactDraft} from './ApprovedFactsEditor.tsx';
 export interface OutreachPorts {
  read():Promise<OperationOutput<'outreach.control'>>;
- standing?():Promise<OperationOutput<'outreach.senderStanding'>>;
+ standing?():Promise<OperationOutput<'outreach.senderStanding'>|OperationOutput<'outreach.senderStandingV2'>>;
  preview(input:OperationInput<'outreach.preview'>):Promise<OperationOutput<'outreach.preview'>>;
  mutate(input:OutreachMutation):Promise<OperationOutput<'outreach.mutate'>>;
 }
 const api=()=>{const a=operations();if(!a)throw new Error('unavailable');return a;};
-const defaults:OutreachPorts={read:()=>api().read('outreach.control',{}),standing:()=>api().read('outreach.senderStanding',{}),preview:i=>api().read('outreach.preview',i),mutate:i=>api().command('outreach.mutate',i)};
+const defaults:OutreachPorts={read:()=>api().read('outreach.control',{}),standing:()=>api().read('outreach.senderStandingV2',{}),preview:i=>api().read('outreach.preview',i),mutate:i=>api().command('outreach.mutate',i)};
 type Policy={expectedRevision:number;enabled:boolean;sequenceVersionId:string|null;bookingUrl:string|null};
-interface Memory {open:boolean;view:OutreachControl|null;standing:OutreachSenderStandingResponse|null;busy:boolean;generation:number;message:string|null;pending:OutreachMutation|null;sender:string;autoSequence:string|null;fact:FactDraft;factRefreshRequired:boolean;policy:Policy|null;selected:string[];email:string;call:string;reviewed:boolean;preview:OutreachCohortPreview|null;listeners:Set<()=>void>}
+interface Memory {open:boolean;view:OutreachControl|null;standing:OutreachSenderStandingResponse|OutreachSenderStandingV2Response|null;busy:boolean;generation:number;message:string|null;pending:OutreachMutation|null;sender:string;autoSequence:string|null;fact:FactDraft;factRefreshRequired:boolean;policy:Policy|null;selected:string[];email:string;call:string;reviewed:boolean;preview:OutreachCohortPreview|null;listeners:Set<()=>void>}
 const fresh=():Memory=>({open:false,view:null,standing:null,busy:false,generation:0,message:null,pending:null,sender:'',autoSequence:null,fact:{kind:'product',text:''},factRefreshRequired:false,policy:null,selected:[],email:'',call:'',reviewed:false,preview:null,listeners:new Set()});
 const sessions=new WeakMap<object,Memory>();
 function useMemory(){const epoch=useSessionEpoch(),[fallback]=useState(fresh),[,bump]=useReducer((n:number)=>n+1,0);let found=epoch?sessions.get(epoch):fallback;if(!found){found=fresh();sessions.set(epoch!,found);}const m=found;useEffect(()=>{const notify=()=>bump();m.listeners.add(notify);return()=>{m.listeners.delete(notify);m.generation++;m.busy=false;};},[m]);return {m,touch:useCallback(()=>{for(const fn of m.listeners)fn();},[m])};}
 const refusal=(reason:string|null)=>({configuration_required:'Choose an authorized sender and an approved five-email sequence.',configuration_incomplete:'Choose both a sender and an approved five-email sequence.',owner_changed:'Choose a sender that you own.',owner_inactive:'The configured owner is no longer active.',approved_email_sequence_required:'Choose a published five-email sequence with approved content.',mailbox_binding_changed:'Sender authorization changed. Save the configuration and evaluate it again.',sequence_binding_changed:'Sequence content changed. Save the configuration and evaluate it again.',evaluation_required:'Evaluation is still required.',evaluation_mismatch:'Evaluation no longer matches the current configuration.',activation_not_available:'Automatic email admission is not available yet. Sending and authentication verification are still required.',stale_revision:'This changed elsewhere. Refresh before saving.',stale_version:'This fact changed elsewhere. Refresh and compare it with your draft.',preview_changed:'The selected firms or sender changed. Preview the cohort again.',mailbox_not_authorized:'Choose a connected, authorized sender that you own.',approved_reply_content_required:'Choose a published one-email sequence and approve at least one answer fact.',campaign_sequence_required:'Choose an approved sequence for this outreach lane.',qualification_requires_review:'Review the evidence before enabling these firms.',one_reply_sequence_required:'Choose a published sequence with exactly one approved email.',booking_link_invalid:'Use your public HTTPS Cal.com booking link.'}[reason??'']??'The action could not be completed. Refresh and review the current settings.');
 const standingReason=(reason:string)=>({unresolved_submission:'A previous send still needs reconciliation.',authentication_failing:'Sending is paused or the recorded authentication checks are incomplete.',mailbox_disconnected:'Reconnect this mailbox before sending.',coverage_incomplete:'Mailbox sync coverage needs verification before sending.',coverage_unproven:'Mailbox sync coverage needs verification.',coverage_stale:'Mailbox sync needs to catch up before sending.',owner_inactive:'The mailbox owner is inactive.'}[reason]??'Sending is held until the current mailbox issue is resolved.');
+const incidentSentence=(incident:ProviderIncidentView):string=>{
+ if(incident.state==='waiting'&&incident.retryAt!==null)return `Provider cooldown: sending waits until ${new Date(incident.retryAt).toLocaleString()}. Current checks still apply afterwards.`;
+ if(incident.reason==='unresolved_submission')return 'A previous send still needs reconciliation. Sending remains held.';
+ if(incident.state==='revalidation_due')return 'Cooldown has ended. Current mailbox checks must pass before sending can resume.';
+ if(incident.classification==='authentication')return 'Authentication requires review. Sending remains held.';
+ if(incident.classification==='reputation')return 'Sender reputation requires review. Sending remains held.';
+ return 'This provider incident needs review. Sending remains held.';
+};
+function currentIncidents(standing:OutreachSenderStandingResponse|OutreachSenderStandingV2Response|null,mailboxId:string):ProviderIncidentView[]|null{
+ const parsed=outreachSenderStandingV2ResponseSchema.safeParse(standing);
+ return parsed.success?parsed.data.senders.find(sender=>sender.mailboxId===mailboxId)?.incidents??null:null;
+}
 const smallSelect='rounded-md border border-input bg-background p-2 text-sm max-w-full';
 export function OutreachSection({enabled,ports=defaults,initialMailboxId}:{enabled:boolean;ports?:OutreachPorts;initialMailboxId?:string}){
  const {m,touch}=useMemory(),ref=useRef(ports),focusedTarget=useRef<string|null>(null);ref.current=ports;
@@ -36,7 +49,7 @@ export function OutreachSection({enabled,ports=defaults,initialMailboxId}:{enabl
  const perform=async(p:OutreachMutation)=>{if(m.busy||!enabled)return;const g=++m.generation;m.pending=p;m.busy=true;touch();try{const r=await ref.current.mutate(p);if(g!==m.generation)return;if(r.accepted){m.pending=null;if(p.action==='policy')m.policy=null;if(p.action==='email_admission')m.autoSequence=null;if(p.action==='fact_save'){m.fact={kind:'product',text:''};m.factRefreshRequired=false;}if(p.action==='cohort_enable'){m.preview=null;m.selected=[];m.reviewed=false;}if(r.view)accept(r.view);await readStanding(g);if(g!==m.generation)return;m.message=r.view?'Saved. Sending controls still apply.':'Saved. Refresh to read the latest settings.';}else if(noDefiniteAnswer(r.reason))m.message='No definite answer. Retry the same action.';else{m.pending=null;if(p.action==='fact_save'&&r.reason==='stale_version')m.factRefreshRequired=true;m.message=refusal(r.reason);}}catch{if(g===m.generation)m.message='No definite answer. Retry the same action.';}finally{if(g===m.generation){m.busy=false;touch();}}};
  const input=():OperationInput<'outreach.preview'>=>({mailboxId:m.sender,candidateIds:[...m.selected],emailSequenceVersionId:m.email||null,callSequenceVersionId:m.call||null});
  const preview=async()=>{if(m.busy||!enabled)return;const g=++m.generation;m.busy=true;m.preview=null;touch();try{const r=await ref.current.preview(input());if(g!==m.generation)return;m.preview=r.view;if(!r.view)m.message=refusal(r.reason);}catch{if(g===m.generation)m.message='Could not preview this cohort.';}finally{if(g===m.generation){m.busy=false;touch();}}};
- const blocked=!enabled||m.busy||m.pending!==null,box=m.view?.senders.find(s=>s.id===m.sender),standing=m.standing?.senders.find(s=>s.mailboxId===m.sender)?.standing;
+ const blocked=!enabled||m.busy||m.pending!==null,box=m.view?.senders.find(s=>s.id===m.sender),senderStanding=m.standing?.senders.find(s=>s.mailboxId===m.sender),standing=senderStanding?.standing,incidents=currentIncidents(m.standing,m.sender);
  const change=()=>{m.preview=null;m.reviewed=false;touch();};
  return <Section title="Outreach"><Button variant="quiet" aria-expanded={m.open} onClick={()=>{m.open=!m.open;touch();if(m.open)void load();}}>Outreach setup</Button>
  {m.open?<div className="space-y-6 pt-3">
@@ -51,6 +64,7 @@ export function OutreachSection({enabled,ports=defaults,initialMailboxId}:{enabl
     <p>Earned history: {standing.healthySendingDays} healthy sending days · {standing.earnedCap} emails per day.</p>
     {standing.recovery?.active?<p>Inactivity recovery: {standing.recovery.qualifyingDays%5} of 5 qualifying days completed at this stage; {standing.recovery.nextStageAfterDays} more required before the next stage.</p>:null}
     <p>{standing.activityBasis==='confirmed_send'&&standing.lastActivityAt?`Last observed send: ${new Date(standing.lastActivityAt).toLocaleString()} · ${standing.inactivityDays} calendar days ago.`:`No confirmed sending activity observed. Inactivity is measured from mailbox creation (${standing.inactivityDays} calendar days).`}</p>
+    {incidents===null?<p>Provider incident details are unavailable. Refresh to check.</p>:incidents.length?<ul aria-label="Provider incidents">{incidents.map(incident=><li key={incident.id}>{incidentSentence(incident)}</li>)}</ul>:null}
     {standing.readiness.ready?<p>Current mailbox checks pass. Each send still requires its normal safety checks.</p>:<ul>{standing.readiness.reasons.map(reason=><li key={reason}>{standingReason(reason)}</li>)}</ul>}
     <p className="text-muted-foreground">This is a ceiling, not a daily target. Recovery needs qualifying activity and passing checks; waiting alone does not raise it. These checks do not prove inbox placement.</p>
    </div>:<p className="text-sm">Current sender standing is unavailable. Refresh to check the allowance and recovery status.</p>}

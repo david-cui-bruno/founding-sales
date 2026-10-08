@@ -4,7 +4,8 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import { GmailClientError, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig } from './gmailClient.ts';
+import type { GmailAccessGrant, GmailClient, GmailOAuthConfig, GmailListOutcome } from './gmailClient.ts';
+import {readProviderBinding,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
 import {
   advanceGeneration,
   openMailboxHold,
@@ -301,6 +302,7 @@ export async function beginRestoreRecovery(
 }
 
 export interface MailRecoveryDeps extends MessagePipelineDeps {
+  readonly now?: (()=>Date)|undefined;
   readonly gmail: GmailClient;
   readonly oauth: GmailOAuthConfig;
   readonly cipher: EnvelopeCipher;
@@ -319,6 +321,7 @@ export type MailRecoveryOutcome =
   | 'mailbox_inactive'
   | 'generation_superseded'
   | 'grant_revoked'
+  | 'incident_held'
   | 'rate_limited';
 
 export interface MailRecoveryReport extends MessagePipelineReport {
@@ -390,6 +393,7 @@ export async function runMailRecovery(
 
   const access = await accessForMailbox(context, deps, mailbox.id);
   if (!access.ok) {
+    if(access.reason==='provider_incident')return recoveryReport(mailbox.id,input.generation,'incident_held');
     await holdForRevokedGrant(context, mailbox);
     return recoveryReport(mailbox.id, input.generation, 'grant_revoked');
   }
@@ -436,6 +440,7 @@ export async function runMailRecovery(
   // skips the ids already recorded; the walk comes before the pipeline, so no listing
   // call waits behind the send gate, and it stops early once it holds more unrecorded
   // ids than the read cap lets this run read, because this run then cannot complete.
+  const binding=await readProviderBinding(context,mailbox.id),now=deps.now?.()??new Date();
   const unrecorded: string[] = [];
   const seen = new Set<string>();
   let slicesListed = 0;
@@ -452,19 +457,22 @@ export async function runMailRecovery(
   type Listed = { readonly ok: true; readonly ids: readonly string[]; readonly more: boolean } | { readonly ok: false; readonly report: MailRecoveryReport };
   const listOnce = async (query: { readonly after: number; readonly before: number }, pageToken?: string): Promise<Listed & { readonly next?: string | null }> => {
     listingCalls += 1;
-    const outcome = await deps.gmail.listMessageIds(access.access, {
+    let outcome:GmailListOutcome;
+    try {outcome = await deps.gmail.listMessageIds(access.access, {
       afterEpochSeconds: query.after,
       beforeEpochSeconds: query.before,
       maxResults: pageSize,
       ...(pageToken === undefined ? {} : { pageToken }),
-    });
+    });}catch{outcome={ok:false,reason:'rate_limited',classification:'unknown',incidentReason:'unknown_provider_failure'};}
     if (!outcome.ok) {
-      if (outcome.reason === 'grant_revoked') {
+      const classification=outcome.classification??(outcome.reason==='grant_revoked'?'authentication':'transient');
+      if(binding)await recordProviderIncident(context,{mailboxId:mailbox.id,sourceKind:'mail_read',sourceId:`recovery:${mailbox.id}`,classification,reason:outcome.incidentReason??outcome.reason,retryAt:outcome.retryAt,binding,now});
+      if (outcome.reason === 'grant_revoked'&&classification==='authentication') {
         await holdForRevokedGrant(context, mailbox);
         return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'grant_revoked') };
       }
       await recordSyncError(context, { mailboxId: mailbox.id, error: 'the Gmail recovery listing was rate limited', fence });
-      return { ok: false, report: recoveryReport(mailbox.id, input.generation, 'rate_limited') };
+      return { ok: false, report: recoveryReport(mailbox.id, input.generation, classification==='transient'?'rate_limited':'incident_held') };
     }
     return { ok: true, ids: outcome.messageIds, more: outcome.nextPageToken !== null, next: outcome.nextPageToken };
   };
@@ -558,15 +566,24 @@ export async function runMailRecovery(
     processed += slice.processedMessages;
     if (slice.readFailure !== null) break;
   }
-  // The pipeline stops at a failed Gmail read instead of throwing, which `mail.sync` uses
-  // to commit the prefix it processed. A recovery throws instead and the whole job rolls
-  // back and is retried; the recorded rows are its position, so nothing is lost by
-  // that, and the coverage hold blocks the owner's automated sends meanwhile.
+  // Persist the failed observation and the completed prefix. Recorded message
+  // identities remain the recovery cursor; no failed read proves interval coverage.
   if (pipeline.readFailure !== null) {
-    throw new GmailClientError(
-      'unexpected_status',
-      `the Gmail ${pipeline.readFailure.read} read failed during recovery (${pipeline.readFailure.detail})`,
-    );
+    if (binding) await recordProviderIncident(context, {
+      mailboxId: mailbox.id,
+      sourceKind: 'mail_read',
+      sourceId: `recovery:${mailbox.id}`,
+      classification: pipeline.readFailure.incident?.classification ?? 'unknown',
+      reason: pipeline.readFailure.incident?.incidentReason ?? 'unknown_provider_failure',
+      retryAt: pipeline.readFailure.incident?.retryAt,
+      binding,
+      now,
+    });
+    return recoveryReport(mailbox.id, input.generation, 'incident_held', pipeline, {
+      fromAt: recovery.fromAt,
+      toAt: recovery.toAt,
+      pagesCompleted: recovery.pagesCompleted,
+    });
   }
 
   // Coverage is proved only by one walk, in this run, that reached the end of the
@@ -626,6 +643,7 @@ export async function runMailRecovery(
   // cursor. The mailbox statement goes first and is the predicate: the row lock it takes
   // holds to commit, so nothing moves the mailbox between it and the two writes after
   // it. The cursor is not written here: it is already the id read before `toAt`.
+  if(binding)await resolveProviderIncidentsAfterRead(context,mailbox.id,binding,now,['mail_read']);
   const completed = await context.db.query(
     `UPDATE mailboxes
         SET sync_state = 'ready',

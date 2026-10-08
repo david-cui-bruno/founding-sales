@@ -48,6 +48,7 @@ export class GmailClientError extends Error {
     readonly code: 'transport' | 'malformed_response' | 'unexpected_status',
     message: string,
     readonly status?: number,
+    readonly incident?: GmailIncidentMetadata,
   ) {
     super(message);
     this.name = 'GmailClientError';
@@ -162,7 +163,7 @@ export type GmailHistoryOutcome =
       /** `ListHistoryResponse.historyId`: the mailbox's current history record. */
       readonly historyId: string;
     }
-  | { readonly ok: false; readonly reason: 'history_expired' | 'grant_revoked' | 'rate_limited' };
+  | ({ readonly ok: false; readonly reason: 'history_expired' | 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailListOutcome =
   | {
@@ -170,7 +171,7 @@ export type GmailListOutcome =
       readonly messageIds: readonly string[];
       readonly nextPageToken: string | null;
     }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailTokenOutcome =
   | { readonly ok: true; readonly grant: GmailAuthorizationGrant }
@@ -178,11 +179,11 @@ export type GmailTokenOutcome =
 
 export type GmailAccessOutcome =
   | { readonly ok: true; readonly grant: GmailAccessGrant }
-  | { readonly ok: false; readonly reason: 'grant_refused' | 'grant_revoked' };
+  | ({ readonly ok: false; readonly reason: 'grant_refused' | 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailWatchOutcome =
   | { readonly ok: true; readonly watch: GmailWatchRegistration }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'provider_refusal' };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'provider_refusal' } & GmailIncidentMetadata);
 
 export interface GmailHistoryRequest {
   readonly startHistoryId: string;
@@ -304,17 +305,22 @@ export interface GmailSendRequest {
  */
 export type GmailSendOutcome =
   | { readonly ok: true; readonly messageId: string; readonly threadId: string }
-  | {
+  | ({
       readonly ok: false;
       readonly outcome: 'refused';
       readonly reason: 'grant_revoked' | 'rate_limited' | 'recipient_rejected' | 'provider_refusal';
-    }
+    } & GmailIncidentMetadata)
   | { readonly ok: false; readonly outcome: 'indeterminate'; readonly detail: string };
 
+export interface GmailIncidentMetadata {
+ readonly classification?: 'transient'|'authentication'|'reputation'|'unknown' | undefined;
+ readonly retryAt?: string|null|undefined;
+ readonly incidentReason?: 'rate_limited'|'grant_revoked'|'permission_unknown'|'quota_exceeded'|'service_unavailable'|'reputation_warning'|'unknown_provider_failure'|undefined;
+}
 export type GmailSentSearchOutcome =
   | { readonly ok: true; readonly found: null }
   | { readonly ok: true; readonly found: { readonly messageId: string; readonly threadId: string } }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 /**
  * Whether Gmail's label set says the message left this mailbox.

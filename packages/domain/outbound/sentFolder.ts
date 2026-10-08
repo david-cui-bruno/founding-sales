@@ -82,6 +82,7 @@ export interface SentFolderMessage {
 export type SentFolderScanOutcome =
   | 'scanned'
   | 'grant_revoked'
+  | 'incident_held'
   | 'rate_limited'
   | 'truncated'
   | 'mailbox_unknown'
@@ -122,7 +123,7 @@ export async function scanSentFolder(
   const mailbox = await readMailbox(context, input.mailboxId);
   if (mailbox === null) return { outcome: 'mailbox_unknown', listed: 0, messages: [], vanished: 0 };
   const access = await accessForMailbox(context, deps, mailbox.id);
-  if (!access.ok) return { outcome: 'grant_revoked', listed: 0, messages: [], vanished: 0 };
+  if (!access.ok) return { outcome: access.reason === 'provider_incident' ? 'incident_held' : 'grant_revoked', listed: 0, messages: [], vanished: 0 };
 
   const sinceMs = Date.parse(input.since);
   const untilMs = Date.parse(input.until);

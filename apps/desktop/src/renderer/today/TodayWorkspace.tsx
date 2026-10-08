@@ -1,3 +1,5 @@
+import {NotificationStatus,type NotificationStatusPort} from './NotificationStatus.tsx';
+import {operations} from '../app/bridges.ts';
 import { ActionQueue } from './ActionQueue.tsx';
 import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { useQueryClient } from '@tanstack/react-query';
@@ -283,6 +285,10 @@ function Warnings({ warnings, onConnectMailbox }: { readonly warnings: HomeView[
   );
 }
 
+const notificationStatusPort:NotificationStatusPort={
+ read:async()=>{const api=operations();return api?await api.read('notifications.read',{}):{ok:false,reason:'unavailable',offline:false};},
+ runtime:async()=>{const api=operations();return api?await api.read('notifications.runtime',{}):{state:'unavailable',lastCheckedAt:null};},
+};
 export function TodayWorkspace({
   home,
   today,
@@ -577,6 +583,7 @@ export function TodayWorkspace({
         </div>
       ) : null}
       <ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} />
+      <NotificationStatus port={notificationStatusPort}/>
       {unavailable ? (
         <div className="max-w-[640px] p-6">
           <p data-testid="today-unavailable" className="text-sm text-muted-foreground">

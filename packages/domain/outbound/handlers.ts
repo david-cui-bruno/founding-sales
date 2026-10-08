@@ -59,6 +59,9 @@ export function mailReconcileHandler(
         mailboxId,
         ...(options.limit === undefined ? {} : { limit: options.limit }),
       });
+      // The persisted incident owns retry timing. Waiting/held reads are not fresh
+      // mailbox observations; the next scheduled pass can safely check the deadline.
+      if (reports.some(report => ['rate_limited','cooldown','incident_held','grant_revoked'].includes(report.outcome))) return;
       await recordMailboxHeartbeat(input.session, {
         workspaceId: input.scope.workspaceId,
         mailboxId,
@@ -68,11 +71,6 @@ export function mailReconcileHandler(
           terminal: reports.filter(report => report.outcome === 'unknown_terminal').length,
         },
       });
-      // A rate limit is the one outcome worth retrying the whole job for: the
-      // backoff ladder is a better place to wait than a lease.
-      if (reports.some(report => report.outcome === 'rate_limited')) {
-        throw new Error('Gmail rate-limited the Sent-folder reconciliation');
-      }
     },
   };
 }

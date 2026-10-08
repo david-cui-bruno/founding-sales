@@ -149,6 +149,19 @@ describe('fss admin mailbox reconcile-sent', () => {
     await world.stop();
   });
 
+  /** This case deliberately retains incidents; later restore cases need their own source. */
+  async function withIncidentWorld(work: () => Promise<void>): Promise<void> {
+    const shared = world;
+    const isolated = await createOutboundWorld();
+    world = isolated;
+    try {
+      await work();
+    } finally {
+      world = shared;
+      await isolated.stop();
+    }
+  }
+
   const workspaceId = (): string => world.alpha.workspace.workspaceId;
   const context = () => world.systemContext(workspaceId());
   const fssHeader = (): string => deterministicMessageId(randomUUID(), SENDING_DOMAIN);
@@ -311,7 +324,7 @@ describe('fss admin mailbox reconcile-sent', () => {
     expect(JSON.stringify(outcome.report)).not.toContain(header.slice(1, -1));
   });
 
-  it('refuses to finish while a Sent folder was not read to the end', async () => {
+  it('refuses to finish while a Sent folder was not read to the end', async () => withIncidentWorld(async () => {
     const at = '2026-09-24T18:00:00.000Z';
     const gmail = world.clientWith(world.alpha, {
       grantRevoked: true,
@@ -325,7 +338,25 @@ describe('fss admin mailbox reconcile-sent', () => {
         { kind: 'sent_folder_unscanned', workspaceId: workspaceId(), mailboxId: world.alpha.mailboxId, outcome: 'grant_revoked' },
       ]),
     );
-  });
+    // A later healthy client is not evidence that the revoked grant was reauthorized.
+    // The command reports the retained incident and does not attempt another refresh.
+    let refreshes = 0;
+    const healthy = world.clientWith(world.alpha, {});
+    const retry = await mailboxReconcileSentCommand(invocation({
+      ...healthy,
+      refreshAccessToken: async (...args) => {
+        refreshes += 1;
+        return await healthy.refreshAccessToken(...args);
+      },
+    }, tenMinutesBefore(at)));
+    expect(retry).toMatchObject({ ok: false, reason: 'reconcile_unresolved' });
+    if (retry.ok) return;
+    expect(retry.report?.['unresolved']).toEqual([
+      { kind: 'sent_folder_unscanned', workspaceId: workspaceId(), mailboxId: world.alpha.mailboxId, outcome: 'incident_held' },
+      { kind: 'sent_folder_unscanned', workspaceId: world.beta.workspace.workspaceId, mailboxId: world.beta.mailboxId, outcome: 'incident_held' },
+    ]);
+    expect(refreshes).toBe(0);
+  }));
 
   it('refuses a folder in which a listed message vanished before its metadata was read', async () => {
     const at = '2026-09-24T19:00:00.000Z';

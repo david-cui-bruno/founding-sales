@@ -25,9 +25,10 @@ locals {
   # the ninth and tenth, one of each per availability zone. 8080 is the one port
   # the API container listens on, the load balancer forwards to and the network
   # admits. The Workspace domain is Callie's; an empty one would admit every
-  # Google account (5.1, 12.1).
+  # Google account (5.1, 12.1). Production's zones are fixed; rehearsal may use
+  # its bounded capacity choice for both subnet tiers.
   aws_region           = "us-east-1"
-  availability_zones   = ["us-east-1a", "us-east-1b"]
+  availability_zones   = local.is_production ? ["us-east-1a", "us-east-1b"] : var.rehearsal_availability_zones
   public_subnet_cidrs  = [cidrsubnet(var.vpc_cidr, 4, 0), cidrsubnet(var.vpc_cidr, 4, 1)]
   private_subnet_cidrs = [cidrsubnet(var.vpc_cidr, 4, 8), cidrsubnet(var.vpc_cidr, 4, 9)]
   container_port       = 8080
@@ -92,6 +93,11 @@ resource "terraform_data" "environment_guard" {
     precondition {
       condition     = !local.is_production || var.database_backup_retention_days == 35
       error_message = "A production database keeps the full 35-day point-in-time recovery window."
+    }
+
+    precondition {
+      condition     = !local.is_production || join(",", var.rehearsal_availability_zones) == "us-east-1a,us-east-1b"
+      error_message = "Production's fixed us-east-1a/us-east-1b topology cannot take a rehearsal zone override."
     }
   }
 }

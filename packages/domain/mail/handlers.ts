@@ -68,7 +68,7 @@ export function mailSyncHandler(deps: MailSyncDeps, options: MailHandlerOptions 
       // heartbeat — which is what a thrown read gave before, when the rollback took the
       // heartbeat with it. A message Gmail keeps refusing stops every run at the same
       // place, and three missed checks raise `mailbox_heartbeat_missed`.
-      if (report.outcome === 'read_stopped') return;
+      if (report.outcome === 'read_stopped'||report.outcome==='rate_limited') return;
       // 13.3: "Heartbeats cover API, scheduler, worker, and every mailbox." The
       // mailbox proved it is being read, whatever the outcome was, which is what the
       // three-missed-checks alarm asks.
@@ -95,6 +95,7 @@ export function mailRecoveryHandler(deps: MailRecoveryDeps, options: MailHandler
       }
       const context = repositoryContext(input.scope, input.session);
       const report = await runMailRecovery(context, deps, { mailboxId, generation });
+      if(report.outcome==='incident_held'||report.outcome==='rate_limited')return;
       await recordMailboxHeartbeat(input.session, {
         workspaceId: input.scope.workspaceId,
         mailboxId,

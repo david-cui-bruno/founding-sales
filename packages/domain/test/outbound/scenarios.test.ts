@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hasOptOutLink } from '@fss/contracts';
 import { recordSuppression } from '../../suppression/events.ts';
 import {
@@ -32,11 +32,11 @@ import {
 describe('at-most-once sending', () => {
   let world: OutboundWorld;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     world = await createOutboundWorld();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await world.stop();
   });
 

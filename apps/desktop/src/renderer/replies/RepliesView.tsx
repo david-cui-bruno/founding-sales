@@ -1,5 +1,5 @@
 import { MailOpen, X } from 'lucide-react';
-import { useEffect, useRef, type JSX } from 'react';
+import { useEffect, useRef, type JSX,type ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 import { navigate } from '../routes.ts';
 import type { ReplyState, ReplySummary } from '../replyContract.ts';
@@ -364,11 +364,13 @@ function Answer({
 }
 
 function Panel({
+  composer,
   card,
   state,
   replies,
   outcome,
 }: {
+  readonly composer?:ReactNode;
   readonly card: ReplyCardView;
   readonly state: ReplyState;
   readonly replies: Replies;
@@ -442,6 +444,7 @@ function Panel({
         <div className="flex flex-col gap-2 empty:hidden">
           <Banners banners={card.banners} prefix="card-banner" />
         </div>
+        {composer}
         <Answer key={card.messageId} card={card} state={state} replies={replies} outcome={outcome} />
       </div>
     </section>
@@ -505,7 +508,7 @@ function Counts({
   );
 }
 
-export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Element | null {
+export function RepliesView({ replies,composer }: { readonly replies: Replies;readonly composer?:(messageId:string,enabled:boolean)=>ReactNode }): JSX.Element | null {
   const state = replies.state;
   const [filterText, setFilterText] = useKept('replies:filter', 'all');
   const filter = queueFilterOf(filterText);
@@ -738,7 +741,7 @@ export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Ele
             Use J and K to move, Enter to open.
           </EmptyState>
         ) : (
-          <Panel card={view.card} state={state} replies={replies} outcome={outcomeOnPanel ? outcome.code : null} />
+          <Panel composer={composer?.(view.card.messageId,state.mayMutate&&state.online)} card={view.card} state={state} replies={replies} outcome={outcomeOnPanel ? outcome.code : null} />
         )}
       </div>
     </div>

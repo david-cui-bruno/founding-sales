@@ -12,6 +12,7 @@ import {
 } from '../shared/operations.ts';
 import {
   desktopStateSchema,
+  actionNavigationSchema,
   navigationTargetOf,
   sessionChangeSchema,
   type DesktopBridge,
@@ -104,6 +105,12 @@ const bridge: DesktopBridge = {
     ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
       const target = navigationTargetOf(name);
       if (target !== null) listener(target);
+    });
+  },
+  onActionNavigate:listener=>{
+    ipcRenderer.on(IPC_CHANNELS.navigateAction,(_event,raw:unknown)=>{
+      const parsed=actionNavigationSchema.safeParse(raw);
+      if(parsed.success)listener(parsed.data);
     });
   },
   // A transition the main process saw (1.0.12). Parsed here like everything else that
