@@ -42,7 +42,7 @@ export function OutreachSection({enabled,ports=defaults}:{enabled:boolean;ports?
   <Button variant="quiet" disabled={m.busy} onClick={()=>void load()}>Refresh outreach</Button>
   <fieldset className="space-y-2"><legend className="font-medium">Sender</legend>
    <select aria-label="Outreach sender" className={smallSelect} value={m.sender} disabled={blocked} onChange={e=>{m.sender=e.target.value;change();}}><option value="">Choose a sender</option>{m.view?.senders.map(s=><option key={s.id} value={s.id}>{s.address}</option>)}</select>
-   {box?<><p className="text-sm">{box.sendingEnabled?'Domain sending enabled':'Sending paused'}{!standing&&box.dailyCap!==null?` · ${box.dailyCap} emails per day, including follow-ups`:''}</p><p className="text-sm text-muted-foreground">Authorization applies only to this connected mailbox. The sending switch stays in Sending settings.</p>
+   {box?<><p className="text-sm">{box.sendingEnabled?'Domain sending enabled':'Sending paused'}</p><p className="text-sm text-muted-foreground">Authorization applies only to this connected mailbox. The sending switch stays in Sending settings.</p>
    {standing?<div className="space-y-1 text-sm" aria-label="Sender standing">
     <p>Current allowance: {standing.effectiveCap} emails per day, including follow-ups.</p>
     <p>Earned history: {standing.healthySendingDays} healthy sending days · {standing.earnedCap} emails per day.</p>

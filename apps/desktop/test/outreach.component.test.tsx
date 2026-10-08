@@ -46,6 +46,16 @@ it('keeps a fact draft across navigation and saving does not approve it',async()
  await waitFor(()=>expect(p.mutate).toHaveBeenCalledWith(expect.objectContaining({action:'fact_save',text:'Callie integrates with AppFolio.'})));
  expect(p.mutate).toHaveBeenCalledTimes(1);
 });
+it('does not report a previous allowance as current when both standing and control refresh are unavailable',async()=>{
+ const p=Object.assign(ports(),{standing:vi.fn(async()=>({view:null,reason:'unavailable'}))});
+ p.read=vi.fn().mockResolvedValueOnce({view:{...view,senders:[{...view.senders[0]!,dailyCap:50}]},reason:null}).mockRejectedValue(new Error('offline'));
+ render(<OutreachSection enabled ports={p}/>);fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));
+ await screen.findByText('Current sender standing is unavailable. Refresh to check the allowance and recovery status.');
+ fireEvent.click(screen.getByRole('button',{name:'Refresh outreach'}));
+ await screen.findByText('Could not refresh outreach. Your draft is kept.');
+ expect(screen.queryByText(/50 emails per day/)).toBeNull();
+ expect(p.mutate).not.toHaveBeenCalled();
+});
 it('retries an uncertain action with the same command identity',async()=>{
  const p=ports();p.mutate=vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue({accepted:true,view,reason:null});
  render(<OutreachSection enabled ports={p}/>);fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));await screen.findByText(/^Sending paused/);
