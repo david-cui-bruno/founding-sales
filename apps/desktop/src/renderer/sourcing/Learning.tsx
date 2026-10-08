@@ -4,6 +4,7 @@ import {operations} from '../app/bridges.ts';
 import {navigate} from '../routes.ts';
 import {Button} from '../ui/button.tsx';
 import {QualificationPanel} from './QualificationPanel.tsx';
+import {AutomaticEmailResults} from './AutomaticEmailResults.tsx';
 import {Targeting} from './Targeting.tsx';
 import type {OperationInput,OperationOutput} from '../../shared/operations.ts';
 type Read=(input:OperationInput<'sourcing.learning'>)=>Promise<OperationOutput<'sourcing.learning'>>;
@@ -17,11 +18,12 @@ export function Learning({read=defaultRead,enabled=true}:{read?:Read;enabled?:bo
  useEffect(()=>{const guard=epoch;void load();return()=>{guard.current++;};},[load]);
  return <section className="space-y-5" aria-label="Sourcing results">
   <div className="flex justify-between gap-3"><h2 className="text-lg font-medium">Sourcing results</h2><Button variant="quiet" disabled={busy} onClick={()=>void load()}>Refresh results</Button></div>
-  <p className="text-sm text-muted-foreground">First contacted in the last 30 days. Counts use current accepted outcomes through the observation date; corrections can change earlier results.</p>
+  <p className="text-sm text-muted-foreground">Contacted cohorts cover firms first contacted in the last 30 days. Counts use current accepted outcomes through the observation date; corrections can change earlier results.</p>
   {failed?<div role="alert"><p>Results are unavailable. This does not mean there were no conversations.</p><Button onClick={()=>void load()}>Retry results</Button></div>:busy&&!view?<p role="status">Loading results…</p>:null}
   {view&&!failed?<>
    <p className="text-sm">Observed through {new Date(view.asOf).toLocaleDateString()} · {new Date(view.from).toLocaleDateString()} to {new Date(view.to).toLocaleDateString()}</p>
-   <div className="rounded-lg border border-border p-4 space-y-2"><h3 className="font-medium">Before outreach</h3><p>{view.coverage.candidates} candidates found</p><p className="text-sm text-muted-foreground">{view.coverage.qualified} marked eligible at last check · {view.coverage.admitted} admitted · {view.coverage.unavailable} unavailable</p><p className="text-sm text-muted-foreground">{view.search.attempts} search dispatches · {view.search.creditsReserved} search credits reserved once per request, shared across its results.</p></div>
+   <div className="rounded-lg border border-border p-4 space-y-2"><h3 className="font-medium">All candidate coverage</h3><p>{view.coverage.candidates} candidates found</p><p className="text-sm text-muted-foreground">{view.coverage.qualified} marked eligible at last check · {view.coverage.admitted} admitted · {view.coverage.unavailable} unavailable</p><p className="text-sm text-muted-foreground">{view.search.attempts} search dispatches · {view.search.creditsReserved} search credits reserved once per request, shared across its results. Candidate coverage includes manual staging; discovery yield is separated below.</p></div>
+   {view.automation?<AutomaticEmailResults view={view.automation}/>:<p className="text-sm text-muted-foreground">Automatic email results are unavailable in this report.</p>}
    {view.cohorts.length===0?<p>No contacted firms in this interval yet. Conversion rates are unavailable.</p>:<div className="space-y-4">{view.cohorts.map(c=><article key={`${c.acquisition}:${c.hypothesis}:${c.policyVersion}`} className="rounded-lg border border-border p-4 space-y-3">
     <h3 className="font-medium capitalize">{label(c.hypothesis)} · {label(c.acquisition)}</h3>
     <p className="text-xs text-muted-foreground">Policy {c.policyVersion}</p>

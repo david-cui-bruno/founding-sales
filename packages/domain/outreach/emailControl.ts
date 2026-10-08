@@ -93,5 +93,5 @@ export async function automaticEmailConfiguration(ctx:RepositoryContext,expected
  if(current.mailboxBinding!==row.mailbox_binding)return {ok:false as const,reason:'mailbox_binding_changed'};
  if(current.sequenceBinding!==row.sequence_binding)return {ok:false as const,reason:'sequence_binding_changed'};
  if(!evaluationMatches(row.evaluation,current.configurationSha256))return {ok:false as const,reason:'evaluation_mismatch'};
- return {ok:true as const,value:{ownerUserId:row.owner_user_id,mailboxId:row.mailbox_id,sequenceVersionId:row.sequence_version_id,revision:row.revision,evaluationSha256:emailAdmissionEvaluationSchema.parse(row.evaluation).reportSha256}};
+ return {ok:true as const,value:{ownerUserId:row.owner_user_id,mailboxId:row.mailbox_id,sequenceVersionId:row.sequence_version_id,revision:row.revision,evaluationSha256:emailAdmissionEvaluationSchema.parse(row.evaluation).reportSha256,promptVersion:QUALIFICATION_PROMPT_VERSION,policyVersion:EMAIL_FIT_POLICY_VERSION,implementationCommit:buildCommit(process.env),configurationSha256:current.configurationSha256}};
 }

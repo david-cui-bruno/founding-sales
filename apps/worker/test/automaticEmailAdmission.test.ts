@@ -368,7 +368,7 @@ async function preparedAutomaticSender(){
  const prepared=await tx(()=>runDueStepExecution(timed,{stepExecutionId:step.id,now:at,eligibility:composeEligibility(),sendHandoff:outboundSendHandoff({deps})}));
  expect(prepared,JSON.stringify(prepared)).toMatchObject({kind:'handed_to_send'});
  if(prepared.kind!=='handed_to_send')throw new Error(prepared.kind);
- return {...result.value,step,at,gmail,deps,timed,fenceId:prepared.outboundMessageId};
+ return {...input,...result.value,step,at,gmail,deps,timed,fenceId:prepared.outboundMessageId};
 }
 it('dispatches an automatically admitted enrollment once through the existing sender',async()=>{
  const f=await preparedAutomaticSender();
@@ -451,4 +451,95 @@ it('waits for the next business-day allowance instead of exhausting capacity che
  if(!wake)throw new Error('missing capacity wake');
  expect(day.format(new Date(wake))).toBe(tomorrow.toISOString().slice(0,10));
  expect(new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(wake))).toBe('00:05');
+});
+
+import {readSourcingLearning} from '@fss/domain/sourcing/learningReport.ts';
+const learningInterval=()=>({from:new Date(Date.now()-86400000).toISOString(),to:new Date(Date.now()+1000).toISOString(),asOf:new Date(Date.now()+1000).toISOString()});
+it('shows an automatic unsent enrollment in learning without manufacturing contact or delivery',async()=>{
+ await configureFutureActivation();const input=await qualified('Learning Unsent PM');
+ const result=await admitAutomaticEmailProspect(worker(),input);if(!result.ok)throw new Error(result.reason);
+ const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
+ expect(view).toMatchObject({cohorts:[],coverage:{admitted:1},automation:{outcomes:{admissions:1,attempts:0,sent:0,replies:0,booked:0,heldQualified:0},decisions:[{candidateId:input.candidateId,runId:input.qualificationRunId,reason:'enrolled',firmId:result.value.firmId,enrollmentId:result.value.enrollmentId}]}});
+ expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:2}))).toMatchObject({ok:true});
+ const {learningReportSchema}=await import('@fss/contracts');
+ const changed=learningReportSchema.parse(await tx(()=>readSourcingLearning(admin(),learningInterval())));
+ expect(changed.automation).toMatchObject({control:{enabled:false,revision:3},decisions:[{controlRevision:2,evaluationSha256:'b'.repeat(64),implementationCommit:'a'.repeat(40),sequenceVersionId:sequenceId}]});
+});
+it('counts one actual send and automatic email attribution after sender replay',async()=>{
+ const f=await preparedAutomaticSender();const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
+ await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});
+ const {reconcileEmailAttribution}=await import('@fss/domain/sourcing/attribution.ts');
+ await tx(()=>reconcileEmailAttribution(worker()));await tx(()=>reconcileEmailAttribution(worker()));
+ const asOf=new Date(Date.parse(f.at)+1000).toISOString();
+ const view=await tx(()=>readSourcingLearning(admin(),{...learningInterval(),to:asOf,asOf}));
+ expect(view).toMatchObject({automation:{outcomes:{admissions:1,attempts:1,sent:1}},cohorts:[{policyVersion:'outreach-email-fit-v1',contacted:1,email:{sent:1}}]});
+});
+it('shows permanent deferral and exhausted capacity checks with historical evidence and bindings',async()=>{
+ await configureFutureActivation();const fit=await qualified('Visible Capacity PM');
+ const contrary=await qualified('Visible Contrary PM',{need:'We do not need maintenance help.'});
+ await db.session.query('UPDATE mailbox_send_ramp SET admin_daily_cap=0,admin_changed_at=now(),admin_changed_by_user_id=$2 WHERE mailbox_id=$1',[mailboxId,seeded.alpha.admin.userId]);
+ for(let i=0;i<7;i++){await runAutomaticEmailBatch(worker(),2);await db.session.query("UPDATE sourcing_qualification_runs SET email_admission_next_at=now()-interval '1 minute' WHERE id=$1 AND email_admission_next_at IS NOT NULL",[fit.qualificationRunId]);}
+ const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
+ expect(view.automation?.decisions).toHaveLength(2);
+ expect(view.automation?.decisions).toEqual(expect.arrayContaining([
+ expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:'a'.repeat(40),firmId:null,enrollmentId:null}),
+ expect.objectContaining({candidateId:contrary.candidateId,status:'deferred',checks:1,retryAt:null,evidence:expect.arrayContaining([expect.objectContaining({url:'https://visiblecontrarypm.example.test/'})])})]));
+});
+it('distinguishes retained discovery hits and supported email prospects from manual staging without double counting',async()=>{
+ await configureFutureActivation();const found=await qualified('Discovered Office PM');await qualified('Manual Staged PM');
+ const attempt=(await db.session.query<{id:string}>("INSERT INTO sourcing_discovery_attempts(workspace_id,query_id,query,state) VALUES($1,'dfw','Dallas residential property management','complete') RETURNING id",[seeded.alpha.workspaceId])).rows[0]!.id;
+ for(const suffix of ['a','b'])await db.session.query('INSERT INTO sourcing_discovery_hits(workspace_id,source_url,attempt_id,candidate_id) VALUES($1,$2,$3,$4)',[seeded.alpha.workspaceId,`https://discoveredofficepm.example.test/${suffix}`,attempt,found.candidateId]);
+ const result=await admitAutomaticEmailProspect(worker(),found);if(!result.ok)throw new Error(result.reason);
+ expect(await tx(()=>readSourcingLearning(admin(),learningInterval()))).toMatchObject({automation:{discovery:{retainedHits:2,supportedProspects:1,admissions:1,manualStaged:1,unavailable:0}}});
+});
+it('keeps substantive replies, delivery failures, opt-outs and bookings separate from attended qualified conversations',async()=>{
+ const f=await preparedAutomaticSender();
+ const {recordMessage}=await import('@fss/domain/mail/messages.ts');const {findMatchCandidates,recordMatches}=await import('@fss/domain/mail/matching.ts');const {recordDeterministicClassification}=await import('@fss/domain/mail/effects.ts');
+ for(const kind of ['human','bounce','opt_out'] as const){
+  const metadata={providerMessageId:randomUUID(),providerThreadId:randomUUID(),rfcMessageId:`${randomUUID()}@example.test`,direction:'incoming' as const,internalDate:new Date().toISOString(),headerFrom:'info@senderofficepm.example.test',headerTo:['owner@example.test'],headerCc:[],subject:'Re: Maintenance',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]};
+  const m=await tx(()=>recordMessage(worker(),{mailboxId,metadata}));const candidates=await findMatchCandidates(worker(),{mailboxId,messageId:m.message.id,metadata});
+  await tx(async()=>{await recordMatches(worker(),{messageId:m.message.id,candidates});await recordMatches(worker(),{messageId:m.message.id,candidates});await recordDeterministicClassification(worker(),{messageId:m.message.id,classification:{messageId:m.message.id,class:kind,suggestedDisposition:null,signals:[],requiresConfirmation:false}});});
+ }
+ const {receiveCalcomEvent}=await import('@fss/domain/meetings/calcom.ts');
+ const body={triggerEvent:'BOOKING_CREATED',createdAt:new Date().toISOString(),payload:{uid:randomUUID(),startTime:f.at,endTime:new Date(Date.parse(f.at)+1800000).toISOString(),organizer:{email:'owner@example.test'},attendees:[{email:'info@senderofficepm.example.test',name:'Office'}]}};
+ await tx(()=>receiveCalcomEvent(db.session,{workspaceId:seeded.alpha.workspaceId,rawBody:Buffer.from(JSON.stringify(body)),body}));await tx(()=>receiveCalcomEvent(db.session,{workspaceId:seeded.alpha.workspaceId,rawBody:Buffer.from(JSON.stringify(body)),body}));
+ const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
+ expect(view.automation).toMatchObject({outcomes:{admissions:1,attempts:0,sent:0,replies:1,deliveryFailures:1,optOuts:1,booked:1,heldQualified:0,unknownQualification:1},attention:[{firmId:f.firmId,needsReply:1,bookings:1,heldQualified:0}]});
+});
+it('restricts automatic decisions, evidence and outcome totals to the workspace and assigned owner',async()=>{
+ await configureFutureActivation();const input=await qualified('Private Owner PM');const result=await admitAutomaticEmailProspect(worker(),input);if(!result.ok)throw new Error(result.reason);
+ const sales=repositoryContext(workspaceScope(seeded.alpha.workspaceId,{kind:'user',userId:seeded.alpha.salesperson.userId,role:'salesperson'}),db.session);
+ const beta=repositoryContext(workspaceScope(seeded.beta.workspaceId,{kind:'user',userId:seeded.beta.admin.userId,role:'admin'}),db.session);
+ for(const scoped of [sales,beta])expect((await tx(()=>readSourcingLearning(scoped,learningInterval()))).automation).toMatchObject({decisions:[],attention:[],outcomes:{admissions:0,sent:0},discovery:{manualStaged:0}});
+ await db.session.query('UPDATE firms SET assigned_user_id=$2 WHERE id=$1',[result.value.firmId,seeded.alpha.salesperson.userId]);
+ expect((await tx(()=>readSourcingLearning(sales,learningInterval()))).automation).toMatchObject({decisions:[{firmId:result.value.firmId}],outcomes:{admissions:1}});
+});
+it('makes a whole-batch binding refusal visible without fabricating a prospect decision',async()=>{
+ await configureFutureActivation();await qualified('Batch Binding PM');vi.stubEnv('FSS_BUILD_COMMIT','f'.repeat(40));
+ expect(await runAutomaticEmailBatch(worker(),2)).toMatchObject({reason:'evaluation_mismatch',checked:0});
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation).toMatchObject({control:{enabled:true,revision:2,lastBatchReason:'evaluation_mismatch'},decisions:[],outcomes:{admissions:0}});
+});
+it('joins confirmed feedback and qualification spend through automatic email attribution',async()=>{
+ const f=await preparedAutomaticSender();
+ const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');await dispatchOutboundMessage(f.timed,f.deps,{outboundMessageId:f.fenceId});
+ const {reconcileEmailAttribution}=await import('@fss/domain/sourcing/attribution.ts');await tx(()=>reconcileEmailAttribution(worker()));
+ const {recordSourcingFeedback}=await import('@fss/domain/sourcing/feedback.ts');
+ expect(await tx(()=>recordSourcingFeedback(admin(),{candidateId:f.candidateId,qualificationRunId:f.qualificationRunId,code:'real_pain'}))).toMatchObject({ok:true});
+ const {reserveAttempt,markCalling,settleAttempt}=await import('@fss/domain/research/reservations.ts');const at=new Date().toISOString();
+ const paid=await tx(()=>reserveAttempt(worker(),{subjectKind:'sourcing_qualification',subjectId:f.qualificationRunId,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at,businessTimeZone:'America/New_York',cents:2,modelName:'fixture',maxInputTokens:1000,maxOutputTokens:100}));
+ await tx(()=>markCalling(worker(),paid.id));await tx(()=>settleAttempt(worker(),{reservationId:paid.id,at,outcome:{kind:'estimated'}}));
+ const asOf=new Date(Date.parse(f.at)+1000).toISOString();const view=await tx(()=>readSourcingLearning(admin(),{...learningInterval(),to:asOf,asOf}));
+ expect(view.cohorts).toMatchObject([{policyVersion:'outreach-email-fit-v1',confirmedPain:1,researchGrossCents:2,researchCashCents:0}]);
+});
+it('counts held qualification only after confirmed attendance and withdraws it when attendance is corrected',async()=>{
+ const f=await preparedAutomaticSender(),meetingId=randomUUID(),uid=randomUUID();
+ await db.session.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$4,$4,'booked',now()-interval '2 hours',now()-interval '1 hour',now())",[seeded.alpha.workspaceId,meetingId,f.firmId,uid]);
+ const {setMeetingAttendance}=await import('@fss/domain/meetings/attendance.ts');const {saveMeetingQualification}=await import('@fss/domain/meetings/qualification.ts');
+ const commandId=randomUUID();
+ expect(await tx(()=>saveMeetingQualification(admin(),{meetingId,expectedRevision:0,commandId,buyingParticipant:'yes',maintenanceNeed:'yes',openToPaying:'yes',evidence:(['buyingParticipant','maintenanceNeed','openToPaying'] as const).map(field=>({field,sourceKind:'user_confirmation',sourceId:commandId,sourceRevision:1}))}))).toMatchObject({ok:true});
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:0,unknownQualification:0});
+ await tx(()=>setMeetingAttendance(admin(),{meetingId,attendance:'attended'}));
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:1});
+ await tx(()=>setMeetingAttendance(admin(),{meetingId,attendance:'unconfirmed'}));
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:0});
 });

@@ -237,7 +237,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       return answer.ok?{result:answer.value,reason:null}:{result:null,reason:answer.reason.slice(0,80)};
     },
     'sourcing.learning': async (input:OperationInput<'sourcing.learning'>)=>{
-      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/learning',value=>learningReportSchema.parse(value),input);
+      const generation=deps.recordings.identity.current();const answer=await deps.api.read('/sourcing/learning/v2',value=>learningReportSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },

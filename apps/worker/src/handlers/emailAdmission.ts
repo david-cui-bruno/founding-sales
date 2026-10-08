@@ -9,6 +9,7 @@ export async function admitAutomaticEmailProspect(ctx:RepositoryContext,input:Au
 
 import {automaticEmailConfiguration} from '@fss/domain/outreach/emailControl.ts';
 import {lockSendGateForStopFact} from '@fss/domain/policy/sendGate.ts';
+import {recordCrmAuditEvent} from '@fss/domain/crm/audit.ts';
 import {databaseNow} from '@fss/domain/policy/clock.ts';
 import {candidateIdentity} from '@fss/domain/sourcing/qualificationDecision.ts';
 import {QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from '@fss/domain/sourcing/qualificationStore.ts';
@@ -23,7 +24,8 @@ export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevisi
   await lockSendGateForStopFact(ctx);
   const config=await automaticEmailConfiguration(ctx,controlRevision);
   const report:AdmissionBatch={checked:0,deferred:[],admitted:[],reason:null};
-  if(!config.ok)return {...report,reason:config.reason};
+  if(!config.ok)return await finish({...report,reason:config.reason});
+  const binding=config.value;
   const now=await databaseNow(ctx);
   const rows=(await ctx.db.query<QualificationRunRow&{payload:CandidateInput;email_admission_attempts:number;email_admission_control_revision:number|null}>(`SELECT r.*,c.payload FROM sourcing_candidates c
    JOIN LATERAL (SELECT * FROM sourcing_qualification_runs q WHERE q.workspace_id=c.workspace_id AND q.candidate_id=c.id ORDER BY q.requested_at DESC,q.id DESC LIMIT 1) r ON true
@@ -31,7 +33,7 @@ export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevisi
    AND r.state IN ('eligible','review') AND r.reason IS NULL AND r.prompt_version=$2 AND r.policy_version=$3
    AND (r.email_admission_control_revision IS DISTINCT FROM $4 OR (r.email_admission_next_at<=$5::timestamptz AND r.email_admission_attempts<7))
    ORDER BY r.id LIMIT 501`,[ctx.scope.workspaceId,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,controlRevision,now])).rows;
-  if(rows.length>500)return {...report,reason:'candidate_pool_limit'};
+  if(rows.length>500)return await finish({...report,reason:'candidate_pool_limit'});
   const ranked:{row:typeof rows[number];lead:RankedQualifiedLead}[]=[];
   for(const row of rows){
    const verdict=qualifyEmailCandidate({identity:candidateIdentity(row.payload,row.facts,row.observations),facts:row.facts,observations:row.observations,now});
@@ -40,21 +42,24 @@ export async function runAutomaticEmailBatch(ctx:RepositoryContext,controlRevisi
    ranked.push({row,lead:{id:row.candidate_id,firmName:row.payload.firmName,rank:verdict.rank,corroboratingSources:new Set(supporting.map(o=>o.url)).size,observedAt:supporting.map(o=>o.retrievedAt).sort().at(-1)??now,namedContact:verdict.route.identityKind==='named'}});
   }
   ranked.sort((a,b)=>rankQualifiedLeads(a.lead,b.lead));
-  for(const {row} of ranked.slice(0,25)){
+  for(const {row,lead} of ranked.slice(0,25)){
    const result=await admitAutomaticEmailCandidate(ctx,{candidateId:row.candidate_id,qualificationRunId:row.id,expectedRevision:row.candidate_revision,expectedControlRevision:controlRevision});
-   if(result.ok){report.admitted.push({candidateId:row.candidate_id,enrollmentId:result.value.enrollmentId});await recordDisposition(row,'enrolled',false);}
-   else {const temporary=['mailbox_capacity_exhausted','sender_unhealthy','prospect_held'].includes(result.reason);await recordDisposition(row,result.reason,temporary);
+   if(result.ok){report.admitted.push({candidateId:row.candidate_id,enrollmentId:result.value.enrollmentId});await recordDisposition(row,'enrolled',false,lead.rank);}
+   else {const temporary=['mailbox_capacity_exhausted','sender_unhealthy','prospect_held'].includes(result.reason);await recordDisposition(row,result.reason,temporary,lead.rank);
     if(['mailbox_capacity_exhausted','sender_unhealthy'].includes(result.reason)){report.reason=result.reason;break;}
    }
   }
-  return report;
-  async function recordDisposition(row:typeof rows[number],reason:string,temporary:boolean){
+  return await finish(report);
+  async function finish(value:AdmissionBatch){await recordCrmAuditEvent(ctx,{action:'outreach.email_admission_batch',subjectKind:'workspace',subjectId:ctx.scope.workspaceId,detail:{controlRevision,checked:value.checked,admitted:value.admitted.length,reason:value.reason}});return value;}
+
+  async function recordDisposition(row:typeof rows[number],reason:string,temporary:boolean,rank:string|null=null){
    const attempts=(row.email_admission_control_revision===controlRevision?row.email_admission_attempts:0)+1;
    const retry=temporary&&attempts<7;
    const wake=(await ctx.db.query<{email_admission_next_at:Date|null}>(`UPDATE sourcing_qualification_runs SET email_admission_control_revision=$3,email_admission_attempts=$4,email_admission_reason=$5,
     email_admission_next_at=CASE WHEN NOT $6 THEN NULL WHEN $5='mailbox_capacity_exhausted' THEN
      (((($7::timestamptz AT TIME ZONE (SELECT business_time_zone FROM workspaces WHERE id=$1))::date+1)::timestamp+interval '5 minutes') AT TIME ZONE (SELECT business_time_zone FROM workspaces WHERE id=$1))
      ELSE $7::timestamptz+interval '1 hour' END WHERE workspace_id=$1 AND id=$2 RETURNING email_admission_next_at`,[ctx.scope.workspaceId,row.id,controlRevision,attempts,reason,retry,now])).rows[0];
+   await recordCrmAuditEvent(ctx,{action:'outreach.email_admission_decided',subjectKind:'sourcing_candidate',subjectId:row.candidate_id,detail:{...binding,candidateId:row.candidate_id,runId:row.id,candidateRevision:row.candidate_revision,controlRevision,reason,checks:attempts,rank,status:reason==='enrolled'?'enrolled':temporary?(retry?'held':'exhausted'):'deferred',retryAt:wake?.email_admission_next_at?.toISOString()??null}});
    report.checked++;
    if(reason!=='enrolled')report.deferred.push({candidateId:row.candidate_id,reason:temporary&&!retry?'rechecks_exhausted':reason,retryAt:wake?.email_admission_next_at?.toISOString()??null});
   }
