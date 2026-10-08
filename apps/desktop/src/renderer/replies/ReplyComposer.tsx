@@ -7,7 +7,7 @@ import {Button} from '../ui/button.tsx';
 
 export interface ReplyComposerPorts {
  context(input:ReplyDraftContextInput):Promise<ReplyComposerResult<ReplyDraftContext>>;
- generate(input:Omit<ReplyDraftGenerateInput,'clientVersion'>):Promise<ReplyComposerResult<ReplyGeneratedDraft>>;
+ prepareSuggestion(input:Omit<ReplyDraftGenerateInput,'clientVersion'>):Promise<ReplyComposerResult<ReplyGeneratedDraft>>;
 }
 function selection(messageId:string,envelope:string,refs:string):ReplyDraftContextInput{
  try{const parsed=replyDraftContextInputSchema.safeParse({messageId,...(envelope?{envelope:JSON.parse(envelope)}:{}),...(refs?{factRefs:JSON.parse(refs)}:{})});return parsed.success?parsed.data:{messageId};}catch{return {messageId};}
@@ -77,7 +77,7 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
   const commandId=attempt.startsWith(`${context.sourceRevision}:`)?attempt.slice(65):crypto.randomUUID();
   setAttempt(`${context.sourceRevision}:${commandId}`);setGenerating(true);setSuggestion(null);
   try{
-   const result=await ports.generate({commandId,messageId,sourceRevision:context.sourceRevision,factRefs:context.facts.map(f=>({id:f.id,version:f.version})),envelope:context.envelope});
+   const result=await ports.prepareSuggestion({commandId,messageId,sourceRevision:context.sourceRevision,factRefs:context.facts.map(f=>({id:f.id,version:f.version})),envelope:context.envelope});
    if(mine!==read.current)return;
    if(result.ok){setSuggestion(result.value);setNotice(null);}else setNotice(result.reason);
   }catch{if(mine===read.current)setNotice('generation_outcome_unknown');}

@@ -128,6 +128,23 @@ it('records a throwing native submission as unknown, while an observed native fa
   expect(h.natives[0]?.shown).toBe(1);
 });
 
+it('keeps one native listener per event across repeated suspend and resume, with only current click authority', async () => {
+  const h = harness(), runner = createNotificationRunner(h.deps);
+  h.deps.native.history = async () => null;
+  await runner.tick(() => true);
+  const handle = h.natives[0]!;
+  for (let cycle = 0; cycle < 12; cycle++) {
+    runner.stop({ clear: false });
+    await handle.emit('click');
+    expect(h.targets).toEqual([]);
+    await runner.tick(() => true);
+  }
+  for (const event of ['show', 'failed', 'click']) expect(handle.listeners.get(event)).toHaveLength(1);
+  await handle.emit('click');
+  expect(h.targets).toEqual([h.item.target]);
+  expect(handle.shown).toBe(1);
+});
+
 it('drops a claimed alert and a late clicked target when the session changes, and leaves routine empty work quiet', async () => {
   const h = harness(), claim = h.deps.api.claim;
   let active = true;

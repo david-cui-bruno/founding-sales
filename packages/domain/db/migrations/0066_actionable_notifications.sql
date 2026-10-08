@@ -1,6 +1,6 @@
 -- changes: actionable_notification_attempts
 -- A workspace/user/event gets one durable submission, independent of device.
--- Its UUID is also the native request identity. Never delete a marker to retry.
+-- Its event key derives the stable native identity. Never delete a marker to retry.
 CREATE TABLE actionable_notification_attempts (
  workspace_id uuid NOT NULL,
  attempt_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -29,4 +29,5 @@ CREATE TABLE actionable_notification_attempts (
  CHECK(status<>'failed' OR failed_at IS NOT NULL),
  CHECK(status<>'unknown' OR unknown_at IS NOT NULL)
 );
+CREATE INDEX actionable_notification_attempts_device_recent ON actionable_notification_attempts(workspace_id,user_id,device_id,attempted_at DESC,attempt_id DESC);
 GRANT SELECT,INSERT,UPDATE ON actionable_notification_attempts TO app_runtime,migration;

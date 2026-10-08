@@ -9,8 +9,12 @@ export interface NotificationCandidate extends TodayAction {
 
 export async function readNotificationCandidates(context: RepositoryContext, input: { now: string }): Promise<NotificationCandidate[]> {
   if (context.scope.actor.kind !== 'user') return [];
-  return (await readTodayActions(context, input)).actions.filter(action => action.kind === 'reply' || action.kind === 'problem' ||
-    action.kind === 'call' && Date.parse(action.dueAt) - Date.parse(input.now) <= 15 * 60_000).map(action => {
+  return notificationCandidatesFromToday((await readTodayActions(context, input)).actions, input.now);
+}
+
+export function notificationCandidatesFromToday(actions: readonly TodayAction[], now: string): NotificationCandidate[] {
+  return actions.filter(action => action.kind === 'reply' || action.kind === 'problem' ||
+    action.kind === 'call' && Date.parse(action.dueAt) - Date.parse(now) <= 15 * 60_000).map(action => {
     const phase = action.kind === 'call' ? 'pre_call' : action.reason === 'substantive_reply' && action.state === 'overdue' ? 'reply_overdue' : 'attention';
     return { ...action, phase, eventKey: `${action.actionId}:${phase}${action.kind === 'call' ? `:${action.dueAt}` : ''}` };
   });

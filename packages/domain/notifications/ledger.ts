@@ -1,7 +1,7 @@
 import { notificationReceiptSchema, type ActionableNotificationsResponse, type NotificationItem, type TodayActionTarget, type NotificationReceipt } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { readNotificationCandidates } from './actions.ts';
-import { openTodayAction } from '../today/actions.ts';
+import { readNotificationCandidates, notificationCandidatesFromToday } from './actions.ts';
+import { openTodayAction, readTodayActions, currentTodayTarget } from '../today/actions.ts';
 
 interface AttemptRow {
   readonly [column: string]: unknown;
@@ -36,15 +36,29 @@ export async function claimNotification(context: RepositoryContext, input: { eve
 export async function readActionableNotifications(context: RepositoryContext, input: { deviceId: string; now: string }): Promise<ActionableNotificationsResponse> {
   if (context.scope.actor.kind !== 'user') throw new Error('notification_user_required');
   if (!await ownedDevice(context, input.deviceId)) throw new Error('notification_device_unavailable');
-  const candidates = await readNotificationCandidates(context, input);
-  const { rows } = await context.db.query<AttemptRow>('SELECT * FROM actionable_notification_attempts WHERE workspace_id=$1 AND user_id=$2 ORDER BY attempted_at,attempt_id', [context.scope.workspaceId, context.scope.actor.userId]);
+  const today = await readTodayActions(context, input);
+  const candidates = notificationCandidatesFromToday(today.actions, input.now);
+  const currentEventKeys = today.actions.flatMap(action => action.kind === 'reply'
+    ? [`${action.actionId}:attention`, `${action.actionId}:reply_overdue`]
+    : [`${action.actionId}:${action.kind === 'call' ? `pre_call:${action.dueAt}` : 'attention'}`]);
+  // Keep every durable marker. Presentation includes current events plus at most100
+  // recent device receipts, so obsolete lifetime history cannot grow each poll.
+  const { rows } = await context.db.query<AttemptRow>(`WITH selected AS (
+    SELECT attempt_id FROM actionable_notification_attempts WHERE workspace_id=$1 AND user_id=$2 AND event_key=ANY($4::text[])
+    UNION
+    SELECT attempt_id FROM (SELECT attempt_id FROM actionable_notification_attempts
+      WHERE workspace_id=$1 AND user_id=$2 AND device_id=$3 ORDER BY attempted_at DESC,attempt_id DESC LIMIT 100) recent
+  ) SELECT a.* FROM actionable_notification_attempts a JOIN selected USING(attempt_id)
+    WHERE a.workspace_id=$1 AND a.user_id=$2 ORDER BY a.attempted_at,a.attempt_id`,
+  [context.scope.workspaceId, context.scope.actor.userId, input.deviceId, currentEventKeys]);
+  const byEvent = new Map(rows.map(row => [row.event_key, row]));
   const recoveries: ActionableNotificationsResponse['recoveries'] = [];
   for (const row of rows.filter(row => row.device_id === input.deviceId)) {
-    const current = (await openTodayAction(context, { actionId: row.action_id, target: row.target, now: input.now })).target !== null;
+    const current = currentTodayTarget(today.actions, { actionId: row.action_id, target: row.target }) !== null;
     recoveries.push({ eventKey: row.event_key, actionId: row.action_id, target: row.target, current, receipt: receipt(row) });
   }
   return { version: 1, workspaceId: context.scope.workspaceId, userId: context.scope.actor.userId, asOf: input.now,
-    items: candidates.map(item => ({ ...item, receipt: rows.find(row => row.event_key === item.eventKey) === undefined ? null : receipt(rows.find(row => row.event_key === item.eventKey)!) })), recoveries };
+    items: candidates.map(item => { const row = byEvent.get(item.eventKey); return { ...item, receipt: row === undefined ? null : receipt(row) }; }), recoveries };
 }
 
 export async function observeNotification(context: RepositoryContext, input: { attemptId: string; deviceId: string; observation: 'native_shown' | 'failed' | 'unknown'; now: string }): Promise<boolean> {

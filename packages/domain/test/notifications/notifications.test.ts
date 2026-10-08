@@ -19,6 +19,25 @@ let world: ClassifierWorld | null = null;
 afterEach(async () => { await world?.stop(); world = null; });
 
 describe('actionable notifications', () => {
+  it('bounds obsolete receipt presentation while retaining old current events and durable deduplication', async () => {
+    world = await createClassifierWorld({ cases: REPLY_CORPUS.filter(c => c.id === 'terse-human-reply') });
+    const deviceId = world.mail.seeded.alpha.salesperson.deviceId, now = '2026-09-11T03:00:00.000Z';
+    const candidate = (await readNotificationCandidates(world.context(), { now }))[0]!;
+    const original = await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now });
+    if (original?.receipt == null) throw new Error('original claim absent');
+    await world.mail.database.session.query(`INSERT INTO actionable_notification_attempts
+      (workspace_id,user_id,device_id,event_key,action_id,phase,target,status,attempted_at,acknowledged_at)
+      SELECT $1,$2,$3,'reply-message:'||id||':attention','reply-message:'||id,'attention',
+        jsonb_build_object('kind','reply','firmId',$4::text,'messageId',id::text),'acknowledged',
+        '2026-09-12T00:00Z'::timestamptz+n*interval '1 minute','2026-09-12T03:00Z'::timestamptz
+      FROM (SELECT gen_random_uuid() AS id,n FROM generate_series(1,150) n) history`,
+    [world.mail.seeded.alpha.workspaceId, world.mail.seeded.alpha.salesperson.userId, deviceId, world.mail.crm.alpha.firmId]);
+    const read = await readActionableNotifications(world.context(), { deviceId, now: '2026-09-14T22:00:00.000Z' });
+    expect(read.recoveries).toHaveLength(101);
+    expect(read.recoveries).toContainEqual(expect.objectContaining({ current: true, receipt: expect.objectContaining({ attemptId: original.receipt.attemptId }) }));
+    expect(await claimNotification(world.context(), { deviceId, eventKey: candidate.eventKey, now })).toBeNull();
+    expect((await world.mail.database.session.query<{ n: number }>('SELECT count(*)::integer AS n FROM actionable_notification_attempts WHERE workspace_id=$1', [world.mail.seeded.alpha.workspaceId])).rows[0]?.n).toBe(151);
+  });
   it('offers the current reply at night and one reminder at its business-day deadline, using the same Today source identity', async () => {
     world = await createClassifierWorld({ cases: REPLY_CORPUS.filter(c => c.id === 'terse-human-reply') });
     await withTransaction(world.mail.database.session, async () => await confirmReplyDisposition(world!.context(), { messageId: world!.messageIdOf('terse-human-reply'), disposition: 'interested', journal: world!.mail.journal }));

@@ -8,7 +8,7 @@ afterEach(cleanup);
 const id='11111111-1111-4111-8111-111111111111';
 const ref={id,version:1};
 const context:ReplyDraftContext={messageId:id,sourceRevision:'a'.repeat(64),firmId:id,contactId:id,authorUserId:id,mailboxId:id,mailboxOwnerUserId:id,authorAddress:'owner@example.test',authorizationRevision:1,subject:'Question',senderAddress:'prospect@example.test',providerThreadId:'thread-one',inReplyTo:'question@example.test',references:['question@example.test'],observedTo:['owner@example.test'],observedCc:[],replyToMetadata:'unavailable',envelope:{to:['prospect@example.test'],cc:[]},recipientOptions:[{address:'prospect@example.test',contactId:id}],messageText:'What does Callie do?',priorContext:[],bookings:[],facts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}],availableFacts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}]};
-const ports=():ReplyComposerPorts=>({context:vi.fn<ReplyComposerPorts['context']>(async()=>({ok:true,value:context})),generate:vi.fn<ReplyComposerPorts['generate']>(async()=>({ok:false,reason:'generation_unavailable'}))});
+const ports=():ReplyComposerPorts=>({context:vi.fn<ReplyComposerPorts['context']>(async()=>({ok:true,value:context})),prepareSuggestion:vi.fn<ReplyComposerPorts['prepareSuggestion']>(async()=>({ok:false,reason:'generation_unavailable'}))});
 
 it('retains human text across navigation and shows current recipient/thread/fact context without a send control',async()=>{
  const p=ports();
@@ -20,7 +20,7 @@ it('retains human text across navigation and shows current recipient/thread/fact
  await waitFor(()=>expect((screen.getByLabelText('Reply draft') as HTMLTextAreaElement).value).toBe('My edited answer.'));
  expect(screen.getByText(/Reply-To address metadata is unavailable/)).toBeTruthy();
  expect(screen.queryByRole('button',{name:/send/i})).toBeNull();
- expect(p.generate).not.toHaveBeenCalled();
+ expect(p.prepareSuggestion).not.toHaveBeenCalled();
 });
 
 it('retains a human edit when refreshed source changes and requires explicit adoption before exact review',async()=>{
@@ -42,7 +42,7 @@ it('retains a human edit when refreshed source changes and requires explicit ado
 
 it('a late suggestion never replaces newer human typing and adoption remains explicit',async()=>{
  let finish!:(value:{ok:true;value:{sourceRevision:string;draftRevision:string;text:string;factRefs:typeof ref[];reviewRequired:true;reviewNotes:string[]}})=>void;
- const p=ports();p.generate=vi.fn<ReplyComposerPorts['generate']>(()=>new Promise(resolve=>{finish=resolve;}));
+ const p=ports();p.prepareSuggestion=vi.fn<ReplyComposerPorts['prepareSuggestion']>(()=>new Promise(resolve=>{finish=resolve;}));
  render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
  await screen.findByText('question@example.test');
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion'}));
@@ -65,7 +65,7 @@ it('an explicit CC choice is validated as a new draft envelope and invalidates r
  expect(await screen.findByText(/Your draft is stale/)).toBeTruthy();
  fireEvent.click(screen.getByRole('button',{name:'Use current context'}));
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion'}));
- await waitFor(()=>expect(p.generate).toHaveBeenCalledWith(expect.objectContaining({envelope:{to:['prospect@example.test'],cc:[extra]}})));
+ await waitFor(()=>expect(p.prepareSuggestion).toHaveBeenCalledWith(expect.objectContaining({envelope:{to:['prospect@example.test'],cc:[extra]}})));
  expect(screen.getByText(/CC dispatch is a separate feature/)).toBeTruthy();
 });
 
@@ -92,12 +92,12 @@ it('changing the selected exact approved facts retains text and requires a fresh
  expect((screen.getByLabelText('Reply draft') as HTMLTextAreaElement).value).toBe('A human answer.');
  fireEvent.click(screen.getByRole('button',{name:'Use current context'}));
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion'}));
- await waitFor(()=>expect(p.generate).toHaveBeenCalledWith(expect.objectContaining({factRefs:[]})));
+ await waitFor(()=>expect(p.prepareSuggestion).toHaveBeenCalledWith(expect.objectContaining({factRefs:[]})));
 });
 
 it('refreshing during generation drops its late result and leaves the retained draft editable',async()=>{
- let finish!:(value:Awaited<ReturnType<ReplyComposerPorts['generate']>>)=>void;
- const p=ports();p.generate=vi.fn<ReplyComposerPorts['generate']>(()=>new Promise(resolve=>{finish=resolve;}));
+ let finish!:(value:Awaited<ReturnType<ReplyComposerPorts['prepareSuggestion']>>)=>void;
+ const p=ports();p.prepareSuggestion=vi.fn<ReplyComposerPorts['prepareSuggestion']>(()=>new Promise(resolve=>{finish=resolve;}));
  render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
  await screen.findByText('question@example.test');
  fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'Keep my human answer.'}});
@@ -111,18 +111,18 @@ it('refreshing during generation drops its late result and leaves the retained d
 });
 
 it('explains an unknown suggestion result in plain language and reuses the same attempt after navigation',async()=>{
- const p=ports();p.generate=vi.fn<ReplyComposerPorts['generate']>(async()=>({ok:false,reason:'generation_outcome_unknown'}));
+ const p=ports();p.prepareSuggestion=vi.fn<ReplyComposerPorts['prepareSuggestion']>(async()=>({ok:false,reason:'generation_outcome_unknown'}));
  const tree=(open:boolean)=><DraftsProvider>{open?<ReplyComposer messageId={id} ports={p}/>:<p>Today</p>}</DraftsProvider>;
  const view=render(tree(true));await screen.findByText('question@example.test');
  fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'Keep this answer.'}});
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion'}));
  expect(await screen.findByText(/No definite suggestion result is available/)).toBeTruthy();
  expect(screen.queryByText(/generation_outcome_unknown/)).toBeNull();
- const first=vi.mocked(p.generate).mock.calls[0]![0].commandId;
+ const first=vi.mocked(p.prepareSuggestion).mock.calls[0]![0].commandId;
  view.rerender(tree(false));view.rerender(tree(true));await screen.findByText('question@example.test');
  fireEvent.click(screen.getByRole('button',{name:'Prepare suggestion'}));
- await waitFor(()=>expect(p.generate).toHaveBeenCalledTimes(2));
- expect(vi.mocked(p.generate).mock.calls[1]![0].commandId).toBe(first);
+ await waitFor(()=>expect(p.prepareSuggestion).toHaveBeenCalledTimes(2));
+ expect(vi.mocked(p.prepareSuggestion).mock.calls[1]![0].commandId).toBe(first);
  expect((screen.getByLabelText('Reply draft') as HTMLTextAreaElement).value).toBe('Keep this answer.');
 });
 

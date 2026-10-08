@@ -24,6 +24,8 @@ export interface NotificationRunnerDeps {
 export function createNotificationRunner(deps: NotificationRunnerDeps) {
   const handles = new Map<string, NativeNotificationHandle>();
   const boundEpoch = new Map<string, number>();
+  const bindings = new WeakMap<NativeNotificationHandle, { item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }; current(): boolean }>();
+  const boundHandles = new WeakSet<NativeNotificationHandle>();
   let epoch = 0;
   const status = (state: NotificationRuntimeStatus['state']) => deps.onStatus?.({ state, lastCheckedAt: deps.now() });
   function nativeId(identity: NotificationIdentity, eventKey: string): string {
@@ -31,13 +33,18 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
   }
   function bind(handle: NativeNotificationHandle, item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }, current: () => boolean) {
     boundEpoch.set(handle.id, epoch);
-    handle.on('show', async () => { if (current()) await deps.api.observe(item.receipt.attemptId, 'native_shown'); });
-    handle.on('failed', async () => { if (current()) await deps.api.observe(item.receipt.attemptId, 'failed'); });
+    bindings.set(handle, { item, current });
+    if (boundHandles.has(handle)) return;
+    boundHandles.add(handle);
+    const active = () => { const binding = bindings.get(handle); return binding?.current() ? binding : null; };
+    handle.on('show', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, 'native_shown'); });
+    handle.on('failed', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, 'failed'); });
     handle.on('click', async () => {
-      if (!current()) return;
+      const binding = active();
+      if (!binding) return;
       if (deps.onActivation !== undefined) { deps.onActivation(handle.id); return; }
-      const result = await deps.api.acknowledge(item.receipt.attemptId, item.actionId);
-      if (current() && result.ok && result.value !== null) deps.openTarget(result.value);
+      const result = await deps.api.acknowledge(binding.item.receipt.attemptId, binding.item.actionId);
+      if (binding.current() && result.ok && result.value !== null) deps.openTarget(result.value);
     });
   }
   return {
@@ -72,7 +79,9 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
       for (const recovery of queue.recoveries) {
         const id = nativeId(identity, recovery.eventKey), restored = history?.find(handle => handle.id === id);
         if (!recovery.current) {
-          try { (handles.get(id) ?? restored)?.close(); } catch { /* No stale native destination is reopened. */ }
+          const stale = handles.get(id) ?? restored;
+          if (stale) bindings.delete(stale);
+          try { stale?.close(); } catch { /* No stale native destination is reopened. */ }
           handles.delete(id);
           boundEpoch.delete(id);
           continue;
@@ -127,7 +136,7 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
     stop(options: { clear?: boolean } = {}) {
       epoch++;
       if (options.clear !== false) {
-        for (const handle of handles.values()) { try { handle.close(); } catch { /* Native removal is best effort. */ } }
+        for (const handle of handles.values()) { bindings.delete(handle); try { handle.close(); } catch { /* Native removal is best effort. */ } }
         handles.clear(); boundEpoch.clear();
       }
       // Electron requires created handles to stay strongly referenced. Suspend keeps
