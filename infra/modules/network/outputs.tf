@@ -32,3 +32,8 @@ output "egress_rules" {
   description = "The declared egress inventory. Every egress rule resource is generated from it."
   value       = local.egress_rules
 }
+
+output "availability_zones" {
+  description = "Actual Availability Zones assigned to the private database subnets."
+  value       = aws_subnet.private[*].availability_zone
+}
