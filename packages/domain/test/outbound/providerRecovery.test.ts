@@ -2,6 +2,13 @@ import {afterEach,beforeEach,describe,expect,it} from 'vitest';
 import {dispatchOutboundMessage} from '../../outbound/send.ts';
 import {reconcileOutboundMessage} from '../../outbound/reconcile.ts';
 import {readFence} from '../../outbound/fence.ts';
+import {createGmailHttpClient} from '../../mail/gmailClientHttp.ts';
+import {setAdminCap,readRampStanding} from '../../outbound/ramp.ts';
+import {prepareFor,seedFirm} from './support/dispatchFixtures.ts';
+import {readProviderIncidents} from '../../outbound/providerIncidents.ts';
+import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
+import {withTransaction} from '../../db/queryable.ts';
+import {setProspectingAuthorization} from '../../outreach/authorization.ts';
 import {createOutboundWorld,OPEN_INSTANT,type OutboundWorld} from './support/outboundWorld.ts';
 
 describe('provider incident recovery through outbound callers',()=>{
@@ -24,6 +31,63 @@ describe('provider incident recovery through outbound callers',()=>{
   expect(searches).toBe(1);
   expect((await readFence(ctx,id))?.state).toBe('reconciling');
   expect(await reconcileOutboundMessage(restarted,world.reconcileDeps(world.alpha,{gmail,now:()=>new Date(retryAt)}),{outboundMessageId:id})).toMatchObject({outcome:'sent'});
+  expect(gmail.sends).toHaveLength(1);
+ });
+ it('preserves a provider Retry-After instant through the production Sent-read adapter',async()=>{
+  const client=createGmailHttpClient({apiBaseUrl:'https://fixture.invalid',fetch:async()=>({status:429,headers:{'retry-after':'Wed, 23 Sep 2026 09:05:00 GMT'},body:'{}'})});
+  expect(await client.searchSentByMessageId({accessToken:'ephemeral-fixture',expiresAtEpochSeconds:0},'<fixture-id>')).toEqual({ok:false,reason:'rate_limited',retryAt:'2026-09-23T09:05:00.000Z'});
+ });
+ it('defers other dispatches while waiting and preserves a lower cap after verified recovery without an inactivity epoch',async()=>{
+  const ctx=world.systemContext(world.alpha.workspace.workspaceId),box=world.alpha;
+  await setAdminCap(ctx,{mailboxId:box.mailboxId,adminUserId:box.workspace.admin.userId,lowerTo:2});
+  const gmail=world.clientWith(box,{sendBehaviour:'indeterminate_but_delivered'}),id=await world.prepare(box);
+  await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail}),{outboundMessageId:id});
+  const retryAt='2026-09-23T09:05:00.000Z';
+  const limited={...gmail,searchSentByMessageId:async()=>({ok:false as const,reason:'rate_limited' as const,retryAt})};
+  await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail:limited,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id});
+  const next=await prepareFor(world,box,await seedFirm(world,box,'cooldown-other'));
+  expect(await dispatchOutboundMessage(ctx,world.sendDeps(box),{outboundMessageId:next})).toMatchObject({outcome:'held',refusal:'rate_limited',retryAt});
+  expect(box.gmail.sends).toHaveLength(0);
+  expect(await dispatchOutboundMessage(ctx,world.sendDeps(box,{now:()=>new Date(retryAt)}),{outboundMessageId:next})).toMatchObject({outcome:'held',refusal:'provider_refusal'});
+  expect((await readRampStanding(ctx,box.mailboxId))?.effectiveCap).toBe(2);
+  await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail,now:()=>new Date(retryAt)}),{outboundMessageId:id});
+  expect(await dispatchOutboundMessage(ctx,world.sendDeps(box,{now:()=>new Date(retryAt)}),{outboundMessageId:next})).toMatchObject({outcome:'sent'});
+  expect((await readRampStanding(ctx,box.mailboxId))?.effectiveCap).toBe(2);
+ });
+ it.each([undefined,'malformed'])('holds a rate limit with an unavailable deadline (%s) instead of recovering from a later successful read',async retryAt=>{
+  const ctx=world.systemContext(world.alpha.workspace.workspaceId),box=world.alpha;
+  const gmail=world.clientWith(box,{sendBehaviour:'indeterminate_but_delivered'}),id=await world.prepare(box);
+  await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail}),{outboundMessageId:id});
+  const limited={...gmail,searchSentByMessageId:async()=>({ok:false as const,reason:'rate_limited' as const,retryAt})};
+  await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail:limited,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id});
+  expect(await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail,now:()=>new Date('2026-09-23T10:00:00Z')}),{outboundMessageId:id})).toMatchObject({outcome:'incident_held'});
+  expect(await readProviderIncidents(ctx,box.mailboxId)).toMatchObject([{state:'action_required'}]);
+  expect(gmail.sends).toHaveLength(1);
+ });
+ it.each(['unknown','reputation'] as const)('never treats a %s incident deadline as safe recovery evidence',async classification=>{
+  const ctx=world.systemContext(world.alpha.workspace.workspaceId),box=world.alpha;
+  const gmail=world.clientWith(box,{sendBehaviour:'indeterminate_but_delivered'}),id=await world.prepare(box);
+  await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail}),{outboundMessageId:id});
+  const retryAt='2026-09-23T09:05:00.000Z';
+  const refused={...gmail,searchSentByMessageId:async()=>({ok:false as const,reason:'rate_limited' as const,classification,retryAt})};
+  await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail:refused,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id});
+  expect(await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail,now:()=>new Date(retryAt)}),{outboundMessageId:id})).toMatchObject({outcome:'incident_held'});
+  expect(await readProviderIncidents(ctx,box.mailboxId)).toMatchObject([{classification,state:'action_required'}]);
+ });
+ it('requires explicit permission revalidation after authority changes during cooldown',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId);
+  const admin=repositoryContext(workspaceScope(box.workspace.workspaceId,{kind:'user',userId:box.workspace.admin.userId,role:'admin'}),world.database.session);
+  const permission=(expectedRevision:number,enabled:boolean)=>withTransaction(world.database.session,()=>setProspectingAuthorization(admin,{mailboxId:box.mailboxId,expectedRevision,enabled,basis:'owner_reported_google_permission'}));
+  expect(await permission(0,true)).toMatchObject({ok:true});
+  const gmail=world.clientWith(box,{sendBehaviour:'indeterminate_but_delivered'}),id=await world.prepare(box);
+  await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail}),{outboundMessageId:id});
+  const retryAt='2026-09-23T09:05:00.000Z';
+  const limited={...gmail,searchSentByMessageId:async()=>({ok:false as const,reason:'rate_limited' as const,retryAt})};
+  await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail:limited,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id});
+  expect(await permission(1,false)).toMatchObject({ok:true});
+  expect(await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail,now:()=>new Date(retryAt)}),{outboundMessageId:id})).toMatchObject({outcome:'incident_held'});
+  expect(await permission(2,true)).toMatchObject({ok:true});
+  expect(await reconcileOutboundMessage(ctx,world.reconcileDeps(box,{gmail,now:()=>new Date(retryAt)}),{outboundMessageId:id})).toMatchObject({outcome:'sent'});
   expect(gmail.sends).toHaveLength(1);
  });
 });

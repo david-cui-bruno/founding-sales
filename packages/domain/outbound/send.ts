@@ -1,4 +1,5 @@
 import { prospectingRetryAt } from './pacing.ts';
+import {providerIncidentRefusal} from './providerIncidents.ts';
 import {routineReplyThreading,recordRoutineDelivery} from '../outreach/replyDelivery.ts';
 import {databaseNow} from '../policy/clock.ts';
 import {reserveOutreachEmail} from '../outreach/touchReservations.ts';
@@ -163,6 +164,9 @@ export async function dispatchOutboundMessage(
     // must not send. The reconciliation sweep is what finishes it.
     return { outcome: 'not_ready', outboundMessageId: initial.id, detail: initial.state };
   }
+
+  const incident=await providerIncidentRefusal(context,initial.mailboxId,deps.now?.()??new Date());
+  if(incident)return {outcome:'held',outboundMessageId:initial.id,refusal:incident.reason,detail:incident.detail,...(incident.retryAt?{retryAt:incident.retryAt}:{})};
 
   let fence: OutboundFenceRow = initial;
   if (fence.state === 'held') {

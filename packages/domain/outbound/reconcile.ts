@@ -137,7 +137,7 @@ export async function reconcileOutboundMessage(
 
   const search = await deps.gmail.searchSentByMessageId(access.access, fence.providerMessageIdHeader);
   if (!search.ok) {
-    if(binding)await recordProviderIncident(context,{mailboxId:fence.mailboxId,sourceKind:'sent_search',sourceId:fence.id,classification:search.reason==='rate_limited'?'transient':'authentication',reason:search.reason,binding,retryAt:search.retryAt,now});
+    if(binding)await recordProviderIncident(context,{mailboxId:fence.mailboxId,sourceKind:'sent_search',sourceId:fence.id,classification:search.classification??(search.reason==='rate_limited'?'transient':'authentication'),reason:search.incidentReason??search.reason,binding,retryAt:search.retryAt,now});
     const attempts = await recordReconcileMiss(context, fence.id);
     return {
       outcome: search.reason === 'grant_revoked' ? 'grant_revoked' : 'rate_limited',

@@ -6,6 +6,7 @@ import { firstSuppressed } from '../suppression/effective.ts';
 import { localParts } from '../src/rules/localClock.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { effectiveDailyCap, ensureRamp, openSendDay, readSenderReadiness, type RampRow, type SendDayRow } from './ramp.ts';
+import {providerIncidentRefusal} from './providerIncidents.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
@@ -131,6 +132,8 @@ export async function decideSend(
   const mailbox = mailboxRead.rows[0];
   if (mailbox === undefined) return refuseSend('mailbox_unknown');
   if (mailbox.status !== 'connected') return refuseSend('mailbox_inactive');
+  const incident=await providerIncidentRefusal(context,mailbox.id,now);
+  if(incident)return refuseSend(incident.reason,incident.detail);
 
   // ---------------------------------------------------------------- never send
   // 9.2, and the strongest refusal there is. A suppressed handle or firm is not a

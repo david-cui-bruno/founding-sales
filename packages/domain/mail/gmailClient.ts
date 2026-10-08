@@ -311,10 +311,15 @@ export type GmailSendOutcome =
     }
   | { readonly ok: false; readonly outcome: 'indeterminate'; readonly detail: string };
 
+export interface GmailIncidentMetadata {
+ readonly classification?: 'transient'|'authentication'|'reputation'|'unknown' | undefined;
+ readonly retryAt?: string|null|undefined;
+ readonly incidentReason?: 'rate_limited'|'grant_revoked'|'permission_unknown'|'quota_exceeded'|'service_unavailable'|'reputation_warning'|'unknown_provider_failure'|undefined;
+}
 export type GmailSentSearchOutcome =
   | { readonly ok: true; readonly found: null }
   | { readonly ok: true; readonly found: { readonly messageId: string; readonly threadId: string } }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited'; readonly retryAt?: string | null | undefined };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 /**
  * Whether Gmail's label set says the message left this mailbox.

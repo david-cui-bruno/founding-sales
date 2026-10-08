@@ -64,6 +64,14 @@ export async function readProviderIncidents(ctx:RepositoryContext,mailboxId:stri
   retryAt:row.retry_at?.toISOString()??null,observedAt:row.observed_at.toISOString(),sourceKind:row.source_kind,sourceId:row.source_id}));
 }
 
+export async function providerIncidentRefusal(ctx:RepositoryContext,mailboxId:string,now:Date):Promise<{reason:'rate_limited'|'provider_refusal';detail:string;retryAt?:string}|null>{
+ const incidents=await readProviderIncidents(ctx,mailboxId,now);
+ if(incidents.length===0)return null;
+ if(incidents.some(i=>i.state==='action_required'))return {reason:'provider_refusal',detail:'provider_incident_requires_review'};
+ if(incidents.some(i=>i.state==='revalidation_due'))return {reason:'provider_refusal',detail:'provider_incident_revalidation_due'};
+ return {reason:'rate_limited',detail:'provider_cooldown',retryAt:incidents.map(i=>i.retryAt!).sort().at(-1)!};
+}
+
 /** A fresh successful read clears only safe, unchanged incidents whose wait expired. */
 export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,mailboxId:string,before:ProviderBinding,now:Date):Promise<void>{
  await incidentTransaction(ctx,async()=>{
@@ -76,4 +84,20 @@ export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,ma
    AND retry_at IS NOT NULL AND retry_at<=$4 AND resolved_at IS NULL RETURNING id`,[ctx.scope.workspaceId,mailboxId,before.hash,now])).rows;
   for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
  });
+}
+
+/** Only established explicit grant/permission/auth commands call this. They may
+ * refresh a transient binding, but never erase its provider deadline. Revoked
+ * grants require the successful OAuth reconnect; reputation/unknown stay held. */
+export async function revalidateProviderIncidentConfiguration(ctx:RepositoryContext,mailboxId:string,basis:'oauth_reconnected'|'permission_revalidated'|'domain_authentication_checked',now:Date):Promise<void>{
+ if(ctx.scope.actor.kind!=='user'||(basis!=='oauth_reconnected'&&ctx.scope.actor.role!=='admin'))return;
+ const current=await readProviderBinding(ctx,mailboxId);if(current?.hash===null||current===null)return;
+ await ctx.db.query(`UPDATE mailbox_provider_incidents SET binding_sha256=$3
+  WHERE workspace_id=$1 AND mailbox_id=$2 AND classification='transient' AND resolved_at IS NULL`,[ctx.scope.workspaceId,mailboxId,current.hash]);
+ if(basis!=='oauth_reconnected')return;
+ const rows=(await ctx.db.query<{id:string}>(`UPDATE mailbox_provider_incidents i SET resolved_at=$4,resolution='human_revalidated'
+  FROM mailboxes m WHERE i.workspace_id=$1 AND i.mailbox_id=$2 AND m.workspace_id=i.workspace_id AND m.id=i.mailbox_id
+  AND i.classification='authentication' AND i.resolved_at IS NULL AND m.connected_at>=i.observed_at
+  AND $3::text IS NOT NULL RETURNING i.id`,[ctx.scope.workspaceId,mailboxId,current.hash,now])).rows;
+ for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
 }

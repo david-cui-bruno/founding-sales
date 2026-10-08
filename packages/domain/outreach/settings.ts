@@ -1,5 +1,6 @@
 import {readEmailAdmissionControl} from './emailControl.ts';
-import {routineSettingsSaveSchema,type OutreachControl,type OutreachSenderStandingResponse} from '@fss/contracts';
+import {routineSettingsSaveSchema,type OutreachControl,type OutreachSenderStandingResponse,type OutreachSenderStandingV2Response} from '@fss/contracts';
+import {readProviderIncidents} from '../outbound/providerIncidents.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {readSequenceVersion} from '../sequences/rows.ts';
@@ -67,5 +68,12 @@ export async function readOutreachSenderStanding(ctx:RepositoryContext):Promise<
   const standing=await readRampStanding(ctx,box.id);
   if(standing)senders.push({mailboxId:box.id,standing:describeRampStanding(standing)});
  }
+ return {senders};
+}
+
+export async function readOutreachSenderStandingV2(ctx:RepositoryContext):Promise<OutreachSenderStandingV2Response>{
+ const view=await readOutreachSenderStanding(ctx);
+ const senders:OutreachSenderStandingV2Response['senders']=[];
+ for(const sender of view.senders)senders.push({...sender,incidents:[...await readProviderIncidents(ctx,sender.mailboxId)]});
  return {senders};
 }

@@ -86,9 +86,17 @@ export interface GmailHttpOptions {
   readonly apiBaseUrl: string;
   /** The largest body this client will keep. A very long mail is truncated, not refused. */
   readonly maxBodyCharacters?: number | undefined;
+  readonly now?: (()=>Date) | undefined;
 }
 
 export const DEFAULT_MAX_BODY_CHARACTERS = 100_000;
+
+/** Never shorten a provider deadline. Missing/invalid values grant no retry. */
+function retryDeadline(response:HttpResponse,now:Date):string|null {
+ const value=response.headers['retry-after'];if(value===undefined)return null;
+ const milliseconds=/^\d+$/.test(value)?now.getTime()+Number(value)*1000:Date.parse(value);
+ return Number.isFinite(milliseconds)&&milliseconds>=0&&milliseconds<=8.64e15?new Date(milliseconds).toISOString():null;
+}
 
 type Json = Record<string, unknown>;
 
@@ -711,7 +719,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       if (response.status !== 200) {
         const failure = classifyStatus(response.status, response.body);
         if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
-        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited' };
+        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited',...(response.headers['retry-after']===undefined?{}:{retryAt:retryDeadline(response,options.now?.()??new Date())}) };
         throw new GmailClientError('unexpected_status', 'the Sent search failed', response.status);
       }
       const json = parseJson(response.body);
