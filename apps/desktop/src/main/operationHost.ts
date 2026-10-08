@@ -3,7 +3,7 @@ import {socialWeeklySchema} from '@fss/contracts';
 import {socialDraftWorkspaceSchema} from '@fss/contracts';
 import type {SocialImageImport} from './social/imageImport.ts';
 import {socialAssetViewSchema,socialAssetLibrarySchema,socialWorkspaceSchema} from '@fss/contracts';
-import {outreachControlSchema,outreachCohortPreviewSchema} from '@fss/contracts';
+import {outreachControlSchema,outreachSenderStandingResponseSchema,outreachCohortPreviewSchema} from '@fss/contracts';
 import {callNeedViewSchema} from '@fss/contracts';
 import {learningReportSchema,targetingViewSchema} from '@fss/contracts';
 import {meetingQualificationViewSchema} from '@fss/contracts';
@@ -207,6 +207,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'social.mutate':async(input:OperationInput<'social.mutate'>)=>{const generation=deps.recordings.identity.current();const {action,commandId,...payload}=input;const paths={save:'/social/posts/save',approve:'/social/posts/approve',cancel:'/social/posts/cancel'} as const;const answer=await deps.api.command(paths[action],payload,v=>z.unknown().parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};if(!answer.ok)return {accepted:false,view:null,reason:answer.reason};const view=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};return {accepted:true,view:view.ok?view.value:null,reason:view.ok?null:'refresh_failed'};},
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
       const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control/v2',value=>outreachControlSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
+      return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
+    },
+    'outreach.senderStanding': async(input:OperationInput<'outreach.senderStanding'>)=>{
+      const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/senders/standing',value=>outreachSenderStandingResponseSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
       return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason.slice(0,80)};
     },
