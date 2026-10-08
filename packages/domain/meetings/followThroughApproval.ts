@@ -12,8 +12,8 @@ type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 export async function meetingPlanSources(ctx:RepositoryContext,plan:FollowThroughRow,draft:FollowThroughDraftRow):Promise<Result<{templates:{id:string;hash:string}[];facts:AnswerBlock[]}>> {
  const version=plan.sequence_version_id===null?null:await readSequenceVersion(ctx,plan.sequence_version_id);
  if(version===null||version.state!=='published'||version.steps.length<1||version.steps.length>3||version.steps.some(s=>s.channel!=='email'))return {ok:false,reason:'recap_sequence_required'};
- const templates:{id:string;hash:string}[]=[];const texts=[draft.subject,draft.body];
- for(const step of version.steps){const t=step.templateVersionId===null?null:await readTemplateVersion(ctx,step.templateVersionId);if(t===null||t.approvedAt===null||t.retiredAt!==null)return {ok:false,reason:'template_unapproved'};templates.push({id:t.id,hash:t.contentHash});if(step.ordinal>draft.ordinal)texts.push(t.subject,t.body);}
+ const templates:{id:string;hash:string}[]=[];const texts=draft.state==='sent'?[]:[draft.subject,draft.body];
+ for(const step of version.steps){const t=step.templateVersionId===null?null:await readTemplateVersion(ctx,step.templateVersionId);if(t===null||((step.ordinal>draft.ordinal||(step.ordinal===draft.ordinal&&draft.state!=='sent'))&&(t.approvedAt===null||t.retiredAt!==null)))return {ok:false,reason:'template_unapproved'};templates.push({id:t.id,hash:t.contentHash});if(step.ordinal>draft.ordinal)texts.push(t.subject,t.body);}
  const refs=(await ctx.db.query<{id:string;version:number}>(`SELECT DISTINCT ON (b.id) b.id,v.version FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id WHERE b.workspace_id=$1 AND strpos($2,v.text)>0 ORDER BY b.id,v.version DESC LIMIT 21`,[ctx.scope.workspaceId,texts.join('\n')])).rows;
  if(refs.length>20)return {ok:false,reason:'facts_catalogue_too_large'};
  const facts=refs.length===0?{ok:true as const,value:[]}:await readApprovedAnswerBlocks(ctx,refs);
@@ -36,7 +36,7 @@ export async function verifyMeetingPlanApproval(ctx:RepositoryContext,plan:Follo
 
 export async function meetingPlannedMessages(ctx:RepositoryContext,plan:FollowThroughRow,draft:FollowThroughDraftRow):Promise<{ordinal:number;subject:string;body:string}[]> {
  const version=plan.sequence_version_id===null?null:await readSequenceVersion(ctx,plan.sequence_version_id);
- const messages=[{ordinal:draft.ordinal,subject:draft.subject,body:draft.body}];
+ const messages=draft.state==='sent'?[]:[{ordinal:draft.ordinal,subject:draft.subject,body:draft.body}];
  if(version===null||plan.contact_id===null)return messages;
  for(const step of version.steps){if(step.ordinal===draft.ordinal||step.ordinal<draft.ordinal)continue;
   const t=step.templateVersionId===null?null:await readTemplateVersion(ctx,step.templateVersionId);if(t===null||t.approvedAt===null||t.retiredAt!==null)continue;

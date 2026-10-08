@@ -59,7 +59,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         if(pending.action==='begin_edit'&&answer.view.currentDraft!==null){
           const current=answer.view.currentDraft;
           entry.form={planId:answer.view.planId!,expectedPlanVersion:answer.view.version,expectedDraftVersion:current.version,subject:entry.form?.subject??current.subject,body:entry.form?.body??current.body};entry.editingUi=true;
-        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='approve'?'Recap and follow-up plan approved.':pending.action==='save'?'Recap saved.':pending.action==='cancel'?'Follow-up cancelled.':null;}
+        } else {entry.form=null;entry.editingUi=false;entry.message=pending.action==='approve'?(draft.state==='sent'?'Remaining follow-up plan approved.':'Recap and follow-up plan approved.'):pending.action==='save'?'Recap saved.':pending.action==='cancel'?'Follow-up cancelled.':null;}
       } else if(noDefiniteAnswer(answer.reason))entry.message='The answer was lost. Retry uses the same request.';
       else if(answer.reason==='not_found'){entry.view=null;entry.form=null;entry.pending=null;entry.editingUi=false;entry.gone=true;entry.unavailable=true;}
       else {entry.pending=null;entry.message=['draft_changed','source_changed'].includes(answer.reason??'')?'The meeting or draft changed. Your draft is kept. Refresh to compare.':'This action could not finish. Your draft is kept.';}
@@ -68,6 +68,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
   };
   const view=entry.view,draft=view?.currentDraft,form=entry.form;
   const terminal=view?.status==='cancelled'||view?.status==='completed',immutable=draft?.state==='submitted'||draft?.state==='sent';
+  const recordedSent=draft?.state==='sent'&&view?.sentMessages.some(m=>m.ordinal===draft.ordinal)===true;
   const disabled=entry.busy||entry.pending!==null||entry.gone||!actionsEnabled;
   return <div className="min-w-0" data-testid="meeting-follow-through">
     <Button size="sm" variant="quiet" aria-expanded={entry.open} onClick={()=>{entry.open=!entry.open;touch();}}>Follow-up</Button>
@@ -79,7 +80,7 @@ export function MeetingFollowThrough({meetingId,ports=defaultPorts,actionsEnable
         {[...new Set(view.blockers.filter(r=>!['sending_paused','editing'].includes(r)).map(r=>reasons[r]??'Review this follow-up before sending.'))].map(text=><p key={text} className="text-sm text-muted-foreground">{text}</p>)}
         {view.facts?.length?<div aria-label="Shared facts used" className="space-y-2 text-sm"><h5>Shared facts used</h5>{view.facts.map(f=><p key={f.id}>{f.text} <span className="text-muted-foreground">Version {f.version}</span></p>)}</div>:null}
         {view.plannedMessages?.filter(m=>m.ordinal>1).map(m=><details key={m.ordinal} className="text-sm"><summary>Follow-up {m.ordinal-1}</summary><p>{m.subject}</p><p className="whitespace-pre-wrap">{m.body}</p></details>)}
-        {view.approvalRequired&&draft!=null&&!terminal&&!immutable&&!entry.editingUi?<div className="space-y-2"><p className="text-sm">Approve this recap and up to three messages under the existing cadence. Replies, bookings and stops interrupt the plan. Approval does not resume paused sending.</p><Button size="sm" disabled={disabled||view.approvalHash==null} onClick={()=>{void command('approve');}}>Approve recap and plan</Button></div>:null}
+        {view.approvalRequired&&draft!=null&&!terminal&&(!immutable||recordedSent)&&!entry.editingUi?<div className="space-y-2"><p className="text-sm">{recordedSent?'Review only the remaining follow-up messages. The sent recap stays in history and will not be sent again.':'Approve this recap and up to three messages under the existing cadence. Replies, bookings and stops interrupt the plan. Approval does not resume paused sending.'}</p><Button size="sm" disabled={disabled||view.approvalHash==null} onClick={()=>{void command('approve');}}>{recordedSent?'Approve remaining follow-up plan':'Approve recap and plan'}</Button></div>:null}
         {draft==null?<p className="text-sm text-muted-foreground">Add sufficient notes in Notes & tasks and choose an approved recap sequence in Calling & calendar. Callie prepares the draft when those are ready.</p>:entry.editingUi&&form!==null?<div className="space-y-3">
           <label className="block space-y-1 text-sm"><span>Subject</span><Input aria-label="Recap subject" maxLength={998} value={form.subject} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,subject:e.target.value};touch();}}/></label>
           <label className="block space-y-1 text-sm"><span>Message</span><Textarea aria-label="Recap message" rows={8} maxLength={4000} value={form.body} disabled={entry.busy||!actionsEnabled} onChange={e=>{entry.form={...form,body:e.target.value};touch();}}/></label>

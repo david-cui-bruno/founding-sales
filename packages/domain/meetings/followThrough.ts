@@ -167,20 +167,21 @@ export async function editMeetingRecap(context: RepositoryContext, input: Meetin
   if (plan === undefined) return { ok: false, reason: 'meeting_unknown' };
   const draft = await currentMeetingDraft(context, plan);
   if (plan.version !== input.expectedPlanVersion || draft?.version !== input.expectedDraftVersion) return { ok: false, reason: 'draft_changed' };
-  if ((draft.state === 'submitted' || draft.state === 'sent') && input.action !== 'cancel') return { ok: false, reason: 'delivery_in_progress' };
+  if ((draft.state === 'submitted' || draft.state === 'sent') && input.action !== 'cancel' && !(input.action === 'approve' && draft.state === 'sent')) return { ok: false, reason: 'delivery_in_progress' };
   if (plan.status === 'cancelled' || plan.status === 'completed') return { ok: false, reason: 'plan_finished' };
   if (input.action === 'approve') {
-    if (plan.editing || (draft.state !== 'ready' && !(draft.state === 'sent' && draft.manual_message_id !== null))) return {ok:false,reason:'draft_not_ready'};
+    if (plan.editing || (draft.state !== 'ready' && draft.state !== 'sent')) return {ok:false,reason:'draft_not_ready'};
+    if (draft.state === 'sent' && !(await meetingDeliveryHistory(context,plan.id)).some(d=>d.ordinal===draft.ordinal && d.messageId===(draft.manual_message_id??draft.outbound_message_id))) return {ok:false,reason:'delivery_in_progress'};
     if (plan.source_hash !== locked.value.sourceHash) return {ok:false,reason:'source_changed'};
     if (requiresExplicitMeetingReview(plan.blockers)) return {ok:false,reason:'plan_held'};
     const interruption = await meetingPlanInterruption(context,plan);
     if (interruption !== null && interruption !== 'opportunity_required') return {ok:false,reason:interruption};
-    if (plan.fact_refs.length > 0) { const facts = await readApprovedAnswerBlocks(context,plan.fact_refs); if (!facts.ok) return {ok:false,reason:`facts_${facts.reason}`}; }
+    if (draft.state !== 'sent' && plan.fact_refs.length > 0) { const facts = await readApprovedAnswerBlocks(context,plan.fact_refs); if (!facts.ok) return {ok:false,reason:`facts_${facts.reason}`}; }
     const sources = await meetingPlanSources(context,plan,draft); if (!sources.ok) return sources;
     if (await meetingApprovalHash(context,plan,draft) !== input.expectedApprovalHash) return {ok:false,reason:'approval_changed'};
     const now = at ?? new Date().toISOString();
     const messages = await meetingPlannedMessages(context,plan,draft);
-    const approval = {sourceHash:plan.source_hash,sequenceVersionId:plan.sequence_version_id!,templates:sources.value.templates,facts:sources.value.facts,draftHashes:{...plan.approval?.draftHashes,...Object.fromEntries(messages.map(m=>[String(m.ordinal),renderedHash(m.subject,m.body)]))},at:now};
+    const approval = {sourceHash:plan.source_hash,sequenceVersionId:plan.sequence_version_id!,templates:sources.value.templates,facts:sources.value.facts,draftHashes:{...plan.approval?.draftHashes,[String(draft.ordinal)]:draft.rendered_hash,...Object.fromEntries(messages.map(m=>[String(m.ordinal),renderedHash(m.subject,m.body)]))},at:now};
     await context.db.query("UPDATE meeting_follow_through SET approval_mode='human',approval=$3::jsonb,fact_refs=$4::jsonb,version=version+1,next_wake_at=$5,updated_at=$5 WHERE workspace_id=$1 AND id=$2",[context.scope.workspaceId,plan.id,JSON.stringify(approval),JSON.stringify(sources.value.facts),now]);
     await recordCrmAuditEvent(context,{action:'meeting.plan_approved',subjectKind:'meeting',subjectId:plan.meeting_id,detail:{planId:plan.id,draftVersion:draft.version,sourceHash:plan.source_hash,sequenceVersionId:plan.sequence_version_id,renderedHash:draft.rendered_hash,factRefs:sources.value.facts.map(f=>({id:f.id,version:f.version}))}});
     return {ok:true,value:(await readMeetingFollowThrough(context,{meetingId:plan.meeting_id}))!};

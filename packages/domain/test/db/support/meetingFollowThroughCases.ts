@@ -28,8 +28,9 @@ async function task(f: F): Promise<Row> {
 const bad = (table: string, constraint: string, make: (f: F) => Promise<Row>, changes: Row): Case => ({ constraint, run: async f => await insert(f, table, { ...await make(f), ...changes }) });
 const twice = (table: string, constraint: string, make: (f: F) => Promise<Row>, changes: () => Row = () => ({})): Case => ({ constraint, run: async f => { const row = await make(f); await insert(f, table, row); return await insert(f, table, { ...row, ...changes() }); } });
 export const MEETING_FOLLOW_THROUGH_CONSTRAINT_CASES: readonly Case[] = [
-  ...[['source_hash', 'bad'], ['notes_revision', -1], ['reviewed_draft_version', -1], ['version', 0], ['current_draft_version', -1], ['status', 'bad'], ['blockers', '{}']].map(([key, value]) =>
+  ...[['source_hash', 'bad'], ['notes_revision', -1], ['reviewed_draft_version', -1], ['version', 0], ['current_draft_version', -1], ['status', 'bad'], ['blockers', '{}'], ['approval_mode','unverified'], ['approval','[]'], ['fact_refs','{}']].map(([key, value]) =>
     bad('meeting_follow_through', `meeting_follow_through_${String(key)}_check`, plan, { [String(key)]: value })),
+  bad('meeting_follow_through','meeting_follow_through_fact_refs_check',plan,{fact_refs:JSON.stringify(Array.from({length:21},()=>({id:missing,version:1})))}),
   ...[['workspace_id', 'workspace_id'], ['firm_id', 'workspace_id_meeting_id_firm_id'], ['contact_id', 'workspace_id_contact_id_firm_id'], ['owner_user_id', 'workspace_id_owner_user_id'],
     ['analysis_id', 'workspace_id_analysis_id_meeting_id'], ['sequence_version_id', 'workspace_id_sequence_version_id'], ['permission_id', 'workspace_id_permission_id'], ['enrollment_id', 'workspace_id_enrollment_id']].map(([key, name]) =>
     bad('meeting_follow_through', `meeting_follow_through_${name!}_fkey`, plan, { [key!]: missing })),

@@ -16,7 +16,7 @@ import type { SendHandoff } from '../../../sequences/sendHandoff.ts';
 import { composeEligibility } from '../../../sequences/eligibility.ts';
 import { runDueStepExecution } from '../../../sequences/executions.ts';
 
-export async function preparedMeetingFixture(options: { steps?: number; material?: string; paused?: boolean } = {}) {
+export async function preparedMeetingFixture(options: { steps?: number; material?: string; paused?: boolean; approve?: boolean } = {}) {
   const world = await createOutboundWorld(), db = world.database.session, workspace = world.alpha.workspace.workspaceId;
   const context = world.systemContext(workspace);
   const admin = repositoryContext(workspaceScope(workspace, { kind: 'user', userId: world.alpha.workspace.admin.userId, role: 'admin' }), db);
@@ -51,7 +51,7 @@ export async function preparedMeetingFixture(options: { steps?: number; material
   if (options.paused) await db.query('UPDATE sending_domains SET automated_sending_enabled=false,automated_sending_enabled_at=NULL WHERE workspace_id=$1',[workspace]);
   const prepared = await withTransaction(db, () => prepareMeetingRecap(admin, { meetingId, expectedSourceHash: input.value.sourceHash, at: new Date(now.getTime() - 40 * 60_000).toISOString() }));
   if (!prepared.ok || prepared.value.currentDraft === null) throw new Error(`prepare: ${JSON.stringify(prepared)}`);
-  const approved=await withTransaction(db,()=>editMeetingRecap(admin,{planId:prepared.value.planId!,expectedPlanVersion:prepared.value.version,expectedDraftVersion:prepared.value.currentDraft!.version,action:'approve',expectedApprovalHash:prepared.value.approvalHash!},prepared.value.currentDraft!.createdAt));
+  const approved=options.approve===false?prepared:await withTransaction(db,()=>editMeetingRecap(admin,{planId:prepared.value.planId!,expectedPlanVersion:prepared.value.version,expectedDraftVersion:prepared.value.currentDraft!.version,action:'approve',expectedApprovalHash:prepared.value.approvalHash!},prepared.value.currentDraft!.createdAt));
   if(!approved.ok)throw new Error(`approval: ${approved.reason}`);
   return { world, db, workspace, context, admin, ...firm, meetingId, at, before, planId: prepared.value.planId!, version: approved.value.version, templateVersionId, draft: prepared.value.currentDraft };
 }
