@@ -13,7 +13,7 @@ it('requires audited explicit evaluation and active ownership, preserving unrela
  expect(await qualificationConfigureCommand({session:db.session,options:{...approved,'--owner-user-id':seed.beta.admin.userId},launch})).toMatchObject({ok:false,reason:'owner_inactive'});
  expect(await qualificationConfigureCommand({session:db.session,options:{...approved,'--false-eligible':'1'},launch})).toMatchObject({ok:false});
  expect(await qualificationConfigureCommand({session:db.session,options:approved,launch})).toMatchObject({ok:true});
- expect((await db.session.query('SELECT enabled,auto_admission_enabled,qualification_evaluation FROM sourcing_discovery_settings')).rows[0]).toMatchObject({enabled:false,auto_admission_enabled:true,qualification_evaluation:{policyVersion:'qualification-v2',reviewedEligible:3,falseEligible:0}});
+ expect((await db.session.query('SELECT enabled,auto_admission_enabled,qualification_evaluation FROM sourcing_discovery_settings')).rows[0]).toMatchObject({enabled:false,auto_admission_enabled:true,qualification_evaluation:{policyVersion:'qualification-v3',reviewedEligible:3,falseEligible:0}});
  expect(await qualificationConfigureCommand({session:db.session,options:{...options,'--enabled':'false'},launch})).toMatchObject({ok:true});
  expect((await db.session.query('SELECT auto_admission_enabled,qualification_evaluation FROM sourcing_discovery_settings')).rows[0]).toMatchObject({auto_admission_enabled:false,qualification_evaluation:{reviewedEligible:3}});
  expect((await db.session.query('SELECT id FROM sourcing_search_account')).rows).toHaveLength(0);
