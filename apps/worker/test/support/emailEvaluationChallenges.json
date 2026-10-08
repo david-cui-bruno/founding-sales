@@ -1,0 +1,1900 @@
+[
+  {
+    "id": "fit-without-pain",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Supported TX residential fit and office email; phone and pain optional."
+    },
+    "candidate": {
+      "firmName": "Evaluation Fit Without Pain PM",
+      "website": "https://fit-without-pain.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://fit-without-pain.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "7d0143cb-4f3f-50b0-a61b-abd9e54779b9",
+        "url": "https://fit-without-pain.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Fit Without Pain PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Fit Without Pain PM Dallas TX office info@fit-without-pain.example.test"
+          }
+        ],
+        "contentHash": "9281e44ab5a9b3aa9d2c518b41c6fbc51b99e31400a8023174fcad35a5021ad2",
+        "relevantTextHash": "9281e44ab5a9b3aa9d2c518b41c6fbc51b99e31400a8023174fcad35a5021ad2",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Fit Without Pain PM manages residential properties in Dallas, TX.",
+        "observationId": "7d0143cb-4f3f-50b0-a61b-abd9e54779b9"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Fit Without Pain PM manages residential properties in Dallas, TX.",
+        "observationId": "7d0143cb-4f3f-50b0-a61b-abd9e54779b9"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Fit Without Pain PM manages residential properties in Dallas, TX.",
+        "observationId": "7d0143cb-4f3f-50b0-a61b-abd9e54779b9"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Fit Without Pain PM Dallas TX office info@fit-without-pain.example.test",
+        "observationId": "7d0143cb-4f3f-50b0-a61b-abd9e54779b9"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "ri-fit",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Providence RI target, residential fit and office email."
+    },
+    "candidate": {
+      "firmName": "Evaluation Ri Fit PM",
+      "website": "https://ri-fit.example.test/",
+      "locality": "Providence",
+      "region": "RI",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://ri-fit.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "1702c331-2719-565e-848d-b57f9ff8ea2c",
+        "url": "https://ri-fit.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Ri Fit PM manages residential properties in Providence, RI."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Ri Fit PM Providence RI office info@ri-fit.example.test"
+          }
+        ],
+        "contentHash": "d7264c5c8bcb5e3666b8f517d444b9edcd750a3b50334815029f1a2c61d63011",
+        "relevantTextHash": "d7264c5c8bcb5e3666b8f517d444b9edcd750a3b50334815029f1a2c61d63011",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Ri Fit PM manages residential properties in Providence, RI.",
+        "observationId": "1702c331-2719-565e-848d-b57f9ff8ea2c"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Ri Fit PM manages residential properties in Providence, RI.",
+        "observationId": "1702c331-2719-565e-848d-b57f9ff8ea2c"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Ri Fit PM manages residential properties in Providence, RI.",
+        "observationId": "1702c331-2719-565e-848d-b57f9ff8ea2c"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Ri Fit PM Providence RI office info@ri-fit.example.test",
+        "observationId": "1702c331-2719-565e-848d-b57f9ff8ea2c"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "ma-fit",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Boston MA target, residential fit and office email."
+    },
+    "candidate": {
+      "firmName": "Evaluation Ma Fit PM",
+      "website": "https://ma-fit.example.test/",
+      "locality": "Boston",
+      "region": "MA",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://ma-fit.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "61c7dc01-e5cb-597f-a16e-abc5f7e4ea53",
+        "url": "https://ma-fit.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Ma Fit PM manages residential properties in Boston, MA."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Ma Fit PM Boston MA office info@ma-fit.example.test"
+          }
+        ],
+        "contentHash": "3ebd170710aae3b3257db1343cf8557da54140e121ffe709c2404e0973828f61",
+        "relevantTextHash": "3ebd170710aae3b3257db1343cf8557da54140e121ffe709c2404e0973828f61",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Ma Fit PM manages residential properties in Boston, MA.",
+        "observationId": "61c7dc01-e5cb-597f-a16e-abc5f7e4ea53"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Ma Fit PM manages residential properties in Boston, MA.",
+        "observationId": "61c7dc01-e5cb-597f-a16e-abc5f7e4ea53"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Ma Fit PM manages residential properties in Boston, MA.",
+        "observationId": "61c7dc01-e5cb-597f-a16e-abc5f7e4ea53"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Ma Fit PM Boston MA office info@ma-fit.example.test",
+        "observationId": "61c7dc01-e5cb-597f-a16e-abc5f7e4ea53"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "software-team",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "AppFolio and maintenance staff are context, never unmet need or automatic exclusion."
+    },
+    "candidate": {
+      "firmName": "Evaluation Software Team PM",
+      "website": "https://software-team.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://software-team.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "bb532335-0b50-51e1-9edf-b9c435423ab7",
+        "url": "https://software-team.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Software Team PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Software Team PM Dallas TX office info@software-team.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "Our maintenance staff uses AppFolio software."
+          }
+        ],
+        "contentHash": "3279438bc544e9e21f61a8018207750c75a4d059119ffc1aec0c32e7460c531e",
+        "relevantTextHash": "3279438bc544e9e21f61a8018207750c75a4d059119ffc1aec0c32e7460c531e",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Software Team PM manages residential properties in Dallas, TX.",
+        "observationId": "bb532335-0b50-51e1-9edf-b9c435423ab7"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Software Team PM manages residential properties in Dallas, TX.",
+        "observationId": "bb532335-0b50-51e1-9edf-b9c435423ab7"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Software Team PM manages residential properties in Dallas, TX.",
+        "observationId": "bb532335-0b50-51e1-9edf-b9c435423ab7"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Software Team PM Dallas TX office info@software-team.example.test",
+        "observationId": "bb532335-0b50-51e1-9edf-b9c435423ab7"
+      },
+      {
+        "kind": "existing_support",
+        "blockId": "extra",
+        "value": "Our maintenance staff uses AppFolio software.",
+        "observationId": "bb532335-0b50-51e1-9edf-b9c435423ab7"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "current-help",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Own current dated explicit help request outranks fit."
+    },
+    "candidate": {
+      "firmName": "Evaluation Current Help PM",
+      "website": "https://current-help.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://current-help.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd",
+        "url": "https://current-help.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Current Help PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Current Help PM Dallas TX office info@current-help.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "We need help with maintenance coordination. Published 2026-10-06"
+          }
+        ],
+        "contentHash": "f7c421fdf469db347ef499db498bad51bd40d294d689c4e3297edba14a98b0fa",
+        "relevantTextHash": "f7c421fdf469db347ef499db498bad51bd40d294d689c4e3297edba14a98b0fa",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": "2026-10-06T00:00:00.000Z",
+        "publishedAtBlockId": "extra",
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Current Help PM manages residential properties in Dallas, TX.",
+        "observationId": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Current Help PM manages residential properties in Dallas, TX.",
+        "observationId": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Current Help PM manages residential properties in Dallas, TX.",
+        "observationId": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Current Help PM Dallas TX office info@current-help.example.test",
+        "observationId": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd"
+      },
+      {
+        "kind": "help_request",
+        "blockId": "extra",
+        "value": "We need help with maintenance coordination. Published 2026-10-06",
+        "observationId": "674caf7d-1b7d-5e11-9a98-43eeb0dfedbd"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "help_request",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "unknown-help",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Undated request must not gain pain priority."
+    },
+    "candidate": {
+      "firmName": "Evaluation Unknown Help PM",
+      "website": "https://unknown-help.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://unknown-help.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "a1421d8d-f47e-588f-8385-b939476cf5bd",
+        "url": "https://unknown-help.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Unknown Help PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Unknown Help PM Dallas TX office info@unknown-help.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "We need help with maintenance coordination."
+          }
+        ],
+        "contentHash": "7677e9dbb175bd502fa520508d47969992ea7e454fd42d1d567220667243e524",
+        "relevantTextHash": "7677e9dbb175bd502fa520508d47969992ea7e454fd42d1d567220667243e524",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Help PM manages residential properties in Dallas, TX.",
+        "observationId": "a1421d8d-f47e-588f-8385-b939476cf5bd"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Help PM manages residential properties in Dallas, TX.",
+        "observationId": "a1421d8d-f47e-588f-8385-b939476cf5bd"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Help PM manages residential properties in Dallas, TX.",
+        "observationId": "a1421d8d-f47e-588f-8385-b939476cf5bd"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Unknown Help PM Dallas TX office info@unknown-help.example.test",
+        "observationId": "a1421d8d-f47e-588f-8385-b939476cf5bd"
+      },
+      {
+        "kind": "help_request",
+        "blockId": "extra",
+        "value": "We need help with maintenance coordination.",
+        "observationId": "a1421d8d-f47e-588f-8385-b939476cf5bd"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "expired-help",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Expired help keeps otherwise supported fit only."
+    },
+    "candidate": {
+      "firmName": "Evaluation Expired Help PM",
+      "website": "https://expired-help.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://expired-help.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "e897e1ed-9a1c-5fa3-8499-be040c1f2478",
+        "url": "https://expired-help.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Expired Help PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Expired Help PM Dallas TX office info@expired-help.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "We need help with maintenance coordination. Published 2026-08-01"
+          }
+        ],
+        "contentHash": "502b674424ef3e40dfa3de320f17c101f20a92a988d667589490635e6bd42424",
+        "relevantTextHash": "502b674424ef3e40dfa3de320f17c101f20a92a988d667589490635e6bd42424",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": "2026-08-01T00:00:00.000Z",
+        "publishedAtBlockId": "extra",
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Expired Help PM manages residential properties in Dallas, TX.",
+        "observationId": "e897e1ed-9a1c-5fa3-8499-be040c1f2478"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Expired Help PM manages residential properties in Dallas, TX.",
+        "observationId": "e897e1ed-9a1c-5fa3-8499-be040c1f2478"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Expired Help PM manages residential properties in Dallas, TX.",
+        "observationId": "e897e1ed-9a1c-5fa3-8499-be040c1f2478"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Expired Help PM Dallas TX office info@expired-help.example.test",
+        "observationId": "e897e1ed-9a1c-5fa3-8499-be040c1f2478"
+      },
+      {
+        "kind": "help_request",
+        "blockId": "extra",
+        "value": "We need help with maintenance coordination. Published 2026-08-01",
+        "observationId": "e897e1ed-9a1c-5fa3-8499-be040c1f2478"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "expired-growth",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Expired growth cannot gain investigation priority."
+    },
+    "candidate": {
+      "firmName": "Evaluation Expired Growth PM",
+      "website": "https://expired-growth.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://expired-growth.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "a3ba1828-ce3c-5f7c-8904-2318e033de7a",
+        "url": "https://expired-growth.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Expired Growth PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Expired Growth PM Dallas TX office info@expired-growth.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "Our team is growing. Published 2026-06-01"
+          }
+        ],
+        "contentHash": "b64bda2319ce61ced772cd0a6c305b36d212f2c8e1a59d5788937734de63ccb1",
+        "relevantTextHash": "b64bda2319ce61ced772cd0a6c305b36d212f2c8e1a59d5788937734de63ccb1",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": "2026-06-01T00:00:00.000Z",
+        "publishedAtBlockId": "extra",
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Expired Growth PM manages residential properties in Dallas, TX.",
+        "observationId": "a3ba1828-ce3c-5f7c-8904-2318e033de7a"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Expired Growth PM manages residential properties in Dallas, TX.",
+        "observationId": "a3ba1828-ce3c-5f7c-8904-2318e033de7a"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Expired Growth PM manages residential properties in Dallas, TX.",
+        "observationId": "a3ba1828-ce3c-5f7c-8904-2318e033de7a"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Expired Growth PM Dallas TX office info@expired-growth.example.test",
+        "observationId": "a3ba1828-ce3c-5f7c-8904-2318e033de7a"
+      },
+      {
+        "kind": "growth",
+        "blockId": "extra",
+        "value": "Our team is growing. Published 2026-06-01",
+        "observationId": "a3ba1828-ce3c-5f7c-8904-2318e033de7a"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "unknown-job",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Undated hiring cannot gain investigation priority."
+    },
+    "candidate": {
+      "firmName": "Evaluation Unknown Job PM",
+      "website": "https://unknown-job.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://unknown-job.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "de92ab94-710e-5913-88e4-642f33323363",
+        "url": "https://unknown-job.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Unknown Job PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Unknown Job PM Dallas TX office info@unknown-job.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "We are hiring a maintenance coordinator. Apply now."
+          }
+        ],
+        "contentHash": "15db0076278e1d7b440c8abd392a9e2b79dd1dfafb72e439cb1688b7dce0d2d2",
+        "relevantTextHash": "15db0076278e1d7b440c8abd392a9e2b79dd1dfafb72e439cb1688b7dce0d2d2",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Job PM manages residential properties in Dallas, TX.",
+        "observationId": "de92ab94-710e-5913-88e4-642f33323363"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Job PM manages residential properties in Dallas, TX.",
+        "observationId": "de92ab94-710e-5913-88e4-642f33323363"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Unknown Job PM manages residential properties in Dallas, TX.",
+        "observationId": "de92ab94-710e-5913-88e4-642f33323363"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Unknown Job PM Dallas TX office info@unknown-job.example.test",
+        "observationId": "de92ab94-710e-5913-88e4-642f33323363"
+      },
+      {
+        "kind": "coordination_job",
+        "blockId": "extra",
+        "value": "We are hiring a maintenance coordinator. Apply now.",
+        "observationId": "de92ab94-710e-5913-88e4-642f33323363"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "contrary-need",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Explicit denial of maintenance need blocks supported fit."
+    },
+    "candidate": {
+      "firmName": "Evaluation Contrary Need PM",
+      "website": "https://contrary-need.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://contrary-need.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "da961102-d24e-54eb-b700-6e3d24954062",
+        "url": "https://contrary-need.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Contrary Need PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Contrary Need PM Dallas TX office info@contrary-need.example.test"
+          },
+          {
+            "id": "extra",
+            "text": "We do not need maintenance help."
+          }
+        ],
+        "contentHash": "d45447dcdf94c4c4d2df91c26113549650e32f767c66e3654baf032e6753b380",
+        "relevantTextHash": "d45447dcdf94c4c4d2df91c26113549650e32f767c66e3654baf032e6753b380",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Contrary Need PM manages residential properties in Dallas, TX.",
+        "observationId": "da961102-d24e-54eb-b700-6e3d24954062"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Contrary Need PM manages residential properties in Dallas, TX.",
+        "observationId": "da961102-d24e-54eb-b700-6e3d24954062"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Contrary Need PM manages residential properties in Dallas, TX.",
+        "observationId": "da961102-d24e-54eb-b700-6e3d24954062"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Contrary Need PM Dallas TX office info@contrary-need.example.test",
+        "observationId": "da961102-d24e-54eb-b700-6e3d24954062"
+      },
+      {
+        "kind": "existing_support",
+        "blockId": "extra",
+        "value": "We do not need maintenance help.",
+        "observationId": "da961102-d24e-54eb-b700-6e3d24954062"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "stale-source",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Eight-day-old source is not fresh."
+    },
+    "candidate": {
+      "firmName": "Evaluation Stale Source PM",
+      "website": "https://stale-source.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://stale-source.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "b6a756dd-b177-51aa-8488-5d4ee5d78ce3",
+        "url": "https://stale-source.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Stale Source PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Stale Source PM Dallas TX office info@stale-source.example.test"
+          }
+        ],
+        "contentHash": "b7dc893873f31832bdfe4621ada8f8ac75be7f61827f50a2fef0405e91621faa",
+        "relevantTextHash": "b7dc893873f31832bdfe4621ada8f8ac75be7f61827f50a2fef0405e91621faa",
+        "retrievedAt": "2026-09-29T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Stale Source PM manages residential properties in Dallas, TX.",
+        "observationId": "b6a756dd-b177-51aa-8488-5d4ee5d78ce3"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Stale Source PM manages residential properties in Dallas, TX.",
+        "observationId": "b6a756dd-b177-51aa-8488-5d4ee5d78ce3"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Stale Source PM manages residential properties in Dallas, TX.",
+        "observationId": "b6a756dd-b177-51aa-8488-5d4ee5d78ce3"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Stale Source PM Dallas TX office info@stale-source.example.test",
+        "observationId": "b6a756dd-b177-51aa-8488-5d4ee5d78ce3"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "future-source",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Future retrieval cannot establish fresh evidence."
+    },
+    "candidate": {
+      "firmName": "Evaluation Future Source PM",
+      "website": "https://future-source.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://future-source.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "9a547dcf-23df-5c70-b9f3-462e31c75a15",
+        "url": "https://future-source.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Future Source PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Future Source PM Dallas TX office info@future-source.example.test"
+          }
+        ],
+        "contentHash": "cedd9b8c1961bcd485ef7b743bdbc9a58f63a5a7a5c27248e974a2bfa8edcd27",
+        "relevantTextHash": "cedd9b8c1961bcd485ef7b743bdbc9a58f63a5a7a5c27248e974a2bfa8edcd27",
+        "retrievedAt": "2026-10-09T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Future Source PM manages residential properties in Dallas, TX.",
+        "observationId": "9a547dcf-23df-5c70-b9f3-462e31c75a15"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Future Source PM manages residential properties in Dallas, TX.",
+        "observationId": "9a547dcf-23df-5c70-b9f3-462e31c75a15"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Future Source PM manages residential properties in Dallas, TX.",
+        "observationId": "9a547dcf-23df-5c70-b9f3-462e31c75a15"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Future Source PM Dallas TX office info@future-source.example.test",
+        "observationId": "9a547dcf-23df-5c70-b9f3-462e31c75a15"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": false
+  },
+  {
+    "id": "truncated-source",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Truncated first-party page cannot establish complete evidence."
+    },
+    "candidate": {
+      "firmName": "Evaluation Truncated Source PM",
+      "website": "https://truncated-source.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://truncated-source.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "fef4b5a3-2e8b-5192-9ef7-7ae5a88ce007",
+        "url": "https://truncated-source.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Truncated Source PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Truncated Source PM Dallas TX office info@truncated-source.example.test"
+          }
+        ],
+        "contentHash": "151314f202652b3e2425249c0848aa19588778a50d20ff7725b95036076f5b81",
+        "relevantTextHash": "151314f202652b3e2425249c0848aa19588778a50d20ff7725b95036076f5b81",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": true
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Truncated Source PM manages residential properties in Dallas, TX.",
+        "observationId": "fef4b5a3-2e8b-5192-9ef7-7ae5a88ce007"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Truncated Source PM manages residential properties in Dallas, TX.",
+        "observationId": "fef4b5a3-2e8b-5192-9ef7-7ae5a88ce007"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Truncated Source PM manages residential properties in Dallas, TX.",
+        "observationId": "fef4b5a3-2e8b-5192-9ef7-7ae5a88ce007"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Truncated Source PM Dallas TX office info@truncated-source.example.test",
+        "observationId": "fef4b5a3-2e8b-5192-9ef7-7ae5a88ce007"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "third-party",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Third-party text does not establish first-party association."
+    },
+    "candidate": {
+      "firmName": "Evaluation Third Party PM",
+      "website": "https://third-party.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://third-party.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "4a92a378-439d-5974-a3c8-f489218d0ca1",
+        "url": "https://third-party.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Third Party PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Third Party PM Dallas TX office info@third-party.example.test"
+          }
+        ],
+        "contentHash": "df0d2127517ac71d5b52a22c062f4fb0fa1b84480ed3ac1abfbe1ed19faf040f",
+        "relevantTextHash": "df0d2127517ac71d5b52a22c062f4fb0fa1b84480ed3ac1abfbe1ed19faf040f",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": false,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Third Party PM manages residential properties in Dallas, TX.",
+        "observationId": "4a92a378-439d-5974-a3c8-f489218d0ca1"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Third Party PM manages residential properties in Dallas, TX.",
+        "observationId": "4a92a378-439d-5974-a3c8-f489218d0ca1"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Third Party PM manages residential properties in Dallas, TX.",
+        "observationId": "4a92a378-439d-5974-a3c8-f489218d0ca1"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Third Party PM Dallas TX office info@third-party.example.test",
+        "observationId": "4a92a378-439d-5974-a3c8-f489218d0ca1"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "mismatched-host",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Even a firstParty flag does not authorize a mismatched website host."
+    },
+    "candidate": {
+      "firmName": "Evaluation Mismatched Host PM",
+      "website": "https://mismatched-host.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://mismatched-host.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "efbf5a99-bef0-5c48-828f-e66ef2a38409",
+        "url": "https://unrelated.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Mismatched Host PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Mismatched Host PM Dallas TX office info@mismatched-host.example.test"
+          }
+        ],
+        "contentHash": "73a4ed0fccb72914754c6207fa967c73ef5dbeeed9c85fa8417ef8c96d679ddf",
+        "relevantTextHash": "73a4ed0fccb72914754c6207fa967c73ef5dbeeed9c85fa8417ef8c96d679ddf",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Mismatched Host PM manages residential properties in Dallas, TX.",
+        "observationId": "efbf5a99-bef0-5c48-828f-e66ef2a38409"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Mismatched Host PM manages residential properties in Dallas, TX.",
+        "observationId": "efbf5a99-bef0-5c48-828f-e66ef2a38409"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Mismatched Host PM manages residential properties in Dallas, TX.",
+        "observationId": "efbf5a99-bef0-5c48-828f-e66ef2a38409"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Mismatched Host PM Dallas TX office info@mismatched-host.example.test",
+        "observationId": "efbf5a99-bef0-5c48-828f-e66ef2a38409"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "wrong-identity",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Another company paragraph cannot resolve this candidate."
+    },
+    "candidate": {
+      "firmName": "Evaluation Wrong Identity PM",
+      "website": "https://wrong-identity.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://wrong-identity.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "4d2d4d80-f65e-5e4a-b889-d309c4cf7ef5",
+        "url": "https://wrong-identity.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Other Manager PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Wrong Identity PM Dallas TX office info@wrong-identity.example.test"
+          }
+        ],
+        "contentHash": "3d87d56cde9f7692b52e2fdcccbcee68f7bcb65136e1af51d5e8099c9922395d",
+        "relevantTextHash": "3d87d56cde9f7692b52e2fdcccbcee68f7bcb65136e1af51d5e8099c9922395d",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Other Manager PM manages residential properties in Dallas, TX.",
+        "observationId": "4d2d4d80-f65e-5e4a-b889-d309c4cf7ef5"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Other Manager PM manages residential properties in Dallas, TX.",
+        "observationId": "4d2d4d80-f65e-5e4a-b889-d309c4cf7ef5"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Other Manager PM manages residential properties in Dallas, TX.",
+        "observationId": "4d2d4d80-f65e-5e4a-b889-d309c4cf7ef5"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Wrong Identity PM Dallas TX office info@wrong-identity.example.test",
+        "observationId": "4d2d4d80-f65e-5e4a-b889-d309c4cf7ef5"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "commercial-only",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Commercial management is outside residential fit."
+    },
+    "candidate": {
+      "firmName": "Evaluation Commercial Only PM",
+      "website": "https://commercial-only.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://commercial-only.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "66645a5f-ac85-51f1-99aa-ccbbcd8bf2ea",
+        "url": "https://commercial-only.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Commercial Only PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Commercial Only PM Dallas TX office info@commercial-only.example.test"
+          },
+          {
+            "id": "res",
+            "text": "We manage commercial office buildings."
+          }
+        ],
+        "contentHash": "0b9222e40e5a9a2e70a5a57a1169283a15a2398ed8fb03c6fb4812bd1a01afbb",
+        "relevantTextHash": "0b9222e40e5a9a2e70a5a57a1169283a15a2398ed8fb03c6fb4812bd1a01afbb",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Commercial Only PM manages residential properties in Dallas, TX.",
+        "observationId": "66645a5f-ac85-51f1-99aa-ccbbcd8bf2ea"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "res",
+        "value": "We manage commercial office buildings.",
+        "observationId": "66645a5f-ac85-51f1-99aa-ccbbcd8bf2ea"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Commercial Only PM manages residential properties in Dallas, TX.",
+        "observationId": "66645a5f-ac85-51f1-99aa-ccbbcd8bf2ea"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Commercial Only PM Dallas TX office info@commercial-only.example.test",
+        "observationId": "66645a5f-ac85-51f1-99aa-ccbbcd8bf2ea"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "navigation-only",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Property Management navigation label does not establish residential management."
+    },
+    "candidate": {
+      "firmName": "Evaluation Navigation Only PM",
+      "website": "https://navigation-only.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://navigation-only.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "04029f84-6725-5412-9a92-522cea53f9a3",
+        "url": "https://navigation-only.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Navigation Only PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Navigation Only PM Dallas TX office info@navigation-only.example.test"
+          },
+          {
+            "id": "res",
+            "text": "Property Management"
+          }
+        ],
+        "contentHash": "69e419a7b51c09cda19dcb47929c342ef1e09a61eed235216999f28f76ffeada",
+        "relevantTextHash": "69e419a7b51c09cda19dcb47929c342ef1e09a61eed235216999f28f76ffeada",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Navigation Only PM manages residential properties in Dallas, TX.",
+        "observationId": "04029f84-6725-5412-9a92-522cea53f9a3"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "res",
+        "value": "Property Management",
+        "observationId": "04029f84-6725-5412-9a92-522cea53f9a3"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Navigation Only PM manages residential properties in Dallas, TX.",
+        "observationId": "04029f84-6725-5412-9a92-522cea53f9a3"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Navigation Only PM Dallas TX office info@navigation-only.example.test",
+        "observationId": "04029f84-6725-5412-9a92-522cea53f9a3"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "wrong-geography",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "A CA office does not support a TX candidate."
+    },
+    "candidate": {
+      "firmName": "Evaluation Wrong Geography PM",
+      "website": "https://wrong-geography.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://wrong-geography.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "af136737-7285-555a-b7f0-314de5b63eb5",
+        "url": "https://wrong-geography.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Wrong Geography PM manages residential properties in Sacramento, CA."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Wrong Geography PM Dallas TX office info@wrong-geography.example.test"
+          }
+        ],
+        "contentHash": "3ba3e7fa0d1ea40c31614323775e83b9c44e1ac91d9e263aaf9cad4121f07d3f",
+        "relevantTextHash": "3ba3e7fa0d1ea40c31614323775e83b9c44e1ac91d9e263aaf9cad4121f07d3f",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Wrong Geography PM manages residential properties in Sacramento, CA.",
+        "observationId": "af136737-7285-555a-b7f0-314de5b63eb5"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Wrong Geography PM manages residential properties in Sacramento, CA.",
+        "observationId": "af136737-7285-555a-b7f0-314de5b63eb5"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Wrong Geography PM manages residential properties in Sacramento, CA.",
+        "observationId": "af136737-7285-555a-b7f0-314de5b63eb5"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Wrong Geography PM Dallas TX office info@wrong-geography.example.test",
+        "observationId": "af136737-7285-555a-b7f0-314de5b63eb5"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "unsupported-ri-city",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "RI targeting is restricted to settled cities."
+    },
+    "candidate": {
+      "firmName": "Evaluation Unsupported Ri City PM",
+      "website": "https://unsupported-ri-city.example.test/",
+      "locality": "Westerly",
+      "region": "RI",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://unsupported-ri-city.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "b0efc581-4cf2-5e45-bb65-470ef35b7ad9",
+        "url": "https://unsupported-ri-city.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Unsupported Ri City PM manages residential properties in Westerly, RI."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Unsupported Ri City PM Westerly RI office info@unsupported-ri-city.example.test"
+          }
+        ],
+        "contentHash": "d2b87b529746461a49648e28aae5325a11687f7ab4417768c5069b9eefa94e15",
+        "relevantTextHash": "d2b87b529746461a49648e28aae5325a11687f7ab4417768c5069b9eefa94e15",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Unsupported Ri City PM manages residential properties in Westerly, RI.",
+        "observationId": "b0efc581-4cf2-5e45-bb65-470ef35b7ad9"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Unsupported Ri City PM manages residential properties in Westerly, RI.",
+        "observationId": "b0efc581-4cf2-5e45-bb65-470ef35b7ad9"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Unsupported Ri City PM manages residential properties in Westerly, RI.",
+        "observationId": "b0efc581-4cf2-5e45-bb65-470ef35b7ad9"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Unsupported Ri City PM Westerly RI office info@unsupported-ri-city.example.test",
+        "observationId": "b0efc581-4cf2-5e45-bb65-470ef35b7ad9"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "consumer-email",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "A published consumer-domain address remains excluded."
+    },
+    "candidate": {
+      "firmName": "Evaluation Consumer Email PM",
+      "website": "https://consumer-email.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://consumer-email.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "c2863528-850e-5656-a701-0828d42f8dde",
+        "url": "https://consumer-email.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Consumer Email PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Consumer Email PM Dallas TX office manager@gmail.com"
+          }
+        ],
+        "contentHash": "ffecd31f5ddb68679a93ad7efa41e8180cec117a6b32daffe5674592dc4c1f80",
+        "relevantTextHash": "ffecd31f5ddb68679a93ad7efa41e8180cec117a6b32daffe5674592dc4c1f80",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Consumer Email PM manages residential properties in Dallas, TX.",
+        "observationId": "c2863528-850e-5656-a701-0828d42f8dde"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Consumer Email PM manages residential properties in Dallas, TX.",
+        "observationId": "c2863528-850e-5656-a701-0828d42f8dde"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Consumer Email PM manages residential properties in Dallas, TX.",
+        "observationId": "c2863528-850e-5656-a701-0828d42f8dde"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Consumer Email PM Dallas TX office manager@gmail.com",
+        "observationId": "c2863528-850e-5656-a701-0828d42f8dde"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "vendor-contact",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Vendor wording cannot establish firm association."
+    },
+    "candidate": {
+      "firmName": "Evaluation Vendor Contact PM",
+      "website": "https://vendor-contact.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://vendor-contact.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "24e2e5ab-63cd-5882-81ee-3be2f74c2614",
+        "url": "https://vendor-contact.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Vendor Contact PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Vendor Contact PM Dallas TX web designer info@vendor-contact.example.test"
+          }
+        ],
+        "contentHash": "5b763f838cd8b3cbefcb96ea6b1ddfeb6606daafcb74f9bb4986c460a991513d",
+        "relevantTextHash": "5b763f838cd8b3cbefcb96ea6b1ddfeb6606daafcb74f9bb4986c460a991513d",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Vendor Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "24e2e5ab-63cd-5882-81ee-3be2f74c2614"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Vendor Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "24e2e5ab-63cd-5882-81ee-3be2f74c2614"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Vendor Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "24e2e5ab-63cd-5882-81ee-3be2f74c2614"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Vendor Contact PM Dallas TX web designer info@vendor-contact.example.test",
+        "observationId": "24e2e5ab-63cd-5882-81ee-3be2f74c2614"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "guessed-email",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Suggested email patterns are not a published route."
+    },
+    "candidate": {
+      "firmName": "Evaluation Guessed Email PM",
+      "website": "https://guessed-email.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://guessed-email.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "7a9ac896-b1f7-543e-98ed-51ca41592898",
+        "url": "https://guessed-email.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Guessed Email PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Guessed Email PM Dallas TX try emailing jane@guessed-email.example.test"
+          }
+        ],
+        "contentHash": "568f9b3fdd778459fde50d95f0180a105e16e3dbd0c673753a0bb0e357dba689",
+        "relevantTextHash": "568f9b3fdd778459fde50d95f0180a105e16e3dbd0c673753a0bb0e357dba689",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Guessed Email PM manages residential properties in Dallas, TX.",
+        "observationId": "7a9ac896-b1f7-543e-98ed-51ca41592898"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Guessed Email PM manages residential properties in Dallas, TX.",
+        "observationId": "7a9ac896-b1f7-543e-98ed-51ca41592898"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Guessed Email PM manages residential properties in Dallas, TX.",
+        "observationId": "7a9ac896-b1f7-543e-98ed-51ca41592898"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Guessed Email PM Dallas TX try emailing jane@guessed-email.example.test",
+        "observationId": "7a9ac896-b1f7-543e-98ed-51ca41592898"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "ambiguous-email",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Two office addresses in one selected block do not establish exactly one route."
+    },
+    "candidate": {
+      "firmName": "Evaluation Ambiguous Email PM",
+      "website": "https://ambiguous-email.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://ambiguous-email.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "f707afe4-1bd5-5b3c-9961-09ee1459217a",
+        "url": "https://ambiguous-email.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Ambiguous Email PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Ambiguous Email PM Dallas TX office info@ambiguous-email.example.test or hello@ambiguous-email.example.test"
+          }
+        ],
+        "contentHash": "cf68f2775643b428e31e2573247aa6ce887672a33a20b4f152ac9a1b020a67e5",
+        "relevantTextHash": "cf68f2775643b428e31e2573247aa6ce887672a33a20b4f152ac9a1b020a67e5",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Ambiguous Email PM manages residential properties in Dallas, TX.",
+        "observationId": "f707afe4-1bd5-5b3c-9961-09ee1459217a"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Ambiguous Email PM manages residential properties in Dallas, TX.",
+        "observationId": "f707afe4-1bd5-5b3c-9961-09ee1459217a"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Ambiguous Email PM manages residential properties in Dallas, TX.",
+        "observationId": "f707afe4-1bd5-5b3c-9961-09ee1459217a"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Ambiguous Email PM Dallas TX office info@ambiguous-email.example.test or hello@ambiguous-email.example.test",
+        "observationId": "f707afe4-1bd5-5b3c-9961-09ee1459217a"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "unnamed-person",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "A non-role address without an explicit named contact does not establish person association."
+    },
+    "candidate": {
+      "firmName": "Evaluation Unnamed Person PM",
+      "website": "https://unnamed-person.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://unnamed-person.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "cab79a9e-7372-53f7-89ce-720c49e400df",
+        "url": "https://unnamed-person.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Unnamed Person PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Unnamed Person PM Dallas TX jsmith@unnamed-person.example.test"
+          }
+        ],
+        "contentHash": "ff4183d4bb4385105dc6ac191afc4b9fe7b0c58a1f4d4dfdb381744b60828bd9",
+        "relevantTextHash": "ff4183d4bb4385105dc6ac191afc4b9fe7b0c58a1f4d4dfdb381744b60828bd9",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Unnamed Person PM manages residential properties in Dallas, TX.",
+        "observationId": "cab79a9e-7372-53f7-89ce-720c49e400df"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Unnamed Person PM manages residential properties in Dallas, TX.",
+        "observationId": "cab79a9e-7372-53f7-89ce-720c49e400df"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Unnamed Person PM manages residential properties in Dallas, TX.",
+        "observationId": "cab79a9e-7372-53f7-89ce-720c49e400df"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Unnamed Person PM Dallas TX jsmith@unnamed-person.example.test",
+        "observationId": "cab79a9e-7372-53f7-89ce-720c49e400df"
+      }
+    ],
+    "expectedAdmission": false,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  },
+  {
+    "id": "named-contact",
+    "provenance": {
+      "kind": "synthetic_adversarial_or_boundary",
+      "reviewNote": "Source explicitly names a person and the address; no inferred name."
+    },
+    "candidate": {
+      "firmName": "Evaluation Named Contact PM",
+      "website": "https://named-contact.example.test/",
+      "locality": "Dallas",
+      "region": "TX",
+      "signal": "fit_only",
+      "evidence": "Labeled evaluation fixture, not a discovered prospect.",
+      "sourceUrl": "https://named-contact.example.test/",
+      "observedOn": "2026-10-07",
+      "preparedBy": "Isolated diagnostic"
+    },
+    "observations": [
+      {
+        "id": "820af8b2-841f-5fc4-8e9b-19ed31a084ec",
+        "url": "https://named-contact.example.test/",
+        "blocks": [
+          {
+            "id": "firm",
+            "text": "Evaluation Named Contact PM manages residential properties in Dallas, TX."
+          },
+          {
+            "id": "email",
+            "text": "Evaluation Named Contact PM Dallas TX contact Jane Smith at jane@named-contact.example.test"
+          }
+        ],
+        "contentHash": "180272ae0dbeef0c1621f42b962af319f99164a2f999b061ad29508ff18d43c0",
+        "relevantTextHash": "180272ae0dbeef0c1621f42b962af319f99164a2f999b061ad29508ff18d43c0",
+        "retrievedAt": "2026-10-07T12:00:00.000Z",
+        "publishedAt": null,
+        "publishedAtBlockId": null,
+        "firstParty": true,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "kind": "firm_identity",
+        "blockId": "firm",
+        "value": "Evaluation Named Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "820af8b2-841f-5fc4-8e9b-19ed31a084ec"
+      },
+      {
+        "kind": "residential_management",
+        "blockId": "firm",
+        "value": "Evaluation Named Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "820af8b2-841f-5fc4-8e9b-19ed31a084ec"
+      },
+      {
+        "kind": "service_area",
+        "blockId": "firm",
+        "value": "Evaluation Named Contact PM manages residential properties in Dallas, TX.",
+        "observationId": "820af8b2-841f-5fc4-8e9b-19ed31a084ec"
+      },
+      {
+        "kind": "business_email",
+        "blockId": "email",
+        "value": "Evaluation Named Contact PM Dallas TX contact Jane Smith at jane@named-contact.example.test",
+        "observationId": "820af8b2-841f-5fc4-8e9b-19ed31a084ec"
+      }
+    ],
+    "expectedAdmission": true,
+    "expectedRank": "fit_only",
+    "expectedEvidenceAccepted": true
+  }
+]
