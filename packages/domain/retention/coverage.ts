@@ -169,6 +169,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   sending_domains: coverage(['operational'], 'Callie’s own domain authentication and ramp posture.'),
   mailbox_send_ramp: coverage(['operational'], 'A Callie mailbox’s position in the new-domain ramp.'),
   mailbox_send_days: coverage(['operational'], 'Per-mailbox daily counts; no prospect identity.'),
+  mailbox_recovery_epochs: coverage(['operational', 'retained'], 'Mailbox inactivity anchors and reversible recovery credits, without prospect text; retained with ramp/day references through prospect deletion and departure, and restored together by database point-in-time recovery.'),
 
   // ------------------------------------------------- classification (G7b)
   classifier_settings: coverage(['operational'], 'Workspace configuration for the reply classifier.'),
