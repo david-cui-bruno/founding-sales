@@ -531,3 +531,15 @@ it('joins confirmed feedback and qualification spend through automatic email att
  const asOf=new Date(Date.parse(f.at)+1000).toISOString();const view=await tx(()=>readSourcingLearning(admin(),{...learningInterval(),to:asOf,asOf}));
  expect(view.cohorts).toMatchObject([{policyVersion:'outreach-email-fit-v1',confirmedPain:1,researchGrossCents:2,researchCashCents:0}]);
 });
+it('counts held qualification only after confirmed attendance and withdraws it when attendance is corrected',async()=>{
+ const f=await preparedAutomaticSender(),meetingId=randomUUID(),uid=randomUUID();
+ await db.session.query("INSERT INTO meetings(workspace_id,id,firm_id,booking_uid,current_booking_uid,state,starts_at,ends_at,last_event_at) VALUES($1,$2,$3,$4,$4,'booked',now()-interval '2 hours',now()-interval '1 hour',now())",[seeded.alpha.workspaceId,meetingId,f.firmId,uid]);
+ const {setMeetingAttendance}=await import('@fss/domain/meetings/attendance.ts');const {saveMeetingQualification}=await import('@fss/domain/meetings/qualification.ts');
+ const commandId=randomUUID();
+ expect(await tx(()=>saveMeetingQualification(admin(),{meetingId,expectedRevision:0,commandId,buyingParticipant:'yes',maintenanceNeed:'yes',openToPaying:'yes',evidence:(['buyingParticipant','maintenanceNeed','openToPaying'] as const).map(field=>({field,sourceKind:'user_confirmation',sourceId:commandId,sourceRevision:1}))}))).toMatchObject({ok:true});
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:0,unknownQualification:0});
+ await tx(()=>setMeetingAttendance(admin(),{meetingId,attendance:'attended'}));
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:1});
+ await tx(()=>setMeetingAttendance(admin(),{meetingId,attendance:'unconfirmed'}));
+ expect((await tx(()=>readSourcingLearning(admin(),learningInterval()))).automation?.outcomes).toMatchObject({booked:1,heldQualified:0});
+});
