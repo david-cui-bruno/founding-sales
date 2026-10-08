@@ -1,3 +1,4 @@
+import {withSupportedOfficeName,recoverDiscoveredIdentity} from './discoveredIdentityRecovery.ts';
 import {createHash,randomUUID} from 'node:crypto';
 import type {CandidateInput,SourceObservation} from '@fss/contracts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
@@ -13,7 +14,7 @@ import {centsOf,isPricedModel} from '../research/pricing.ts';
 import {parsePageText} from '../research/pageText.ts';
 import {isPublicResearchUrl,withoutFragment} from '../research/sourcePolicy.ts';
 import type {PageFetchProvider,ProviderOutcome} from '../research/providers.ts';
-import {finishQualification,type QualificationRunRow} from './qualificationStore.ts';
+import {finishQualification,QUALIFICATION_PROMPT_VERSION,QUALIFICATION_POLICY_VERSION,type QualificationRunRow} from './qualificationStore.ts';
 import {QUALIFICATION_OUTPUT_TOKENS,type QualificationExtractionProvider,type QualificationExtractionAnswer} from './qualificationPrompt.ts';
 interface Run extends QualificationRunRow {payload:CandidateInput;current_revision:number;candidate_status:string}
 const readSql=`SELECT r.*,c.payload,c.revision AS current_revision,c.status AS candidate_status FROM sourcing_qualification_runs r
@@ -36,6 +37,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  if(!run)return;
  let observations:SourceObservation[]=[];
  const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null)=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion}));
+ if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
  const extraction=deps.extraction;
  if(!extraction||extraction.providerKey!=='aws_bedrock.sourcing_qualification'||!isPricedModel(run.model_name,'bedrock')){await finish('credit_route_unavailable');return;}
  const website=run.payload.website,source=withoutFragment(run.payload.sourceUrl);
@@ -70,12 +72,16 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  const previous=(await db.query<QualificationRunRow>(`SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND candidate_id=$2 AND id<>$3
   AND candidate_revision=$4 AND prompt_version=$5 AND policy_version=$6 AND model_name=$7 AND state IN ('review','eligible','admitted') AND reason IS NULL
   ORDER BY requested_at DESC,id DESC LIMIT 1`,[ctx.scope.workspaceId,run.candidate_id,run.id,run.candidate_revision,run.prompt_version,run.policy_version,run.model_name])).rows[0];
- if(previous && previous.observations.length===observations.length && observations.every(source=>previous.observations.some(old=>old.url===source.url&&old.relevantTextHash===source.relevantTextHash&&old.firstParty===source.firstParty&&old.truncated===source.truncated))){
+ if(previous && previous.facts.every(f=>previous.observations.some(s=>s.id===f.observationId&&s.firstParty&&!s.truncated)) && previous.observations.length===observations.length && observations.every(source=>previous.observations.some(old=>old.url===source.url&&old.relevantTextHash===source.relevantTextHash&&old.firstParty===source.firstParty&&old.truncated===source.truncated))){
   const oldToNew=new Map(previous.observations.map(old=>[old.id,observations.find(source=>source.url===old.url)!.id]));
   observations=observations.map(source=>{const old=previous.observations.find(item=>item.url===source.url)!;return {...source,publishedAt:old.publishedAt,publishedAtBlockId:old.publishedAtBlockId};});
-  await finish(null,previous.facts.map(fact=>({...fact,observationId:oldToNew.get(fact.observationId)})),previous.opening_question);return;
+  const facts=previous.facts.map(fact=>({...fact,observationId:oldToNew.get(fact.observationId)!}));
+  const saved=await finish(null,withSupportedOfficeName(run.payload,facts,observations,await databaseNow(ctx)),previous.opening_question);
+  if(saved.ok)await recoverDiscoveredIdentity(ctx,run.id);return;
  }
- const request={observations,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
+ const offered=observations.filter(source=>source.firstParty&&!source.truncated);
+ if(!offered.length){await finish('source_incomplete_or_unverified');return;}
+ const request={observations:offered,modelName:run.model_name,maxInputTokens:0,maxOutputTokens:QUALIFICATION_OUTPUT_TOKENS};
  let tokens:number;
  try{tokens=await extraction.countInputTokens(request);}catch{await finish('token_count_unavailable');return;}
  if(!Number.isSafeInteger(tokens)||tokens<1||tokens>100000){await finish('input_over_budget');return;}
@@ -102,7 +108,10 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   await settleAttempt(ctx,{reservationId:reservation.id,at:await databaseNow(ctx),outcome:result.costEstimated?{kind:'estimated'}:{kind:'settled',cents:result.costCents}});
  });
  // Settlement has its own commit so even invalid/stale evidence cannot erase spent money.
- const saved=await finish(result.ok?null:result.failureCode,result.ok?result.value.facts:[],result.ok?result.value.openingQuestion:null);
+ if(result.ok&&result.value.facts.some(f=>!offered.some(source=>source.id===f.observationId))){await finish('invalid_evidence');return;}
+ const facts=result.ok?withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx)):[];
+ const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null);
+ if(saved.ok&&result.ok)await recoverDiscoveredIdentity(ctx,run.id);
  if(!saved.ok&&saved.reason==='invalid_evidence'){observations=[];await finish('invalid_evidence');}
 }
 /** Scheduler sweep is independent of whether any qualification handler manages to start. */

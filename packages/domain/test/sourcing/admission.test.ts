@@ -40,7 +40,7 @@ it('admits one firm-level route idempotently without creating deals, contacts or
  for(const table of ['contacts','opportunities','sequence_enrollments'])expect((await db.session.query(`SELECT id FROM ${table} WHERE workspace_id=$1 AND firm_id=$2`,[seeded.alpha.workspaceId,firmId])).rows).toHaveLength(0);
  expect((await db.session.query('SELECT contact_id,e164 FROM phone_routes WHERE id=$1',[result.value.routeId])).rows[0]).toEqual({contact_id:null,e164:'+12145550100'});
 });
-async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v2',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
+async function enableAutomatic(){await db.session.query(`INSERT INTO sourcing_discovery_settings(workspace_id,auto_admission_enabled,qualification_evaluation) VALUES($1,true,$2::jsonb)`,[seeded.alpha.workspaceId,JSON.stringify({policyVersion:'qualification-v3',promptVersion:'qualification-growth-v6',reportSha256:'a'.repeat(64),reviewedEligible:1,falseEligible:0})]);}
 it('requires an explicit owner for automatic admission in a workspace with multiple sellers',async()=>{
  const input=await qualified('Owner PM');await enableAutomatic();expect(await tx(()=>admitCandidate(ctx(),{...input,mode:'automatic'}))).toEqual({ok:false,reason:'sourcing_owner_required'});
 });

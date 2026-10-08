@@ -16,7 +16,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 
 export const QUALIFICATION_PROMPT_VERSION='qualification-growth-v6';
-export const QUALIFICATION_POLICY_VERSION='qualification-v2';
+export const QUALIFICATION_POLICY_VERSION='qualification-v3';
 export type SourcingResult<T>={ok:true;value:T}|{ok:false;reason:string};
 export interface QualificationRunRow {
   id:string;candidate_id:string;candidate_revision:number;model_name:string;
