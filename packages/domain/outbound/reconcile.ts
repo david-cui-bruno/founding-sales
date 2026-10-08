@@ -14,6 +14,7 @@ import {
 } from './fence.ts';
 import { RECONCILE_WINDOW_HOURS, reconcileBackoffSeconds } from './types.ts';
 import { recordMeetingDelivery } from '../meetings/followThroughDelivery.ts';
+import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead} from './providerIncidents.ts';
 
 /**
  * Sent-folder reconciliation (Appendix B, Appendix G 5 and 12).
@@ -68,6 +69,8 @@ export type ReconcileOutcome =
   | 'not_reconciling'
   | 'fence_unknown'
   | 'grant_revoked'
+  | 'cooldown'
+  | 'incident_held'
   | 'rate_limited';
 
 export interface ReconcileReport {
@@ -75,6 +78,7 @@ export interface ReconcileReport {
   readonly outboundMessageId: string;
   readonly attempts: number;
   readonly nextAttemptInSeconds?: number | undefined;
+  readonly retryAt?: string | undefined;
 }
 
 export async function reconcileOutboundMessage(
@@ -113,6 +117,12 @@ export async function reconcileOutboundMessage(
     return { outcome: 'not_reconciling', outboundMessageId: fence.id, attempts: fence.reconcileAttempts };
   }
 
+  const incidents=await readProviderIncidents(context,fence.mailboxId,now);
+  if(incidents.some(i=>i.state==='action_required'))return {outcome:'incident_held',outboundMessageId:fence.id,attempts:fence.reconcileAttempts};
+  const wait=incidents.filter(i=>i.state==='waiting').map(i=>i.retryAt!).sort().at(-1);
+  if(wait)return {outcome:'cooldown',outboundMessageId:fence.id,attempts:fence.reconcileAttempts,retryAt:wait};
+  const binding=await readProviderBinding(context,fence.mailboxId);
+
   const access = await accessForMailbox(
     context,
     { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher },
@@ -127,14 +137,18 @@ export async function reconcileOutboundMessage(
 
   const search = await deps.gmail.searchSentByMessageId(access.access, fence.providerMessageIdHeader);
   if (!search.ok) {
+    if(binding)await recordProviderIncident(context,{mailboxId:fence.mailboxId,sourceKind:'sent_search',sourceId:fence.id,classification:search.reason==='rate_limited'?'transient':'authentication',reason:search.reason,binding,retryAt:search.retryAt,now});
     const attempts = await recordReconcileMiss(context, fence.id);
     return {
       outcome: search.reason === 'grant_revoked' ? 'grant_revoked' : 'rate_limited',
       outboundMessageId: fence.id,
       attempts,
       nextAttemptInSeconds: reconcileBackoffSeconds(attempts),
+      ...(search.retryAt?{retryAt:search.retryAt}:{}),
     };
   }
+
+  if(binding)await resolveProviderIncidentsAfterRead(context,fence.mailboxId,binding,now);
 
   if (search.found !== null) {
     const recorded = await recordReconciledSent(context, {

@@ -314,7 +314,7 @@ export type GmailSendOutcome =
 export type GmailSentSearchOutcome =
   | { readonly ok: true; readonly found: null }
   | { readonly ok: true; readonly found: { readonly messageId: string; readonly threadId: string } }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' };
+  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited'; readonly retryAt?: string | null | undefined };
 
 /**
  * Whether Gmail's label set says the message left this mailbox.
