@@ -50,6 +50,8 @@ module "stack" {
   # A range of its own, apart from production's 10.60.0.0/16.
   vpc_cidr = "10.70.0.0/16"
 
+  rehearsal_availability_zones = var.availability_zones
+
   # Single-AZ (a rehearsal needs a database, not a standby),
   # 20 GiB without autoscaling, and one day of backups.
   database_multi_az              = false

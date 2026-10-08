@@ -393,3 +393,63 @@ run "the_rehearsal_api_is_told_no_upgrade_address" {
     error_message = "Only the production root sets FSS_DESKTOP_UPGRADE_URL, and only on the API."
   }
 }
+
+run "a_rehearsal_can_use_capacity_in_an_explicit_alternate_zone" {
+  command = plan
+  variables {
+    availability_zones = ["us-east-1a", "us-east-1d"]
+  }
+  assert {
+    condition     = join(",", output.availability_zones) == "us-east-1a,us-east-1d"
+    error_message = "The actual isolated database subnets must use the selected capacity-bearing zone pair."
+  }
+}
+
+run "a_rehearsal_keeps_the_existing_zone_pair_by_default" {
+  command = plan
+
+  assert {
+    condition     = join(",", output.availability_zones) == "us-east-1a,us-east-1b"
+    error_message = "Omitting the rehearsal capacity choice must preserve the existing a/b topology."
+  }
+}
+
+run "duplicate_rehearsal_zones_are_refused" {
+  command = plan
+
+  variables {
+    availability_zones = ["us-east-1a", "us-east-1a"]
+  }
+
+  expect_failures = [var.availability_zones]
+}
+
+run "a_single_comma_joined_zone_is_refused" {
+  command = plan
+
+  variables {
+    availability_zones = ["us-east-1a,us-east-1b"]
+  }
+
+  expect_failures = [var.availability_zones]
+}
+
+run "foreign_region_rehearsal_zones_are_refused" {
+  command = plan
+
+  variables {
+    availability_zones = ["us-west-2a", "us-west-2b"]
+  }
+
+  expect_failures = [var.availability_zones]
+}
+
+run "an_unapproved_rehearsal_pair_is_refused" {
+  command = plan
+
+  variables {
+    availability_zones = ["us-east-1a", "us-east-1c"]
+  }
+
+  expect_failures = [var.availability_zones]
+}

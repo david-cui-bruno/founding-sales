@@ -19,6 +19,17 @@ variable "name_prefix" {
   }
 }
 
+variable "availability_zones" {
+  description = "Ordered zone pair for this isolated rehearsal's task and database subnets. Defaults to us-east-1a/b; us-east-1a/d accommodates reported RDS capacity."
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
+
+  validation {
+    condition     = length(var.availability_zones) == 2 && contains(["us-east-1a,us-east-1b", "us-east-1a,us-east-1d"], join(",", var.availability_zones))
+    error_message = "Rehearsal availability_zones must be the ordered pair us-east-1a/us-east-1b or us-east-1a/us-east-1d."
+  }
+}
+
 variable "assume_deployment_role" {
   description = <<-EOT
     Whether the provider assumes `deployment_role_name` before it calls AWS, or

@@ -66,6 +66,15 @@ variables {
   worker_schema_range = { min = 1, max = 4 }
 }
 
+run "production_keeps_the_existing_zone_pair" {
+  command = plan
+
+  assert {
+    condition     = join(",", module.stack.availability_zones) == "us-east-1a,us-east-1b"
+    error_message = "Rehearsal capacity choices cannot alter the actual production database subnet zones."
+  }
+}
+
 run "production_is_named_fss_prod_and_is_never_destroyable" {
   command = plan
 
@@ -456,4 +465,3 @@ run "the_production_api_names_the_update_manifest_as_its_upgrade_address" {
     error_message = "The production API publishes the signed update manifest, releases/darwin-arm64/latest.json on the updates distribution, and the upgrade address is the API's alone."
   }
 }
-

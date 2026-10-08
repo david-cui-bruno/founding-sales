@@ -273,3 +273,8 @@ output "one_off_task_families" {
 output "social_assets_bucket_name" {
   value = module.social_assets.bucket_name
 }
+
+output "availability_zones" {
+  description = "The private database subnet zones selected by this environment."
+  value       = module.network.availability_zones
+}
