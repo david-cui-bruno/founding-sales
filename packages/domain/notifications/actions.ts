@@ -16,6 +16,12 @@ export function notificationCandidatesFromToday(actions: readonly TodayAction[],
   return actions.filter(action => action.kind === 'reply' || action.kind === 'problem' ||
     action.kind === 'call' && Date.parse(action.dueAt) - Date.parse(now) <= 15 * 60_000).map(action => {
     const phase = action.kind === 'call' ? 'pre_call' : action.reason === 'substantive_reply' && action.state === 'overdue' ? 'reply_overdue' : 'attention';
-    return { ...action, phase, eventKey: `${action.actionId}:${phase}${action.kind === 'call' ? `:${action.dueAt}` : ''}` };
+    return { ...action, phase, eventKey: notificationEventKey(action, phase) };
   });
+}
+
+/** Booking replacements at the same time are distinct current occurrences. */
+export function notificationEventKey(action: TodayAction, phase: NotificationCandidate['phase']): string {
+  const booking = action.target.kind === 'meeting' && action.target.bookingUid !== undefined ? `:${action.target.bookingUid}` : '';
+  return `${action.actionId}:${phase}${action.kind === 'call' ? `${booking}:${action.dueAt}` : ''}`;
 }

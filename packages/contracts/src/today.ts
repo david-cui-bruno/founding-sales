@@ -261,7 +261,7 @@ export const todayPauseReleaseResultSchema = z.object({
 /** Live source-backed actions; never persisted in the desktop Today cache. */
 export const todayActionTargetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('reply'), firmId: uuid, messageId: uuid }),
-  z.strictObject({ kind: z.literal('meeting'), firmId: uuid, meetingId: uuid, startsAt: instant }),
+  z.strictObject({ kind: z.literal('meeting'), firmId: uuid, meetingId: uuid, startsAt: instant, bookingUid: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional() }),
   z.strictObject({ kind: z.literal('settings'), tab: z.enum(['administration', 'diagnostics']), section: z.enum(['sending-admin', 'alerts']), mailboxId: uuid }),
 ]);
 export type TodayActionTarget = z.infer<typeof todayActionTargetSchema>;
