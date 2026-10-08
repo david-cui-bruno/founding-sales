@@ -8,6 +8,7 @@ export interface NotificationIdentity { workspaceId: string; userId: string }
 export interface NotificationApiPort {
   read(): Promise<ApiOutcome<ActionableNotificationsResponse>>;
   claim(eventKey: string): Promise<ApiOutcome<NotificationItem | null>>;
+  validate(actionId: string, target: TodayActionTarget): Promise<ApiOutcome<boolean>>;
   observe(attemptId: string, observation: 'native_shown' | 'failed' | 'unknown'): Promise<boolean>;
   acknowledge(attemptId: string, actionId: string): Promise<ApiOutcome<TodayActionTarget | null>>;
 }
@@ -97,6 +98,14 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
         if (!claim.ok) { status(claim.offline ? 'offline' : 'unavailable'); return; }
         const item = claim.value;
         if (item?.receipt == null || item.eventKey !== candidate.eventKey || item.receipt.status !== 'attempting') continue;
+        // A source can change while a successful claim response is in flight.
+        // Reuse Today's exact current target read immediately before a new native call.
+        const validated = await deps.api.validate(item.actionId, item.target);
+        if (!current()) return;
+        if (!validated.ok || !validated.value) {
+          if (!validated.ok) status(validated.offline ? 'offline' : 'unavailable');
+          continue;
+        }
         const id = nativeId(identity, item.eventKey);
         if (handles.has(id)) continue;
         const restored = history?.find(handle => handle.id === id);

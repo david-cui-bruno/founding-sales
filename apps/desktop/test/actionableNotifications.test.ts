@@ -30,6 +30,7 @@ function harness() {
     async read() { return online ? { ok: true, value: await read() } : { ok: false, reason: 'offline', offline: true }; },
     async claim() { if (item.receipt !== null) return { ok: true, value: null }; item = { ...item, receipt: { attemptId: randomUUID(), deviceId, status: 'attempting', attemptedAt: '2026-09-14T03:00:00.000Z', nativeShownAt: null, acknowledgedAt: null, failedAt: null, unknownAt: null } }; return { ok: true, value: structuredClone(item) }; },
     async observe(_id, observation) { if (!online || item.receipt === null) return false; item.receipt.status = observation; if (observation === 'native_shown') item.receipt.nativeShownAt = '2026-09-14T03:00:00.000Z'; return true; },
+    async validate() { return online ? { ok: true, value: currentTarget !== null } : { ok: false, reason: 'offline', offline: true }; },
     async acknowledge() { if (!online) return { ok: false, reason: 'offline', offline: true }; if (item.receipt !== null) { item.receipt.status = 'acknowledged'; item.receipt.acknowledgedAt = '2026-09-14T03:00:00.000Z'; } return { ok: true, value: currentTarget }; },
   };
   const native: NativeNotificationPort = { supported: () => true, history: async () => history,
@@ -213,4 +214,12 @@ it('retains an offline native click until recovery can durably acknowledge and o
   expect(h.targets).toEqual([h.item.target]);
   expect(h.natives[0]?.shown).toBe(1);
   pump.stop();
+});
+
+it('suppresses a stale action that resolves while the claim response is in flight', async () => {
+  const h = harness(), claim = h.deps.api.claim;
+  h.deps.api.claim = async eventKey => { const result = await claim(eventKey); h.setCurrent(false); return result; };
+  await createNotificationRunner(h.deps).tick(() => true);
+  expect(h.natives).toEqual([]);
+  expect(h.item.receipt?.nativeShownAt).toBeNull();
 });

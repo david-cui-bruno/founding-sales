@@ -21,6 +21,11 @@ export function createNotificationApiPort(api: AuthedClient, current: () => bool
       const result = await api.command('/notifications/observe', { attemptId, observation }, value => observeNotificationResultSchema.parse(value));
       return current() && result.ok && result.value.recorded;
     },
+    async validate(actionId, target) {
+      if (!current()) return changed;
+      const result = await api.read('/today/actions/open', value => todayActionOpenResponseSchema.parse(value), { actionId, target });
+      return !current() ? changed : result.ok ? { ok: true, value: result.value.target !== null } : result;
+    },
     async acknowledge(attemptId, actionId) {
       if (!current()) return changed;
       const result = await api.command('/notifications/acknowledge', { attemptId }, value => acknowledgeNotificationResultSchema.parse(value));
