@@ -42,8 +42,8 @@ export function withSupportedOfficeName(candidate:CandidateInput,facts:readonly 
 export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:string):Promise<void> {
  if(ctx.scope.actor.kind!=='system'||ctx.scope.actor.component!=='worker')return;
  await withTransaction(ctx.db as SessionQueryable,async()=>{
-  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return;
   await lockSendGateForStopFact(ctx);
+  if(!(await readResearchSettings(ctx)).enabled||(await listApplicableHolds(ctx,{actionKind:'research'})).length)return;
   const w=ctx.scope.workspaceId;
   const candidate=(await ctx.db.query<{id:string;payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id
    WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,runId])).rows[0];

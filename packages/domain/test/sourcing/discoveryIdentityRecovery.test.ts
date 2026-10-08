@@ -15,7 +15,7 @@ const ctx=()=>repositoryContext(workspaceScope(workspaceId,{kind:'system',compon
 beforeAll(async()=>{db=await createTestDatabase();workspaceId=(await seedTwoWorkspaces(db.session)).alpha.workspaceId;});
 afterAll(async()=>db.drop());
 beforeEach(async()=>{
- await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');await db.session.query('DELETE FROM sourcing_candidates');
+ await db.session.query('DELETE FROM active_holds');await db.session.query('DELETE FROM sourcing_discovery_hits');await db.session.query('DELETE FROM sourcing_discovery_attempts');await db.session.query('DELETE FROM sourcing_candidates');
  await db.session.query('DELETE FROM provider_reservations');await db.session.query('DELETE FROM provider_ledger');
  await db.session.query('DELETE FROM sourcing_search_account');await db.session.query('DELETE FROM sourcing_discovery_settings');await db.session.query('DELETE FROM research_settings');await db.session.query('DELETE FROM daily_counters');
  await db.session.query('INSERT INTO sourcing_search_account(id) VALUES(true)');
@@ -143,4 +143,23 @@ it.each(['info@other.test','example@gmail.com','[email protected]'])('does not r
   return {ok:true,costCents:1,value:{facts:[...(['firm_identity','residential_management','service_area'] as const).map(kind=>({kind,observationId:source.id,blockId:block.id,value:block.text})),{kind:'business_email',observationId:source.id,blockId:address.id,value:address.text}],openingQuestion:null}};
  }}});
  expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,revision:1,firmName:original.candidate.firmName}]}});
+});
+
+it('sees a research hold committed while identity recovery waits for the send gate',async()=>{
+ const original=await discovered(),session=await db.appRuntimeSession();
+ const other=repositoryContext(ctx().scope,session),pid=(await session.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+ const {openHold}=await import('../../policy/holds.ts');
+ let opened!:()=>void;const holdOpened=new Promise<void>(resolve=>{opened=resolve;});
+ const attempt=runQualification(other,{runId:original.runId},{pageFetch:pages,extraction:{...extraction,extract:async input=>{
+  const answer=await extraction.extract(input);
+  await db.session.query('BEGIN');
+  await openHold(ctx(),{scopeKind:'workspace',reasonCode:'scoped_pause',blockedActionKinds:['research'],sourceEventKind:'regression_pause'});
+  opened();return answer;
+ }}});
+ try{
+  await holdOpened;
+  await expect.poll(async()=>(await db.session.query<{wait_event_type:string}>('SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1',[pid])).rows[0]?.wait_event_type,{timeout:2000}).toBe('Lock');
+  await db.session.query('COMMIT');await attempt;
+ }finally{await db.session.query('ROLLBACK');}
+ expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{id:original.candidate.id,firmName:original.candidate.firmName,revision:1}]}});
 });

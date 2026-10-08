@@ -6,7 +6,7 @@ After a successful current-version qualification, the worker can correct an unto
 
 Recovery uses the existing correction command under the send gate and candidate/evidence locks. Only revision-one, unblocked, needs-review candidates with an actual discovery-hit association qualify. Manual staging, edited candidates, admitted/outreach-linked candidates and identity collisions remain protected. Original discovery attribution, observations and runs remain intact; the correction is audited and increments the candidate revision.
 
-The old revision cannot authorize admission. A fresh qualification is requested within ordinary research controls. If the quota defers that request, the supported correction remains and ordinary scheduling can retry later; there is no cap override, forced discovery or extra network request in the correction transaction. Research pauses prevent recovery. Interpretation reuse also applies these guards and cannot reuse facts from incomplete pages.
+The old revision cannot authorize admission. A fresh qualification is requested within ordinary research controls. If the quota defers that request, the supported correction remains and ordinary scheduling can retry later; there is no cap override, forced discovery or extra network request in the correction transaction. Research settings and holds are read after acquiring the send gate, so a hold committed while recovery waits is seen before correction. Research pauses prevent recovery. Interpretation reuse also applies these guards and cannot reuse facts from incomplete pages.
 
 ## Verification and limits
 
