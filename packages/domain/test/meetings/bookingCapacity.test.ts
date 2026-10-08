@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {withTransaction} from '../../db/queryable.ts';
-import {createFirm} from '../../crm/firms.ts';
+import {createFirm,reassignFirm} from '../../crm/firms.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
@@ -93,6 +93,50 @@ describe('Cal.com capacity and recorded bookings',()=>{
   it.each([{events:[],reason:'event_not_found'},{events:[{id:73},{id:74}],reason:'event_ambiguous'}])('reports $reason without guessing one provider event',async({events,reason})=>{
     const result=await readBookingCapacity(ctx(),{now:NOW,client:{async readProfile(){return {id:42,username:'callie-founder'};},async readEventTypes(){return events;}}});
     expect(result.provider).toMatchObject({status:'unavailable',reason,eventTypeId:null,weeklyLimit:null});
+  });
+
+  it('does not call a disabled event weekly setting verified capacity',async()=>{
+    const result=await readBookingCapacity(ctx(),{now:NOW,client:{async readProfile(){return {id:42,username:'callie-founder'};},async readEventTypes(){return [{id:73,ownerId:42,slug:'intro',bookingUrl:'https://cal.com/callie-founder/intro',bookingLimitsCount:{week:3,disabled:true}}];}}});
+    expect(result.provider).toMatchObject({status:'observed',weeklyLimit:null});
+  });
+
+  it('drops newly reassigned booking identity before returning a pending provider read to its former owner',async()=>{
+    const created=await withTransaction(db.session,()=>createFirm(ctx(),{name:'Pending-read office',website:'https://pending-read.example',assignedUserId:seed.alpha.salesperson.userId}));
+    if(!created.ok)throw new Error('fixture firm creation failed');
+    const body={triggerEvent:'BOOKING_CREATED',createdAt:'2026-10-08T11:00:00.000Z',payload:{uid:randomUUID(),startTime:'2026-10-10T16:00:00.000Z',endTime:'2026-10-10T16:30:00.000Z',attendees:[{email:'manager@pending-read.example'}]}};
+    const booked=await withTransaction(db.session,()=>receiveCalcomEvent(db.session,{workspaceId:seed.alpha.workspaceId,rawBody:Buffer.from(JSON.stringify(body)),body}));
+    const formerOwner=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.salesperson.userId,role:'salesperson'}),db.session);
+    const result=await readBookingCapacity(formerOwner,{now:NOW,client:{
+      async readProfile(){return {id:42,username:'callie-founder'};},
+      async readEventTypes(){
+        expect(await withTransaction(db.session,()=>reassignFirm(ctx(),{firmId:created.value.id,toUserId:seed.alpha.admin.userId}))).toMatchObject({ok:true});
+        return [{id:73,ownerId:42,slug:'intro',bookingUrl:'https://cal.com/callie-founder/intro',bookingLimitsCount:{week:3}}];
+      },
+    }});
+    expect(result.recorded.bookings.map(row=>row.meetingId)).not.toContain(booked.meetingId);
+  });
+
+  it.each(['demoted','inactive'])('uses current membership when an administrator becomes %s during the provider read',async(change)=>{
+    try {
+      const result=await readBookingCapacity(ctx(),{now:NOW,client:{
+        async readProfile(){return {id:42,username:'callie-founder'};},
+        async readEventTypes(){
+          await db.session.query("UPDATE workspace_memberships SET role='admin' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+          if(change==='demoted')await db.session.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+          else await db.session.query("UPDATE workspace_memberships SET status='inactive',deactivated_at=now() WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+          return [{id:73,ownerId:42,slug:'intro',bookingUrl:'https://cal.com/callie-founder/intro',bookingLimitsCount:{week:3}}];
+        },
+      }});
+      if(change==='inactive')expect(result.recorded.bookings).toEqual([]);
+      else {
+        expect(result.recorded.bookings.some(row=>row.firm?.name==='Known Office')).toBe(false);
+        expect(result.recorded.bookings.find(row=>row.matchReason==='firm_ambiguous')).toMatchObject({firm:null,attendeeEmail:null});
+        expect(result.recorded.bookings.find(row=>row.firm?.name==='Other owner office')).toMatchObject({attendeeEmail:'manager@other-owner.example'});
+      }
+    } finally {
+      await db.session.query("UPDATE workspace_memberships SET role='admin',status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);
+      await db.session.query("UPDATE workspace_memberships SET role='salesperson' WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.salesperson.userId]);
+    }
   });
 
 });
