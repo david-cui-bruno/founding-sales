@@ -1,5 +1,5 @@
 import {readEmailAdmissionControl} from './emailControl.ts';
-import {routineSettingsSaveSchema,type OutreachControl} from '@fss/contracts';
+import {routineSettingsSaveSchema,type OutreachControl,type OutreachSenderStandingResponse} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {readSequenceVersion} from '../sequences/rows.ts';
@@ -7,7 +7,7 @@ import {readTemplateVersion} from '../templates/templates.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
 import {listAnswerBlocks} from './facts.ts';
 import {authorizationForMailbox} from './authorization.ts';
-import {readRampStanding} from '../outbound/ramp.ts';
+import {describeRampStanding,ensureRamp,readRampStanding} from '../outbound/ramp.ts';
 import {stopEnrollments} from '../sequences/enrollments.ts';
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
 export async function campaignKind(ctx:RepositoryContext,id:string):Promise<'reply'|'email_first'|'call_first'|null>{
@@ -56,4 +56,16 @@ export async function handleRoutineManually(ctx:RepositoryContext,input:{id:stri
  await ctx.db.query("UPDATE outreach_reply_requests SET state='review',reason='manual_handling',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,input.id]);
  await recordCrmAuditEvent(ctx,{action:'outreach.reply_manual',subjectKind:'outreach_reply',subjectId:input.id,detail:{planId:r.plan_id}});
  return {ok:true,value:{revision:r.revision+1}};
+}
+
+export async function readOutreachSenderStanding(ctx:RepositoryContext):Promise<OutreachSenderStandingResponse>{
+ if(ctx.scope.actor.kind!=='user'||ctx.scope.actor.role!=='admin')throw new Error('admin_required');
+ const boxes=(await ctx.db.query<{id:string}>('SELECT id FROM mailboxes WHERE workspace_id=$1 ORDER BY email_address LIMIT 20',[ctx.scope.workspaceId])).rows;
+ const senders:OutreachSenderStandingResponse['senders']=[];
+ for(const box of boxes){
+  await ensureRamp(ctx,box.id);
+  const standing=await readRampStanding(ctx,box.id);
+  if(standing)senders.push({mailboxId:box.id,standing:describeRampStanding(standing)});
+ }
+ return {senders};
 }

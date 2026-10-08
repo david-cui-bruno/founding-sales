@@ -9,7 +9,7 @@ import {
 } from '@fss/domain/outbound/domainGuard.ts';
 import { readFence, readFenceEvents, resolveUnknownTerminal } from '@fss/domain/outbound/fence.ts';
 import { outboundDoubtCounts } from '@fss/domain/outbound/metrics.ts';
-import { overrideRaise, readRampStanding, setAdminCap } from '@fss/domain/outbound/ramp.ts';
+import { describeRampStanding, overrideRaise, readRampStanding, setAdminCap } from '@fss/domain/outbound/ramp.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { mailRouteDeps } from './mailSupport.ts';
 import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
@@ -255,6 +255,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
               adminDailyCap: standing.ramp.adminDailyCap,
               raisedDailyCap: standing.ramp.raisedDailyCap,
               lastHealthFailure: standing.ramp.lastHealthFailure,
+              standing: describeRampStanding(standing),
             },
       fence:
         fence === null

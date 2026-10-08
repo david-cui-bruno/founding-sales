@@ -1,3 +1,5 @@
+import type { SenderStanding } from '@fss/contracts';
+import { assessInactivity, readRecovery, readSenderActivity, recoveryStageIndex, type SenderRecovery } from './recovery.ts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
@@ -15,7 +17,10 @@ import {
  *
  * The whole of this file is one idea: **the cap is computed, never stored**. What is
  * stored is the number of healthy sending days the mailbox has behind it, and the two
- * admin adjustments. The schedule is `RAMP_SCHEDULE`, and if it ever changes, every
+ * admin adjustments. An independent inactivity recovery epoch temporarily bounds
+ * that allowance without erasing earned history; its new-day credits compute the
+ * recovery ceiling and can be reversed by late adverse evidence.
+ * The schedule is `RAMP_SCHEDULE`, and if it ever changes, every
  * mailbox already ramping is governed by the new one the moment the release lands,
  * which is what an operator expects of a safety limit.
  *
@@ -59,6 +64,7 @@ export interface RampRow {
   readonly adminDailyCap: number | null;
   readonly raisedDailyCap: number | null;
   readonly lastHealthFailure: string | null;
+  readonly recovery?: SenderRecovery | null;
 }
 
 type RampDbRow = {
@@ -140,7 +146,7 @@ export function raiseRefusal(
 export function effectiveDailyCap(ramp: RampRow): number {
   const base = ramp.raisedDailyCap ?? scheduledCap(ramp.healthySendingDays);
   const lowered = ramp.adminDailyCap === null ? base : Math.min(base, ramp.adminDailyCap);
-  return Math.max(Math.min(lowered, RAMP_HARD_CEILING), 0);
+  return Math.max(Math.min(lowered, RAMP_HARD_CEILING, ramp.recovery?.active ? ramp.recovery.stageCap : RAMP_HARD_CEILING, ramp.recovery?.active ? scheduledCap(ramp.healthySendingDays) : RAMP_HARD_CEILING), 0);
 }
 
 /**
@@ -178,6 +184,13 @@ export async function readHealthyStreak(
 export interface RampStanding {
   readonly ramp: RampRow;
   readonly healthyStreak: number;
+  readonly recovery: SenderRecovery | null;
+  readonly earnedCap: number;
+  readonly healthySendingDays: number;
+  readonly lastActivityAt: string | null;
+  readonly activityBasis: 'confirmed_send' | 'mailbox_creation';
+  readonly inactivityDays: number;
+  readonly readiness: { readonly ready: boolean; readonly reasons: readonly string[] };
   readonly effectiveCap: number;
   /**
    * Why a raise is not earned today, or null when it is: `POST /outbound/cap` refuses
@@ -189,12 +202,18 @@ export interface RampStanding {
 export async function readRampStanding(
   context: RepositoryContext,
   mailboxId: string,
+  options: { readonly now?: Date } = {},
 ): Promise<RampStanding | null> {
-  const ramp = await readRamp(context, mailboxId);
-  if (ramp === null) return null;
+  if (await readRamp(context, mailboxId) === null) return null;
+  const ramp = await ensureRamp(context, mailboxId, options);
   const healthyStreak = await readHealthyStreak(context, mailboxId);
   return {
     ramp,
+    recovery: ramp.recovery ?? null,
+    earnedCap: scheduledCap(ramp.healthySendingDays),
+    healthySendingDays: ramp.healthySendingDays,
+    ...await readSenderActivity(context, mailboxId, options.now),
+    readiness: await readSenderReadiness(context, mailboxId),
     healthyStreak,
     effectiveCap: effectiveDailyCap(ramp),
     raiseRefusal: raiseRefusal(ramp, healthyStreak),
@@ -210,7 +229,7 @@ export async function readRamp(
     [context.scope.workspaceId, mailboxId],
   );
   const row = rows[0];
-  return row === undefined ? null : toRamp(row);
+  return row === undefined ? null : { ...toRamp(row), recovery: await readRecovery(context, mailboxId) };
 }
 
 /**
@@ -220,7 +239,7 @@ export async function readRamp(
  * A missing row therefore means day zero and a cap of five, not "unlimited" and not
  * an error — so this is an upsert rather than a read that can fail.
  */
-export async function ensureRamp(context: RepositoryContext, mailboxId: string): Promise<RampRow> {
+export async function ensureRamp(context: RepositoryContext, mailboxId: string, options: { readonly now?: Date } = {}): Promise<RampRow> {
   const { rows } = await context.db.query<RampDbRow>(
     `INSERT INTO mailbox_send_ramp (workspace_id, mailbox_id)
      VALUES ($1, $2)
@@ -230,7 +249,8 @@ export async function ensureRamp(context: RepositoryContext, mailboxId: string):
   );
   const row = rows[0];
   if (row === undefined) throw new Error('the ramp upsert returned no row');
-  return toRamp(row);
+  await assessInactivity(context, mailboxId, scheduledCap(row.healthy_sending_days), options.now);
+  return { ...toRamp(row), recovery: await readRecovery(context, mailboxId) };
 }
 
 /**
@@ -343,15 +363,19 @@ export async function closeSendDay(
     readonly signals: Omit<RampHealthSignals, 'automatedSent' | 'bounces' | 'optOuts' | 'providerErrors'>;
   },
 ): Promise<CloseDayOutcome | null> {
+  const ramp = await ensureRamp(context, input.mailboxId);
   const { rows } = await context.db.query<{
     automated_sent: number;
     bounces: number;
     opt_outs: number;
     provider_errors: number;
+    recovery_epoch_id: string | null;
+    recovery_cap: number | null;
+    recovery_stage: number | null;
     closed_at: Date | null;
     healthy: boolean | null;
   }>(
-    `SELECT automated_sent, bounces, opt_outs, provider_errors, closed_at, healthy
+    `SELECT automated_sent, bounces, opt_outs, provider_errors, recovery_epoch_id, recovery_cap, recovery_stage, closed_at, healthy
        FROM mailbox_send_days
       WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
       FOR UPDATE`,
@@ -360,7 +384,6 @@ export async function closeSendDay(
   const day = rows[0];
   if (day === undefined) return null;
 
-  const ramp = await ensureRamp(context, input.mailboxId);
   // A closed verdict is final, except for late adverse signals. Never re-earn it
   // because a later retry observes better mailbox conditions.
   if (day.closed_at !== null) {
@@ -372,14 +395,19 @@ export async function closeSendDay(
         AND dispatch_started_at IS NOT NULL AND state <> 'sent') AS unsettled`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate],
   );
-  const failure = rampAdvancementFailure({
+  const recovery = ramp.recovery ?? null;
+  const recovering = recovery !== null && recovery.active;
+  // Stage identity prevents delayed day-closing jobs from carrying old exposure
+  // into a newly permitted stage, including ordinary growth after completion.
+  const recoveryOrderFailure = recovery !== null && (day.recovery_epoch_id !== recovery.epochId || day.recovery_stage !== recoveryStageIndex(recovery.qualifyingDays) || input.businessDate < recovery.startedOn || input.businessDate < recovery.stageStartedOn || (recovery.lastQualifiedOn !== null && input.businessDate <= recovery.lastQualifiedOn)) ? 'out_of_order_day' : null;
+  const failure = recoveryOrderFailure ?? rampAdvancementFailure({
     ...input.signals,
     automatedSent: day.automated_sent,
     bounces: day.bounces,
     optOuts: day.opt_outs,
     providerErrors: day.provider_errors,
-  }, scheduledCap(ramp.healthySendingDays)) ?? (unresolved.rows[0]?.unsettled === true ? 'unsettled_sends' : null)
-    ?? (ramp.lastAdvancedOn !== null && input.businessDate <= ramp.lastAdvancedOn ? 'out_of_order_day' : null);
+  }, recovering ? day.recovery_cap ?? effectiveDailyCap(ramp) : scheduledCap(ramp.healthySendingDays)) ?? (unresolved.rows[0]?.unsettled === true ? 'unsettled_sends' : null)
+    ?? (!recovering && ramp.lastAdvancedOn !== null && input.businessDate <= ramp.lastAdvancedOn ? 'out_of_order_day' : null);
   const healthy = failure === null;
 
   if (day.closed_at === null) {
@@ -398,6 +426,15 @@ export async function closeSendDay(
       [context.scope.workspaceId, input.mailboxId, failure],
     );
     return { healthy: false, failure, healthySendingDays: ramp.healthySendingDays, advanced: false };
+  }
+
+  if (recovering) {
+    await context.db.query(`UPDATE mailbox_recovery_epochs SET qualifying_days=qualifying_days+1,
+      last_qualified_on=$3::date,stage_started_on=CASE WHEN (qualifying_days+1)%5=0 THEN $3::date ELSE stage_started_on END,updated_at=now()
+      WHERE workspace_id=$1 AND id=$2`, [context.scope.workspaceId,recovery.epochId,input.businessDate]);
+    await context.db.query(`UPDATE mailbox_send_days SET recovery_credited=true
+      WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date`, [context.scope.workspaceId,input.mailboxId,input.businessDate]);
+    return { healthy: true, failure: null, healthySendingDays: ramp.healthySendingDays, advanced: true };
   }
 
   const advanced = await context.db.query<{ healthy_sending_days: number }>(
@@ -475,8 +512,8 @@ export async function setAdminCap(
       [context.scope.workspaceId, input.mailboxId],
     );
     if (rows[0] === undefined) return { ok: false, reason: 'mailbox_unknown' };
-    await ensureRamp(context, input.mailboxId);
   }
+  await ensureRamp(context, input.mailboxId);
 
   const locked = await context.db.query<RampDbRow>(
     `SELECT ${RAMP_COLUMNS} FROM mailbox_send_ramp WHERE workspace_id = $1 AND mailbox_id = $2 FOR UPDATE`,
@@ -508,7 +545,7 @@ export async function setAdminCap(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'mailbox_unknown' };
-  const ramp = toRamp(row);
+  const ramp = { ...toRamp(row), recovery: await readRecovery(context, input.mailboxId) };
   return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp) };
 }
 
@@ -558,7 +595,7 @@ export async function overrideRaise(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'mailbox_unknown' };
-  const ramp = toRamp(row);
+  const ramp = { ...toRamp(row), recovery: await readRecovery(context, input.mailboxId) };
   const warning = raiseTo === null ? null : raiseRefusal(ramp, await readHealthyStreak(context, input.mailboxId));
   return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp), warning };
 }
@@ -584,6 +621,7 @@ export async function openSendDay(
   context: RepositoryContext,
   input: { readonly mailboxId: string; readonly businessDate: string; readonly cap: number },
 ): Promise<SendDayRow> {
+  const recovery = await readRecovery(context, input.mailboxId);
   const { rows } = await context.db.query<{
     id: string;
     business_date: Date | string;
@@ -591,13 +629,13 @@ export async function openSendDay(
     cap_granted: number;
     healthy: boolean | null;
   }>(
-    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, cap_granted)
-     VALUES ($1, $2, $3::date, $4)
+    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, cap_granted, recovery_epoch_id, recovery_cap, recovery_stage)
+     VALUES ($1, $2, $3::date, $4, $5, $6, $7)
      ON CONFLICT (workspace_id, mailbox_id, business_date)
      DO UPDATE SET cap_granted = greatest(mailbox_send_days.cap_granted, EXCLUDED.cap_granted),
                    updated_at = now()
      RETURNING id, business_date, automated_sent, cap_granted, healthy`,
-    [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
+    [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap, recovery?.epochId ?? null, recovery ? input.cap : null, recovery ? recoveryStageIndex(recovery.qualifyingDays) : null],
   );
   const row = rows[0];
   if (row === undefined) throw new Error('the send-day upsert returned no row');
@@ -678,17 +716,24 @@ export async function recordDaySignal(
   // Dispatch records provider errors outside a caller transaction. One statement
   // keeps the counter, once-only graduation marker and ramp correction atomic.
   await context.db.query(
-    `WITH before AS MATERIALIZED (
-       SELECT healthy,closed_at FROM mailbox_send_days
-        WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date FOR UPDATE
+    `WITH locked AS MATERIALIZED (
+       SELECT mailbox_id FROM mailbox_send_ramp WHERE workspace_id=$1 AND mailbox_id=$2 FOR UPDATE
+     ), before AS MATERIALIZED (
+       SELECT d.healthy,d.closed_at,d.recovery_credited,d.recovery_epoch_id FROM mailbox_send_days d LEFT JOIN locked l ON l.mailbox_id=d.mailbox_id
+        WHERE d.workspace_id=$1 AND d.mailbox_id=$2 AND d.business_date=$3::date FOR UPDATE OF d
      ), changed AS (
        UPDATE mailbox_send_days d SET ${column}=d.${column}+1,
          healthy=CASE WHEN before.closed_at IS NOT NULL AND before.healthy IS TRUE THEN false ELSE before.healthy END,
          updated_at=now()
        FROM before WHERE d.workspace_id=$1 AND d.mailbox_id=$2 AND d.business_date=$3::date
-       RETURNING before.healthy AS was_healthy,before.closed_at
+       RETURNING before.healthy AS was_healthy,before.closed_at,before.recovery_credited,before.recovery_epoch_id
+     ), recovery AS (
+       UPDATE mailbox_recovery_epochs e SET qualifying_days=greatest(qualifying_days-1,0),updated_at=now()
+       FROM changed c WHERE e.workspace_id=$1 AND e.id=c.recovery_epoch_id
+         AND c.was_healthy IS TRUE AND c.closed_at IS NOT NULL AND c.recovery_credited
      )
-     UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-1,0),
+     UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-
+       CASE WHEN EXISTS(SELECT 1 FROM changed WHERE NOT recovery_credited) THEN 1 ELSE 0 END,0),
        last_health_failure=$4,updated_at=now()
       WHERE workspace_id=$1 AND mailbox_id=$2
         AND EXISTS(SELECT 1 FROM changed WHERE was_healthy IS TRUE AND closed_at IS NOT NULL)`,
@@ -710,16 +755,20 @@ async function revokeDayAdvancement(
   context: RepositoryContext,
   input: { readonly mailboxId: string; readonly businessDate: string; readonly failure: RampHealthFailure },
 ): Promise<boolean> {
-  const { rowCount } = await context.db.query(
+  const day = (await context.db.query<{ recovery_credited: boolean; recovery_epoch_id: string|null }>(
     `UPDATE mailbox_send_days SET healthy=false,updated_at=now()
-      WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date AND healthy`,
+      WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date AND healthy
+      RETURNING recovery_credited,recovery_epoch_id`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate],
-  );
-  if ((rowCount ?? 0) === 0) return false;
+  )).rows[0];
+  if (!day) return false;
+  if(day.recovery_credited) await context.db.query(
+    `UPDATE mailbox_recovery_epochs SET qualifying_days=greatest(qualifying_days-1,0),updated_at=now() WHERE workspace_id=$1 AND id=$2`,
+    [context.scope.workspaceId,day.recovery_epoch_id]);
   await context.db.query(
-    `UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-1,0),
+    `UPDATE mailbox_send_ramp SET healthy_sending_days=greatest(healthy_sending_days-$4,0),
        last_health_failure=$3,updated_at=now() WHERE workspace_id=$1 AND mailbox_id=$2`,
-    [context.scope.workspaceId, input.mailboxId, input.failure],
+    [context.scope.workspaceId, input.mailboxId, input.failure,day.recovery_credited?0:1],
   );
   return true;
 }
@@ -765,6 +814,7 @@ export async function recordBounceAgainstDay(
   context: RepositoryContext,
   input: { readonly mailboxId: string; readonly businessDate: string },
 ): Promise<BounceAgainstDay | null> {
+  await ensureRamp(context, input.mailboxId);
   const { rows } = await context.db.query<{
     automated_sent: number;
     bounces: number;
@@ -872,6 +922,7 @@ export async function readSendDayHealth(
     actionKind: 'email_send',
     ownerUserId: coverage.ownerUserId,
     mailboxId,
+    channel: 'email',
   });
 
   return {
@@ -879,4 +930,26 @@ export async function readSendDayHealth(
     coverageHealthy: coverageRefusal(coverage) === null && holds.length === 0,
     providerWarning: false,
   };
+}
+
+/** Sender readiness is explanatory and is re-read under the final claim locks.
+ * It never replaces the release, prospecting authorization, stop or window gates. */
+export async function readSenderReadiness(context: RepositoryContext, mailboxId: string): Promise<{ready:boolean;reasons:string[]}> {
+  const coverage=await readMailboxCoverage(context,{mailboxId});
+  const reasons:string[]=[];
+  const coverageFailure=coverageRefusal(coverage);
+  if(coverageFailure) reasons.push(coverageFailure.reason);
+  const domain=await readPrimarySendingDomain(context);
+  if(!domain || !authenticationPasses(domain) || !domain.automatedSendingEnabled) reasons.push('authentication_failing');
+  if(coverage) for(const hold of await listApplicableHolds(context,{actionKind:'email_send',ownerUserId:coverage.ownerUserId,mailboxId,channel:'email'})) reasons.push(hold.reasonCode);
+  const unsettled=(await context.db.query<{unsettled:boolean}>(`SELECT EXISTS(SELECT 1 FROM outbound_messages
+    WHERE workspace_id=$1 AND mailbox_id=$2 AND (state IN ('dispatching','reconciling') OR (state='unknown_terminal' AND admin_resolution IS NULL))) AS unsettled`,[context.scope.workspaceId,mailboxId])).rows[0]?.unsettled;
+  if(unsettled) reasons.push('unresolved_submission');
+  return {ready:reasons.length===0,reasons:[...new Set(reasons)]};
+}
+
+export function describeRampStanding(standing: RampStanding): SenderStanding {
+ return {healthySendingDays:standing.healthySendingDays,earnedCap:standing.earnedCap,effectiveCap:standing.effectiveCap,
+ lastActivityAt:standing.lastActivityAt,activityBasis:standing.activityBasis,inactivityDays:standing.inactivityDays,
+ recovery:standing.recovery,readiness:{ready:standing.readiness.ready,reasons:[...standing.readiness.reasons]}};
 }
