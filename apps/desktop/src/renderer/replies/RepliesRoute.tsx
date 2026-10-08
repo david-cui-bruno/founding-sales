@@ -12,7 +12,7 @@ import { useReplies } from './useReplies.ts';
  * be remembered to release the hold. What waits now is the card whose button was pressed:
  * `replies.busy(messageId)` in `RepliesView`, released by the same call that took it.
  */
-export function RepliesRoute({ column: _column }: { readonly column: RefObject<HTMLElement | null> }): JSX.Element | null {
-  const replies = useReplies();
+export function RepliesRoute({ column: _column, messageId }: { readonly column: RefObject<HTMLElement | null>; readonly messageId?: string }): JSX.Element | null {
+  const replies = useReplies(messageId);
   return <RepliesView replies={replies} />;
 }

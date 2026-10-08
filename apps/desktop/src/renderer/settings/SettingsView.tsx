@@ -156,7 +156,7 @@ export function SettingsView({
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />
-              {isAdmin?<OutreachSection enabled={identity!==null && state?.mayMutate===true}/>:null}
+              {isAdmin?<OutreachSection enabled={identity!==null && state?.mayMutate===true} {...(route.name === 'settings' && route.mailboxId !== undefined ? { initialMailboxId: route.mailboxId } : {})}/>:null}
               <ReplyModelSection isAdmin={isAdmin} identity={identity} generation={generation} guard={guard} />
             </>
           ) : tabForScreen(view.screen) === 'dashboard' ? (

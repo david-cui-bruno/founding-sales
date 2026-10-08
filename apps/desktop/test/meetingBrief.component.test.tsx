@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { JSX, ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FirmMeetingDto, MeetingBriefResponse } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { resetAttendanceMemory } from '../src/renderer/meetings/attendanceMemory.ts';
@@ -351,3 +351,11 @@ describe('the brief, shown', () => {
   });
 });
 
+
+it('a Today call link opens that current meeting’s brief, not another meeting at the firm', async () => {
+  const { ports, reads } = harness({ [FIRM_ID]: [row(MEETING, 'booked', inDays(2)), row(OTHER, 'booked', inDays(4))] });
+  render(<Session><FirmMeetings firmId={FIRM_ID} initialMeetingId={OTHER} ports={ports} /></Session>);
+  await vi.waitFor(() => expect(reads.map(read => read.meetingId)).toEqual([OTHER]));
+  expect(within(await rowOf(OTHER)).getByTestId('meeting-brief-toggle').getAttribute('aria-expanded')).toBe('true');
+  expect(within(await rowOf(MEETING)).getByTestId('meeting-brief-toggle').getAttribute('aria-expanded')).toBe('false');
+});

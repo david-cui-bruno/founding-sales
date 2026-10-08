@@ -1,9 +1,11 @@
+import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,expect,it} from 'vitest';
 import {createTestDatabase,type TestDatabase} from '../../db/testing/testDatabase.ts';
 import {seedTwoWorkspaces,type TwoWorkspaces} from '../db/support/fixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
-import {saveAnswerBlock,approveAnswerBlock,readApprovedAnswerBlocks,retireAnswerBlock} from '../../outreach/facts.ts';
+import {saveAnswerBlock,approveAnswerBlock,readApprovedAnswerBlocks,retireAnswerBlock,listAnswerBlocks} from '../../outreach/facts.ts';
+import {readSocialDraftSources} from '../../social/draftSources.ts';
 let db:TestDatabase,seed:TwoWorkspaces;
 const ctx=()=>repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.admin.userId,role:'admin'}),db.session);
 const tx=<T>(f:()=>Promise<T>)=>withTransaction(db.session,f);
@@ -28,4 +30,64 @@ it('does not approve unsupported pricing or integration text without an admin ac
  expect(await tx(()=>approveAnswerBlock(nonadmin,{id:one.value.id,version:1}))).toEqual({ok:false,reason:'admin_required'});
  const beta=repositoryContext(workspaceScope(seed.beta.workspaceId,{kind:'user',userId:seed.beta.admin.userId,role:'admin'}),db.session);
  expect(await readApprovedAnswerBlocks(beta,[{id:one.value.id,version:1}])).toEqual({ok:false,reason:'not_found'});
+});
+it('admits exactly one concurrent edit and requires approval of that exact new version',async()=>{
+ const initial=await tx(()=>saveAnswerBlock(ctx(),{kind:'product',text:'Q: Does Callie replace our team? A: Callie helps the existing team coordinate maintenance requests.'}));
+ if(!initial.ok)throw new Error(initial.reason);
+ await tx(()=>approveAnswerBlock(ctx(),{id:initial.value.id,version:1}));
+ const secondSession=await db.appRuntimeSession();
+ const secondContext=repositoryContext(ctx().scope,secondSession);
+ const changes=await Promise.all([
+  tx(()=>saveAnswerBlock(ctx(),{id:initial.value.id,expectedVersion:1,kind:'product',text:'Q: Does Callie replace our team? A: Callie supports the existing property team.'})),
+  withTransaction(secondSession,()=>saveAnswerBlock(secondContext,{id:initial.value.id,expectedVersion:1,kind:'product',text:'Q: Does Callie replace our team? A: Callie coordinates maintenance with the existing team.'})),
+ ]);
+ expect(changes.filter(change=>change.ok)).toHaveLength(1);
+ expect(changes.filter(change=>!change.ok)).toEqual([{ok:false,reason:'stale_version'}]);
+ const current=(await listAnswerBlocks(ctx())).find(block=>block.id===initial.value.id);
+ expect(current).toMatchObject({version:2,approvedAt:null,retiredAt:null});
+ expect(await tx(()=>approveAnswerBlock(ctx(),{id:initial.value.id,version:1}))).toEqual({ok:false,reason:'stale_version'});
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:initial.value.id,version:1}])).toEqual({ok:false,reason:'block_changed'});
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:initial.value.id,version:2}])).toEqual({ok:false,reason:'block_unapproved'});
+ const approved=await tx(()=>approveAnswerBlock(ctx(),{id:initial.value.id,version:2}));
+ if(!approved.ok)throw new Error(approved.reason);
+ expect(await readApprovedAnswerBlocks(ctx(),[{id:initial.value.id,version:2}])).toEqual({ok:true,value:[approved.value]});
+});
+it('restricts fact editing, approval and retirement to workspace administrators',async()=>{
+ const initial=await tx(()=>saveAnswerBlock(ctx(),{kind:'material',text:'Approved overview: https://usecallie.com/'}));
+ if(!initial.ok)throw new Error(initial.reason);
+ const nonadmin=repositoryContext(workspaceScope(seed.alpha.workspaceId,{kind:'user',userId:seed.alpha.salesperson.userId,role:'salesperson'}),db.session);
+ const beta=repositoryContext(workspaceScope(seed.beta.workspaceId,{kind:'user',userId:seed.beta.admin.userId,role:'admin'}),db.session);
+ expect(await tx(()=>saveAnswerBlock(nonadmin,{id:initial.value.id,expectedVersion:1,kind:'material',text:'Changed link'}))).toEqual({ok:false,reason:'admin_required'});
+ expect(await tx(()=>approveAnswerBlock(nonadmin,{id:initial.value.id,version:1}))).toEqual({ok:false,reason:'admin_required'});
+ expect(await tx(()=>retireAnswerBlock(nonadmin,{id:initial.value.id,version:1}))).toEqual({ok:false,reason:'admin_required'});
+ expect(await listAnswerBlocks(nonadmin)).toEqual([]);
+ expect(await tx(()=>saveAnswerBlock(beta,{id:initial.value.id,expectedVersion:1,kind:'material',text:'Changed link'}))).toEqual({ok:false,reason:'not_found'});
+ expect(await tx(()=>approveAnswerBlock(beta,{id:initial.value.id,version:1}))).toEqual({ok:false,reason:'not_found'});
+ expect(await tx(()=>retireAnswerBlock(beta,{id:initial.value.id,version:1}))).toEqual({ok:false,reason:'not_found'});
+ expect((await listAnswerBlocks(ctx())).find(block=>block.id===initial.value.id)).toEqual(initial.value);
+});
+it('shares exact approved FAQ text and links while social refuses changed and retired references',async()=>{
+ const faqText='Q: How does Callie help after hours? A: Callie coordinates after-hours maintenance requests with the existing team.';
+ const linkText='Approved product overview: https://usecallie.com/';
+ const faq=await tx(()=>saveAnswerBlock(ctx(),{kind:'product',text:faqText}));
+ const link=await tx(()=>saveAnswerBlock(ctx(),{kind:'material',text:linkText}));
+ if(!faq.ok||!link.ok)throw new Error('Fact setup failed');
+ const refs=[{id:faq.value.id,version:1},{id:link.value.id,version:1}];
+ for(const ref of refs)await tx(()=>approveAnswerBlock(ctx(),ref));
+ const shared=await readApprovedAnswerBlocks(ctx(),refs);
+ expect(shared).toMatchObject({ok:true,value:[{kind:'product',text:faqText,version:1},{kind:'material',text:linkText,version:1}]});
+ const sourceId=randomUUID();
+ await db.session.query('INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload) VALUES($1,$2,$3,$4::jsonb)',[seed.alpha.workspaceId,sourceId,randomUUID().replaceAll('-','').padEnd(64,'0'),JSON.stringify({brief:'Small property teams coordinate after-hours maintenance.'})]);
+ const request={sourceRefs:[{kind:'public' as const,id:sourceId,revision:1}],factBlocks:[refs[0]!]};
+ const social=await readSocialDraftSources(ctx(),request);
+ expect(social).toMatchObject({ok:true,value:{input:{facts:[{id:faq.value.id,version:1,kind:'product',text:faqText}]}}});
+ await tx(()=>saveAnswerBlock(ctx(),{id:faq.value.id,expectedVersion:1,kind:'product',text:'Q: How does Callie help? A: Callie coordinates maintenance requests.'}));
+ expect(await readApprovedAnswerBlocks(ctx(),request.factBlocks)).toEqual({ok:false,reason:'block_changed'});
+ expect(await readSocialDraftSources(ctx(),request)).toEqual({ok:false,reason:'block_changed'});
+ const next={...request,factBlocks:[{id:faq.value.id,version:2}]};
+ expect(await readSocialDraftSources(ctx(),next)).toEqual({ok:false,reason:'block_unapproved'});
+ await tx(()=>approveAnswerBlock(ctx(),next.factBlocks[0]!));
+ await tx(()=>retireAnswerBlock(ctx(),next.factBlocks[0]!));
+ expect(await readApprovedAnswerBlocks(ctx(),next.factBlocks)).toEqual({ok:false,reason:'block_retired'});
+ expect(await readSocialDraftSources(ctx(),next)).toEqual({ok:false,reason:'block_retired'});
 });

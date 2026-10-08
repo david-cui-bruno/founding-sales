@@ -1,3 +1,4 @@
+import { ActionQueue } from './ActionQueue.tsx';
 import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, CornerDownLeft, HelpCircle, ListTodo, NotebookPen, Pencil, PhoneIncoming, Search } from 'lucide-react';
@@ -575,6 +576,7 @@ export function TodayWorkspace({
           </button>
         </div>
       ) : null}
+      <ActionQueue refreshKey={state?.asOf ?? null} enabled={hasTodayBridge} />
       {unavailable ? (
         <div className="max-w-[640px] p-6">
           <p data-testid="today-unavailable" className="text-sm text-muted-foreground">

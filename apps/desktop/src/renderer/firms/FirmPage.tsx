@@ -921,8 +921,10 @@ export function FirmPage({
   guard,
   timelinePorts,
   onApplyStageSuggestion,
+  initialMeetingId,
 }: {
   readonly page: FirmPageResponse;
+  readonly initialMeetingId?: string;
   readonly sequences: FirmSequencesView | null;
   readonly actionsEnabled: boolean;
   /** Whether one named form's own command is on the wire (1.0.13, after the review). */
@@ -989,6 +991,7 @@ export function FirmPage({
       {variant === 'page' ? (
         <FirmMeetings
           firmId={page.read.firm.id}
+          {...(initialMeetingId === undefined ? {} : { initialMeetingId })}
           actionsEnabled={actionsEnabled}
           // The deal's stage: a move made here or anywhere reads the suggestion again.
           refreshKey={page.visibility === 'assigned_or_admin' ? `${page.opportunity?.id ?? 'none'}:${page.opportunity?.stageKey ?? ''}` : ''}
