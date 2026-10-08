@@ -3,8 +3,7 @@ import type { TodayAction, TodayActionsResponse, TodayActionTarget } from '@fss/
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { workspaceBusinessTimeZone } from './snapshots.ts';
 import { currentHolidayCalendar } from '../sequences/calendars.ts';
-import { addBusinessDays } from '../src/rules/businessDays.ts';
-import { localInstant, localParts } from '../src/rules/localClock.ts';
+import { replyDeadline } from './replyDeadline.ts';
 
 /** Live metadata only. Daily snapshots are presentation, never the action authority. */
 export async function readTodayActions(context: RepositoryContext, input: { now: string }): Promise<TodayActionsResponse> {
@@ -47,18 +46,17 @@ export async function readTodayActions(context: RepositoryContext, input: { now:
         AND NOT EXISTS (SELECT 1 FROM outreach_reply_requests r WHERE r.workspace_id=m.workspace_id AND r.original_message_id=m.id AND r.state='delivered')
       ORDER BY m.internal_date,m.id`, [context.scope.workspaceId, assignee]);
   const actions: TodayAction[] = rows.map(row => {
-    const parts = localParts(row.internal_date.toISOString(), businessTimeZone);
-    const dueAt = localInstant(addBusinessDays(parts.date, 1, calendar), { hour: parts.hour, minute: parts.minute, second: parts.second, millisecond: 0 }, businessTimeZone);
+    const dueAt = replyDeadline(row.internal_date.toISOString(), businessTimeZone, calendar);
     return { actionId: `reply-message:${row.id}`, kind: 'reply', subject: row.name, reason: row.substantive ? 'substantive_reply' : 'reply_review', dueAt, state: Date.parse(input.now) >= Date.parse(dueAt) ? 'overdue' : 'open', target: { kind: 'reply', firmId: row.firm_id, messageId: row.id } };
   });
-  const { rows: meetings } = await context.db.query<{ id: string; firm_id: string; name: string; starts_at: Date }>(
-    `SELECT m.id, f.id AS firm_id, f.name, m.starts_at FROM meetings m
+  const { rows: meetings } = await context.db.query<{ id: string; firm_id: string; name: string; starts_at: Date; current_booking_uid: string }>(
+    `SELECT m.id, f.id AS firm_id, f.name, m.starts_at, m.current_booking_uid FROM meetings m
        JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
       WHERE m.workspace_id=$1 AND f.status='active' AND ($2::uuid IS NULL OR f.assigned_user_id=$2)
         AND m.state IN ('booked','rescheduled') AND m.starts_at >= $3::timestamptz
         AND m.starts_at <= $3::timestamptz + interval '7 days'
       ORDER BY m.starts_at,m.id`, [context.scope.workspaceId, assignee, input.now]);
-  for (const meeting of meetings) actions.push({ actionId: `meeting:${meeting.id}`, kind: 'call', subject: meeting.name, reason: 'upcoming_call', dueAt: meeting.starts_at.toISOString(), state: 'open', target: { kind: 'meeting', firmId: meeting.firm_id, meetingId: meeting.id, startsAt: meeting.starts_at.toISOString() } });
+  for (const meeting of meetings) actions.push({ actionId: `meeting:${meeting.id}`, kind: 'call', subject: meeting.name, reason: 'upcoming_call', dueAt: meeting.starts_at.toISOString(), state: 'open', target: { kind: 'meeting', firmId: meeting.firm_id, meetingId: meeting.id, startsAt: meeting.starts_at.toISOString(), bookingUid: meeting.current_booking_uid } });
   const { rows: mailboxes } = await context.db.query<{ id: string; generation: number; status: string; disconnected_at: Date }>(
     `SELECT id, generation, status, disconnected_at FROM mailboxes
       WHERE workspace_id=$1 AND status='revoked'

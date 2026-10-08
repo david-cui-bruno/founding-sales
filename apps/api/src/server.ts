@@ -1,3 +1,4 @@
+import type {BookingCapacityDeps} from './routes/bookingCapacity.ts';
 import type {SocialMediaStore} from './social/mediaStore.ts';
 import type { CallAudioRemover } from './integrations/callAudio.ts';
 import type { MeetingAudioStore } from './integrations/meetingAudio.ts';
@@ -83,6 +84,7 @@ import {
  */
 
 export interface ApiOptions {
+  readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
@@ -160,6 +162,7 @@ export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
   return {
+    ...(options.bookingCapacity===undefined?{}:{bookingCapacity:options.bookingCapacity}),
     ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,
     supportedClientVersions: options.supportedClientVersions,

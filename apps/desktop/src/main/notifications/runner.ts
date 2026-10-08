@@ -24,21 +24,31 @@ export interface NotificationRunnerDeps {
 export function createNotificationRunner(deps: NotificationRunnerDeps) {
   const handles = new Map<string, NativeNotificationHandle>();
   const boundEpoch = new Map<string, number>();
-  const bindings = new WeakMap<NativeNotificationHandle, { item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }; current(): boolean }>();
+  const bindings = new WeakMap<NativeNotificationHandle, { item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }; current(): boolean; shownObservation: 'native_shown' | 'unknown' }>();
   const boundHandles = new WeakSet<NativeNotificationHandle>();
   let epoch = 0;
   const status = (state: NotificationRuntimeStatus['state']) => deps.onStatus?.({ state, lastCheckedAt: deps.now() });
   function nativeId(identity: NotificationIdentity, eventKey: string): string {
     return `callie-action:${identity.workspaceId}:${identity.userId}:${createHash('sha256').update(eventKey).digest('hex')}`;
   }
-  function bind(handle: NativeNotificationHandle, item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }, current: () => boolean) {
+  function legacyId(identity: NotificationIdentity, item: { actionId: string; target: TodayActionTarget }): string | null {
+    return item.target.kind === 'meeting' && item.target.bookingUid !== undefined
+      ? nativeId(identity, `${item.actionId}:pre_call:${item.target.startsAt}`) : null;
+  }
+  function matchingHandle(identity: NotificationIdentity, item: { eventKey: string; actionId: string; target: TodayActionTarget }, history: NativeNotificationHandle[] | null) {
+    const id = nativeId(identity, item.eventKey), legacy = legacyId(identity, item);
+    const handle = handles.get(id) ?? history?.find(handle => handle.id === id)
+      ?? (legacy === null ? undefined : handles.get(legacy) ?? history?.find(handle => handle.id === legacy));
+    return handle === undefined ? null : { handle, inHistory: history?.some(retained => retained.id === handle.id) === true, observation: handle.id === id ? 'native_shown' as const : 'unknown' as const };
+  }
+  function bind(handle: NativeNotificationHandle, item: { actionId: string; receipt: NonNullable<NotificationItem['receipt']> }, current: () => boolean, shownObservation: 'native_shown' | 'unknown' = 'native_shown') {
     boundEpoch.set(handle.id, epoch);
-    bindings.set(handle, { item, current });
+    bindings.set(handle, { item, current, shownObservation });
     if (boundHandles.has(handle)) return;
     boundHandles.add(handle);
     const active = () => { const binding = bindings.get(handle); return binding?.current() ? binding : null; };
-    handle.on('show', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, 'native_shown'); });
-    handle.on('failed', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, 'failed'); });
+    handle.on('show', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, binding.shownObservation); });
+    handle.on('failed', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, binding.shownObservation === 'unknown' ? 'unknown' : 'failed'); });
     handle.on('click', async () => {
       const binding = active();
       if (!binding) return;
@@ -56,7 +66,7 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
       if (!current()) return 'ignored';
       if (!result.ok) { status(result.offline ? 'offline' : 'unavailable'); return 'unavailable'; }
       if (result.value.workspaceId !== identity.workspaceId || result.value.userId !== identity.userId) return 'ignored';
-      const recovery = result.value.recoveries.find(item => nativeId(identity, item.eventKey) === identifier);
+      const recovery = result.value.recoveries.find(item => nativeId(identity, item.eventKey) === identifier || item.current && legacyId(identity, item) === identifier);
       if (recovery === undefined) return 'ignored';
       const acknowledged = await deps.api.acknowledge(recovery.receipt.attemptId, recovery.actionId);
       if (!current()) return 'ignored';
@@ -81,8 +91,8 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
       // Obsolete receipts may fall outside the presentation window; their known
       // native handles must still close without deleting any durable marker.
       const currentNativeIds = new Set([
-        ...queue.items.filter(item => item.receipt === null).map(item => nativeId(identity, item.eventKey)),
-        ...queue.recoveries.filter(item => item.current).map(item => nativeId(identity, item.eventKey)),
+        ...queue.items.filter(item => item.receipt === null).flatMap(item => [nativeId(identity, item.eventKey), legacyId(identity, item)].filter(id => id !== null)),
+        ...queue.recoveries.filter(item => item.current).flatMap(item => [nativeId(identity, item.eventKey), legacyId(identity, item)].filter(id => id !== null)),
       ]);
       const known = new Map([...(history ?? []).map(handle => [handle.id, handle] as const), ...handles]);
       for (const [id, handle] of known) {
@@ -92,16 +102,20 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
         handles.delete(id); boundEpoch.delete(id);
       }
       for (const recovery of queue.recoveries) {
-        const id = nativeId(identity, recovery.eventKey), restored = history?.find(handle => handle.id === id);
         if (!recovery.current) continue;
-        const handle = handles.get(id) ?? restored;
-        if (handle !== undefined && boundEpoch.get(id) !== generation) { handles.set(id, handle); bind(handle, recovery, current); }
-        if (restored !== undefined) {
-          if (!handles.has(id)) { handles.set(id, restored); bind(restored, recovery, current); }
-          if (recovery.receipt.nativeShownAt === null) await deps.api.observe(recovery.receipt.attemptId, 'native_shown');
-        } else if (recovery.receipt.status === 'attempting' && (!handles.has(id) || Date.parse(deps.now()) - Date.parse(recovery.receipt.attemptedAt) >= 120_000)) {
+        const restored = matchingHandle(identity, recovery, history);
+        if (restored !== null) {
+          const { handle, observation } = restored;
+          handles.set(handle.id, handle);
+          if (boundEpoch.get(handle.id) !== generation) bind(handle, recovery, current, observation);
+          if (restored.inHistory && (observation === 'unknown' ? recovery.receipt.status === 'attempting' : recovery.receipt.nativeShownAt === null)) {
+            // An old unversioned native handle proves no delivery of this booking UID.
+            await deps.api.observe(recovery.receipt.attemptId, observation);
+          } else if (!restored.inHistory && recovery.receipt.status === 'attempting' && Date.parse(deps.now()) - Date.parse(recovery.receipt.attemptedAt) >= 120_000) {
+            await deps.api.observe(recovery.receipt.attemptId, 'unknown');
+          }
+        } else if (recovery.receipt.status === 'attempting') {
           // Empty/missing history cannot prove failure (dismissed, unsigned or quit).
-          // Preserve the durable marker. A later show/history observation may settle it.
           await deps.api.observe(recovery.receipt.attemptId, 'unknown');
         }
       }
@@ -125,11 +139,11 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
         }
         const id = nativeId(identity, item.eventKey);
         if (handles.has(id)) continue;
-        const restored = history?.find(handle => handle.id === id);
-        if (restored !== undefined) {
-          handles.set(id, restored);
-          bind(restored, { actionId: item.actionId, receipt: item.receipt }, current);
-          await deps.api.observe(item.receipt.attemptId, 'native_shown');
+        const restored = matchingHandle(identity, item, history);
+        if (restored !== null) {
+          handles.set(restored.handle.id, restored.handle);
+          bind(restored.handle, { actionId: item.actionId, receipt: item.receipt }, current, restored.observation);
+          await deps.api.observe(item.receipt.attemptId, restored.observation);
           continue;
         }
         let submissionStarted = false;

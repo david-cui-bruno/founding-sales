@@ -1,3 +1,4 @@
+import type {BookingCapacityDeps} from './bookingCapacity.ts';
 import type {SocialMediaStore} from '../social/mediaStore.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
@@ -51,6 +52,7 @@ export interface RouteResult {
 }
 
 export interface RoutingOptions {
+  readonly bookingCapacity?:BookingCapacityDeps;
   readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;
   /** The policy (lane g78). A route that answers with versions publishes `publishedClientVersions` of it. */

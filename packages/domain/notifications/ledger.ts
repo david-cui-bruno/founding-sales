@@ -1,6 +1,6 @@
 import { notificationReceiptSchema, type ActionableNotificationsResponse, type NotificationItem, type TodayActionTarget, type NotificationReceipt } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { readNotificationCandidates, notificationCandidatesFromToday } from './actions.ts';
+import { readNotificationCandidates, notificationCandidatesFromToday, notificationEventKey } from './actions.ts';
 import { openTodayAction, readTodayActions, currentTodayTarget } from '../today/actions.ts';
 
 interface AttemptRow {
@@ -27,6 +27,15 @@ export async function claimNotification(context: RepositoryContext, input: { eve
   if (context.scope.actor.kind !== 'user' || !await ownedDevice(context, input.deviceId)) return null;
   const candidate = (await readNotificationCandidates(context, input)).find(item => item.eventKey === input.eventKey);
   if (candidate === undefined) return null;
+  if (candidate.target.kind === 'meeting' && candidate.target.bookingUid !== undefined) {
+    // An unversioned durable attempt cannot prove which booking was submitted.
+    // Keep its original marker and suppress another alert for the same meeting/time.
+    const legacyKey = `${candidate.actionId}:pre_call:${candidate.dueAt}`;
+    const legacy = await context.db.query(`SELECT 1 FROM actionable_notification_attempts
+      WHERE workspace_id=$1 AND user_id=$2 AND event_key=$3 AND NOT (target ? 'bookingUid')`,
+    [context.scope.workspaceId, context.scope.actor.userId, legacyKey]);
+    if (legacy.rows.length > 0) return null;
+  }
   const { rows } = await context.db.query<AttemptRow>(`INSERT INTO actionable_notification_attempts
     (workspace_id,user_id,device_id,event_key,action_id,phase,target,attempted_at)
     VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT(workspace_id,user_id,event_key) DO NOTHING RETURNING *`,
@@ -40,7 +49,7 @@ export async function readActionableNotifications(context: RepositoryContext, in
   const candidates = notificationCandidatesFromToday(today.actions, input.now);
   const currentEventKeys = today.actions.flatMap(action => action.kind === 'reply'
     ? [`${action.actionId}:attention`, `${action.actionId}:reply_overdue`]
-    : [`${action.actionId}:${action.kind === 'call' ? `pre_call:${action.dueAt}` : 'attention'}`]);
+    : [notificationEventKey(action, action.kind === 'call' ? 'pre_call' : 'attention')]);
   // Keep every durable marker. Presentation includes current events plus at most100
   // recent device receipts, so obsolete lifetime history cannot grow each poll.
   const { rows } = await context.db.query<AttemptRow>(`WITH selected AS (

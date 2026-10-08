@@ -1,3 +1,6 @@
+import {readCalcomSecret,CALCOM_SECRET_VARIABLE} from '@fss/domain/meetings/calcomSecret.ts';
+import {calcomCapacityClient} from '../integrations/calcomCapacityClient.ts';
+import type {BookingCapacityDeps} from '../routes/bookingCapacity.ts';
 import {loadSocialMediaStore} from '../social/mediaStore.ts';
 import { CALL_AUDIO_BUCKET_VARIABLE, loadCallAudioRemover } from '../integrations/callAudio.ts';
 import { loadMeetingAudioStore } from '../integrations/meetingAudio.ts';
@@ -246,7 +249,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // Lane M4: the same bucket, `meetings/` prefix, for a demo recording's upload and HEAD.
   const meetingAudio =
     callAudioBucket === '' || callAudioRegion === '' ? undefined : await loadMeetingAudioStore({ bucket: callAudioBucket, region: callAudioRegion });
+  const calcom = readCalcomSecret(environment[CALCOM_SECRET_VARIABLE]);
+  const bookingCapacity:BookingCapacityDeps = calcom.ok && calcom.apiKey !== null
+    ? {client:calcomCapacityClient({apiKey:calcom.apiKey})}
+    : {client:null,missingKeyReason:((calcom.ok ? calcom.apiKeyProblem === 'absent' : calcom.problem === 'absent') ? 'api_key_missing' : 'api_key_invalid')};
   const server = createApiServer({
+    bookingCapacity,
     replyComposer:await loadHumanReplyDraftPort(environment),
     connections: poolConnections(pool, log),
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,

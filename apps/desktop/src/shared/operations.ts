@@ -1,3 +1,4 @@
+import {bookingCapacityResponseSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,notificationRuntimeStatusSchema} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -1709,6 +1710,11 @@ export const OPERATIONS = {
     kind: 'command', calls: [{ method: 'POST', path: '/meetings/tasks/change' }],
     input: z.discriminatedUnion('action', [changeMeetingTaskSchema.options[0].extend({ commandId: uuid }), changeMeetingTaskSchema.options[1].extend({ commandId: uuid }), changeMeetingTaskSchema.options[2].extend({ commandId: uuid })]),
     output: z.strictObject({ task: meetingTaskViewSchema.nullable(), reason: z.string().max(80).nullable() }), transform: 'versioned edit, completion or cancellation of a meeting task',
+  },
+  'meetings.bookingCapacity': {
+    kind:'read',calls:[{method:'GET',path:'/meetings/booking-capacity'}],input:nothing,
+    output:z.strictObject({capacity:bookingCapacityResponseSchema.nullable()}),
+    transform:'Read-only Cal.com event configuration and scoped retained booking evidence; no available-slot inference',
   },
   'meetings.brief': {
     kind: 'read',

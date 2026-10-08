@@ -1,3 +1,4 @@
+import {bookingCapacityResponseSchema} from '@fss/contracts';
 import {outreachSenderStandingV2ResponseSchema} from '@fss/contracts';
 import {actionableNotificationsResponseSchema,type NotificationRuntimeStatus} from '@fss/contracts';
 import { todayActionsResponseSchema, todayActionOpenResponseSchema } from '@fss/contracts';
@@ -573,6 +574,11 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     },
 
     // Meetings (slice M1). Straight through the authenticated client, like Diagnostics.
+    'meetings.bookingCapacity':async()=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/meetings/booking-capacity',value=>bookingCapacityResponseSchema.parse(value));
+      return {capacity:generation===deps.recordings.identity.current()&&answer.ok?answer.value:null};
+    },
     'meetings.forFirm': async (input: { readonly firmId: string }) => {
       const answer = await deps.api.read(`/meetings/firm?firmId=${encodeURIComponent(input.firmId)}`, value =>
         firmMeetingsResponseSchema.parse(value),

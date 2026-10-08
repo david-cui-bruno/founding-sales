@@ -54,3 +54,5 @@ export type { TodayActionTarget, TodayAction, TodayActionsResponse } from './tod
 export * from './replyComposer.ts';
 export {providerIncidentSchema,outreachSenderStandingV2ResponseSchema,type ProviderIncidentView,type OutreachSenderStandingV2Response} from './senderIncidents.ts';
 export * from './notifications.ts';
+
+export {bookingCapacityResponseSchema,BOOKING_CAPACITY_REASONS,type BookingCapacityResponse,type BookingCapacityReason} from './bookingCapacity.ts';
