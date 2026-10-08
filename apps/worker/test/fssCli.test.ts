@@ -185,7 +185,8 @@ describe('the commands deploy.sh release runs on the migration task definition',
 
   it('every migration-identity command is one the parser knows, so the list holds no phantom', () => {
     for (const command of MIGRATION_IDENTITY_COMMANDS) {
-      expect(parseFssCommand(command.split(' ')).ok, command).toBe(true);
+      const argv=command==='migration-auth-check'?[command,'--expected-database','fss','--expected-user','fss_admin','--expected-host','db.example.test']:command.split(' ');
+      expect(parseFssCommand(argv).ok, command).toBe(true);
     }
   });
 });

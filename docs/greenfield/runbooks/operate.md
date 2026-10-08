@@ -9,7 +9,7 @@ One workspace and one salesperson. Two processes run in AWS us-east-1, account `
 - **Four task definitions**, all from `infra/modules/cluster`: `fss-prod-api` and `fss-prod-worker`, which the services run and which carry `track_latest = true`, so Terraform reads CI's newest ACTIVE revision as its own; and the one-off `fss-prod-migration` and `fss-prod-operations`, which carry the worker image of the last apply.
 - **The applied schema is what the last migration recorded**, and every declared range is a strict `{N,N}` (`packages/domain/db/schemaRange.ts`), so no build straddles a schema change and a schema release is an outage on purpose. Read the number rather than trusting this page: `deploy.sh current fss-prod` prints the ranges each running service accepts, and `GET /diagnostics` prints `schema.appliedVersion`. Production recorded 0001 to 0019; 0020 (the postal address) and then 0021 (the compatibility cleanup) are the next two releases, each from the schema before it. Migrations are forward-only and immutable once applied: the runner checksums each file's bytes.
 - **Four Terraform roots** under `infra/roots/`: `production`, `production-google` (the Gmail push objects and the CI identity; planned and applied only by `greenfield-google.yml`, below), `rehearsal`, `rehearsal-registry`. Production and rehearsal have distinct state keys, roles and namespaces, and `infra/scripts/lib.sh` refuses at the call any rehearsal command naming `fss-prod`.
-- **Ten scripts and no others** in `infra/scripts/`: `deploy.sh`, `images.sh`, `lib.sh`, `offline-gate.sh`, `policy.sh`, `preflight.sh`, `record.sh`, `rehearsal.sh`, `rollback.sh`, `stop.sh`. Each one's header is its usage.
+- **Release scripts** in `infra/scripts/`: `deploy.sh`, `images.sh`, `lib.sh`, `offline-gate.sh`, `policy.sh`, `preflight.sh`, `migration-auth.sh`, `idle.sh`, `record.sh`, `rehearsal.sh`, `rollback.sh`, `stop.sh`. Each one's header is its usage.
 - Metrics go to `FSS/fss-prod`, never the bare `FSS`. Plan from main only, at the commit being released. `infra/scripts/deploy.sh current fss-prod` is the first command of any manual release: it prints `api_image=`, `worker_image=`, `api_schema_range=`, `worker_schema_range=` — the four a plan is made from — and then the two services' database hosts.
 
 ## An app change
@@ -47,7 +47,7 @@ gh workflow run greenfield-release.yml --ref main -f mode=schema -f stage=full \
 
 `stage` is `plan`, `create`, `deploy`, `full` or `teardown`; each of the first four runs everything before it, and one is worth running only once the one before it passed. About 45 minutes at `full`. An app-only or desktop-only release needs no rehearsal.
 
-**3. The preflight, on production, while both services are still running.** A migration's own counts, inside a rolled-back READ ONLY transaction, on a one-off task of the operations definition with **this release's** worker image. It exits 3 when the migration would refuse, so the chain stops here rather than with both services at zero. It runs *after* the rehearsal and *before* the stop, and only a migration that **can refuse** has one: a migration with no condition under which it raises has no `fss admin schema-preflight` command and the release skips this step. **0022 is one of those** — it adds a table and nothing else, so there is nothing for a preflight to count or to stop on. The 0021 text below is kept as history: it is what this step looks like when a migration can refuse.
+**3. Row-dependent preflight, on production, while both services are still running.** A migration's own counts, inside a rolled-back READ ONLY transaction, on a one-off task of the operations definition with **this release's** worker image. It exits 3 when the migration would refuse, so the chain stops here rather than with both services at zero. It runs *after* the rehearsal and *before* the stop, and only a migration that **can refuse** has one: a migration with no condition under which it raises has no `fss admin schema-preflight` command and the release skips this step. **0022 is one of those** — it adds a table and nothing else, so there is nothing for a preflight to count or to stop on. The 0021 text below is kept as history: it is what this step looks like when a migration can refuse.
 
 ```bash
 infra/scripts/preflight.sh infra/roots/production fss-prod 0021 --worker-digest "$worker_digest"
@@ -95,10 +95,12 @@ The two ranges must be the schema the release is **going to**, never the one it 
 
 Read the plan. It must show no change to an ECR repository, and for a schema release exactly the four task definitions replaced and the two services re-pointed. Then:
 
+Production stop now always checks migration authentication, including additive migrations that have no row-dependent preflight. It launches the exact release worker image on the existing migration task binding, uses a bounded READ ONLY connection check, and verifies database identity and credential-version metadata before drain. It checks authentication again after idle waiting, then checks activity again before scaling either service. Credential/task metadata and receipt freshness are rechecked after the last idle observation, without starting another slow task. Any refusal leaves services running; a refusal after idle also clears the drain. There is no runtime fallback or force-idle bypass. A changed credential/task binding requires a fresh check, not an old receipt. Reports contain metadata only. No database password rotation or permission expansion is performed.
+
 ```bash
 infra/scripts/images.sh promote /tmp/fss-ci/image-pin.json
 infra/scripts/deploy.sh current fss-prod --compare "<api_image>" "<worker_image>" --allow-digest-change
-infra/scripts/stop.sh infra/roots/production fss-prod --environment production
+infra/scripts/stop.sh infra/roots/production fss-prod --environment production --worker-digest "$worker_digest"
 (cd infra/roots/production && terraform apply production.tfplan)
 infra/scripts/deploy.sh release infra/roots/production fss-prod --schema-change \
   --api-digest "$api_digest" --worker-digest "$worker_digest" \

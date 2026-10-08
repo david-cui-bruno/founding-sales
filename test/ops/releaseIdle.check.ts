@@ -43,17 +43,23 @@ function stub(directory: string, prefix: string): string {
     `state='${directory}'`,
     'printf "%s\\n" "$*" >> "$state/calls.log"',
     'service=$1; operation=$2; shift 2',
-    'name=""; count=""; overrides=""; stream=""',
+    'name=""; count=""; overrides=""; stream=""; input=""; task=""',
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
     '    --service|--services) name=$2; shift ;;',
     '    --desired-count) count=$2; shift ;;',
     '    --overrides) overrides=$2; shift ;;',
     '    --log-stream-name) stream=$2; shift ;;',
+    '    --cli-input-json) input=$2; shift ;;',
+    '    --tasks) task=$2; shift ;;',
     '  esac',
     '  shift',
     'done',
     'case "$service $operation" in',
+    '  "ecs register-task-definition") cp "${input#file://}" "$state/registered-definition"; echo \'{"taskDefinition":{"taskDefinitionArn":"arn:aws:ecs:us-east-1:111111111111:task-definition/fss-prod-migration:2"}}\'; exit 0 ;;',
+    '  "ecs deregister-task-definition") echo \'{}\'; exit 0 ;;',
+    '  "ecs describe-task-definition") cat "$state/migration-definition"; exit 0 ;;',
+    `  "secretsmanager describe-secret") if [ -f "$state/credential-changes" ] || [ -f "$state/credential-after-idle" ]; then k=$(( $(cat "$state/secret-reads" 2>/dev/null || echo 0)+1 )); echo "$k" > "$state/secret-reads"; limit=1; if [ -f "$state/credential-after-idle" ]; then limit=4; fi; if [ "$k" -gt "$limit" ]; then echo '{"VersionIdsToStages":{"version-two":["AWSCURRENT"]}}'; exit 0; fi; fi; echo '{"VersionIdsToStages":{"version-one":["AWSCURRENT"]}}'; exit 0 ;;`,
     '  "ecs describe-services")',
     '    desired=$(cat "$state/$name.desired" 2>/dev/null || echo 0); running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
     '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[],"events":[]}],"failures":[]}\\n\' "$name" "$desired" "$running"',
@@ -65,10 +71,12 @@ function stub(directory: string, prefix: string): string {
     `    printf '{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:${ACCOUNT}:task/${prefix}-cluster/oneoff-%s"}],"failures":[]}\\n' "$n"`,
     '    exit 0 ;;',
     '  "ecs describe-tasks")',
-    '    printf \'{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"operations","exitCode":%s}]}],"failures":[]}\\n\' "$(cat "$state/exit-code" 2>/dev/null || echo 0)"',
+    '    n=${task##*oneoff-}; container=operations; code=$(cat "$state/exit-code" 2>/dev/null || echo 0); if [[ "$(cat "$state/task-$n.cmd")" == *migration-auth-check* ]]; then container=migration; code=0; fi',
+    `    printf '{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"%s","exitCode":%s}]}],"failures":[]}\\n' "$container" "$code"`,
     '    exit 0 ;;',
     '  "logs get-log-events")',
     '    n=${stream##*oneoff-}; cmd=$(cat "$state/task-$n.cmd")',
+    '    if [[ "$cmd" == *migration-auth-check* ]]; then k=$(( $(cat "$state/auth-reads" 2>/dev/null || echo 0)+1 )); echo "$k" > "$state/auth-reads"; answer=$(cat "$state/authentication-answer"); if [ "$k" -gt 1 ] && [ -f "$state/authentication-after-idle" ]; then answer=$(cat "$state/authentication-after-idle"); fi; python3 -c \'import json,sys; print(json.dumps({"events":[{"message": sys.argv[1]}]}))\' "$answer"; exit 0; fi',
     '    if [ -f "$state/old-image" ]; then answer=\'{"level":"error","event":"fss_usage","reason":"command_unknown","detail":"admin release"}\'; python3 -c \'import json,sys; print(json.dumps({"events":[{"message": sys.argv[1]}]}))\' "$answer"; exit 0; fi',
     '    case "$cmd" in',
     '      *idle-check*)',
@@ -98,10 +106,16 @@ interface Run {
   readonly counts: Readonly<Record<'api' | 'worker', number>>;
   readonly report: (name: string) => string | null;
   readonly tasks: readonly string[];
+  readonly registeredDefinition:unknown;
 }
 
 interface Options {
   readonly production?: boolean;
+  readonly authentication?: Readonly<Record<string,unknown>>;
+  readonly authenticationAfterIdle?: Readonly<Record<string,unknown>>;
+  readonly credentialChanges?: boolean;
+  readonly credentialChangesAfterIdle?:boolean;
+  readonly cloneMigrationImage?: boolean;
   /** One JSON answer per idle poll; the last repeats. */
   readonly answers?: readonly Record<string, unknown>[] | readonly string[];
   readonly env?: Readonly<Record<string, string>>;
@@ -129,6 +143,10 @@ function run(script: string, options: Options = {}): Run {
     writeFileSync(join(directory, 'old-image'), '');
     writeFileSync(join(directory, 'exit-code'), '64\n');
   }
+  writeFileSync(join(directory,'authentication-answer'),JSON.stringify(options.authentication??{ok:true,identity:'fss_admin',database:'fss',schemaVersion:61,readOnly:true,migrationMember:true,checkedAt:new Date().toISOString()}));
+  if(options.credentialChangesAfterIdle)writeFileSync(join(directory,'credential-after-idle'),'');
+  if(options.credentialChanges)writeFileSync(join(directory,'credential-changes'),'');
+  if(options.authenticationAfterIdle)writeFileSync(join(directory,'authentication-after-idle'),JSON.stringify(options.authenticationAfterIdle));
   const answers = (options.answers ?? [IDLE_ANSWER]).map(answer => (typeof answer === 'string' ? answer : JSON.stringify(answer)));
   writeFileSync(join(directory, 'idle-answers'), `${answers.join('\n')}\n`);
   const env: Record<string, string> = {};
@@ -148,6 +166,8 @@ function run(script: string, options: Options = {}): Run {
     FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/${prefix}-migration:1`,
     FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/${prefix}-operations:1`,
     FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: SECRET(prefix),
+    FSS_RELEASE_OUTPUT_MIGRATION_DATABASE_SECRET_ARN: SECRET(prefix).replace('app-runtime-database','migration-database'),
+    FSS_RELEASE_OUTPUT_DATABASE_NAME:'fss',
     FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: `/fss/${prefix}/worker`,
     FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
       subnet_ids: ['subnet-0a'],
@@ -164,6 +184,7 @@ function run(script: string, options: Options = {}): Run {
     }),
     FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
       containerDefinitions: [
+        {name:'migration',image:`${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/${prefix}-worker@${WORKER_DIGEST}`,environment:[{name:'FSS_DATABASE_HOST',value:HOST}],secrets:[{name:'MIGRATION_DATABASE_SECRET',valueFrom:SECRET(prefix).replace('app-runtime-database','migration-database')}]},
         {
           name: 'operations',
           image: `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/${prefix}-worker@${WORKER_DIGEST}`,
@@ -173,9 +194,12 @@ function run(script: string, options: Options = {}): Run {
       ],
     }),
   };
+  const fixtureDefinition=JSON.parse(fixtures['FSS_RELEASE_TASK_DEFINITION']!) as {containerDefinitions:{name:string}[]};
+  writeFileSync(join(directory,'migration-definition'),JSON.stringify({taskDefinition:{family:`${prefix}-migration`,taskRoleArn:`arn:aws:iam::${ACCOUNT}:role/${prefix}-migration-task`,executionRoleArn:`arn:aws:iam::${ACCOUNT}:role/${prefix}-migration-execution`,containerDefinitions:fixtureDefinition.containerDefinitions.filter(c=>c.name==='migration')}}));
+  if(options.cloneMigrationImage){const path=join(directory,'migration-definition');const d=JSON.parse(readFileSync(path,'utf8')) as {taskDefinition:{containerDefinitions:{image:string}[]};tags:unknown[]};d.taskDefinition.containerDefinitions[0]!.image=`${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/${prefix}-worker@sha256:${'a'.repeat(64)}`;d.tags=[{key:'NamePrefix',value:prefix}];writeFileSync(path,JSON.stringify(d));}
   const args =
     script === STOP
-      ? [root, prefix, ...(production ? ['--environment', 'production'] : [])]
+      ? [root, prefix, ...(production ? ['--environment', 'production', '--worker-digest', WORKER_DIGEST] : [])]
       : [...(options.args ?? []), root, prefix, ...(options.tail ?? [])];
   const result = spawnSync(repositoryPath(script), args, {
     encoding: 'utf8',
@@ -189,20 +213,66 @@ function run(script: string, options: Options = {}): Run {
     calls: (read('calls.log') ?? '').split('\n').filter(line => line !== ''),
     counts: { api: Number(read(`${prefix}-api.desired`) ?? 'NaN'), worker: Number(read(`${prefix}-worker.desired`) ?? 'NaN') },
     report: name => (existsSync(join(reports, name)) ? readFileSync(join(reports, name), 'utf8').trim() : null),
+    registeredDefinition:read('registered-definition')?JSON.parse(read('registered-definition')!):null,
     tasks: Array.from({ length: taskCount }, (_, index) => {
       const cmd = read(`task-${String(index + 1)}.cmd`) ?? '';
-      return cmd.includes('idle-check') ? 'idle-check' : cmd.includes('"on"') ? 'drain-on' : cmd.includes('"off"') ? 'drain-off' : 'other';
+      return cmd.includes('migration-auth-check') ? 'migration-auth-check' : cmd.includes('idle-check') ? 'idle-check' : cmd.includes('"on"') ? 'drain-on' : cmd.includes('"off"') ? 'drain-off' : 'other';
     }),
   };
 }
 
 const scaled = (calls: readonly string[]): readonly string[] => calls.filter(call => call.startsWith('ecs update-service'));
 
+describe('production migration authentication before drain and stop',()=>{
+ it('authenticates before drain and again after idle before scaling either service',()=>{
+  const r=run(STOP,{production:true});
+  expect(r.code,r.output).toBe(0);
+  expect(r.tasks).toEqual(['migration-auth-check','drain-on','idle-check','migration-auth-check','idle-check']);
+  expect(r.counts).toEqual({api:0,worker:0});
+ });
+ it('refuses a credential rotation during the preflight before any drain',()=>{
+  const r=run(STOP,{production:true,credentialChanges:true});
+  expect(r.code).not.toBe(0);expect(r.output).toContain('credential changed during authentication');
+  expect(r.tasks).toEqual(['migration-auth-check']);expect(scaled(r.calls)).toEqual([]);
+ });
+ it('refuses a failed fresh check after idle and clears the drain without stopping',()=>{
+  const r=run(STOP,{production:true,authenticationAfterIdle:{ok:false,reason:'authentication_failed'}});
+  expect(r.code).not.toBe(0);expect(r.tasks).toEqual(['migration-auth-check','drain-on','idle-check','migration-auth-check','drain-off']);
+  expect(scaled(r.calls)).toEqual([]);expect(r.counts).toEqual({api:2,worker:1});
+ });
+ it('clones the existing migration definition to the release image and deregisters it on refusal',()=>{
+  const r=run(STOP,{production:true,cloneMigrationImage:true,authentication:{ok:false,reason:'authentication_failed'}});
+  expect(r.tasks).toEqual(['migration-auth-check']);expect(scaled(r.calls)).toEqual([]);
+  expect(r.calls.filter(c=>c.startsWith('ecs register-task-definition'))).toHaveLength(1);
+  expect(r.calls.filter(c=>c.startsWith('ecs deregister-task-definition'))).toHaveLength(1);
+  expect(r.registeredDefinition).toMatchObject({family:'fss-prod-migration',taskRoleArn:`arn:aws:iam::${ACCOUNT}:role/fss-prod-migration-task`,executionRoleArn:`arn:aws:iam::${ACCOUNT}:role/fss-prod-migration-execution`,containerDefinitions:[{name:'migration',image:`${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@${WORKER_DIGEST}`,secrets:[{name:'MIGRATION_DATABASE_SECRET',valueFrom:SECRET('fss-prod').replace('app-runtime-database','migration-database')}]}]});
+ });
+ it('refuses a stale authentication result before any drain',()=>{
+  const r=run(STOP,{production:true,authentication:{ok:true,database:'fss',identity:'fss_admin',readOnly:true,migrationMember:true,schemaVersion:61,checkedAt:'2026-01-01T00:00:00Z'}});
+  expect(r.code).not.toBe(0);expect(r.output).toContain('report is stale');expect(r.tasks).toEqual(['migration-auth-check']);expect(scaled(r.calls)).toEqual([]);
+ });
+ it('refuses a credential change during the last idle check before scaling',()=>{
+  const r=run(STOP,{production:true,credentialChangesAfterIdle:true});
+  expect(r.code).not.toBe(0);expect(scaled(r.calls)).toEqual([]);expect(r.tasks.at(-1)).toBe('drain-off');
+ });
+ it('refuses when new activity makes the idle result stale during authentication',()=>{
+  const r=run(STOP,{production:true,answers:[IDLE_ANSWER,busy('a command was accepted during the authentication task')]});
+  expect(r.code).not.toBe(0);expect(scaled(r.calls)).toEqual([]);expect(r.tasks.at(-1)).toBe('drain-off');expect(r.counts).toEqual({api:2,worker:1});
+ });
+ it.each(['0','1'])('runs a failed authentication check and leaves production undrained and running with force-idle=%s',(force)=>{
+  const r=run(STOP,{production:true,authentication:{ok:false,reason:'authentication_failed'},env:{FSS_PROD_FORCE_IDLE:force}});
+  expect(r.code).not.toBe(0);
+  expect(r.tasks).toEqual(['migration-auth-check']);
+  expect(scaled(r.calls)).toEqual([]);
+  expect(r.counts).toEqual({api:2,worker:1});
+ });
+});
+
 describe('stop.sh in production waits for idle before it stops anything', () => {
   it('turns the drain on, polls busy, busy, idle, and only then scales both services down', () => {
     const r = run(STOP, { production: true, answers: [busy('1 call is in progress; wait for it to end'), busy('1 call is in progress'), IDLE_ANSWER] });
     expect(r.code, r.output).toBe(0);
-    expect(r.tasks).toEqual(['drain-on', 'idle-check', 'idle-check', 'idle-check']);
+    expect(r.tasks).toEqual(['migration-auth-check', 'drain-on', 'idle-check', 'idle-check', 'idle-check', 'migration-auth-check', 'idle-check']);
     expect(scaled(r.calls)).toHaveLength(2);
     expect(r.counts).toEqual({ api: 0, worker: 0 });
     // The order: every task (drain, then the three checks) before the first scale-down, and
@@ -228,7 +298,7 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
     expect(r.output).toContain('2 API commands were accepted in the last 5 minutes; someone is working');
     expect(scaled(r.calls), 'a refused stop scaled a service').toEqual([]);
     expect(r.counts).toEqual({ api: 2, worker: 1 });
-    expect(r.tasks).toEqual(['drain-on', 'idle-check', 'drain-off']);
+    expect(r.tasks).toEqual(['migration-auth-check', 'drain-on', 'idle-check', 'drain-off']);
     expect(r.report('release-stop.txt')).toBeNull();
     expect(r.report('release-stop-instant.txt')).toBeNull();
     expect(r.report('release-idle.txt')).toContain('result=refused');
@@ -240,7 +310,7 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
     // refuses every busy answer at once.
     const r = run(STOP, { production: true, answers: [busy('a job'), busy('a job'), busy('a job'), busy('a job'), IDLE_ANSWER], env: { FSS_PROD_IDLE_WAIT_SECONDS: '600' } });
     expect(r.code, r.output).toBe(0);
-    expect(r.tasks.filter(task => task === 'idle-check')).toHaveLength(5);
+    expect(r.tasks.filter(task => task === 'idle-check')).toHaveLength(6);
   });
 
   it('FSS_PROD_FORCE_IDLE=1 skips the wait, prints forced, and records it', () => {

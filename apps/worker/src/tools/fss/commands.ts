@@ -120,6 +120,13 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'the same thing, spelled the long way',
   },
   {
+    path: ['migration-auth-check'],
+    valueFlags: ['--expected-database', '--expected-user', '--expected-host', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--expected-database', '--expected-user', '--expected-host'],
+    summary: 'bounded read-only authentication of the migration credential before a schema release stops services',
+  },
+  {
     // Lane RS-2. One migration task instead of two: `migrate` and then
     // `admin database-users ensure`, in that order, under the one RunTask start
     // latency. `--migrate-report` and `--users-report` write each step's own report,
