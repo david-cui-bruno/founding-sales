@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stop both services before the apply of a schema-change release (lane g70; P7).
 #
-#   infra/scripts/stop.sh <root> <prefix> [--environment production]
+#   infra/scripts/stop.sh <root> <prefix> [--environment production --worker-digest sha256:...]
 #
 # The task definitions a schema release registers declare a strict `{N,N}` range and
 # refuse the schema the database is still at, so the order is
@@ -18,6 +18,9 @@
 # Before it scales anything (slice A4), it asks whether production is idle, so a schema
 # release never stops the system under a call or a person at work:
 #
+# Production authenticates the existing migration credential on the exact release image
+# before drain and again after idle. Force-idle cannot bypass that read-only check.
+#
 #   1. production only: `idle.sh drain-on` (nothing new starts; it lapses by itself);
 #   2. `idle.sh wait`: `fss admin release idle-check` on the operations task, every
 #      FSS_PROD_IDLE_POLL_SECONDS (15) for up to FSS_PROD_IDLE_WAIT_SECONDS (600);
@@ -32,16 +35,21 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 NAMED_ENVIRONMENT=''
-[ "$#" -ge 2 ] || { echo "usage: stop.sh <terraform root> <name prefix> [--environment production]" >&2; exit 1; }
+STOP_WORKER_DIGEST=''
+[ "$#" -ge 2 ] || { echo "usage: stop.sh <terraform root> <name prefix> [--environment production --worker-digest sha256:...]" >&2; exit 1; }
 STOP_ROOT=$1
 STOP_PREFIX=$2
 shift 2
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --worker-digest) STOP_WORKER_DIGEST=${2:-}; shift; [ "$#" -gt 0 ] && shift ;;
     --environment) NAMED_ENVIRONMENT=${2:-}; shift; [ "$#" -gt 0 ] && shift ;;
     *) echo "FAIL: stop.sh does not take '$1'" >&2; exit 1 ;;
   esac
 done
+
+[[ "${FSS_PROD_IDLE_POLL_SECONDS:-15}" =~ ^[0-9]+$ ]] || { echo 'FAIL: FSS_PROD_IDLE_POLL_SECONDS must be a whole number' >&2; exit 1; }
+[[ "${FSS_PROD_IDLE_WAIT_SECONDS:-600}" =~ ^[0-9]+$ ]] || { echo 'FAIL: FSS_PROD_IDLE_WAIT_SECONDS must be a whole number' >&2; exit 1; }
 
 release_read_root "$STOP_ROOT" "$STOP_PREFIX" "$NAMED_ENVIRONMENT" \
   "scales both of its services to zero, the outage a schema-change release takes on purpose"
@@ -50,6 +58,10 @@ STOP_STARTED_AT="$(date -u +%s)"
 rehearsal_log "stopping $PREFIX from $ROOT_DIRECTORY ($ENVIRONMENT) before the apply"
 release_guard_services stop
 rehearsal_log "services $API_SERVICE, then $WORKER_SERVICE"
+
+if [ "$ENVIRONMENT" = production ]; then
+  "$(dirname "${BASH_SOURCE[0]}")/migration-auth.sh" "$ROOT_DIRECTORY" "$PREFIX" "$STOP_WORKER_DIGEST" || exit 1
+fi
 
 # Is production idle? Before anything is scaled, and before the stop instant is written.
 IDLE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/idle.sh"
@@ -69,6 +81,14 @@ if ! "$IDLE_SCRIPT" wait "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAM
       || echo "WARN: the release drain could not be turned off; it lapses by itself within 60 minutes." >&2
   fi
   exit 1
+fi
+# Idle waiting can outlive a credential rotation. A second fresh check is required;
+# a file from the earlier check cannot authorize the service stop.
+if [ "$ENVIRONMENT" = production ]; then
+  if ! "$(dirname "${BASH_SOURCE[0]}")/migration-auth.sh" "$ROOT_DIRECTORY" "$PREFIX" "$STOP_WORKER_DIGEST"; then
+    "$IDLE_SCRIPT" drain-off "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} || echo 'WARN: release drain cleanup failed; it lapses automatically' >&2
+    exit 1
+  fi
 fi
 IDLE_RESULT=unknown
 DRAIN_STATE=not_used

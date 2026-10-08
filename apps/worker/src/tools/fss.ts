@@ -1,3 +1,4 @@
+import {migrationAuthenticationCheck} from './fss/migrationAuthentication.ts';
 import {discoveryResumeCommand} from './fss/discoveryResume.ts';
 import {qualificationResolveIdentityCommand} from './fss/qualificationResolveIdentity.ts';
 import {qualificationConfigureCommand} from './fss/qualificationConfigure.ts';
@@ -97,6 +98,7 @@ export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
   'admin database-users ensure',
   // Lane RS-2: the two above, in one task, which is what the schema release runs.
   'release-prepare',
+  'migration-auth-check',
 ]);
 
 const write = (line: string): void => {
@@ -490,6 +492,13 @@ export async function main(
     console.error(JSON.stringify({ level: 'error', event: 'fss_usage', reason: parsed.reason, detail: parsed.detail }));
     if (parsed.reason === 'command_missing') console.error(describeCommands());
     return FSS_EXIT_CODES.usage;
+  }
+
+  if (parsed.value.spec.path.join(' ') === 'migration-auth-check') {
+    const outcome = await migrationAuthenticationCheck(parsed.value.options, environment);
+    await report(parsed.value.options['--report'], outcome);
+    write(JSON.stringify(outcome));
+    return outcome.ok ? FSS_EXIT_CODES.ok : FSS_EXIT_CODES.refused;
   }
 
   const log = toolLogger(parsed.value.spec.path.join('-'));
