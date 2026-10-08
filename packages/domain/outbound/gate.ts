@@ -5,7 +5,7 @@ import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { localParts } from '../src/rules/localClock.ts';
 import { businessDateOf } from '../today/snapshots.ts';
-import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
+import { effectiveDailyCap, ensureRamp, openSendDay, readSenderReadiness, type RampRow, type SendDayRow } from './ramp.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
@@ -233,7 +233,11 @@ export async function decideSend(
   //
   // The cap in force now: the schedule, or the admin's raise as written (wave 2, S4.6),
   // lowered by the admin's lowering, never above 100.
-  const ramp = await ensureRamp(context, mailbox.id);
+  const ramp = await ensureRamp(context, mailbox.id, { now });
+  if(ramp.recovery?.active){
+    const readiness=await readSenderReadiness(context,mailbox.id);
+    if(!readiness.ready)return refuseSend('step_ineligible',`sender_recovery_unready:${readiness.reasons.join(',')}`);
+  }
   const cap = effectiveDailyCap(ramp);
   const businessDate = await businessDateOf(context, now.toISOString());
   const day = await openSendDay(context, { mailboxId: mailbox.id, businessDate, cap });

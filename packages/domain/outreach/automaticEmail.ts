@@ -32,6 +32,7 @@ async function admit(ctx:RepositoryContext,input:AutomaticEmailInput):Promise<Re
  const health=await readSendDayHealth(ctx,config.value.mailboxId);
  if(!health?.authenticationPasses||!health.coverageHealthy||health.providerWarning)return {ok:false,reason:'sender_unhealthy'};
  const ramp=await readRampStanding(ctx,config.value.mailboxId);
+ if(ramp&&!ramp.readiness.ready)return {ok:false,reason:'sender_unhealthy'};
  if(!ramp||ramp.effectiveCap<=0)return {ok:false,reason:'mailbox_capacity_exhausted'};
  // Conservative backlog bound: queued first touches count even when their
  // morning slot is tomorrow. Due follow-ups and claimed sends take priority.

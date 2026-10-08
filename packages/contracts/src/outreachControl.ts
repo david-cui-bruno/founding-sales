@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {senderStandingSchema} from './outbound.ts';
 import {uuid} from './foundationRows.ts';
 import {commandIdSchema} from './auth.ts';
 import {semanticVersionSchema} from './clientVersion.ts';
@@ -38,3 +39,7 @@ export const outreachMutationSchema=z.discriminatedUnion('action',[
  routineManualCommandSchema.omit({clientVersion:true}).extend({action:z.literal('reply_manual')}),
 ]);
 export type OutreachMutation=z.infer<typeof outreachMutationSchema>;
+
+/** Successor read keeps the installed strict /outreach/control(/v2) sender shape. */
+export const outreachSenderStandingResponseSchema=z.strictObject({senders:z.array(z.strictObject({mailboxId:uuid,standing:senderStandingSchema}))});
+export type OutreachSenderStandingResponse=z.infer<typeof outreachSenderStandingResponseSchema>;

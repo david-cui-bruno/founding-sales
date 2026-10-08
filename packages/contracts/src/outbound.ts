@@ -65,6 +65,25 @@ const outboundDoubtSchema = z.object({
   unresolvedTerminal: z.number().int().min(0),
 });
 
+/** Sender standing explains allowance and current mailbox readiness. It grants no
+ * dispatch authority; installed strict outreach DTOs use their existing shape. */
+export const senderStandingSchema = z.strictObject({
+ healthySendingDays:z.number().int().nonnegative(),
+ earnedCap:z.number().int().nonnegative().max(100),
+ effectiveCap:z.number().int().nonnegative().max(100),
+ lastActivityAt:instant.nullable(),
+ activityBasis:z.enum(['confirmed_send','mailbox_creation']),
+ inactivityDays:z.number().int().nonnegative(),
+ recovery:z.strictObject({
+  epochId:uuid,active:z.boolean(),startedOn:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  stageCap:z.number().int().nonnegative().max(100),earnedCap:z.number().int().nonnegative().max(100),
+  qualifyingDays:z.number().int().nonnegative(),nextStageAfterDays:z.number().int().nonnegative().max(5),
+  lastQualifiedOn:z.string().nullable(),stageStartedOn:z.string(),
+ }).nullable(),
+ readiness:z.strictObject({ready:z.boolean(),reasons:z.array(z.string())}),
+});
+export type SenderStanding=z.infer<typeof senderStandingSchema>;
+
 /** One mailbox's ramp, present only when the read named a `mailboxId`. */
 const mailboxRampStatusSchema = z.object({
   mailboxId: uuid,
@@ -73,6 +92,7 @@ const mailboxRampStatusSchema = z.object({
   adminDailyCap: z.number().int().min(0).nullable(),
   raisedDailyCap: z.number().int().min(0).nullable(),
   lastHealthFailure: z.string().nullable(),
+  standing: senderStandingSchema.optional(),
 });
 
 /** One fence, present only when the read named an `outboundMessageId`. Never a subject or body. */
