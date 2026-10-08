@@ -48,7 +48,13 @@ export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:stri
   const candidate=(await ctx.db.query<{id:string;payload:CandidateInput;revision:number;status:string;qualification_blocked:boolean}>(`SELECT c.* FROM sourcing_candidates c JOIN sourcing_qualification_runs r ON r.workspace_id=c.workspace_id AND r.candidate_id=c.id
    WHERE c.workspace_id=$1 AND r.id=$2 FOR UPDATE OF c`,[w,runId])).rows[0];
   if(!candidate||candidate.revision!==1||candidate.status!=='needs_review'||candidate.qualification_blocked)return;
-  if(!(await ctx.db.query('SELECT 1 FROM sourcing_discovery_hits WHERE workspace_id=$1 AND candidate_id=$2 LIMIT 1',[w,candidate.id])).rows.length)return;
+  if(candidate.payload.preparedBy!=='Tavily Basic search · not verified')return;
+  // A hit can later be associated with an existing manual candidate. Require the
+  // candidate and original hit to have been created in the same discovery transaction.
+  if(!(await ctx.db.query(`SELECT 1 FROM sourcing_discovery_hits h JOIN sourcing_discovery_attempts a ON a.workspace_id=h.workspace_id AND a.id=h.attempt_id
+   JOIN sourcing_candidates c ON c.workspace_id=h.workspace_id AND c.id=h.candidate_id
+   WHERE h.workspace_id=$1 AND c.id=$2 AND h.retrieved_at=c.created_at AND h.source_url=c.payload->>'sourceUrl'
+    AND a.query=c.payload->>'discoveryQuery' AND a.state='complete' LIMIT 1`,[w,candidate.id])).rows.length)return;
   const run=(await ctx.db.query<QualificationRunRow>('SELECT * FROM sourcing_qualification_runs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[w,runId])).rows[0];
   if(!run||run.candidate_revision!==1||run.reason||run.policy_version!==QUALIFICATION_POLICY_VERSION||run.prompt_version!==QUALIFICATION_PROMPT_VERSION||!['review','eligible'].includes(run.state))return;
   const now=await databaseNow(ctx),supported=officeName(candidate.payload,run.facts,run.observations,now);

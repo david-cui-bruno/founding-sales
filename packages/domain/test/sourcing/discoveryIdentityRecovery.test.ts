@@ -78,12 +78,15 @@ it('leaves corrected evidence ineligible while the ordinary research ceiling def
  expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{qualificationWaitReason:'daily_firm_ceiling',candidates:[{id:original.candidate.id,firmName:name,revision:2}]}});
  expect(await readQualification(ctx(),{candidateId:original.candidate.id})).toMatchObject({status:'unavailable',reason:'candidate_changed',candidateRevision:1});
 });
-it('never rewrites manually staged or already edited discovery candidates',async()=>{
- const manual=await withTransaction(db.session,()=>saveCandidate(ctx(),{firmName:'Manual approved name',website:'https://example.test/',locality:'Boston',region:'MA',signal:'fit_only',sourceUrl:'https://example.test/',evidence:'Operator evidence',observedOn:'2026-10-01',preparedBy:'Manual'}));if(!manual.ok)throw Error(manual.reason);
+it('never rewrites a manual import even if discovery later associates a hit',async()=>{
+ const manual=await withTransaction(db.session,()=>saveCandidate(ctx(),{firmName:'Manual approved name',website:'https://example.test/',locality:'Boston',region:'MA',signal:'fit_only',sourceUrl:'https://example.test/',evidence:'Operator evidence',observedOn:'2026-10-01',preparedBy:'Tavily Basic search · not verified',discoveryQuery:'Boston residential property management'}));if(!manual.ok)throw Error(manual.reason);
  const pending=await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:manual.value.id,expectedRevision:1}));if(!pending.ok)throw Error(pending.reason);
+ await discovered(); // Discovery retains/associates a hit for the existing manually staged candidate.
+ expect((await db.session.query('SELECT candidate_id FROM sourcing_discovery_hits')).rows).toMatchObject([{candidate_id:manual.value.id}]);
  await runQualification(ctx(),{runId:pending.value.runId},{pageFetch:pages,extraction});
  expect(await listCandidates(ctx(),{status:'needs_review',offset:0})).toMatchObject({value:{candidates:[{firmName:'Manual approved name',revision:1}]}});
- await db.session.query('DELETE FROM sourcing_candidates');
+});
+it('never rewrites already edited discovery candidates',async()=>{
  const edited=await discovered();await withTransaction(db.session,()=>reviewCandidate(ctx(),{id:edited.candidate.id,expectedRevision:1,status:'kept'}));
  const next=await withTransaction(db.session,()=>requestQualification(ctx(),{candidateId:edited.candidate.id,expectedRevision:2}));if(!next.ok)throw Error(next.reason);
  await runQualification(ctx(),{runId:next.value.runId},{pageFetch:pages,extraction});
