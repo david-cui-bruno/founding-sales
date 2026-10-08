@@ -1,3 +1,5 @@
+import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
+import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
 import {OutreachSection} from '../outreach/OutreachSection.tsx';
 import { useEffect, useRef, type JSX } from 'react';
 import type { MailboxState } from '../../shared/contract.ts';
@@ -153,6 +155,7 @@ export function SettingsView({
                   }}
                 />
               )}
+              <BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} />
               <Administration view={view} actions={admin.actions} busy={admin.busy} />
               {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
               <ResearchSettings identity={identity} generation={generation} guard={guard} />

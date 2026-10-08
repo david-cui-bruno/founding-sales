@@ -1,3 +1,5 @@
+import {BookingCapacity} from '../meetings/BookingCapacity.tsx';
+import {bookingCapacityPorts} from '../meetings/bookingCapacityPorts.ts';
 import {FirmQualification} from '../sourcing/FirmQualification.tsx';
 import { Candidates } from '../sourcing/Candidates.tsx';
 import { useKept } from '../replies/kept.ts';
@@ -323,6 +325,7 @@ export function FirmsRoute({
             <Banners notices={view.banners} />
           </div>
         )}
+        <div className="shrink-0 max-h-64 overflow-y-auto px-5"><BookingCapacity key={`booking:${identity}:${String(generation)}`} ports={bookingCapacityPorts} onOpenFirm={crm.actions.openFirm} /></div>
         {/* Slice M1: Cal.com bookings Callie could not attach to a firm. Nothing while there are none. */}
         <BookingsToMatch
           firms={firmsOf(state.pipeline)}

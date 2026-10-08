@@ -1,3 +1,4 @@
+import {BOOKING_CAPACITY_PATHS,routeBookingCapacity} from './bookingCapacity.ts';
 import {SOCIAL_PATHS,routeSocial} from './social.ts';
 import {SOURCING_LEARNING_PATHS,routeSourcingLearning} from './sourcingLearning.ts';
 import {OUTREACH_PATHS,routeOutreach} from './outreach.ts';
@@ -199,6 +200,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // Slice M1: the firm page's meetings, the bookings to match, and the match. Exact
     // paths; none reaches Cal.com.
     moduleOf('meetings', { paths: MEETING_PATHS }, routeMeetings, routing),
+    moduleOf('booking-capacity', {paths:BOOKING_CAPACITY_PATHS},routeBookingCapacity,routing),
     // Lane M4: exact paths under /meetings/recordings, beside M1's exact /meetings paths.
     moduleOf('meeting-auto-recording', {paths:MEETING_AUTO_RECORDING_PATHS}, routeMeetingAutoRecording,routing),
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),

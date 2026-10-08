@@ -236,6 +236,7 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'meetings.outcomes': { meetingId: UUID },
   'meetings.saveNotes': { meetingId: UUID, expectedRevision: 0, debrief: '', speakerMappings: [], itemOverrides: [], sufficient: false, commandId: UUID },
   'meetings.changeTask': { taskId: UUID, expectedVersion: 1, action: 'complete', commandId: UUID },
+  'meetings.bookingCapacity': {},
   'meetings.brief': { meetingId: UUID },
   'meetings.match': { meetingId: UUID, firmId: UUID },
   'meetings.setAttendance': { meetingId: UUID, attendance: 'attended', commandId: UUID },
@@ -388,6 +389,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         saveNotes: async input => await handlers['meetings.saveNotes'](input as never),
         changeTask: async input => await handlers['meetings.changeTask'](input as never),
         brief: async input => await handlers['meetings.brief'](input as never),
+        bookingCapacity: async () => await handlers['meetings.bookingCapacity'](undefined as never),
       };
     })(),
     // Slice S2: answered by `operationHost.ts` against the client directly, like Meetings.
