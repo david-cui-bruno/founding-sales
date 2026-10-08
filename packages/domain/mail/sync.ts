@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailAccessGrant, GmailClient, GmailHistoryRecord, GmailOAuthConfig } from './gmailClient.ts';
+import type { GmailAccessGrant, GmailAccessOutcome, GmailClient, GmailHistoryOutcome, GmailHistoryRecord, GmailOAuthConfig } from './gmailClient.ts';
+import {readProviderBinding,readProviderIncidents,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
 import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
@@ -65,6 +66,7 @@ export const DEFAULT_SYNC_MESSAGE_LIMIT = 50;
 export const DEFAULT_SYNC_PAGE_LIMIT = 20;
 
 export interface MailSyncDeps extends MessagePipelineDeps {
+  readonly now?: (()=>Date)|undefined;
   readonly maxMessages?: number | undefined;
   readonly maxPages?: number | undefined;
   /** 12.3's "oldest unresolved outbound message or active enrollment". G7-2 and G8. */
@@ -197,15 +199,26 @@ function report(
  */
 export async function accessForMailbox(
   context: RepositoryContext,
-  deps: { readonly gmail: GmailClient; readonly oauth: GmailOAuthConfig; readonly cipher: EnvelopeCipher },
+  deps: { readonly gmail: GmailClient; readonly oauth: GmailOAuthConfig; readonly cipher: EnvelopeCipher;readonly now?: (()=>Date)|undefined },
   mailboxId: string,
 ): Promise<
-  { readonly ok: true; readonly access: GmailAccessGrant } | { readonly ok: false; readonly reason: 'grant_revoked' }
+  { readonly ok: true; readonly access: GmailAccessGrant } | { readonly ok: false; readonly reason: 'grant_revoked'|'provider_incident' }
 > {
+  const now=deps.now?.()??new Date();
+  const incidents=(await readProviderIncidents(context,mailboxId,now)).filter(i=>!(i.sourceKind==='provider_send'&&i.reason==='unresolved_submission'));
+  if(incidents.some(i=>i.state!=='revalidation_due'))return {ok:false,reason:'provider_incident'};
+  const binding=await readProviderBinding(context,mailboxId);
   const refreshToken = await readRefreshToken(context, { mailboxId, cipher: deps.cipher });
   if (refreshToken === null) return { ok: false, reason: 'grant_revoked' };
-  const outcome = await deps.gmail.refreshAccessToken(deps.oauth, refreshToken);
-  if (!outcome.ok) return { ok: false, reason: 'grant_revoked' };
+  let outcome:GmailAccessOutcome;
+  try{outcome=await deps.gmail.refreshAccessToken(deps.oauth,refreshToken);}
+  catch{if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification:'unknown',reason:'unknown_provider_failure',binding,now});return {ok:false,reason:'provider_incident'};}
+  if(!outcome.ok){
+   const classification=outcome.classification??(outcome.reason==='rate_limited'?'transient':outcome.reason==='grant_revoked'?'authentication':'unknown');
+   if(binding)await recordProviderIncident(context,{mailboxId,sourceKind:'token_refresh',sourceId:mailboxId,classification,reason:outcome.incidentReason??outcome.reason,retryAt:outcome.retryAt,binding,now});
+   return {ok:false,reason:classification==='authentication'&&outcome.reason==='grant_revoked'?'grant_revoked':'provider_incident'};
+  }
+  if(binding)await resolveProviderIncidentsAfterRead(context,mailboxId,binding,now,['token_refresh']);
   return { ok: true, access: outcome.grant };
 }
 
@@ -250,6 +263,7 @@ export async function runMailSync(
 
   const access = await accessForMailbox(context, deps, mailbox.id);
   if (!access.ok) {
+    if(access.reason==='provider_incident')return report(mailbox.id,'read_stopped',mailbox.historyId);
     await holdForRevokedGrant(context, mailbox);
     return report(mailbox.id, 'grant_revoked', mailbox.historyId);
   }
@@ -286,6 +300,8 @@ export async function runMailSync(
 
   const maxMessages = deps.maxMessages ?? DEFAULT_SYNC_MESSAGE_LIMIT;
   const maxPages = deps.maxPages ?? DEFAULT_SYNC_PAGE_LIMIT;
+  const now=deps.now?.()??new Date();
+  const binding=await readProviderBinding(context,mailbox.id);
 
   // ---- Step 2: history, bounded, whole records, ids only. -------------------
   const records: GmailHistoryRecord[] = [];
@@ -295,15 +311,21 @@ export async function runMailSync(
   let historyExhausted = false;
 
   for (let page = 0; page < maxPages; page += 1) {
-    const outcome = await deps.gmail.listHistory(access.access, {
+    let outcome:GmailHistoryOutcome;
+    try { outcome = await deps.gmail.listHistory(access.access, {
       startHistoryId: mailbox.historyId,
       ...(pageToken === undefined ? {} : { pageToken }),
-    });
+    }); } catch {
+      if(binding)await recordProviderIncident(context,{mailboxId:mailbox.id,sourceKind:'mail_read',sourceId:mailbox.id,classification:'unknown',reason:'unknown_provider_failure',binding,now});
+      return report(mailbox.id,'read_stopped',mailbox.historyId);
+    }
     if (!outcome.ok) {
       if (outcome.reason === 'history_expired') {
         return await beginRecoveryForExpiredCursor(context, deps, access.access, mailbox);
       }
-      if (outcome.reason === 'grant_revoked') {
+      const classification=outcome.classification??(outcome.reason==='grant_revoked'?'authentication':'transient');
+      if(binding)await recordProviderIncident(context,{mailboxId:mailbox.id,sourceKind:'mail_read',sourceId:mailbox.id,classification,reason:outcome.incidentReason??outcome.reason,retryAt:outcome.retryAt,binding,now});
+      if (outcome.reason === 'grant_revoked'&&classification==='authentication') {
         await holdForRevokedGrant(context, mailbox);
         return report(mailbox.id, 'grant_revoked', mailbox.historyId);
       }
@@ -312,7 +334,7 @@ export async function runMailSync(
         error: 'the Gmail history read was rate limited',
         fence: fenceOf(mailbox),
       });
-      return report(mailbox.id, 'rate_limited', mailbox.historyId);
+      return report(mailbox.id, classification==='transient'?'rate_limited':'read_stopped', mailbox.historyId);
     }
 
     for (const record of outcome.records) {
@@ -389,6 +411,7 @@ export async function runMailSync(
     // `releaseMailboxHold` re-reads the row and refuses unless the mailbox is
     // `ready`, which is 4.2's "never after one successful API call".
     await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'coverage_incomplete' });
+    if(binding)await resolveProviderIncidentsAfterRead(context,mailbox.id,binding,now,['mail_read']);
   }
   // A capped run does *not* re-arm its own job here. It cannot: the handler runs
   // inside the runner's transaction and its own row is still `running`, so an upsert

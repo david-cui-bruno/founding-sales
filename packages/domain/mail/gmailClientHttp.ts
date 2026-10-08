@@ -8,6 +8,7 @@ import {
   type GmailHistoryOutcome,
   type GmailHistoryRecord,
   type GmailHistoryRequest,
+  type GmailIncidentMetadata,
   type GmailListOutcome,
   type GmailListRequest,
   type GmailMessageBody,
@@ -156,6 +157,14 @@ export function classifyStatus(status: number, body: string): GmailFailure {
   return 'unexpected';
 }
 
+function incidentMetadata(response: HttpResponse, now: Date): GmailIncidentMetadata {
+  const reason=errorReason(response.body)??'';
+  const retry=response.headers['retry-after']===undefined?{}:{retryAt:retryDeadline(response,now)};
+  if(response.status===403&&reason.includes('quota'))return {...retry,classification:'unknown',incidentReason:'quota_exceeded'};
+  if(response.status===403&&!reason.includes('ratelimit')&&reason!=='autherror')return {...retry,classification:'unknown',incidentReason:'permission_unknown'};
+  return retry;
+}
+
 function decodeBase64Url(value: string): string {
   return Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
 }
@@ -253,13 +262,13 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
   const exchange = async (
     config: GmailOAuthConfig,
     form: URLSearchParams,
-  ): Promise<{ readonly status: number; readonly json: Json | null }> => {
+  ): Promise<{ readonly status: number; readonly json: Json | null;readonly response:HttpResponse }> => {
     const response = await options.fetch(config.tokenEndpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
       body: form.toString(),
     });
-    return { status: response.status, json: parseJson(response.body) };
+    return { status: response.status, json: parseJson(response.body),response };
   };
 
   /**
@@ -293,8 +302,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     );
     if (response.status !== 200) {
       const classified = classifyStatus(response.status, response.body);
-      if (classified === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
-      if (classified === 'rate_limited') return { ok: false, reason: 'rate_limited' };
+      if (classified === 'grant_revoked') return { ok: false, reason: 'grant_revoked',...incidentMetadata(response,options.now?.()??new Date()) };
+      if (classified === 'rate_limited') return { ok: false, reason: 'rate_limited',...incidentMetadata(response,options.now?.()??new Date()) };
       throw new GmailClientError('unexpected_status', failure, response.status);
     }
     const json = parseJson(response.body);
@@ -457,7 +466,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     },
 
     refreshAccessToken: async (config, refreshToken): Promise<GmailAccessOutcome> => {
-      const { status, json } = await exchange(
+      const { status, json,response } = await exchange(
         config,
         new URLSearchParams({
           grant_type: 'refresh_token',
@@ -468,9 +477,11 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       );
       // Google answers 400 `invalid_grant` for a revoked or expired refresh token,
       // which is the ordinary end of a grant rather than a fault to retry.
-      if (status !== 200 || json === null) return { ok: false, reason: 'grant_revoked' };
+      if(status===429||status===503)return {ok:false,reason:'rate_limited',...(response.headers['retry-after']===undefined?{}:{retryAt:retryDeadline(response,options.now?.()??new Date())})};
+      if(status===400&&json?.['error']==='invalid_grant')return {ok:false,reason:'grant_revoked'};
+      if (status !== 200 || json === null) return { ok: false, reason: 'grant_refused',classification:'unknown',incidentReason:'unknown_provider_failure' };
       const accessToken = asString(json['access_token']);
-      if (accessToken === null) return { ok: false, reason: 'grant_revoked' };
+      if (accessToken === null) return { ok: false, reason: 'grant_refused',classification:'unknown',incidentReason:'unknown_provider_failure' };
       const expiresIn = Number(json['expires_in'] ?? 3600);
       return {
         ok: true,
@@ -524,7 +535,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       });
       if (response.status !== 200) {
         const failure = classifyStatus(response.status, response.body);
-        return { ok: false, reason: failure === 'grant_revoked' ? 'grant_revoked' : 'provider_refusal' };
+        return { ok: false, reason: failure === 'grant_revoked' ? 'grant_revoked' : 'provider_refusal',
+          ...(failure==='rate_limited'?{classification:'transient' as const,incidentReason:'rate_limited' as const}:{}),...incidentMetadata(response,options.now?.()??new Date()) };
       }
       const json = parseJson(response.body);
       const historyId = historyIdOf(json?.['historyId']);
@@ -560,8 +572,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         // 12.3: "On expired history cursor ..." Gmail says 404 for a start id it has
         // pruned, and that is the only 404 this call can produce.
         if (failure === 'not_found') return { ok: false, reason: 'history_expired' };
-        if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
-        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited' };
+        if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked',...incidentMetadata(response,options.now?.()??new Date()) };
+        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited',...incidentMetadata(response,options.now?.()??new Date()) };
         throw new GmailClientError('unexpected_status', 'the Gmail history read failed', response.status);
       }
       // `ListHistoryResponse` is `{ history: History[], nextPageToken, historyId }`, and
@@ -697,6 +709,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
                 : response.status === 400
                   ? 'recipient_rejected'
                   : 'provider_refusal',
+          ...incidentMetadata(response,options.now?.()??new Date()),
         };
       }
       return {
@@ -717,6 +730,9 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         'GET',
       );
       if (response.status !== 200) {
+        const reason=errorReason(response.body)??'';
+        if(response.status===403&&reason.includes('quota'))return {ok:false,reason:'rate_limited',classification:'unknown',incidentReason:'quota_exceeded'};
+        if(response.status===403&&!reason.includes('ratelimit')&&reason!=='autherror')return {ok:false,reason:'grant_revoked',classification:'unknown',incidentReason:'permission_unknown'};
         const failure = classifyStatus(response.status, response.body);
         if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
         if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited',...(response.headers['retry-after']===undefined?{}:{retryAt:retryDeadline(response,options.now?.()??new Date())}) };

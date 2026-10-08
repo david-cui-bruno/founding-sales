@@ -3,7 +3,7 @@ import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import type { EnvelopeCipher } from '../mail/envelope.ts';
-import type { GmailClient, GmailOAuthConfig } from '../mail/gmailClient.ts';
+import type { GmailClient, GmailOAuthConfig,GmailSentSearchOutcome } from '../mail/gmailClient.ts';
 import { accessForMailbox } from '../mail/sync.ts';
 import {
   beginReconciling,
@@ -117,7 +117,7 @@ export async function reconcileOutboundMessage(
     return { outcome: 'not_reconciling', outboundMessageId: fence.id, attempts: fence.reconcileAttempts };
   }
 
-  const incidents=await readProviderIncidents(context,fence.mailboxId,now);
+  const incidents=(await readProviderIncidents(context,fence.mailboxId,now)).filter(i=>!(i.sourceKind==='provider_send'&&i.reason==='unresolved_submission'));
   if(incidents.some(i=>i.state==='action_required'))return {outcome:'incident_held',outboundMessageId:fence.id,attempts:fence.reconcileAttempts};
   const wait=incidents.filter(i=>i.state==='waiting').map(i=>i.retryAt!).sort().at(-1);
   if(wait)return {outcome:'cooldown',outboundMessageId:fence.id,attempts:fence.reconcileAttempts,retryAt:wait};
@@ -125,17 +125,19 @@ export async function reconcileOutboundMessage(
 
   const access = await accessForMailbox(
     context,
-    { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher },
+    { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher,now:deps.now },
     fence.mailboxId,
   );
   if (!access.ok) {
     // Without a grant there is no way to look. The fence stays reconciling and the
     // window keeps running, which is right: a mailbox nobody can read is exactly the
     // case where "we do not know" is the truthful answer.
-    return { outcome: 'grant_revoked', outboundMessageId: fence.id, attempts: fence.reconcileAttempts };
+    return { outcome: access.reason==='provider_incident'?'incident_held':'grant_revoked', outboundMessageId: fence.id, attempts: fence.reconcileAttempts };
   }
 
-  const search = await deps.gmail.searchSentByMessageId(access.access, fence.providerMessageIdHeader);
+  let search:GmailSentSearchOutcome;
+  try{search=await deps.gmail.searchSentByMessageId(access.access,fence.providerMessageIdHeader);}
+  catch{if(binding)await recordProviderIncident(context,{mailboxId:fence.mailboxId,sourceKind:'sent_search',sourceId:fence.id,classification:'unknown',reason:'unknown_provider_failure',binding,now});return {outcome:'incident_held',outboundMessageId:fence.id,attempts:fence.reconcileAttempts};}
   if (!search.ok) {
     if(binding)await recordProviderIncident(context,{mailboxId:fence.mailboxId,sourceKind:'sent_search',sourceId:fence.id,classification:search.classification??(search.reason==='rate_limited'?'transient':'authentication'),reason:search.incidentReason??search.reason,binding,retryAt:search.retryAt,now});
     const attempts = await recordReconcileMiss(context, fence.id);

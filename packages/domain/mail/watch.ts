@@ -1,7 +1,8 @@
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailClient, GmailOAuthConfig } from './gmailClient.ts';
+import type { GmailClient, GmailOAuthConfig,GmailWatchOutcome } from './gmailClient.ts';
+import {readProviderBinding,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
 import { fenceOf, lockForFencedStopFact, lockMailboxAtFence, openMailboxHold, readMailbox } from './mailboxes.ts';
 import { stdoutMailLog, type MailLog } from './log.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
@@ -86,6 +87,7 @@ export async function nextWatchGeneration(context: RepositoryContext, mailboxId:
 }
 
 export interface WatchRenewalDeps {
+  readonly now?: (()=>Date)|undefined;
   readonly gmail: GmailClient;
   readonly oauth: GmailOAuthConfig;
   readonly cipher: EnvelopeCipher;
@@ -101,6 +103,7 @@ export type WatchRenewalOutcome =
   | 'mailbox_inactive'
   | 'generation_superseded'
   | 'grant_revoked'
+  | 'incident_held'
   | 'provider_refusal';
 
 export interface WatchRenewalReport {
@@ -155,18 +158,26 @@ export async function renewWatch(
 
   const access = await accessForMailbox(context, deps, mailbox.id);
   if (!access.ok) {
+    if(access.reason==='provider_incident')return {outcome:'incident_held',mailboxId:mailbox.id,generation:input.generation,expiresAt:null};
     await holdForRevokedGrant(context, mailbox);
     return { outcome: 'grant_revoked', mailboxId: mailbox.id, generation: input.generation, expiresAt: null };
   }
 
-  const registered = await deps.gmail.watch(access.access, { topicName: deps.topicName });
+  const binding=await readProviderBinding(context,mailbox.id),now=deps.now?.()??new Date();
+  let registered:GmailWatchOutcome;
+  try{registered=await deps.gmail.watch(access.access,{topicName:deps.topicName});}
+  catch{registered={ok:false,reason:'provider_refusal',classification:'unknown',incidentReason:'unknown_provider_failure'};}
   if (!registered.ok) {
-    if (registered.reason === 'grant_revoked') {
+    const classification=registered.classification??(registered.reason==='grant_revoked'?'authentication':'unknown');
+    if(binding)await recordProviderIncident(context,{mailboxId:mailbox.id,sourceKind:'mail_read',sourceId:`watch:${mailbox.id}`,classification,reason:registered.incidentReason??registered.reason,retryAt:registered.retryAt,binding,now});
+    if (registered.reason === 'grant_revoked'&&classification==='authentication') {
       await holdForRevokedGrant(context, mailbox);
       return { outcome: 'grant_revoked', mailboxId: mailbox.id, generation: input.generation, expiresAt: null };
     }
-    return { outcome: 'provider_refusal', mailboxId: mailbox.id, generation: input.generation, expiresAt: null };
+    return { outcome: 'incident_held', mailboxId: mailbox.id, generation: input.generation, expiresAt: null };
   }
+
+  if(binding)await resolveProviderIncidentsAfterRead(context,mailbox.id,binding,now,['mail_read']);
 
   // Watch fencing: the registration commits only while the mailbox is still the
   // generation and address this job read before it called `users.watch`. The row lock

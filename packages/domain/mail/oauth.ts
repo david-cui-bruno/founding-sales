@@ -7,6 +7,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { coalesceMailSync } from './coalesce.ts';
 import type { MailPublicConfig } from './config.ts';
 import { resolveGmailOAuthConfig } from './config.ts';
+import {revalidateProviderIncidentConfiguration} from '../outbound/providerIncidents.ts';
 import type { EnvelopeCipher, EnvelopeCiphertext } from './envelope.ts';
 import { GmailClientError, type GmailClient } from './gmailClient.ts';
 import {
@@ -536,6 +537,7 @@ export async function completeGmailGrant(
       // 10. A reconnect ends the disconnection: nothing released this hold before A2.
       // `coverage_incomplete` stays until the baseline proves coverage.
       await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'mailbox_disconnected' });
+      await revalidateProviderIncidentConfiguration(context,mailbox.id,'oauth_reconnected',now);
       // 11. The audit row. The address is business data the owner and an admin may see
       // (Appendix F). The token is not here, not hashed here, and not anywhere but
       // `mailbox_tokens`.

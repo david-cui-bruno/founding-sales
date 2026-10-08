@@ -162,7 +162,7 @@ export type GmailHistoryOutcome =
       /** `ListHistoryResponse.historyId`: the mailbox's current history record. */
       readonly historyId: string;
     }
-  | { readonly ok: false; readonly reason: 'history_expired' | 'grant_revoked' | 'rate_limited' };
+  | ({ readonly ok: false; readonly reason: 'history_expired' | 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailListOutcome =
   | {
@@ -170,7 +170,7 @@ export type GmailListOutcome =
       readonly messageIds: readonly string[];
       readonly nextPageToken: string | null;
     }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailTokenOutcome =
   | { readonly ok: true; readonly grant: GmailAuthorizationGrant }
@@ -178,11 +178,11 @@ export type GmailTokenOutcome =
 
 export type GmailAccessOutcome =
   | { readonly ok: true; readonly grant: GmailAccessGrant }
-  | { readonly ok: false; readonly reason: 'grant_refused' | 'grant_revoked' };
+  | ({ readonly ok: false; readonly reason: 'grant_refused' | 'grant_revoked' | 'rate_limited' } & GmailIncidentMetadata);
 
 export type GmailWatchOutcome =
   | { readonly ok: true; readonly watch: GmailWatchRegistration }
-  | { readonly ok: false; readonly reason: 'grant_revoked' | 'provider_refusal' };
+  | ({ readonly ok: false; readonly reason: 'grant_revoked' | 'provider_refusal' } & GmailIncidentMetadata);
 
 export interface GmailHistoryRequest {
   readonly startHistoryId: string;
@@ -304,11 +304,11 @@ export interface GmailSendRequest {
  */
 export type GmailSendOutcome =
   | { readonly ok: true; readonly messageId: string; readonly threadId: string }
-  | {
+  | ({
       readonly ok: false;
       readonly outcome: 'refused';
       readonly reason: 'grant_revoked' | 'rate_limited' | 'recipient_rejected' | 'provider_refusal';
-    }
+    } & GmailIncidentMetadata)
   | { readonly ok: false; readonly outcome: 'indeterminate'; readonly detail: string };
 
 export interface GmailIncidentMetadata {

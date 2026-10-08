@@ -48,8 +48,10 @@ export async function recordProviderIncident(ctx:RepositoryContext,input:{mailbo
    (workspace_id,mailbox_id,source_kind,source_id,classification,reason,binding_sha256,observed_at,retry_at)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
    ON CONFLICT(workspace_id,mailbox_id,source_kind,source_id) WHERE resolved_at IS NULL
-   DO UPDATE SET retry_at=CASE WHEN mailbox_provider_incidents.classification='transient' AND EXCLUDED.classification='transient' THEN greatest(mailbox_provider_incidents.retry_at,EXCLUDED.retry_at) ELSE NULL END,
-    classification=CASE WHEN EXCLUDED.classification='transient' THEN mailbox_provider_incidents.classification ELSE EXCLUDED.classification END
+   DO UPDATE SET retry_at=CASE WHEN mailbox_provider_incidents.classification='transient' AND EXCLUDED.classification='transient'
+     AND mailbox_provider_incidents.retry_at IS NOT NULL AND EXCLUDED.retry_at IS NOT NULL THEN greatest(mailbox_provider_incidents.retry_at,EXCLUDED.retry_at) ELSE NULL END,
+    classification=CASE WHEN mailbox_provider_incidents.classification='transient' THEN EXCLUDED.classification ELSE mailbox_provider_incidents.classification END,
+    reason=CASE WHEN mailbox_provider_incidents.classification='transient' AND EXCLUDED.classification<>'transient' THEN EXCLUDED.reason ELSE mailbox_provider_incidents.reason END
    RETURNING id,hold_id`,[ctx.scope.workspaceId,input.mailboxId,input.sourceKind,input.sourceId,input.classification,input.reason,input.binding.hash,input.now,retry])).rows[0]!;
   if(row.hold_id===null){const holdId=await openHold(ctx,{scopeKind:'mailbox',scopeKey:input.mailboxId,reasonCode:'provider_refusal',blockedActionKinds:['email_send'],sourceEventKind:'provider_incident',sourceEventId:row.id,recoveryAction:'resume_after_review'});
    await ctx.db.query('UPDATE mailbox_provider_incidents SET hold_id=$3 WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,row.id,holdId]);}
@@ -59,21 +61,32 @@ export async function recordProviderIncident(ctx:RepositoryContext,input:{mailbo
 export async function readProviderIncidents(ctx:RepositoryContext,mailboxId:string,now=new Date()):Promise<readonly ProviderIncident[]>{
  const binding=await readProviderBinding(ctx,mailboxId);
  const rows=(await ctx.db.query<IncidentRow>('SELECT * FROM mailbox_provider_incidents WHERE workspace_id=$1 AND mailbox_id=$2 AND resolved_at IS NULL ORDER BY observed_at,id',[ctx.scope.workspaceId,mailboxId])).rows;
- return rows.map(row=>({id:row.id,classification:row.classification,reason:row.reason,
+ const incidents:ProviderIncident[]=rows.map(row=>({id:row.id,classification:row.classification,reason:row.reason,
   state:row.classification!=='transient'||row.retry_at===null||row.binding_sha256===null||binding?.hash!==row.binding_sha256?'action_required':row.retry_at.getTime()>now.getTime()?'waiting':'revalidation_due',
   retryAt:row.retry_at?.toISOString()??null,observedAt:row.observed_at.toISOString(),sourceKind:row.source_kind,sourceId:row.source_id}));
+ const fences=(await ctx.db.query<{id:string;state:string;dispatch_started_at:Date;created_at:Date}>(`SELECT id,state,dispatch_started_at,created_at FROM outbound_messages
+  WHERE workspace_id=$1 AND mailbox_id=$2 AND (state IN ('dispatching','reconciling') OR (state='unknown_terminal' AND admin_resolution IS NULL))
+  ORDER BY dispatch_started_at,id LIMIT 100`,[ctx.scope.workspaceId,mailboxId])).rows;
+ for(const fence of fences)incidents.push({id:fence.id,classification:'unknown',reason:'unresolved_submission',
+  state:fence.state==='unknown_terminal'?'action_required':'revalidation_due',retryAt:null,
+  observedAt:(fence.dispatch_started_at??fence.created_at).toISOString(),sourceKind:'provider_send',sourceId:fence.id});
+ return incidents;
 }
 
 export async function providerIncidentRefusal(ctx:RepositoryContext,mailboxId:string,now:Date):Promise<{reason:'rate_limited'|'provider_refusal';detail:string;retryAt?:string}|null>{
  const incidents=await readProviderIncidents(ctx,mailboxId,now);
  if(incidents.length===0)return null;
  if(incidents.some(i=>i.state==='action_required'))return {reason:'provider_refusal',detail:'provider_incident_requires_review'};
- if(incidents.some(i=>i.state==='revalidation_due'))return {reason:'provider_refusal',detail:'provider_incident_revalidation_due'};
- return {reason:'rate_limited',detail:'provider_cooldown',retryAt:incidents.map(i=>i.retryAt!).sort().at(-1)!};
+ const waiting=incidents.filter(i=>i.state==='waiting');
+ if(waiting.length)return {reason:'rate_limited',detail:'provider_cooldown',retryAt:waiting.map(i=>i.retryAt!).sort().at(-1)!};
+ return {reason:'provider_refusal',detail:'provider_incident_revalidation_due'};
 }
 
 /** A fresh successful read clears only safe, unchanged incidents whose wait expired. */
-export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,mailboxId:string,before:ProviderBinding,now:Date):Promise<void>{
+export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,mailboxId:string,before:ProviderBinding,now:Date,sources:readonly ProviderIncidentSource[]=['sent_search','mail_read','token_refresh','provider_send']):Promise<void>{
+ if(before.hash===null)return;
+ if((await ctx.db.query(`SELECT 1 FROM mailbox_provider_incidents WHERE workspace_id=$1 AND mailbox_id=$2 AND resolved_at IS NULL
+  AND classification='transient' AND source_kind=ANY($3::text[]) LIMIT 1`,[ctx.scope.workspaceId,mailboxId,sources])).rows.length===0)return;
  await incidentTransaction(ctx,async()=>{
   await lockSendGateForStopFact(ctx);
   await lockMailboxAtFence(ctx,{mailboxId,fence:before.fence,write:'provider incident recovery'});
@@ -81,7 +94,7 @@ export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,ma
   if(before.hash===null||current?.hash!==before.hash)return;
   const rows=(await ctx.db.query<{id:string}>(`UPDATE mailbox_provider_incidents SET resolved_at=$4,resolution='verified_read'
    WHERE workspace_id=$1 AND mailbox_id=$2 AND binding_sha256=$3 AND classification='transient'
-   AND retry_at IS NOT NULL AND retry_at<=$4 AND resolved_at IS NULL RETURNING id`,[ctx.scope.workspaceId,mailboxId,before.hash,now])).rows;
+   AND source_kind=ANY($5::text[]) AND retry_at IS NOT NULL AND retry_at<=$4 AND resolved_at IS NULL RETURNING id`,[ctx.scope.workspaceId,mailboxId,before.hash,now,sources])).rows;
   for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
  });
 }
@@ -91,13 +104,15 @@ export async function resolveProviderIncidentsAfterRead(ctx:RepositoryContext,ma
  * grants require the successful OAuth reconnect; reputation/unknown stay held. */
 export async function revalidateProviderIncidentConfiguration(ctx:RepositoryContext,mailboxId:string,basis:'oauth_reconnected'|'permission_revalidated'|'domain_authentication_checked',now:Date):Promise<void>{
  if(ctx.scope.actor.kind!=='user'||(basis!=='oauth_reconnected'&&ctx.scope.actor.role!=='admin'))return;
- const current=await readProviderBinding(ctx,mailboxId);if(current?.hash===null||current===null)return;
- await ctx.db.query(`UPDATE mailbox_provider_incidents SET binding_sha256=$3
+ const current=await readProviderBinding(ctx,mailboxId);if(current===null)return;
+ if(current.hash!==null)await ctx.db.query(`UPDATE mailbox_provider_incidents SET binding_sha256=$3
   WHERE workspace_id=$1 AND mailbox_id=$2 AND classification='transient' AND resolved_at IS NULL`,[ctx.scope.workspaceId,mailboxId,current.hash]);
  if(basis!=='oauth_reconnected')return;
- const rows=(await ctx.db.query<{id:string}>(`UPDATE mailbox_provider_incidents i SET resolved_at=$4,resolution='human_revalidated'
+ const rows=(await ctx.db.query<{id:string}>(`UPDATE mailbox_provider_incidents i SET resolved_at=$3,resolution='human_revalidated'
   FROM mailboxes m WHERE i.workspace_id=$1 AND i.mailbox_id=$2 AND m.workspace_id=i.workspace_id AND m.id=i.mailbox_id
   AND i.classification='authentication' AND i.resolved_at IS NULL AND m.connected_at>=i.observed_at
-  AND $3::text IS NOT NULL RETURNING i.id`,[ctx.scope.workspaceId,mailboxId,current.hash,now])).rows;
+  AND m.status='connected' AND EXISTS(SELECT 1 FROM mailbox_tokens t WHERE t.workspace_id=m.workspace_id AND t.mailbox_id=m.id)
+  AND EXISTS(SELECT 1 FROM workspace_memberships wm WHERE wm.workspace_id=m.workspace_id AND wm.user_id=m.owner_user_id AND wm.status='active')
+  RETURNING i.id`,[ctx.scope.workspaceId,mailboxId,now])).rows;
  for(const row of rows)await releaseHoldsOfEvent(ctx,{sourceEventId:row.id,reasonCode:'provider_refusal'});
 }
