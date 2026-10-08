@@ -1,4 +1,4 @@
-import {EMAIL_FIT_POLICY_VERSION} from './selection.ts';
+import {EMAIL_FIT_POLICY_VERSION} from './emailFitPolicy.ts';
 import {readRampStanding,readSendDayHealth,rampHealthFailure} from '../outbound/ramp.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';

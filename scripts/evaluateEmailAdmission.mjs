@@ -1,4 +1,4 @@
-import {EMAIL_FIT_POLICY_VERSION} from '../packages/domain/outreach/selection.ts';
+import {EMAIL_FIT_POLICY_VERSION} from '../packages/domain/outreach/emailFitPolicy.ts';
 // Offline diagnostic only: Vitest provisions its own PostgreSQL cluster. No
 // production URL, search client, crawler, mailbox credentials or send adapter.
 import {execFileSync,spawn} from 'node:child_process';
