@@ -74,6 +74,17 @@ afterEach(async () => {
 });
 
 const workspaceId = (): string => world.alpha.workspace.workspaceId;
+async function withIsolatedIncidentWorld(work: () => Promise<void>): Promise<void> {
+  const original = world;
+  const isolated = await createOutboundWorld();
+  world = isolated;
+  try {
+    await work();
+  } finally {
+    world = original;
+    await isolated.stop();
+  }
+}
 const worker = (): RepositoryContext => world.systemContext(workspaceId());
 const salesperson = (): RepositoryContext =>
   repositoryContext(
@@ -973,11 +984,13 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
       }),
       fixtureMessage({ id: 'read-stop-2', historyId: '1102', from: followUp.address, to: world.alpha.address }),
     );
-    const base = world.syncDeps(world.alpha);
+    const observation = new Date();
+    const retryAt = new Date(observation.getTime() + 1000).toISOString();
+    const base = world.syncDeps(world.alpha, { now: () => observation });
     const failing: GmailClient = {
       ...base.gmail,
       getMetadata: async (access, messageId, headers) => {
-        if (messageId === 'read-stop-2') throw new GmailClientError('unexpected_status', 'the fixture read failed', 500);
+        if (messageId === 'read-stop-2') throw new GmailClientError('unexpected_status', 'the fixture read failed', 503,{classification:'transient',incidentReason:'service_unavailable',retryAt});
         return await base.gmail.getMetadata(access, messageId, headers);
       },
     };
@@ -990,7 +1003,7 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
     expect(first.outcome).toBe('read_stopped');
     expect(first.directSendsRecorded).toBe(1);
     expect(first.processedMessages).toBe(1);
-    expect(first.readFailure).toEqual({ providerMessageId: 'read-stop-2', read: 'metadata', detail: 'unexpected_status 500' });
+    expect(first.readFailure).toEqual({ providerMessageId: 'read-stop-2', read: 'metadata', detail: 'unexpected_status 503',incident:{classification:'transient',incidentReason:'service_unavailable',retryAt} });
     expect(first.moreToDo).toBe(true);
     expect(first.cursorTo).toBe('1101');
 
@@ -1047,7 +1060,7 @@ describe('S1 round-7: a Gmail read that fails later in the job does not undo an 
     // The next run reads message 2, and message 1 is not read again.
     const second = await withTransaction(
       session,
-      async () => await runMailSync(worker(), base, { mailboxId: world.alpha.mailboxId }),
+      async () => await runMailSync(worker(), {...base,now:()=>new Date(retryAt)}, { mailboxId: world.alpha.mailboxId }),
     );
     expect(second.outcome).toBe('synced');
     expect(second.readFailure).toBeNull();
@@ -1117,7 +1130,7 @@ describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
     expect(replay.automatedSendsRecognised).toBe(1);
   });
 
-  it('a failed duplicate-proof read stops at that message: the direct send before it commits', async () => {
+  it('a failed duplicate-proof read stops at that message: the direct send before it commits', async () => withIsolatedIncidentWorld(async () => {
     const firm = await seedFirm(world, world.alpha, 'proof-stop');
     const followUp = await fenceOfEnrollment(firm);
     await becomeContextualReply(followUp.permissionId ?? '', firm, followUp.contactId);
@@ -1161,7 +1174,7 @@ describe('C2B-A1 fold 2: RFC Message-ID conflicts and the direct send', () => {
     });
     // The cursor stands just before the copy's record.
     expect((await readMailbox(worker(), world.alpha.mailboxId))?.historyId).toBe('1402');
-  });
+  }));
 });
 
 describe('C2B-A1 fold 3: a recovery adopting its cursor takes the gate before the row', () => {

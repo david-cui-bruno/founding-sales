@@ -27,6 +27,8 @@ import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
 // The reply cards and the classifier's configuration.
 import { REPLY_PATHS, routeReplies } from './replies.ts';
+import {REPLY_COMPOSER_PATHS,routeReplyComposer} from './replyComposer.ts';
+import {NOTIFICATION_PATHS,routeNotifications} from './notifications.ts';
 // The policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
@@ -202,6 +204,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('meeting-follow-through', { paths: MEETING_FOLLOW_THROUGH_PATHS }, routeMeetingFollowThrough, routing),
     moduleOf('social',{paths:SOCIAL_PATHS},routeSocial,routing),
     moduleOf('outreach',{paths:OUTREACH_PATHS},routeOutreach,routing),
+    moduleOf('notifications',{paths:NOTIFICATION_PATHS},routeNotifications,routing),
     moduleOf('meeting-qualification',{paths:MEETING_QUALIFICATION_PATHS},routeMeetingQualification,routing),
     moduleOf('meeting-outcomes', { paths: MEETING_OUTCOMES_PATHS }, routeMeetingOutcomes, routing),
     moduleOf('meeting-transcription', { paths: MEETING_TRANSCRIPTION_PATHS }, routeMeetingTranscription, routing),
@@ -223,6 +226,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // one claim answer for both, and the registry can only promise about the paths
     // it was told.
     moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
+    moduleOf('reply-composer',{paths:REPLY_COMPOSER_PATHS},(request,options)=>routeReplyComposer(request,options,options.replyComposer??null),routing),
     // The four outbound admin surfaces. Exact paths, and not an `/outbound` prefix:
     // an unknown path under that root is a typo in a command that marks a send
     // delivered or opens the sending gate, and `not_found` from the registry says so

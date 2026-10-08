@@ -94,6 +94,8 @@ COPY packages/domain/research packages/domain/research
 COPY packages/domain/social packages/domain/social
 COPY packages/domain/sourcing packages/domain/sourcing
 COPY packages/domain/outreach packages/domain/outreach
+COPY packages/domain/replies packages/domain/replies
+COPY packages/domain/notifications packages/domain/notifications
 COPY packages/domain/retention packages/domain/retention
 COPY packages/domain/release packages/domain/release
 # Call-to-booking (slice W): call sessions and Cal.com meetings.

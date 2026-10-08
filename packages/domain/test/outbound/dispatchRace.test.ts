@@ -354,19 +354,23 @@ describe('the send gate serializes the claim with every stop fact', () => {
 
 describe('C25: capacity is reserved by the claim and nowhere else', () => {
   it('a grant that fails at the token refresh reserves nothing', async () => {
-    const firm = await seedFirm(world, world.alpha, 'revoked');
-    const fenceId = await prepareFor(world, world.alpha, firm);
-    const before = await capacity();
-    const gmail = world.clientWith(world.alpha, { grantRevoked: true });
-    const report = await dispatchOutboundMessage(context(), world.sendDeps(world.alpha, { gmail }), {
+    const isolated=await createOutboundWorld();
+    try {
+    const box=isolated.alpha,ctx=isolated.systemContext(box.workspace.workspaceId);
+    const capacityOf=async()=>({counter:await automatedSent(isolated.database.session,box,FIXTURE_BUSINESS_DATE),claimed:await claimedAutomatedSends(ctx,{mailboxId:box.mailboxId,businessDate:FIXTURE_BUSINESS_DATE})});
+    const firm = await seedFirm(isolated, box, 'revoked');
+    const fenceId = await prepareFor(isolated, box, firm);
+    const before = await capacityOf();
+    const gmail = isolated.clientWith(box, { grantRevoked: true });
+    const report = await dispatchOutboundMessage(ctx, isolated.sendDeps(box, { gmail }), {
       outboundMessageId: fenceId,
     });
     expect(report.outcome).toBe('held');
     expect(report.refusal).toBe('grant_revoked');
-    const after = await capacity();
+    const after = await capacityOf();
     expect(after.counter).toBe(before.counter);
     expect(after.claimed).toBe(after.counter);
-    await world.clearHolds(workspaceId());
+    } finally {await isolated.stop();}
   });
 
   it('a process that dies between the reservation and the commit leaves no count behind', async () => {

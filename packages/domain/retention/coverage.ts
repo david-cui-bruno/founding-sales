@@ -52,6 +52,8 @@ const coverage = (dispositions: readonly TableDisposition[], note: string): Tabl
 });
 
 export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> = Object.freeze({
+  actionable_notification_attempts: coverage(['operational','retained'], 'Body-free user/device/source delivery and acknowledgement markers are retained for event deduplication through prospect deletion, departure and whole-database restore. Current ownership and source reads gate every new alert and context; a retained attempt never authorizes a replay.'),
+  mailbox_provider_incidents: coverage(['operational','retained'], 'Coded mailbox safety history and hold identities; retained after prospect deletion/departure and with the whole database restore. Deadlines do not authorize fresh external action.'),
   social_weekly_settings: coverage(['operational'], 'Owner opt-in and next weekly draft check; active membership required, no transcripts or publication permission.'),
   social_library_usage: coverage(['operational'], 'Workspace storage quota; released only after physical object deletion.'),
   social_assets: coverage(['retained'], 'Owner-authored library metadata; explicit asset deletion tombstones it and queues private object removal.'),

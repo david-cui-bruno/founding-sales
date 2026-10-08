@@ -1,6 +1,7 @@
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {recordCrmAuditEvent} from '../crm/audit.ts';
+import {revalidateProviderIncidentConfiguration} from '../outbound/providerIncidents.ts';
 export interface ProspectingIdentity {mailboxId:string;ownerUserId:string;providerAccountId:string}
 export interface ProspectingAuthorization {allowed:boolean;revision:number|null;reason:string|null}
 type Result<T>={ok:true;value:T}|{ok:false;reason:string};
@@ -24,6 +25,7 @@ export async function setProspectingAuthorization(ctx:RepositoryContext,input:{m
  ON CONFLICT(workspace_id,mailbox_id) DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id,provider_account_id=EXCLUDED.provider_account_id,email_address=EXCLUDED.email_address,revision=EXCLUDED.revision,enabled=EXCLUDED.enabled,basis=EXCLUDED.basis,reported_by=EXCLUDED.reported_by,enabled_at=EXCLUDED.enabled_at,revoked_at=EXCLUDED.revoked_at,updated_at=now()`,
  [w,input.mailboxId,mailbox.owner_user_id,mailbox.provider_account_id,mailbox.email_address,revision,input.enabled,input.basis,actor.userId]);
  await recordCrmAuditEvent(ctx,{action:'outreach.authorization_changed',subjectKind:'mailbox',subjectId:input.mailboxId,detail:{revision,enabled:input.enabled,basis:input.basis}});
+ if(input.enabled)await revalidateProviderIncidentConfiguration(ctx,input.mailboxId,'permission_revalidated',new Date());
  return {ok:true,value:{revision}};
 }
 /** Rechecks the live OAuth identity; refreshing tokens for that same identity is harmless. */

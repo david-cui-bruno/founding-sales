@@ -3,9 +3,11 @@ import { attestedReleaseBinding, type ReleaseAdmission } from '../release/record
 import { effectiveSendingEnabled } from '../settings/effective.ts';
 import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
+import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
 import { localParts } from '../src/rules/localClock.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { effectiveDailyCap, ensureRamp, openSendDay, readSenderReadiness, type RampRow, type SendDayRow } from './ramp.ts';
+import {providerIncidentRefusal} from './providerIncidents.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
@@ -131,6 +133,7 @@ export async function decideSend(
   const mailbox = mailboxRead.rows[0];
   if (mailbox === undefined) return refuseSend('mailbox_unknown');
   if (mailbox.status !== 'connected') return refuseSend('mailbox_inactive');
+  const incident = await providerIncidentRefusal(context, mailbox.id, now);
 
   // ---------------------------------------------------------------- never send
   // 9.2, and the strongest refusal there is. A suppressed handle or firm is not a
@@ -146,6 +149,15 @@ export async function decideSend(
   );
   if (suppressed !== null) {
     return refuseSend(suppressed.scope === 'firm' ? 'firm_suppressed' : 'handle_suppressed');
+  }
+
+  if (incident && incident.detail !== 'unresolved_submission') {
+    const coverage = coverageRefusal(await readMailboxCoverage(context, { mailboxId: mailbox.id }));
+    if (coverage) return refuseSend(
+      coverage.reason === 'coverage_incomplete' ? 'coverage_incomplete' : 'grant_revoked',
+      `${coverage.reason}:${coverage.detail}`,
+    );
+    return refuseSend(incident.reason, incident.detail);
   }
 
   // 11.2's re-read, whole (lane g77). The sequences lane's own eligibility — the
@@ -238,6 +250,7 @@ export async function decideSend(
     const readiness=await readSenderReadiness(context,mailbox.id);
     if(!readiness.ready)return refuseSend('step_ineligible',`sender_recovery_unready:${readiness.reasons.join(',')}`);
   }
+  if (incident) return refuseSend(incident.reason, incident.detail);
   const cap = effectiveDailyCap(ramp);
   const businessDate = await businessDateOf(context, now.toISOString());
   const day = await openSendDay(context, { mailboxId: mailbox.id, businessDate, cap });

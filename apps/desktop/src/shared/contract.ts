@@ -13,6 +13,7 @@ import {
   signInStartResponseSchema,
   uuid,
   type SignInStartResponse,
+  todayActionTargetSchema,
 } from '@fss/contracts';
 
 /**
@@ -258,6 +259,9 @@ export const sessionChangeSchema = z.strictObject({
   reason: z.string().max(80),
 });
 export type SessionChange = z.infer<typeof sessionChangeSchema>;
+/** Internal freshly authorized action navigation; external deep links keep their closed view list. */
+export const actionNavigationSchema=z.strictObject({generation:z.number().int().min(0),target:todayActionTargetSchema});
+export type ActionNavigation=z.infer<typeof actionNavigationSchema>;
 
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
@@ -280,6 +284,7 @@ export interface DesktopBridge {
    * value against `NAVIGATION_TARGETS` before it gets here.
    */
   onNavigate(listener: (target: NavigationTarget) => void): void;
+  onActionNavigate?(listener:(event:ActionNavigation)=>void):void;
   /**
    * Sign-out, another workspace, a changed role, a revoked device: the page clears its
    * request cache and everything anybody had typed, at once. The main process sends it

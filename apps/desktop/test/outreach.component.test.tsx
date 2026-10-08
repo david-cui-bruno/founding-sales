@@ -8,6 +8,18 @@ afterEach(cleanup);
 const id='11111111-1111-4111-8111-111111111111';
 const view:OutreachControl={emailAdmission:{revision:0,enabled:false,ownerUserId:null,mailboxId:null,sequenceVersionId:null,evaluation:null,configurationSha256:null,ready:false,reasons:['configuration_required']},settings:{revision:0,enabled:false,sequenceVersionId:null,bookingUrl:null},blocks:[],senders:[{id,address:'david@usecallie.com',ownerUserId:id,connected:true,authorized:false,authorizationRevision:0,sendingEnabled:false,dailyCap:5}],sequences:[],candidates:[],replies:[]};
 const ports=():OutreachPorts=>({read:vi.fn(async()=>({view,reason:null})),preview:vi.fn(async()=>({view:null,reason:'not_found'})),mutate:vi.fn(async()=>({accepted:true,view,reason:null}))});
+it('shows a provider deadline and required authentication review without offering to bypass either hold',async()=>{
+ const standing={senders:[{mailboxId:id,standing:{healthySendingDays:40,earnedCap:50,effectiveCap:5,lastActivityAt:null,activityBasis:'mailbox_creation' as const,inactivityDays:0,recovery:null,readiness:{ready:false,reasons:['provider_incident']}},incidents:[
+  {id,classification:'transient' as const,reason:'rate_limited',state:'waiting' as const,retryAt:'2026-10-08T20:00:00.000Z',observedAt:'2026-10-08T18:00:00.000Z',sourceKind:'sent_search' as const,sourceId:id},
+  {id:'22222222-2222-4222-8222-222222222222',classification:'authentication' as const,reason:'token_revoked',state:'action_required' as const,retryAt:null,observedAt:'2026-10-08T18:00:00.000Z',sourceKind:'token_refresh' as const,sourceId:id},
+ ]}]};
+ const p=Object.assign(ports(),{standing:vi.fn(async()=>({view:standing,reason:null}))});
+ render(<OutreachSection enabled ports={p}/>);fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));
+ expect(await screen.findByText(/Provider cooldown: sending waits until/)).toBeTruthy();
+ expect(screen.getByText('Authentication requires review. Sending remains held.')).toBeTruthy();
+ expect(screen.queryByRole('button',{name:/clear incident|resume provider|bypass/i})).toBeNull();
+ expect(p.mutate).not.toHaveBeenCalled();
+});
 it('explains the current recovery allowance separately from earned history without changing sending',async()=>{
  const standing:OutreachSenderStandingResponse={senders:[{mailboxId:id,standing:{healthySendingDays:40,earnedCap:50,effectiveCap:5,lastActivityAt:'2026-09-20T15:00:00.000Z',activityBasis:'confirmed_send',inactivityDays:18,recovery:{epochId:id,active:true,startedOn:'2026-10-08',stageCap:5,earnedCap:50,qualifyingDays:2,nextStageAfterDays:3,lastQualifiedOn:'2026-10-09',stageStartedOn:'2026-10-08'},readiness:{ready:false,reasons:['unresolved_submission']}}}]};
  const p=Object.assign(ports(),{standing:vi.fn(async()=>({view:standing,reason:null}))});

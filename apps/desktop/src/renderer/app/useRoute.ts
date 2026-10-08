@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { routeOf, routeText, setNavigator, type Route } from '../routes.ts';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { routeOf, routeText, routeForAction, setNavigator, type Route } from '../routes.ts';
+import {actionNavigationSchema} from '../../shared/contract.ts';
 import { desktopBridge } from './bridges.ts';
 
 /**
@@ -43,7 +44,8 @@ function initialRoute(): Route {
   return routeOf(decodeURIComponent(location.hash.slice(1))) ?? { name: 'today' };
 }
 
-export function useRoute(): RouteState {
+export function useRoute(generation=0): RouteState {
+  const currentGeneration=useRef(generation);currentGeneration.current=generation;
   const [state, setState] = useState<{ readonly route: Route; readonly epoch: number }>(() => ({
     route: initialRoute(),
     epoch: 0,
@@ -75,6 +77,10 @@ export function useRoute(): RouteState {
     desktopBridge().onNavigate(target => {
       const next = routeOf(target);
       if (next !== null) navigate(next);
+    });
+    desktopBridge().onActionNavigate?.(raw=>{
+      const parsed=actionNavigationSchema.safeParse(raw);
+      if(parsed.success&&parsed.data.generation===currentGeneration.current)navigate(routeForAction(parsed.data.target));
     });
   }, [navigate]);
 

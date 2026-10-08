@@ -47,10 +47,13 @@ for(const change of ['authorization','owner','fact','rematch','automatic','takeo
  expect(paused.refreshes()).toBe(1);expect(report.outcome).toBe('held');expect(gmail.sends).toHaveLength(0);
 });
 it('keeps uncertain provider acceptance fenced rather than sending another answer',async()=>{
- const f=await fixture(),gmail=world.clientWith(world.alpha,{sendBehaviour:'indeterminate'}),deps=world.sendDeps(world.alpha,{gmail});
+ const isolated=await createOutboundWorld();
+ try {
+ const f=await routineReplyFixture(isolated),gmail=isolated.clientWith(isolated.alpha,{sendBehaviour:'indeterminate'}),deps=isolated.sendDeps(isolated.alpha,{gmail});
  await dispatchOutboundMessage(f.ctx,deps,{outboundMessageId:f.fenceId});
  await dispatchOutboundMessage(f.ctx,deps,{outboundMessageId:f.fenceId});
  expect(gmail.sends).toHaveLength(1);expect((await readFence(f.ctx,f.fenceId))?.state).toBe('reconciling');
+ } finally {await isolated.stop();}
 });
 it('expires a stranded paid claim independently of the failed worker and settles it once',async()=>{
  const f=await fixture();

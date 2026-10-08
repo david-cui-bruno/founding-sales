@@ -83,6 +83,7 @@ import {
  */
 
 export interface ApiOptions {
+  readonly replyComposer?:HumanReplyDraftPort|null;
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
   readonly supportedClientVersions: ClientVersionPolicy;
@@ -159,6 +160,7 @@ export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
   return {
+    ...(options.replyComposer===undefined?{}:{replyComposer:options.replyComposer}),
     session: options.session,
     supportedClientVersions: options.supportedClientVersions,
     sendingEnabled: options.sendingEnabled,
@@ -459,3 +461,4 @@ async function handle(
     connection.release();
   }
 }
+import type {HumanReplyDraftPort} from '@fss/domain/replies/composerGeneration.ts';

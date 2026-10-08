@@ -1,3 +1,4 @@
+import {captureActionNotificationActivation} from './app.ts';
 import { join } from 'node:path';
 import { app, protocol } from 'electron';
 import { showRoute, start } from './app.ts';
@@ -77,6 +78,7 @@ function main(): void {
   });
   // `open-url` has to be registered before the app is ready, or a link that
   // launched the app is delivered to nobody.
+  app.on('ready',(_event,launchInfo)=>captureActionNotificationActivation(launchInfo));
   app.on('open-url', (event, url) => {
     event.preventDefault();
     focusFor(url);

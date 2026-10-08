@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { PERSONAL_GMAIL_DOMAINS } from './types.ts';
+import { revalidateProviderIncidentConfiguration } from './providerIncidents.ts';
 
 /**
  * The workspace's sending domains (specification 12.7): the DNS checklist, the
@@ -224,6 +225,13 @@ export type ChecklistOutcome =
   | { readonly ok: true; readonly domain: SendingDomainRow }
   | { readonly ok: false; readonly reason: 'domain_unknown' | 'authentication_incomplete' };
 
+async function revalidateDomainIncidents(context: RepositoryContext): Promise<void> {
+  const { rows } = await context.db.query<{ id: string }>(
+    'SELECT id FROM mailboxes WHERE workspace_id=$1 ORDER BY id', [context.scope.workspaceId],
+  );
+  for (const row of rows) await revalidateProviderIncidentConfiguration(context, row.id, 'domain_authentication_checked', new Date());
+}
+
 /**
  * Record the admin's DNS checklist.
  *
@@ -273,6 +281,7 @@ export async function recordAuthenticationChecklist(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'domain_unknown' };
+  if (authenticationPasses(toDomain(row)) && row.automated_sending_enabled) await revalidateDomainIncidents(context);
   return { ok: true, domain: toDomain(row) };
 }
 
@@ -308,5 +317,6 @@ export async function setAutomatedSendingEnabled(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'domain_unknown' };
+  if (input.enabled) await revalidateDomainIncidents(context);
   return { ok: true, domain: toDomain(row) };
 }
