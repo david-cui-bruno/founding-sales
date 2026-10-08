@@ -11,6 +11,7 @@ import {setProspectingAuthorization} from '@fss/domain/outreach/authorization.ts
 import {readReplyDraftContext} from '@fss/domain/replies/composer.ts';
 import type {HumanReplyDraftPort} from '@fss/domain/replies/composerGeneration.ts';
 import {revokeDevice} from '../src/auth/sessions.ts';
+import {previewHumanReply} from '@fss/domain/replies/dispatch.ts';
 let f:AuthFixture,token:string;
 beforeAll(async()=>{f=await createAuthFixture();token=(await issueSessionFor(f,f.alpha,f.alpha.salesperson)).accessToken;});
 afterAll(async()=>f.stop());
@@ -60,4 +61,16 @@ it('withholds generated prose when the authenticated device is revoked during ge
   return {raw:JSON.stringify({text:'Private generated prose.',factRefs:[],unsupportedClaims:[]}),costCents:1,costEstimated:false};
  }};
  expect(await call('/replies/composer/generate',input,true,port,grant.accessToken)).toMatchObject({status:409,body:{status:'refused',reason:'session_changed'}});
+});
+
+it('accepts one exact explicit send receipt, refuses changed replay bytes and reads its durable queued state',async()=>{
+ const input=await conversation(),ctx=repositoryContext(workspaceScope(f.alpha.workspaceId,{kind:'user',userId:f.alpha.salesperson.userId,role:'salesperson'}),f.db);
+ await f.db.query("INSERT INTO sending_domains(workspace_id,domain,is_primary) VALUES($1,'example.test',true) ON CONFLICT DO NOTHING",[f.alpha.workspaceId]);
+ const {commandId,clientVersion,sourceRevision,...source}=input;
+ const preview=await previewHumanReply(ctx,{...source,text:'My exact human reply.'});if(!preview.ok)throw new Error(preview.reason);
+ const send={...source,text:'My exact human reply.',commandId,clientVersion,sourceRevision,draftRevision:preview.value.draftRevision};
+ expect(await call('/replies/composer/send',send)).toMatchObject({status:200,body:{status:'accepted',replayed:false,result:{ok:true,value:{state:'queued'}}}});
+ expect(await call('/replies/composer/send',send)).toMatchObject({status:200,body:{status:'accepted',replayed:true,result:{ok:true,value:{state:'queued'}}}});
+ expect(await call('/replies/composer/send',{...send,text:'Changed bytes.'})).toMatchObject({status:409,body:{status:'refused',reason:'command_payload_mismatch'}});
+ expect(await call('/replies/composer/send-status',{messageId:input.messageId})).toMatchObject({status:200,body:{ok:true,value:{state:'queued',providerMessageId:null}}});
 });

@@ -3,8 +3,8 @@ import type { EnvelopeCipher } from '../mail/envelope.ts';
 import { GmailClientError, headerValue, type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
 import { readMailbox } from '../mail/mailboxes.ts';
 import { accessForMailbox } from '../mail/sync.ts';
-import { normalizeAddressList } from '../mail/types.ts';
-import { fssFenceIdOfSentMessage } from './types.ts';
+import { normalizeAddress, normalizeAddressList, normalizeMessageId, normalizeMessageIdList } from '../mail/types.ts';
+import { fssFenceIdOfSentMessage, humanReplySourceIdOfMessageId } from './types.ts';
 
 /**
  * Listing one mailbox's Sent folder for the sends FSS made (Appendix E step 3).
@@ -17,7 +17,7 @@ import { fssFenceIdOfSentMessage } from './types.ts';
  * asked about it, and the restored sequence would have sent it again.
  *
  * This file is the Gmail half of the fix and nothing else. It lists the folder over a
- * window, reads each message's metadata with a three-header allowlist, and keeps the
+ * window, reads each message's metadata with a bounded header allowlist, and keeps the
  * ones carrying FSS's marker for this mailbox (`fssFenceIdOfSentMessage`). It writes
  * nothing. What each message means to the restored database — a fence that is present,
  * one that is missing and whose step is known, one nobody can attribute — is
@@ -36,8 +36,8 @@ import { fssFenceIdOfSentMessage } from './types.ts';
  * (review of PR 296, P1).
  */
 
-/** The headers the scan reads. The Message-ID is the marker; the rest fill the tombstone. */
-export const SENT_SCAN_HEADERS: readonly string[] = Object.freeze(['Message-ID', 'To', 'Subject']);
+/** Message-ID owns the marker; envelope and references prove a restored human conversation. */
+export const SENT_SCAN_HEADERS: readonly string[] = Object.freeze(['Message-ID', 'To', 'Subject', 'From', 'Cc', 'In-Reply-To', 'References']);
 
 /** Gmail's own page size for a listing. */
 export const SENT_SCAN_PAGE_SIZE = 500;
@@ -60,6 +60,10 @@ export interface SentFolderMessage {
   readonly rfcMessageId: string;
   /** The fence uuid inside it. */
   readonly fenceId: string;
+  /** Present only for the human marker; never attributed to a sequence enrollment. */
+  readonly humanReplySourceId?: string | undefined;
+  /** Actual allowlisted provider metadata, never a reconstructed approval envelope. */
+  readonly humanReplyEnvelope?: {readonly from:string|null;readonly to:readonly string[];readonly cc:readonly string[];readonly inReplyTo:string|null;readonly referenceIds:readonly string[]} | undefined;
   /** The one recipient, normalized; null when the To header is not exactly one address. */
   readonly recipientAddress: string | null;
   readonly subject: string | null;
@@ -186,11 +190,16 @@ export async function scanSentFolder(
     const fenceId = fssFenceIdOfSentMessage(header, mailbox.emailAddress);
     if (fenceId === null) continue;
     const recipients = normalizeAddressList(headerValue(metadata.headers, 'To'));
+    const humanSourceId = humanReplySourceIdOfMessageId(header);
     messages.push({
       providerMessageId: metadata.id,
       providerThreadId: metadata.threadId,
       rfcMessageId: header,
       fenceId,
+      ...(humanSourceId === null ? {} : { humanReplySourceId: humanSourceId, humanReplyEnvelope: {
+        from:normalizeAddress(headerValue(metadata.headers,'From')),to:recipients,cc:normalizeAddressList(headerValue(metadata.headers,'Cc')),
+        inReplyTo:normalizeMessageId(headerValue(metadata.headers,'In-Reply-To')),referenceIds:normalizeMessageIdList(headerValue(metadata.headers,'References')),
+      } }),
       recipientAddress: recipients.length === 1 ? (recipients[0] ?? null) : null,
       subject: headerValue(metadata.headers, 'Subject') ?? null,
       sentAt: new Date(at).toISOString(),

@@ -41,6 +41,7 @@ import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
 import { SENDER_RECOVERY_CONSTRAINT_CASES } from './support/senderRecoveryCases.ts';
 import { PROVIDER_INCIDENT_CONSTRAINT_CASES } from './support/providerIncidentCases.ts';
 import { NOTIFICATION_CONSTRAINT_CASES } from './support/notificationCases.ts';
+import { HUMAN_REPLY_CONSTRAINT_CASES } from './support/humanReplyCases.ts';
 import { seedOutbound, type SeededOutbound } from './support/outboundFixtures.ts';
 
 /**
@@ -1396,6 +1397,7 @@ const cases: readonly Case[] = [
   ...SENDER_RECOVERY_CONSTRAINT_CASES,
   ...PROVIDER_INCIDENT_CONSTRAINT_CASES,
   ...NOTIFICATION_CONSTRAINT_CASES,
+  ...HUMAN_REPLY_CONSTRAINT_CASES,
   ...CLASSIFICATION_CONSTRAINT_CASES,
   ...SEQUENCE_CONSTRAINT_CASES,
   ...SETTINGS_CONSTRAINT_CASES,

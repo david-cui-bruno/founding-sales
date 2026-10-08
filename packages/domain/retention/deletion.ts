@@ -286,6 +286,10 @@ async function measure(
     // Migration 0025. Previewed as well as removed, because the preview is what a
     // person approves and "one permission to write to this person" is exactly the kind
     // of row somebody would want to see named before it goes.
+    human_reply_send_intents: await countOf(context,
+      `SELECT count(*) AS count FROM human_reply_send_intents i JOIN outbound_messages o
+       ON o.workspace_id=i.workspace_id AND o.id=i.outbound_message_id
+       WHERE o.workspace_id=$1 AND o.firm_id=$3 AND ${contactPredicate('o.contact_id','$2')}`,byContact),
     outreach_reply_deliveries: await countOf(context,
       `SELECT count(*) AS count FROM outreach_reply_deliveries d JOIN outreach_plans p ON p.workspace_id=d.workspace_id
        JOIN outreach_reply_requests r ON r.workspace_id=d.workspace_id AND r.id=d.request_id AND r.plan_id=p.id
@@ -857,6 +861,12 @@ export async function commitDeletion(
         AND permission_id IS NOT NULL`,
     byContact,
   );
+  // Remove envelope/thread approval metadata; the original draft fence retains only
+  // the established outbound history and source identity for no-repeat readback.
+  await remove('human_reply_send_intents',
+    `DELETE FROM human_reply_send_intents i USING outbound_messages o
+     WHERE i.workspace_id=$1 AND o.workspace_id=i.workspace_id AND o.id=i.outbound_message_id
+     AND o.firm_id=$3 AND ${contactPredicate('o.contact_id','$2')}`,byContact);
   await remove('outreach_reply_deliveries',
     `DELETE FROM outreach_reply_deliveries d USING outreach_reply_requests r,outreach_plans p
      WHERE d.workspace_id=$1 AND r.workspace_id=d.workspace_id AND r.id=d.request_id

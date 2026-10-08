@@ -12,6 +12,8 @@ import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } fr
 import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
 import type { OutboundFenceRow } from './fence.ts';
+import {decideHumanReplyPermission} from '../replies/sendAuthority.ts';
+import {currentHolidayCalendar} from '../sequences/calendars.ts';
 
 /**
  * Everything that must be true before a fence may be dispatched (11.2, 12.7, 4.2,
@@ -47,6 +49,8 @@ import type { OutboundFenceRow } from './fence.ts';
  */
 
 export interface SendGateDeps {
+  /** An explicit queued human approval, never a sequence setting or sending override. */
+  readonly humanReplyRevision?: number | undefined;
   /** Database time, so the window agrees with the fence's timestamps. */
   readonly now?: (() => Date) | undefined;
   /**
@@ -166,7 +170,9 @@ export async function decideSend(
   // owner holds among them), assignment, the route this fence froze and its version
   // (12.3's bounce invalidates it), proven mailbox coverage rather than a `ready`
   // flag, and the approval of the template the bytes came from.
-  const permission = await decideStepPermission(
+  const humanPermission=fence.originKind==='draft'?await decideHumanReplyPermission(context,fence,deps.humanReplyRevision):null;
+  if(humanPermission&&!humanPermission.ok)return humanPermission;
+  const permission = fence.originKind==='draft'?null:await decideStepPermission(
     context,
     fence,
     // The kind only names the mailbox in a cold-outreach refusal's detail; it never
@@ -174,7 +180,7 @@ export async function decideSend(
     { id: mailbox.id, ownerUserId: mailbox.owner_user_id, kind: mailbox.kind },
     now,
   );
-  if (!permission.ok) return permission;
+  if (permission&&!permission.ok) return permission;
 
   // ------------------------------------------------------------- not yet, then
   // 16.2: "Production sending remains disabled until all mandatory scenarios for the
@@ -232,8 +238,8 @@ export async function decideSend(
   // hold must not go out at 03:00 because its placement said so yesterday — nor on a
   // holiday because it was prepared the evening before one (lane g77: the placement
   // rule itself, holidays included, asked about this instant).
-  const calendar = await dispatchHolidayCalendar(context, permission.value.enrollment);
-  if (!insideSendingWindow(now, fence.sourceZone, calendar, permission.value.enrollment.originKind === 'prospecting')) {
+  const calendar = permission?.ok?await dispatchHolidayCalendar(context, permission.value.enrollment):await currentHolidayCalendar(context);
+  if (!insideSendingWindow(now, fence.sourceZone, calendar, permission?.ok&&permission.value.enrollment.originKind === 'prospecting')) {
     return refuseSend('outside_email_window', `${fence.sourceZone} ${localParts(now.toISOString(), fence.sourceZone).date}`);
   }
 
@@ -258,7 +264,7 @@ export async function decideSend(
     return refuseSend('daily_cap', `automated ${String(day.automatedSent)}/${String(cap)}`);
   }
 
-  if(permission.value.enrollment.originKind==='prospecting'){
+  if(permission?.ok&&permission.value.enrollment.originKind==='prospecting'){
     const waiting=(await context.db.query<{n:number}>(`SELECT count(DISTINCT n.id)::int AS n FROM sequence_enrollments n
       JOIN step_executions x ON x.workspace_id=n.workspace_id AND x.enrollment_id=n.id
       JOIN follow_up_permissions p ON p.workspace_id=n.workspace_id AND p.id=n.permission_id

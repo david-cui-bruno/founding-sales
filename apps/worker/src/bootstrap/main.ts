@@ -1,4 +1,5 @@
 import {automaticEmailHandler,automaticEmailSource} from '../handlers/emailAdmission.ts';
+import {humanReplySendJobHandler} from '../handlers/humanReply.ts';
 import {socialDraftHandler,socialDraftSource} from '../social/draftJobs.ts';
 import {socialDraftModel} from '../social/draftModel.ts';
 import {socialAssetsHandler,socialAssetsSource,socialDeletionPort,type SocialDeletionPort} from '../social/cleanup.ts';
@@ -190,6 +191,7 @@ export function registerHandlers(
 ): HandlerRegistry {
   const { classifier } = composition;
   registry.register(canaryHandler());
+  registry.register(humanReplySendJobHandler(composition.send));
   registry.register(meetingFollowThroughJobHandler());
   if(composition.meetingAutoRecording)registry.register(meetingAutoRecordingJobHandler(composition.meetingAutoRecording));
   registry.register(suppressionFinalizeJobHandler());

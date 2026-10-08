@@ -1,4 +1,5 @@
 import {recordRoutineDelivery} from '../outreach/replyDelivery.ts';
+import {recordHumanReplyDelivery} from '../replies/delivery.ts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
@@ -161,6 +162,7 @@ export async function reconcileOutboundMessage(
     });
     if (recorded.ok) {
       await recordRoutineDelivery(context, fence.id);
+      await recordHumanReplyDelivery(context, fence.id);
       if (fence.stepExecutionId !== null) await recordMeetingDelivery(context, {
         executionId: fence.stepExecutionId, messageId: fence.id, sentAt: recorded.value.sentAt!,
       });

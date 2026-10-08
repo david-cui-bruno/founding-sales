@@ -29,3 +29,15 @@ export type ReplyDraftContext=z.infer<typeof replyDraftContextSchema>;
 export type ReplyDraftGenerateInput=z.infer<typeof replyDraftGenerateInputSchema>;
 export type ReplyGeneratedDraft=z.infer<typeof replyGeneratedDraftSchema>;
 export type ReplyComposerResult<T>={ok:true;value:T}|{ok:false;reason:string};
+
+export const humanReplyPreviewInputSchema=replyDraftContextInputSchema.safeExtend({text:z.string().min(1).max(12000),factRefs:z.array(replyFactRefSchema).max(20),envelope:replyDraftEnvelopeSchema});
+export const humanReplyPreviewSchema=z.strictObject({sourceRevision:z.string().regex(/^[a-f0-9]{64}$/u),draftRevision:z.string().regex(/^[a-f0-9]{64}$/u),subject:z.string().max(998),body:z.string().min(1).max(16000),envelope:replyDraftEnvelopeSchema});
+export const humanReplySendInputSchema=humanReplyPreviewInputSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema,sourceRevision:z.string().regex(/^[a-f0-9]{64}$/u),draftRevision:z.string().regex(/^[a-f0-9]{64}$/u)});
+export const humanReplySendReadInputSchema=z.strictObject({messageId:uuid});
+export const humanReplySendStatusSchema=z.strictObject({messageId:uuid,outboundMessageId:uuid,state:z.enum(['queued','held','dispatching','reconciling','sent','unknown_terminal']),providerMessageId:z.string().nullable(),sentAt:z.string().nullable(),reason:z.string().nullable()});
+export const humanReplyPreviewResultSchema=z.discriminatedUnion('ok',[z.strictObject({ok:z.literal(true),value:humanReplyPreviewSchema}),replyComposerRefusalSchema]);
+export const humanReplySendResultSchema=z.discriminatedUnion('ok',[z.strictObject({ok:z.literal(true),value:humanReplySendStatusSchema}),replyComposerRefusalSchema]);
+export type HumanReplyPreviewInput=z.infer<typeof humanReplyPreviewInputSchema>;
+export type HumanReplyPreview=z.infer<typeof humanReplyPreviewSchema>;
+export type HumanReplySendInput=z.infer<typeof humanReplySendInputSchema>;
+export type HumanReplySendStatus=z.infer<typeof humanReplySendStatusSchema>;

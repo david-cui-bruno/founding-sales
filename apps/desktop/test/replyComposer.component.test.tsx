@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it,vi} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {ReplyComposer,type ReplyComposerPorts} from '../src/renderer/replies/ReplyComposer.tsx';
 import {DraftsProvider,useClearDrafts} from '../src/renderer/app/drafts.tsx';
 import type {ReplyDraftContext} from '../../../packages/contracts/src/replyComposer.ts';
@@ -9,6 +9,120 @@ const id='11111111-1111-4111-8111-111111111111';
 const ref={id,version:1};
 const context:ReplyDraftContext={messageId:id,sourceRevision:'a'.repeat(64),firmId:id,contactId:id,authorUserId:id,mailboxId:id,mailboxOwnerUserId:id,authorAddress:'owner@example.test',authorizationRevision:1,subject:'Question',senderAddress:'prospect@example.test',providerThreadId:'thread-one',inReplyTo:'question@example.test',references:['question@example.test'],observedTo:['owner@example.test'],observedCc:[],replyToMetadata:'unavailable',envelope:{to:['prospect@example.test'],cc:[]},recipientOptions:[{address:'prospect@example.test',contactId:id}],messageText:'What does Callie do?',priorContext:[],bookings:[],facts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}],availableFacts:[{...ref,kind:'product',text:'Callie helps coordinate maintenance requests.',approvedAt:'2026-10-08T00:00:00Z',retiredAt:null}]};
 const ports=():ReplyComposerPorts=>({context:vi.fn<ReplyComposerPorts['context']>(async()=>({ok:true,value:context})),prepareSuggestion:vi.fn<ReplyComposerPorts['prepareSuggestion']>(async()=>({ok:false,reason:'generation_unavailable'}))});
+
+it('shows final bytes before enabling one explicit send and keeps uncertainty on the original attempt through navigation',async()=>{
+ const p=ports(),sent={messageId:id,outboundMessageId:id,state:'reconciling' as const,providerMessageId:null,sentAt:null,reason:null};
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Re: Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ const send=vi.fn(async()=>({ok:true as const,value:sent}));p.send=send;
+ p.sendStatus=vi.fn(async()=>send.mock.calls.length?{ok:true as const,value:sent}:{ok:false as const,reason:'no_send_attempt'});
+ const tree=(open:boolean)=><DraftsProvider>{open?<ReplyComposer messageId={id} ports={p}/>:<p>Today</p>}</DraftsProvider>;
+ const view=render(tree(true));await screen.findByText('question@example.test');
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'My exact human answer.'}});
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ expect(await screen.findByText(/Fixture postal address/)).toBeTruthy();
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ expect(await screen.findByText(/Delivery is uncertain/)).toBeTruthy();
+ expect(p.send).toHaveBeenCalledTimes(1);
+ expect(p.send).toHaveBeenCalledWith(expect.objectContaining({text:'My exact human answer.',draftRevision:'b'.repeat(64),envelope:context.envelope}));
+ view.rerender(tree(false));view.rerender(tree(true));
+ expect(await screen.findByText(/Delivery is uncertain/)).toBeTruthy();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(p.send).toHaveBeenCalledTimes(1);
+});
+
+for(const olderState of ['queued','held'] as const)for(const currentState of ['sent','reconciling'] as const)it(`a late ${olderState} status cannot replace the newer ${currentState} outcome or reopen Send`,async()=>{
+ const p=ports(),attempt={messageId:id,outboundMessageId:id,providerMessageId:null,sentAt:null,reason:null};
+ let finishOlder!:(value:Awaited<ReturnType<NonNullable<ReplyComposerPorts['sendStatus']>>>)=>void;
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ p.send=vi.fn(async()=>({ok:true as const,value:{...attempt,state:'queued' as const}}));
+ p.sendStatus=vi.fn<NonNullable<ReplyComposerPorts['sendStatus']>>()
+  .mockResolvedValueOnce({ok:true,value:{...attempt,state:'held'}})
+  .mockImplementationOnce(()=>new Promise(resolve=>{finishOlder=resolve;}))
+  .mockResolvedValue({ok:true,value:{...attempt,state:currentState,providerMessageId:currentState==='sent'?'confirmed-message':null,sentAt:currentState==='sent'?'2026-10-08T15:00:00.000Z':null}});
+ render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
+ await screen.findByText(/This reply was held before submission/);
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'A retained exact answer.'}});
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ await screen.findByText(/Fixture postal address/);
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(false);
+ fireEvent.click(screen.getByRole('button',{name:'Check send status'}));
+ fireEvent.click(screen.getByRole('button',{name:'Check send status'}));
+ const currentCopy=currentState==='sent'?/Sent\. Delivery was confirmed/:/Delivery is uncertain/;
+ await screen.findByText(currentCopy);
+ await act(async()=>{finishOlder({ok:true,value:{...attempt,state:olderState}});});
+ expect(screen.getByText(currentCopy)).toBeTruthy();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(p.send).not.toHaveBeenCalled();
+});
+
+it('a status read started before an explicit send cannot replace its uncertain outcome',async()=>{
+ const p=ports(),attempt={messageId:id,outboundMessageId:id,providerMessageId:null,sentAt:null,reason:null};
+ let finishOlder!:(value:Awaited<ReturnType<NonNullable<ReplyComposerPorts['sendStatus']>>>)=>void;
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ p.send=vi.fn(async()=>({ok:true as const,value:{...attempt,state:'reconciling' as const}}));
+ p.sendStatus=vi.fn<NonNullable<ReplyComposerPorts['sendStatus']>>()
+  .mockResolvedValueOnce({ok:true,value:{...attempt,state:'held'}})
+  .mockImplementationOnce(()=>new Promise(resolve=>{finishOlder=resolve;}));
+ render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
+ await screen.findByText(/This reply was held before submission/);
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'A newly reviewed answer.'}});
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ await screen.findByText(/Fixture postal address/);
+ fireEvent.click(screen.getByRole('button',{name:'Check send status'}));
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ await screen.findByText(/Delivery is uncertain/);
+ await act(async()=>{finishOlder({ok:true,value:{...attempt,state:'held'}});});
+ expect(screen.getByText(/Delivery is uncertain/)).toBeTruthy();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(p.send).toHaveBeenCalledTimes(1);
+});
+
+it('a status read started while the send command is pending cannot replace its newer uncertain result',async()=>{
+ const p=ports(),attempt={messageId:id,outboundMessageId:id,providerMessageId:null,sentAt:null,reason:null};
+ let finishSend!:(value:Awaited<ReturnType<NonNullable<ReplyComposerPorts['send']>>>)=>void;
+ let finishStatus!:(value:Awaited<ReturnType<NonNullable<ReplyComposerPorts['sendStatus']>>>)=>void;
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ p.send=vi.fn<NonNullable<ReplyComposerPorts['send']>>(()=>new Promise(resolve=>{finishSend=resolve;}));
+ p.sendStatus=vi.fn<NonNullable<ReplyComposerPorts['sendStatus']>>()
+  .mockResolvedValueOnce({ok:true,value:{...attempt,state:'held'}})
+  .mockImplementationOnce(()=>new Promise(resolve=>{finishStatus=resolve;}));
+ render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
+ await screen.findByText(/This reply was held before submission/);
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'A pending human command.'}});
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ await screen.findByText(/Fixture postal address/);
+ act(()=>{
+  fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+  fireEvent.click(screen.getByRole('button',{name:'Check send status'}));
+ });
+ expect(p.send).toHaveBeenCalledTimes(1);
+ expect(p.sendStatus).toHaveBeenCalledTimes(2);
+ await act(async()=>{finishSend({ok:true,value:{...attempt,state:'reconciling'}});});
+ await screen.findByText(/Delivery is uncertain/);
+ await act(async()=>{finishStatus({ok:true,value:{...attempt,state:'held'}});});
+ expect(screen.getByText(/Delivery is uncertain/)).toBeTruthy();
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+});
+
+for(const disposition of ['delivered','skipped'] as const)it(`shows administrator-marked ${disposition} as an unconfirmed terminal disposition without offering resend`,async()=>{
+ const p=ports();
+ p.preview=vi.fn(async input=>({ok:true as const,value:{sourceRevision:context.sourceRevision,draftRevision:'b'.repeat(64),subject:'Question',body:input.text+'\n\nFixture postal address',envelope:input.envelope}}));
+ p.send=vi.fn(async()=>({ok:false as const,reason:'must_not_send'}));
+ p.sendStatus=vi.fn(async()=>({ok:true as const,value:{messageId:id,outboundMessageId:id,state:'unknown_terminal' as const,providerMessageId:null,sentAt:null,reason:`admin_marked_${disposition}`}}));
+ render(<DraftsProvider><ReplyComposer messageId={id} ports={p}/></DraftsProvider>);
+ expect(await screen.findByText(new RegExp(`An administrator marked the original attempt ${disposition}`))).toBeTruthy();
+ expect(screen.getByText(/The mail provider has not confirmed delivery/)).toBeTruthy();
+ expect(screen.queryByText(/requires administrator review/)).toBeNull();
+ expect(screen.queryByText(/Sent\. Delivery was confirmed/)).toBeNull();
+ fireEvent.change(screen.getByLabelText('Reply draft'),{target:{value:'A retained answer cannot reopen a resolved attempt.'}});
+ fireEvent.click(screen.getByRole('button',{name:'Review exact draft'}));
+ await screen.findByText(/Fixture postal address/);
+ expect((screen.getByRole('button',{name:'Send reviewed reply'}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button',{name:'Send reviewed reply'}));
+ expect(p.send).not.toHaveBeenCalled();
+});
 
 it('retains human text across navigation and shows current recipient/thread/fact context without a send control',async()=>{
  const p=ports();

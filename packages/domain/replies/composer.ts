@@ -11,6 +11,7 @@ import {authorizationForMailbox} from '../outreach/authorization.ts';
 import {readApprovedAnswerBlocks} from '../outreach/facts.ts';
 import {firstSuppressed} from '../suppression/effective.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
+import {workspaceBusinessZone} from '../research/ledger.ts';
 
 /** No body is persisted here. Human drafting is independent of routine automation. */
 export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDraftContextInput):Promise<ReplyComposerResult<ReplyDraftContext>>{
@@ -29,7 +30,7 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const recipientOptions=routes.filter(r=>!own.some(identity=>identity.address===r.address)&&routes.filter(other=>other.address===r.address).length===1).map(r=>({address:r.address,contactId:r.contact_id}));
  const sender=recipientOptions.filter(r=>r.address===message.headerFrom&&r.contactId===target.contactId);
  if(sender.length!==1||recipientOptions.length>20)return {ok:false,reason:'sender_unverified'};
- const envelope=input.envelope??{to:[sender[0]!.address],cc:[]};
+ const envelope={to:[...(input.envelope?.to??[sender[0]!.address])],cc:[...(input.envelope?.cc??[])]};
  const recipients=[...envelope.to,...envelope.cc];
  if(new Set(recipients).size!==recipients.length||recipients.some(address=>!recipientOptions.some(r=>r.address===address))||!envelope.to.includes(sender[0]!.address))return {ok:false,reason:'recipient_unverified'};
  if(await firstSuppressed(ctx,[{scope:'firm',canonicalKey:firm.id},...recipients.map(address=>({scope:'handle' as const,canonicalKey:address}))],'email'))return {ok:false,reason:'conversation_stopped'};
@@ -53,7 +54,7 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const opportunity=target.opportunityId?(await ctx.db.query('SELECT id,status,control_mode,control_mode_changed_at,stage_id FROM opportunities WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',[ctx.scope.workspaceId,target.opportunityId,firm.id])).rows[0]:null;
  const confirmation=(await ctx.db.query('SELECT id,disposition FROM mail_reply_confirmations WHERE workspace_id=$1 AND mail_message_id=$2',[ctx.scope.workspaceId,message.id])).rows[0]??null;
  const source={messageId:message.id,firmId:firm.id,contactId:target.contactId,authorUserId:actor.userId,mailboxId:message.mailboxId,mailboxOwnerUserId:mailbox.owner_user_id,authorAddress:mailbox.email_address,authorizationRevision:auth.revision,subject:message.subject??'',senderAddress:message.headerFrom,providerThreadId:message.providerThreadId,inReplyTo:message.rfcMessageId,references:[...new Set([...message.referenceMessageIds,message.rfcMessageId])],observedTo:[...message.headerTo],observedCc:[...message.headerCc],replyToMetadata:'unavailable' as const,envelope,recipientOptions,messageText:body.text,priorContext:thread.filter(m=>m.id!==message.id).map(m=>({direction:m.direction,text:m.body_text!})),facts:selected.value};
- const sourceRevision=createHash('sha256').update(JSON.stringify({source,bookings,plan,opportunity,confirmation,assignedUserId:firm.assigned_user_id,matchId:target.id,mailboxAccountId:mailbox.provider_account_id,mailboxGeneration:mailbox.generation,threadIds:thread.map(m=>m.id),routes,holds})).digest('hex');
+ const sourceRevision=createHash('sha256').update(JSON.stringify({source,bookings,plan,opportunity,confirmation,sourceZone:firm.time_zone??await workspaceBusinessZone(ctx),assignedUserId:firm.assigned_user_id,matchId:target.id,mailboxAccountId:mailbox.provider_account_id,mailboxGeneration:mailbox.generation,threadIds:thread.map(m=>m.id),routes,holds})).digest('hex');
  if(firmReadIsAudited(ctx,firm))await recordCrmAuditEvent(ctx,{action:'reply_composer.context_read',subjectKind:'mail_message',subjectId:message.id});
  return {ok:true,value:{...source,bookings,sourceRevision,availableFacts}};
 }

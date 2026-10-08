@@ -1,11 +1,13 @@
 import {clientCompatibility} from '@fss/contracts';
 import {replyDraftContextInputSchema,replyDraftGenerateInputSchema} from '../../../../packages/contracts/src/replyComposer.ts';
+import {humanReplyPreviewInputSchema,humanReplySendInputSchema,humanReplySendReadInputSchema} from '../../../../packages/contracts/src/replyComposer.ts';
+import {previewHumanReply,requestHumanReplySend,readHumanReplySend} from '@fss/domain/replies/dispatch.ts';
 import {readReplyDraftContext} from '@fss/domain/replies/composer.ts';
 import {generateReplyDraft,type HumanReplyDraftPort} from '@fss/domain/replies/composerGeneration.ts';
-import {requirePrincipal,contextForPrincipal} from './routeSupport.ts';
+import {requirePrincipal,contextForPrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RoutingOptions,RouteResult} from './types.ts';
 
-export const REPLY_COMPOSER_PATHS=['/replies/composer/context','/replies/composer/generate'];
+export const REPLY_COMPOSER_PATHS=['/replies/composer/context','/replies/composer/generate','/replies/composer/preview','/replies/composer/send-status','/replies/composer/send'];
 /** Paid attempt metadata supplies replay safety; source/generated prose is never a receipt. */
 export async function routeReplyComposer(request:ApiRequest,options:RoutingOptions,port:HumanReplyDraftPort|null=null):Promise<RouteResult|null>{
  if(!REPLY_COMPOSER_PATHS.includes(request.path))return null;
@@ -13,6 +15,18 @@ export async function routeReplyComposer(request:ApiRequest,options:RoutingOptio
  if(!options.auth)return {status:404,body:{error:'not_found'}};
  const principal=await requirePrincipal(options.auth,request);if(!principal.ok)return principal.result;
  const scoped=contextForPrincipal(options.auth,principal.principal);if(!scoped.ok)return scoped.result;
+ if(request.path==='/replies/composer/preview'){
+  const input=humanReplyPreviewInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
+  return {status:200,body:await previewHumanReply(scoped.context,input.data)};
+ }
+ if(request.path==='/replies/composer/send-status'){
+  const input=humanReplySendReadInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
+  return {status:200,body:await readHumanReplySend(scoped.context,input.data)};
+ }
+ if(request.path==='/replies/composer/send')return runRouteCommand({auth:options.auth,principal:principal.principal,request},humanReplySendInputSchema,'reply.human_send',async(ctx,input)=>{
+  const result=await requestHumanReplySend(ctx,input,{sessionId:principal.principal.sessionId,deviceId:principal.principal.deviceId});
+  return result.ok?{ok:true,value:result}:result;
+ });
  if(request.path==='/replies/composer/context'){
   const input=replyDraftContextInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
   return {status:200,body:await readReplyDraftContext(scoped.context,input.data)};

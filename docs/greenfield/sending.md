@@ -92,6 +92,17 @@ send of. The tombstone takes the lost fence's own id and Message-ID, so the dedu
 in `prepareOutboundMessage` sees it and `dispatchOutboundMessage` answers
 `already_terminal`. See `docs/archive/decisions/g73-missing-fences-are-recovered-from-sent.md`.
 
+Explicit human replies (#452) use `<fss.reply.{sourceMessageId}.{fenceId}@{domain}>`;
+existing sequence markers stay unchanged. The source question identity travels in
+the provider-held marker so a restore can recover a sent draft tombstone even when
+its approval and fence were lost. Recovery proves the restored question, mailbox,
+thread and actual verified From/To/CC metadata before recording metadata-only human
+conversation effects. It copies no reply body and consumes no sequence step.
+Missing source or authority, multiple To recipients or unverifiable recipients are
+`unattached` with `human_reply_unresolved`; the existing restore workflow refuses
+restart or keeps the affected firm/workspace held for manual reconciliation. A
+recovered draft tombstone remains the original source's terminal send identity.
+
 ### 5. `unknown_terminal` is terminal, whichever the admin chooses
 
 When the window expires the fence is `unknown_terminal` and there is no transition out
