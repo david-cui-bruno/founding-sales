@@ -467,7 +467,7 @@ it('shows an automatic unsent enrollment in learning without manufacturing conta
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null,expectedRevision:2}))).toMatchObject({ok:true});
  const {learningReportSchema}=await import('@fss/contracts');
  const changed=learningReportSchema.parse(await tx(()=>readSourcingLearning(admin(),learningInterval())));
- expect(changed.automation).toMatchObject({control:{enabled:false,revision:3},decisions:[{controlRevision:2,evaluationSha256:'b'.repeat(64),implementationCommit:'a'.repeat(40),sequenceVersionId:sequenceId}]});
+ expect(changed.automation).toMatchObject({control:{enabled:false,revision:3},decisions:[{controlRevision:2,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),sequenceVersionId:sequenceId}]});
 });
 it('counts one actual send and automatic email attribution after sender replay',async()=>{
  const f=await preparedAutomaticSender();const {dispatchOutboundMessage}=await import('@fss/domain/outbound/send.ts');
@@ -486,7 +486,7 @@ it('shows permanent deferral and exhausted capacity checks with historical evide
  const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
  expect(view.automation?.decisions).toHaveLength(2);
  expect(view.automation?.decisions).toEqual(expect.arrayContaining([
- expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:'a'.repeat(40),firmId:null,enrollmentId:null}),
+ expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),firmId:null,enrollmentId:null}),
  expect.objectContaining({candidateId:contrary.candidateId,status:'deferred',checks:1,retryAt:null,evidence:expect.arrayContaining([expect.objectContaining({url:'https://visiblecontrarypm.example.test/'})])})]));
 });
 it('distinguishes retained discovery hits and supported email prospects from manual staging without double counting',async()=>{

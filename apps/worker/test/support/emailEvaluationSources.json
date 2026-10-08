@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-10-08T00:45:00.000Z",
+  "asOf": "2026-10-08T00:55:00.000Z",
   "cases": [
     {
       "id": "nhs-identity",
@@ -4986,9 +4986,16 @@
       "provenance": {
         "kind": "recorded_first_party_extraction",
         "candidateId": "e8e64db9-e8ce-4c2f-8c99-40c60ba2a577",
-        "runId": "d1b975db-86da-4fde-b81d-0bce6a86c8ea",
-        "promptVersion": "qualification-email-v2",
-        "reviewNote": "Retained short page has no matched canonical firm name, residential statement, target city/state or business email."
+        "runId": "14326add-1ef4-4bf4-962e-873541df9709",
+        "promptVersion": "qualification-growth-v6",
+        "reviewNote": "Current v6 refresh still lacks the candidate search-title identity, explicit residential-management and city/state evidence. Published email uses zannoco.com, not the source zannopm.com host. Portal/vendor support is context, not pain. Must defer.",
+        "originalRunId": "d1b975db-86da-4fde-b81d-0bce6a86c8ea",
+        "originalPromptVersion": "qualification-email-v2",
+        "originalEvidenceSha256": "1fd8e0a767ec168e76bae9dfce789e8a16900967cc6446b344360a3e9adb47a9",
+        "refreshScope": "disposable_database_current_bounded_qualification",
+        "modelName": "claude-haiku-4-5",
+        "recordedCostCents": 1,
+        "evaluationCeilingCents": 5
       },
       "candidate": {
         "region": "RI",
@@ -5005,7 +5012,7 @@
       },
       "observations": [
         {
-          "id": "6be22d67-75d9-4da9-b26d-1509e012217a",
+          "id": "118f9962-5522-4942-bc91-abb79085be0c",
           "url": "https://www.zannopm.com/",
           "blocks": [
             {
@@ -5045,8 +5052,623 @@
           "firstParty": true,
           "contentHash": "b8d6de4707a459b53cfa532112323436870454ce4fff4ef361a6e6b64a691740",
           "publishedAt": null,
-          "retrievedAt": "2026-10-07T02:24:54.830Z",
+          "retrievedAt": "2026-10-08T00:54:18.366Z",
           "relevantTextHash": "84785641dd1d85b958e962b4e599281b04952be3e25626a9ae6f2681b1b5637d",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "4ea43b7c-6f17-427e-bc5b-116c5b452302",
+          "url": "https://www.zannopm.com/contact",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b3",
+              "text": "Contractors"
+            },
+            {
+              "id": "b4",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b5",
+              "text": "Resident Login"
+            },
+            {
+              "id": "b6",
+              "text": "Contact Us"
+            },
+            {
+              "id": "b7",
+              "text": "Zanno Property Management"
+            },
+            {
+              "id": "b8",
+              "text": "498 Main Street Warren, RI 02885"
+            },
+            {
+              "id": "b9",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b10",
+              "text": "Office Hours:"
+            },
+            {
+              "id": "b11",
+              "text": "Monday:"
+            },
+            {
+              "id": "b12",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b13",
+              "text": "Tuesday:"
+            },
+            {
+              "id": "b14",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b15",
+              "text": "Wednesday:"
+            },
+            {
+              "id": "b16",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b17",
+              "text": "Thursday:"
+            },
+            {
+              "id": "b18",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b19",
+              "text": "Friday:"
+            },
+            {
+              "id": "b20",
+              "text": "9:00am - 5:00pm"
+            },
+            {
+              "id": "b21",
+              "text": "Saturday:"
+            },
+            {
+              "id": "b22",
+              "text": "Appointment Only"
+            },
+            {
+              "id": "b23",
+              "text": "Sunday:"
+            },
+            {
+              "id": "b24",
+              "text": "Appointment Only"
+            },
+            {
+              "id": "b25",
+              "text": "Drop Us a Line!"
+            },
+            {
+              "id": "b26",
+              "text": "Owner or Renter?"
+            },
+            {
+              "id": "b27",
+              "text": "I'm an Owner"
+            },
+            {
+              "id": "b28",
+              "text": "I'm a Renter"
+            },
+            {
+              "id": "b29",
+              "text": "I'm a Vendor"
+            },
+            {
+              "id": "b30",
+              "text": "498 Main Street Warren, RI 02885"
+            },
+            {
+              "id": "b31",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b32",
+              "text": "propertymanagement@zannoco.com"
+            },
+            {
+              "id": "b33",
+              "text": "Zanno Property Management"
+            },
+            {
+              "id": "b34",
+              "text": "498 Main Street Warren, RI 02885"
+            },
+            {
+              "id": "b35",
+              "text": "401-244-5062 propertymanagement@zannoco.com social sharing Providence Property Management Property Management Providence Property Management, Providence investment services, Providence Real Estate portfolio management, Providence Houses and Homes for Rent"
+            },
+            {
+              "id": "b36",
+              "text": "Office Hours"
+            },
+            {
+              "id": "b37",
+              "text": "Monday"
+            },
+            {
+              "id": "b38",
+              "text": "9am - 5pm"
+            },
+            {
+              "id": "b39",
+              "text": "Tuesday"
+            },
+            {
+              "id": "b40",
+              "text": "9am - 5pm"
+            },
+            {
+              "id": "b41",
+              "text": "Wednesday"
+            },
+            {
+              "id": "b42",
+              "text": "9am - 5pm"
+            },
+            {
+              "id": "b43",
+              "text": "Thursday"
+            },
+            {
+              "id": "b44",
+              "text": "9am - 5pm"
+            },
+            {
+              "id": "b45",
+              "text": "Friday"
+            },
+            {
+              "id": "b46",
+              "text": "9am - 5pm"
+            },
+            {
+              "id": "b47",
+              "text": "Sat & Sun"
+            },
+            {
+              "id": "b48",
+              "text": "Appointment Only"
+            },
+            {
+              "id": "b49",
+              "text": "After Hours"
+            },
+            {
+              "id": "b50",
+              "text": "888.815.2816"
+            },
+            {
+              "id": "b51",
+              "text": "Current"
+            },
+            {
+              "id": "b52",
+              "text": "Tenants"
+            },
+            {
+              "id": "b53",
+              "text": "Portal"
+            },
+            {
+              "id": "b54",
+              "text": "Pay Rent"
+            },
+            {
+              "id": "b55",
+              "text": "Repair Request"
+            },
+            {
+              "id": "b56",
+              "text": "Resources"
+            },
+            {
+              "id": "b57",
+              "text": "Prospective"
+            },
+            {
+              "id": "b58",
+              "text": "Tenants"
+            },
+            {
+              "id": "b59",
+              "text": "Available Rentals"
+            },
+            {
+              "id": "b60",
+              "text": "Apply Now"
+            },
+            {
+              "id": "b61",
+              "text": "FAQs"
+            },
+            {
+              "id": "b62",
+              "text": "Pet Policy"
+            },
+            {
+              "id": "b63",
+              "text": "Property"
+            },
+            {
+              "id": "b64",
+              "text": "Owners"
+            },
+            {
+              "id": "b65",
+              "text": "Portal"
+            },
+            {
+              "id": "b66",
+              "text": "Our Services"
+            },
+            {
+              "id": "b67",
+              "text": "Our Pricing"
+            },
+            {
+              "id": "b68",
+              "text": "FAQs"
+            },
+            {
+              "id": "b69",
+              "text": "Copyright 2026 Zanno Property Management. All Rights Reserved. Property Manager Website powered by PMW"
+            },
+            {
+              "id": "b70",
+              "text": "Sitemap"
+            },
+            {
+              "id": "b71",
+              "text": "Privacy Policy"
+            },
+            {
+              "id": "b72",
+              "text": "Zanno Property Management is committed to ensuring that its website is accessible to people with disabilities. All the pages on our website will meet W3C WAI's Web Content Accessibility Guidelines 2.0, Level A conformance. Any issues should be reported to propertymanagement@zannoco.com. Website Accessibility Policy"
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "ede76ecdc930da06fa2146789daac15cd17540b56f4abaae220dfc5344d9fb7e",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-08T00:54:18.754Z",
+          "relevantTextHash": "e8b3ed9460c439a63d3ab39821be9492f9d4b053ae5f2861e97ece6844208319",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "bb74477e-8d9c-4b40-8ae4-8a4723b75fcf",
+          "url": "https://www.zannopm.com/tenant-screening",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b3",
+              "text": "Contractors"
+            },
+            {
+              "id": "b4",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b5",
+              "text": "Resident Login"
+            },
+            {
+              "id": "b6",
+              "text": "Providence Property Management"
+            },
+            {
+              "id": "b7",
+              "text": ", Perfected."
+            },
+            {
+              "id": "b8",
+              "text": "We Eliminate the Stress of Property Ownership"
+            },
+            {
+              "id": "b9",
+              "text": "How We Screen Your Rental Applicants"
+            },
+            {
+              "id": "b10",
+              "text": "We work hard to find the right tenant for your investment"
+            },
+            {
+              "id": "b11",
+              "text": "We strive to get your investment rented quickly, but feel it is important to get the RIGHT resident versus the FAST resident! Spending time up front and finding the BEST resident for your rental creates a good experience all around, versus one that is stressful and frustrating."
+            },
+            {
+              "id": "b12",
+              "text": "Oftentimes people think they just need to do a quick credit check and verify employment but there\u2019s more to it than that. Our high quality resident screening process digs deeper. We gather extensive information on the following:"
+            },
+            {
+              "id": "b13",
+              "text": "Credit Check"
+            },
+            {
+              "id": "b14",
+              "text": "Debt to income ratios"
+            },
+            {
+              "id": "b15",
+              "text": "Criminal history check"
+            },
+            {
+              "id": "b16",
+              "text": "Employment verification"
+            },
+            {
+              "id": "b17",
+              "text": "Eviction history check"
+            },
+            {
+              "id": "b18",
+              "text": "Previous landlord calls"
+            },
+            {
+              "id": "b19",
+              "text": "Our screening process is not just based on a credit score only - we take a comprehensive look at the overall applicant. This process has proven to be extremely successful."
+            },
+            {
+              "id": "b20",
+              "text": "Get started with your FREE PROPERTY CONSULTATION by completing the form ."
+            },
+            {
+              "id": "b21",
+              "text": "Schedule Your Free Consultation"
+            },
+            {
+              "id": "b22",
+              "text": "Owner or Renter?"
+            },
+            {
+              "id": "b23",
+              "text": "I'm an Owner"
+            },
+            {
+              "id": "b24",
+              "text": "I'm a Renter"
+            },
+            {
+              "id": "b25",
+              "text": "I'm a Vendor"
+            },
+            {
+              "id": "b26",
+              "text": "Why Work With Us"
+            },
+            {
+              "id": "b27",
+              "text": "WE MAKE IT EASY TO STAY IN THE LOOP"
+            },
+            {
+              "id": "b28",
+              "text": "We use digital listings and online account portals to make it easy for residents and landlords alike to connect with us in just a few clicks."
+            },
+            {
+              "id": "b29",
+              "text": "OUR CUSTOMER SERVICE IS SIMPLY UNBEATABLE"
+            },
+            {
+              "id": "b30",
+              "text": "Our property management pros are passionate about helping our clients to succeed, and we do everything in our power to exceed your expectations."
+            },
+            {
+              "id": "b31",
+              "text": "HONESTY & TRANSPARENCY DEFINE OUR TEAM"
+            },
+            {
+              "id": "b32",
+              "text": "We aren't interested in making a quick profit off your rental portfolio; our goal is to ensure you hit your performance benchmarks, creating a win-win for everyone."
+            },
+            {
+              "id": "b33",
+              "text": "HUNDREDS OF HAPPY CLIENTS SAY IT ALL"
+            },
+            {
+              "id": "b34",
+              "text": "Our team has worked with countless property owners across Rhode Island. Our track record speaks volumes to the effectiveness of our property management approach."
+            },
+            {
+              "id": "b35",
+              "text": "Get Started"
+            },
+            {
+              "id": "b36",
+              "text": "As Your Providence Property Manager, We Take Care of Everything."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "18a6ee029db3c3667492f318414e7dc48cc8ee1555fa4c98357debbeb6912ceb",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-08T00:54:19.693Z",
+          "relevantTextHash": "248e40268a071d8bee016f745f5b35c6ca2757b70c4a1ed0c4a5bdbed0d938b6",
+          "publishedAtBlockId": null
+        },
+        {
+          "id": "9c831be8-7908-4e4b-ad63-2edf36cad13c",
+          "url": "https://www.zannopm.com/maintenance-services",
+          "blocks": [
+            {
+              "id": "b1",
+              "text": "Skip to main content"
+            },
+            {
+              "id": "b2",
+              "text": "401-244-5062"
+            },
+            {
+              "id": "b3",
+              "text": "Contractors"
+            },
+            {
+              "id": "b4",
+              "text": "Owner Login"
+            },
+            {
+              "id": "b5",
+              "text": "Resident Login"
+            },
+            {
+              "id": "b6",
+              "text": "Providence Property Management"
+            },
+            {
+              "id": "b7",
+              "text": ", Perfected."
+            },
+            {
+              "id": "b8",
+              "text": "We Eliminate the Stress of Property Ownership"
+            },
+            {
+              "id": "b9",
+              "text": "Maintenance & Repairs"
+            },
+            {
+              "id": "b10",
+              "text": "We keep your investment safeguarded"
+            },
+            {
+              "id": "b11",
+              "text": "We know that a well-maintained home results in quicker rentals, lower turnovers, and in general, happier residents! We offer our residents a secure portal to submit all maintenance issues, which can be accessed online with a simple click. Our Vendors are trustworthy and very quick to respond. We coordinate and communicate with the residents, with you, and vendors for our maintenance scenarios. Protecting and maintaining your home and your investment is a top priority for us."
+            },
+            {
+              "id": "b12",
+              "text": "PROPERTY INSPECTIONS"
+            },
+            {
+              "id": "b13",
+              "text": "We perform regular inspections to protect your real estate investment. During an inspection visit, our team verifies that all is well behind the scenes of your property."
+            },
+            {
+              "id": "b14",
+              "text": "Vendor bills and receipts are emailed monthly with Owner Statements and are also available through our online Owner Portal."
+            },
+            {
+              "id": "b15",
+              "text": "How This Benefits You"
+            },
+            {
+              "id": "b16",
+              "text": "We offer quality repairs at competitive prices"
+            },
+            {
+              "id": "b17",
+              "text": "You can rest easy knowing your home is protected nights, weekends and holidays"
+            },
+            {
+              "id": "b18",
+              "text": "Accurate billing so you can keep track of your investment"
+            },
+            {
+              "id": "b19",
+              "text": "Prompt response to protect your property and keep your tenants happy"
+            },
+            {
+              "id": "b20",
+              "text": "Get started with your FREE PROPERTY CONSULTATION by completing the form ."
+            },
+            {
+              "id": "b21",
+              "text": "Schedule Your Free Consultation"
+            },
+            {
+              "id": "b22",
+              "text": "Owner or Renter?"
+            },
+            {
+              "id": "b23",
+              "text": "I'm an Owner"
+            },
+            {
+              "id": "b24",
+              "text": "I'm a Renter"
+            },
+            {
+              "id": "b25",
+              "text": "I'm a Vendor"
+            },
+            {
+              "id": "b26",
+              "text": "Why Work With Us"
+            },
+            {
+              "id": "b27",
+              "text": "WE MAKE IT EASY TO STAY IN THE LOOP"
+            },
+            {
+              "id": "b28",
+              "text": "We use digital listings and online account portals to make it easy for residents and landlords alike to connect with us in just a few clicks."
+            },
+            {
+              "id": "b29",
+              "text": "OUR CUSTOMER SERVICE IS SIMPLY UNBEATABLE"
+            },
+            {
+              "id": "b30",
+              "text": "Our property management pros are passionate about helping our clients to succeed, and we do everything in our power to exceed your expectations."
+            },
+            {
+              "id": "b31",
+              "text": "HONESTY & TRANSPARENCY DEFINE OUR TEAM"
+            },
+            {
+              "id": "b32",
+              "text": "We aren't interested in making a quick profit off your rental portfolio; our goal is to ensure you hit your performance benchmarks, creating a win-win for everyone."
+            },
+            {
+              "id": "b33",
+              "text": "HUNDREDS OF HAPPY CLIENTS SAY IT ALL"
+            },
+            {
+              "id": "b34",
+              "text": "Our team has worked with countless property owners across Rhode Island. Our track record speaks volumes to the effectiveness of our property management approach."
+            },
+            {
+              "id": "b35",
+              "text": "Get Started"
+            },
+            {
+              "id": "b36",
+              "text": "As Your Providence Property Manager, We Take Care of Everything."
+            }
+          ],
+          "truncated": false,
+          "firstParty": true,
+          "contentHash": "f1b99f4783204dc63281f22a5b34e71ce23ad7e22e3ebc7feb598f18f913d9fe",
+          "publishedAt": null,
+          "retrievedAt": "2026-10-08T00:54:20.095Z",
+          "relevantTextHash": "abe90aac027f70413ebd3f45ae38c753cd9ae9bcad37f8406cb4cee26b80ef80",
           "publishedAtBlockId": null
         }
       ],
@@ -5055,19 +5677,37 @@
           "kind": "firm_identity",
           "value": "Rhode Island Property Management",
           "blockId": "b6",
-          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+          "observationId": "118f9962-5522-4942-bc91-abb79085be0c"
         },
         {
-          "kind": "business_phone",
-          "value": "401-244-5062",
-          "blockId": "b2",
-          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+          "kind": "residential_management",
+          "value": "We Eliminate the Stress of Property Ownership in Providence, Kent, Washington, Newport and Bristol Counties.",
+          "blockId": "b8",
+          "observationId": "118f9962-5522-4942-bc91-abb79085be0c"
         },
         {
           "kind": "service_area",
           "value": "We Eliminate the Stress of Property Ownership in Providence, Kent, Washington, Newport and Bristol Counties.",
           "blockId": "b8",
-          "observationId": "6be22d67-75d9-4da9-b26d-1509e012217a"
+          "observationId": "118f9962-5522-4942-bc91-abb79085be0c"
+        },
+        {
+          "kind": "business_phone",
+          "value": "401-244-5062",
+          "blockId": "b9",
+          "observationId": "4ea43b7c-6f17-427e-bc5b-116c5b452302"
+        },
+        {
+          "kind": "business_email",
+          "value": "propertymanagement@zannoco.com",
+          "blockId": "b32",
+          "observationId": "4ea43b7c-6f17-427e-bc5b-116c5b452302"
+        },
+        {
+          "kind": "existing_support",
+          "value": "We know that a well-maintained home results in quicker rentals, lower turnovers, and in general, happier residents! We offer our residents a secure portal to submit all maintenance issues, which can be accessed online with a simple click. Our Vendors are trustworthy and very quick to respond. We coordinate and communicate with the residents, with you, and vendors for our maintenance scenarios. Protecting and maintaining your home and your investment is a top priority for us.",
+          "blockId": "b11",
+          "observationId": "9c831be8-7908-4e4b-ad63-2edf36cad13c"
         }
       ],
       "expectedAdmission": false,
