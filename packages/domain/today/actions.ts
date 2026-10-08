@@ -3,8 +3,7 @@ import type { TodayAction, TodayActionsResponse, TodayActionTarget } from '@fss/
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { workspaceBusinessTimeZone } from './snapshots.ts';
 import { currentHolidayCalendar } from '../sequences/calendars.ts';
-import { addBusinessDays } from '../src/rules/businessDays.ts';
-import { localInstant, localParts } from '../src/rules/localClock.ts';
+import { replyDeadline } from './replyDeadline.ts';
 
 /** Live metadata only. Daily snapshots are presentation, never the action authority. */
 export async function readTodayActions(context: RepositoryContext, input: { now: string }): Promise<TodayActionsResponse> {
@@ -47,8 +46,7 @@ export async function readTodayActions(context: RepositoryContext, input: { now:
         AND NOT EXISTS (SELECT 1 FROM outreach_reply_requests r WHERE r.workspace_id=m.workspace_id AND r.original_message_id=m.id AND r.state='delivered')
       ORDER BY m.internal_date,m.id`, [context.scope.workspaceId, assignee]);
   const actions: TodayAction[] = rows.map(row => {
-    const parts = localParts(row.internal_date.toISOString(), businessTimeZone);
-    const dueAt = localInstant(addBusinessDays(parts.date, 1, calendar), { hour: parts.hour, minute: parts.minute, second: parts.second, millisecond: 0 }, businessTimeZone);
+    const dueAt = replyDeadline(row.internal_date.toISOString(), businessTimeZone, calendar);
     return { actionId: `reply-message:${row.id}`, kind: 'reply', subject: row.name, reason: row.substantive ? 'substantive_reply' : 'reply_review', dueAt, state: Date.parse(input.now) >= Date.parse(dueAt) ? 'overdue' : 'open', target: { kind: 'reply', firmId: row.firm_id, messageId: row.id } };
   });
   const { rows: meetings } = await context.db.query<{ id: string; firm_id: string; name: string; starts_at: Date }>(
