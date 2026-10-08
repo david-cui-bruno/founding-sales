@@ -227,13 +227,13 @@ describe('S03: proven coverage, not a ready flag', () => {
     ]);
     return { watermarkAt: rows[0]?.coverage_watermark_at ?? null, attemptAt: rows[0]?.last_synced_at ?? null };
   };
-  const sync = async (overrides: { readonly rateLimited?: boolean }) =>
+  const sync = async (overrides: { readonly rateLimited?: boolean;readonly now?:Date;readonly retryAt?:string }) =>
     await withTransaction(
       world.database.session,
       async () =>
         await runMailSync(
           context(),
-          world.syncDeps(world.alpha, { gmail: world.clientWith(world.alpha, { messages: [], ...overrides }) }),
+          world.syncDeps(world.alpha, { now:()=>overrides.now??new Date(),gmail: {...world.clientWith(world.alpha,{messages:[]}),...(overrides.rateLimited?{listHistory:async()=>({ok:false as const,reason:'rate_limited' as const,retryAt:overrides.retryAt})}:{})} }),
           { mailboxId: world.alpha.mailboxId },
         ),
     );
@@ -256,7 +256,8 @@ describe('S03: proven coverage, not a ready flag', () => {
     // A rate-limited sync is an attempt, not a success: `last_synced_at` moves, the
     // watermark does not, and the send stays held.
     const before = await watermark();
-    const limited = await sync({ rateLimited: true });
+    const observation=new Date(),retryAt=new Date(observation.getTime()+1000);
+    const limited = await sync({ rateLimited: true,now:observation,retryAt:retryAt.toISOString() });
     expect(limited.outcome).toBe('rate_limited');
     const after = await watermark();
     expect(after.attemptAt?.getTime() ?? 0).toBeGreaterThan(before.attemptAt?.getTime() ?? 0);
@@ -267,7 +268,7 @@ describe('S03: proven coverage, not a ready flag', () => {
     expect(stillStale.sends).toBe(0);
 
     // A sync that finishes the history proves coverage now, and the same fence goes.
-    const synced = await sync({});
+    const synced = await sync({now:retryAt});
     expect(synced.outcome).toBe('synced');
     expect((await watermark()).watermarkAt?.getTime() ?? 0).toBeGreaterThan(before.watermarkAt?.getTime() ?? 0);
     const fresh = await dispatch(fenceId);

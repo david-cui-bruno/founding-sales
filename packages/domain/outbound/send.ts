@@ -152,6 +152,7 @@ export async function dispatchOutboundMessage(
   deps: OutboundSendDeps,
   input: { readonly outboundMessageId: string },
 ): Promise<SendReport> {
+  await assertOutsideTransaction(context);
   const initial = await readFence(context, input.outboundMessageId);
   if (initial === null) {
     return { outcome: 'fence_unknown', outboundMessageId: input.outboundMessageId };
@@ -164,9 +165,6 @@ export async function dispatchOutboundMessage(
     // must not send. The reconciliation sweep is what finishes it.
     return { outcome: 'not_ready', outboundMessageId: initial.id, detail: initial.state };
   }
-
-  const incident=await providerIncidentRefusal(context,initial.mailboxId,deps.now?.()??new Date());
-  if(incident)return {outcome:'held',outboundMessageId:initial.id,refusal:incident.reason,detail:incident.detail,...(incident.retryAt?{retryAt:incident.retryAt}:{})};
 
   let fence: OutboundFenceRow = initial;
   if (fence.state === 'held') {
@@ -237,6 +235,7 @@ export async function dispatchOutboundMessage(
       outboundMessageId: fence.id,
       refusal: claimed.reason,
       ...(claimed.detail === undefined ? {} : { detail: claimed.detail }),
+      ...(claimed.retryAt === undefined ? {} : { retryAt: claimed.retryAt }),
     };
   }
   const { plan, claim } = claimed;
@@ -345,6 +344,7 @@ type ClaimOutcome =
       readonly fence: OutboundFenceRow;
       readonly reason: SendRefusalCode;
       readonly detail?: string | undefined;
+      readonly retryAt?: string | undefined;
     }
   | { readonly kind: 'not_ready'; readonly retryAt?: string | undefined; readonly refusal?: SendRefusalCode | undefined; readonly detail?: string | undefined };
 
@@ -391,8 +391,11 @@ async function recheckAndClaim(
         reason: gate.reason,
         ...(deps.actor === undefined ? {} : { actor: deps.actor }),
       });
+      const retryAt = gate.reason === 'rate_limited'
+        ? (await providerIncidentRefusal(context, fence.mailboxId, deps.now?.() ?? new Date()))?.retryAt
+        : undefined;
       await context.db.query('COMMIT');
-      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
+      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail, retryAt };
     }
     const plan = gate.value;
     // An agreed-sequence e-mail to somebody the salesperson wrote to by hand within the
@@ -594,7 +597,8 @@ async function hold(
     ...(deps.actor === undefined ? {} : { actor: deps.actor }),
   });
   await openStepHold(context, fence, reason);
-  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }) };
+  const retryAt=reason==='rate_limited'?(await providerIncidentRefusal(context,fence.mailboxId,deps.now?.()??new Date()))?.retryAt:undefined;
+  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }),...(retryAt===undefined?{}:{retryAt}) };
 }
 
 /** The `active_holds` row a refusal opens, when it opens one (`holdReasonForRefusal`). */

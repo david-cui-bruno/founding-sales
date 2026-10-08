@@ -76,6 +76,7 @@ export async function readProviderIncidents(ctx:RepositoryContext,mailboxId:stri
 export async function providerIncidentRefusal(ctx:RepositoryContext,mailboxId:string,now:Date):Promise<{reason:'rate_limited'|'provider_refusal';detail:string;retryAt?:string}|null>{
  const incidents=await readProviderIncidents(ctx,mailboxId,now);
  if(incidents.length===0)return null;
+ if(incidents.every(i=>i.reason==='unresolved_submission'))return {reason:'provider_refusal',detail:'unresolved_submission'};
  if(incidents.some(i=>i.state==='action_required'))return {reason:'provider_refusal',detail:'provider_incident_requires_review'};
  const waiting=incidents.filter(i=>i.state==='waiting');
  if(waiting.length)return {reason:'rate_limited',detail:'provider_cooldown',retryAt:waiting.map(i=>i.retryAt!).sort().at(-1)!};

@@ -375,6 +375,18 @@ export async function runMailSync(
   // one-minute reconciliation reads the rest — the failed message first.
   const stopped = pipeline.readFailure !== null;
   const moreToDo = stopped || !historyExhausted || take.recordsLeft > 0;
+  if (stopped && binding) await recordProviderIncident(context, {
+    mailboxId: mailbox.id,
+    sourceKind: 'mail_read',
+    sourceId: mailbox.id,
+    classification: pipeline.readFailure?.incident?.classification ?? 'unknown',
+    reason: pipeline.readFailure?.incident?.incidentReason ?? 'unknown_provider_failure',
+    retryAt: pipeline.readFailure?.incident?.retryAt,
+    binding,
+    now,
+  });
+  // Incident writes take the send gate before the cursor update takes the mailbox row.
+  if (!moreToDo && binding) await resolveProviderIncidentsAfterRead(context, mailbox.id, binding, now, ['mail_read']);
   const cursorTo = stopped
     ? throughProcessedRecords(
         mailbox.historyId,
@@ -411,7 +423,6 @@ export async function runMailSync(
     // `releaseMailboxHold` re-reads the row and refuses unless the mailbox is
     // `ready`, which is 4.2's "never after one successful API call".
     await releaseMailboxHold(context, { mailboxId: mailbox.id, reasonCode: 'coverage_incomplete' });
-    if(binding)await resolveProviderIncidentsAfterRead(context,mailbox.id,binding,now,['mail_read']);
   }
   // A capped run does *not* re-arm its own job here. It cannot: the handler runs
   // inside the runner's transaction and its own row is still `running`, so an upsert

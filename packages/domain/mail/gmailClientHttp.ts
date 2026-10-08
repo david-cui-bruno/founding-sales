@@ -41,8 +41,9 @@ import { historyIdOf } from './historyIds.ts';
  * **Status codes are mapped to the specification's outcomes, not to retries.** A 404
  * from `history.list` is 12.3's expired cursor and has a defined recovery; a 401 or a
  * 403 `authError` is 12.6's revoked grant and has a defined hold; a 429 or a 403
- * `rateLimitExceeded` is a retry. Anything else throws, and the job runner's ladder
- * decides.
+ * `rateLimitExceeded` carries a provider deadline when available. Metadata/body errors
+ * carry coded incident metadata to the pipeline; the caller persists a wait or hold
+ * rather than treating an unclassified failure as automatic retry authority.
  *
  * **A body is the first `text/plain` part, decoded, bounded.** HTML-only mail is
  * flattened crudely on purpose: the deterministic classifier reads sentences, and a
@@ -163,6 +164,15 @@ function incidentMetadata(response: HttpResponse, now: Date): GmailIncidentMetad
   if(response.status===403&&reason.includes('quota'))return {...retry,classification:'unknown',incidentReason:'quota_exceeded'};
   if(response.status===403&&!reason.includes('ratelimit')&&reason!=='autherror')return {...retry,classification:'unknown',incidentReason:'permission_unknown'};
   return retry;
+}
+
+function readFailureMetadata(response: HttpResponse, now: Date): GmailIncidentMetadata {
+  const failure = classifyStatus(response.status, response.body);
+  return {
+    classification: failure === 'rate_limited' ? 'transient' : failure === 'grant_revoked' ? 'authentication' : 'unknown',
+    incidentReason: failure === 'rate_limited' ? 'rate_limited' : failure === 'grant_revoked' ? 'grant_revoked' : 'unknown_provider_failure',
+    ...incidentMetadata(response, now),
+  };
 }
 
 function decodeBase64Url(value: string): string {
@@ -361,7 +371,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     // message Gmail calls gone is not one it may count.
     if (response.status === 410 && !strict) return null;
     if (response.status !== 200) {
-      throw new GmailClientError('unexpected_status', 'the Gmail metadata read failed', response.status);
+      throw new GmailClientError('unexpected_status', 'the Gmail metadata read failed', response.status,
+        readFailureMetadata(response, options.now?.() ?? new Date()));
     }
     const json = parseJson(response.body);
     if (json === null) throw new GmailClientError('malformed_response', 'the Gmail metadata read was not JSON');
@@ -640,7 +651,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       );
       if (response.status === 404) return null;
       if (response.status !== 200) {
-        throw new GmailClientError('unexpected_status', 'the Gmail body read failed', response.status);
+        throw new GmailClientError('unexpected_status', 'the Gmail body read failed', response.status,
+          readFailureMetadata(response, options.now?.() ?? new Date()));
       }
       const json = parseJson(response.body);
       if (json === null) throw new GmailClientError('malformed_response', 'the Gmail body read was not JSON');

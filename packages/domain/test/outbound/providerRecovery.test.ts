@@ -1,8 +1,10 @@
 import {afterEach,beforeEach,describe,expect,it} from 'vitest';
 import {dispatchOutboundMessage} from '../../outbound/send.ts';
 import {reconcileOutboundMessage} from '../../outbound/reconcile.ts';
+import {scanSentFolder} from '../../outbound/sentFolder.ts';
 import {readFence,resolveUnknownTerminal} from '../../outbound/fence.ts';
 import {createGmailHttpClient} from '../../mail/gmailClientHttp.ts';
+import {GmailClientError} from '../../mail/gmailClient.ts';
 import {setAdminCap,readRampStanding} from '../../outbound/ramp.ts';
 import {prepareFor,seedFirm,openExtraSession,pausingAtTokenRefresh} from './support/dispatchFixtures.ts';
 import {readProviderIncidents} from '../../outbound/providerIncidents.ts';
@@ -19,6 +21,7 @@ import {mailSyncHandler} from '../../mail/handlers.ts';
 import {renewWatch} from '../../mail/watch.ts';
 import {startRecovery,runMailRecovery} from '../../mail/recover.ts';
 import {readMailbox} from '../../mail/mailboxes.ts';
+import {fixtureMessage} from '../mail/support/mailWorld.ts';
 import {claimJobs,enqueueJob} from '../../jobs/jobStore.ts';
 import {readHeartbeats} from '../../jobs/heartbeats.ts';
 import {createOutboundWorld,OPEN_INSTANT,type OutboundWorld} from './support/outboundWorld.ts';
@@ -240,7 +243,7 @@ describe('provider incident recovery through outbound callers',()=>{
     await withTransaction(other.session,()=>runMailSync(other.context(box.workspace.workspaceId),world.syncDeps(box,{gmail:limited,now:()=>new Date(OPEN_INSTANT)}),{mailboxId:box.mailboxId}));
    });
    const id=await world.prepare(box);
-   expect(await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail:paused.client,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id})).toMatchObject({outcome:'held',refusal:'rate_limited'});
+   expect(await dispatchOutboundMessage(ctx,world.sendDeps(box,{gmail:paused.client,now:()=>new Date(OPEN_INSTANT)}),{outboundMessageId:id})).toMatchObject({outcome:'held',refusal:'rate_limited',retryAt});
    expect(paused.refreshes()).toBe(1);
    expect(box.gmail.sends).toHaveLength(0);
    expect((await readFence(ctx,id))?.dispatchStartedAt).toBeNull();
@@ -297,4 +300,63 @@ describe('provider incident recovery through outbound callers',()=>{
   expect((await readProviderIncidents(ctx,box.mailboxId,new Date(OPEN_INSTANT))).filter(i=>i.sourceKind==='mail_read')).toMatchObject([{state:'waiting',retryAt}]);
   expect((await readHeartbeats(world.database.session)).filter(h=>h.instanceKey===box.mailboxId)).toEqual([]);
  });
+ it('holds new mailbox dispatch after an unclassified metadata read and preserves its unread cursor',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId),id=await world.prepare(box);
+  let reads=0;
+  const gmail={...box.gmail,listHistory:async()=>({ok:true as const,records:[{id:'1101',changes:[{messageId:'unclassified-metadata',threadId:'unclassified-thread',kind:'message_added' as const,labelIds:['INBOX']}]}],historyId:'1101',nextPageToken:null}),getMetadata:async()=>{reads++;throw new Error('unclassified provider body');}};
+  const sync=()=>withTransaction(world.database.session,()=>runMailSync(ctx,world.syncDeps(box,{gmail,now:()=>new Date(OPEN_INSTANT)}),{mailboxId:box.mailboxId}));
+  expect(await sync()).toMatchObject({outcome:'read_stopped',cursorTo:'1000'});
+  expect((await readProviderIncidents(ctx,box.mailboxId)).filter(i=>i.sourceKind==='mail_read')).toMatchObject([{classification:'unknown',reason:'unknown_provider_failure',state:'action_required'}]);
+  expect(await dispatchOutboundMessage(ctx,world.sendDeps(box),{outboundMessageId:id})).toMatchObject({outcome:'held',refusal:'provider_refusal'});
+  expect(await sync()).toMatchObject({outcome:'read_stopped'});
+  expect(reads).toBe(1);
+  expect(box.gmail.sends).toHaveLength(0);
+ });
+ it('preserves metadata-read Retry-After through the public sync pipeline and revalidates after it',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId),retryAt='2026-09-23T09:05:00.000Z';
+  let reads=0,limited=true;
+  const http=createGmailHttpClient({apiBaseUrl:'https://fixture.invalid',now:()=>new Date(OPEN_INSTANT),fetch:async()=>({status:429,headers:{'retry-after':'300'},body:'{}'})});
+  const gmail={...box.gmail,listHistory:async()=>({ok:true as const,records:[{id:'1101',changes:[{messageId:'metadata-cooldown',threadId:'metadata-thread',kind:'message_added' as const,labelIds:['INBOX']}]}],historyId:'1101',nextPageToken:null}),getMetadata:async(...args:Parameters<typeof box.gmail.getMetadata>)=>{reads++;return limited?http.getMetadata(...args):null;}};
+  const sync=(instant:string)=>withTransaction(world.database.session,()=>runMailSync(ctx,world.syncDeps(box,{gmail,now:()=>new Date(instant)}),{mailboxId:box.mailboxId}));
+  expect(await sync(OPEN_INSTANT)).toMatchObject({outcome:'read_stopped'});
+  expect((await readProviderIncidents(ctx,box.mailboxId,new Date(OPEN_INSTANT))).filter(i=>i.sourceKind==='mail_read')).toMatchObject([{classification:'transient',state:'waiting',retryAt}]);
+  await sync('2026-09-23T09:04:59Z');expect(reads).toBe(1);limited=false;
+  expect(await sync(retryAt)).toMatchObject({outcome:'synced'});
+  expect(reads).toBe(2);
+  expect(await readProviderIncidents(ctx,box.mailboxId)).toEqual([]);
+ });
+ it('commits an unknown recovery metadata incident instead of rolling back into repeated provider reads',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId),mailbox=(await readMailbox(world.systemContext(world.alpha.workspace.workspaceId),world.alpha.mailboxId))!;
+  box.messages.push(fixtureMessage({id:'recovery-read-failure',historyId:'1101',from:'fixture@example.test',to:box.address,internalDateEpochMilliseconds:Date.parse(OPEN_INSTANT)-60_000}));
+  await withTransaction(world.database.session,()=>startRecovery(ctx,{mailbox,reason:'baseline',startHistoryId:mailbox.historyId!,fromAt:'2026-09-23T08:00:00Z',toAt:OPEN_INSTANT}));
+  let reads=0;
+  const gmail={...box.gmail,listMessageIds:async()=>({ok:true as const,messageIds:['recovery-read-failure'],nextPageToken:null}),getMetadata:async()=>{reads++;throw new GmailClientError('unexpected_status','opaque fixture failure',500);}};
+  const recover=()=>withTransaction(world.database.session,()=>runMailRecovery(ctx,{...world.syncDeps(box,{gmail}),now:()=>new Date(OPEN_INSTANT)},{mailboxId:box.mailboxId,generation:mailbox.generation}));
+  await expect(recover()).resolves.toMatchObject({outcome:'incident_held',coverageProved:false});
+  expect((await readProviderIncidents(ctx,box.mailboxId)).filter(i=>i.sourceKind==='mail_read')).toMatchObject([{classification:'unknown',state:'action_required'}]);
+  await expect(recover()).resolves.toMatchObject({outcome:'incident_held'});
+  expect(reads).toBe(1);
+ });
+ it('holds an unclassified body read while leaving the unresolved message unread',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId);
+  await world.prepare(box);
+  box.messages.push(fixtureMessage({id:'body-read-failure',historyId:'1101',from:box.recipientAddress,to:box.address,body:'Thanks for reaching out.',internalDateEpochMilliseconds:Date.parse(OPEN_INSTANT)-60_000}));
+  let bodies=0;
+  const gmail={...box.gmail,getBody:async()=>{bodies++;throw new Error('opaque provider body');}};
+  const sync=()=>withTransaction(world.database.session,()=>runMailSync(ctx,world.syncDeps(box,{gmail,now:()=>new Date(OPEN_INSTANT)}),{mailboxId:box.mailboxId}));
+  expect(await sync()).toMatchObject({outcome:'read_stopped',cursorTo:'1000',readFailure:{read:'body'}});
+  expect((await readProviderIncidents(ctx,box.mailboxId)).filter(i=>i.sourceKind==='mail_read')).toMatchObject([{classification:'unknown',state:'action_required'}]);
+  await sync();expect(bodies).toBe(1);
+ });
+ it('reports a retained provider incident during a Sent restore scan without claiming the grant is revoked',async()=>{
+  const box=world.alpha,ctx=world.systemContext(box.workspace.workspaceId);
+  const gmail={...box.gmail,listHistory:async()=>{throw new Error('opaque fixture failure');}};
+  await withTransaction(world.database.session,()=>runMailSync(ctx,world.syncDeps(box,{gmail}),{mailboxId:box.mailboxId}));
+  let refreshes=0;
+  const scanGmail={...box.gmail,refreshAccessToken:async(...args:Parameters<typeof box.gmail.refreshAccessToken>)=>{refreshes++;return box.gmail.refreshAccessToken(...args);}};
+  expect(await scanSentFolder(ctx,{...world.sendDeps(box),gmail:scanGmail},{mailboxId:box.mailboxId,since:OPEN_INSTANT,until:'2026-09-24T09:00:00Z'})).toMatchObject({outcome:'incident_held',listed:0,messages:[]});
+  expect((await readMailbox(ctx,box.mailboxId))?.status).toBe('connected');
+  expect(refreshes).toBe(0);
+ });
+
 });

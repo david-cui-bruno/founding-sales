@@ -48,6 +48,7 @@ export class GmailClientError extends Error {
     readonly code: 'transport' | 'malformed_response' | 'unexpected_status',
     message: string,
     readonly status?: number,
+    readonly incident?: GmailIncidentMetadata,
   ) {
     super(message);
     this.name = 'GmailClientError';

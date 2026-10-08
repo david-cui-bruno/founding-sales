@@ -717,12 +717,16 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
   });
 
   it('reports a Sent folder it could not read as unscanned, never as empty', async () => {
-    const gmail = world.clientWith(world.alpha, {
+    const isolated=await createOutboundWorld();
+    try {
+    const box=isolated.alpha;
+    const gmail = isolated.clientWith(box, {
       grantRevoked: true,
       sentMessages: [sentMessage({ header: fssHeader(), to: 'unread@northwind.example.test', at: '2026-09-24T19:00:00.000Z' })],
     });
-    const { scan } = await pass(gmail, around('2026-09-24T19:00:00.000Z'));
+    const scan = await scanSentFolder(isolated.systemContext(box.workspace.workspaceId),{gmail,oauth:isolated.sendDeps(box).oauth,cipher:isolated.cipher},{mailboxId:box.mailboxId,...around('2026-09-24T19:00:00.000Z')});
     expect(scan).toEqual({ outcome: 'grant_revoked', listed: 0, messages: [], vanished: 0 });
+    } finally {await isolated.stop();}
   });
 
   it('reports a folder in which a listed message vanished as not read to the end, with what it did read', async () => {

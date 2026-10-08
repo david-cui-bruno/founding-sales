@@ -4,7 +4,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { accessForMailbox, holdForRevokedGrant } from './sync.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import { GmailClientError, type GmailAccessGrant, type GmailClient, type GmailOAuthConfig,type GmailListOutcome } from './gmailClient.ts';
+import type { GmailAccessGrant, GmailClient, GmailOAuthConfig, GmailListOutcome } from './gmailClient.ts';
 import {readProviderBinding,recordProviderIncident,resolveProviderIncidentsAfterRead} from '../outbound/providerIncidents.ts';
 import {
   advanceGeneration,
@@ -566,15 +566,24 @@ export async function runMailRecovery(
     processed += slice.processedMessages;
     if (slice.readFailure !== null) break;
   }
-  // The pipeline stops at a failed Gmail read instead of throwing, which `mail.sync` uses
-  // to commit the prefix it processed. A recovery throws instead and the whole job rolls
-  // back and is retried; the recorded rows are its position, so nothing is lost by
-  // that, and the coverage hold blocks the owner's automated sends meanwhile.
+  // Persist the failed observation and the completed prefix. Recorded message
+  // identities remain the recovery cursor; no failed read proves interval coverage.
   if (pipeline.readFailure !== null) {
-    throw new GmailClientError(
-      'unexpected_status',
-      `the Gmail ${pipeline.readFailure.read} read failed during recovery (${pipeline.readFailure.detail})`,
-    );
+    if (binding) await recordProviderIncident(context, {
+      mailboxId: mailbox.id,
+      sourceKind: 'mail_read',
+      sourceId: `recovery:${mailbox.id}`,
+      classification: pipeline.readFailure.incident?.classification ?? 'unknown',
+      reason: pipeline.readFailure.incident?.incidentReason ?? 'unknown_provider_failure',
+      retryAt: pipeline.readFailure.incident?.retryAt,
+      binding,
+      now,
+    });
+    return recoveryReport(mailbox.id, input.generation, 'incident_held', pipeline, {
+      fromAt: recovery.fromAt,
+      toAt: recovery.toAt,
+      pagesCompleted: recovery.pagesCompleted,
+    });
   }
 
   // Coverage is proved only by one walk, in this run, that reached the end of the
