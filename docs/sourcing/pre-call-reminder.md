@@ -21,6 +21,8 @@ Legacy native history suppresses a second show for the same meeting/start after 
 database restore. Its old identifier cannot prove the current booking UID was
 shown: current-occurrence receipt state stays unknown. A click still needs fresh
 authorized context before it can open the current brief.
+An old handle's later failure also stays unknown for the current booking; it
+cannot attest failure of a native submission that never happened.
 
 The authenticated, awake desktop checks all hours, including evening calls. Sleep
 and closed-app delivery are not promised. Suspend retains the original native
@@ -54,7 +56,7 @@ Migration 0068 extends only the notification target CHECK to accept an optional
 validated Cal.com UID, preserving earlier targets and durable markers. Schema 67→68
 verification preserves legacy history, accepts a current UID claim and remains
 idempotent. The seven focused notification, migration and mandatory constraint
-suites passed 1,677 checks. Five desktop runtime/API suites passed 23 checks, including
+suites passed 1,677 checks. Five desktop runtime/API suites passed 24 checks, including
 call-specific UI coverage, alias activation and current revalidation after an old
 acknowledgement replay. Contract/domain/desktop typechecking and owned-file lint
 are required before the owned commit. Focused receipts remain in local

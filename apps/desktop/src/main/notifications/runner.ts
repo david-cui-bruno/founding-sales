@@ -48,7 +48,7 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
     boundHandles.add(handle);
     const active = () => { const binding = bindings.get(handle); return binding?.current() ? binding : null; };
     handle.on('show', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, binding.shownObservation); });
-    handle.on('failed', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, 'failed'); });
+    handle.on('failed', async () => { const binding = active(); if (binding) await deps.api.observe(binding.item.receipt.attemptId, binding.shownObservation === 'unknown' ? 'unknown' : 'failed'); });
     handle.on('click', async () => {
       const binding = active();
       if (!binding) return;

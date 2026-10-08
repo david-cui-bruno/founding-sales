@@ -97,6 +97,19 @@ it('recognizes a retained native pre-UID call alert after restore without showin
   expect(h.receipt).toMatchObject({ status: 'unknown', nativeShownAt: null });
 });
 
+it('does not attribute an old unversioned native failure to a current booking that was never submitted', async () => {
+  const h = fixture();
+  if (h.target.kind !== 'meeting') throw new Error('meeting fixture missing');
+  const legacyKey = `meeting:${h.target.meetingId}:pre_call:${h.target.startsAt}`;
+  const legacy = new CallAlert(`callie-action:${h.identity.workspaceId}:${h.identity.userId}:${createHash('sha256').update(legacyKey).digest('hex')}`);
+  h.history.push(legacy);
+  h.runtime.start();
+  await vi.waitFor(() => expect(h.receipt?.status).toBe('unknown'));
+  await legacy.emit('failed');
+  expect(h.receipt).toMatchObject({ status: 'unknown', nativeShownAt: null, failedAt: null });
+  expect(h.alerts).toEqual([]);
+});
+
 it('invalidates a visible reminder after Cal.com cancellation or changed ownership, so a clicked old alert opens no brief', async () => {
   const h = fixture();
   h.runtime.start();
