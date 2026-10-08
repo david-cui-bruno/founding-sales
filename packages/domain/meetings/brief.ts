@@ -4,6 +4,7 @@ import {
   type CallSummaryDto,
   type MeetingBriefItem,
   type MeetingBriefResponse,
+  type MeetingPreparationResponse,
   type MeetingBriefSection,
   type PreparedBriefDto,
 } from '@fss/contracts';
@@ -38,6 +39,10 @@ import { MEETING_COLUMNS, type MeetingRow } from './calcom.ts';
  *     summary) and the last two e-mail threads (subject and date only).
  *   * **Objections** — the recent calls' analyses' objections, one per category, the most
  *     recent quote kept, with its date.
+ *   * **Known workflow** — stored workflow/software quotes, dated and linked; external
+ *     reports are attributed rather than treated as the firm's own words.
+ *   * **Open questions / objective** — deterministic preparation prompts, explicitly
+ *     inferred; an absent workflow stays unknown and a recorded workflow needs confirmation.
  *   * **Open commitments** — the recent calls' summaries' commitments, de-duplicated.
  */
 
@@ -124,6 +129,12 @@ export interface BriefCall {
 
 /** The brief, or null when the meeting is unknown, matched to no firm, or not the caller's to read. */
 export async function readMeetingBrief(context: RepositoryContext, meetingId: string, options: { includeMeetingTasks?: boolean } = {}): Promise<MeetingBriefResponse | null> {
+  const preparation = await readMeetingPreparation(context, meetingId, options);
+  return preparation === null ? null : originalBrief(preparation);
+}
+
+/** The explicit v2 read shares exactly the same stored evidence and authorization. */
+export async function readMeetingPreparation(context: RepositoryContext, meetingId: string, options: { includeMeetingTasks?: boolean } = {}): Promise<MeetingPreparationResponse | null> {
   if (!/^[0-9a-f-]{36}$/iu.test(meetingId)) return null;
   const { rows: meetings } = await context.db.query<MeetingRow & { created_at: Date }>(
     `SELECT ${MEETING_COLUMNS}, created_at FROM meetings WHERE workspace_id = $1 AND id = $2`,
@@ -143,7 +154,7 @@ export async function readMeetingBrief(context: RepositoryContext, meetingId: st
     const analysis = await readCallAnalysis(context, sessionId);
     if (analysis !== null) analyses.set(sessionId, analysis);
   }
-  return assembleMeetingBrief({
+  return assembleMeetingPreparation({
     meeting: { ...meeting, firm_id: firmId },
     calls,
     storedSummaries: await readCallSummaries(context, sessionIds),
@@ -159,6 +170,20 @@ export async function readMeetingBrief(context: RepositoryContext, meetingId: st
 
 /** The brief from its sources. Pure. */
 export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBriefResponse {
+  return originalBrief(assembleMeetingPreparation(sources));
+}
+
+function originalBrief(preparation: MeetingPreparationResponse): MeetingBriefResponse {
+  const { whyThisDemo, firm, conversations, objections, commitments } = preparation.sections;
+  return { ...preparation, sections: {
+    whyThisDemo,
+    // Keep the shipped v1 presentation exactly; v2 exposes the corrected attribution.
+    firm: { ...firm, items: firm.items.map(entry => ({ ...entry, label: entry.label === 'External report · software' ? 'Software' : entry.label === 'External report · maintenance workflow' ? 'Maintenance workflow' : entry.label })) },
+    conversations, objections, commitments,
+  } };
+}
+
+export function assembleMeetingPreparation(sources: MeetingBriefSources): MeetingPreparationResponse {
   const { meeting, calls, storedSummaries, analysedSummaries, analyses } = sources;
   const dated = (call: BriefCall): string => call.at.toISOString();
   // The booking's own words are dated by the source that last said them (review M2R, minor
@@ -212,7 +237,7 @@ export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBrief
     if (!FIRM_FACT_KEYS.includes(fact.key) || fact.quote === null) continue;
     firm.push(
       item({
-        label: fact.key === 'software_evidence' ? 'Software' : 'Maintenance workflow',
+        label: fact.firstParty ? (fact.key === 'software_evidence' ? 'Software' : 'Maintenance workflow') : (fact.key === 'software_evidence' ? 'External report · software' : 'External report · maintenance workflow'),
         text: fact.quote,
         source: 'research_fact',
         provenance: 'observed',
@@ -282,6 +307,12 @@ export function assembleMeetingBrief(sources: MeetingBriefSources): MeetingBrief
       conversations: section(conversations),
       objections: section(objections),
       commitments: section(commitments),
+      workflow: section(sources.facts.filter(fact => FIRM_FACT_KEYS.includes(fact.key) && fact.quote !== null).map(fact => item({
+        label: fact.firstParty ? (fact.key === 'software_evidence' ? 'Software' : 'Maintenance workflow') : (fact.key === 'software_evidence' ? 'External report · software' : 'External report · maintenance workflow'),
+        text: fact.quote ?? '', source: 'research_fact', provenance: 'observed', at: fact.retrievedAt, sourceUrl: fact.sourceReference,
+      }))),
+      openQuestions: { items: [{ label: null, sourceUrl: null, text: sources.facts.some(fact => fact.key === 'maintenance_workflow' && fact.quote !== null && fact.firstParty) ? 'Is the recorded maintenance workflow still accurate, and where does coordination get difficult?' : 'How do maintenance requests reach your team today?', source: 'preparation_prompt', provenance: 'inferred', at: null }], omitted: 0 },
+      objective: { items: [{ label: null, sourceUrl: null, text: 'Understand the current maintenance workflow and confirm whether a next step is useful.', source: 'preparation_prompt', provenance: 'inferred', at: null }], omitted: 0 },
     },
     generatedAt: sources.now.toISOString(),
   };

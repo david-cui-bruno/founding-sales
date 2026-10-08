@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { MeetingBriefItem, MeetingBriefResponse, MeetingBriefSection, MeetingBriefSectionKey } from '@fss/contracts';
+import type { MeetingPreparationItem, MeetingPreparationResponse, MeetingPreparationSection, MeetingPreparationSectionKey } from '@fss/contracts';
 import { shortDay } from '../dates.ts';
 import { OUTCOME_LABELS } from '../outcomeForm.ts';
 import { OBJECTION_WORDS } from '../today/Recap.tsx';
@@ -17,17 +17,20 @@ import { useBriefMemory } from './briefMemory.ts';
  * way; an answer from an older read, or one naming another meeting, is dropped (K7).
  */
 
-export type BriefReader = (meetingId: string) => Promise<{ readonly brief: MeetingBriefResponse | null; readonly reason: string | null }>;
+export type BriefReader = (meetingId: string) => Promise<{ readonly brief: MeetingPreparationResponse | null; readonly reason: string | null }>;
 
-const SECTION_TITLES: Readonly<Record<MeetingBriefSectionKey, string>> = Object.freeze({
+const SECTION_TITLES: Readonly<Record<MeetingPreparationSectionKey, string>> = Object.freeze({
   whyThisDemo: 'Why this demo',
   firm: 'Firm',
   conversations: 'Previous conversations',
   objections: 'Objections',
   commitments: 'Open commitments',
+  workflow: 'Known workflow',
+  openQuestions: 'Open questions',
+  objective: 'Suggested call objective',
 });
 
-const SECTION_ORDER: readonly MeetingBriefSectionKey[] = ['whyThisDemo', 'firm', 'conversations', 'objections', 'commitments'];
+const SECTION_ORDER: readonly MeetingPreparationSectionKey[] = ['objective', 'workflow', 'openQuestions', 'whyThisDemo', 'firm', 'conversations', 'objections', 'commitments'];
 const SHOWN = 3;
 
 /** A calendar day is shown as that day wherever the Mac is; an instant in the Mac's zone. */
@@ -46,19 +49,21 @@ function hostOf(url: string | null): string | null {
 }
 
 /** Where a line came from, in words. */
-function originOf(entry: MeetingBriefItem): string {
+function originOf(entry: MeetingPreparationItem): string {
   switch (entry.source) {
     case 'booking_notes':
     case 'booking_answer':
       return 'Booking form';
-    case 'call_signal':
-    case 'call_objection':
+    case 'preparation_prompt':
+      return 'Suggested preparation · inferred';
     case 'meeting_task':
       return 'Meeting task';
+    case 'call_signal':
+    case 'call_objection':
     case 'call_commitment':
       return 'Quoted from a call';
     case 'call_next_step':
-      return 'Call summary';
+      return entry.provenance === 'inferred' ? 'Call summary · inferred' : 'Call summary';
     case 'prepared_brief':
       return 'Prepared research · not verified by Callie';
     case 'research_fact': {
@@ -66,13 +71,13 @@ function originOf(entry: MeetingBriefItem): string {
       return host === null ? 'Quoted from research' : `Quoted from ${host}`;
     }
     case 'call':
-      return entry.provenance === 'inferred' ? 'Call · summary' : 'Call';
+      return entry.provenance === 'inferred' ? 'Call · summary · inferred' : 'Call';
     case 'email_thread':
       return 'E-mail thread';
   }
 }
 
-function labelOf(entry: MeetingBriefItem): string | null {
+function labelOf(entry: MeetingPreparationItem): string | null {
   // Prepared research says so in its origin line; its label would say it twice.
   if (entry.source === 'prepared_brief') return null;
   if (entry.label === null) return entry.source === 'call' ? 'Call' : null;
@@ -81,7 +86,12 @@ function labelOf(entry: MeetingBriefItem): string | null {
   return entry.label;
 }
 
-function Section({ name, section }: { readonly name: MeetingBriefSectionKey; readonly section: MeetingBriefSection }): JSX.Element {
+function sourceLink(url: string | null): string | null {
+  if (url === null) return null;
+  try { return new URL(url).protocol === 'https:' ? url : null; } catch { return null; }
+}
+
+function Section({ name, section }: { readonly name: MeetingPreparationSectionKey; readonly section: MeetingPreparationSection }): JSX.Element {
   const [all, setAll] = useState(false);
   const shown = all ? section.items : section.items.slice(0, SHOWN);
   const hidden = section.items.length - shown.length;
@@ -89,19 +99,22 @@ function Section({ name, section }: { readonly name: MeetingBriefSectionKey; rea
     <section data-testid={`brief-section-${name}`} className="flex flex-col gap-0.5">
       <h4 className="text-xs font-medium text-muted-foreground">{SECTION_TITLES[name]}</h4>
       {section.items.length === 0 ? (
-        <p className="text-xs text-faint">{name === 'whyThisDemo' ? 'Unknown' : 'Nothing yet'}</p>
+        <p className="text-xs text-faint">{['whyThisDemo', 'workflow', 'openQuestions', 'objective'].includes(name) ? 'Unknown' : 'Nothing yet'}</p>
       ) : (
         <ul className="flex flex-col gap-1">
           {shown.map((entry, index) => {
             const label = labelOf(entry);
             const day = dayOf(entry.at);
+            const link = sourceLink(entry.sourceUrl);
             return (
               <li key={`${entry.source}:${String(index)}`} data-testid="brief-item" className="text-sm">
                 <p>
                   {label === null ? null : <span className="font-medium">{/[?:.!]$/u.test(label) ? `${label} ` : `${label}: `}</span>}
                   <span>{entry.provenance === 'observed' && entry.source !== 'call' && entry.source !== 'email_thread' ? `“${entry.text}”` : entry.text}</span>
                 </p>
-                <p className="text-xs text-faint">{day === null ? originOf(entry) : `${originOf(entry)} · ${day}`}</p>
+                <p className="text-xs text-faint">{day === null ? originOf(entry) : `${originOf(entry)} · ${day}`}
+                  {link === null ? null : <> · <a className="underline" href={link} target="_blank" rel="noreferrer">Source</a></>}
+                </p>
               </li>
             );
           })}
@@ -189,7 +202,7 @@ export function MeetingBrief({ meetingId, read }: { readonly meetingId: string; 
         </p>
       )}
       {SECTION_ORDER.map(name => (
-        <Section key={name} name={name} section={brief.sections[name]} />
+        <Section key={name} name={name} section={brief.sections[name] ?? { items: [], omitted: 0 }} />
       ))}
     </div>
   );

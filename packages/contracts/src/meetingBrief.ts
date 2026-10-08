@@ -14,7 +14,7 @@ import { meetingStateWireSchema } from './meetings.ts';
  *   * `stated` — the booker's own words on the booking form;
  *   * `observed` — a verbatim quote from a call transcript or a research page, or a record
  *     (a logged outcome, an e-mail's subject);
- *   * `inferred` — a model's summary or next step;
+ *   * `inferred` — a summary, next step or suggested preparation prompt;
  *   * `unverified` — prepared research, "not verified by Callie".
  */
 
@@ -88,3 +88,24 @@ export const meetingBriefResponseSchema = z.strictObject({
   generatedAt: instant,
 });
 export type MeetingBriefResponse = z.infer<typeof meetingBriefResponseSchema>;
+
+/** Explicit v2 preparation read; the shipped v1 DTO above stays strict and unchanged. */
+export const meetingPreparationItemSchema = meetingBriefItemSchema.extend({
+  source: z.enum([...MEETING_BRIEF_SOURCES, 'preparation_prompt']),
+});
+export type MeetingPreparationItem = z.infer<typeof meetingPreparationItemSchema>;
+export const meetingPreparationSectionSchema = meetingBriefSectionSchema.extend({
+  items: z.array(meetingPreparationItemSchema).max(MEETING_BRIEF_SECTION_MAX),
+});
+export type MeetingPreparationSection = z.infer<typeof meetingPreparationSectionSchema>;
+export const MEETING_PREPARATION_SECTION_KEYS = [...MEETING_BRIEF_SECTION_KEYS, 'workflow', 'openQuestions', 'objective'] as const;
+export type MeetingPreparationSectionKey = (typeof MEETING_PREPARATION_SECTION_KEYS)[number];
+export const meetingPreparationResponseSchema = meetingBriefResponseSchema.extend({
+  sections: meetingBriefResponseSchema.shape.sections.extend({
+    /** Optional for retained briefs created before v2. */
+    workflow: meetingPreparationSectionSchema.optional(),
+    openQuestions: meetingPreparationSectionSchema.optional(),
+    objective: meetingPreparationSectionSchema.optional(),
+  }),
+});
+export type MeetingPreparationResponse = z.infer<typeof meetingPreparationResponseSchema>;

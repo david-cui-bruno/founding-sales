@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { JSX, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FirmMeetingDto, MeetingBriefResponse } from '@fss/contracts';
+import type { FirmMeetingDto, MeetingPreparationResponse } from '@fss/contracts';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { resetAttendanceMemory } from '../src/renderer/meetings/attendanceMemory.ts';
 import { resetBriefMemory } from '../src/renderer/meetings/briefMemory.ts';
@@ -39,7 +39,7 @@ const row = (meetingId: string, state: string, startsAt: string, attendanceSourc
   attendanceSource,
 });
 
-const item = (text: string, source: MeetingBriefResponse['sections']['firm']['items'][number]['source'] = 'booking_notes') => ({
+const item = (text: string, source: MeetingPreparationResponse['sections']['firm']['items'][number]['source'] = 'booking_notes') => ({
   label: null,
   text,
   source,
@@ -49,7 +49,7 @@ const item = (text: string, source: MeetingBriefResponse['sections']['firm']['it
 });
 const emptySection = { items: [], omitted: 0 };
 
-function brief(meetingId: string, why: readonly string[], firmId = FIRM_ID): MeetingBriefResponse {
+function brief(meetingId: string, why: readonly string[], firmId = FIRM_ID): MeetingPreparationResponse {
   return {
     meetingId,
     firmId,
@@ -77,7 +77,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-type BriefAnswer = { readonly brief: MeetingBriefResponse | null; readonly reason: string | null };
+type BriefAnswer = { readonly brief: MeetingPreparationResponse | null; readonly reason: string | null };
 
 /** Ports whose brief reads are answered by hand, in any order. */
 function harness(meetings: Readonly<Record<string, readonly FirmMeetingDto[]>>) {
@@ -264,7 +264,7 @@ describe('the brief, shown', () => {
     );
     await userEvent.click(within(await rowOf(MEETING)).getByTestId('meeting-brief-toggle'));
     const full = brief(MEETING, []);
-    const answer: MeetingBriefResponse = {
+    const answer: MeetingPreparationResponse = {
       ...full,
       sections: {
         ...full.sections,
@@ -358,4 +358,26 @@ it('a Today call link opens that current meeting’s brief, not another meeting 
   await vi.waitFor(() => expect(reads.map(read => read.meetingId)).toEqual([OTHER]));
   expect(within(await rowOf(OTHER)).getByTestId('meeting-brief-toggle').getAttribute('aria-expanded')).toBe('true');
   expect(within(await rowOf(MEETING)).getByTestId('meeting-brief-toggle').getAttribute('aria-expanded')).toBe('false');
+});
+
+
+describe('booked-call preparation', () => {
+  it('shows known workflow, its source link, unknowns and a suggested objective without treating inference as a prospect claim', async () => {
+    const { ports, reads } = harness({ [FIRM_ID]: [row(MEETING, 'booked', inDays(2))] });
+    render(<Session><FirmMeetings firmId={FIRM_ID} ports={ports} /></Session>);
+    await userEvent.click(within(await rowOf(MEETING)).getByTestId('meeting-brief-toggle'));
+    const preparation = brief(MEETING, ['They requested a demo.']);
+    preparation.sections.whyThisDemo.items.push({ ...item('Offer a walkthrough.', 'call_next_step'), provenance: 'inferred' });
+    preparation.sections.workflow = { items: [{ ...item('Residents submit requests through the portal.', 'research_fact'), provenance: 'observed', sourceUrl: 'https://workflow.example.test/maintenance' }], omitted: 0 };
+    preparation.sections.openQuestions = { items: [], omitted: 0 };
+    preparation.sections.objective = { items: [{ ...item('Confirm whether a next step is useful.'), source: 'preparation_prompt', provenance: 'inferred', at: null }], omitted: 0 };
+    await act(async () => { reads[0]?.answer.resolve({ brief: preparation, reason: null }); await Promise.resolve(); });
+    const displayed = within(await rowOf(MEETING));
+    expect(displayed.getByText('Known workflow')).toBeTruthy();
+    expect(within(displayed.getByTestId('brief-section-openQuestions')).getByText('Unknown')).toBeTruthy();
+    expect(displayed.getByText('Suggested call objective')).toBeTruthy();
+    expect(displayed.getByText('Suggested preparation · inferred')).toBeTruthy();
+    expect(displayed.getByText(/Call summary · inferred/u)).toBeTruthy();
+    expect(displayed.getByRole('link', { name: 'Source' }).getAttribute('href')).toBe('https://workflow.example.test/maintenance');
+  });
 });
