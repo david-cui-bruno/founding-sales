@@ -5,6 +5,7 @@ import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 import {listApplicableHolds} from '../policy/holds.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {databaseNow} from '../policy/clock.ts';
+import {officeContactContext} from '../outreach/contactContext.ts';
 import {supportedBusinessEmail,qualifyEmailCandidate} from '../outreach/selection.ts';
 import {correctCandidateName} from './candidateCorrection.ts';
 import {requestQualification,QUALIFICATION_POLICY_VERSION,QUALIFICATION_PROMPT_VERSION,type QualificationRunRow} from './qualificationStore.ts';
@@ -33,10 +34,38 @@ function officeName(candidate:CandidateInput,facts:readonly QualificationFact[],
  const selected=supportedBusinessEmail({identity:{status:'resolved',name:supported.name,website:candidate.website,locality:candidate.locality,region:candidate.region},facts,observations,now});
  return selected?.address===supported.address?supported:null;
 }
-/** Adds only the literal office-name citation; the original model/source evidence remains. */
+/** Adds literal citations from the one supported office card; model facts remain unchanged. */
 export function withSupportedOfficeName(candidate:CandidateInput,facts:readonly QualificationFact[],observations:readonly SourceObservation[],now:string):QualificationFact[] {
  const supported=officeName(candidate,facts,observations,now);
- return supported&&!facts.some(f=>f.kind==='firm_identity'&&f.observationId===supported.fact.observationId&&f.blockId===supported.fact.blockId)?[...facts,supported.fact]:[...facts];
+ const result=supported&&!facts.some(f=>f.kind==='firm_identity'&&f.observationId===supported.fact.observationId&&f.blockId===supported.fact.blockId)?[...facts,supported.fact]:[...facts];
+ if(!supported||result.length>=30)return result;
+ const identity={status:'resolved' as const,name:supported.name,website:candidate.website,locality:candidate.locality,region:candidate.region};
+ const route=supportedBusinessEmail({identity,facts,observations,now});
+ const source=observations.find(s=>s.id===route?.sourceObservationId),email=facts.find(f=>f.kind==='business_email'&&f.observationId===route?.sourceObservationId&&f.blockId===route?.blockId);
+ if(!source||!email)return result;
+ const context=officeContactContext(source,email,identity);if(!context)return result;
+ const offices=observations.flatMap(observation=>observation.blocks.flatMap(block=>{
+  const candidateFact:QualificationFact={kind:'business_email',value:block.text,observationId:observation.id,blockId:block.id};
+  const candidateRoute=supportedBusinessEmail({identity,facts:[candidateFact],observations,now});
+  if(candidateRoute?.address!==route?.address)return [];
+  const card=officeContactContext(observation,candidateFact,identity);
+  return card?[card]:[];
+ }));
+ if(offices.length!==1)return result;
+ // Match the exact accepted contiguous card, never scan unrelated page locations.
+ const cards=[];
+ for(let start=0;start<source.blocks.length;start++)for(let size=3;size<=8;size++){
+  const card=source.blocks.slice(start,start+size);
+  if(card.length===size&&card.map(b=>b.text).join(' ')===context)cards.push(card);
+ }
+ if(cards.length!==1)return result;
+ const escape=(value:string)=>value.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&');
+ const location=new RegExp(`^${escape(candidate.locality)},?\\s+${escape(candidate.region)}(?:\\s+\\d{5}(?:-\\d{4})?)?$`,'iu');
+ const matches=cards[0]!.filter(b=>location.test(b.text.trim()));
+ if(matches.length!==1)return result;
+ const block=matches[0]!;
+ if(!result.some(f=>f.kind==='service_area'&&f.observationId===source.id&&f.blockId===block.id))result.push({kind:'service_area',value:block.text,observationId:source.id,blockId:block.id});
+ return result;
 }
 /** Owns a transaction. Correct only an untouched discovery candidate; old revisions stay invalid until bounded fresh research succeeds. */
 export async function recoverDiscoveredIdentity(ctx:RepositoryContext,runId:string):Promise<void> {
