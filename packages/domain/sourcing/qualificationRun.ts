@@ -1,6 +1,6 @@
 import {withSupportedOfficeName,recoverDiscoveredIdentity} from './discoveredIdentityRecovery.ts';
 import {createHash,randomUUID} from 'node:crypto';
-import type {CandidateInput,SourceObservation} from '@fss/contracts';
+import type {CandidateInput,SourceObservation,QualificationFact} from '@fss/contracts';
 import {withTransaction,type SessionQueryable} from '../db/queryable.ts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {decideAdminOnly} from '../crm/authorization.ts';
@@ -36,7 +36,7 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  });
  if(!run)return;
  let observations:SourceObservation[]=[];
- const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null)=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion}));
+ const finish=async(reason:string|null,facts:unknown[]=[],openingQuestion:string|null=null,supplementedEvidence:readonly Pick<QualificationFact,'kind'|'observationId'|'blockId'>[]=[])=>withTransaction(db,()=>finishQualification(ctx,{runId:run.id,observations,facts,reason,openingQuestion,supplementedEvidence}));
  if(run.prompt_version!==QUALIFICATION_PROMPT_VERSION||run.policy_version!==QUALIFICATION_POLICY_VERSION){await finish('qualification_version_changed');return;}
  const extraction=deps.extraction;
  if(!extraction||extraction.providerKey!=='aws_bedrock.sourcing_qualification'||!isPricedModel(run.model_name,'bedrock')){await finish('credit_route_unavailable');return;}
@@ -76,7 +76,9 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
   const oldToNew=new Map(previous.observations.map(old=>[old.id,observations.find(source=>source.url===old.url)!.id]));
   observations=observations.map(source=>{const old=previous.observations.find(item=>item.url===source.url)!;return {...source,publishedAt:old.publishedAt,publishedAtBlockId:old.publishedAtBlockId};});
   const facts=previous.facts.map(fact=>({...fact,observationId:oldToNew.get(fact.observationId)!}));
-  const saved=await finish(null,withSupportedOfficeName(run.payload,facts,observations,await databaseNow(ctx)),previous.opening_question);
+  const supplemented=withSupportedOfficeName(run.payload,facts,observations,await databaseNow(ctx));
+  const citations=supplemented.filter(f=>!facts.some(original=>original.kind===f.kind&&original.observationId===f.observationId&&original.blockId===f.blockId)).map(({kind,observationId,blockId})=>({kind,observationId,blockId}));
+  const saved=await finish(null,supplemented,previous.opening_question,citations);
   if(saved.ok)await recoverDiscoveredIdentity(ctx,run.id);return;
  }
  const offered=observations.filter(source=>source.firstParty&&!source.truncated);
@@ -110,7 +112,8 @@ export async function runQualification(ctx:RepositoryContext,input:{runId:string
  // Settlement has its own commit so even invalid/stale evidence cannot erase spent money.
  if(result.ok&&result.value.facts.some(f=>!offered.some(source=>source.id===f.observationId))){await finish('invalid_evidence');return;}
  const facts=result.ok?withSupportedOfficeName(run.payload,result.value.facts,observations,await databaseNow(ctx)):[];
- const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null);
+ const supplementedEvidence=result.ok?facts.filter(f=>!result.value.facts.some(original=>original.kind===f.kind&&original.observationId===f.observationId&&original.blockId===f.blockId)).map(({kind,observationId,blockId})=>({kind,observationId,blockId})):[];
+ const saved=await finish(result.ok?null:result.failureCode,facts,result.ok?result.value.openingQuestion:null,supplementedEvidence);
  if(saved.ok&&result.ok)await recoverDiscoveredIdentity(ctx,run.id);
  if(!saved.ok&&saved.reason==='invalid_evidence'){observations=[];await finish('invalid_evidence');}
 }
