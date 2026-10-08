@@ -16,8 +16,10 @@ import {generateReplyDraft,type HumanReplyDraftPort} from '../../replies/compose
 import {openHold} from '../../policy/holds.ts';
 import {humanReplyDraftInterpretation} from '../../replies/composerModel.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
-import {updateResearchSettings} from '../../research/settings.ts';
+import {readResearchSettings,updateResearchSettings} from '../../research/settings.ts';
 import {reassignFirm} from '../../crm/firms.ts';
+import {readCreditSpend,workspaceBusinessZone} from '../../research/ledger.ts';
+import {databaseNow} from '../../policy/clock.ts';
 
 let world:OutboundWorld;
 beforeAll(async()=>{world=await createOutboundWorld();});
@@ -67,7 +69,7 @@ it('a recipient-handle opt-out also refuses preparation',async()=>{
 it('generates a reviewed plain-text suggestion once without sending an email',async()=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
  let paidCalls=0;
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{paidCalls++;return {raw:JSON.stringify({text:'Callie helps existing property teams coordinate maintenance requests. Pricing is not defined yet.',factRefs:[f.ref],unsupportedClaims:['Pricing needs a human answer.']}),costCents:1,costEstimated:false};}};
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{paidCalls++;return {raw:JSON.stringify({text:'Callie helps existing property teams coordinate maintenance requests. Pricing is not defined yet.',factRefs:[f.ref],unsupportedClaims:['Pricing needs a human answer.']}),costCents:1,costEstimated:false};}};
  const input={commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope};
  const generated=await generateReplyDraft(f.ctx,input,port);
  expect(generated).toMatchObject({ok:true,value:{text:'Callie helps existing property teams coordinate maintenance requests. Pricing is not defined yet.',sourceRevision:source.value.sourceRevision,factRefs:[f.ref],reviewRequired:true,reviewNotes:expect.arrayContaining(['Pricing needs a human answer.'])}});
@@ -77,7 +79,7 @@ it('generates a reviewed plain-text suggestion once without sending an email',as
 
 it('discards a model suggestion when a new sending hold changes the conversation authority during generation',async()=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{
   await f.tx(()=>openHold(f.admin,{scopeKind:'firm',scopeKey:f.firm.firmId,reasonCode:'scoped_pause',blockedActionKinds:['email_send'],sourceEventKind:'fixture'}));
   return {raw:JSON.stringify({text:'Callie helps coordinate maintenance requests.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false};
  }};
@@ -97,7 +99,7 @@ it('uses the bounded approved model transport to prepare plain text rather than 
 
 it('does not turn an invented price and commitment into a suggested answer',async()=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>({raw:JSON.stringify({text:'It costs $99 per month and we will launch tomorrow.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false})};
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>({raw:JSON.stringify({text:'It costs $99 per month and we will launch tomorrow.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false})};
  expect(await generateReplyDraft(f.ctx,{commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope},port)).toEqual({ok:false,reason:'generation_unsupported_claim'});
 });
 
@@ -122,7 +124,7 @@ it('a changed booking invalidates the conversation revision without changing Cal
 
 it('an unknown model outcome never creates another paid attempt for the same command',async()=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
- let calls=0;const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{calls++;throw new Error('controlled lost result');}};
+ let calls=0;const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{calls++;throw new Error('controlled lost result');}};
  const input={commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope};
  expect(await generateReplyDraft(f.ctx,input,port)).toEqual({ok:false,reason:'generation_outcome_unknown'});
  expect(await generateReplyDraft(f.ctx,input,port)).toEqual({ok:false,reason:'generation_already_attempted'});
@@ -131,7 +133,7 @@ it('an unknown model outcome never creates another paid attempt for the same com
 
 it('retains the approved credit ceilings and applicable research holds for human generation',async()=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
- let calls=0;const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{calls++;throw new Error('must not call');}};
+ let calls=0;const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{calls++;throw new Error('must not call');}};
  const input={commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope};
  await f.tx(()=>updateResearchSettings(f.admin,{dailyCostCeilingCents:0}));
  try{expect(await generateReplyDraft(f.ctx,input,port)).toEqual({ok:false,reason:'generation_over_budget'});}finally{await f.tx(()=>updateResearchSettings(f.admin,{dailyCostCeilingCents:50}));}
@@ -140,9 +142,18 @@ it('retains the approved credit ceilings and applicable research holds for human
  expect(calls).toBe(0);
 });
 
+it('refuses a 3970-token suggestion when one cent remains because token estimates need headroom',async()=>{
+ const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
+ const settings=await readResearchSettings(f.admin),spend=await readCreditSpend(f.ctx,{at:await databaseNow(f.ctx),businessTimeZone:await workspaceBusinessZone(f.ctx)});
+ await f.tx(()=>updateResearchSettings(f.admin,{dailyCostCeilingCents:spend.todayCents+1,monthlyCostCeilingCents:spend.monthToDateCents+1}));
+ let calls=0;const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>3970,prepareReplyDraft:async()=>{calls++;return {raw:JSON.stringify({text:'Thank you for your question.',factRefs:[],unsupportedClaims:[]}),costCents:1,costEstimated:false};}};
+ try{expect(await generateReplyDraft(f.ctx,{commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope},port)).toEqual({ok:false,reason:'generation_over_budget'});}finally{await f.tx(()=>updateResearchSettings(f.admin,{dailyCostCeilingCents:settings.dailyCostCeilingCents,monthlyCostCeilingCents:settings.monthlyCostCeilingCents}));}
+ expect(calls).toBe(0);expect(world.alpha.gmail.sends).toHaveLength(0);
+});
+
 it.each(['retired fact','revoked mailbox authority','reassigned firm'] as const)('withholds a model result after %s changes during generation',async change=>{
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{
   if(change==='retired fact')await f.tx(()=>retireAnswerBlock(f.admin,f.ref));
   if(change==='revoked mailbox authority')await f.tx(()=>setProspectingAuthorization(f.admin,{mailboxId:world.alpha.mailboxId,expectedRevision:source.value.authorizationRevision,enabled:false,basis:'owner_reported_google_permission'}));
   if(change==='reassigned firm')await f.tx(()=>reassignFirm(f.admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled source change'}));
@@ -168,7 +179,7 @@ it('concurrent callers share one paid generation attempt on separate PostgreSQL 
  const f=await fixture(),source=await readReplyDraftContext(f.ctx,{messageId:f.messageId,factRefs:[f.ref]});if(!source.ok)throw new Error(source.reason);
  const second=repositoryContext(f.ctx.scope,await world.database.appRuntimeSession());
  let calls=0,counted=0,release!:()=>void;const countedTogether=new Promise<void>(resolve=>{release=resolve;});
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>{if(++counted===2)release();await countedTogether;return 100;},compose:async()=>{calls++;return {raw:JSON.stringify({text:'Callie helps existing property teams coordinate maintenance requests.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false};}};
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>{if(++counted===2)release();await countedTogether;return 100;},prepareReplyDraft:async()=>{calls++;return {raw:JSON.stringify({text:'Callie helps existing property teams coordinate maintenance requests.',factRefs:[f.ref],unsupportedClaims:[]}),costCents:1,costEstimated:false};}};
  const input={commandId:randomUUID(),clientVersion:'1.0.0',messageId:f.messageId,sourceRevision:source.value.sourceRevision,factRefs:[f.ref],envelope:source.value.envelope};
  const results=await Promise.all([generateReplyDraft(f.ctx,input,port),generateReplyDraft(second,input,port)]);
  expect(results.filter(result=>result.ok)).toHaveLength(1);

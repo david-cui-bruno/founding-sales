@@ -47,7 +47,7 @@ it('refuses obsolete generation clients before any paid attempt',async()=>{
 
 it('returns the accepted strict-client command envelope for an injected bounded suggestion',async()=>{
  const input=await conversation();let calls=0;
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{calls++;return {raw:JSON.stringify({text:'Thank you for your question.',factRefs:[],unsupportedClaims:[]}),costCents:1,costEstimated:false};}};
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{calls++;return {raw:JSON.stringify({text:'Thank you for your question.',factRefs:[],unsupportedClaims:[]}),costCents:1,costEstimated:false};}};
  expect(await call('/replies/composer/generate',input,true,port)).toMatchObject({status:200,body:{status:'accepted',replayed:false,result:{ok:true,value:{text:'Thank you for your question.',reviewRequired:true}}}});
  expect(await call('/replies/composer/generate',input,true,port)).toMatchObject({status:409,body:{status:'refused',replayed:true,reason:'generation_already_attempted'}});
  expect(calls).toBe(1);
@@ -55,7 +55,7 @@ it('returns the accepted strict-client command envelope for an injected bounded 
 
 it('withholds generated prose when the authenticated device is revoked during generation',async()=>{
  const grant=await issueSessionFor(f,f.alpha,f.alpha.salesperson,{deviceLabel:'revoked composer fixture'}),input=await conversation();
- const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,compose:async()=>{
+ const port:HumanReplyDraftPort={providerKey:'aws_bedrock.outreach_reply',countInputTokens:async()=>100,prepareReplyDraft:async()=>{
   await withTransaction(f.db,()=>revokeDevice(f.deps,{workspaceId:f.alpha.workspaceId,deviceId:grant.deviceId,reason:'device_revoked'}));
   return {raw:JSON.stringify({text:'Private generated prose.',factRefs:[],unsupportedClaims:[]}),costCents:1,costEstimated:false};
  }};

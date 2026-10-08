@@ -10,7 +10,7 @@ import {lockResearchBudget} from '../research/ceilings.ts';
 import {readResearchSettings} from '../research/settings.ts';
 import {readCreditSpend,workspaceBusinessZone} from '../research/ledger.ts';
 import {readAttempt,reserveAttempt,markCalling,settleAttempt} from '../research/reservations.ts';
-import {centsOf} from '../research/pricing.ts';
+import {centsOf,countedWithHeadroom} from '../research/pricing.ts';
 import {readReplyDraftContext} from './composer.ts';
 
 export const HUMAN_REPLY_DRAFT_MODEL='claude-haiku-4-5';
@@ -18,7 +18,7 @@ export const HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS=1024;
 export interface HumanReplyDraftPort {
  readonly providerKey:'aws_bedrock.outreach_reply';
  countInputTokens(context:ReplyDraftContext):Promise<number>;
- compose(context:ReplyDraftContext):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
+ prepareReplyDraft(context:ReplyDraftContext):Promise<{raw:string;costCents:number;costEstimated:boolean}>;
 }
 const outputSchema=z.strictObject({text:z.string().trim().min(1).max(12000),factRefs:z.array(replyFactRefSchema).max(20),unsupportedClaims:z.array(z.string().trim().min(1).max(500)).max(9)});
 
@@ -34,7 +34,8 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
  if(!port||port.providerKey!=='aws_bedrock.outreach_reply')return {ok:false,reason:'generation_unavailable'};
  let tokens:number;try{tokens=await port.countInputTokens(source.value);}catch{return {ok:false,reason:'token_count_unavailable'};}
  if(!Number.isSafeInteger(tokens)||tokens<=0||tokens>100000)return {ok:false,reason:'input_over_budget'};
- const cents=centsOf(HUMAN_REPLY_DRAFT_MODEL,{inputTokens:tokens,outputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS},'bedrock');
+ const inputTokens=countedWithHeadroom(tokens);
+ const cents=centsOf(HUMAN_REPLY_DRAFT_MODEL,{inputTokens,outputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS},'bedrock');
  const db=ctx.db as SessionQueryable;
  const claim=await withTransaction(db,async()=>{
   await lockSendGateForDispatch(ctx);await lockResearchBudget(ctx);
@@ -46,7 +47,7 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
   if(!settings.enabled||(await listApplicableHolds(ctx,{actionKind:'research',firmId:current.value.firmId,ownerUserId:current.value.mailboxOwnerUserId,mailboxId:current.value.mailboxId})).length)return {ok:false as const,reason:'generation_held'};
   const at=await databaseNow(ctx),zone=await workspaceBusinessZone(ctx),spend=await readCreditSpend(ctx,{at,businessTimeZone:zone});
   if(spend.todayCents+cents>settings.dailyCostCeilingCents||spend.monthToDateCents+cents>settings.monthlyCostCeilingCents)return {ok:false as const,reason:'generation_over_budget'};
-  const reservation=await reserveAttempt(ctx,{...attempt,providerKey:port.providerKey,at,businessTimeZone:zone,cents,modelName:HUMAN_REPLY_DRAFT_MODEL,maxInputTokens:tokens,maxOutputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS});
+  const reservation=await reserveAttempt(ctx,{...attempt,providerKey:port.providerKey,at,businessTimeZone:zone,cents,modelName:HUMAN_REPLY_DRAFT_MODEL,maxInputTokens:inputTokens,maxOutputTokens:HUMAN_REPLY_DRAFT_MAX_OUTPUT_TOKENS});
   if(!await markCalling(ctx,reservation.id))return {ok:false as const,reason:'generation_already_attempted'};
   return {ok:true as const,value:reservation};
  });
@@ -56,7 +57,7 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
   return {ok:false,reason:'session_changed'};
  }
  let answer:{raw:string;costCents:number;costEstimated:boolean};
- try{answer=await port.compose(source.value);}catch{
+ try{answer=await port.prepareReplyDraft(source.value);}catch{
   await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'estimated'}}));
   return {ok:false,reason:'generation_outcome_unknown'};
  }
