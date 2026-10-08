@@ -127,7 +127,7 @@ export interface SendFooterConfiguration extends FooterConfiguration {
 /** The block a send appends: the sign-off, and the address when there is one. Nothing else. */
 export function sendFooterBlock(configuration: SendFooterConfiguration): string {
   const address = configuration.postalAddress?.trim() ?? '';
-  return address.length === 0 ? configuration.signOff.trim() : `${configuration.signOff.trim()}\n${address}`;
+  return [configuration.signOff.trim(),address].filter(part=>part.length>0).join('\n');
 }
 
 /**
@@ -206,7 +206,7 @@ function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly
   const addresses = [configuration.postalAddress ?? '', ...(configuration.recordedAddresses ?? [])]
     .map(address => address.trim())
     .filter(address => address.length > 0);
-  const heads = [signOff, ...addresses.map(address => `${signOff}\n${address}`)];
+  const heads = signOff.length===0 ? addresses : [signOff, ...addresses.map(address => `${signOff}\n${address}`)];
   const blocks = new Set<string>();
   for (const head of heads) {
     blocks.add(head);
@@ -229,8 +229,6 @@ function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly
  * as far as anything here can tell (review of PR 311). Nothing of either is removed.
  */
 function footerBlockStart(body: string, configuration: SendFooterConfiguration): number | null {
-  const signOff = configuration.signOff.trim();
-  if (signOff.length === 0) return null;
   const stripped = body.replace(/\s+$/u, '');
   for (const block of candidateFooterBlocks(configuration)) {
     if (!stripped.endsWith(block)) continue;

@@ -21,6 +21,7 @@ import type {HumanReplySendInput} from '../../../contracts/src/replyComposer.ts'
 import {setAdminCap} from '../../outbound/ramp.ts';
 import {previewDeletion,commitDeletion} from '../../retention/deletion.ts';
 import {resolveUnknownTerminal} from '../../outbound/fence.ts';
+import {readSetting,updateSetting} from '../../settings/store.ts';
 
 let world:OutboundWorld;
 beforeAll(async()=>{world=await createOutboundWorld();});
@@ -147,6 +148,39 @@ it('deleting a prospect removes reply metadata and a completed-job replay cannot
  expect(world.alpha.gmail.sends).toHaveLength(before+1);
 });
 
+it('a first approval racing committed deletion cannot recreate reply metadata on an older pinned route',async()=>{
+ const f=await fixture(),first=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!first.ok)throw new Error(first.reason);
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:first.value.outboundMessageId})).toMatchObject({outcome:'sent'});
+ const question=await f.tx(()=>recordMessage(f.ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:f.threadId,rfcMessageId:`${randomUUID()}@example.test`,direction:'incoming',internalDate:new Date(Date.now()+1000).toISOString(),headerFrom:f.firm.address,headerTo:[world.alpha.address],headerCc:[],subject:'Can you help?',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]}}));
+ await f.tx(()=>recordMatches(f.ctx,{messageId:question.message.id,candidates:[{firmId:f.firm.firmId,contactId:f.firm.contactId,opportunityId:f.firm.opportunityId,rule:'participant',viaClosedOpportunity:false}]}));
+ await f.tx(()=>storeMessageBody(f.ctx,{messageId:question.message.id,text:'One more question.',truncated:false}));
+ const input={...f.input,messageId:question.message.id},preview=await previewHumanReply(f.ctx,input);if(!preview.ok)throw new Error(preview.reason);
+ const deleter=await openExtraSession(world),observer=await openExtraSession(world),admin=repositoryContext(f.admin.scope,deleter.session);
+ const requesterPid=(await f.ctx.db.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+ let preparing:ReturnType<typeof requestHumanReplySend>|undefined;
+ try{
+  await deleter.session.query('BEGIN');
+  const deletion=await previewDeletion(admin,{targetKind:'firm',firmId:f.firm.firmId});if(!deletion.ok)throw new Error(deletion.reason);
+  expect(await commitDeletion(admin,{requestId:deletion.value.requestId,previewHash:deletion.value.previewHash,commandId:randomUUID(),journal:recordingSuppressionJournal()})).toMatchObject({ok:true});
+  let settled=false;
+  preparing=f.tx(()=>requestHumanReplySend(f.ctx,{...f.send,...input,commandId:randomUUID(),sourceRevision:preview.value.sourceRevision,draftRevision:preview.value.draftRevision},f.identity)).finally(()=>{settled=true;});
+  // Fixture synchronization: wait for either completion or the real gate wait,
+  // then commit deletion. The assertion below observes only public request/readback.
+  for(let attempt=0;attempt<400&&!settled;attempt++){
+   const waiting=(await observer.session.query<{waiting:boolean}>("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND NOT granted AND locktype='advisory') AS waiting",[requesterPid])).rows[0]!.waiting;
+   if(waiting)break;
+   await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  await deleter.session.query('COMMIT');
+  expect(await preparing).toEqual({ok:false,reason:'message_unavailable'});
+  expect(await readHumanReplySend(f.ctx,input)).toEqual({ok:false,reason:'no_send_attempt'});
+ }finally{
+  await deleter.session.query('ROLLBACK');
+  await preparing?.catch(()=>undefined);
+  await observer.close();await deleter.close();
+ }
+});
+
 it('a plan-only founder-sales conversation records the explicit reply as answered after one provider submission',async()=>{
  const f=await fixture(false,true),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
  const before=world.alpha.gmail.sends.length,id=queued.value.outboundMessageId;
@@ -161,6 +195,22 @@ it('a full retained reference chain still records provider delivery and answers 
  const f=await fixture(false,false,100),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
  expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:queued.value.outboundMessageId})).toMatchObject({outcome:'sent'});
  expect(await readReplyDraftContext(f.ctx,{messageId:f.input.messageId,factRefs:[]})).toEqual({ok:false,reason:'answered_manually'});
+});
+
+it('an explicit reviewed reply with the configured postal address submits the exact footer once',async()=>{
+ const f=await fixture(),postal='100 Example Avenue\nBoston, MA 02110';
+ const current=await readSetting(f.admin,'postal_address');
+ expect(await f.tx(()=>updateSetting(f.admin,{settingKey:'postal_address',value:{address:postal}}))).toMatchObject({ok:true});
+ try{
+  const preview=await previewHumanReply(f.ctx,f.input);if(!preview.ok)throw new Error(preview.reason);
+  const queued=await f.tx(()=>requestHumanReplySend(f.ctx,{...f.send,commandId:randomUUID(),sourceRevision:preview.value.sourceRevision,draftRevision:preview.value.draftRevision},f.identity));if(!queued.ok)throw new Error(queued.reason);
+  const before=world.alpha.gmail.sends.length;
+  expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:queued.value.outboundMessageId})).toMatchObject({outcome:'sent'});
+  expect(world.alpha.gmail.sends.slice(before)).toMatchObject([{body:preview.value.body}]);
+  expect(preview.value.body.split(postal)).toHaveLength(2);
+ }finally{
+  await f.tx(()=>updateSetting(f.admin,{settingKey:'postal_address',value:current.value}));
+ }
 });
 
 it('replaying a sent reply does not restore its body after established retention removes it',async()=>{
@@ -230,4 +280,19 @@ it('dispatches only the exact verified CC choice and a CC stop during refresh pr
   expect(await dispatchOutboundMessage(stopped.ctx,world.sendDeps(world.alpha,{gmail:paused.client}),{outboundMessageId:q.value.outboundMessageId})).toMatchObject({outcome:'held',detail:'human_reply:conversation_stopped'});
   expect(paused.refreshes()).toBe(1);expect(world.alpha.gmail.sends).toHaveLength(before+1);
  }finally{await second.close();}
+});
+
+it('fresh human approval after a zone correction keeps the original fence and uses the corrected local sending window',async()=>{
+ const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const id=queued.value.outboundMessageId,before=world.alpha.gmail.sends.length;
+ expect(await f.tx(()=>resolveZoneForFirm(f.admin,{firmId:f.firm.firmId,recordedZone:'America/Chicago'}))).toMatchObject({ok:true});
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'held',refusal:'step_ineligible',detail:'human_reply:draft_changed'});
+ expect(world.alpha.gmail.sends).toHaveLength(before);
+ const fresh=await previewHumanReply(f.ctx,f.input);if(!fresh.ok)throw new Error(fresh.reason);
+ const renewed=await f.tx(()=>requestHumanReplySend(f.ctx,{...f.send,commandId:randomUUID(),sourceRevision:fresh.value.sourceRevision,draftRevision:fresh.value.draftRevision},f.identity));
+ expect(renewed).toMatchObject({ok:true,value:{state:'queued',outboundMessageId:id}});
+ // The existing clock is09:00UTC: inside the old UTC window, but04:00 in Chicago.
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'held',refusal:'outside_email_window'});
+ expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'held',outboundMessageId:id,reason:'outside_email_window'}});
+ expect(world.alpha.gmail.sends).toHaveLength(before);
 });

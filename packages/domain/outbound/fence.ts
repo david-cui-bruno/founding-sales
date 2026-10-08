@@ -1237,6 +1237,8 @@ export async function rewritePreparedBody(
     readonly outboundMessageId: string;
     readonly body: string;
     readonly subject?: string | undefined;
+    /** Fresh human approval may correct the original fence's zone before any claim. */
+    readonly sourceZone?: string | undefined;
     readonly reason: string;
     readonly actor?: string | undefined;
   },
@@ -1253,7 +1255,7 @@ export async function rewritePreparedBody(
   }
   const { rows } = await context.db.query<FenceDbRow>(
     `UPDATE outbound_messages
-        SET body = $3, rendered_hash = $4, subject=$5, updated_at = now()
+        SET body = $3, rendered_hash = $4, subject=$5, source_zone=coalesce($6,source_zone), updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND attempt_token IS NULL AND state IN ('prepared', 'held')
       RETURNING ${FENCE_COLUMNS}`,
     [
@@ -1262,6 +1264,7 @@ export async function rewritePreparedBody(
       input.body,
       renderedHash(input.subject ?? current.subject, input.body),
       input.subject ?? current.subject,
+      input.sourceZone ?? null,
     ],
   );
   const row = rows[0];

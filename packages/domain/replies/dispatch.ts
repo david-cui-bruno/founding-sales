@@ -9,6 +9,7 @@ import {prepareHumanReplyFence,readFence,readFenceByDraftId,lockFenceForClaim,re
 import {enqueueJob} from '../jobs/jobStore.ts';
 import {directSendTargetOf} from '../mail/matching.ts';
 import {workspaceBusinessZone} from '../research/ledger.ts';
+import {lockSendGateForStopFact} from '../policy/sendGate.ts';
 
 export interface HumanReplyIdentity {sessionId:string;deviceId:string}
 export async function previewHumanReply(ctx:RepositoryContext,input:HumanReplyPreviewInput):Promise<ReplyComposerResult<HumanReplyPreview>>{
@@ -39,6 +40,8 @@ export async function readHumanReplySend(ctx:RepositoryContext,input:{messageId:
 export async function requestHumanReplySend(ctx:RepositoryContext,input:HumanReplySendInput,identity:HumanReplyIdentity):Promise<ReplyComposerResult<HumanReplySendStatus>>{
  if(!humanReplySendInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
  const actor=ctx.scope.actor;if(actor.kind!=='user')return {ok:false,reason:'human_required'};
+ // Preparation and deletion share one order, including retained pinned routes.
+ await lockSendGateForStopFact(ctx);
  if(!await humanReplyIdentityLive(ctx,identity,actor.userId,actor.role))return {ok:false,reason:'session_changed'};
  await ctx.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`human-reply:${ctx.scope.workspaceId}:${input.messageId}`]);
  const existing=await readHumanReplySend(ctx,input);
@@ -56,7 +59,8 @@ export async function requestHumanReplySend(ctx:RepositoryContext,input:HumanRep
   const fence=await lockFenceForClaim(ctx,existing.value.outboundMessageId);
   if(!fence||fence.attemptToken!==null||!['prepared','held'].includes(fence.state))return readHumanReplySend(ctx,input);
   if(fence.mailboxId!==context.value.mailboxId||fence.firmId!==context.value.firmId||fence.contactId!==context.value.contactId||fence.recipientAddress!==context.value.senderAddress)return {ok:false,reason:'owner_changed'};
-  const rewritten=await rewritePreparedBody(ctx,{outboundMessageId:fence.id,body:preview.value.body,subject:preview.value.subject,reason:'human_fresh_approval'});if(!rewritten.ok)return {ok:false,reason:rewritten.reason};
+  const currentFirm=await readFirm(ctx,context.value.firmId);
+  const rewritten=await rewritePreparedBody(ctx,{outboundMessageId:fence.id,body:preview.value.body,subject:preview.value.subject,sourceZone:currentFirm?.time_zone??await workspaceBusinessZone(ctx),reason:'human_fresh_approval'});if(!rewritten.ok)return {ok:false,reason:rewritten.reason};
   if(fence.state==='held'){const released=await releaseFence(ctx,{outboundMessageId:fence.id});if(!released.ok)return {ok:false,reason:released.reason};}
   const row=(await ctx.db.query<{revision:number}>(`UPDATE human_reply_send_intents SET user_id=$3,role=$4,session_id=$5,device_id=$6,command_id=$7,revision=revision+1,authorized=true,expires_at=clock_timestamp()+interval '2 minutes',source_revision=$8,draft_revision=$9,fact_refs=$10::jsonb,envelope=$11::jsonb,refusal=NULL WHERE workspace_id=$1 AND message_id=$2 RETURNING revision`,[ctx.scope.workspaceId,input.messageId,actor.userId,actor.role,identity.sessionId,identity.deviceId,input.commandId,input.sourceRevision,input.draftRevision,JSON.stringify(input.factRefs),JSON.stringify(input.envelope)])).rows[0]!;
   await enqueueJob(ctx.db,{workspaceId:ctx.scope.workspaceId,kind:'reply.human_send',idempotencyKey:`human-reply:${input.messageId}:${row.revision}`,payload:{outboundMessageId:fence.id,revision:row.revision}});
