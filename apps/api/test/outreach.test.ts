@@ -81,7 +81,7 @@ it('binds evaluation to this configuration and exact policy, prompt and running 
  vi.stubEnv('FSS_BUILD_COMMIT','a'.repeat(40));
  try{
   const view=z.object({emailAdmission:z.object({configurationSha256:z.string()})}).parse((await call({},'/outreach/control/v2')).body);
-  const evaluation={policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',implementationCommit:'a'.repeat(40),reportSha256:'b'.repeat(64),configurationSha256:view.emailAdmission.configurationSha256,reviewedEligible:2,falseEligible:0};
+  const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:'a'.repeat(40),reportSha256:'b'.repeat(64),configurationSha256:view.emailAdmission.configurationSha256,reviewedEligible:2,falseEligible:0};
   const base={expectedRevision:2,enabled:false,ownerUserId:f.alpha.admin.userId,mailboxId,sequenceVersionId:emailSequenceId,evaluation};
   for(const changed of [{promptVersion:'old'},{implementationCommit:'c'.repeat(40)},{configurationSha256:'c'.repeat(64)},{falseEligible:1}]){
    expect((await call(command({...base,evaluation:{...evaluation,...changed}}),'/outreach/email-admission/save')).body).toMatchObject({reason:'evaluation_mismatch'});

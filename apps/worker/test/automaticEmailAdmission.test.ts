@@ -37,7 +37,7 @@ async function configureFutureActivation(){
  const config={enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:null};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,expectedRevision:0}))).toMatchObject({ok:true});
  const control=await readEmailAdmissionControl(admin());
- const evaluation={policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:'b'.repeat(64),reviewedEligible:20,falseEligible:0};
+ const evaluation={policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',implementationCommit:process.env['FSS_BUILD_COMMIT'],configurationSha256:control.configurationSha256,reportSha256:'b'.repeat(64),reviewedEligible:20,falseEligible:0};
  expect(await tx(()=>saveEmailAdmissionControl(admin(),{...config,evaluation,expectedRevision:1}))).toMatchObject({ok:true});
  // Simulate a later, explicitly gated activation ONLY in this disposable database.
  // The shipped migration and all application activation controls remain disabled.
@@ -132,7 +132,7 @@ it('rolls back the entire prospect when enrollment storage fails, then permits a
  const retried=await admitAutomaticEmailProspect(worker(),input);expect(retried).toMatchObject({ok:true});
  if(!retried.ok)throw new Error(retried.reason);
  const {readFirmSourcing}=await import('@fss/domain/sourcing/attribution.ts');
- expect(await readFirmSourcing(worker(),retried.value.firmId)).toMatchObject({sources:[{candidateId:input.candidateId,qualificationRunId:input.qualificationRunId,policyVersion:'outreach-email-fit-v1',hypothesis:'fit_only',sourceAvailable:true}]});
+ expect(await readFirmSourcing(worker(),retried.value.firmId)).toMatchObject({sources:[{candidateId:input.candidateId,qualificationRunId:input.qualificationRunId,policyVersion:'outreach-email-fit-v2',hypothesis:'fit_only',sourceAvailable:true}]});
 });
 it('concurrent workers and later retries preserve one enrollment and its original scheduled execution',async()=>{
  await configureFutureActivation();const input=await qualified('Key Properties Fixture');
@@ -166,6 +166,12 @@ it('sees a concurrent recipient stop committed while the worker waits for the se
 it('rejects a changed exact-version evaluation without partial admission',async()=>{
  await configureFutureActivation();const input=await qualified('Changed Evaluation PM'),before=await listFirmsForActor(worker());
  vi.stubEnv('FSS_BUILD_COMMIT','f'.repeat(40));
+ expect(await admitAutomaticEmailProspect(worker(),input)).toEqual({ok:false,reason:'evaluation_mismatch'});
+ expect(await listFirmsForActor(worker())).toEqual(before);expect(await listEnrollments(worker())).toHaveLength(0);
+});
+it('refuses a prior email-fit policy report before creating any prospect or enrollment',async()=>{
+ await configureFutureActivation();const input=await qualified('Prior Policy PM'),before=await listFirmsForActor(worker());
+ await db.session.query(`UPDATE outreach_email_admission_settings SET evaluation=jsonb_set(evaluation,'{policyVersion}','"outreach-email-fit-v1"'::jsonb) WHERE workspace_id=$1`,[seeded.alpha.workspaceId]);
  expect(await admitAutomaticEmailProspect(worker(),input)).toEqual({ok:false,reason:'evaluation_mismatch'});
  expect(await listFirmsForActor(worker())).toEqual(before);expect(await listEnrollments(worker())).toHaveLength(0);
 });
@@ -476,7 +482,7 @@ it('counts one actual send and automatic email attribution after sender replay',
  await tx(()=>reconcileEmailAttribution(worker()));await tx(()=>reconcileEmailAttribution(worker()));
  const asOf=new Date(Date.parse(f.at)+1000).toISOString();
  const view=await tx(()=>readSourcingLearning(admin(),{...learningInterval(),to:asOf,asOf}));
- expect(view).toMatchObject({automation:{outcomes:{admissions:1,attempts:1,sent:1}},cohorts:[{policyVersion:'outreach-email-fit-v1',contacted:1,email:{sent:1}}]});
+ expect(view).toMatchObject({automation:{outcomes:{admissions:1,attempts:1,sent:1}},cohorts:[{policyVersion:'outreach-email-fit-v2',contacted:1,email:{sent:1}}]});
 });
 it('shows permanent deferral and exhausted capacity checks with historical evidence and bindings',async()=>{
  await configureFutureActivation();const fit=await qualified('Visible Capacity PM');
@@ -486,7 +492,7 @@ it('shows permanent deferral and exhausted capacity checks with historical evide
  const view=await tx(()=>readSourcingLearning(admin(),learningInterval()));
  expect(view.automation?.decisions).toHaveLength(2);
  expect(view.automation?.decisions).toEqual(expect.arrayContaining([
- expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),firmId:null,enrollmentId:null}),
+ expect.objectContaining({candidateId:fit.candidateId,reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,rank:'fit_only',policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',controlRevision:2,sequenceVersionId:sequenceId,evaluationSha256:'b'.repeat(64),implementationCommit:process.env['FSS_EMAIL_EVALUATED_COMMIT']??'a'.repeat(40),firmId:null,enrollmentId:null}),
  expect.objectContaining({candidateId:contrary.candidateId,status:'deferred',checks:1,retryAt:null,evidence:expect.arrayContaining([expect.objectContaining({url:'https://visiblecontrarypm.example.test/'})])})]));
 });
 it('distinguishes retained discovery hits and supported email prospects from manual staging without double counting',async()=>{
@@ -533,7 +539,7 @@ it('joins confirmed feedback and qualification spend through automatic email att
  const paid=await tx(()=>reserveAttempt(worker(),{subjectKind:'sourcing_qualification',subjectId:f.qualificationRunId,attempt:1,providerKey:'aws_bedrock.sourcing_qualification',at,businessTimeZone:'America/New_York',cents:2,modelName:'fixture',maxInputTokens:1000,maxOutputTokens:100}));
  await tx(()=>markCalling(worker(),paid.id));await tx(()=>settleAttempt(worker(),{reservationId:paid.id,at,outcome:{kind:'estimated'}}));
  const asOf=new Date(Date.parse(f.at)+1000).toISOString();const view=await tx(()=>readSourcingLearning(admin(),{...learningInterval(),to:asOf,asOf}));
- expect(view.cohorts).toMatchObject([{policyVersion:'outreach-email-fit-v1',confirmedPain:1,researchGrossCents:2,researchCashCents:0}]);
+ expect(view.cohorts).toMatchObject([{policyVersion:'outreach-email-fit-v2',confirmedPain:1,researchGrossCents:2,researchCashCents:0}]);
 });
 it('counts held qualification only after confirmed attendance and withdraws it when attendance is corrected',async()=>{
  const f=await preparedAutomaticSender(),meetingId=randomUUID(),uid=randomUUID();
@@ -578,7 +584,7 @@ it.each(emailEvaluationCases)('evaluates labeled email admission: $id',async c=>
 it('accepts a bound diagnostic report through normal disabled controls and still refuses activation',async()=>{
  await configureFutureActivation();
  const path=process.env['FSS_EMAIL_EVALUATION_REPORT'];
- const report=path?JSON.parse(readFileSync(path,'utf8')):{implementationCommit:process.env['FSS_BUILD_COMMIT'],policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',reviewedEligible:2,falseEligible:0};
+ const report=path?JSON.parse(readFileSync(path,'utf8')):{implementationCommit:process.env['FSS_BUILD_COMMIT'],policyVersion:'outreach-email-fit-v2',promptVersion:'qualification-growth-v6',reviewedEligible:2,falseEligible:0};
  const reportSha256=createHash('sha256').update(path?readFileSync(path):JSON.stringify(report)).digest('hex');
  const control=await readEmailAdmissionControl(admin());
  const input={expectedRevision:2,enabled:false,ownerUserId:seeded.alpha.admin.userId,mailboxId,sequenceVersionId:sequenceId,evaluation:{policyVersion:report.policyVersion,promptVersion:report.promptVersion,implementationCommit:report.implementationCommit,configurationSha256:control.configurationSha256,reportSha256,reviewedEligible:report.reviewedEligible,falseEligible:report.falseEligible}};

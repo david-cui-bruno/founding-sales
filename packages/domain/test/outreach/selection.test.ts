@@ -64,3 +64,34 @@ it('keeps a non-role handle unresolved outside a bounded office card or explicit
  const input=officeCard(['Example PM','Dallas TX','Other office','admin@example.test']);
  expect(supportedBusinessEmail(input)).toBeNull();
 });
+
+// Recorded office layout: name, street, suite, city, contact label, two phones, email.
+const suiteCard = ['Example PM','221 Main Avenue','Suite 402','Dallas, TX 75201','Contact Information','(214) 424-0775','(214) 424-0771','admin@example.test'];
+it('recovers a published email from one eight-block office card while retaining the original citation',()=>{
+ const input=officeCard(suiteCard);
+ expect(supportedBusinessEmail(input)).toMatchObject({address:'admin@example.test',sourceObservationId:input.observations[0]!.id,blockId:'b7',identityKind:'role',displayName:'Office'});
+ expect(supportedBusinessEmail(officeCard(suiteCard.filter(line=>line!=='(214) 424-0771')))).not.toBeNull();
+});
+it('refuses office-card recovery across extra offices, prose, addresses or email routes',()=>{
+ const rejected=[
+ suiteCard.map(line=>line==='Suite 402'?'Other office':line),
+ suiteCard.map(line=>line==='Dallas, TX 75201'?'Houston, TX 77001':line),
+ suiteCard.map(line=>line==='Contact Information'?'Investor Contact Information':line),
+ suiteCard.map(line=>line==='(214) 424-0771'?'Houston, TX 77001':line),
+ suiteCard.map(line=>line==='(214) 424-0771'?'221 Other Avenue':line),
+ suiteCard.map(line=>line==='Suite 402'?'Dallas, TX 75201':line),
+ [...suiteCard.slice(0,6),'(214) 424-0000',...suiteCard.slice(6)],
+ [...suiteCard,'other@example.test'],
+ ];
+ for(const lines of rejected)expect(supportedBusinessEmail(officeCard(lines))).toBeNull();
+ const input=officeCard(suiteCard);
+ for(const change of ['truncated','stale','third_party','wrong_domain','wrong_name'] as const){
+  const changed=structuredClone(input);
+  if(change==='truncated')changed.observations[0]!.truncated=true;
+  if(change==='stale')changed.observations[0]!.retrievedAt='2026-09-01T00:00:00Z';
+  if(change==='third_party')changed.observations[0]!.firstParty=false;
+  if(change==='wrong_domain')changed.observations[0]!.url='https://other.test/contact';
+  if(change==='wrong_name')changed.identity.name='Other PM';
+  expect(supportedBusinessEmail(changed)).toBeNull();
+ }
+});
