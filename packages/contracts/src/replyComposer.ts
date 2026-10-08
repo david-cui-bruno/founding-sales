@@ -14,6 +14,7 @@ export const replyDraftContextSchema=z.strictObject({
  observedTo:z.array(z.string()).max(200),observedCc:z.array(z.string()).max(200),replyToMetadata:z.literal('unavailable'),
  envelope:replyDraftEnvelopeSchema,recipientOptions:z.array(z.strictObject({address:z.email(),contactId:uuid})).max(20),
  messageText:z.string().max(200000),priorContext:z.array(z.strictObject({direction:z.enum(['incoming','outgoing']),text:z.string().max(200000)})).max(19),
+ bookings:z.array(z.strictObject({id:uuid,state:z.enum(['booked','rescheduled','cancelled','held','no_show']),startsAt:z.string(),endsAt:z.string()})).max(20),
  facts:z.array(answerBlockSchema).max(20),availableFacts:z.array(answerBlockSchema).max(50),
 });
 export const replyDraftGenerateInputSchema=replyDraftContextInputSchema.safeExtend({commandId:commandIdSchema,clientVersion:semanticVersionSchema,sourceRevision:z.string().regex(/^[a-f0-9]{64}$/u),factRefs:z.array(replyFactRefSchema).max(20),envelope:replyDraftEnvelopeSchema});

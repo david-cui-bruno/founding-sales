@@ -38,7 +38,7 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  if(answered)return {ok:false,reason:'answered_manually'};
  const thread=(await ctx.db.query<{id:string;direction:'incoming'|'outgoing';internal_date:Date;body_text:string|null;truncated:boolean|null}>(`SELECT m.id,m.direction,m.internal_date,b.body_text,b.truncated FROM mail_messages m LEFT JOIN mail_message_bodies b ON b.workspace_id=m.workspace_id AND b.mail_message_id=m.id WHERE m.workspace_id=$1 AND m.mailbox_id=$2 AND m.provider_thread_id=$3 ORDER BY m.internal_date,m.id LIMIT 21`,[ctx.scope.workspaceId,message.mailboxId,message.providerThreadId])).rows;
  if(thread.length>20)return {ok:false,reason:'context_too_large'};
- if(thread.at(-1)?.id!==message.id)return {ok:false,reason:'thread_changed'};
+ if(thread.filter(m=>m.direction==='incoming').at(-1)?.id!==message.id)return {ok:false,reason:'thread_changed'};
  if(thread.some(m=>m.body_text===null||m.truncated))return {ok:false,reason:'context_incomplete'};
  const catalog=(await ctx.db.query<{block_id:string;version:number;kind:AnswerBlock['kind'];text:string;approved_at:Date}>(`SELECT v.* FROM outreach_answer_blocks b JOIN outreach_answer_block_versions v ON v.workspace_id=b.workspace_id AND v.block_id=b.id AND v.version=b.current_version WHERE b.workspace_id=$1 AND v.approved_at IS NOT NULL AND v.retired_at IS NULL ORDER BY b.id LIMIT 51`,[ctx.scope.workspaceId])).rows;
  if(catalog.length>50)return {ok:false,reason:'facts_catalogue_too_large'};
@@ -46,8 +46,14 @@ export async function readReplyDraftContext(ctx:RepositoryContext,input:ReplyDra
  const refs=input.factRefs??(availableFacts.length<=20?availableFacts.map(b=>({id:b.id,version:b.version})):[]);
  if(new Set(refs.map(r=>r.id)).size!==refs.length)return {ok:false,reason:'invalid_input'};
  const selected=refs.length?await readApprovedAnswerBlocks(ctx,refs):{ok:true as const,value:[]};if(!selected.ok)return {ok:false,reason:selected.reason};
+ const meetingRows=(await ctx.db.query<{id:string;state:ReplyDraftContext['bookings'][number]['state'];starts_at:Date;ends_at:Date}>(`SELECT id,state,starts_at,ends_at FROM meetings WHERE workspace_id=$1 AND firm_id=$2 ORDER BY starts_at DESC,id LIMIT 21`,[ctx.scope.workspaceId,firm.id])).rows;
+ if(meetingRows.length>20)return {ok:false,reason:'context_too_large'};
+ const bookings=meetingRows.map(m=>({id:m.id,state:m.state,startsAt:m.starts_at.toISOString(),endsAt:m.ends_at.toISOString()}));
+ const plan=target.outreachPlanId?(await ctx.db.query('SELECT id,revision,state,owner_user_id,mailbox_id FROM outreach_plans WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',[ctx.scope.workspaceId,target.outreachPlanId,firm.id])).rows[0]:null;
+ const opportunity=target.opportunityId?(await ctx.db.query('SELECT id,status,control_mode,control_mode_changed_at,stage_id FROM opportunities WHERE workspace_id=$1 AND id=$2 AND firm_id=$3',[ctx.scope.workspaceId,target.opportunityId,firm.id])).rows[0]:null;
+ const confirmation=(await ctx.db.query('SELECT id,disposition FROM mail_reply_confirmations WHERE workspace_id=$1 AND mail_message_id=$2',[ctx.scope.workspaceId,message.id])).rows[0]??null;
  const source={messageId:message.id,firmId:firm.id,contactId:target.contactId,authorUserId:actor.userId,mailboxId:message.mailboxId,mailboxOwnerUserId:mailbox.owner_user_id,authorAddress:mailbox.email_address,authorizationRevision:auth.revision,subject:message.subject??'',senderAddress:message.headerFrom,providerThreadId:message.providerThreadId,inReplyTo:message.rfcMessageId,references:[...new Set([...message.referenceMessageIds,message.rfcMessageId])],observedTo:[...message.headerTo],observedCc:[...message.headerCc],replyToMetadata:'unavailable' as const,envelope,recipientOptions,messageText:body.text,priorContext:thread.filter(m=>m.id!==message.id).map(m=>({direction:m.direction,text:m.body_text!})),facts:selected.value};
- const sourceRevision=createHash('sha256').update(JSON.stringify({source,assignedUserId:firm.assigned_user_id,matchId:target.id,mailboxAccountId:mailbox.provider_account_id,mailboxGeneration:mailbox.generation,threadIds:thread.map(m=>m.id),routes,holds})).digest('hex');
+ const sourceRevision=createHash('sha256').update(JSON.stringify({source,bookings,plan,opportunity,confirmation,assignedUserId:firm.assigned_user_id,matchId:target.id,mailboxAccountId:mailbox.provider_account_id,mailboxGeneration:mailbox.generation,threadIds:thread.map(m=>m.id),routes,holds})).digest('hex');
  if(firmReadIsAudited(ctx,firm))await recordCrmAuditEvent(ctx,{action:'reply_composer.context_read',subjectKind:'mail_message',subjectId:message.id});
- return {ok:true,value:{...source,sourceRevision,availableFacts}};
+ return {ok:true,value:{...source,bookings,sourceRevision,availableFacts}};
 }

@@ -23,8 +23,9 @@ export interface HumanReplyDraftPort {
 const outputSchema=z.strictObject({text:z.string().trim().min(1).max(12000),factRefs:z.array(replyFactRefSchema).max(20),unsupportedClaims:z.array(z.string().trim().min(1).max(500)).max(9)});
 
 /** Caller supplies one session, outside any transaction. Paid markers contain no body. */
-export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftGenerateInput,port:HumanReplyDraftPort|null):Promise<ReplyComposerResult<ReplyGeneratedDraft>>{
+export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftGenerateInput,port:HumanReplyDraftPort|null,currentAuthorization:()=>Promise<boolean>=async()=>true):Promise<ReplyComposerResult<ReplyGeneratedDraft>>{
  if(!replyDraftGenerateInputSchema.safeParse(input).success)return {ok:false,reason:'invalid_input'};
+ if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  const selection={messageId:input.messageId,factRefs:input.factRefs,envelope:input.envelope};
  const source=await readReplyDraftContext(ctx,selection);if(!source.ok)return source;
  if(source.value.sourceRevision!==input.sourceRevision)return {ok:false,reason:'source_changed'};
@@ -37,6 +38,7 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
  const db=ctx.db as SessionQueryable;
  const claim=await withTransaction(db,async()=>{
   await lockSendGateForDispatch(ctx);await lockResearchBudget(ctx);
+  if(!await currentAuthorization())return {ok:false as const,reason:'session_changed'};
   if(await readAttempt(ctx,attempt))return {ok:false as const,reason:'generation_already_attempted'};
   const current=await readReplyDraftContext(ctx,selection);if(!current.ok)return current;
   if(current.value.sourceRevision!==input.sourceRevision)return {ok:false as const,reason:'source_changed'};
@@ -49,12 +51,17 @@ export async function generateReplyDraft(ctx:RepositoryContext,input:ReplyDraftG
   return {ok:true as const,value:reservation};
  });
  if(!claim.ok)return claim;
+ if(!await currentAuthorization()){
+  await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'released_not_called'}}));
+  return {ok:false,reason:'session_changed'};
+ }
  let answer:{raw:string;costCents:number;costEstimated:boolean};
  try{answer=await port.compose(source.value);}catch{
   await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:{kind:'estimated'}}));
   return {ok:false,reason:'generation_outcome_unknown'};
  }
  await withTransaction(db,()=>settleAttempt(ctx,{reservationId:claim.value.id,at:new Date().toISOString(),outcome:answer.costEstimated||!Number.isSafeInteger(answer.costCents)||answer.costCents<0?{kind:'estimated'}:{kind:'settled',cents:answer.costCents}}));
+ if(!await currentAuthorization())return {ok:false,reason:'session_changed'};
  const current=await withTransaction(db,async()=>{await lockSendGateForDispatch(ctx);return readReplyDraftContext(ctx,selection);});
  if(!current.ok)return current;
  if(current.value.sourceRevision!==input.sourceRevision)return {ok:false,reason:'source_changed'};

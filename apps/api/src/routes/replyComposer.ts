@@ -19,6 +19,10 @@ export async function routeReplyComposer(request:ApiRequest,options:RoutingOptio
  }
  const input=replyDraftGenerateInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
  if(clientCompatibility(options.auth.config.supportedClientVersions,input.data.clientVersion).kind!=='supported')return {status:426,body:{status:'refused',replayed:false,reason:'client_upgrade_required'}};
- const generated=await generateReplyDraft(scoped.context,input.data,port);
+ const generated=await generateReplyDraft(scoped.context,input.data,port,async()=>{
+  const current=await requirePrincipal(options.auth!,request);if(!current.ok)return false;
+  const before=principal.principal,after=current.principal;
+  return before.workspaceId===after.workspaceId&&before.userId===after.userId&&before.sessionId===after.sessionId&&before.deviceId===after.deviceId&&before.role===after.role;
+ });
  return generated.ok?{status:200,body:{status:'accepted',replayed:false,result:generated}}:{status:409,body:{status:'refused',replayed:generated.reason==='generation_already_attempted',reason:generated.reason}};
 }
