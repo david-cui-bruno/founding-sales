@@ -89,6 +89,18 @@ if [ "$ENVIRONMENT" = production ]; then
     "$IDLE_SCRIPT" drain-off "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} || echo 'WARN: release drain cleanup failed; it lapses automatically' >&2
     exit 1
   fi
+  # Authentication task startup may take minutes. Recheck activity immediately before
+  # scale-down; keep the existing explicit force-idle behavior, never an auth bypass.
+  if [ "${FSS_PROD_FORCE_IDLE:-0}" != 1 ] && ! "$IDLE_SCRIPT" check "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"}; then
+    "$IDLE_SCRIPT" drain-off "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} || echo 'WARN: release drain cleanup failed; it lapses automatically' >&2
+    exit 1
+  fi
+  # Check credential/task metadata after the last idle task as well. This is a
+  # receipt/binding read, not another slow task that could stale the idle observation.
+  if ! "$(dirname "${BASH_SOURCE[0]}")/migration-auth.sh" "$ROOT_DIRECTORY" "$PREFIX" "$STOP_WORKER_DIGEST" --verify-binding; then
+    "$IDLE_SCRIPT" drain-off "$ROOT_DIRECTORY" "$PREFIX" ${IDLE_NAMED[@]+"${IDLE_NAMED[@]}"} || echo 'WARN: release drain cleanup failed; it lapses automatically' >&2
+    exit 1
+  fi
 fi
 IDLE_RESULT=unknown
 DRAIN_STATE=not_used

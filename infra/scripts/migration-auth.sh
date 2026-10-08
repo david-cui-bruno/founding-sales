@@ -2,8 +2,9 @@
 # A fresh, bounded, read-only check on the existing migration identity, with this release's image.
 # Called by stop.sh before production drain, and again after idle before the first stop.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-[ "$#" = 3 ] || { echo 'usage: migration-auth.sh <root> <prefix> <release worker digest>' >&2; exit 1; }
-ROOT=$1; NAME_PREFIX=$2; DIGEST=$3
+[ "$#" = 3 ] || [ "$#" = 4 ] || { echo 'usage: migration-auth.sh <root> <prefix> <release worker digest>' >&2; exit 1; }
+ROOT=$1; NAME_PREFIX=$2; DIGEST=$3; MODE=${4:-check}
+[ "$MODE" = check ] || [ "$MODE" = --verify-binding ] || { echo 'FAIL: unknown migration authentication mode' >&2; exit 1; }
 [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'FAIL: migration authentication requires the exact release worker digest' >&2; exit 1; }
 release_read_root "$ROOT" "$NAME_PREFIX" production 'checks migration authentication before stopping production'
 [ "$ENVIRONMENT" = production ] || { echo 'FAIL: this check is for the production schema stop' >&2; exit 1; }
@@ -34,6 +35,26 @@ current_version() {
 }
 VERSION="$(current_version)" || exit 1
 release_aws "$ENVIRONMENT" ecs describe-task-definition --task-definition "$MIGRATION_TASK_DEFINITION" --include TAGS --output json > "$WORK/definition.json" || exit 1
+REPORTS="$(rehearsal_report_dir)";mkdir -p "$REPORTS"
+BASE_HASH="$(python3 - "$WORK/definition.json" <<'PY_HASH'
+import json,hashlib,sys
+d=json.load(open(sys.argv[1]))['taskDefinition']
+# Only public binding metadata; never hash environment credential values.
+b={k:d.get(k) for k in ['taskDefinitionArn','taskRoleArn','executionRoleArn','networkMode']}
+b['containers']=[{'name':c.get('name'),'image':c.get('image'),'databaseHost':next((e.get('value') for e in c.get('environment',[]) if e.get('name')=='FSS_DATABASE_HOST'),None),'secretReferences':c.get('secrets',[])} for c in d.get('containerDefinitions',[])]
+print(hashlib.sha256(json.dumps(b,sort_keys=True,separators=(',',':')).encode()).hexdigest())
+PY_HASH
+)" || exit 1
+if [ "$MODE" = --verify-binding ]; then
+ FSS_REPORT="$REPORTS/migration-authentication.json" FSS_VERSION="$VERSION" FSS_BASE_HASH="$BASE_HASH" FSS_DIGEST="$DIGEST" FSS_DATABASE="$DATABASE" python3 - <<'PY_BIND'
+import json,os,sys,datetime
+p=os.environ
+try:d=json.load(open(p['FSS_REPORT']));age=(datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat(d['checkedAt'].replace('Z','+00:00'))).total_seconds()
+except (OSError,ValueError,KeyError,TypeError):sys.exit('FAIL: fresh authentication receipt unavailable')
+if d.get('ok') is not True or d.get('workerDigest')!=p['FSS_DIGEST'] or d.get('database')!=p['FSS_DATABASE'] or d.get('credentialVersion')!=p['FSS_VERSION'] or d.get('taskDefinitionBindingDigest')!=p['FSS_BASE_HASH'] or not 0<=age<=180:sys.exit('FAIL: migration authentication binding changed or expired; run a fresh check')
+PY_BIND
+ exit "$?"
+fi
 NEED="$(FSS_WORK="$WORK" FSS_DIGEST="$DIGEST" FSS_PREFIX="$PREFIX" FSS_ACCOUNT="$ACCOUNT" FSS_REGION="$REGION" FSS_HOST="$DATABASE_HOST" FSS_SECRET="$SECRET" python3 - <<'PY'
 import json,os,re,sys
 p=os.environ;doc=json.load(open(p['FSS_WORK']+'/definition.json'));d=doc['taskDefinition'];cs=d.get('containerDefinitions',[])
@@ -70,13 +91,13 @@ AFTER="$(current_version)" || exit 1
 # Reread the registered base binding, so a replacement cannot silently reuse the receipt.
 release_aws "$ENVIRONMENT" ecs describe-task-definition --task-definition "$MIGRATION_TASK_DEFINITION" --include TAGS --output json > "$WORK/after.json" || exit 1
 cmp -s "$WORK/definition.json" "$WORK/after.json" || { echo 'FAIL: migration task binding changed during authentication' >&2; exit 1; }
-FSS_REPORT="$REPORTS/migration-authentication.json" FSS_DATABASE="$DATABASE" FSS_DIGEST="$DIGEST" FSS_SECRET="$SECRET" FSS_VERSION="$VERSION" FSS_TASK="$LAUNCH" python3 - <<'PY'
+FSS_REPORT="$REPORTS/migration-authentication.json" FSS_DATABASE="$DATABASE" FSS_DIGEST="$DIGEST" FSS_SECRET="$SECRET" FSS_VERSION="$VERSION" FSS_TASK="$LAUNCH" FSS_BASE_HASH="$BASE_HASH" python3 - <<'PY'
 import json,os,sys,datetime
 p=os.environ;d=json.load(open(p['FSS_REPORT']))
 if d.get('ok') is not True or d.get('database')!=p['FSS_DATABASE'] or d.get('identity')!='fss_admin' or d.get('readOnly') is not True or d.get('migrationMember') is not True or not isinstance(d.get('schemaVersion'),int):sys.exit('FAIL: migration authentication did not verify the expected identity and database')
 try:age=(datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat(d['checkedAt'].replace('Z','+00:00'))).total_seconds()
 except (KeyError,ValueError,TypeError):sys.exit('FAIL: authentication timestamp unavailable')
 if not 0<=age<=180:sys.exit('FAIL: authentication report is stale')
-d.update(workerDigest=p['FSS_DIGEST'],migrationSecretArn=p['FSS_SECRET'],credentialVersion=p['FSS_VERSION'],taskDefinition=p['FSS_TASK'])
+d.update(workerDigest=p['FSS_DIGEST'],migrationSecretArn=p['FSS_SECRET'],credentialVersion=p['FSS_VERSION'],taskDefinition=p['FSS_TASK'],taskDefinitionBindingDigest=p['FSS_BASE_HASH'])
 json.dump(d,open(p['FSS_REPORT'],'w'),indent=2)
 PY

@@ -59,7 +59,7 @@ function stub(directory: string, prefix: string): string {
     '  "ecs register-task-definition") cp "${input#file://}" "$state/registered-definition"; echo \'{"taskDefinition":{"taskDefinitionArn":"arn:aws:ecs:us-east-1:111111111111:task-definition/fss-prod-migration:2"}}\'; exit 0 ;;',
     '  "ecs deregister-task-definition") echo \'{}\'; exit 0 ;;',
     '  "ecs describe-task-definition") cat "$state/migration-definition"; exit 0 ;;',
-    `  "secretsmanager describe-secret") if [ -f "$state/credential-changes" ]; then k=$(( $(cat "$state/secret-reads" 2>/dev/null || echo 0)+1 )); echo "$k" > "$state/secret-reads"; if [ "$k" -gt 1 ]; then echo '{"VersionIdsToStages":{"version-two":["AWSCURRENT"]}}'; exit 0; fi; fi; echo '{"VersionIdsToStages":{"version-one":["AWSCURRENT"]}}'; exit 0 ;;`,
+    `  "secretsmanager describe-secret") if [ -f "$state/credential-changes" ] || [ -f "$state/credential-after-idle" ]; then k=$(( $(cat "$state/secret-reads" 2>/dev/null || echo 0)+1 )); echo "$k" > "$state/secret-reads"; limit=1; if [ -f "$state/credential-after-idle" ]; then limit=4; fi; if [ "$k" -gt "$limit" ]; then echo '{"VersionIdsToStages":{"version-two":["AWSCURRENT"]}}'; exit 0; fi; fi; echo '{"VersionIdsToStages":{"version-one":["AWSCURRENT"]}}'; exit 0 ;;`,
     '  "ecs describe-services")',
     '    desired=$(cat "$state/$name.desired" 2>/dev/null || echo 0); running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
     '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[],"events":[]}],"failures":[]}\\n\' "$name" "$desired" "$running"',
@@ -114,6 +114,7 @@ interface Options {
   readonly authentication?: Readonly<Record<string,unknown>>;
   readonly authenticationAfterIdle?: Readonly<Record<string,unknown>>;
   readonly credentialChanges?: boolean;
+  readonly credentialChangesAfterIdle?:boolean;
   readonly cloneMigrationImage?: boolean;
   /** One JSON answer per idle poll; the last repeats. */
   readonly answers?: readonly Record<string, unknown>[] | readonly string[];
@@ -143,6 +144,7 @@ function run(script: string, options: Options = {}): Run {
     writeFileSync(join(directory, 'exit-code'), '64\n');
   }
   writeFileSync(join(directory,'authentication-answer'),JSON.stringify(options.authentication??{ok:true,identity:'fss_admin',database:'fss',schemaVersion:61,readOnly:true,migrationMember:true,checkedAt:new Date().toISOString()}));
+  if(options.credentialChangesAfterIdle)writeFileSync(join(directory,'credential-after-idle'),'');
   if(options.credentialChanges)writeFileSync(join(directory,'credential-changes'),'');
   if(options.authenticationAfterIdle)writeFileSync(join(directory,'authentication-after-idle'),JSON.stringify(options.authenticationAfterIdle));
   const answers = (options.answers ?? [IDLE_ANSWER]).map(answer => (typeof answer === 'string' ? answer : JSON.stringify(answer)));
@@ -225,7 +227,7 @@ describe('production migration authentication before drain and stop',()=>{
  it('authenticates before drain and again after idle before scaling either service',()=>{
   const r=run(STOP,{production:true});
   expect(r.code,r.output).toBe(0);
-  expect(r.tasks).toEqual(['migration-auth-check','drain-on','idle-check','migration-auth-check']);
+  expect(r.tasks).toEqual(['migration-auth-check','drain-on','idle-check','migration-auth-check','idle-check']);
   expect(r.counts).toEqual({api:0,worker:0});
  });
  it('refuses a credential rotation during the preflight before any drain',()=>{
@@ -249,6 +251,14 @@ describe('production migration authentication before drain and stop',()=>{
   const r=run(STOP,{production:true,authentication:{ok:true,database:'fss',identity:'fss_admin',readOnly:true,migrationMember:true,schemaVersion:61,checkedAt:'2026-01-01T00:00:00Z'}});
   expect(r.code).not.toBe(0);expect(r.output).toContain('report is stale');expect(r.tasks).toEqual(['migration-auth-check']);expect(scaled(r.calls)).toEqual([]);
  });
+ it('refuses a credential change during the last idle check before scaling',()=>{
+  const r=run(STOP,{production:true,credentialChangesAfterIdle:true});
+  expect(r.code).not.toBe(0);expect(scaled(r.calls)).toEqual([]);expect(r.tasks.at(-1)).toBe('drain-off');
+ });
+ it('refuses when new activity makes the idle result stale during authentication',()=>{
+  const r=run(STOP,{production:true,answers:[IDLE_ANSWER,busy('a command was accepted during the authentication task')]});
+  expect(r.code).not.toBe(0);expect(scaled(r.calls)).toEqual([]);expect(r.tasks.at(-1)).toBe('drain-off');expect(r.counts).toEqual({api:2,worker:1});
+ });
  it.each(['0','1'])('runs a failed authentication check and leaves production undrained and running with force-idle=%s',(force)=>{
   const r=run(STOP,{production:true,authentication:{ok:false,reason:'authentication_failed'},env:{FSS_PROD_FORCE_IDLE:force}});
   expect(r.code).not.toBe(0);
@@ -262,7 +272,7 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
   it('turns the drain on, polls busy, busy, idle, and only then scales both services down', () => {
     const r = run(STOP, { production: true, answers: [busy('1 call is in progress; wait for it to end'), busy('1 call is in progress'), IDLE_ANSWER] });
     expect(r.code, r.output).toBe(0);
-    expect(r.tasks).toEqual(['migration-auth-check', 'drain-on', 'idle-check', 'idle-check', 'idle-check', 'migration-auth-check']);
+    expect(r.tasks).toEqual(['migration-auth-check', 'drain-on', 'idle-check', 'idle-check', 'idle-check', 'migration-auth-check', 'idle-check']);
     expect(scaled(r.calls)).toHaveLength(2);
     expect(r.counts).toEqual({ api: 0, worker: 0 });
     // The order: every task (drain, then the three checks) before the first scale-down, and
@@ -300,7 +310,7 @@ describe('stop.sh in production waits for idle before it stops anything', () => 
     // refuses every busy answer at once.
     const r = run(STOP, { production: true, answers: [busy('a job'), busy('a job'), busy('a job'), busy('a job'), IDLE_ANSWER], env: { FSS_PROD_IDLE_WAIT_SECONDS: '600' } });
     expect(r.code, r.output).toBe(0);
-    expect(r.tasks.filter(task => task === 'idle-check')).toHaveLength(5);
+    expect(r.tasks.filter(task => task === 'idle-check')).toHaveLength(6);
   });
 
   it('FSS_PROD_FORCE_IDLE=1 skips the wait, prints forced, and records it', () => {
