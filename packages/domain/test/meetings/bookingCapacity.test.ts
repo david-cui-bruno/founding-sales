@@ -87,7 +87,15 @@ describe('Cal.com capacity and recorded bookings',()=>{
     const result=await readBookingCapacity(salesperson,{client:null,now:NOW});
     expect(result.recorded.bookings.map(row=>row.meetingId)).not.toContain(other.meetingId);
     expect(result.recorded.bookings.find(row=>row.matchReason==='firm_ambiguous')).toMatchObject({firm:null,attendeeEmail:null});
-    expect(result.recorded.bookings.find(row=>row.firm?.name==='Known Office')).toMatchObject({attendeeEmail:'manager@known.example'});
+    expect(result.recorded.bookings.find(row=>row.firm?.name==='Known Office')).toMatchObject({attendeeEmail:null});
+  });
+
+  it.each(['admin','salesperson','system'] as const)('keeps matched attendee addresses out of the aggregate for %s',async(role)=>{
+    const actor=role==='system'?{kind:'system',component:'worker'} as const:{kind:'user',userId:role==='admin'?seed.alpha.admin.userId:seed.alpha.salesperson.userId,role} as const;
+    const result=await readBookingCapacity(repositoryContext(workspaceScope(seed.alpha.workspaceId,actor),db.session),{client:null,now:NOW});
+    expect(result.recorded.bookings.find(row=>row.firm?.name==='Known Office')).toMatchObject({firm:expect.objectContaining({name:'Known Office'}),attendeeEmail:null,startsAt:'2026-10-09T15:00:00.000Z'});
+    expect(result.recorded.bookings.filter(row=>row.firm!==null).every(row=>row.attendeeEmail===null)).toBe(true);
+    expect(result.recorded.bookings.find(row=>row.matchReason==='firm_ambiguous')).toMatchObject({firm:null,attendeeEmail:role==='admin'?'manager@shared.example':null});
   });
 
   it.each([{events:[],reason:'event_not_found'},{events:[{id:73},{id:74}],reason:'event_ambiguous'}])('reports $reason without guessing one provider event',async({events,reason})=>{
@@ -131,7 +139,7 @@ describe('Cal.com capacity and recorded bookings',()=>{
       else {
         expect(result.recorded.bookings.some(row=>row.firm?.name==='Known Office')).toBe(false);
         expect(result.recorded.bookings.find(row=>row.matchReason==='firm_ambiguous')).toMatchObject({firm:null,attendeeEmail:null});
-        expect(result.recorded.bookings.find(row=>row.firm?.name==='Other owner office')).toMatchObject({attendeeEmail:'manager@other-owner.example'});
+        expect(result.recorded.bookings.find(row=>row.firm?.name==='Other owner office')).toMatchObject({attendeeEmail:null});
       }
     } finally {
       await db.session.query("UPDATE workspace_memberships SET role='admin',status='active',deactivated_at=NULL WHERE workspace_id=$1 AND user_id=$2",[seed.alpha.workspaceId,seed.alpha.admin.userId]);

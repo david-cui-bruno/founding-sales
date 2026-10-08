@@ -51,7 +51,7 @@ export async function readBookingCapacity(ctx:RepositoryContext,options:{client:
   const actor=ctx.scope.actor;
   const rows=(await ctx.db.query<{id:string;state:string;starts_at:Date;ends_at:Date;last_event_at:Date;firm_id:string|null;firm_name:string|null;attendee_email:string|null;match_reason:'firm_unmatched'|'firm_ambiguous'|null}>(`
     SELECT m.id,m.state,m.starts_at,m.ends_at,m.last_event_at,m.firm_id,f.name AS firm_name,
-      CASE WHEN $4::boolean OR member.role='admin' OR f.assigned_user_id=$5::uuid THEN m.attendee_email ELSE NULL END AS attendee_email,
+      CASE WHEN m.firm_id IS NULL AND member.role='admin' THEN m.attendee_email ELSE NULL END AS attendee_email,
       r.reason AS match_reason
     FROM meetings m LEFT JOIN firms f ON f.workspace_id=m.workspace_id AND f.id=m.firm_id
     LEFT JOIN workspace_memberships member ON member.workspace_id=m.workspace_id AND member.user_id=$5::uuid AND member.status='active'
