@@ -136,3 +136,8 @@ output "task_network_configuration" {
   description = "Subnets, security group and public-address setting a one-off task must be launched with."
   value       = module.stack.task_network_configuration
 }
+
+output "availability_zones" {
+  description = "The selected isolated rehearsal database subnet zones."
+  value       = module.stack.availability_zones
+}

@@ -49,6 +49,17 @@ variable "vpc_cidr" {
   type        = string
 }
 
+variable "rehearsal_availability_zones" {
+  description = "Rehearsal-only ordered zone pair. Production always uses its fixed us-east-1a/b pair."
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
+
+  validation {
+    condition     = length(var.rehearsal_availability_zones) == 2 && contains(["us-east-1a,us-east-1b", "us-east-1a,us-east-1d"], join(",", var.rehearsal_availability_zones))
+    error_message = "rehearsal_availability_zones must be the ordered pair us-east-1a/us-east-1b or us-east-1a/us-east-1d."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
