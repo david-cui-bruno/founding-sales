@@ -46,7 +46,7 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
  const [sendStatus,setSendStatus]=useState<HumanReplySendStatus|null>(null);
  const [sendReadReady,setSendReadReady]=useState(false);
  const [sending,setSending]=useState(false);
- const sendLock=useRef(false),sendLife=useRef(0);
+ const sendLock=useRef(false),sendLife=useRef(0),sendRead=useRef(0);
  const sendUnknownSetter=useRef(setSendUnknown);sendUnknownSetter.current=setSendUnknown;
  const [context,setContext]=useState<ReplyDraftContext|null>(null);
  const [notice,setNotice]=useState<string|null>(null);
@@ -75,13 +75,13 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
  },[refresh,epoch,invalidate]);
  const checkSend=useCallback(async()=>{
   if(!ports.sendStatus||!enabled)return;
-  const mine=sendLife.current;
+  const lifetime=sendLife.current,mine=++sendRead.current;
   try{
-   const result=await ports.sendStatus({messageId});if(mine!==sendLife.current)return;
+   const result=await ports.sendStatus({messageId});if(lifetime!==sendLife.current||mine!==sendRead.current)return;
    if(result.ok){setSendStatus(result.value);setSendReadReady(true);sendUnknownSetter.current('');}
    else if(result.reason==='no_send_attempt'){setSendStatus(null);setSendReadReady(true);sendUnknownSetter.current('');}
    else {setSendReadReady(false);setNotice(result.reason);}
-  }catch{if(mine===sendLife.current)setSendReadReady(false);}
+  }catch{if(lifetime===sendLife.current&&mine===sendRead.current)setSendReadReady(false);}
  },[ports,enabled,messageId]);
  useEffect(()=>{const lifetime=sendLife;lifetime.current++;setPreview(null);setSendStatus(null);setSendReadReady(false);sendLock.current=false;setSending(false);void checkSend();return ()=>{lifetime.current++;};},[checkSend,epoch]);
  useEffect(()=>{if(!sendStatus||!['queued','dispatching','reconciling'].includes(sendStatus.state))return;const timer=setInterval(()=>void checkSend(),3000);return ()=>clearInterval(timer);},[sendStatus,checkSend]);
@@ -103,15 +103,16 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
  };
  const sendExact=async()=>{
   if(!ports.send||!preview||!context||sendLock.current||!enabled||stale||reviewed!==fingerprint||!sendReadReady||sendUnknown||sendStatus&&sendStatus.state!=='held')return;
-  sendLock.current=true;setSending(true);const mine=sendLife.current;
+  sendLock.current=true;sendRead.current++;setSending(true);const mine=sendLife.current;
   let commandId:string=crypto.randomUUID();try{const previous=JSON.parse(sendAttempt) as {revision?:string;commandId?:string};if(sendStatus?.state!=='held'&&previous.revision===preview.draftRevision&&previous.commandId)commandId=previous.commandId;}catch{/* First explicit approval. */}
   setSendAttempt(JSON.stringify({revision:preview.draftRevision,commandId}));
   try{
    const result=await ports.send({commandId,messageId,text,sourceRevision:preview.sourceRevision,draftRevision:preview.draftRevision,factRefs:context.facts.map(f=>({id:f.id,version:f.version})),envelope:preview.envelope});if(mine!==sendLife.current)return;
+   sendRead.current++;
    setReviewed('');setPreview(null);
    if(result.ok){setSendStatus(result.value);setSendUnknown('');if(result.value.state==='held')setSendAttempt('');}
    else {setSendUnknown('pending');setSendReadReady(false);setNotice(result.reason);}
-  }catch{if(mine===sendLife.current){setSendUnknown('pending');setSendReadReady(false);setReviewed('');setPreview(null);}}
+  }catch{if(mine===sendLife.current){sendRead.current++;setSendUnknown('pending');setSendReadReady(false);setReviewed('');setPreview(null);}}
   finally{if(mine===sendLife.current){sendLock.current=false;setSending(false);}}
  };
  const prepare=async()=>{
@@ -124,8 +125,13 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
    if(mine!==read.current)return;
    if(result.ok){setSuggestion(result.value);setNotice(null);}else setNotice(result.reason);
   }catch{if(mine===read.current)setNotice('generation_outcome_unknown');}
-  finally{if(mine===read.current)setGenerating(false);}
+ finally{if(mine===read.current)setGenerating(false);}
  };
+ const unknownOutcome=sendStatus?.reason==='admin_marked_delivered'
+  ?'An administrator marked the original attempt delivered. The mail provider has not confirmed delivery; the original attempt cannot be resent.'
+  :sendStatus?.reason==='admin_marked_skipped'
+   ?'An administrator marked the original attempt skipped. The mail provider has not confirmed delivery; the original attempt cannot be resent.'
+   :'Delivery remains unknown. The original attempt requires administrator review; it cannot be resent.';
  return <section aria-label="Reply composer" className="space-y-3 rounded-md border border-border p-3">
   <h3 className="font-medium">Prepare a reply</h3>
   <p className="text-sm text-muted-foreground">Drafts stay in this signed-in session while you navigate. Review every claim and commitment. Pricing remains undefined until separately approved. Only an explicit Send click requests delivery.</p>
@@ -172,7 +178,7 @@ export function ReplyComposer({messageId,ports,enabled=true}:{messageId:string;p
   {reviewed===fingerprint&&!stale?<p role="status">Reviewed exact draft. Editing it requires another review.</p>:null}
   {preview&&reviewed===fingerprint&&!stale?<section aria-label="Exact send preview"><p>Subject: {preview.subject}</p><p>To: {preview.envelope.to.join(', ')}</p><p>CC: {preview.envelope.cc.join(', ')||'None'}</p><p className="whitespace-pre-wrap">{preview.body}</p></section>:null}
   {sendUnknown?<p role="alert">The send request has no confirmed result. Check the original attempt before any further action.</p>:null}
-  {sendStatus?<p role="status">{sendStatus.state==='sent'?'Sent. Delivery was confirmed by the mail provider.':sendStatus.state==='reconciling'?'Delivery is uncertain. Callie is checking the original attempt and will not submit a replacement.':sendStatus.state==='unknown_terminal'?'Delivery remains unknown. The original attempt requires administrator review; it cannot be resent.':sendStatus.state==='dispatching'?'The original reply is being submitted. Check its status before taking another action.':sendStatus.state==='queued'?'Your explicit reply request is queued for the normal sending checks. It has not been confirmed sent.':'This reply was held before submission. Refresh context and review the exact draft before a fresh Send click.'}</p>:null}
+  {sendStatus?<p role="status">{sendStatus.state==='sent'?'Sent. Delivery was confirmed by the mail provider.':sendStatus.state==='reconciling'?'Delivery is uncertain. Callie is checking the original attempt and will not submit a replacement.':sendStatus.state==='unknown_terminal'?unknownOutcome:sendStatus.state==='dispatching'?'The original reply is being submitted. Check its status before taking another action.':sendStatus.state==='queued'?'Your explicit reply request is queued for the normal sending checks. It has not been confirmed sent.':'This reply was held before submission. Refresh context and review the exact draft before a fresh Send click.'}</p>:null}
   <p className="text-xs text-muted-foreground">Review confirms your judgment about this exact draft, including unsupported claims and commitments. It does not approve shared facts or authorize sending.</p>
  </section>;
 }

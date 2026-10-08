@@ -21,10 +21,12 @@ CREATE TABLE human_reply_send_intents (
  in_reply_to text NOT NULL CHECK(length(in_reply_to) BETWEEN 1 AND 998),
  reference_ids jsonb NOT NULL CHECK(jsonb_typeof(reference_ids)='array' AND jsonb_array_length(reference_ids)<=101),
  author_address text NOT NULL CHECK(author_address ~ '^[^[:space:]<>]+@[^[:space:]<>]+$'),
+ outreach_plan_id uuid,
  refusal text CHECK(refusal ~ '^[a-z0-9_:,-]{1,200}$'),
  PRIMARY KEY(workspace_id,message_id),
  UNIQUE(workspace_id,outbound_message_id),
  FOREIGN KEY(workspace_id,outbound_message_id) REFERENCES outbound_messages(workspace_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(workspace_id,outreach_plan_id) REFERENCES outreach_plans(workspace_id,id),
  CHECK(NOT authorized OR refusal IS NULL)
 );
 GRANT SELECT,INSERT,UPDATE,DELETE ON human_reply_send_intents TO app_runtime,migration;

@@ -161,8 +161,21 @@ export function deterministicMessageId(outboundMessageId: string, sendingDomain:
   return `<fss.${outboundMessageId}@${sendingDomain}>`;
 }
 
+/** Human source identity survives loss of both the approval and fence during PITR. */
+export function deterministicHumanReplyMessageId(sourceMessageId: string, outboundMessageId: string, sendingDomain: string): string {
+  return `<fss.reply.${sourceMessageId}.${outboundMessageId}@${sendingDomain}>`;
+}
+
+export function humanReplySourceIdOfMessageId(header: string): string | null {
+  const match = /^<fss\.reply\.([0-9a-f-]{36})\.([0-9a-f-]{36})@[^<>@]+>$/u.exec(header.trim());
+  return match && CANONICAL_UUID.test(match[1]!) && CANONICAL_UUID.test(match[2]!) ? match[1]! : null;
+}
+
 /** The fence id inside a deterministic Message-ID, or null if it is not one of ours. */
 export function fenceIdOfMessageId(header: string): string | null {
+  if (humanReplySourceIdOfMessageId(header) !== null) {
+    return /^<fss\.reply\.[0-9a-f-]{36}\.([0-9a-f-]{36})@[^<>@]+>$/u.exec(header.trim())?.[1] ?? null;
+  }
   const match = /^<fss\.([0-9a-f-]{36})@[^<>@]+>$/.exec(header.trim());
   return match?.[1] ?? null;
 }
@@ -174,14 +187,15 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
  * mailbox, or null (Appendix E step 3).
  *
  * The marker is the *whole* deterministic Message-ID, not a prefix of it:
- * `<fss.{fence uuid}@{the sending mailbox's domain}>`, exactly as
- * `deterministicMessageId` writes it from the mailbox `prepareOutboundMessage` resolved.
+ * `<fss.{fence uuid}@{the sending mailbox's domain}>` for sequence steps, or
+ * `<fss.reply.{source uuid}.{fence uuid}@{domain}>` for explicit human replies. The
+ * latter preserves the original question through loss of its fence after a restore.
  * Every FSS send carries it, because the header is written into the fence before the
  * one Gmail call and the MIME builder copies it verbatim; nothing else Gmail or a person
  * sends does, because Gmail mints `<CA…@mail.gmail.com>` ids for everything it composes.
  *
  * The domain is part of the marker for the step that reads it. A message in this
- * mailbox's Sent folder whose id has the `fss.<uuid>` shape but another domain was not
+ * mailbox's Sent folder whose id has either FSS shape but another domain was not
  * written by FSS for this mailbox — a copy, a forward that kept the header, another
  * system's scheme — and step 3 must not turn it into a tombstone that stops a real step
  * from sending. Never a subject or body heuristic: those are what a person types.

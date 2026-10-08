@@ -10,6 +10,7 @@ export const HUMAN_REPLY_CONSTRAINT_CASES:readonly OutboundCase[]=[
  {constraint:'human_reply_send_intents_workspace_id_outbound_message_id_key',run:async f=>{await insert(f);return insert(f);}},
  {constraint:'human_reply_send_intents_workspace_id_fkey',run:f=>insert(f,{workspace_id:randomUUID()})},
  {constraint:'human_reply_send_intents_workspace_id_outbound_message_id_fkey',run:f=>insert(f,{outbound_message_id:f.outbound.beta.sentFenceId})},
+ {constraint:'human_reply_send_intents_workspace_id_outreach_plan_id_fkey',run:f=>insert(f,{outreach_plan_id:randomUUID()})},
  ...([
   ['role','operator'],['revision',0],['source_revision','body'],['draft_revision','body'],['fact_refs','{}'],
   ['envelope',JSON.stringify({to:[],cc:[],body:'forbidden'})],['provider_thread_id',''],['in_reply_to',''],['reference_ids','{}'],['author_address','bad address'],['refusal','raw private prose']

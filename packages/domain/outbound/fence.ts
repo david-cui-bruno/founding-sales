@@ -7,6 +7,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   PLACEMENT_RULE_VERSION,
   deterministicMessageId,
+  deterministicHumanReplyMessageId,
   refuseSend,
   acceptSend,
   type OutboundOutcomeState,
@@ -16,13 +17,15 @@ import type { OutboundState } from '@fss/contracts';
 
 /** Human callers supply already reviewed final bytes. Dispatch still revalidates authority. */
 export async function prepareHumanReplyFence(context:RepositoryContext,input:{draftId:string;mailboxId:string;firmId:string;contactId:string;opportunityId:string|null;address:string;routeId:string;routeVersion:number;subject:string;body:string;sourceZone:string}):Promise<SendResult<PreparedFence>>{
+ const existing=await readFenceByDraftId(context,input.draftId);
+ if(existing)return acceptSend({outboundMessageId:existing.id,created:false});
  const issue=sendBodyIssue(input.body);
  if(issue!==null||hasOptOutLink(input.subject))return refuseSend('footer_not_composed',issue??'optout_link');
  const id=(await context.db.query<{id:string}>('SELECT gen_random_uuid() AS id')).rows[0]!.id;
  const domain=(await context.db.query<{domain:string}>('SELECT domain FROM sending_domains WHERE workspace_id=$1 AND is_primary',[context.scope.workspaceId])).rows[0]?.domain;
  if(!domain)return refuseSend('sending_domain_unknown');
  await context.db.query(`INSERT INTO outbound_messages(id,workspace_id,mailbox_id,origin_kind,draft_id,firm_id,contact_id,opportunity_id,recipient_address,recipient_route_id,recipient_route_version,subject,body,rendered_hash,provider_message_id_header,send_at,source_zone,placement_rule_version)
- VALUES($1,$2,$3,'draft',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp(),$15,'human-reply.1')`,[id,context.scope.workspaceId,input.mailboxId,input.draftId,input.firmId,input.contactId,input.opportunityId,input.address,input.routeId,input.routeVersion,input.subject,input.body,renderedHash(input.subject,input.body),deterministicMessageId(id,domain),input.sourceZone]);
+ VALUES($1,$2,$3,'draft',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp(),$15,'human-reply.1')`,[id,context.scope.workspaceId,input.mailboxId,input.draftId,input.firmId,input.contactId,input.opportunityId,input.address,input.routeId,input.routeVersion,input.subject,input.body,renderedHash(input.subject,input.body),deterministicHumanReplyMessageId(input.draftId,id,domain),input.sourceZone]);
  await appendEvent(context,{outboundMessageId:id,fromState:null,toState:'prepared',actor:describeActor(context),detail:{origin:'human_reply'}});
  return acceptSend({outboundMessageId:id,created:true});
 }
@@ -462,6 +465,15 @@ export async function readFenceByStepExecution(
   return row === undefined ? null : toFence(row);
 }
 
+/** Original human source identity remains fenced even if its approval metadata is gone. */
+export async function readFenceByDraftId(context: RepositoryContext, draftId: string): Promise<OutboundFenceRow | null> {
+  const {rows} = await context.db.query<FenceDbRow>(
+    `SELECT ${FENCE_COLUMNS} FROM outbound_messages WHERE workspace_id=$1 AND draft_id=$2`,
+    [context.scope.workspaceId,draftId],
+  );
+  return rows[0] === undefined ? null : toFence(rows[0]);
+}
+
 /**
  * The fence of an outgoing message the sync imported, or null if FSS did not send it
  * (12.2, 12.7, Appendix G 19; lane G15).
@@ -597,6 +609,11 @@ export interface SentTombstoneInput {
   readonly actor?: string | undefined;
 }
 
+export interface HumanReplySentTombstoneInput extends Omit<SentTombstoneInput,'enrollmentId'|'stepExecutionId'|'opportunityId'> {
+  readonly draftId: string;
+  readonly opportunityId: string | null;
+}
+
 /**
  * Insert a `sent` fence for a send whose fence the restored database never had
  * (Appendix E step 3, lane g73).
@@ -617,27 +634,28 @@ export interface SentTombstoneInput {
  */
 export async function insertSentTombstone(
   context: RepositoryContext,
-  input: SentTombstoneInput,
+  input: SentTombstoneInput | HumanReplySentTombstoneInput,
 ): Promise<SendResult<OutboundFenceRow>> {
   const subject = tombstoneSubject(input.subject);
+  const human = 'draftId' in input;
   const { rows } = await context.db.query<FenceDbRow>(
     `INSERT INTO outbound_messages
        (id, workspace_id, mailbox_id, state, origin_kind, enrollment_id, step_execution_id, firm_id,
         contact_id, opportunity_id, recipient_address, recipient_route_id, recipient_route_version,
         subject, body, template_version_id, rendered_hash, provider_message_id_header, send_at,
         source_zone, placement_rule_version, attempt_token, dispatch_started_at, sent_at,
-        provider_message_id, provider_thread_id, business_date)
-     VALUES ($1, $2, $3, 'sent', 'step_execution', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, $14,
+        provider_message_id, provider_thread_id, business_date, draft_id)
+     VALUES ($1, $2, $3, 'sent', $22, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, $14,
              $15, $16::timestamptz, 'UTC', $17, gen_random_uuid(), $16::timestamptz, $16::timestamptz,
-             $18, $19, $20::date)
+             $18, $19, $20::date, $21)
      ON CONFLICT DO NOTHING
      RETURNING ${FENCE_COLUMNS}`,
     [
       input.fenceId,
       context.scope.workspaceId,
       input.mailboxId,
-      input.enrollmentId,
-      input.stepExecutionId,
+      human ? null : input.enrollmentId,
+      human ? null : input.stepExecutionId,
       input.firmId,
       input.contactId,
       input.opportunityId,
@@ -653,6 +671,8 @@ export async function insertSentTombstone(
       input.providerMessageId,
       input.providerThreadId,
       input.businessDate,
+      human ? input.draftId : null,
+      human ? 'draft' : 'step_execution',
     ],
   );
   const row = rows[0];

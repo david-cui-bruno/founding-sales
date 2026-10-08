@@ -10,6 +10,14 @@ import type { SentFolderMessage } from '../outbound/sentFolder.ts';
 import { completeEmailStep } from '../sequences/executions.ts';
 import { nextUnfinishedExecution } from '../sequences/rows.ts';
 import { businessDateOf } from '../today/snapshots.ts';
+import {readMessage,recordMessage} from '../mail/messages.ts';
+import {directSendTargetOf,recordMatches} from '../mail/matching.ts';
+import {applyDirectSendEffects} from '../mail/effects.ts';
+import {readMailbox} from '../mail/mailboxes.ts';
+import {readFirm} from '../crm/firms.ts';
+import {humanReplySourceIdOfMessageId} from '../outbound/types.ts';
+import {lockSendGateForStopFact} from '../policy/sendGate.ts';
+import {applyHumanReplyDelivery} from '../replies/delivery.ts';
 
 /**
  * The missing fences after a point-in-time restore: what one FSS send found in a Sent
@@ -87,6 +95,7 @@ export type UnattachedReason =
   | 'recipient_unreadable'
   | 'several_live_enrollments'
   | 'assignee_not_mailbox_owner'
+  | 'human_reply_unresolved'
   | 'no_open_email_step'
   | 'open_step_has_fence';
 
@@ -121,8 +130,8 @@ export type SentMessageRecovery =
   | {
       readonly outcome: 'tombstoned';
       readonly outboundMessageId: string;
-      readonly stepExecutionId: string;
-      readonly enrollmentId: string;
+      readonly stepExecutionId: string | null;
+      readonly enrollmentId: string | null;
       readonly stepCompleted: boolean;
     }
   | { readonly outcome: 'unmatched'; readonly reason: 'no_live_enrollment' }
@@ -240,6 +249,8 @@ export async function recoverSentFolderMessage(
   input: RecoverSentMessageInput,
 ): Promise<SentMessageRecovery> {
   const { message, mailbox } = input;
+  const humanSourceId = humanReplySourceIdOfMessageId(message.rfcMessageId);
+  if(humanSourceId !== null) await lockSendGateForStopFact(context);
   const fence = await readFenceForSentMessage(context, {
     fenceId: message.fenceId,
     mailboxId: mailbox.id,
@@ -247,6 +258,10 @@ export async function recoverSentFolderMessage(
   });
 
   if (fence !== null) {
+    if(humanSourceId !== null && (fence.originKind !== 'draft' || fence.draftId !== humanSourceId || fence.mailboxId !== mailbox.id)) {
+      return {outcome:'unattached',reason:'human_reply_unresolved',firmIds:[],enrollmentIds:[]};
+    }
+    if(fence.originKind === 'draft') await lockSendGateForStopFact(context);
     if (fence.state !== 'prepared' && fence.state !== 'held') {
       return { outcome: 'present', outboundMessageId: fence.id, state: fence.state };
     }
@@ -287,6 +302,7 @@ export async function recoverSentFolderMessage(
     await releaseHoldsOfFence(context, fence.id);
     const stepCompleted =
       fence.stepExecutionId === null ? false : await completeFromSend(context, fence.stepExecutionId, message.sentAt);
+    if(fence.originKind === 'draft') await applyHumanReplyDelivery(context,fence.id);
     return {
       outcome: 'pre_dispatch_marked_sent',
       outboundMessageId: fence.id,
@@ -295,6 +311,25 @@ export async function recoverSentFolderMessage(
       sentBytesVerified: verifiedBytes !== undefined && !refusedBytes,
       ...(refusedBytes ? { sentBytesUnverifiedReason: 'optout_link' as const } : {}),
     };
+  }
+
+  if(humanSourceId !== null){
+    const source=await readMessage(context,humanSourceId),target=source?await directSendTargetOf(context,source.id):undefined;
+    const firm=target?await readFirm(context,target.firmId):null;
+    const envelope=message.humanReplyEnvelope,mailboxRow=await readMailbox(context,mailbox.id);
+    if(!source||source.direction!=='incoming'||source.mailboxId!==mailbox.id||source.providerThreadId!==message.providerThreadId||!target?.contactId||!firm||firm.status!=='active'||firm.assigned_user_id!==mailbox.ownerUserId||!message.recipientAddress||source.headerFrom!==message.recipientAddress||!envelope||envelope.from!==mailboxRow?.emailAddress||envelope.to.length!==1||envelope.to[0]!==message.recipientAddress||envelope.cc.length>10||new Set([...envelope.to,...envelope.cc]).size!==envelope.to.length+envelope.cc.length||envelope.inReplyTo!==source.rfcMessageId){
+      return {outcome:'unattached',reason:'human_reply_unresolved',firmIds:firm?[firm.id]:[],enrollmentIds:[]};
+    }
+    const recipients=[...envelope.to,...envelope.cc];
+    const recipientRows=(await context.db.query<{address:string;contact_id:string}>(`SELECT e.address,e.contact_id FROM email_addresses e JOIN contacts c ON c.workspace_id=e.workspace_id AND c.id=e.contact_id AND c.firm_id=e.firm_id WHERE e.workspace_id=$1 AND e.firm_id=$2 AND e.address=ANY($3::text[]) AND e.eligibility<>'retired' AND NOT EXISTS(SELECT 1 FROM mailboxes b WHERE b.workspace_id=e.workspace_id AND b.email_address=e.address)`,[context.scope.workspaceId,firm.id,recipients])).rows;
+    if(recipients.some(address=>recipientRows.filter(row=>row.address===address).length!==1))return {outcome:'unattached',reason:'human_reply_unresolved',firmIds:[firm.id],enrollmentIds:[]};
+    const route=await routeAt(context,target.contactId,message.recipientAddress);
+    const inserted=await insertSentTombstone(context,{draftId:source.id,fenceId:message.fenceId,mailboxId:mailbox.id,firmId:firm.id,contactId:target.contactId,opportunityId:target.opportunityId,recipientAddress:message.recipientAddress,recipientRouteId:route?.id??null,recipientRouteVersion:route?.version??null,subject:message.subject,rfcMessageId:message.rfcMessageId,providerMessageId:message.providerMessageId,providerThreadId:message.providerThreadId,sentAt:message.sentAt,businessDate:await businessDateOf(context,message.sentAt),...(input.actor===undefined?{}:{actor:input.actor})});
+    if(!inserted.ok)return {outcome:'unattached',reason:'human_reply_unresolved',firmIds:[firm.id],enrollmentIds:[]};
+    const stored=await recordMessage(context,{mailboxId:mailbox.id,metadata:{providerMessageId:message.providerMessageId,providerThreadId:message.providerThreadId,rfcMessageId:message.rfcMessageId.replace(/^<|>$/gu,''),direction:'outgoing',internalDate:message.sentAt,headerFrom:envelope.from,headerTo:envelope.to,headerCc:envelope.cc,subject:message.subject,referenceMessageIds:envelope.referenceIds.slice(0,100),inReplyTo:envelope.inReplyTo,autoSubmitted:null,listId:null,labelIds:['SENT'],attachments:[]}});
+    await recordMatches(context,{messageId:stored.message.id,candidates:[target]});
+    await applyDirectSendEffects(context,{message:stored.message,candidate:target});
+    return {outcome:'tombstoned',outboundMessageId:inserted.value.id,stepExecutionId:null,enrollmentId:null,stepCompleted:false};
   }
 
   // No fence at all: the send happened after the restore point.

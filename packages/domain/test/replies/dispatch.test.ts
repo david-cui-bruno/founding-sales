@@ -4,7 +4,7 @@ import {createOutboundWorld,type OutboundWorld} from '../outbound/support/outbou
 import {seedFirm,openExtraSession,pausingAtTokenRefresh} from '../outbound/support/dispatchFixtures.ts';
 import {repositoryContext,workspaceScope} from '../../db/workspaceScope.ts';
 import {withTransaction} from '../../db/queryable.ts';
-import {recordMessage,storeMessageBody} from '../../mail/messages.ts';
+import {recordMessage,storeMessageBody,recordedProviderMessageIds,readMessageBody,discardMessageBody} from '../../mail/messages.ts';
 import {recordMatches} from '../../mail/matching.ts';
 import {setProspectingAuthorization} from '../../outreach/authorization.ts';
 import {previewHumanReply,requestHumanReplySend,readHumanReplySend} from '../../replies/dispatch.ts';
@@ -14,21 +14,31 @@ import {recordSuppression} from '../../suppression/events.ts';
 import {recordingSuppressionJournal} from '../../suppression/journal.ts';
 import {receiveCalcomEvent} from '../../meetings/calcom.ts';
 import {applyDirectSendEffects} from '../../mail/effects.ts';
-import {reassignFirm} from '../../crm/firms.ts';
+import {reassignFirm,resolveZoneForFirm} from '../../crm/firms.ts';
 import {saveAnswerBlock,approveAnswerBlock,retireAnswerBlock} from '../../outreach/facts.ts';
 import {reconcileOutboundMessage} from '../../outbound/reconcile.ts';
 import type {HumanReplySendInput} from '../../../contracts/src/replyComposer.ts';
 import {setAdminCap} from '../../outbound/ramp.ts';
+import {previewDeletion,commitDeletion} from '../../retention/deletion.ts';
+import {resolveUnknownTerminal} from '../../outbound/fence.ts';
 
 let world:OutboundWorld;
 beforeAll(async()=>{world=await createOutboundWorld();});
 afterAll(async()=>world.stop());
-async function fixture(withCc=false){
+async function fixture(withCc=false,planOnly=false,referenceCount=0){
  const member=world.alpha.workspace.salesperson;
  const ctx=repositoryContext(workspaceScope(world.alpha.workspace.workspaceId,{kind:'user',userId:member.userId,role:'salesperson'}),world.database.session);
  const admin=repositoryContext(workspaceScope(ctx.scope.workspaceId,{kind:'user',userId:world.alpha.workspace.admin.userId,role:'admin'}),ctx.db);
  const tx=<T>(work:()=>Promise<T>)=>withTransaction(world.database.session,work);
  const firm=await seedFirm(world,world.alpha,'human-send');
+ let planId:string|null=null;
+ if(planOnly){
+  await ctx.db.query('DELETE FROM opportunities WHERE workspace_id=$1 AND id=$2',[ctx.scope.workspaceId,firm.opportunityId]);
+  const candidate=randomUUID(),run=randomUUID();planId=randomUUID();
+  await ctx.db.query("INSERT INTO sourcing_candidates(workspace_id,id,identity_key,payload,status,revision) VALUES($1,$2,$3,'{}','needs_review',1)",[ctx.scope.workspaceId,candidate,randomUUID().replaceAll('-','').repeat(2)]);
+  await ctx.db.query("INSERT INTO sourcing_qualification_runs(workspace_id,id,candidate_id,candidate_revision,fingerprint,prompt_version,policy_version,model_name) VALUES($1,$2,$3,1,$4,'fixture','fixture','fixture')",[ctx.scope.workspaceId,run,candidate,'e'.repeat(64)]);
+  await ctx.db.query("INSERT INTO outreach_plans(workspace_id,id,firm_id,contact_id,owner_user_id,mailbox_id,candidate_id,qualification_run_id,lane,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'email_first','reply_pending')",[ctx.scope.workspaceId,planId,firm.firmId,firm.contactId,member.userId,world.alpha.mailboxId,candidate,run]);
+ }
  await ctx.db.query("UPDATE firms SET time_zone='Etc/UTC',time_zone_confidence='high',time_zone_source='recorded',time_zone_rule_version='fixture' WHERE workspace_id=$1 AND id=$2",[ctx.scope.workspaceId,firm.firmId]);
  const cc=withCc?[`colleague-${randomUUID()}@prospect.example.test`]:[];
  if(withCc){
@@ -40,16 +50,16 @@ async function fixture(withCc=false){
  const sessionId=randomUUID();
  await ctx.db.query("INSERT INTO sessions(workspace_id,id,user_id,device_id,access_token_hash,expires_at,reauthenticate_after) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour',now()+interval '30 days')",[ctx.scope.workspaceId,sessionId,member.userId,member.deviceId,randomUUID().replaceAll('-','')+'a'.repeat(32)]);
  const threadId=randomUUID();
- const incoming=await tx(()=>recordMessage(ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:threadId,rfcMessageId:`${threadId}@example.test`,direction:'incoming',internalDate:new Date(Date.now()-1000).toISOString(),headerFrom:firm.address,headerTo:[world.alpha.address],headerCc:cc,subject:'Can you help?',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]}}));
- await tx(()=>recordMatches(ctx,{messageId:incoming.message.id,candidates:[{firmId:firm.firmId,contactId:firm.contactId,opportunityId:firm.opportunityId,rule:'participant',viaClosedOpportunity:false}]}));
+ const incoming=await tx(()=>recordMessage(ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:randomUUID(),providerThreadId:threadId,rfcMessageId:`${threadId}@example.test`,direction:'incoming',internalDate:new Date(Date.now()-1000).toISOString(),headerFrom:firm.address,headerTo:[world.alpha.address],headerCc:cc,subject:'Can you help?',referenceMessageIds:Array.from({length:referenceCount},(_,i)=>`prior-${i}@example.test`),inReplyTo:null,autoSubmitted:null,listId:null,labelIds:[],attachments:[]}}));
+ await tx(()=>recordMatches(ctx,{messageId:incoming.message.id,candidates:[{firmId:firm.firmId,contactId:firm.contactId,opportunityId:planOnly?null:firm.opportunityId,outreachPlanId:planId,rule:'participant',viaClosedOpportunity:false}]}));
  await tx(()=>storeMessageBody(ctx,{messageId:incoming.message.id,text:'Could you explain Callie?',truncated:false}));
  const input={messageId:incoming.message.id,text:'Callie helps coordinate maintenance requests.\n\nDavid',factRefs:[],envelope:{to:[firm.address],cc}};
  const preview=await previewHumanReply(ctx,input);if(!preview.ok)throw new Error(preview.reason);
  const send:HumanReplySendInput={...input,commandId:randomUUID(),clientVersion:'1.0.0',sourceRevision:preview.value.sourceRevision,draftRevision:preview.value.draftRevision};
- return {ctx,admin,tx,firm,threadId,input,cc,preview:preview.value,send,identity:{sessionId,deviceId:member.deviceId}};
+ return {ctx,admin,tx,firm,planId,threadId,input,cc,preview:preview.value,send,identity:{sessionId,deviceId:member.deviceId}};
 }
 
-for(const change of ['stop','booking','new question','manual Gmail answer','reassignment','retired fact','ended session'] as const)it(`a ${change} committed during token refresh refuses the exact human reply with zero submissions`,async()=>{
+for(const change of ['stop','booking','new question','manual Gmail answer','reassignment','retired fact','ended session','recipient zone change'] as const)it(`a ${change} committed during token refresh refuses the exact human reply with zero submissions`,async()=>{
  const f=await fixture(),second=await openExtraSession(world),human=repositoryContext(f.ctx.scope,second.session),admin=repositoryContext(f.admin.scope,second.session);
  try{
   let fact:{id:string;version:number}|null=null;
@@ -63,6 +73,7 @@ for(const change of ['stop','booking','new question','manual Gmail answer','reas
   const paused=pausingAtTokenRefresh(world.alpha.gmail,()=>withTransaction(second.session,async()=>{
    if(change==='stop')await recordSuppression(admin,{scope:'firm',firmId:f.firm.firmId,source:'prospect_opt_out',channel:'email',commandId:randomUUID(),journal:recordingSuppressionJournal()});
    if(change==='reassignment')await reassignFirm(admin,{firmId:f.firm.firmId,toUserId:world.alpha.workspace.admin.userId,reason:'Controlled race'});
+   if(change==='recipient zone change')await resolveZoneForFirm(admin,{firmId:f.firm.firmId,recordedZone:'America/Chicago'});
    if(change==='retired fact')await retireAnswerBlock(admin,fact!);
    if(change==='ended session')await second.session.query("UPDATE sessions SET status='ended',ended_at=now(),end_reason='signed_out' WHERE workspace_id=$1 AND id=$2",[f.ctx.scope.workspaceId,f.identity.sessionId]);
    if(change==='booking'){
@@ -118,6 +129,54 @@ it('dispatches reviewed bytes once in the original thread and reports confirmed 
  expect(await readReplyDraftContext(f.ctx,{messageId:f.input.messageId,factRefs:[]})).toEqual({ok:false,reason:'answered_manually'});
 });
 
+it('deleting a prospect removes reply metadata and a completed-job replay cannot recreate correspondence',async()=>{
+ const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const before=world.alpha.gmail.sends.length,id=queued.value.outboundMessageId;
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'sent'});
+ const sent=await readHumanReplySend(f.ctx,f.input);if(!sent.ok||!sent.value.providerMessageId)throw new Error('Expected durable delivery');
+ const providerMessageIds=[sent.value.providerMessageId];
+ expect((await recordedProviderMessageIds(f.ctx,{mailboxId:world.alpha.mailboxId,providerMessageIds})).size).toBe(1);
+ const preview=await f.tx(()=>previewDeletion(f.admin,{targetKind:'firm',firmId:f.firm.firmId}));if(!preview.ok)throw new Error(preview.reason);
+ expect(preview.value.removes['human_reply_send_intents']).toBe(1);
+ const deleted=await f.tx(()=>commitDeletion(f.admin,{requestId:preview.value.requestId,previewHash:preview.value.previewHash,commandId:randomUUID(),journal:recordingSuppressionJournal()}));
+ expect(deleted.ok).toBe(true);
+ expect((await recordedProviderMessageIds(f.ctx,{mailboxId:world.alpha.mailboxId,providerMessageIds})).size).toBe(0);
+ expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'sent',outboundMessageId:id,providerMessageId:sent.value.providerMessageId}});
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'already_terminal'});
+ expect((await recordedProviderMessageIds(f.ctx,{mailboxId:world.alpha.mailboxId,providerMessageIds})).size).toBe(0);
+ expect(world.alpha.gmail.sends).toHaveLength(before+1);
+});
+
+it('a plan-only founder-sales conversation records the explicit reply as answered after one provider submission',async()=>{
+ const f=await fixture(false,true),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const before=world.alpha.gmail.sends.length,id=queued.value.outboundMessageId;
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'sent'});
+ expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'sent'}});
+ expect(await readReplyDraftContext(f.ctx,{messageId:f.input.messageId,factRefs:[]})).toEqual({ok:false,reason:'answered_manually'});
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'already_terminal'});
+ expect(world.alpha.gmail.sends).toHaveLength(before+1);
+});
+
+it('a full retained reference chain still records provider delivery and answers the original conversation',async()=>{
+ const f=await fixture(false,false,100),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:queued.value.outboundMessageId})).toMatchObject({outcome:'sent'});
+ expect(await readReplyDraftContext(f.ctx,{messageId:f.input.messageId,factRefs:[]})).toEqual({ok:false,reason:'answered_manually'});
+});
+
+it('replaying a sent reply does not restore its body after established retention removes it',async()=>{
+ const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const id=queued.value.outboundMessageId;
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'sent'});
+ const sent=await readHumanReplySend(f.ctx,f.input);if(!sent.ok||!sent.value.providerMessageId||!sent.value.sentAt)throw new Error('Expected durable delivery');
+ const existing=await f.tx(()=>recordMessage(f.ctx,{mailboxId:world.alpha.mailboxId,metadata:{providerMessageId:sent.value.providerMessageId!,providerThreadId:f.threadId,rfcMessageId:null,direction:'outgoing',internalDate:sent.value.sentAt!,headerFrom:world.alpha.address,headerTo:[f.firm.address],headerCc:[],subject:'Can you help?',referenceMessageIds:[],inReplyTo:null,autoSubmitted:null,listId:null,labelIds:['SENT'],attachments:[]}}));
+ expect(existing.inserted).toBe(false);
+ expect(await readMessageBody(f.ctx,existing.message.id)).toMatchObject({text:f.preview.body});
+ await f.tx(()=>discardMessageBody(f.ctx,existing.message.id));
+ expect(await readMessageBody(f.ctx,existing.message.id)).toBeNull();
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha),{outboundMessageId:id})).toMatchObject({outcome:'already_terminal'});
+ expect(await readMessageBody(f.ctx,existing.message.id)).toBeNull();
+});
+
 it('uncertain acceptance survives another connection and command, then reconciles the original message without resubmission',async()=>{
  const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
  const gmail=world.clientWith(world.alpha,{sendBehaviour:'indeterminate_but_delivered'}),id=queued.value.outboundMessageId;
@@ -133,6 +192,19 @@ it('uncertain acceptance survives another connection and command, then reconcile
   expect(await readReplyDraftContext(restarted,{messageId:f.input.messageId,factRefs:[]})).toEqual({ok:false,reason:'answered_manually'});
   expect(gmail.sends).toHaveLength(1);
  }finally{await other.close();}
+});
+
+for(const resolution of ['delivered','skipped'] as const)it(`terminal uncertainty reports the administrator's ${resolution} disposition without claiming provider confirmation or retrying`,async()=>{
+ const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const gmail=world.clientWith(world.alpha,{sendBehaviour:'indeterminate'}),id=queued.value.outboundMessageId;
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha,{gmail}),{outboundMessageId:id})).toMatchObject({outcome:'reconciling'});
+ // Backdate both ends of the controlled observation window, preserving its ordering.
+ await f.ctx.db.query("UPDATE outbound_messages SET reconcile_started_at=clock_timestamp()-interval '25 hours',reconcile_deadline_at=clock_timestamp()-interval '1 hour' WHERE workspace_id=$1 AND id=$2",[f.ctx.scope.workspaceId,id]);
+ expect(await reconcileOutboundMessage(f.ctx,world.reconcileDeps(world.alpha,{gmail}),{outboundMessageId:id})).toMatchObject({outcome:'unknown_terminal'});
+ expect(await f.tx(()=>resolveUnknownTerminal(f.admin,{outboundMessageId:id,resolution,adminUserId:world.alpha.workspace.admin.userId}))).toMatchObject({ok:true});
+ expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'unknown_terminal',reason:`admin_marked_${resolution}`,providerMessageId:null,sentAt:null}});
+ expect(await dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha,{gmail}),{outboundMessageId:id})).toMatchObject({outcome:'already_terminal'});
+ expect(gmail.sends).toHaveLength(1);
 });
 
 it('an explicit human approval cannot override a lower mailbox cap',async()=>{
