@@ -7,9 +7,12 @@ import {createElectronSocialRuntime} from './social/electronRuntime.ts';
 import {probeLinkedInIdentity} from './social/identityProbe.ts';
 import {createSocialImageImport} from './social/imageImport.ts';
 import { join } from 'node:path';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, powerMonitor } from 'electron';
+import { app, BrowserWindow, Notification, clipboard, dialog, ipcMain, Menu, shell, powerMonitor } from 'electron';
+import {createElectronNotificationPort} from './notifications/native.ts';
+import {createNotificationRuntime} from './notifications/runtime.ts';
+import {defaultNotificationActivationIdentifier} from './notifications/activation.ts';
 import { z } from 'zod';
-import { uuid, LINKEDIN_ADAPTER_VERSION } from '@fss/contracts';
+import { uuid, LINKEDIN_ADAPTER_VERSION,type TodayActionTarget } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { BUNDLE_ORIGIN } from './bundleScheme.ts';
@@ -30,6 +33,7 @@ import { createRecordingStore } from './recordings/store.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
 import type { NavigationTarget, SessionChange } from '../shared/contract.ts';
+import {actionNavigationSchema} from '../shared/contract.ts';
 
 /**
  * The Electron main process.
@@ -122,6 +126,24 @@ export function registerBridge(manager: SessionManager): void {
 let mainWindow: BrowserWindow | null = null;
 let windowLoaded = false;
 let pendingRoute: NavigationTarget | null = null;
+let pendingAction:{target:TodayActionTarget;generation:number;current:()=>boolean}|null=null;
+let actionNotifications:ReturnType<typeof createNotificationRuntime>|null=null;
+const pendingNativeActivations=new Set<string>();
+export function captureActionNotificationActivation(input:unknown):void{
+ const identifier=defaultNotificationActivationIdentifier(input);
+ if(identifier===null)return;
+ if(actionNotifications!==null)actionNotifications.activate(identifier);
+ else if(pendingNativeActivations.size<25)pendingNativeActivations.add(identifier);
+}
+function showActionTarget(target:TodayActionTarget,generation:number,current:()=>boolean):void{
+  if(!current())return;
+  const parsed=actionNavigationSchema.safeParse({target,generation});
+  if(!parsed.success)return;
+  const window=mainWindow;
+  if(window===null||window.isDestroyed()||!windowLoaded){pendingAction={target,generation,current};return;}
+  if(window.isMinimized())window.restore();
+  window.focus();window.webContents.send(IPC_CHANNELS.navigateAction,parsed.data);
+}
 
 /**
  * Bring the window forward on `route`: the Window menu's ⌘1–⌘6 and every deep link.
@@ -211,6 +233,8 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
   const queued = pendingRoute;
   pendingRoute = null;
   if (queued !== null) showRoute(queued);
+  const action=pendingAction;pendingAction=null;
+  if(action!==null)showActionTarget(action.target,action.generation,action.current);
   return window;
 }
 
@@ -222,6 +246,8 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
  * Nothing here opens a window: there is one, and the menu shows a view in it.
  */
 export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): void {
+  let notifications:ReturnType<typeof createNotificationRuntime>|null=null;
+  let wasReachable=true;
   const api = createAuthedClient({
     baseUrl: configuration.apiBaseUrl,
     clientVersion: configuration.clientVersion,
@@ -229,6 +255,8 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     accessToken: async () => await manager.accessToken(),
     onConnection: reachable => {
       manager.noteConnection(reachable);
+      if(reachable&&!wasReachable)notifications?.wake();
+      wasReachable=reachable;
     },
     // A bridge call refused as unauthenticated. A revocation wipes here exactly as one
     // on the renewal path does — for the session that made the call, and no other — and
@@ -238,6 +266,16 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     },
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
+  notifications=createNotificationRuntime({api,native:createElectronNotificationPort({supported:()=>Notification.isSupported(),getHistory:()=>Notification.getHistory(),create:options=>new Notification(options)}),
+    identity:()=>manager.signedInIdentity(),generation:()=>manager.sessionGeneration(),now:()=>new Date().toISOString(),
+    openTarget:(target,generation)=>showActionTarget(target,generation,()=>manager.sessionGeneration()===generation)});
+  notifications.start();
+  actionNotifications=notifications;
+  for(const identifier of pendingNativeActivations)notifications.activate(identifier);
+  pendingNativeActivations.clear();
+  powerMonitor.on('resume',()=>notifications?.start());
+  powerMonitor.on('suspend',()=>notifications?.stop({clear:false}));
+  app.once('before-quit',()=>notifications?.stop({clear:false}));
   const openExternally = async (url: string): Promise<void> => {
     await shell.openExternal(url);
   };
@@ -278,6 +316,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     return answer&&'platform' in answer?answer:null;
   }});
   const bridges = registerWindowBridges({
+    notifications,
     socialAccounts,
     socialImages: createSocialImageImport({
       directory: configuration.userDataDirectory, api,
@@ -354,6 +393,9 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
    * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
+    pendingAction=null;
+    pendingNativeActivations.clear();
+    notifications?.reset();
     socialPump.stop();
     socialRuntime.signOut();
     socialPump.start();

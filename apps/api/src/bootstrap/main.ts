@@ -24,6 +24,7 @@ import { startApiHeartbeat } from './heartbeat.ts';
 import { createLogger, errorFields } from './log.ts';
 import { drainApi } from './shutdown.ts';
 import { createApiServer } from '../server.ts';
+import {loadHumanReplyDraftPort} from '../integrations/replyComposer.ts';
 
 /**
  * The API container's entry point.
@@ -246,6 +247,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const meetingAudio =
     callAudioBucket === '' || callAudioRegion === '' ? undefined : await loadMeetingAudioStore({ bucket: callAudioBucket, region: callAudioRegion });
   const server = createApiServer({
+    replyComposer:await loadHumanReplyDraftPort(environment),
     connections: poolConnections(pool, log),
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
     ...(auth === undefined ? {} : { auth }),

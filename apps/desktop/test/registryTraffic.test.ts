@@ -345,6 +345,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       transcript: async input => await today.callTranscript(input as { callSessionId: string }),
     },
     replies: createReplyBridge({ api, session }) as unknown as Host,
+    notifications:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['read','runtime'].map(method=>[method,async(input:unknown)=>await handlers[`notifications.${method}` as OperationName](input as never)])) as Host;})(),
     replyComposer:(()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['context','generate'].map(method=>[method,async(input:unknown)=>await handlers[`replyComposer.${method}` as OperationName](input as never)])) as Host;})(),
     social: (()=>{const socialAccounts=createSocialAccountsBridge({api,identity:async()=>({workspaceId:UUID,userId:UUID}),generation:()=>0,open:async()=>({platform:'linkedin',accountKind:'profile',externalAccountId:'https://www.linkedin.com/in/example/',displayName:'Example'}),clear:async()=>{}});const handlers=operationHandlers({api,socialAccounts,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return {...Object.fromEntries(['connectAccount','disconnectAccount','weekly','saveWeekly','drafts','requestDrafts','workspace','mutate','assets','removeAsset','thumbnail','imageStage','chooseImage','pasteImage','imageFromUrl','editImage'].map(method=>[method,async(input:unknown)=>await handlers[`social.${method}` as OperationName](input as never)])), ...Object.fromEntries(['uploadImage','discardImage'].map(action=>[action,async()=>{
       const directory=await mkdtemp(join(tmpdir(),'social-traffic-'));
@@ -355,7 +356,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
         return await operationHandlers({api,socialImages:host} as unknown as OperationHostDeps)[`social.${action}` as OperationName]({id:chosen.stage.id} as never);
       }finally{await rm(directory,{recursive:true,force:true});}
     }]))} as Host;})(),
-    outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','senderStanding','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
+    outreach: (()=>{const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);return Object.fromEntries(['control','senderStanding','senderStandingV2','preview','mutate'].map(method=>[method,async(input:unknown)=>await handlers[`outreach.${method}` as OperationName](input as never)])) as Host;})(),
     sourcing: (() => {
       const handlers=operationHandlers({api,recordings:{identity:{current:()=>0}}} as unknown as OperationHostDeps);
       return Object.fromEntries(['list','save','review','delete','check','qualification','firmQualification','qualify','admit','feedback','learning','targeting','proposeTargeting','applyTargeting','callNeed','saveCallNeed'].map(method=>[method,async(input:unknown)=>await handlers[`sourcing.${method}` as OperationName](input as never)])) as Host;

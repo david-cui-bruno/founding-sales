@@ -230,7 +230,7 @@ const PAGE_LAYOUT = 'mx-auto max-w-[520px] px-14 pt-[12vh] pb-20';
 
 export function App(): JSX.Element {
   const session = useSession();
-  const { route, epoch, navigate } = useRoute();
+  const { route, epoch, navigate } = useRoute(session.generation);
   const client = useQueryClient();
   const [signInDraft, setSignInDraft] = useState<SignInDraft | null>(null);
   const identity = session.identity;

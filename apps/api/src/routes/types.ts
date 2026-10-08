@@ -51,6 +51,7 @@ export interface RouteResult {
 }
 
 export interface RoutingOptions {
+  readonly replyComposer?:HumanReplyDraftPort|null;
   readonly session: SessionQueryable;
   /** The policy (lane g78). A route that answers with versions publishes `publishedClientVersions` of it. */
   readonly supportedClientVersions: ClientVersionPolicy;
@@ -120,3 +121,4 @@ export interface MailRoutingDeps extends MailGrantDeps {
  * refuses to start rather than publish it (`readUpgradeUrl` in `bootstrap/deployment.ts`).
  */
 export const DEFAULT_UPGRADE_URL = 'https://callie.example/downloads/mac';
+import type {HumanReplyDraftPort} from '@fss/domain/replies/composerGeneration.ts';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { todayActionsResponseSchema, reasonSentence, type TodayActionsResponse, type TodayAction } from '@fss/contracts';
-import { navigate } from '../routes.ts';
+import { navigate,routeForAction } from '../routes.ts';
 import { Button } from '../ui/button.tsx';
 
 /** Current metadata in mounted React state only; no cache or message content. */
@@ -31,9 +31,7 @@ export function ActionQueue({ refreshKey, enabled }: { readonly refreshKey: stri
       if (!alive.current) return;
       const target = answer?.target;
       if (target == null) { setNotice(answer === null || answer === undefined ? 'Actions are unavailable. Try again.' : 'This action changed. Today has been refreshed.'); refresh(); return; }
-      if (target.kind === 'reply') navigate({ name: 'replies', messageId: target.messageId });
-      else if (target.kind === 'meeting') navigate({ name: 'firm', firmId: target.firmId, meetingId: target.meetingId });
-      else navigate({ name: 'settings', tab: target.tab, section: target.section, mailboxId: target.mailboxId });
+      navigate(routeForAction(target));
     } catch {
       if (alive.current) setNotice('Actions are unavailable. Try again.');
     } finally { if (alive.current) setBusy(null); }
