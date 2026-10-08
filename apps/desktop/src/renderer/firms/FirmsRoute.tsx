@@ -247,6 +247,7 @@ export function FirmsRoute({
   const firmBody = (variant: 'page' | 'panel', firm: NonNullable<CrmState['firm']>): JSX.Element => (
     <FirmPage
       page={firm}
+      {...(route.name === 'firm' && route.firmId === firm.read.firm.id && route.meetingId !== undefined ? { initialMeetingId: route.meetingId } : {})}
       sequences={state.sequences}
       actionsEnabled={view.actionsEnabled}
       busy={crm.busy}

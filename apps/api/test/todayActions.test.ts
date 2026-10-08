@@ -1,0 +1,36 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { todayActionsResponseSchema, todayActionOpenResponseSchema } from '@fss/contracts';
+import { dispatch, type ApiRequest } from '../src/server.ts';
+import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
+import { issueSessionFor } from './support/sessionFixture.ts';
+let fixture: AuthFixture;
+let token: string;
+let otherToken: string;
+let firmId: string;
+let messageId: string;
+const call = async (path: string, access = token, body?: unknown) => await dispatch({ method: body === undefined ? 'GET' : 'POST', path, query: new URLSearchParams(), headers: { authorization: `Bearer ${access}` }, body } as ApiRequest, { session: fixture.db, supportedClientVersions: fixture.deps.config.supportedClientVersions, sendingEnabled: false, auth: fixture.deps });
+beforeAll(async () => {
+  fixture = await createAuthFixture();
+  token = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
+  otherToken = (await issueSessionFor(fixture, fixture.beta, fixture.beta.salesperson)).accessToken;
+  const ws = fixture.alpha.workspaceId;
+  firmId = (await fixture.db.query<{id:string}>("INSERT INTO firms(workspace_id,name,assigned_user_id) VALUES ($1,'Action Fixture Rentals',$2) RETURNING id", [ws, fixture.alpha.salesperson.userId])).rows[0]!.id;
+  const opportunity = (await fixture.db.query<{id:string}>("INSERT INTO opportunities(workspace_id,firm_id,status,stage_id,control_mode_changed_at) VALUES ($1,$2,'open',(SELECT id FROM pipeline_stages WHERE workspace_id=$1 ORDER BY position LIMIT 1),now()) RETURNING id", [ws,firmId])).rows[0]!.id;
+  const mailbox = (await fixture.db.query<{id:string}>("INSERT INTO mailboxes(workspace_id,owner_user_id,email_address) VALUES ($1,$2,'action@example.test') RETURNING id", [ws,fixture.alpha.salesperson.userId])).rows[0]!.id;
+  messageId = (await fixture.db.query<{id:string}>("INSERT INTO mail_messages(workspace_id,mailbox_id,provider_message_id,provider_thread_id,direction,internal_date) VALUES ($1,$2,$3,'action-thread','incoming',now()-interval '4 days') RETURNING id", [ws,mailbox,randomUUID()])).rows[0]!.id;
+  await fixture.db.query("INSERT INTO mail_message_classifications(workspace_id,mail_message_id,layer,class,requires_confirmation,rules_version) VALUES ($1,$2,'deterministic','human',false,'fixture.1')", [ws,messageId]);
+  await fixture.db.query("INSERT INTO mail_message_matches(workspace_id,mail_message_id,firm_id,opportunity_id,match_rule) VALUES ($1,$2,$3,$4,'thread')",[ws,messageId,firmId,opportunity]);
+});
+afterAll(async () => { await fixture.stop(); });
+it('reads source-backed actions without message content and opens only a current owned target', async () => {
+  const answer = await call('/today/actions');
+  expect(answer.status).toBe(200);
+  const read = todayActionsResponseSchema.parse(answer.body);
+  expect(read.actions).toMatchObject([{ actionId: `reply-message:${messageId}`, state: 'overdue', target: { kind: 'reply', messageId, firmId } }]);
+  const action = read.actions[0]!;
+  expect(todayActionOpenResponseSchema.parse((await call('/today/actions/open', token, { actionId: action.actionId, target: action.target })).body).target).toEqual(action.target);
+  expect(todayActionsResponseSchema.parse((await call('/today/actions', otherToken)).body).actions).toEqual([]);
+  expect(todayActionOpenResponseSchema.parse((await call('/today/actions/open', otherToken, { actionId: action.actionId, target: action.target })).body).target).toBeNull();
+  expect((await call('/today/actions/open', token, { actionId: action.actionId, target: { ...action.target, body: 'not permitted' } })).status).toBe(400);
+});

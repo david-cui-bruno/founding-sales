@@ -257,3 +257,29 @@ export const todayPauseReleaseResultSchema = z.object({
   releasedAt: instant,
   resume: z.enum(['resume', 'still_held', 'not_applicable']),
 });
+
+/** Live source-backed actions; never persisted in the desktop Today cache. */
+export const todayActionTargetSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('reply'), firmId: uuid, messageId: uuid }),
+  z.strictObject({ kind: z.literal('meeting'), firmId: uuid, meetingId: uuid, startsAt: instant }),
+  z.strictObject({ kind: z.literal('settings'), tab: z.enum(['administration', 'diagnostics']), section: z.enum(['sending-admin', 'alerts']), mailboxId: uuid }),
+]);
+export type TodayActionTarget = z.infer<typeof todayActionTargetSchema>;
+export const todayActionSchema = z.strictObject({
+  actionId: z.string().min(1).max(200),
+  kind: z.enum(['reply', 'call', 'problem']),
+  subject: z.string().min(1).max(300),
+  reason: z.string().min(1).max(200),
+  dueAt: instant,
+  state: z.enum(['open', 'overdue']),
+  target: todayActionTargetSchema,
+});
+export type TodayAction = z.infer<typeof todayActionSchema>;
+export const todayActionsResponseSchema = z.strictObject({
+  version: z.literal(1), workspaceId: uuid, businessTimeZone: ianaTimeZone, asOf: instant,
+  actions: z.array(todayActionSchema),
+});
+export type TodayActionsResponse = z.infer<typeof todayActionsResponseSchema>;
+/** A navigation acknowledgement only: no completion or persisted delivery/view receipt. */
+export const todayActionOpenRequestSchema = z.strictObject({ actionId: z.string().min(1).max(200), target: todayActionTargetSchema });
+export const todayActionOpenResponseSchema = z.strictObject({ version: z.literal(1), target: todayActionTargetSchema.nullable() });

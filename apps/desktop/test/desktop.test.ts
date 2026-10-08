@@ -872,6 +872,9 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       { name: 'pipeline' },
       { name: 'firms' },
       { name: 'firm', firmId },
+      { name: 'firm', firmId, meetingId: firmId },
+      { name: 'replies', messageId: firmId },
+      { name: 'settings', tab: 'administration', section: 'sending-admin', mailboxId: firmId },
       { name: 'settings', tab: 'diagnostics' },
     ] as const) {
       expect(routeOf(routeText(route))).toEqual(route);

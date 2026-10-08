@@ -1,3 +1,4 @@
+import { todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from '@fss/contracts';
 import {socialWeeklySchema,socialWeeklySaveSchema} from '@fss/contracts';
 import {socialDraftWorkspaceSchema,socialDraftRequestSchema} from '@fss/contracts';
 import {socialImageImportViewSchema,socialImageChooseSchema,socialImageEditSchema} from './socialImages.ts';
@@ -535,6 +536,14 @@ export interface Operation {
 }
 
 export const OPERATIONS = {
+  'today.actions': {
+    kind: 'read', calls: [{ method: 'GET', path: '/today/actions' }], input: nothing,
+    output: todayActionsResponseSchema.nullable(), transform: 'live action metadata only; unavailable is null; never cached',
+  },
+  'today.openAction': {
+    kind: 'read', calls: [{ method: 'POST', path: '/today/actions/open' }], input: todayActionOpenRequestSchema,
+    output: todayActionOpenResponseSchema.nullable(), transform: 'revalidate the exact current action target; navigation acknowledgement never completes work',
+  },
   // --- Today -------------------------------------------------------------
   'today.state': {
     kind: 'read',

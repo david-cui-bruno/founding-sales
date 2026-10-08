@@ -203,7 +203,7 @@ function Column({
             }}
           />
         ) : route.name === 'replies' ? (
-          <RepliesRoute key={key} column={columnRef} />
+          <RepliesRoute key={key} column={columnRef} {...(route.messageId === undefined ? {} : { messageId: route.messageId })} />
         ) : route.name === 'social' ? (
           <SocialRoute key={key}/>
         ) : route.name === 'sequences' ? (

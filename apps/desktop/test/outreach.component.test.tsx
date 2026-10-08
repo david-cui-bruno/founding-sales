@@ -76,3 +76,30 @@ it('requires a fresh cohort preview and clears it when selection changes',async(
  fireEvent.click(screen.getByLabelText('Dallas PM · Dallas, TX'));
  expect(screen.queryByRole('button',{name:'Enable selected cohort'})).toBeNull();expect(p.mutate).not.toHaveBeenCalled();
 });
+
+it('opens an explicitly targeted owned sender without mutating controls',async()=>{
+ const target='33333333-3333-4333-8333-333333333333';
+ const p=ports();p.read=vi.fn(async()=>({view:{...view,senders:[...view.senders,{...view.senders[0]!,id:target,address:'other@usecallie.com'}]},reason:null}));
+ render(<DraftsProvider><OutreachSection enabled initialMailboxId={target} ports={p}/></DraftsProvider>);
+ await waitFor(()=>expect((screen.getByLabelText('Outreach sender') as HTMLSelectElement).value).toBe(target));
+ expect(p.mutate).not.toHaveBeenCalled();
+});
+
+it('keeps a typed fact when navigation focuses another owned sender',async()=>{
+ const target='33333333-3333-4333-8333-333333333333';
+ const p=ports();p.read=vi.fn(async()=>({view:{...view,senders:[...view.senders,{...view.senders[0]!,id:target,address:'other@usecallie.com'}]},reason:null}));
+ const {rerender}=render(<DraftsProvider><OutreachSection enabled ports={p}/></DraftsProvider>);
+ fireEvent.click(screen.getByRole('button',{name:'Outreach setup'}));await screen.findByText(/^Sending paused/);
+ fireEvent.change(screen.getByLabelText('Answer fact'),{target:{value:'Retain this draft for review.'}});
+ rerender(<DraftsProvider><span>Today</span></DraftsProvider>);
+ rerender(<DraftsProvider><OutreachSection enabled initialMailboxId={target} ports={p}/></DraftsProvider>);
+ await waitFor(()=>expect((screen.getByLabelText('Outreach sender') as HTMLSelectElement).value).toBe(target));
+ expect((screen.getByLabelText('Answer fact') as HTMLTextAreaElement).value).toBe('Retain this draft for review.');
+ expect(p.mutate).not.toHaveBeenCalled();
+});
+it('does not substitute another sender when the requested mailbox is no longer owned',async()=>{
+ const p=ports();render(<OutreachSection enabled initialMailboxId="33333333-3333-4333-8333-333333333333" ports={p}/>);
+ expect(await screen.findByText('The requested sender is no longer available.')).toBeTruthy();
+ expect((screen.getByLabelText('Outreach sender') as HTMLSelectElement).value).toBe('');
+ expect(p.mutate).not.toHaveBeenCalled();
+});

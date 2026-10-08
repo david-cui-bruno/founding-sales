@@ -1,3 +1,5 @@
+import { todayActionOpenRequestSchema } from '@fss/contracts';
+import { readTodayActions, openTodayAction } from '@fss/domain/today/actions.ts';
 import { TODAY_CARD_VERSION, completeCallTaskCommandSchema, todayFirmRequestSchema } from '@fss/contracts';
 import { completeCallTask } from '@fss/domain/calls/callTasks.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
@@ -33,7 +35,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * from the scope's own role, because 8.2's "Admins see all entries; salespeople see their
  * own" is a property of the read and not of the transport.
  */
-export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete'];
+export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed', '/today/tasks/complete', '/today/actions', '/today/actions/open'];
 
 /**
  * Slice 3a: `GET /today?include=tasks` (repeated or comma-separated; an unknown value is
@@ -67,6 +69,16 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   if (!scoped.ok) return scoped.result;
   const context = scoped.context;
 
+  if (request.path === '/today/actions') {
+    if (request.method !== 'GET') return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+    return { status: 200, body: await readTodayActions(context, { now: await databaseNow(context) }) };
+  }
+  if (request.path === '/today/actions/open') {
+    if (request.method !== 'POST') return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+    const parsed = todayActionOpenRequestSchema.safeParse(request.body);
+    if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    return { status: 200, body: await openTodayAction(context, { ...parsed.data, now: await databaseNow(context) }) };
+  }
   if (request.path === '/today') {
     if (request.method !== 'GET') {
       return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
