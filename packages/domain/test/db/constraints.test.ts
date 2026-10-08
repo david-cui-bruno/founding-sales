@@ -38,6 +38,7 @@ import { MEETING_RECORDINGS_CONSTRAINT_CASES } from './support/meetingRecordings
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
+import { SENDER_RECOVERY_CONSTRAINT_CASES } from './support/senderRecoveryCases.ts';
 import { seedOutbound, type SeededOutbound } from './support/outboundFixtures.ts';
 
 /**
@@ -1390,6 +1391,7 @@ const cases: readonly Case[] = [
   ...MAIL_CONSTRAINT_CASES,
   ...TODAY_CONSTRAINT_CASES,
   ...OUTBOUND_CONSTRAINT_CASES,
+  ...SENDER_RECOVERY_CONSTRAINT_CASES,
   ...CLASSIFICATION_CONSTRAINT_CASES,
   ...SEQUENCE_CONSTRAINT_CASES,
   ...SETTINGS_CONSTRAINT_CASES,

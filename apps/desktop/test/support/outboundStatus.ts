@@ -52,6 +52,16 @@ export function outboundRampAnswer(mailboxId: string, overrides: Readonly<Record
     adminDailyCap: null,
     raisedDailyCap: null,
     lastHealthFailure: null,
+    standing: {
+      healthySendingDays: overrides['healthySendingDays'] ?? 0,
+      earnedCap: 5,
+      effectiveCap: overrides['effectiveCap'] ?? 5,
+      lastActivityAt: null,
+      activityBasis: 'mailbox_creation',
+      inactivityDays: 0,
+      recovery: null,
+      readiness: { ready: false, reasons: ['mailbox_disconnected', 'authentication_failing'] },
+    },
     ...overrides,
   };
 }
