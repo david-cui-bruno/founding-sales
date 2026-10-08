@@ -9,8 +9,8 @@ export const replyDraftEnvelopeSchema=z.strictObject({to:z.array(z.email().max(3
 export const replyDraftContextInputSchema=z.strictObject({messageId:uuid,factRefs:z.array(replyFactRefSchema).max(20).optional(),envelope:replyDraftEnvelopeSchema.optional()});
 export const replyDraftContextSchema=z.strictObject({
  messageId:uuid,sourceRevision:z.string().regex(/^[a-f0-9]{64}$/u),firmId:uuid,contactId:uuid,
- authorUserId:uuid,mailboxId:uuid,authorAddress:z.email(),authorizationRevision:z.number().int().positive(),
- subject:z.string().max(998),providerThreadId:z.string().min(1).max(500),inReplyTo:z.string().min(1).max(998),references:z.array(z.string()).max(101),
+ authorUserId:uuid,mailboxId:uuid,mailboxOwnerUserId:uuid,authorAddress:z.email(),authorizationRevision:z.number().int().positive(),
+ subject:z.string().max(998),senderAddress:z.email(),providerThreadId:z.string().min(1).max(500),inReplyTo:z.string().min(1).max(998),references:z.array(z.string()).max(101),
  observedTo:z.array(z.string()).max(200),observedCc:z.array(z.string()).max(200),replyToMetadata:z.literal('unavailable'),
  envelope:replyDraftEnvelopeSchema,recipientOptions:z.array(z.strictObject({address:z.email(),contactId:uuid})).max(20),
  messageText:z.string().max(200000),priorContext:z.array(z.strictObject({direction:z.enum(['incoming','outgoing']),text:z.string().max(200000)})).max(19),

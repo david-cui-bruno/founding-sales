@@ -19,3 +19,14 @@ Only human-owned draft state survives navigation in the session-scoped DraftsPro
 - Context: red missing public module, then green visible exact fact/envelope read with routine automation off.
 - Manual answer: red reported only `thread_changed`; green recognizes same-thread verified-recipient evidence as `answered_manually`.
 - Opt-out: red returned an authorized context after public suppression; green refuses `conversation_stopped` through the existing effective suppression authority.
+- Generation: red missing public operation; green bounded plain-text suggestion, exact references, mandatory human review and one paid attempt with zero Gmail sends.
+- Sending hold during generation: corrected fixture first established a real `email_send` hold; red returned an obsolete suggestion, green binds applicable hold evidence into the source revision.
+- Transport: red missing adapter; green uses only the existing configured Bedrock Haiku route, bounded output and token-priced credit reservation.
+- Unsupported generated price/commitment: red returned invented offer bytes, green rejects explicit uncited offer/promise/capability/link patterns. This bounded backstop is not semantic grounding proof; every draft requires human review.
+- API: red missing route; green authenticated strict context reads and current-client generation refusals. Generation uses the desktop's accepted/refused command envelope without retaining prose in receipts.
+- Desktop: red missing composer; green retained text across navigation with visible envelope/thread/facts and no send control. Red missing refresh/adopt/review behavior; green preserves stale text and invalidates exact review on edits. Red missing suggestion control; green keeps late suggestions separate until explicit adoption. Red missing envelope/fact selection; green validates changed choices as new context with fresh review. Red retired-reference refresh could not expose current context; green compares current approved choices beside retained stale text before explicit adoption.
+- Recipient identity: red exposed a historical mailbox account address as a prospect CC option; green excludes current and historical workspace author identities, and excludes multiply-associated address options.
+
+## Current capability and release limits
+
+The current API task has no Bedrock inference grant or transport configuration. Root owns optional injection of an already approved configured transport; absent capability truthfully returns `generation_unavailable`, while manual drafting remains available. No permission, environment or budget expansion is part of this ticket. Controlled transport demos do not prove live generation access. Backend deployment and signed desktop publication remain separate.
