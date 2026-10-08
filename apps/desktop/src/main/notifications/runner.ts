@@ -76,16 +76,24 @@ export function createNotificationRunner(deps: NotificationRunnerDeps) {
       if (queue.workspaceId !== identity.workspaceId || queue.userId !== identity.userId) { status('unavailable'); return; }
       const history = await deps.native.history();
       if (!current()) return;
+      // Candidates are complete current show authority, including marker loss after
+      // restore. Current recoveries also protect earlier phases of still-open work.
+      // Obsolete receipts may fall outside the presentation window; their known
+      // native handles must still close without deleting any durable marker.
+      const currentNativeIds = new Set([
+        ...queue.items.filter(item => item.receipt === null).map(item => nativeId(identity, item.eventKey)),
+        ...queue.recoveries.filter(item => item.current).map(item => nativeId(identity, item.eventKey)),
+      ]);
+      const known = new Map([...(history ?? []).map(handle => [handle.id, handle] as const), ...handles]);
+      for (const [id, handle] of known) {
+        if (!id.startsWith(`callie-action:${identity.workspaceId}:${identity.userId}:`) || currentNativeIds.has(id)) continue;
+        bindings.delete(handle);
+        try { handle.close(); } catch { /* Stale removal is best effort. */ }
+        handles.delete(id); boundEpoch.delete(id);
+      }
       for (const recovery of queue.recoveries) {
         const id = nativeId(identity, recovery.eventKey), restored = history?.find(handle => handle.id === id);
-        if (!recovery.current) {
-          const stale = handles.get(id) ?? restored;
-          if (stale) bindings.delete(stale);
-          try { stale?.close(); } catch { /* No stale native destination is reopened. */ }
-          handles.delete(id);
-          boundEpoch.delete(id);
-          continue;
-        }
+        if (!recovery.current) continue;
         const handle = handles.get(id) ?? restored;
         if (handle !== undefined && boundEpoch.get(id) !== generation) { handles.set(id, handle); bind(handle, recovery, current); }
         if (restored !== undefined) {

@@ -145,6 +145,30 @@ it('keeps one native listener per event across repeated suspend and resume, with
   expect(handle.shown).toBe(1);
 });
 
+it('closes obsolete native alerts beyond the recent receipt window without showing replacements', async () => {
+  const h = harness(), identity = await h.read();
+  const items: NotificationItem[] = Array.from({ length: 151 }, () => {
+    const messageId = randomUUID(), actionId = `reply-message:${messageId}`;
+    return { ...h.item, actionId, eventKey: `${actionId}:reply_overdue`, target: { kind: 'reply', firmId: randomUUID(), messageId }, receipt: null };
+  });
+  let resolved = false;
+  h.deps.api.read = async () => ({ ok: true, value: { ...identity, items: resolved ? [] : items,
+    recoveries: (resolved ? items.slice(-100) : items).flatMap(item => item.receipt === null ? [] : [{ eventKey: item.eventKey, actionId: item.actionId, target: item.target, current: !resolved, receipt: item.receipt }]) } });
+  h.deps.api.claim = async eventKey => {
+    const item = items.find(item => item.eventKey === eventKey);
+    if (!item || item.receipt !== null) return { ok: true, value: null };
+    item.receipt = { attemptId: randomUUID(), deviceId: randomUUID(), status: 'attempting', attemptedAt: identity.asOf, nativeShownAt: null, acknowledgedAt: null, failedAt: null, unknownAt: null };
+    return { ok: true, value: structuredClone(item) };
+  };
+  const runner = createNotificationRunner(h.deps);
+  await runner.tick(() => true);
+  expect(h.natives).toHaveLength(151);
+  resolved = true;
+  await runner.tick(() => true);
+  expect(h.natives.filter(handle => handle.closed > 0)).toHaveLength(151);
+  expect(h.natives.every(handle => handle.shown === 1)).toBe(true);
+});
+
 it('drops a claimed alert and a late clicked target when the session changes, and leaves routine empty work quiet', async () => {
   const h = harness(), claim = h.deps.api.claim;
   let active = true;
