@@ -8,7 +8,7 @@ async function insert(f: IdentityCaseFixture, changes: Record<string, unknown> =
   return await f.session.query(`INSERT INTO actionable_notification_attempts(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map((_, i) => `$${String(i + 1)}`).join(',')})`, Object.values(row));
 }
 
-/** The catalog's mandatory failing-row seam: each row violates one 0066 invariant. */
+/** The catalog's mandatory failing-row seam: each row violates one notification invariant. */
 export const NOTIFICATION_CONSTRAINT_CASES: readonly IdentityCase[] = [
   { constraint: 'actionable_notification_attempts_pkey', run: async f => { const id = randomUUID(); await insert(f, { attempt_id: id }); return insert(f, { attempt_id: id }); } },
   { constraint: 'actionable_notification_attem_workspace_id_user_id_event_ke_key', run: async f => { await insert(f, { event_key: 'same-user-event' }); return insert(f, { event_key: 'same-user-event' }); } },
@@ -18,6 +18,11 @@ export const NOTIFICATION_CONSTRAINT_CASES: readonly IdentityCase[] = [
   { constraint: 'actionable_notification_attempts_action_id_check', run: f => insert(f, { action_id: '' }) },
   { constraint: 'actionable_notification_attempts_phase_check', run: f => insert(f, { phase: 'routine_progress' }) },
   { constraint: 'actionable_notification_attempts_target_check', run: f => insert(f, { target: JSON.stringify({ kind: 'reply', firmId: randomUUID(), messageId: randomUUID(), body: 'must not persist' }) }) },
+  ...[null, 7, '', 'unsupported.uid', 'x'.repeat(129)].map(bookingUid => ({
+    constraint: 'actionable_notification_attempts_target_check',
+    run: (f: IdentityCaseFixture) => insert(f, { target: JSON.stringify({ kind: 'meeting', firmId: randomUUID(), meetingId: randomUUID(), startsAt: '2026-09-15T03:30:00.000Z', bookingUid }) }),
+  })),
+  { constraint: 'actionable_notification_attempts_target_check', run: f => insert(f, { target: JSON.stringify({ kind: 'meeting', firmId: randomUUID(), meetingId: randomUUID(), startsAt: '2026-09-15T03:30:00.000Z', bookingUid: 'valid-current-uid', body: 'must not persist' }) }) },
   { constraint: 'actionable_notification_attempts_status_check', run: f => insert(f, { status: 'delivered' }) },
   { constraint: 'actionable_notification_attempts_check', run: f => insert(f, { status: 'acknowledged' }) },
   { constraint: 'actionable_notification_attempts_check1', run: f => insert(f, { status: 'native_shown' }) },
