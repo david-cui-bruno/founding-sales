@@ -28,3 +28,16 @@ it('uses held qualified demos, not bookings, as the conversion numerator',async(
  render(<DraftsProvider><Learning read={async()=>({view:{...report,cohorts:[cohort]},reason:null})}/></DraftsProvider>);
  expect(await screen.findByText(/Held qualified demos per contacted firm: 0 \/ 1 \(0%\)/)).toBeTruthy();
 });
+it('shows disabled automation, unsent admissions, exhausted rechecks and reply handling without recipient approval',async()=>{
+ const id='11111111-1111-4111-8111-111111111111';
+ const automation:NonNullable<LearningReport['automation']>={control:{enabled:false,revision:2,lastBatchAt:null,lastBatchReason:null,lastBatchControlRevision:null},discovery:{retainedHits:2,supportedProspects:1,admissions:1,manualStaged:3,unavailable:0},outcomes:{admissions:1,attempts:0,sent:0,unsettled:0,replies:1,deliveryFailures:0,optOuts:0,booked:1,heldQualified:0,unknownQualification:1},attention:[{firmId:id,firmName:'Visible PM',needsReply:1,bookings:1,heldQualified:0}],decisions:[{candidateId:id,runId:id,candidateRevision:1,firmName:'Deferred PM',reason:'mailbox_capacity_exhausted',status:'exhausted',checks:7,retryAt:null,decidedAt:report.asOf,firmId:null,contactId:null,routeId:null,planId:null,enrollmentId:null,ownerUserId:null,mailboxId:null,sequenceVersionId:null,controlRevision:2,rank:'fit_only',policyVersion:'outreach-email-fit-v1',promptVersion:'qualification-growth-v6',evaluationSha256:null,implementationCommit:null,configurationSha256:null,evidence:[{observationId:id,url:'https://pm.example.test/',blockIds:['office'],retrievedAt:report.asOf,contentHash:'c'.repeat(64)}]}]};
+ render(<DraftsProvider><Learning read={async()=>({view:{...report,automation},reason:null})}/></DraftsProvider>);
+ expect(await screen.findByText('Automatic email admission is off.')).toBeTruthy();
+ expect(screen.getByText(/1 admissions · 0 messages attempted · 0 sent/)).toBeTruthy();
+ expect(screen.getAllByText(/1 bookings · 0 held qualified conversations/)[0]).toBeTruthy();
+ expect(screen.getByText(/3 manually staged candidates excluded from discovery yield/)).toBeTruthy();
+ expect(screen.getByText(/Rechecks exhausted after 7 checks/)).toBeTruthy();
+ expect(screen.getByRole('button',{name:'Open replies'})).toBeTruthy();
+ expect(screen.getByRole('link',{name:'https://pm.example.test/'})).toBeTruthy();
+ expect(screen.queryByRole('button',{name:/approve recipient/i})).toBeNull();
+});

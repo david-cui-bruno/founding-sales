@@ -231,6 +231,7 @@ describe('what the API mounts', () => {
       '/sourcing/candidates/review',
       '/sourcing/candidates/save',
       '/sourcing/learning',
+      '/sourcing/learning/v2',
       '/sourcing/qualification/admit',
       '/sourcing/qualification/feedback',
       '/sourcing/qualification/firm',

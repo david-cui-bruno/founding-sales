@@ -34,3 +34,9 @@ it('records a call confirmation through an authenticated replayable command with
  token=(await issueSessionFor(f,f.beta,f.beta.admin)).accessToken;
  expect((await call('/sourcing/call-need',{callLogId:callId})).status).toBe(404);
 });
+it('exposes extended learning on a versioned read while preserving the installed strict report',async()=>{
+ token=(await issueSessionFor(f,f.alpha,f.alpha.admin)).accessToken;
+ const now=new Date().toISOString(),body={from:'2026-01-01T00:00:00.000Z',to:now,asOf:now};
+ const modern=await call('/sourcing/learning/v2',body);expect(modern.status).toBe(200);expect(modern.body).toMatchObject({automation:{decisions:[],outcomes:{admissions:0,sent:0}}});
+ expect((await call('/sourcing/learning',body)).body).not.toHaveProperty('automation');
+});

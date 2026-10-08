@@ -3,6 +3,7 @@ import type {LearningReport,LearningCohort} from '@fss/contracts';
 import type {RepositoryContext} from '../db/workspaceScope.ts';
 import {readFirmSourcing} from './attribution.ts';
 import {readMeetingQualification} from '../meetings/qualification.ts';
+import {readAutomaticEmailLearning} from './automaticEmailLearning.ts';
 import {providerFunding} from '../settings/funding.ts';
 export function learningRatio(numerator:number,denominator:number):number|null{return denominator>0?numerator/denominator:null;}
 const reachedOutcomes=new Set<string>(ANSWERED_CALL_OUTCOMES);
@@ -41,7 +42,7 @@ export async function readSourcingLearning(ctx:RepositoryContext,input:{from:str
  AND (SELECT count(DISTINCT y.firm_id) FROM mail_message_matches y WHERE y.workspace_id=m.workspace_id AND y.mail_message_id=m.id)=1`,[w,firm.id,asOf])).rows[0]!;
   c.email!.sent+=email.sent;c.email!.genuineReplies+=email.replies;c.email!.positiveReplies+=email.positive;c.email!.bounces+=email.bounces;c.email!.deferrals+=email.deferrals;
   if(answered.size||email.replies)c.reached++;else c.unreached++;
-  const feedback=(await ctx.db.query<{code:string}>(`SELECT x.code FROM sourcing_feedback x JOIN sourcing_admissions a ON a.workspace_id=x.workspace_id AND a.candidate_id=x.candidate_id WHERE x.workspace_id=$1 AND a.firm_id=$2 AND NOT a.association_review_required AND x.created_at<=$3 ORDER BY x.created_at DESC,x.id DESC LIMIT 1`,[w,firm.id,asOf])).rows[0];
+  const feedback=(await ctx.db.query<{code:string}>(`SELECT x.code FROM sourcing_feedback x WHERE x.workspace_id=$1 AND x.created_at<=$3 AND (EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=x.workspace_id AND a.candidate_id=x.candidate_id AND a.firm_id=$2 AND NOT a.association_review_required) OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=x.workspace_id AND e.candidate_id=x.candidate_id AND e.firm_id=$2 AND NOT e.association_review_required)) ORDER BY x.created_at DESC,x.id DESC LIMIT 1`,[w,firm.id,asOf])).rows[0];
   let pain=feedback?.code==='real_pain',held=false,qualified=false,unknown=false;
   const painCalls=new Set<string>();
   for(const id of answered){
@@ -69,13 +70,14 @@ export async function readSourcingLearning(ctx:RepositoryContext,input:{from:str
   const won=await ctx.db.query(`SELECT 1 FROM (SELECT DISTINCT ON(e.opportunity_id) e.to_stage_id,e.actor_kind FROM opportunity_stage_events e WHERE e.workspace_id=$1 AND e.firm_id=$2 AND e.occurred_at<=$3 ORDER BY e.opportunity_id,e.occurred_at DESC,e.id DESC) latest JOIN pipeline_stages s ON s.workspace_id=$1 AND s.id=latest.to_stage_id WHERE s.terminal_kind='won' AND latest.actor_kind IN ('user','admin') LIMIT 1`,[w,firm.id,asOf]);if(won.rows.length)c.won++;
   const costs=(await ctx.db.query<{provider_key:string;settled_cents:number}>(`SELECT p.provider_key,p.settled_cents FROM provider_reservations p WHERE p.workspace_id=$1 AND p.settled_at<=$3 AND p.state IN ('settled','estimated') AND (
    (p.subject_kind='research_run' AND EXISTS(SELECT 1 FROM research_runs r WHERE r.workspace_id=p.workspace_id AND r.id=p.subject_id AND r.firm_id=$2)) OR
-   (p.subject_kind='sourcing_qualification' AND EXISTS(SELECT 1 FROM sourcing_qualification_runs r JOIN sourcing_admissions a ON a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id WHERE r.workspace_id=p.workspace_id AND r.id=p.subject_id AND a.firm_id=$2)))`,[w,firm.id,asOf])).rows;
+   (p.subject_kind='sourcing_qualification' AND EXISTS(SELECT 1 FROM sourcing_qualification_runs r WHERE r.workspace_id=p.workspace_id AND r.id=p.subject_id AND (EXISTS(SELECT 1 FROM sourcing_admissions a WHERE a.workspace_id=r.workspace_id AND a.candidate_id=r.candidate_id AND a.firm_id=$2 AND NOT a.association_review_required) OR EXISTS(SELECT 1 FROM outreach_email_sources e WHERE e.workspace_id=r.workspace_id AND e.candidate_id=r.candidate_id AND e.run_id=r.id AND e.firm_id=$2 AND NOT e.association_review_required)))))`,[w,firm.id,asOf])).rows;
   for(const cost of costs){c.researchGrossCents+=cost.settled_cents;if(providerFunding(cost.provider_key)==='cash')c.researchCashCents+=cost.settled_cents;}
  }
  report.cohorts=[...cohorts.values()].sort((a,b)=>a.acquisition.localeCompare(b.acquisition)||a.hypothesis.localeCompare(b.hypothesis)||a.policyVersion.localeCompare(b.policyVersion));
  // Candidates have no assignee until admission. Non-admins see only admitted, assigned firms.
- const coverage=(await ctx.db.query<{status:string;state:string|null;admitted:boolean}>(`SELECT c.status,r.state,a.firm_id IS NOT NULL AS admitted FROM sourcing_candidates c LEFT JOIN LATERAL(SELECT state FROM sourcing_qualification_runs WHERE workspace_id=c.workspace_id AND candidate_id=c.id AND requested_at<=$3 ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true LEFT JOIN sourcing_admissions a ON a.workspace_id=c.workspace_id AND a.candidate_id=c.id LEFT JOIN firms f ON f.workspace_id=a.workspace_id AND f.id=a.firm_id WHERE c.workspace_id=$1 AND ($2::uuid IS NULL OR f.assigned_user_id=$2) AND c.created_at<=$3`,[w,assignee,asOf])).rows;
+ const coverage=(await ctx.db.query<{status:string;state:string|null;admitted:boolean}>(`SELECT c.status,r.state,(a.firm_id IS NOT NULL OR e.firm_id IS NOT NULL) AS admitted FROM sourcing_candidates c LEFT JOIN LATERAL(SELECT state FROM sourcing_qualification_runs WHERE workspace_id=c.workspace_id AND candidate_id=c.id AND requested_at<=$3 ORDER BY requested_at DESC,id DESC LIMIT 1) r ON true LEFT JOIN sourcing_admissions a ON a.workspace_id=c.workspace_id AND a.candidate_id=c.id LEFT JOIN outreach_email_sources e ON e.workspace_id=c.workspace_id AND e.candidate_id=c.id LEFT JOIN firms f ON f.workspace_id=c.workspace_id AND f.id=COALESCE(e.firm_id,a.firm_id) WHERE c.workspace_id=$1 AND ($2::uuid IS NULL OR f.assigned_user_id=$2) AND c.created_at<=$3`,[w,assignee,asOf])).rows;
  for(const row of coverage){report.coverage.candidates++;if(['eligible','admitted'].includes(row.state??''))report.coverage.qualified++;if(row.admitted)report.coverage.admitted++;if(row.state==='unavailable')report.coverage.unavailable++;}
  if(assignee===null){const count=(await ctx.db.query<{n:number}>('SELECT count(*)::int AS n FROM sourcing_discovery_attempts WHERE workspace_id=$1 AND created_at>=$2 AND created_at<=$3',[w,from,asOf])).rows[0]?.n??0;report.search={attempts:count,creditsReserved:count};}
+ report.automation=await readAutomaticEmailLearning(ctx,input);
  return report;
 }

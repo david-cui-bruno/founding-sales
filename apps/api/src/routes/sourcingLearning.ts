@@ -6,7 +6,7 @@ import {readSourcingLearning} from '@fss/domain/sourcing/learningReport.ts';
 import {readTargetingView,saveTargetingProposal,applyTargetingProposal} from '@fss/domain/sourcing/targetingProposals.ts';
 import {contextForPrincipal,requirePrincipal,runRouteCommand} from './routeSupport.ts';
 import type {ApiRequest,RouteResult,RoutingOptions} from './types.ts';
-export const SOURCING_LEARNING_PATHS=['/sourcing/call-need','/sourcing/call-need/save','/sourcing/learning','/sourcing/targeting','/sourcing/targeting/save','/sourcing/targeting/apply'];
+export const SOURCING_LEARNING_PATHS=['/sourcing/call-need','/sourcing/call-need/save','/sourcing/learning','/sourcing/learning/v2','/sourcing/targeting','/sourcing/targeting/save','/sourcing/targeting/apply'];
 export async function routeSourcingLearning(request:ApiRequest,options:RoutingOptions):Promise<RouteResult|null>{
  if(!SOURCING_LEARNING_PATHS.includes(request.path))return null;
  const auth=options.auth;if(!auth)return {status:404,body:{error:'not_found'}};
@@ -19,9 +19,9 @@ export async function routeSourcingLearning(request:ApiRequest,options:RoutingOp
   const view=await readCallNeed(scoped.context,parsed.data);return view?{status:200,body:view}:{status:404,body:{error:'not_found'}};
  }
  if(request.path==='/sourcing/call-need/save')return runRouteCommand(deps,callNeedCommandSchema,'sourcing.call_need',async(ctx,body)=>{const {clientVersion:_v,...input}=body;return saveCallNeed(ctx,input);});
- if(request.path==='/sourcing/learning'){
+ if(request.path==='/sourcing/learning'||request.path==='/sourcing/learning/v2'){
   const input=learningInputSchema.safeParse(request.body);if(!input.success)return {status:400,body:{error:'invalid_input'}};
-  return withTransaction(auth.db,async()=>({status:200,body:await readSourcingLearning(scoped.context,input.data)}));
+  return withTransaction(auth.db,async()=>{const report=await readSourcingLearning(scoped.context,input.data);if(request.path.endsWith('/v2'))return {status:200,body:report};const {automation:_automation,...legacy}=report;return {status:200,body:legacy};});
  }
  if(request.path==='/sourcing/targeting')return {status:200,body:await readTargetingView(scoped.context)};
  if(request.path==='/sourcing/targeting/save')return runRouteCommand(deps,targetingProposalCommandSchema,'sourcing.targeting_save',async(ctx,body)=>{const {commandId:_id,clientVersion:_version,...input}=body;return saveTargetingProposal(ctx,input);});
