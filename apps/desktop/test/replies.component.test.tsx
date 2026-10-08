@@ -122,7 +122,8 @@ describe('the Replies view', () => {
     install({}, state({ open: replyCard({ confirmation: replyConfirmationAnswer({ corrected: false }) }) }));
     render(<RepliesRoute column={column} />);
     await screen.findByTestId('reply-card');
-    const text = document.body.textContent ?? '';
+    const text = screen.getByText(/^Answered:/u).textContent ?? '';
+    expect(text).toBe('Answered: Asked me to follow up later.');
     for (const word of ['reviewed', 'you reviewed', 'checked by']) expect(text.toLowerCase()).not.toContain(word);
   });
 });

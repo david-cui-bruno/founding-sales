@@ -17,6 +17,10 @@ export async function decideHumanReplyPermission(ctx:RepositoryContext,fence:Out
  if(!await humanReplyIdentityLive(human,{sessionId:intent.session_id,deviceId:intent.device_id},intent.user_id,intent.role))return refuseSend('step_ineligible','human_reply:session_changed');
  const coverage=coverageRefusal(await readMailboxCoverage(ctx,{mailboxId:fence.mailboxId}));
  if(coverage)return refuseSend(coverage.reason==='coverage_incomplete'?'coverage_incomplete':'grant_revoked',coverage.detail);
+ // The final claim owns gate → fence → intent/session before taking this firm lock.
+ // Keep its authority fixed from preview through claim commit; timezone corrections
+ // take the firm's write lock without needing a workspace-wide send gate.
+ await ctx.db.query('SELECT id FROM firms WHERE workspace_id=$1 AND id=$2 FOR SHARE',[ctx.scope.workspaceId,fence.firmId]);
  const preview=await previewHumanReply(human,{messageId:intent.message_id,text:fence.body,factRefs:intent.fact_refs,envelope:intent.envelope});
  if(!preview.ok)return refuseSend('step_ineligible',`human_reply:${preview.reason}`);
  if(preview.value.sourceRevision!==intent.source_revision||preview.value.draftRevision!==intent.draft_revision||preview.value.body!==fence.body||preview.value.subject!==fence.subject)return refuseSend('step_ineligible','human_reply:draft_changed');

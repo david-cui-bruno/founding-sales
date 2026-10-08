@@ -296,3 +296,50 @@ it('fresh human approval after a zone correction keeps the original fence and us
  expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'held',outboundMessageId:id,reason:'outside_email_window'}});
  expect(world.alpha.gmail.sends).toHaveLength(before);
 });
+
+it('a recipient zone correction cannot commit after the final human preview and before its claim',async()=>{
+ const {backendPid,settle,tracked,waitUntilBlocked}=await import('../outbound/support/dispatchFixtures.ts');
+ const {FIXTURE_BUSINESS_DATE}=await import('../outbound/support/outboundWorld.ts');
+ const f=await fixture(),queued=await f.tx(()=>requestHumanReplySend(f.ctx,f.send,f.identity));if(!queued.ok)throw new Error(queued.reason);
+ const barrier=await openExtraSession(world),editor=await openExtraSession(world),senderPid=await backendPid(world.database.session);
+ const admin=repositoryContext(f.admin.scope,editor.session),id=queued.value.outboundMessageId,before=world.alpha.gmail.sends.length;
+ let dayHeld=false;
+ const paused=pausingAtTokenRefresh(world.alpha.gmail,async()=>{
+  await barrier.session.query('BEGIN');dayHeld=true;
+  // The precheck created this row; the final claim reaches it after its human preview.
+  await barrier.session.query('SELECT id FROM mailbox_send_days WHERE workspace_id=$1 AND mailbox_id=$2 AND business_date=$3::date FOR UPDATE',[f.ctx.scope.workspaceId,world.alpha.mailboxId,FIXTURE_BUSINESS_DATE]);
+ });
+ const sending=tracked(dispatchOutboundMessage(f.ctx,world.sendDeps(world.alpha,{gmail:paused.client}),{outboundMessageId:id}));
+ const correctZone=async()=>({
+  changed:await withTransaction(editor.session,()=>resolveZoneForFirm(admin,{firmId:f.firm.firmId,recordedZone:'America/Chicago'})),
+  status:await readHumanReplySend(admin,f.input),
+ });
+ let correction:ReturnType<typeof tracked<Awaited<ReturnType<typeof correctZone>>>>|undefined;
+ try{
+  await waitUntilBlocked(editor.session,senderPid,'transactionid');
+  expect(paused.refreshes()).toBe(1);expect(world.alpha.gmail.sends).toHaveLength(before);
+  correction=tracked(correctZone());
+  let reachedBoundary=false;
+  for(let attempt=0;attempt<400;attempt+=1){
+   if(correction.settled()){reachedBoundary=true;break;}
+   // Fixture synchronization only: no private send state is used as a behavioral oracle.
+   const waiting=await barrier.session.query<{waiting:boolean}>('SELECT $1=ANY(pg_blocking_pids($2)) AS waiting',[senderPid,editor.pid]);
+   if(waiting.rows[0]?.waiting){reachedBoundary=true;break;}
+   await settle(25);
+  }
+  if(!reachedBoundary)throw new Error('The public zone correction did not reach the claim barrier');
+  await barrier.session.query('COMMIT');dayHeld=false;
+  const [sent,{changed,status}]=await Promise.all([sending.promise,correction.promise]);
+  expect(status,'a completed zone correction must observe an already committed original claim').toMatchObject({ok:true,value:{state:expect.stringMatching(/^(dispatching|sent)$/u)}});
+  // Claim-first is valid in the original09:00UTC window; the later Chicago correction
+  // cannot move that already committed claim into Chicago's04:00 sending window.
+  expect(sent).toMatchObject({outcome:'sent',outboundMessageId:id});
+  expect(changed).toMatchObject({ok:true,value:{timeZone:'America/Chicago'}});
+  expect(await readHumanReplySend(f.ctx,f.input)).toMatchObject({ok:true,value:{state:'sent',outboundMessageId:id,providerMessageId:expect.any(String)}});
+  expect(world.alpha.gmail.sends).toHaveLength(before+1);
+ }finally{
+  if(dayHeld)await barrier.session.query('ROLLBACK');
+  await Promise.allSettled([sending.promise,...(correction?[correction.promise]:[])]);
+  await barrier.close();await editor.close();
+ }
+});
