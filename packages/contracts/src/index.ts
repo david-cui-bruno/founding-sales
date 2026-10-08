@@ -51,3 +51,4 @@ export * from './outreachControl.ts';
 export * from './social.ts';
 export { todayActionTargetSchema, todayActionSchema, todayActionsResponseSchema, todayActionOpenRequestSchema, todayActionOpenResponseSchema } from './today.ts';
 export type { TodayActionTarget, TodayAction, TodayActionsResponse } from './today.ts';
+export * from './replyComposer.ts';

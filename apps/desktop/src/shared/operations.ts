@@ -857,6 +857,8 @@ export const OPERATIONS = {
   'social.requestDrafts': {kind:'command',calls:[{method:'POST',path:'/social/drafts/request'}],input:socialDraftRequestSchema.extend({commandId:z.string().uuid()}),output:z.strictObject({requestId:z.string().uuid().nullable(),reason:z.string().nullable()}),transform:'Request bounded generation without approval'},
   'social.workspace': {kind:'read',calls:[{method:'POST',path:'/social'}],input:z.strictObject({}),output:z.strictObject({view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Owner social drafts and destination connections'},
   'social.mutate': {kind:'command',calls:[{method:'POST',path:'/social/posts/save'},{method:'POST',path:'/social/posts/approve'},{method:'POST',path:'/social/posts/cancel'},{method:'POST',path:'/social'}],input:socialPostMutationSchema,output:z.strictObject({accepted:z.boolean(),view:socialWorkspaceSchema.nullable(),reason:z.string().nullable()}),transform:'Exact revision and explicit scheduling approval'},
+  'replyComposer.context': {kind:'read',calls:[{method:'POST',path:'/replies/composer/context'}],input:replyDraftContextInputSchema,output:replyDraftContextResultSchema,transform:'Current owner-scoped conversation and approved fact versions for a human draft'},
+  'replyComposer.generate': {kind:'command',calls:[{method:'POST',path:'/replies/composer/generate'}],input:replyDraftGenerateInputSchema.omit({clientVersion:true}),output:replyDraftGenerateResultSchema,transform:'Source-bound human draft generation without a send path'},
   'outreach.control': {kind:'read',calls:[{method:'POST',path:'/outreach/control/v2'}],input:z.strictObject({}),output:z.strictObject({view:outreachControlSchema.nullable(),reason:z.string().nullable()}),transform:'Current sender, facts, reply policy and review queue'},
   'outreach.senderStanding': {kind:'read',calls:[{method:'POST',path:'/outreach/senders/standing'}],input:z.strictObject({}),output:z.strictObject({view:outreachSenderStandingResponseSchema.nullable(),reason:z.string().nullable()}),transform:'Current earned allowance, inactivity recovery and mailbox checks'},
   'outreach.preview': {kind:'read',calls:[{method:'POST',path:'/outreach/cohort/preview'}],input:outreachCohortInputSchema,output:z.strictObject({view:outreachCohortPreviewSchema.nullable(),reason:z.string().nullable()}),transform:'Read-only selected cohort preview'},
@@ -1917,3 +1919,4 @@ declare global {
   var callieDial: DialBridge | undefined;
   var callieImport: ImportBridge | undefined;
 }
+import {replyDraftContextInputSchema,replyDraftContextResultSchema,replyDraftGenerateInputSchema,replyDraftGenerateResultSchema} from '@fss/contracts';

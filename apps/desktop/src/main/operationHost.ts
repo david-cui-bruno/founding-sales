@@ -216,6 +216,18 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'social.requestDrafts':async(input:OperationInput<'social.requestDrafts'>)=>{const generation=deps.recordings.identity.current(),{commandId,...selection}=input;const answer=await deps.api.command('/social/drafts/request',selection,v=>z.strictObject({requestId:z.string().uuid()}).parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {requestId:null,reason:'not_found'};return answer.ok?{requestId:answer.value.requestId,reason:null}:{requestId:null,reason:answer.reason};},
     'social.workspace':async()=>{const generation=deps.recordings.identity.current(),answer=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};return answer.ok?{view:answer.value,reason:null}:{view:null,reason:answer.reason};},
     'social.mutate':async(input:OperationInput<'social.mutate'>)=>{const generation=deps.recordings.identity.current();const {action,commandId,...payload}=input;const paths={save:'/social/posts/save',approve:'/social/posts/approve',cancel:'/social/posts/cancel'} as const;const answer=await deps.api.command(paths[action],payload,v=>z.unknown().parse(v),{commandId});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};if(!answer.ok)return {accepted:false,view:null,reason:answer.reason};const view=await deps.api.read('/social',v=>socialWorkspaceSchema.parse(v),{});if(generation!==deps.recordings.identity.current())return {accepted:false,view:null,reason:'not_found'};return {accepted:true,view:view.ok?view.value:null,reason:view.ok?null:'refresh_failed'};},
+    'replyComposer.context':async(input:OperationInput<'replyComposer.context'>)=>{
+      const generation=deps.recordings.identity.current();
+      const answer=await deps.api.read('/replies/composer/context',value=>replyDraftContextResultSchema.parse(value),input);
+      if(generation!==deps.recordings.identity.current())return {ok:false,reason:'not_found'};
+      return answer.ok?answer.value:{ok:false,reason:answer.reason};
+    },
+    'replyComposer.generate':async(input:OperationInput<'replyComposer.generate'>)=>{
+      const generation=deps.recordings.identity.current(),{commandId,...payload}=input;
+      const answer=await deps.api.command('/replies/composer/generate',payload,value=>replyDraftGenerateResultSchema.parse(value),{commandId});
+      if(generation!==deps.recordings.identity.current())return {ok:false,reason:'not_found'};
+      return answer.ok?answer.value:{ok:false,reason:answer.reason};
+    },
     'outreach.control': async(input:OperationInput<'outreach.control'>)=>{
       const generation=deps.recordings.identity.current(),answer=await deps.api.read('/outreach/control/v2',value=>outreachControlSchema.parse(value),input);
       if(generation!==deps.recordings.identity.current())return {view:null,reason:'not_found'};
@@ -734,3 +746,4 @@ export function operationCoverage(handlers: Readonly<Record<string, Handler>>): 
 }
 
 export { DIAL_IPC_CHANNELS, OPERATION_IPC_CHANNELS };
+import {replyDraftContextResultSchema,replyDraftGenerateResultSchema} from '@fss/contracts';
